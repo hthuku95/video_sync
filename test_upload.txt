@@ -1,0 +1,6 @@
+This is a test file for upload functionality.
+The video editor should be able to:
+1. Receive this file via multipart upload
+2. Store it in the database 
+3. Create vector embeddings
+4. Make it accessible to the AI agent

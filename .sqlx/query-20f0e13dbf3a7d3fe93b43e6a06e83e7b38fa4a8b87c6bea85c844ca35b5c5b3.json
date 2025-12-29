@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT uf.id, uf.original_name, uf.stored_name FROM uploaded_files uf\n        JOIN chat_sessions cs ON uf.session_id = cs.id\n        WHERE cs.session_uuid = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 1,
+        "name": "original_name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "stored_name",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "20f0e13dbf3a7d3fe93b43e6a06e83e7b38fa4a8b87c6bea85c844ca35b5c5b3"
+}

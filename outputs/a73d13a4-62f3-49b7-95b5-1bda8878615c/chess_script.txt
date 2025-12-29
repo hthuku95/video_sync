@@ -1,0 +1,13 @@
+Here's a 30-second tutorial script for chess:
+
+**(0-5s) INTRO & OBJECTIVE:**
+"Unlock the world of chess! In 30 seconds, you'll learn the core objective: **Checkmate** your opponent's King."
+
+**(5-15s) CORE MECHANIC:**
+"You control 16 unique pieces, each with distinct moves. White moves first, then players alternate, moving one piece per turn to capture or defend."
+
+**(15-22s) TIPS & BEST PRACTICES / COMMON MISTAKES:**
+"**Tip:** Protect your King and control the board's center. **Avoid:** Leaving valuable pieces undefended or making impulsive moves."
+
+**(22-30s) SUMMARY & NEXT STEPS:**
+"Practice is vital! Explore piece movements online, then play your first game. Enjoy the strategic journey!"

@@ -1,0 +1,350 @@
+# Rust
+/target/
+**/*.rs.bk
+*.pdb
+Cargo.lock
+
+# IDE and Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Environment and Configuration
+.env
+.env.local
+.env.production
+.env.staging
+.env.test
+.env.example
+.env.example.
+*.env
+
+# Security - API Keys and Secrets
+api_keys.txt
+secrets/
+private_keys/
+*.key
+*.pem
+*.p12
+*.pfx
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+database.url
+
+# Logs
+logs/
+*.log
+log.txt
+debug.log
+error.log
+
+# Application uploads and generated content
+uploads/
+downloads/
+temp/
+tmp/
+cache/
+*.tmp
+
+# Video files and media (large files)
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.wmv
+*.flv
+*.webm
+*.m4v
+*.3gp
+*.ogv
+
+# Audio files
+*.mp3
+*.wav
+*.flac
+*.aac
+*.ogg
+*.wma
+*.m4a
+
+# Image files (if not needed in repo)
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.bmp
+*.tiff
+*.svg
+*.ico
+*.webp
+
+# Backup and temporary files
+*.bak
+*.backup
+*.old
+*.orig
+*.save
+*.temp
+
+# Build artifacts
+dist/
+build/
+out/
+bin/
+obj/
+
+# Documentation build
+docs/_build/
+site/
+
+# Package manager
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Python (if any Python scripts)
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+*.egg-info/
+
+# Testing
+coverage/
+.coverage
+.nyc_output
+test-results/
+test-reports/
+junit.xml
+
+# FFmpeg and video processing
+ffmpeg_output/
+processed_videos/
+thumbnails/
+frames_output/
+video_segments/
+
+# Application specific
+chat_history/
+user_data/
+sessions/
+temp_files/
+work_dir/
+
+# Rust-specific build artifacts
+target/
+**/*.rs.bk
+*.pdb
+
+# Backup of original files
+*.orig
+*.rej
+
+# Local development
+.local/
+local_config/
+dev_files/
+
+# Performance profiling
+perf.data*
+cachegrind.out.*
+callgrind.out.*
+
+# IDE specific
+.vs/
+*.vcxproj.user
+*.vcxproj.filters
+
+# JetBrains IDEs
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Vim
+*.swp
+*.swo
+Session.vim
+.netrwhist
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+auto-save-list
+tramp
+.\#*
+
+# Microsoft Visual Studio Code
+.vscode/
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# Generated documentation
+doc/
+docs/build/
+
+# SSL certificates and keys
+*.crt
+*.ca-bundle
+
+# Configuration files with sensitive data
+config/production.toml
+config/staging.toml
+secrets.toml
+
+# Large datasets or models
+*.model
+datasets/
+training_data/
+
+# Compiled binaries
+generate_jwt_secret
+video_editor
+
+# System files
+.fuse_hidden*
+.nfs*
+
+# Application logs
+app.log
+access.log
+application.log
+
+# Temporary directories
+/tmp/
+/temp/
+/.tmp/
+
+# Rust analyzer files
+rust-project.json
+
+# Benchmark results
+bench_results/
+criterion/
+
+# WebAssembly
+*.wasm
+pkg/
+
+# Docker
+.dockerignore
+docker-compose.override.yml
+
+# Kubernetes
+*.kubeconfig
+
+# Terraform
+*.tfstate
+*.tfstate.*
+.terraform/
+
+# Cloud provider configs
+.aws/
+.gcp/
+.azure/
+
+# Monitoring and metrics
+prometheus_data/
+grafana_data/
+
+# Load testing
+load_test_results/
+
+# Security scanning results
+security_reports/
+vulnerability_scan.txt
+
+# Application specific outputs
+output_*.mp4
+processed_*.mp4
+temp_video_*.mp4
+thumbnail_*.jpg
+extracted_audio_*.mp3
+
+# Markdown files (except README.md)
+*.md
+!README.md
+
+# Chat export files
+chat_export_*.json
+conversation_history_*.txt
+
+# User uploaded content (if storing locally)
+user_uploads/
+user_content/
+
+# Generated thumbnails and previews
+preview_images/
+video_thumbnails/
+
+# FFmpeg temporary files
+ffmpeg_*.log
+ffmpeg_temp_*
+
+# Database migrations backups
+migrations/backup/
+
+# Certificate authority files
+ca.crt
+ca.key
+server.crt
+server.key
+client.crt
+client.key
+
+# JWT keys
+jwt_private.key
+jwt_public.key
+
+# Application state
+app_state.json
+runtime_config.json
+
+# Crash dumps
+core
+*.dmp
+crash_*.txt
+
+# Memory dumps
+heap_*.prof
+mem_*.prof
+
+# Network debugging
+*.pcap
+*.cap
+
+# Backup configurations
+backup_config/
+restore_points/
+
+# Development utilities
+dev_tools/
+debug_output/
