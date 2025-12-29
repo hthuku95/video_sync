@@ -1,0 +1,570 @@
+use std::env;
+use std::path::Path;
+use serde::{Deserialize, Serialize};
+use gstreamer as gst;
+use gstreamer::prelude::*;
+use gstreamer_pbutils as gst_pbutils;
+use gstreamer_pbutils::prelude::DiscovererStreamInfoExt;
+
+// Serializable structs for AI Agent tool responses
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VideoMetadata {
+    pub file_path: String,
+    pub duration_seconds: f64,
+    pub width: u32,
+    pub height: u32,
+    pub fps: f64,
+    pub has_audio: bool,
+    pub has_video: bool,
+    pub format: String,
+    pub file_size_mb: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OperationResult {
+    pub success: bool,
+    pub output_file: String,
+    pub operation: String,
+    pub duration_seconds: f64,
+    pub message: String,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrimParameters {
+    pub input_file: String,
+    pub output_file: String,
+    pub start_seconds: f64,
+    pub end_seconds: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExtractParameters {
+    pub input_file: String,
+    pub output_file: String,
+    pub start_seconds: f64,
+    pub end_seconds: f64,
+}
+
+// Tool-friendly functions that can be easily wrapped for AI Agent
+
+/// Analyze a video file and return metadata
+/// This is a pure function - no side effects, just returns data
+pub fn analyze_video(file_path: &str) -> Result<VideoMetadata, String> {
+    // Initialize GStreamer if needed
+    gst::init().map_err(|e| format!("GStreamer init failed: {}", e))?;
+    
+    let path = Path::new(file_path);
+    if !path.exists() {
+        return Err(format!("File does not exist: {}", file_path));
+    }
+
+    let file_size_mb = std::fs::metadata(path)
+        .map(|m| m.len() as f64 / (1024.0 * 1024.0))
+        .unwrap_or(0.0);
+
+    let timeout = gst::ClockTime::from_seconds(10);
+    let absolute_path = path.canonicalize()
+        .map_err(|e| format!("Error getting absolute path: {}", e))?;
+
+    let uri = format!("file://{}", absolute_path.to_string_lossy());
+
+    let discoverer = gst_pbutils::Discoverer::new(timeout)
+        .map_err(|e| format!("Failed to create Discoverer: {}", e))?;
+
+    let info = discoverer.discover_uri(&uri)
+        .map_err(|e| format!("Failed to discover URI: {}", e))?;
+
+    let duration_seconds = info.duration()
+        .map(|d| d.seconds() as f64 + d.mseconds() as f64 / 1000.0)
+        .unwrap_or(0.0);
+
+    let mut metadata = VideoMetadata {
+        file_path: file_path.to_string(),
+        duration_seconds,
+        width: 0,
+        height: 0,
+        fps: 0.0,
+        has_audio: false,
+        has_video: false,
+        format: "unknown".to_string(),
+        file_size_mb,
+    };
+
+    // Analyze video streams
+    if let Some(video_stream) = info.video_streams().first() {
+        if let Some(video_info) = video_stream.downcast_ref::<gst_pbutils::DiscovererVideoInfo>() {
+            metadata.width = video_info.width();
+            metadata.height = video_info.height();
+            metadata.fps = video_info.framerate().numer() as f64 / video_info.framerate().denom() as f64;
+            metadata.has_video = true;
+        }
+    }
+
+    // Check for audio
+    metadata.has_audio = !info.audio_streams().is_empty();
+
+    // Try to determine format from container
+    if let Some(container_info) = info.container_streams().first() {
+        if let Some(caps) = container_info.caps() {
+            if let Some(structure) = caps.structure(0) {
+                metadata.format = structure.name().to_string();
+            }
+        }
+    }
+
+    Ok(metadata)
+}
+
+/// Trim a video file - pure function that performs the operation and returns result
+pub fn trim_video(params: &TrimParameters) -> Result<OperationResult, String> {
+    // Initialize GStreamer
+    gst::init().map_err(|e| format!("GStreamer init failed: {}", e))?;
+
+    // Validate input
+    if !Path::new(&params.input_file).exists() {
+        return Ok(OperationResult {
+            success: false,
+            output_file: params.output_file.clone(),
+            operation: "trim".to_string(),
+            duration_seconds: 0.0,
+            message: format!("Input file does not exist: {}", params.input_file),
+            error: Some("File not found".to_string()),
+        });
+    }
+
+    if params.start_seconds >= params.end_seconds {
+        return Ok(OperationResult {
+            success: false,
+            output_file: params.output_file.clone(),
+            operation: "trim".to_string(),
+            duration_seconds: 0.0,
+            message: "Start time must be less than end time".to_string(),
+            error: Some("Invalid time range".to_string()),
+        });
+    }
+
+    let start_time = gst::ClockTime::from_nseconds((params.start_seconds * 1_000_000_000.0) as u64);
+    let end_time = gst::ClockTime::from_nseconds((params.end_seconds * 1_000_000_000.0) as u64);
+    let duration = params.end_seconds - params.start_seconds;
+
+    // Get video info to determine if it has audio
+    let metadata = analyze_video(&params.input_file)?;
+
+    // Build pipeline based on whether video has audio
+    let pipeline_str = if metadata.has_video && metadata.has_audio {
+        // Video with audio
+        format!(
+            "filesrc location=\"{}\" ! decodebin name=dec ! videoconvert ! x264enc ! mux.video_0 \
+             dec. ! audioconvert ! avenc_aac ! mux.audio_0 \
+             mp4mux name=mux ! filesink location=\"{}\"",
+            params.input_file, params.output_file
+        )
+    } else if metadata.has_video && !metadata.has_audio {
+        // Video only
+        format!(
+            "filesrc location=\"{}\" ! decodebin ! videoconvert ! x264enc ! mp4mux ! filesink location=\"{}\"",
+            params.input_file, params.output_file
+        )
+    } else if !metadata.has_video && metadata.has_audio {
+        // Audio only (like MP3)
+        format!(
+            "filesrc location=\"{}\" ! decodebin ! audioconvert ! avenc_aac ! mux. \
+             mp4mux name=mux ! filesink location=\"{}\"",
+            params.input_file, params.output_file
+        )
+    } else {
+        return Ok(OperationResult {
+            success: false,
+            output_file: params.output_file.clone(),
+            operation: "trim".to_string(),
+            duration_seconds: 0.0,
+            message: "File has neither audio nor video".to_string(),
+            error: Some("Invalid media file".to_string()),
+        });
+    };
+
+    // Execute the pipeline
+    match execute_pipeline(&pipeline_str, start_time, end_time) {
+        Ok(_) => Ok(OperationResult {
+            success: true,
+            output_file: params.output_file.clone(),
+            operation: "trim".to_string(),
+            duration_seconds: duration,
+            message: format!("Successfully trimmed video from {:.1}s to {:.1}s", params.start_seconds, params.end_seconds),
+            error: None,
+        }),
+        Err(e) => Ok(OperationResult {
+            success: false,
+            output_file: params.output_file.clone(),
+            operation: "trim".to_string(),
+            duration_seconds: 0.0,
+            message: format!("Failed to trim video: {}", e),
+            error: Some(e),
+        }),
+    }
+}
+
+/// Extract a video segment - essentially the same as trim but with different semantics
+pub fn extract_video_segment(params: &ExtractParameters) -> Result<OperationResult, String> {
+    let trim_params = TrimParameters {
+        input_file: params.input_file.clone(),
+        output_file: params.output_file.clone(),
+        start_seconds: params.start_seconds,
+        end_seconds: params.end_seconds,
+    };
+    
+    let mut result = trim_video(&trim_params)?;
+    result.operation = "extract".to_string();
+    result.message = result.message.replace("trimmed", "extracted");
+    Ok(result)
+}
+
+/// Get video duration quickly - useful for validation
+pub fn get_video_duration(file_path: &str) -> Result<f64, String> {
+    let metadata = analyze_video(file_path)?;
+    Ok(metadata.duration_seconds)
+}
+
+/// Validate video file - check if it exists and is readable
+pub fn validate_video_file(file_path: &str) -> Result<bool, String> {
+    if !Path::new(file_path).exists() {
+        return Ok(false);
+    }
+    
+    // Try to analyze - if it succeeds, file is valid
+    match analyze_video(file_path) {
+        Ok(_) => Ok(true),
+        Err(_) => Ok(false),
+    }
+}
+
+// Helper function to execute a GStreamer pipeline with seeking
+fn execute_pipeline(pipeline_str: &str, start_time: gst::ClockTime, end_time: gst::ClockTime) -> Result<(), String> {
+    println!("Creating pipeline: {}", pipeline_str);
+    
+    let pipeline = gst::parse::launch(pipeline_str)
+        .map_err(|e| format!("Failed to create pipeline: {}", e))?
+        .downcast::<gst::Pipeline>()
+        .map_err(|_| "Created element is not a pipeline")?;
+
+    let bus = pipeline.bus().unwrap();
+
+    // Set to ready first, then paused
+    println!("Setting pipeline to ready state...");
+    pipeline.set_state(gst::State::Ready)
+        .map_err(|e| format!("Failed to set pipeline to ready: {}", e))?;
+
+    println!("Setting pipeline to paused state...");
+    pipeline.set_state(gst::State::Paused)
+        .map_err(|e| format!("Failed to set pipeline to paused: {}", e))?;
+
+    // Wait for async done (preroll complete) with timeout
+    println!("Waiting for preroll...");
+    let mut preroll_done = false;
+    let start_wait = std::time::Instant::now();
+    
+    while !preroll_done && start_wait.elapsed() < std::time::Duration::from_secs(15) {
+        if let Some(msg) = bus.timed_pop(gst::ClockTime::from_nseconds(100_000_000)) {
+            match msg.view() {
+                gst::MessageView::AsyncDone(_) => {
+                    println!("Preroll complete");
+                    preroll_done = true;
+                }
+                gst::MessageView::Error(err) => {
+                    pipeline.set_state(gst::State::Null).ok();
+                    return Err(format!("Error during preroll: {}", err.error()));
+                }
+                _ => {}
+            }
+        }
+    }
+
+    if !preroll_done {
+        pipeline.set_state(gst::State::Null).ok();
+        return Err("Timeout waiting for preroll".to_string());
+    }
+
+    // Try seeking without KEY_UNIT flag for more accurate seeking
+    println!("Seeking to {}s - {}s...", start_time.seconds(), end_time.seconds());
+    let seek_result = pipeline.seek(
+        1.0,
+        gst::SeekFlags::FLUSH | gst::SeekFlags::ACCURATE,
+        gst::SeekType::Set,
+        start_time,
+        gst::SeekType::Set,
+        end_time,
+    );
+
+    if seek_result.is_err() {
+        // Try alternative approach: seek without end time and manually send EOS
+        println!("Segment seek failed, trying simple seek...");
+        let simple_seek = pipeline.seek_simple(
+            gst::SeekFlags::FLUSH,
+            start_time,
+        );
+        
+        if simple_seek.is_err() {
+            pipeline.set_state(gst::State::Null).ok();
+            return Err("Failed to seek in video".to_string());
+        }
+    }
+
+    // Start playback
+    println!("Starting playback...");
+    pipeline.set_state(gst::State::Playing)
+        .map_err(|e| format!("Failed to start playback: {}", e))?;
+
+    // Monitor pipeline with progress
+    let mut last_position = gst::ClockTime::ZERO;
+    let target_duration = end_time - start_time;
+    let mut eos_sent = false;
+    
+    println!("Processing...");
+
+    loop {
+        // Check for messages
+        if let Some(msg) = bus.timed_pop(gst::ClockTime::from_nseconds(100_000_000)) {
+            match msg.view() {
+                gst::MessageView::Error(err) => {
+                    pipeline.set_state(gst::State::Null).ok();
+                    return Err(format!("Pipeline error: {}", err.error()));
+                }
+                gst::MessageView::Eos(..) => {
+                    println!("End of stream reached");
+                    break;
+                }
+                gst::MessageView::StateChanged(sc) => {
+                    if sc.src().map(|s| s == &pipeline).unwrap_or(false) 
+                        && sc.current() == gst::State::Playing 
+                        && last_position == gst::ClockTime::ZERO {
+                        println!("Pipeline is now playing");
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Check position and send EOS if needed
+        if let Some(position) = pipeline.query_position::<gst::ClockTime>() {
+            if position != last_position && target_duration > gst::ClockTime::ZERO {
+                let progress = if position >= start_time {
+                    ((position - start_time).nseconds() as f64 / target_duration.nseconds() as f64 * 100.0).min(100.0)
+                } else {
+                    0.0
+                };
+                print!("\rProgress: {:.1}%", progress);
+                std::io::Write::flush(&mut std::io::stdout()).unwrap();
+                last_position = position;
+            }
+            
+            // Send EOS when we reach the end time (or slightly before to be safe)
+            if !eos_sent && position >= end_time - gst::ClockTime::from_nseconds(100_000_000) {
+                println!("\nReached end time, sending EOS...");
+                pipeline.send_event(gst::event::Eos::new());
+                eos_sent = true;
+            }
+        }
+
+        // Safety timeout - if we've been playing too long, force EOS
+        if !eos_sent && last_position > gst::ClockTime::ZERO {
+            let expected_duration = target_duration + gst::ClockTime::from_seconds(2);
+            if last_position - start_time > expected_duration {
+                println!("\nForcing EOS due to timeout...");
+                pipeline.send_event(gst::event::Eos::new());
+                eos_sent = true;
+            }
+        }
+    }
+
+    println!(); // New line after progress
+
+    // Clean shutdown
+    pipeline.set_state(gst::State::Null)
+        .map_err(|e| format!("Failed to set pipeline to null: {}", e))?;
+
+    // Give the pipeline a moment to finish writing
+    std::thread::sleep(std::time::Duration::from_millis(500));
+
+    println!("Processing completed successfully");
+    Ok(())
+}
+
+fn format_duration(seconds: f64) -> String {
+    let hours = (seconds / 3600.0) as u32;
+    let minutes = ((seconds % 3600.0) / 60.0) as u32;
+    let secs = (seconds % 60.0) as u32;
+    let millis = ((seconds % 1.0) * 1000.0) as u32;
+    format!("{:02}:{:02}:{:02}.{:03}", hours, minutes, secs, millis)
+}
+
+// CLI interface for testing the tool functions
+fn main() {
+    let args: Vec<String> = env::args().collect();
+    
+    if args.len() < 2 {
+        println!("Video Editor - Tool Functions for AI Agent");
+        println!("Usage: {} <command> [options]", args[0]);
+        println!("\nCommands:");
+        println!("  analyze <input_file>                    - Analyze video file");
+        println!("  trim <input_file> <output_file> <start_sec> <end_sec>  - Trim video");
+        println!("  extract <input_file> <output_file> <start_sec> <end_sec> - Extract segment");
+        println!("  duration <input_file>                   - Get video duration");
+        println!("  validate <input_file>                   - Validate video file");
+        return;
+    }
+
+    let command = &args[1];
+
+    match command.as_str() {
+        "analyze" => {
+            if args.len() < 3 {
+                eprintln!("Usage: {} analyze <input_file>", args[0]);
+                return;
+            }
+            
+            match analyze_video(&args[2]) {
+                Ok(metadata) => {
+                    println!("=== Video Analysis ===");
+                    println!("File: {}", metadata.file_path);
+                    println!("Duration: {}", format_duration(metadata.duration_seconds));
+                    if metadata.has_video {
+                        println!("Video: {}x{} @ {:.2} fps", metadata.width, metadata.height, metadata.fps);
+                    }
+                    println!("Has audio: {}", metadata.has_audio);
+                    println!("Has video: {}", metadata.has_video);
+                    println!("Format: {}", metadata.format);
+                    println!("File size: {:.2} MB", metadata.file_size_mb);
+                    
+                    // Print JSON for AI Agent consumption
+                    println!("\n=== JSON Output ===");
+                    println!("{}", serde_json::to_string_pretty(&metadata).unwrap());
+                }
+                Err(err) => {
+                    eprintln!("Analysis failed: {}", err);
+                    std::process::exit(1);
+                }
+            }
+        }
+
+        "trim" => {
+            if args.len() < 6 {
+                eprintln!("Usage: {} trim <input_file> <output_file> <start_sec> <end_sec>", args[0]);
+                return;
+            }
+
+            let start_sec: f64 = args[4].parse().unwrap_or(0.0);
+            let end_sec: f64 = args[5].parse().unwrap_or(30.0);
+
+            let params = TrimParameters {
+                input_file: args[2].clone(),
+                output_file: args[3].clone(),
+                start_seconds: start_sec,
+                end_seconds: end_sec,
+            };
+
+            match trim_video(&params) {
+                Ok(result) => {
+                    if result.success {
+                        println!("✓ {}", result.message);
+                    } else {
+                        println!("✗ {}", result.message);
+                        if let Some(error) = &result.error {
+                            eprintln!("Error: {}", error);
+                        }
+                        std::process::exit(1);
+                    }
+                    
+                    // Print JSON result for AI Agent
+                    println!("\n=== JSON Output ===");
+                    println!("{}", serde_json::to_string_pretty(&result).unwrap());
+                }
+                Err(err) => {
+                    eprintln!("Trim failed: {}", err);
+                    std::process::exit(1);
+                }
+            }
+        }
+
+        "extract" => {
+            if args.len() < 6 {
+                eprintln!("Usage: {} extract <input_file> <output_file> <start_sec> <end_sec>", args[0]);
+                return;
+            }
+
+            let start_sec: f64 = args[4].parse().unwrap_or(0.0);
+            let end_sec: f64 = args[5].parse().unwrap_or(30.0);
+
+            let params = ExtractParameters {
+                input_file: args[2].clone(),
+                output_file: args[3].clone(),
+                start_seconds: start_sec,
+                end_seconds: end_sec,
+            };
+
+            match extract_video_segment(&params) {
+                Ok(result) => {
+                    if result.success {
+                        println!("✓ {}", result.message);
+                    } else {
+                        println!("✗ {}", result.message);
+                        std::process::exit(1);
+                    }
+                    
+                    // Print JSON result
+                    println!("\n=== JSON Output ===");
+                    println!("{}", serde_json::to_string_pretty(&result).unwrap());
+                }
+                Err(err) => {
+                    eprintln!("Extract failed: {}", err);
+                    std::process::exit(1);
+                }
+            }
+        }
+
+        "duration" => {
+            if args.len() < 3 {
+                eprintln!("Usage: {} duration <input_file>", args[0]);
+                return;
+            }
+            
+            match get_video_duration(&args[2]) {
+                Ok(duration) => {
+                    println!("Duration: {:.2} seconds ({})", duration, format_duration(duration));
+                }
+                Err(err) => {
+                    eprintln!("Failed to get duration: {}", err);
+                    std::process::exit(1);
+                }
+            }
+        }
+
+        "validate" => {
+            if args.len() < 3 {
+                eprintln!("Usage: {} validate <input_file>", args[0]);
+                return;
+            }
+            
+            match validate_video_file(&args[2]) {
+                Ok(is_valid) => {
+                    if is_valid {
+                        println!("✓ Video file is valid");
+                    } else {
+                        println!("✗ Video file is invalid or unreadable");
+                        std::process::exit(1);
+                    }
+                }
+                Err(err) => {
+                    eprintln!("Validation error: {}", err);
+                    std::process::exit(1);
+                }
+            }
+        }
+
+        _ => {
+            println!("Unknown command: {}", command);
+            println!("Available commands: analyze, trim, extract, duration, validate");
+            std::process::exit(1);
+        }
+    }
+}
