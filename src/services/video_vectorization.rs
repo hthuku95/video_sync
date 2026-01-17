@@ -49,15 +49,28 @@ impl VideoVectorizationService {
         let keyframes = Self::extract_keyframes(video_file_path, &frames_dir).await?;
         info!("Extracted {} keyframes from video", keyframes.len());
 
-        // Step 2: Analyze each frame using Gemini multimodal model
+        // Step 2: Analyze each frame using multimodal vision (Claude OR Gemini)
+        // NOTE: Frame ANALYSIS can use Claude vision (preferred for Claude agents) OR Gemini multimodal
+        // Frame EMBEDDINGS (Step 4) can separately use Voyage AI or Gemini
         let mut frame_metadata = Vec::new();
-        let gemini_client = match &state.gemini_client {
-            Some(client) => client,
-            None => return Err("Gemini client not available".into()),
-        };
-        
+
+        // Prefer Claude if available, fallback to Gemini
+        let use_claude_vision = state.claude_client.is_some();
+
+        if !use_claude_vision && state.gemini_client.is_none() {
+            return Err("No vision-capable AI model available (need Claude or Gemini)".into());
+        }
+
         for (frame_number, frame_path) in keyframes.iter().enumerate() {
-            match Self::analyze_frame_with_gemini(frame_path, frame_number as u32, gemini_client).await {
+            let metadata_result = if use_claude_vision {
+                // Use Claude vision
+                Self::analyze_frame_with_claude(frame_path, frame_number as u32, state.claude_client.as_ref().unwrap()).await
+            } else {
+                // Use Gemini vision
+                Self::analyze_frame_with_gemini(frame_path, frame_number as u32, state.gemini_client.as_ref().unwrap()).await
+            };
+
+            match metadata_result {
                 Ok(metadata) => {
                     frame_metadata.push(metadata);
                 },
@@ -68,7 +81,11 @@ impl VideoVectorizationService {
         }
 
         // Step 3: Generate overall video summary using frame analysis
-        let video_summary = Self::generate_video_summary(&frame_metadata, gemini_client).await?;
+        let video_summary = if use_claude_vision {
+            Self::generate_video_summary_with_claude(&frame_metadata, state.claude_client.as_ref().unwrap()).await?
+        } else {
+            Self::generate_video_summary_with_gemini(&frame_metadata, state.gemini_client.as_ref().unwrap()).await?
+        };
 
         // Step 4: Create embeddings and store in Qdrant
         let vector_data = VideoVectorData {
@@ -173,6 +190,71 @@ impl VideoVectorizationService {
         })
     }
 
+    /// Analyze individual frame using Claude vision API
+    async fn analyze_frame_with_claude(
+        frame_path: &str,
+        frame_number: u32,
+        claude_client: &crate::claude_client::ClaudeClient,
+    ) -> Result<VideoFrameMetadata, Box<dyn std::error::Error + Send + Sync>> {
+        // Read frame data as base64
+        let frame_data = fs::read(frame_path).await?;
+        let frame_base64 = BASE64_STANDARD.encode(&frame_data);
+
+        let analysis_prompt = format!(
+            "Analyze this video frame (frame #{}) and provide a detailed description.
+            Focus on:
+            1. Main subjects and objects in the scene
+            2. Actions or activities taking place
+            3. Visual style, colors, and composition
+            4. Text or graphics visible in the frame
+            5. Overall mood and context
+
+            Respond in JSON format with 'description' and 'visual_features' (array of key features).",
+            frame_number
+        );
+
+        // Build Claude request with image
+        use crate::claude_client::{ClaudeMessage, ClaudeContent, ContentBlock, ImageSource};
+
+        let messages = vec![ClaudeMessage {
+            role: "user".to_string(),
+            content: ClaudeContent::Blocks(vec![
+                ContentBlock::Image {
+                    source: ImageSource {
+                        source_type: "base64".to_string(),
+                        media_type: "image/jpeg".to_string(),
+                        data: frame_base64,
+                    },
+                },
+                ContentBlock::Text {
+                    text: analysis_prompt,
+                },
+            ]),
+        }];
+
+        let response = claude_client.generate_content(messages, None, None).await?;
+
+        // Extract text from response
+        let analysis_result = match &response.content.first() {
+            Some(crate::claude_client::ResponseContent::Text { text }) => text.clone(),
+            _ => return Err("No text response from Claude".into()),
+        };
+
+        // Parse the AI response to extract structured data
+        let (description, visual_features) = Self::parse_frame_analysis(&analysis_result);
+
+        // Calculate timestamp based on frame number
+        let timestamp_seconds = frame_number as f64;
+
+        Ok(VideoFrameMetadata {
+            frame_number,
+            timestamp_seconds,
+            frame_path: frame_path.to_string(),
+            description,
+            visual_features,
+        })
+    }
+
     /// Parse AI analysis response to extract description and features
     fn parse_frame_analysis(analysis_result: &str) -> (String, Vec<String>) {
         // Try to parse as JSON first
@@ -181,14 +263,14 @@ impl VideoVectorizationService {
                 .and_then(|v| v.as_str())
                 .unwrap_or(analysis_result)
                 .to_string();
-            
+
             let features = parsed.get("visual_features")
                 .and_then(|v| v.as_array())
                 .map(|arr| arr.iter()
                     .filter_map(|v| v.as_str().map(String::from))
                     .collect())
                 .unwrap_or_else(|| vec!["unstructured_analysis".to_string()]);
-                
+
             (description, features)
         } else {
             // Fallback to using the raw text as description
@@ -196,8 +278,8 @@ impl VideoVectorizationService {
         }
     }
 
-    /// Generate overall video summary from frame analyses
-    async fn generate_video_summary(
+    /// Generate overall video summary from frame analyses using Gemini
+    async fn generate_video_summary_with_gemini(
         frame_metadata: &[VideoFrameMetadata],
         gemini_client: &GeminiClient,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
@@ -249,7 +331,52 @@ impl VideoVectorizationService {
                 _ => None,
             })
             .unwrap_or_else(|| "Failed to generate video summary".to_string());
-            
+
+        Ok(summary)
+    }
+
+    /// Generate overall video summary from frame analyses using Claude
+    async fn generate_video_summary_with_claude(
+        frame_metadata: &[VideoFrameMetadata],
+        claude_client: &crate::claude_client::ClaudeClient,
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        if frame_metadata.is_empty() {
+            return Ok("No frames analyzed".to_string());
+        }
+
+        let frame_descriptions: Vec<String> = frame_metadata
+            .iter()
+            .map(|f| format!("Frame {}: {}", f.frame_number, f.description))
+            .collect();
+
+        let summary_prompt = format!(
+            "Based on these video frame analyses, create a comprehensive summary of the video content:
+
+            {}
+
+            Provide a 2-3 sentence summary that captures:
+            1. The main theme/content of the video
+            2. Key visual elements and style
+            3. Overall narrative or message",
+            frame_descriptions.join("\n")
+        );
+
+        // Create Claude request
+        use crate::claude_client::{ClaudeMessage, ClaudeContent};
+
+        let messages = vec![ClaudeMessage {
+            role: "user".to_string(),
+            content: ClaudeContent::Text(summary_prompt),
+        }];
+
+        let response = claude_client.generate_content(messages, None, None).await?;
+
+        // Extract text from response
+        let summary = match &response.content.first() {
+            Some(crate::claude_client::ResponseContent::Text { text }) => text.clone(),
+            _ => "Failed to generate video summary".to_string(),
+        };
+
         Ok(summary)
     }
 
@@ -263,14 +390,32 @@ impl VideoVectorizationService {
             None => return Err("Qdrant client not available".into()),
         };
 
-        // Generate embeddings for video summary and each frame description
-        let gemini_client = match &state.gemini_client {
-            Some(client) => client,
-            None => return Err("Gemini client not available".into()),
-        };
+        // CRITICAL: Support BOTH Voyage AI (for Claude) and Gemini embeddings
+        // Prefer Voyage AI if available (better Claude compatibility), fallback to Gemini
 
         // 1. Store video-level embedding
-        let video_embedding = Self::generate_text_embedding(&vector_data.video_summary, gemini_client).await?;
+        let video_embedding = if let Some(ref voyage_embeddings) = state.voyage_embeddings {
+            // Use Voyage AI for Claude-compatible embeddings
+            info!("Using Voyage AI embeddings for video vectorization");
+            match voyage_embeddings.generate_single_embedding(vector_data.video_summary.clone()).await {
+                Ok(emb) => emb,
+                Err(e) => {
+                    warn!("Voyage AI embedding failed, falling back to Gemini: {}", e);
+                    // Fallback to Gemini
+                    if let Some(ref gemini_client) = state.gemini_client {
+                        Self::generate_text_embedding_gemini(&vector_data.video_summary, gemini_client).await?
+                    } else {
+                        return Err("No embedding provider available (need Voyage AI or Gemini)".into());
+                    }
+                }
+            }
+        } else if let Some(ref gemini_client) = state.gemini_client {
+            // Use Gemini embeddings
+            info!("Using Gemini embeddings for video vectorization");
+            Self::generate_text_embedding_gemini(&vector_data.video_summary, gemini_client).await?
+        } else {
+            return Err("No embedding provider available (need Voyage AI or Gemini)".into());
+        };
         
         let video_point_id = format!("video_{}", vector_data.file_id);
         let video_payload = json!({
@@ -287,9 +432,27 @@ impl VideoVectorizationService {
         qdrant_client.upsert_point(&video_point_id, &video_embedding, &video_payload).await?;
         info!("Stored video-level embedding for file: {}", vector_data.file_id);
 
-        // 2. Store frame-level embeddings
+        // 2. Store frame-level embeddings (use same embedding provider as video-level)
         for frame in &vector_data.frame_metadata {
-            let frame_embedding = Self::generate_text_embedding(&frame.description, gemini_client).await?;
+            let frame_embedding = if let Some(ref voyage_embeddings) = state.voyage_embeddings {
+                // Use Voyage AI
+                match voyage_embeddings.generate_single_embedding(frame.description.clone()).await {
+                    Ok(emb) => emb,
+                    Err(e) => {
+                        warn!("Voyage AI embedding failed for frame {}, falling back to Gemini: {}", frame.frame_number, e);
+                        if let Some(ref gemini_client) = state.gemini_client {
+                            Self::generate_text_embedding_gemini(&frame.description, gemini_client).await?
+                        } else {
+                            return Err("No embedding provider available".into());
+                        }
+                    }
+                }
+            } else if let Some(ref gemini_client) = state.gemini_client {
+                // Use Gemini
+                Self::generate_text_embedding_gemini(&frame.description, gemini_client).await?
+            } else {
+                return Err("No embedding provider available".into());
+            };
             
             let frame_point_id = format!("frame_{}_f{}", vector_data.file_id, frame.frame_number);
             let frame_payload = json!({
@@ -312,7 +475,7 @@ impl VideoVectorizationService {
     }
 
     /// Generate text embedding using Gemini embedding model
-    async fn generate_text_embedding(
+    async fn generate_text_embedding_gemini(
         text: &str,
         gemini_client: &GeminiClient,
     ) -> Result<Vec<f32>, Box<dyn std::error::Error + Send + Sync>> {
@@ -350,13 +513,14 @@ impl VideoVectorizationService {
         limit: usize,
         state: &Arc<AppState>,
     ) -> Result<Vec<serde_json::Value>, Box<dyn std::error::Error + Send + Sync>> {
-        let gemini_client = match &state.gemini_client {
-            Some(client) => client,
-            None => return Err("Gemini client not available".into()),
+        // Generate embedding for the search query (support both Voyage AI and Gemini)
+        let query_embedding = if let Some(ref voyage_embeddings) = state.voyage_embeddings {
+            voyage_embeddings.generate_single_embedding(query.to_string()).await?
+        } else if let Some(ref gemini_client) = state.gemini_client {
+            Self::generate_text_embedding_gemini(query, gemini_client).await?
+        } else {
+            return Err("No embedding provider available".into());
         };
-        
-        // Generate embedding for the search query
-        let query_embedding = Self::generate_text_embedding(query, gemini_client).await?;
 
         // Search in Qdrant with session filter
         let filter = json!({

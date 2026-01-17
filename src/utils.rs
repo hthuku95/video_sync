@@ -1,5 +1,7 @@
 // utils.rs - Pure FFmpeg utility functions (ZERO GStreamer!)
 use std::process::Command;
+use tokio::process::Command as TokioCommand;
+use std::time::Duration;
 
 /// Format duration in HH:MM:SS.mmm format
 pub fn format_duration(seconds: f64) -> String {
@@ -17,6 +19,49 @@ pub fn execute_ffmpeg_command(mut command: Command) -> Result<String, String> {
     let output = command
         .output()
         .map_err(|e| format!("Failed to execute FFmpeg: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("FFmpeg error: {}", stderr));
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+/// Execute FFmpeg command asynchronously with timeout to prevent hung processes
+/// Timeout is 5 minutes (300 seconds) by default
+pub async fn execute_ffmpeg_command_with_timeout(
+    mut command: TokioCommand,
+    timeout_secs: Option<u64>,
+) -> Result<String, String> {
+    let timeout_duration = Duration::from_secs(timeout_secs.unwrap_or(300));
+
+    tracing::debug!("Executing FFmpeg with {}s timeout: {:?}", timeout_duration.as_secs(), command);
+
+    // Spawn the FFmpeg process
+    let child = command
+        .kill_on_drop(true) // Ensure cleanup if timeout occurs
+        .spawn()
+        .map_err(|e| format!("Failed to spawn FFmpeg process: {}", e))?;
+
+    // Wait with timeout
+    let output = match tokio::time::timeout(timeout_duration, child.wait_with_output()).await {
+        Ok(Ok(output)) => output,
+        Ok(Err(e)) => {
+            return Err(format!("FFmpeg process failed: {}", e));
+        }
+        Err(_) => {
+            tracing::error!("❌ FFmpeg command timed out after {}s - process killed", timeout_duration.as_secs());
+            return Err(format!(
+                "FFmpeg operation timed out after {} seconds. This usually happens when:\n\
+                - System went to sleep/wake cycle\n\
+                - Network download stalled\n\
+                - Complex filter taking too long\n\
+                Process has been terminated.",
+                timeout_duration.as_secs()
+            ));
+        }
+    };
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);

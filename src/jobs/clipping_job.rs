@@ -70,7 +70,7 @@ pub async fn execute_clipping_job(
     update_job_status(job_id, "clips_extracted", 60, None, &app_state.db_pool).await?;
 
     // Step 4: Save clips to database
-    let clip_db_ids = save_clips_to_database(job_id, &clips, &app_state.db_pool).await?;
+    let clip_db_ids = save_clips_to_database(job_id, &clips, &linkage, &app_state.db_pool).await?;
 
     // Step 5: Upload clips to YouTube
     update_job_status(job_id, "posting", 70, None, &app_state.db_pool).await?;
@@ -93,7 +93,7 @@ pub async fn execute_clipping_job(
         .ok_or("Google OAuth client secret not configured")?;
 
     let uploader = ClipUploader::new(
-        youtube_client.clone(),
+        Arc::new(youtube_client.clone()),
         app_state.db_pool.clone(),
         oauth_client_id.clone(),
         oauth_client_secret.clone(),
@@ -117,6 +117,9 @@ pub async fn execute_clipping_job(
     // Step 6: Mark job as completed
     update_job_status(job_id, "completed", 100, None, &app_state.db_pool).await?;
     mark_job_completed(job_id, &app_state.db_pool).await?;
+
+    // Update linkage session timestamp (for 24-hour cooldown)
+    update_linkage_session_timestamp(linkage.id, &app_state.db_pool).await?;
 
     // Update linkage statistics
     update_linkage_stats(linkage.id, clips.len() as i32, uploaded_count, &app_state.db_pool).await?;
@@ -219,9 +222,22 @@ async fn mark_job_completed(job_id: i32, pool: &PgPool) -> Result<(), String> {
     Ok(())
 }
 
+async fn update_linkage_session_timestamp(linkage_id: i32, pool: &PgPool) -> Result<(), String> {
+    sqlx::query(
+        "UPDATE youtube_channel_linkages SET last_clipping_session_at = NOW() WHERE id = $1",
+    )
+    .bind(linkage_id)
+    .execute(pool)
+    .await
+    .map_err(|e| format!("Failed to update session timestamp: {}", e))?;
+
+    Ok(())
+}
+
 async fn save_clips_to_database(
     job_id: i32,
     clips: &[ExtractedClipData],
+    linkage: &ChannelLinkage,
     pool: &PgPool,
 ) -> Result<Vec<i32>, String> {
     let mut clip_ids = Vec::new();
@@ -231,8 +247,9 @@ async fn save_clips_to_database(
             "INSERT INTO extracted_clips
              (clipping_job_id, clip_number, local_clip_path,
               start_time_seconds, end_time_seconds, duration_seconds,
-              ai_title, ai_description, ai_tags, ai_confidence_score, viral_factors)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+              ai_title, ai_description, ai_tags, ai_confidence_score, viral_factors,
+              destination_channel_id)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
              RETURNING id",
         )
         .bind(job_id)
@@ -246,6 +263,7 @@ async fn save_clips_to_database(
         .bind(&clip.ai_tags)
         .bind(clip.ai_confidence_score)
         .bind(&clip.viral_factors)
+        .bind(linkage.destination_channel_id)
         .fetch_one(pool)
         .await
         .map_err(|e| format!("Failed to save clip: {}", e))?;

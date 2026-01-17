@@ -335,16 +335,9 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>, session_uuid: Option
                 // 💾 Save completed job results to conversation history (PostgreSQL + Qdrant)
                 if let crate::jobs::JobStatus::Completed { ref result, .. } = progress_update.status {
                     if !result.is_empty() {
-                        tracing::info!("💾 Saving completed job result to PostgreSQL for session: {}", session_id);
-                        let conversation_manager = crate::agent::conversation_manager::ConversationManager::new(state.db_pool.clone());
-                        let assistant_msg = crate::agent::conversation_manager::ConversationMessage::new_assistant(
-                            session_id.clone(),
-                            result.clone()
-                        );
-                        match conversation_manager.save_message(&assistant_msg).await {
-                            Ok(_) => tracing::info!("✅ Saved completed job result to PostgreSQL"),
-                            Err(e) => tracing::error!("❌ Failed to save job result to PostgreSQL: {}", e),
-                        }
+                        // NOTE: Message is already saved by the job itself (video_job.rs:197)
+                        // Saving here would create duplicate messages after page refresh
+                        tracing::debug!("📨 Job completed with result (message already saved by job): {}", result.chars().take(100).collect::<String>());
 
                         // 🔮 Also save to Qdrant vector database for enhanced context retrieval
                         if let Some(ref qdrant_client) = state.qdrant_client {

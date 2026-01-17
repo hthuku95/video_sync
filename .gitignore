@@ -20,6 +20,7 @@ Cargo.lock
 ehthumbs.db
 Thumbs.db
 
+AI_GUIDE
 # Environment and Configuration
 .env
 .env.local

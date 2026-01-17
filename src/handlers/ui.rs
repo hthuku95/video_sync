@@ -3509,7 +3509,7 @@ pub async fn chat_interface_with_session_id(session_id: Option<String>) -> Html<
                             <div style="font-size: 3rem; margin-bottom: 1rem;">📺</div>
                             <h3 style="color: #2c3e50; margin-bottom: 1rem;">No YouTube Channels Connected</h3>
                             <p style="color: #6c757d; margin-bottom: 1.5rem;">Connect your YouTube channel to start uploading videos directly</p>
-                            <button onclick="window.location.href='/youtube/connect?redirect_to=' + encodeURIComponent(window.location.pathname)" class="btn">Connect YouTube Channel</button>
+                            <button onclick="connectYouTubeChannel()" class="btn">Connect YouTube Channel</button>
                         </div>
                     `;
                 }
@@ -3527,6 +3527,39 @@ pub async fn chat_interface_with_session_id(session_id: Option<String>) -> Html<
         function closeYouTubeModal() {
             document.getElementById('youtubeModal').style.display = 'none';
             currentYouTubeVideo = null;
+        }
+
+        async function connectYouTubeChannel() {
+            try {
+                const authToken = localStorage.getItem('authToken');
+                if (!authToken) {
+                    alert('Please log in first');
+                    window.location.href = '/login';
+                    return;
+                }
+
+                // Fetch OAuth URL from backend with Authorization header
+                const response = await fetch('/youtube/connect?redirect_to=' + encodeURIComponent(window.location.pathname), {
+                    headers: { 'Authorization': 'Bearer ' + authToken }
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    alert('Failed to connect: ' + (error.message || 'Unknown error'));
+                    return;
+                }
+
+                const data = await response.json();
+                if (data.success && data.auth_url) {
+                    // Redirect to Google OAuth page
+                    window.location.href = data.auth_url;
+                } else {
+                    alert('Failed to get authorization URL');
+                }
+            } catch (error) {
+                console.error('Error connecting YouTube:', error);
+                alert('Failed to connect YouTube channel. Please try again.');
+            }
         }
 
         async function selectYouTubeChannel(channelId, channelName) {

@@ -20,6 +20,7 @@ mod qdrant_client;
 mod services;
 mod vector_db;
 mod clipping; // 📹 YouTube clipping feature
+mod tool_selector; // 🔧 Dynamic tool selection for AI agents
 
 // Video processing modules (from lib.rs)
 mod types;
@@ -312,6 +313,13 @@ async fn main() {
                 // Wait 5 minutes before next poll
                 tokio::time::sleep(tokio::time::Duration::from_secs(300)).await;
             }
+        });
+
+        // NEW: Start background worker for executing clipping jobs
+        let worker_state = shared_state.clone();
+        tokio::spawn(async move {
+            let worker = jobs::ClippingWorker::new(worker_state, 60); // Poll every 60 seconds
+            worker.run().await;
         });
     } else {
         tracing::warn!("YouTube client not available - clipping polling disabled");

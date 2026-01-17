@@ -10,6 +10,10 @@ use serde::{Serialize, Deserialize};
 use chrono::{DateTime, Utc};
 
 pub mod video_job;
+pub mod clipping_job;
+pub mod clipping_worker;
+
+pub use clipping_worker::ClippingWorker;
 
 /// Unique identifier for a background job
 pub type JobId = String;
@@ -25,9 +29,14 @@ pub enum JobStatus {
     /// Job is currently running
     Running {
         current_step: String,
-        progress_percent: f64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        progress_percent: Option<f64>,  // Now optional - use only when meaningful
         steps_completed: usize,
         total_steps: usize,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        completed_actions: Option<Vec<String>>,  // NEW: List of completed steps for visibility
+        #[serde(skip_serializing_if = "Option::is_none")]
+        current_action_detail: Option<String>,  // NEW: Detailed sub-step info
     },
     /// Job completed successfully
     Completed {
@@ -88,20 +97,23 @@ pub struct Job {
     pub created_at: DateTime<Utc>,
     pub started_at: Option<DateTime<Utc>>,
     pub completed_at: Option<DateTime<Utc>>,
+    pub last_heartbeat: DateTime<Utc>,  // NEW: Track last progress update to detect stuck jobs
     pub status: JobStatus,
     pub input_data: serde_json::Value,
 }
 
 impl Job {
     pub fn new(session_id: String, job_type: String, input_data: serde_json::Value) -> Self {
+        let now = Utc::now();
         Self {
             id: Uuid::new_v4().to_string(),
             session_id,
             user_id: None,
             job_type,
-            created_at: Utc::now(),
+            created_at: now,
             started_at: None,
             completed_at: None,
+            last_heartbeat: now,
             status: JobStatus::Queued { position: 0 },
             input_data,
         }
@@ -110,6 +122,17 @@ impl Job {
     pub fn with_user_id(mut self, user_id: String) -> Self {
         self.user_id = Some(user_id);
         self
+    }
+
+    /// Check if job appears to be stuck (no heartbeat for > 10 minutes while running)
+    pub fn is_possibly_stuck(&self) -> bool {
+        match &self.status {
+            JobStatus::Running { .. } => {
+                let elapsed = Utc::now() - self.last_heartbeat;
+                elapsed.num_minutes() > 10
+            }
+            _ => false,
+        }
     }
 }
 
@@ -200,6 +223,9 @@ impl JobManager {
         let mut jobs = self.jobs.write().await;
         if let Some(job) = jobs.get_mut(job_id) {
             job.status = status.clone();
+
+            // Update heartbeat whenever status changes (to detect stuck jobs)
+            job.last_heartbeat = Utc::now();
 
             // Update timestamps
             match &status {

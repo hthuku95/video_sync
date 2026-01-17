@@ -208,9 +208,11 @@ async fn get_output_info(
 fn generate_file_id(path: &PathBuf) -> String {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
-    
+
+    // Convert to string first to match tool_executor.rs behavior
+    let path_str = path.to_string_lossy().to_string();
     let mut hasher = DefaultHasher::new();
-    path.hash(&mut hasher);
+    path_str.hash(&mut hasher);
     format!("{:x}", hasher.finish())
 }
 
@@ -224,8 +226,15 @@ fn resolve_file_path(file_id: &str) -> Result<PathBuf, StatusCode> {
         for entry in root_entries.flatten() {
             let path = entry.path();
             if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("mp4") {
+                // Try matching with full path
                 if generate_file_id(&path) == file_id {
                     return Ok(path);
+                }
+                // Also try matching with just the filename (for backward compatibility)
+                if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
+                    if generate_file_id(&PathBuf::from(filename)) == file_id {
+                        return Ok(path);
+                    }
                 }
             }
         }
@@ -238,8 +247,17 @@ fn resolve_file_path(file_id: &str) -> Result<PathBuf, StatusCode> {
             let path = entry.path();
 
             // Check files in outputs/ directory
-            if path.is_file() && generate_file_id(&path) == file_id {
-                return Ok(path);
+            if path.is_file() {
+                // Try matching with full path
+                if generate_file_id(&path) == file_id {
+                    return Ok(path);
+                }
+                // Also try matching with just the filename (for backward compatibility)
+                if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
+                    if generate_file_id(&PathBuf::from(filename)) == file_id {
+                        return Ok(path);
+                    }
+                }
             }
 
             if path.is_dir() {
@@ -247,8 +265,15 @@ fn resolve_file_path(file_id: &str) -> Result<PathBuf, StatusCode> {
                 if let Ok(session_entries) = std::fs::read_dir(&path) {
                     for session_entry in session_entries.flatten() {
                         let session_path = session_entry.path();
+                        // Try matching with full path
                         if generate_file_id(&session_path) == file_id {
                             return Ok(session_path);
+                        }
+                        // Also try matching with just the filename
+                        if let Some(filename) = session_path.file_name().and_then(|n| n.to_str()) {
+                            if generate_file_id(&PathBuf::from(filename)) == file_id {
+                                return Ok(session_path);
+                            }
                         }
                     }
                 }

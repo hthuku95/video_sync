@@ -141,9 +141,11 @@ impl VideoEditingJob {
             tokio::spawn(async move {
                 let status = JobStatus::Running {
                     current_step: msg.clone(),
-                    progress_percent: (progress * 100.0) as f64,
+                    progress_percent: Some((progress * 100.0) as f64),
                     steps_completed: 0,
                     total_steps: 0,
+                    completed_actions: None,
+                    current_action_detail: None,
                 };
 
                 let update = ProgressUpdate::new(job_id.clone(), msg, status.clone());
@@ -472,9 +474,11 @@ impl VideoEditingJob {
                                     "▶️ Resuming job...",
                                     JobStatus::Running {
                                         current_step: "Resumed".to_string(),
-                                        progress_percent: 50.0,
+                                        progress_percent: Some(50.0),
                                         steps_completed: 0,
                                         total_steps: 0,
+                                        completed_actions: None,
+                                        current_action_detail: None,
                                     },
                                 ).await;
                             }
@@ -484,9 +488,11 @@ impl VideoEditingJob {
                                     &format!("🔄 Updated task: {:?}", new_input),
                                     JobStatus::Running {
                                         current_step: "Updated by user".to_string(),
-                                        progress_percent: 50.0,
+                                        progress_percent: Some(50.0),
                                         steps_completed: 0,
                                         total_steps: 0,
+                                        completed_actions: None,
+                                        current_action_detail: None,
                                     },
                                 ).await;
                                 // Note: Full dynamic update would require agent cooperation

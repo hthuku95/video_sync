@@ -34,6 +34,8 @@ pub struct ChannelLinkage {
     pub total_clips_generated: i32,
     pub total_clips_posted: i32,
     pub last_clip_generated_at: Option<DateTime<Utc>>,
+    pub last_clipping_session_at: Option<DateTime<Utc>>,
+    pub clipping_cooldown_hours: i32,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -178,4 +180,28 @@ pub struct ClipCandidate {
 pub struct ReviewResult {
     pub passed: bool,
     pub feedback: String,
+}
+
+/// Clipped source video tracking record
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct ClippedSourceVideo {
+    pub id: i32,
+    pub source_channel_id: i32,
+    pub video_id: String,
+    pub video_title: Option<String>,
+    pub video_published_at: Option<DateTime<Utc>>,
+    pub first_clipped_at: DateTime<Utc>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Pending unclipped video (session memory)
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct PendingUnclippedVideo {
+    pub id: i32,
+    pub linkage_id: i32,
+    pub video_id: String,
+    pub video_title: Option<String>,
+    pub video_published_at: Option<DateTime<Utc>>,
+    pub discovered_at: DateTime<Utc>,
+    pub created_at: DateTime<Utc>,
 }

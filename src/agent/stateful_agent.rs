@@ -192,19 +192,78 @@ Trust your understanding of natural language to determine user intent:
                                 .filter(|s| !s.trim().is_empty());
 
                             let tool_result = if let Some(jid) = job_id {
-                                // Check specific job
-                                if let Some(status) = job_manager.get_job_status(jid).await {
-                                    serde_json::to_string_pretty(&serde_json::json!({
-                                        "job_id": jid,
-                                        "status": format!("{:?}", status),
-                                        "found": true
-                                    })).unwrap_or_else(|_| "Error formatting job status".to_string())
+                                // Check specific job with enhanced details
+                                if let Some(job) = job_manager.get_job(jid).await {
+                                    let elapsed = if let Some(started) = job.started_at {
+                                        let duration = chrono::Utc::now().signed_duration_since(started);
+                                        format!("{}m {}s", duration.num_minutes(), duration.num_seconds() % 60)
+                                    } else {
+                                        "Not started yet".to_string()
+                                    };
+
+                                    let status_detail = match &job.status {
+                                        crate::jobs::JobStatus::Running { current_step, progress_percent, steps_completed, total_steps, completed_actions, current_action_detail } => {
+                                            let mut status_str = format!("RUNNING\n  Current Step: {}\n  Steps: {}/{}", current_step, steps_completed, total_steps);
+
+                                            if let Some(pct) = progress_percent {
+                                                status_str.push_str(&format!("\n  Progress: {:.1}%", pct));
+                                            }
+
+                                            if let Some(actions) = completed_actions {
+                                                if !actions.is_empty() {
+                                                    status_str.push_str(&format!("\n\n  Completed Actions:\n"));
+                                                    for action in actions {
+                                                        status_str.push_str(&format!("    ✅ {}\n", action));
+                                                    }
+                                                }
+                                            }
+
+                                            if let Some(detail) = current_action_detail {
+                                                status_str.push_str(&format!("\n  Detail: {}", detail));
+                                            }
+
+                                            status_str
+                                        }
+                                        crate::jobs::JobStatus::Completed { result, output_files, duration_seconds } => {
+                                            format!(
+                                                "COMPLETED\n  Duration: {:.1}s\n  Files: {}\n  Result: {}",
+                                                duration_seconds, output_files.len(), result
+                                            )
+                                        }
+                                        crate::jobs::JobStatus::Failed { error, failed_at_step } => {
+                                            format!(
+                                                "FAILED\n  Failed at: {}\n  Error: {}",
+                                                failed_at_step, error
+                                            )
+                                        }
+                                        crate::jobs::JobStatus::Queued { position } => {
+                                            format!("QUEUED (position: {})", position)
+                                        }
+                                        _ => format!("{:?}", job.status)
+                                    };
+
+                                    // Check if job appears stuck
+                                    let stuck_warning = if job.is_possibly_stuck() {
+                                        "\n\n⚠️ WARNING: This job hasn't reported progress in over 10 minutes. It may be stuck.\n\
+                                        Possible causes:\n\
+                                        - FFmpeg process hung due to system sleep/wake\n\
+                                        - Network download timeout\n\
+                                        - External process not responding\n\n\
+                                        Consider canceling and restarting the job."
+                                    } else {
+                                        ""
+                                    };
+
+                                    format!(
+                                        "📊 JOB STATUS REPORT\n\n\
+                                        Job ID: {}\n\
+                                        Status: {}\n\
+                                        Time Elapsed: {}\n\
+                                        Created: {}{}",
+                                        jid, status_detail, elapsed, job.created_at.format("%H:%M:%S"), stuck_warning
+                                    )
                                 } else {
-                                    serde_json::to_string_pretty(&serde_json::json!({
-                                        "job_id": jid,
-                                        "found": false,
-                                        "message": "Job not found"
-                                    })).unwrap_or_else(|_| "Job not found".to_string())
+                                    format!("❌ Job {} not found. It may have completed and been cleaned up, or the ID is incorrect.", jid)
                                 }
                             } else {
                                 // Get all jobs for this session
@@ -613,18 +672,80 @@ Trust your understanding of natural language to determine user intent:
                                         .filter(|s| !s.trim().is_empty());
 
                                     let tool_result = if let Some(jid) = job_id {
-                                        // Check specific job
-                                        if let Some(status) = job_manager.get_job_status(jid).await {
-                                            serde_json::json!({
-                                                "job_id": jid,
-                                                "status": format!("{:?}", status),
-                                                "found": true
-                                            })
+                                        // Check specific job with enhanced details
+                                        if let Some(job) = job_manager.get_job(jid).await {
+                                            let elapsed = if let Some(started) = job.started_at {
+                                                let duration = chrono::Utc::now().signed_duration_since(started);
+                                                format!("{}m {}s", duration.num_minutes(), duration.num_seconds() % 60)
+                                            } else {
+                                                "Not started yet".to_string()
+                                            };
+
+                                            let status_detail = match &job.status {
+                                                crate::jobs::JobStatus::Running { current_step, progress_percent, steps_completed, total_steps, completed_actions, current_action_detail } => {
+                                                    let mut status_str = format!("RUNNING\n  Current Step: {}\n  Steps: {}/{}", current_step, steps_completed, total_steps);
+
+                                                    if let Some(pct) = progress_percent {
+                                                        status_str.push_str(&format!("\n  Progress: {:.1}%", pct));
+                                                    }
+
+                                                    if let Some(actions) = completed_actions {
+                                                        if !actions.is_empty() {
+                                                            status_str.push_str(&format!("\n\n  Completed Actions:\n"));
+                                                            for action in actions {
+                                                                status_str.push_str(&format!("    ✅ {}\n", action));
+                                                            }
+                                                        }
+                                                    }
+
+                                                    if let Some(detail) = current_action_detail {
+                                                        status_str.push_str(&format!("\n  Detail: {}", detail));
+                                                    }
+
+                                                    status_str
+                                                }
+                                                crate::jobs::JobStatus::Completed { result, output_files, duration_seconds } => {
+                                                    format!(
+                                                        "COMPLETED\n  Duration: {:.1}s\n  Files: {}\n  Result: {}",
+                                                        duration_seconds, output_files.len(), result
+                                                    )
+                                                }
+                                                crate::jobs::JobStatus::Failed { error, failed_at_step } => {
+                                                    format!(
+                                                        "FAILED\n  Failed at: {}\n  Error: {}",
+                                                        failed_at_step, error
+                                                    )
+                                                }
+                                                crate::jobs::JobStatus::Queued { position } => {
+                                                    format!("QUEUED (position: {})", position)
+                                                }
+                                                _ => format!("{:?}", job.status)
+                                            };
+
+                                            // Check if job appears stuck
+                                            let stuck_warning = if job.is_possibly_stuck() {
+                                                "\n\n⚠️ WARNING: This job hasn't reported progress in over 10 minutes. It may be stuck.\n\
+                                                Possible causes:\n\
+                                                - FFmpeg process hung due to system sleep/wake\n\
+                                                - Network download timeout\n\
+                                                - External process not responding\n\n\
+                                                Consider canceling and restarting the job."
+                                            } else {
+                                                ""
+                                            };
+
+                                            let report = format!(
+                                                "📊 JOB STATUS REPORT\n\n\
+                                                Job ID: {}\n\
+                                                Status: {}\n\
+                                                Time Elapsed: {}\n\
+                                                Created: {}{}",
+                                                jid, status_detail, elapsed, job.created_at.format("%H:%M:%S"), stuck_warning
+                                            );
+                                            serde_json::json!({ "report": report })
                                         } else {
                                             serde_json::json!({
-                                                "job_id": jid,
-                                                "found": false,
-                                                "message": "Job not found"
+                                                "error": format!("❌ Job {} not found. It may have completed and been cleaned up, or the ID is incorrect.", jid)
                                             })
                                         }
                                     } else {

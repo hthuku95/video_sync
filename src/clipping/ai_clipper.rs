@@ -272,36 +272,70 @@ Provide ONLY the JSON array, no other text."#,
         }
     }
 
-    /// Review extracted clip for quality
+    /// Review extracted clip for quality using vectorized analysis
     async fn review_clip(
         &self,
         clip_path: &str,
         original_criteria: &str,
     ) -> Result<ReviewResult, String> {
+        // ENHANCEMENT: Wait briefly for vectorization to complete
+        tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+
+        // Retrieve the vectorized clip analysis to actually VIEW the clip
+        let clip_analysis = match VideoVectorizationService::retrieve_video_analysis(
+            clip_path,
+            &self.app_state,
+        )
+        .await
+        {
+            Ok(analysis) => {
+                // Extract summary for review
+                analysis.get("video_summary")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("Analysis unavailable")
+                    .to_string()
+            }
+            Err(e) => {
+                tracing::warn!("Could not retrieve vectorized clip analysis (proceeding without): {}", e);
+                "Vectorization pending - reviewing based on metadata only".to_string()
+            }
+        };
+
         let review_prompt = format!(
             r#"Review this video clip for YouTube Shorts suitability.
 
 ORIGINAL SELECTION CRITERIA:
 {}
 
+ACTUAL CLIP CONTENT (from AI vision analysis):
+{}
+
 VERIFY:
 1. Duration is appropriate (60-120 seconds)
-2. Contains the intended viral moment
+2. Contains the intended viral moment described in criteria
 3. Video quality is good (no artifacts, clear)
 4. Suitable for YouTube Shorts format
+5. Content matches the selection criteria
 
 Respond with:
 - PASS if the clip meets all criteria
-- FAIL if the clip has issues
+- FAIL if the clip has issues or doesn't match criteria
 
-Then provide brief feedback."#,
-            original_criteria
+Then provide brief feedback explaining your decision."#,
+            original_criteria,
+            clip_analysis
         );
 
         let review_response = self.call_ai_agent(&review_prompt).await?;
 
+        let passed = review_response.to_uppercase().contains("PASS");
+
+        if !passed {
+            tracing::info!("Clip review feedback: {}", review_response);
+        }
+
         Ok(ReviewResult {
-            passed: review_response.to_uppercase().contains("PASS"),
+            passed,
             feedback: review_response,
         })
     }

@@ -23,6 +23,11 @@ impl ChannelMonitor {
     pub async fn poll_all_channels(&self) -> Result<(), String> {
         tracing::info!("🔍 Starting channel polling cycle...");
 
+        // NEW: Process pending videos first (from previous blocked attempts)
+        if let Err(e) = self.process_pending_videos().await {
+            tracing::error!("Failed to process pending videos: {}", e);
+        }
+
         // Get all active source channels that are due for polling
         let channels = self.get_channels_due_for_poll().await?;
 
@@ -66,7 +71,7 @@ impl ChannelMonitor {
         let query = format!("channel:{}", channel.channel_id);
         let videos = match self
             .youtube_client
-            .search_videos(None, &query, 10, Some("date"))
+            .search_videos(None, &query, 50, Some("date"))
             .await
         {
             Ok(response) => response.items,
@@ -133,23 +138,31 @@ impl ChannelMonitor {
     }
 
     /// Filter videos to find new ones not yet processed
+    /// NOW: Uses clipped_source_videos table for backward scanning
     async fn filter_new_videos(
         &self,
         channel: &SourceChannel,
         videos: &[crate::youtube_client::SearchResultItem],
     ) -> Result<Vec<crate::youtube_client::SearchResultItem>, String> {
+        // Get all clipped video IDs for this source channel
+        let clipped_video_ids: Vec<String> = sqlx::query_scalar(
+            "SELECT video_id FROM clipped_source_videos WHERE source_channel_id = $1",
+        )
+        .bind(channel.id)
+        .fetch_all(&self.db_pool)
+        .await
+        .unwrap_or_default();
+
         let mut new_videos = Vec::new();
 
         for video in videos {
-            // Skip if we've already processed this video
-            if let Some(ref last_checked) = channel.last_video_checked {
-                if video.id.video_id == *last_checked {
-                    break; // All videos after this are older
-                }
+            // Skip if already clipped
+            if clipped_video_ids.contains(&video.id.video_id) {
+                continue;
             }
 
-            // Check if we already have a clipping job for this video
-            let exists = sqlx::query_scalar::<_, bool>(
+            // Also check pending jobs (job may exist but not in clipped table yet)
+            let job_exists = sqlx::query_scalar::<_, bool>(
                 "SELECT EXISTS(SELECT 1 FROM clipping_jobs WHERE source_video_id = $1)",
             )
             .bind(&video.id.video_id)
@@ -157,7 +170,7 @@ impl ChannelMonitor {
             .await
             .unwrap_or(false);
 
-            if !exists {
+            if !job_exists {
                 new_videos.push(video.clone());
             }
         }
@@ -166,6 +179,7 @@ impl ChannelMonitor {
     }
 
     /// Create clipping jobs for all linkages of this source channel
+    /// NOW: Includes 24-hour cooldown, 4-clip daily limit, and session memory
     async fn create_clipping_job(
         &self,
         channel: &SourceChannel,
@@ -189,8 +203,53 @@ impl ChannelMonitor {
             return Ok(());
         }
 
-        // Create a clipping job for each linkage
+        // Process each linkage
         for linkage in linkages {
+            // CHECK 1: 24-hour cooldown
+            if !self.is_linkage_eligible_for_session(linkage.id).await? {
+                tracing::info!(
+                    "Linkage {} in cooldown - storing video {} for later",
+                    linkage.id,
+                    video.id.video_id
+                );
+                self.remember_pending_video(linkage.id, video).await?;
+                continue;
+            }
+
+            // CHECK 2: Daily 4-clip limit
+            let clips_today = self.count_clips_posted_today(linkage.destination_channel_id).await?;
+            if clips_today >= 4 {
+                tracing::info!(
+                    "Destination channel {} reached daily limit (4 clips) - storing video for tomorrow",
+                    linkage.destination_channel_id
+                );
+                self.remember_pending_video(linkage.id, video).await?;
+                continue;
+            }
+
+            // CHECK 3: Job doesn't already exist
+            let exists = sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS(
+                    SELECT 1 FROM clipping_jobs
+                    WHERE linkage_id = $1 AND source_video_id = $2
+                )",
+            )
+            .bind(linkage.id)
+            .bind(&video.id.video_id)
+            .fetch_one(&self.db_pool)
+            .await
+            .unwrap_or(false);
+
+            if exists {
+                tracing::debug!(
+                    "Job already exists for video {} on linkage {}",
+                    video.id.video_id,
+                    linkage.id
+                );
+                continue;
+            }
+
+            // ALL CHECKS PASSED - Create job
             sqlx::query(
                 "INSERT INTO clipping_jobs
                  (linkage_id, source_video_id, source_video_title, status)
@@ -203,8 +262,23 @@ impl ChannelMonitor {
             .await
             .map_err(|e| format!("Failed to create clipping job: {}", e))?;
 
+            // Mark video as clipped in tracking table
+            sqlx::query(
+                "INSERT INTO clipped_source_videos
+                 (source_channel_id, video_id, video_title, video_published_at)
+                 VALUES ($1, $2, $3, $4)
+                 ON CONFLICT (source_channel_id, video_id) DO NOTHING",
+            )
+            .bind(channel.id)
+            .bind(&video.id.video_id)
+            .bind(&video.snippet.title)
+            .bind(&video.snippet.published_at)
+            .execute(&self.db_pool)
+            .await
+            .map_err(|e| format!("Failed to mark video as clipped: {}", e))?;
+
             tracing::info!(
-                "Created clipping job for video '{}' (linkage: {})",
+                "✅ Created clipping job for video '{}' (linkage: {})",
                 video.snippet.title,
                 linkage.id
             );
@@ -276,6 +350,164 @@ impl ChannelMonitor {
         .execute(&self.db_pool)
         .await
         .map_err(|e| format!("Failed to reset failure count: {}", e))?;
+
+        Ok(())
+    }
+
+    /// Check if a linkage is eligible for a clipping session (24-hour cooldown)
+    async fn is_linkage_eligible_for_session(&self, linkage_id: i32) -> Result<bool, String> {
+        let linkage = sqlx::query_as::<_, ChannelLinkage>(
+            "SELECT * FROM youtube_channel_linkages WHERE id = $1",
+        )
+        .bind(linkage_id)
+        .fetch_one(&self.db_pool)
+        .await
+        .map_err(|e| format!("Failed to fetch linkage: {}", e))?;
+
+        if let Some(last_session) = linkage.last_clipping_session_at {
+            let cooldown = chrono::Duration::hours(linkage.clipping_cooldown_hours as i64);
+            let next_allowed = last_session + cooldown;
+
+            if Utc::now() < next_allowed {
+                tracing::debug!(
+                    "Linkage {} in cooldown (last: {}, next: {})",
+                    linkage_id,
+                    last_session,
+                    next_allowed
+                );
+                return Ok(false);
+            }
+        }
+
+        Ok(true)
+    }
+
+    /// Count clips posted in last 24 hours for a destination channel
+    async fn count_clips_posted_today(&self, destination_channel_id: i32) -> Result<i32, String> {
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM extracted_clips
+             WHERE destination_channel_id = $1
+             AND upload_status = 'published'
+             AND published_at >= NOW() - INTERVAL '24 hours'",
+        )
+        .bind(destination_channel_id)
+        .fetch_one(&self.db_pool)
+        .await
+        .map_err(|e| format!("Failed to count clips: {}", e))?;
+
+        Ok(count as i32)
+    }
+
+    /// Store unclipped video for later when cooldown blocks session
+    async fn remember_pending_video(
+        &self,
+        linkage_id: i32,
+        video: &crate::youtube_client::SearchResultItem,
+    ) -> Result<(), String> {
+        sqlx::query(
+            "INSERT INTO pending_unclipped_videos
+             (linkage_id, video_id, video_title, video_published_at)
+             VALUES ($1, $2, $3, $4)
+             ON CONFLICT (linkage_id, video_id) DO NOTHING",
+        )
+        .bind(linkage_id)
+        .bind(&video.id.video_id)
+        .bind(&video.snippet.title)
+        .bind(&video.snippet.published_at)
+        .execute(&self.db_pool)
+        .await
+        .map_err(|e| format!("Failed to store pending: {}", e))?;
+
+        Ok(())
+    }
+
+    /// Retrieve pending videos for eligible linkages
+    async fn get_pending_videos(&self, linkage_id: i32) -> Result<Vec<String>, String> {
+        let video_ids: Vec<String> = sqlx::query_scalar(
+            "SELECT video_id FROM pending_unclipped_videos
+             WHERE linkage_id = $1
+             ORDER BY discovered_at ASC",
+        )
+        .bind(linkage_id)
+        .fetch_all(&self.db_pool)
+        .await
+        .map_err(|e| format!("Failed to fetch pending: {}", e))?;
+
+        Ok(video_ids)
+    }
+
+    /// Clear pending video after job creation
+    async fn clear_pending_video(&self, linkage_id: i32, video_id: &str) -> Result<(), String> {
+        sqlx::query(
+            "DELETE FROM pending_unclipped_videos WHERE linkage_id = $1 AND video_id = $2",
+        )
+        .bind(linkage_id)
+        .bind(video_id)
+        .execute(&self.db_pool)
+        .await
+        .map_err(|e| format!("Failed to clear pending: {}", e))?;
+
+        Ok(())
+    }
+
+    /// Process pending videos that were blocked by cooldown/limits
+    /// Called at start of each poll cycle
+    async fn process_pending_videos(&self) -> Result<(), String> {
+        tracing::info!("🔄 Processing pending videos from previous scans...");
+
+        // Get all active linkages
+        let linkages = sqlx::query_as::<_, ChannelLinkage>(
+            "SELECT * FROM youtube_channel_linkages WHERE is_active = true",
+        )
+        .fetch_all(&self.db_pool)
+        .await
+        .map_err(|e| format!("Failed to fetch linkages: {}", e))?;
+
+        for linkage in linkages {
+            // Check if linkage is now eligible
+            if !self.is_linkage_eligible_for_session(linkage.id).await? {
+                continue; // Still in cooldown
+            }
+
+            // Check daily limit
+            let clips_today = self.count_clips_posted_today(linkage.destination_channel_id).await?;
+            if clips_today >= 4 {
+                continue; // Daily limit reached
+            }
+
+            // Get pending videos for this linkage
+            let pending_videos = self.get_pending_videos(linkage.id).await?;
+
+            if pending_videos.is_empty() {
+                continue;
+            }
+
+            tracing::info!(
+                "Found {} pending videos for linkage {}",
+                pending_videos.len(),
+                linkage.id
+            );
+
+            // Take first pending video (FIFO order)
+            if let Some(video_id) = pending_videos.first() {
+                // Create job
+                sqlx::query(
+                    "INSERT INTO clipping_jobs
+                     (linkage_id, source_video_id, source_video_title, status)
+                     VALUES ($1, $2, 'Pending Video', 'pending')",
+                )
+                .bind(linkage.id)
+                .bind(video_id)
+                .execute(&self.db_pool)
+                .await
+                .map_err(|e| format!("Failed to create job from pending: {}", e))?;
+
+                // Clear from pending
+                self.clear_pending_video(linkage.id, video_id).await?;
+
+                tracing::info!("✅ Created job from pending video: {}", video_id);
+            }
+        }
 
         Ok(())
     }

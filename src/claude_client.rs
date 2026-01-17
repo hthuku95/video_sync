@@ -1712,4 +1712,14 @@ impl ClaudeClient {
             },
         ]
     }
+
+    /// Filter tools by name (for dynamic tool selection)
+    /// Returns only the tools whose names are in the provided list
+    pub fn filter_tools_by_name(tool_names: &[String]) -> Vec<ClaudeTool> {
+        let all_tools = Self::create_video_editing_tools();
+        all_tools
+            .into_iter()
+            .filter(|tool| tool_names.contains(&tool.name))
+            .collect()
+    }
 }
