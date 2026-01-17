@@ -60,6 +60,7 @@ pub fn youtube_routes() -> Router {
 
         // Search & Discovery (NEW)
         .route("/api/youtube/search", get(search_videos))
+        .route("/api/youtube/search-channels", get(search_channels_api))
         .route("/api/youtube/trending", get(get_trending_videos))
         .route("/api/youtube/videos/:video_id/related", get(get_related_videos))
 
@@ -2268,6 +2269,60 @@ pub async fn search_videos(
         "results": results,
         "total_results": search_response.page_info.total_results
     })))
+}
+
+/// Search YouTube channels by name
+///
+/// GET /api/youtube/search-channels?q=channel+name
+pub async fn search_channels_api(
+    Query(params): Query<SearchChannelsQuery>,
+    Extension(state): Extension<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let youtube = state.youtube_client.as_ref().ok_or_else(|| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"success": false, "message": "YouTube client not initialized"})),
+        )
+    })?;
+
+    let max_results = params.max_results.unwrap_or(10).min(50) as i32;
+
+    let search_response = youtube.search_channels(
+        None, // No access token needed for public channel search
+        &params.q,
+        max_results,
+        None, // No specific order
+    )
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({"success": false, "message": format!("YouTube API error: {}", e)})),
+        )
+    })?;
+
+    let results: Vec<_> = search_response.items.iter().map(|item| {
+        json!({
+            "channel_id": item.id.channel_id,
+            "channel_name": item.snippet.title,
+            "description": item.snippet.description,
+            "thumbnail_url": item.snippet.thumbnails.get("default").and_then(|t| t.get("url")),
+            "published_at": item.snippet.published_at
+        })
+    }).collect();
+
+    Ok(Json(json!({
+        "success": true,
+        "query": params.q,
+        "channels": results,
+        "total_results": search_response.page_info.total_results
+    })))
+}
+
+#[derive(Deserialize)]
+pub struct SearchChannelsQuery {
+    q: String,
+    max_results: Option<u32>,
 }
 
 /// Get trending videos

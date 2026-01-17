@@ -11,6 +11,7 @@ pub fn ui_routes() -> Router {
         .route("/signup", get(signup_page))
         .route("/dashboard", get(dashboard_page))
         .route("/analytics", get(analytics_dashboard_page))
+        .route("/clipping/manage", get(clipping_management_page))
         .route("/help", get(help_guide_page))
         .route("/privacy", get(privacy_policy_page))
         .route("/terms", get(terms_of_service_page))
@@ -2213,6 +2214,10 @@ pub async fn dashboard_page() -> Html<String> {
                     <h3>📊 Analytics Dashboard</h3>
                     <p>View YouTube channel performance and video analytics</p>
                 </a>
+                <a href="/clipping/manage" class="action-card">
+                    <h3>✂️ YouTube Clipping</h3>
+                    <p>Auto-generate viral clips from popular channels and post to your channel</p>
+                </a>
                 <a href="/help" class="action-card">
                     <h3>📖 Help & Guide</h3>
                     <p>Learn how to use the AI video editor and YouTube features</p>
@@ -4411,6 +4416,845 @@ AI YouTube Tools:<br>
             }
         }
         new DynamicBackgroundManager();
+    </script>
+</body>
+</html>
+    "###;
+    Html(html.to_string())
+}
+// ============================================================================
+// YouTube Clipping Management Page
+// ============================================================================
+
+pub async fn clipping_management_page() -> Html<String> {
+    let html = r###"
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YouTube Clipping Manager - VideoSync</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f1419 100%);
+            min-height: 100vh;
+            color: #e8e8e8;
+        }
+        .container { max-width: 1400px; margin: 0 auto; padding: 2rem; }
+        .header {
+            background: rgba(30, 30, 52, 0.8);
+            backdrop-filter: blur(20px);
+            border-bottom: 1px solid rgba(59, 130, 246, 0.3);
+            padding: 1.5rem 2rem;
+            margin-bottom: 2rem;
+            border-radius: 15px;
+        }
+        .header h1 { font-size: 2rem; margin-bottom: 0.5rem; }
+        .header p { color: #cbd5e1; font-size: 1rem; }
+        .btn {
+            padding: 0.75rem 1.5rem;
+            background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+            color: white;
+            border: none;
+            border-radius: 10px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            text-decoration: none;
+            display: inline-block;
+        }
+        .btn:hover {
+            background: linear-gradient(135deg, #2563eb, #1e40af);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4);
+        }
+        .btn-secondary { background: linear-gradient(135deg, #64748b, #475569); }
+        .btn-secondary:hover { background: linear-gradient(135deg, #475569, #334155); }
+        .btn-danger { background: linear-gradient(135deg, #ef4444, #dc2626); }
+        .btn-danger:hover { background: linear-gradient(135deg, #dc2626, #b91c1c); }
+        .btn-small { padding: 0.5rem 1rem; font-size: 0.9rem; }
+
+        .tabs {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 2rem;
+            border-bottom: 2px solid rgba(59, 130, 246, 0.2);
+        }
+        .tab-button {
+            padding: 1rem 2rem;
+            background: none;
+            border: none;
+            color: #cbd5e1;
+            cursor: pointer;
+            border-bottom: 3px solid transparent;
+            transition: all 0.3s;
+            font-size: 1rem;
+            font-weight: 500;
+        }
+        .tab-button.active {
+            color: #3b82f6;
+            border-bottom-color: #3b82f6;
+        }
+        .tab-button:hover { color: #60a5fa; }
+
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+
+        .card {
+            background: rgba(30, 30, 52, 0.6);
+            border: 1px solid rgba(59, 130, 246, 0.2);
+            border-radius: 15px;
+            padding: 1.5rem;
+            margin-bottom: 1rem;
+        }
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+            gap: 1.5rem;
+        }
+
+        .channel-card {
+            background: rgba(30, 30, 52, 0.6);
+            border: 1px solid rgba(59, 130, 246, 0.2);
+            border-radius: 15px;
+            padding: 1.5rem;
+            transition: all 0.3s;
+        }
+        .channel-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 8px 20px rgba(59, 130, 246, 0.3);
+            border-color: rgba(59, 130, 246, 0.5);
+        }
+        .channel-header {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 1rem;
+        }
+        .channel-thumbnail {
+            width: 60px;
+            height: 60px;
+            border-radius: 50%;
+            object-fit: cover;
+        }
+        .channel-info h3 { font-size: 1.2rem; margin-bottom: 0.25rem; }
+        .channel-info p { color: #94a3b8; font-size: 0.9rem; }
+
+        .linkage-card {
+            background: rgba(30, 30, 52, 0.6);
+            border: 1px solid rgba(59, 130, 246, 0.2);
+            border-radius: 15px;
+            padding: 1.5rem;
+        }
+        .linkage-flow {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            margin-bottom: 1rem;
+        }
+        .linkage-arrow { font-size: 1.5rem; color: #3b82f6; }
+
+        .job-card {
+            background: rgba(30, 30, 52, 0.6);
+            border: 1px solid rgba(59, 130, 246, 0.2);
+            border-radius: 15px;
+            padding: 1.5rem;
+            margin-bottom: 1rem;
+        }
+        .progress-bar {
+            width: 100%;
+            height: 8px;
+            background: rgba(59, 130, 246, 0.2);
+            border-radius: 10px;
+            overflow: hidden;
+            margin: 0.5rem 0;
+        }
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #3b82f6, #60a5fa);
+            transition: width 0.3s;
+        }
+
+        .status-badge {
+            padding: 0.25rem 0.75rem;
+            border-radius: 20px;
+            font-size: 0.85rem;
+            font-weight: 600;
+        }
+        .status-pending { background: rgba(251, 191, 36, 0.2); color: #fbbf24; }
+        .status-running { background: rgba(59, 130, 246, 0.2); color: #3b82f6; }
+        .status-completed { background: rgba(34, 197, 94, 0.2); color: #22c55e; }
+        .status-failed { background: rgba(239, 68, 68, 0.2); color: #ef4444; }
+
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.7);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+        .modal.active { display: flex; }
+        .modal-content {
+            background: rgba(30, 30, 52, 0.95);
+            border: 1px solid rgba(59, 130, 246, 0.3);
+            border-radius: 20px;
+            padding: 2rem;
+            max-width: 600px;
+            width: 90%;
+            max-height: 80vh;
+            overflow-y: auto;
+        }
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1.5rem;
+        }
+        .modal-close {
+            background: none;
+            border: none;
+            color: #e8e8e8;
+            font-size: 1.5rem;
+            cursor: pointer;
+        }
+
+        .form-group {
+            margin-bottom: 1.5rem;
+        }
+        .form-group label {
+            display: block;
+            margin-bottom: 0.5rem;
+            color: #cbd5e1;
+            font-weight: 500;
+        }
+        .form-group input,
+        .form-group select {
+            width: 100%;
+            padding: 0.75rem;
+            background: rgba(30, 30, 52, 0.8);
+            border: 1px solid rgba(59, 130, 246, 0.3);
+            border-radius: 10px;
+            color: #e8e8e8;
+            font-size: 1rem;
+        }
+        .form-group input:focus,
+        .form-group select:focus {
+            outline: none;
+            border-color: #3b82f6;
+        }
+
+        .search-results {
+            max-height: 400px;
+            overflow-y: auto;
+            margin-top: 1rem;
+        }
+        .search-result-item {
+            display: flex;
+            gap: 1rem;
+            padding: 1rem;
+            background: rgba(30, 30, 52, 0.6);
+            border: 1px solid rgba(59, 130, 246, 0.2);
+            border-radius: 10px;
+            margin-bottom: 0.5rem;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        .search-result-item:hover {
+            background: rgba(30, 30, 52, 0.8);
+            border-color: rgba(59, 130, 246, 0.5);
+        }
+
+        .loading {
+            text-align: center;
+            padding: 3rem;
+            color: #94a3b8;
+        }
+        .empty-state {
+            text-align: center;
+            padding: 3rem;
+            color: #94a3b8;
+        }
+        .empty-state-icon { font-size: 3rem; margin-bottom: 1rem; }
+
+        .clip-card {
+            background: rgba(30, 30, 52, 0.6);
+            border: 1px solid rgba(59, 130, 246, 0.2);
+            border-radius: 15px;
+            padding: 1rem;
+        }
+        .clip-thumbnail {
+            width: 100%;
+            height: 200px;
+            background: rgba(15, 20, 25, 0.8);
+            border-radius: 10px;
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #64748b;
+        }
+        .viral-factors {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+            margin: 0.5rem 0;
+        }
+        .viral-factor-badge {
+            padding: 0.25rem 0.5rem;
+            background: rgba(139, 92, 246, 0.2);
+            color: #a78bfa;
+            border-radius: 5px;
+            font-size: 0.75rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                    <h1>✂️ YouTube Clipping Manager</h1>
+                    <p>Monitor channels, auto-clip viral moments, post to your channels</p>
+                </div>
+                <div>
+                    <a href="/dashboard" class="btn btn-secondary">← Back to Dashboard</a>
+                </div>
+            </div>
+        </div>
+
+        <div class="tabs">
+            <button class="tab-button active" onclick="switchTab('sources')">📺 Source Channels</button>
+            <button class="tab-button" onclick="switchTab('linkages')">🔗 Channel Linkages</button>
+            <button class="tab-button" onclick="switchTab('jobs')">⚙️ Active Jobs</button>
+            <button class="tab-button" onclick="switchTab('clips')">🎬 Generated Clips</button>
+        </div>
+
+        <!-- Tab 1: Source Channels -->
+        <div id="sourcesTab" class="tab-content active">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+                <h2>Source Channels to Monitor</h2>
+                <button onclick="openAddChannelModal()" class="btn">+ Add Source Channel</button>
+            </div>
+            <div id="sourceChannelsContainer" class="loading">Loading source channels...</div>
+        </div>
+
+        <!-- Tab 2: Channel Linkages -->
+        <div id="linkagesTab" class="tab-content">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+                <h2>Channel Linkages</h2>
+                <button onclick="openCreateLinkageModal()" class="btn">+ Create Linkage</button>
+            </div>
+            <div id="linkagesContainer" class="loading">Loading linkages...</div>
+        </div>
+
+        <!-- Tab 3: Clipping Jobs -->
+        <div id="jobsTab" class="tab-content">
+            <h2 style="margin-bottom: 1.5rem;">Active Clipping Jobs</h2>
+            <div id="jobsContainer" class="loading">Loading jobs...</div>
+        </div>
+
+        <!-- Tab 4: Generated Clips -->
+        <div id="clipsTab" class="tab-content">
+            <h2 style="margin-bottom: 1.5rem;">Generated Clips Gallery</h2>
+            <div id="clipsContainer" class="loading">Loading clips...</div>
+        </div>
+    </div>
+
+    <!-- Modal: Add Channel -->
+    <div id="addChannelModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Add Source Channel</h2>
+                <button class="modal-close" onclick="closeAddChannelModal()">×</button>
+            </div>
+            <div class="form-group">
+                <label>Search for YouTube Channel</label>
+                <input type="text" id="channelSearchInput" placeholder="e.g., MrBeast, PewDiePie..." oninput="searchChannels(this.value)">
+            </div>
+            <div id="channelSearchResults" class="search-results"></div>
+        </div>
+    </div>
+
+    <!-- Modal: Create Linkage -->
+    <div id="createLinkageModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Create Channel Linkage</h2>
+                <button class="modal-close" onclick="closeCreateLinkageModal()">×</button>
+            </div>
+            <div class="form-group">
+                <label>Source Channel (to clip from)</label>
+                <select id="linkageSourceChannel"></select>
+            </div>
+            <div class="form-group">
+                <label>Destination Channel (your channel)</label>
+                <select id="linkageDestChannel"></select>
+            </div>
+            <div class="form-group">
+                <label>Clips per Video (1-4)</label>
+                <input type="number" id="linkageClipsPerVideo" min="1" max="4" value="2">
+            </div>
+            <div class="form-group">
+                <label>Min Clip Duration (seconds)</label>
+                <input type="number" id="linkageMinDuration" min="30" max="300" value="60">
+            </div>
+            <div class="form-group">
+                <label>Max Clip Duration (seconds)</label>
+                <input type="number" id="linkageMaxDuration" min="60" max="300" value="120">
+            </div>
+            <button onclick="createLinkage()" class="btn">Create Linkage</button>
+        </div>
+    </div>
+
+    <script>
+        const authToken = localStorage.getItem('authToken');
+        if (!authToken) {
+            window.location.href = '/login';
+        }
+
+        let searchTimeout = null;
+
+        // Tab switching
+        function switchTab(tabName) {
+            document.querySelectorAll('.tab-button').forEach(btn => btn.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
+
+            event.target.classList.add('active');
+            document.getElementById(tabName + 'Tab').classList.add('active');
+
+            // Load data for the active tab
+            if (tabName === 'sources') loadSourceChannels();
+            else if (tabName === 'linkages') loadLinkages();
+            else if (tabName === 'jobs') loadJobs();
+            else if (tabName === 'clips') loadClips();
+        }
+
+        // Load source channels
+        async function loadSourceChannels() {
+            const container = document.getElementById('sourceChannelsContainer');
+            container.className = 'loading';
+            container.innerHTML = 'Loading source channels...';
+
+            try {
+                const response = await fetch('/api/clipping/source-channels', {
+                    headers: { 'Authorization': 'Bearer ' + authToken }
+                });
+                const data = await response.json();
+
+                if (data.length === 0) {
+                    container.className = 'empty-state';
+                    container.innerHTML = `
+                        <div class="empty-state-icon">📺</div>
+                        <h3>No Source Channels Yet</h3>
+                        <p>Add channels to start monitoring for viral content</p>
+                    `;
+                    return;
+                }
+
+                container.className = 'grid';
+                container.innerHTML = data.map(channel => `
+                    <div class="channel-card">
+                        <div class="channel-header">
+                            <img src="${channel.channel_thumbnail_url || '/placeholder.png'}"
+                                 alt="${channel.channel_name}"
+                                 class="channel-thumbnail">
+                            <div class="channel-info">
+                                <h3>${channel.channel_name}</h3>
+                                <p>${channel.subscriber_count ? (channel.subscriber_count/1000000).toFixed(1) + 'M subscribers' : 'Unknown'}</p>
+                            </div>
+                        </div>
+                        <p style="color: #94a3b8; font-size: 0.9rem; margin-bottom: 1rem;">
+                            Polling every ${channel.polling_interval_minutes} minutes
+                        </p>
+                        <div style="display: flex; gap: 0.5rem;">
+                            <button onclick="deleteSourceChannel(${channel.id})" class="btn btn-danger btn-small">Delete</button>
+                            <button onclick="toggleChannelActive(${channel.id}, ${!channel.is_active})"
+                                    class="btn btn-small ${channel.is_active ? 'btn-secondary' : ''}">
+                                ${channel.is_active ? 'Deactivate' : 'Activate'}
+                            </button>
+                        </div>
+                    </div>
+                `).join('');
+            } catch (error) {
+                container.className = 'empty-state';
+                container.innerHTML = `<p style="color: #ef4444;">Error loading channels: ${error.message}</p>`;
+            }
+        }
+
+        // Load linkages
+        async function loadLinkages() {
+            const container = document.getElementById('linkagesContainer');
+            container.className = 'loading';
+            container.innerHTML = 'Loading linkages...';
+
+            try {
+                const response = await fetch('/api/clipping/linkages', {
+                    headers: { 'Authorization': 'Bearer ' + authToken }
+                });
+                const data = await response.json();
+
+                if (data.length === 0) {
+                    container.className = 'empty-state';
+                    container.innerHTML = `
+                        <div class="empty-state-icon">🔗</div>
+                        <h3>No Linkages Yet</h3>
+                        <p>Create linkages to start auto-clipping</p>
+                    `;
+                    return;
+                }
+
+                container.innerHTML = data.map(linkage => `
+                    <div class="linkage-card">
+                        <div class="linkage-flow">
+                            <div>
+                                <strong>${linkage.source_channel_name}</strong>
+                                <p style="color: #94a3b8; font-size: 0.85rem;">Source</p>
+                            </div>
+                            <div class="linkage-arrow">→</div>
+                            <div>
+                                <strong>${linkage.destination_channel_name}</strong>
+                                <p style="color: #94a3b8; font-size: 0.85rem;">Destination</p>
+                            </div>
+                        </div>
+                        <div style="background: rgba(59, 130, 246, 0.1); padding: 1rem; border-radius: 10px; margin-bottom: 1rem;">
+                            <p><strong>Config:</strong> ${linkage.clips_per_video} clips/video, ${linkage.min_clip_duration_seconds}-${linkage.max_clip_duration_seconds}s duration</p>
+                            <p><strong>Stats:</strong> ${linkage.total_clips_generated} generated, ${linkage.total_clips_posted} posted</p>
+                        </div>
+                        <div style="display: flex; gap: 0.5rem;">
+                            <button onclick="deleteLinkage(${linkage.id})" class="btn btn-danger btn-small">Delete</button>
+                            <button onclick="toggleLinkageActive(${linkage.id}, ${!linkage.is_active})"
+                                    class="btn btn-small ${linkage.is_active ? 'btn-secondary' : ''}">
+                                ${linkage.is_active ? 'Deactivate' : 'Activate'}
+                            </button>
+                        </div>
+                    </div>
+                `).join('');
+            } catch (error) {
+                container.className = 'empty-state';
+                container.innerHTML = `<p style="color: #ef4444;">Error loading linkages: ${error.message}</p>`;
+            }
+        }
+
+        // Load jobs
+        async function loadJobs() {
+            const container = document.getElementById('jobsContainer');
+
+            try {
+                const response = await fetch('/api/clipping/jobs', {
+                    headers: { 'Authorization': 'Bearer ' + authToken }
+                });
+                const data = await response.json();
+
+                if (data.length === 0) {
+                    container.className = 'empty-state';
+                    container.innerHTML = `
+                        <div class="empty-state-icon">⚙️</div>
+                        <h3>No Jobs Running</h3>
+                        <p>Jobs will appear here when clipping starts</p>
+                    `;
+                    return;
+                }
+
+                container.innerHTML = data.map(job => {
+                    const statusClass = job.status === 'completed' ? 'status-completed' :
+                                       job.status === 'failed' ? 'status-failed' :
+                                       job.status === 'pending' ? 'status-pending' : 'status-running';
+
+                    return `
+                        <div class="job-card">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                                <div>
+                                    <h3>${job.source_video_title}</h3>
+                                    <p style="color: #94a3b8; font-size: 0.9rem;">${job.current_step || 'Initializing'}</p>
+                                </div>
+                                <span class="status-badge ${statusClass}">${job.status}</span>
+                            </div>
+                            ${job.progress_percent ? `
+                                <div class="progress-bar">
+                                    <div class="progress-fill" style="width: ${job.progress_percent}%"></div>
+                                </div>
+                                <p style="text-align: right; color: #94a3b8; font-size: 0.85rem; margin-top: 0.25rem;">
+                                    ${job.progress_percent}%
+                                </p>
+                            ` : ''}
+                            ${job.error_message ? `<p style="color: #ef4444; margin-top: 0.5rem;">${job.error_message}</p>` : ''}
+                        </div>
+                    `;
+                }).join('');
+            } catch (error) {
+                container.className = 'empty-state';
+                container.innerHTML = `<p style="color: #ef4444;">Error loading jobs: ${error.message}</p>`;
+            }
+        }
+
+        // Load clips
+        async function loadClips() {
+            const container = document.getElementById('clipsContainer');
+            container.className = 'loading';
+            container.innerHTML = 'Loading clips...';
+
+            try {
+                const response = await fetch('/api/clipping/clips', {
+                    headers: { 'Authorization': 'Bearer ' + authToken }
+                });
+                const data = await response.json();
+
+                if (data.length === 0) {
+                    container.className = 'empty-state';
+                    container.innerHTML = `
+                        <div class="empty-state-icon">🎬</div>
+                        <h3>No Clips Yet</h3>
+                        <p>Generated clips will appear here</p>
+                    `;
+                    return;
+                }
+
+                container.className = 'grid';
+                container.innerHTML = data.map(clip => {
+                    const statusClass = clip.upload_status === 'published' ? 'status-completed' :
+                                       clip.upload_status === 'failed' ? 'status-failed' :
+                                       clip.upload_status === 'uploading' ? 'status-running' : 'status-pending';
+
+                    return `
+                        <div class="clip-card">
+                            <div class="clip-thumbnail">
+                                🎬 ${clip.duration_seconds}s
+                            </div>
+                            <h3 style="margin-bottom: 0.5rem;">${clip.ai_title}</h3>
+                            <span class="status-badge ${statusClass}">${clip.upload_status}</span>
+                            ${clip.viral_factors ? `
+                                <div class="viral-factors">
+                                    ${JSON.parse(clip.viral_factors).map(factor =>
+                                        `<span class="viral-factor-badge">${factor}</span>`
+                                    ).join('')}
+                                </div>
+                            ` : ''}
+                            ${clip.youtube_url ? `
+                                <a href="${clip.youtube_url}" target="_blank" class="btn btn-small" style="margin-top: 0.5rem; width: 100%;">
+                                    View on YouTube
+                                </a>
+                            ` : ''}
+                        </div>
+                    `;
+                }).join('');
+            } catch (error) {
+                container.className = 'empty-state';
+                container.innerHTML = `<p style="color: #ef4444;">Error loading clips: ${error.message}</p>`;
+            }
+        }
+
+        // Channel search
+        async function searchChannels(query) {
+            if (!query || query.length < 2) {
+                document.getElementById('channelSearchResults').innerHTML = '';
+                return;
+            }
+
+            clearTimeout(searchTimeout);
+            searchTimeout = setTimeout(async () => {
+                try {
+                    const response = await fetch(`/api/youtube/search-channels?q=${encodeURIComponent(query)}`, {
+                        headers: { 'Authorization': 'Bearer ' + authToken }
+                    });
+                    const data = await response.json();
+
+                    const resultsHtml = data.channels.map(channel => `
+                        <div class="search-result-item" onclick="selectChannel('${channel.channel_id}', '${channel.channel_name.replace(/'/g, "\\'")}')">
+                            <img src="${channel.thumbnail_url || '/placeholder.png'}"
+                                 alt="${channel.channel_name}"
+                                 style="width: 50px; height: 50px; border-radius: 50%;">
+                            <div>
+                                <strong>${channel.channel_name}</strong>
+                                <p style="color: #94a3b8; font-size: 0.9rem;">${channel.description || 'No description'}</p>
+                            </div>
+                        </div>
+                    `).join('');
+
+                    document.getElementById('channelSearchResults').innerHTML = resultsHtml || '<p style="color: #94a3b8;">No channels found</p>';
+                } catch (error) {
+                    document.getElementById('channelSearchResults').innerHTML = `<p style="color: #ef4444;">Error: ${error.message}</p>`;
+                }
+            }, 500);
+        }
+
+        async function selectChannel(channelId, channelName) {
+            try {
+                const response = await fetch('/api/clipping/source-channels', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': 'Bearer ' + authToken,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        channel_id: channelId,
+                        polling_interval_minutes: 30
+                    })
+                });
+
+                if (response.ok) {
+                    closeAddChannelModal();
+                    loadSourceChannels();
+                } else {
+                    const error = await response.json();
+                    alert('Error adding channel: ' + error.message);
+                }
+            } catch (error) {
+                alert('Error: ' + error.message);
+            }
+        }
+
+        // Linkage creation
+        async function createLinkage() {
+            const sourceChannelId = document.getElementById('linkageSourceChannel').value;
+            const destChannelId = document.getElementById('linkageDestChannel').value;
+            const clipsPerVideo = document.getElementById('linkageClipsPerVideo').value;
+            const minDuration = document.getElementById('linkageMinDuration').value;
+            const maxDuration = document.getElementById('linkageMaxDuration').value;
+
+            try {
+                const response = await fetch('/api/clipping/linkages', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': 'Bearer ' + authToken,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        source_channel_id: parseInt(sourceChannelId),
+                        destination_channel_id: parseInt(destChannelId),
+                        clips_per_video: parseInt(clipsPerVideo),
+                        min_clip_duration_seconds: parseInt(minDuration),
+                        max_clip_duration_seconds: parseInt(maxDuration)
+                    })
+                });
+
+                if (response.ok) {
+                    closeCreateLinkageModal();
+                    loadLinkages();
+                } else {
+                    const error = await response.json();
+                    alert('Error creating linkage: ' + error.message);
+                }
+            } catch (error) {
+                alert('Error: ' + error.message);
+            }
+        }
+
+        // Modal functions
+        function openAddChannelModal() {
+            document.getElementById('addChannelModal').classList.add('active');
+        }
+
+        function closeAddChannelModal() {
+            document.getElementById('addChannelModal').classList.remove('active');
+            document.getElementById('channelSearchInput').value = '';
+            document.getElementById('channelSearchResults').innerHTML = '';
+        }
+
+        async function openCreateLinkageModal() {
+            // Load source channels
+            const sourcesResponse = await fetch('/api/clipping/source-channels', {
+                headers: { 'Authorization': 'Bearer ' + authToken }
+            });
+            const sources = await sourcesResponse.json();
+
+            // Load user's YouTube channels
+            const channelsResponse = await fetch('/api/youtube/channels', {
+                headers: { 'Authorization': 'Bearer ' + authToken }
+            });
+            const channels = await channelsResponse.json();
+
+            document.getElementById('linkageSourceChannel').innerHTML = sources.map(s =>
+                `<option value="${s.id}">${s.channel_name}</option>`
+            ).join('');
+
+            document.getElementById('linkageDestChannel').innerHTML = channels.map(c =>
+                `<option value="${c.id}">${c.channel_name}</option>`
+            ).join('');
+
+            document.getElementById('createLinkageModal').classList.add('active');
+        }
+
+        function closeCreateLinkageModal() {
+            document.getElementById('createLinkageModal').classList.remove('active');
+        }
+
+        // Delete functions
+        async function deleteSourceChannel(id) {
+            if (!confirm('Are you sure you want to delete this source channel?')) return;
+
+            try {
+                await fetch(`/api/clipping/source-channels/${id}`, {
+                    method: 'DELETE',
+                    headers: { 'Authorization': 'Bearer ' + authToken }
+                });
+                loadSourceChannels();
+            } catch (error) {
+                alert('Error: ' + error.message);
+            }
+        }
+
+        async function deleteLinkage(id) {
+            if (!confirm('Are you sure you want to delete this linkage?')) return;
+
+            try {
+                await fetch(`/api/clipping/linkages/${id}`, {
+                    method: 'DELETE',
+                    headers: { 'Authorization': 'Bearer ' + authToken }
+                });
+                loadLinkages();
+            } catch (error) {
+                alert('Error: ' + error.message);
+            }
+        }
+
+        // Toggle active status
+        async function toggleChannelActive(id, isActive) {
+            try {
+                await fetch(`/api/clipping/source-channels/${id}`, {
+                    method: 'PATCH',
+                    headers: {
+                        'Authorization': 'Bearer ' + authToken,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ is_active: isActive })
+                });
+                loadSourceChannels();
+            } catch (error) {
+                alert('Error: ' + error.message);
+            }
+        }
+
+        async function toggleLinkageActive(id, isActive) {
+            try {
+                await fetch(`/api/clipping/linkages/${id}`, {
+                    method: 'PATCH',
+                    headers: {
+                        'Authorization': 'Bearer ' + authToken,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ is_active: isActive })
+                });
+                loadLinkages();
+            } catch (error) {
+                alert('Error: ' + error.message);
+            }
+        }
+
+        // Auto-refresh jobs every 5 seconds
+        setInterval(() => {
+            if (document.getElementById('jobsTab').classList.contains('active')) {
+                loadJobs();
+            }
+        }, 5000);
+
+        // Initial load
+        loadSourceChannels();
     </script>
 </body>
 </html>

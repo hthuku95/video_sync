@@ -482,8 +482,8 @@ impl StatefulGeminiAgent {
             tracing::info!("{}", msg);
         };
 
-        send_progress("🔧 Initializing Gemini agent (3 control tools + 40+ video editing tools in background job system)...");
-        let control_tools = Self::create_control_tools();
+        send_progress("🔧 Initializing Gemini agent with direct access to 53+ video editing tools...");
+        let all_tools = Self::create_all_tools(user_input);
 
         // Initialize ConversationManager to retrieve and save conversation history
         let conversation_manager = ConversationManager::new(app_state.db_pool.clone());
@@ -499,35 +499,61 @@ impl StatefulGeminiAgent {
             .await
             .unwrap_or_default();
 
-        let system_instruction = r#"You are an intelligent video editing assistant with the ability to manage background processing workflows.
+        let system_instruction = r#"You are an intelligent video editing assistant with DIRECT access to 53+ video editing tools.
 
-## Your Role
-You engage in natural conversation with users while coordinating video editing tasks. You have access to a background job system that handles complex video processing operations in parallel while you continue chatting.
+## Your Capabilities
 
-## Available Tools
+### Direct Tool Access (You Can Use These Immediately!)
+You now have immediate access to ALL video editing tools in conversations:
 
-### start_background_job
-Launches a dedicated video editing agent with 39 specialized tools (trim, merge, filter, overlay, color adjustment, audio processing, etc.) that executes in the background. Use this when the user requests video processing work.
+**Core Editing:** trim_video, merge_videos, split_video, crop_video, rotate_video, flip_video, resize_video, scale_video, stabilize_video
 
-### check_job_status
-Queries the status of background jobs. Use this when the user asks about progress, completion, or wants updates on running tasks. Can check specific jobs by ID or list all jobs in the current session.
+**Visual Effects:** add_text_overlay, add_overlay, apply_filter, adjust_color, picture_in_picture, chroma_key, split_screen, add_subtitles, create_thumbnail
+
+**Audio:** add_audio, extract_audio, adjust_volume, fade_audio
+
+**AI Generation:** generate_text_to_speech, generate_sound_effect, generate_music, generate_image, generate_video_script, auto_generate_video
+
+**Stock Media:** pexels_search, pexels_download_video, pexels_download_photo, pexels_get_trending, pexels_get_curated
+
+**Analysis:** view_video, analyze_video, review_video, extract_frames
+
+**YouTube:** optimize_youtube_metadata, analyze_youtube_performance, get_youtube_trends
+
+**Export:** optimize_for_platform (YouTube, Instagram, TikTok, etc.)
+
+### Background Job System (Still Available)
+For complex multi-step workflows that benefit from parallel execution:
+- Use `start_background_job` to spawn a dedicated agent for complex operations
+- Monitor with `check_job_status`
+
+### Memory
+- Use `search_memory` to find relevant past discussions and video editing tasks
 
 ## Decision-Making Guidelines
 
-Trust your understanding of natural language to determine user intent:
+**Use tools DIRECTLY for:**
+- Single operations: "trim this video from 0:10 to 0:30"
+- Quick edits: "add text overlay saying Hello"
+- Analysis: "what's in this video?"
+- Simple generation: "generate background music" or "create a 10 second video about coffee"
+- Stock media: "search for sunset videos on Pexels"
+- Most user requests can and should be handled with direct tools!
 
-**Start background jobs for:** Video editing requests, file processing tasks, multi-step operations
+**Use background jobs ONLY for:**
+- Complex multi-step workflows: "create a full 5-scene ad from scratch with custom music for each scene"
+- Long-running batch operations: "process all videos in this folder"
+- Parallel tasks that benefit from async execution
 
-**Check job status for:** Progress inquiries, completion questions, status requests
-
-**Respond conversationally for:** Greetings, general questions, clarifications, feedback, discussions about capabilities, weather, or any non-task conversation
+**Respond conversationally for:**
+- Greetings, questions, clarifications, general discussion
 
 ## Important Principles
-
-- You can chat naturally while background jobs execute - these are parallel operations
-- When a job is running, you remain available for conversation and can check its status
-- Only start new jobs for new work requests, not for status inquiries about existing work
-- Be helpful, conversational, and context-aware in all interactions"#;
+- You can now see and use video tools directly - no need to delegate everything to background jobs!
+- Direct tool execution is FASTER for simple operations
+- Background jobs are still useful for complex workflows
+- Be helpful, conversational, and context-aware
+- When users ask "Can you generate a video?" the answer is YES - you have auto_generate_video and all the stock media tools!"#;
 
         // Build contents array with conversation history
         let mut contents = Vec::new();
@@ -591,7 +617,7 @@ Trust your understanding of natural language to determine user intent:
             let request = crate::gemini_client::GenerateContentRequest {
                 contents: conversation_contents.clone(),
                 tools: Some(vec![crate::gemini_client::Tool {
-                    function_declarations: control_tools.clone(),
+                    function_declarations: all_tools.clone(),
                 }]),
                 generation_config: Some(crate::gemini_client::GenerationConfig {
                     temperature: 0.5,
@@ -626,7 +652,38 @@ Trust your understanding of natural language to determine user intent:
 
                                 send_progress(&format!("🔧 Detected tool call: {}", function_name));
 
-                                if function_name == "start_background_job" {
+                                // NEW: Check if this is a video editing tool (not a control tool)
+                                if function_name != "start_background_job"
+                                    && function_name != "check_job_status"
+                                    && function_name != "search_memory" {
+                                    // Execute video editing tool directly using tool_executor
+                                    send_progress(&format!("🎬 Executing {} directly...", function_name));
+                                    tracing::info!("🎬 Executing video tool directly: {}", function_name);
+
+                                    let exec_context = crate::agent::tool_executor::ToolExecutionContext {
+                                        session_id: session_id.to_string(),
+                                        user_id: None, // StatefulAgent doesn't have user_id
+                                        app_state: app_state.clone(),
+                                    };
+
+                                    let tool_result = crate::agent::tool_executor::execute_tool_gemini_with_context(
+                                        &function_name,
+                                        &function_call.args,
+                                        &exec_context
+                                    ).await;
+
+                                    send_progress(&format!("✅ {} completed", function_name));
+
+                                    // Parse the result string as JSON
+                                    let result_value = serde_json::from_str::<serde_json::Value>(&tool_result)
+                                        .unwrap_or_else(|_| serde_json::json!({"result": tool_result}));
+
+                                    function_results.push((
+                                        function_name.clone(),
+                                        result_value,
+                                        function_call.thought_signature.clone()
+                                    ));
+                                } else if function_name == "start_background_job" {
                                     send_progress("🚀 Starting background video editing job...");
                                     tracing::info!("🚀 Gemini decided to start background job");
 
@@ -896,11 +953,12 @@ Trust your understanding of natural language to determine user intent:
         Ok(final_response)
     }
 
-    fn create_control_tools() -> Vec<crate::gemini_client::FunctionDeclaration> {
-        vec![
+    fn create_all_tools(user_input: &str) -> Vec<crate::gemini_client::FunctionDeclaration> {
+        // Start with the 3 control tools
+        let mut all_tools = vec![
             crate::gemini_client::FunctionDeclaration {
                 name: "start_background_job".to_string(),
-                description: "Start a background video editing job to process videos. Use this ONLY when the user gives you a COMMAND or INSTRUCTION to perform video editing work (e.g., 'make it black and white', 'trim from 0-10 seconds', 'add text overlay'). DO NOT use this for questions like 'can you help', 'what can you do', 'are you able to', or status inquiries. The background job spawns a specialized agent with 39 video editing tools that executes the requested operations and sends progress updates.".to_string(),
+                description: "Start a background video editing job for complex multi-step workflows that benefit from parallel execution. Use this when the user requests complex operations like 'create a full ad from scratch with 5 scenes' or 'process all videos in this folder'. For simple single operations, use the direct tools instead.".to_string(),
                 parameters: crate::gemini_client::Parameters {
                     param_type: "object".to_string(),
                     properties: HashMap::from([
@@ -953,6 +1011,13 @@ Trust your understanding of natural language to determine user intent:
                     required: vec!["query".to_string()],
                 },
             },
-        ]
+        ];
+
+        // NEW: Add video editing tools dynamically using ToolSelector
+        let selected_tool_names = crate::tool_selector::ToolSelector::select_tools(user_input);
+        let video_tools = crate::gemini_client::GeminiClient::filter_tools_by_name(&selected_tool_names);
+        all_tools.extend(video_tools);
+
+        all_tools
     }
 }
