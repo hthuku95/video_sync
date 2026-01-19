@@ -1,7 +1,7 @@
 // src/core.rs
 
 use crate::types::*;
-use crate::utils::{execute_ffmpeg_command, execute_ffprobe_command};
+use crate::utils::{execute_ffmpeg_command, execute_ffmpeg_command_with_sync_timeout, execute_ffprobe_command};
 use serde_json::Value;
 use std::process::Command;
 
@@ -75,18 +75,71 @@ pub fn trim_video(
     end_seconds: f64,
 ) -> Result<String, String> {
     let duration = end_seconds - start_seconds;
-    let mut command = Command::new("ffmpeg");
-    command
-        .arg("-i")
-        .arg(input_file)
-        .arg("-ss")
-        .arg(start_seconds.to_string())
-        .arg("-t")
-        .arg(duration.to_string())
-        .arg("-y")
-        .arg(output_file);
 
-    execute_ffmpeg_command(command)
+    // Check if input is already H.264/AAC (can use stream copy)
+    let can_copy = match analyze_video(input_file) {
+        Ok(meta) => {
+            // Check if format contains h264/avc (video codec indicators)
+            let is_h264 = meta.format.to_lowercase().contains("h264")
+                || meta.format.to_lowercase().contains("avc")
+                || meta.format.to_lowercase().contains("mp4");
+            tracing::info!("Input format: {}, can use stream copy: {}", meta.format, is_h264);
+            is_h264
+        }
+        Err(e) => {
+            tracing::warn!("Unable to analyze input video, will re-encode for safety: {}", e);
+            false  // If analysis fails, re-encode to be safe
+        }
+    };
+
+    let mut command = Command::new("ffmpeg");
+
+    if can_copy {
+        // Use stream copy (fast) - move -ss BEFORE -i for faster seeking
+        tracing::info!("🚀 Using stream copy for fast extraction");
+        command
+            .arg("-ss")
+            .arg(start_seconds.to_string())
+            .arg("-i")
+            .arg(input_file)
+            .arg("-t")
+            .arg(duration.to_string())
+            .arg("-c:v")
+            .arg("copy")
+            .arg("-c:a")
+            .arg("copy")
+            .arg("-avoid_negative_ts")
+            .arg("make_zero")
+            .arg("-y")
+            .arg(output_file);
+    } else {
+        // Re-encode (safe and compatible)
+        tracing::info!("🔄 Re-encoding for compatibility and quality");
+        command
+            .arg("-ss")
+            .arg(start_seconds.to_string())
+            .arg("-i")
+            .arg(input_file)
+            .arg("-t")
+            .arg(duration.to_string())
+            .arg("-c:v")
+            .arg("libx264")
+            .arg("-preset")
+            .arg("fast")
+            .arg("-crf")
+            .arg("23")
+            .arg("-c:a")
+            .arg("aac")
+            .arg("-b:a")
+            .arg("192k")
+            .arg("-movflags")
+            .arg("faststart")
+            .arg("-y")
+            .arg(output_file);
+    }
+
+    // Use timeout-protected execution (10-minute timeout for clips)
+    execute_ffmpeg_command_with_sync_timeout(command, Some(600))
 }
 
 pub fn extract_video_segment(
@@ -99,33 +152,101 @@ pub fn extract_video_segment(
 }
 
 pub fn merge_videos(input_files: &[String], output_file: &str) -> Result<String, String> {
-    let concat_list = input_files
-        .iter()
-        .map(|f| {
-            let absolute_path = std::fs::canonicalize(f).unwrap();
-            format!("file '{}'", absolute_path.to_str().unwrap())
-        })
-        .collect::<Vec<String>>()
-        .join("\n");
-    let concat_file_path = format!("{}.txt", output_file);
-    std::fs::write(&concat_file_path, concat_list).map_err(|e| e.to_string())?;
+    // Log video properties before merge for debugging
+    tracing::info!("🎞️ Merging {} video clips", input_files.len());
+    for (i, file) in input_files.iter().enumerate() {
+        match analyze_video(file) {
+            Ok(meta) => {
+                tracing::info!(
+                    "  Clip {}: {}x{} @ {:.1}fps, format: {}, duration: {:.1}s",
+                    i + 1, meta.width, meta.height, meta.fps, meta.format, meta.duration_seconds
+                );
+            }
+            Err(e) => {
+                tracing::warn!("  Clip {}: Unable to analyze - {}", i + 1, e);
+            }
+        }
+    }
+
+    // Build concat filter for re-encoding (handles mixed properties)
+    // Format: [0:v][0:a][1:v][1:a]...concat=n=N:v=1:a=1[outv][outa]
+    let mut filter_parts = Vec::new();
+    for i in 0..input_files.len() {
+        filter_parts.push(format!("[{}:v][{}:a]", i, i));
+    }
+    let filter_complex = format!(
+        "{}concat=n={}:v=1:a=1[outv][outa]",
+        filter_parts.join(""),
+        input_files.len()
+    );
+
+    tracing::info!("🔧 Using concat filter with re-encoding for compatibility");
 
     let mut command = Command::new("ffmpeg");
+
+    // Add all input files
+    for file in input_files {
+        command.arg("-i").arg(file);
+    }
+
     command
-        .arg("-f")
-        .arg("concat")
-        .arg("-safe")
-        .arg("0")
-        .arg("-i")
-        .arg(&concat_file_path)
-        .arg("-c")
-        .arg("copy")
+        .arg("-filter_complex")
+        .arg(&filter_complex)
+        .arg("-map")
+        .arg("[outv]")
+        .arg("-map")
+        .arg("[outa]")
+        // Video encoding settings (H.264 with good quality/speed balance)
+        .arg("-c:v")
+        .arg("libx264")
+        .arg("-preset")
+        .arg("medium") // medium preset: good balance between speed and quality
+        .arg("-crf")
+        .arg("23") // Constant Rate Factor: 23 is good quality (lower = better, 18-28 range)
+        .arg("-pix_fmt")
+        .arg("yuv420p") // Maximum compatibility pixel format
+        // Audio encoding settings
+        .arg("-c:a")
+        .arg("aac")
+        .arg("-b:a")
+        .arg("192k") // Audio bitrate
+        // Ensure proper moov atom placement for streaming
+        .arg("-movflags")
+        .arg("faststart")
+        // Overwrite output file
         .arg("-y")
         .arg(output_file);
 
-    let result = execute_ffmpeg_command(command);
-    std::fs::remove_file(concat_file_path).ok();
-    result
+    tracing::info!("⏳ Re-encoding and merging (this may take 30-60 seconds)...");
+    // Use timeout version (10 minutes max for complex merges)
+    let result = execute_ffmpeg_command_with_sync_timeout(command, Some(600))?;
+
+    // Validate the merged output
+    tracing::info!("🔍 Validating merged output...");
+    if !validate_video_file(output_file)? {
+        return Err(format!("❌ Merged video is corrupted or unreadable: {}", output_file));
+    }
+
+    // Check that duration is reasonable (at least 1 second)
+    match analyze_video(output_file) {
+        Ok(metadata) => {
+            if metadata.duration_seconds < 1.0 {
+                return Err(format!(
+                    "❌ Merged video is too short ({:.1}s), likely corrupted",
+                    metadata.duration_seconds
+                ));
+            }
+            tracing::info!(
+                "✅ Merge successful: {}x{} @ {:.1}fps, duration: {:.1}s",
+                metadata.width, metadata.height, metadata.fps, metadata.duration_seconds
+            );
+        }
+        Err(e) => {
+            tracing::warn!("⚠️ Unable to analyze merged output: {}", e);
+        }
+    }
+
+    Ok(result)
 }
 
 pub fn split_video(

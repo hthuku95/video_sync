@@ -13,6 +13,7 @@ pub fn format_duration(seconds: f64) -> String {
 }
 
 /// Execute FFmpeg command with error handling and progress info
+/// NOTE: This function has no timeout! For long-running operations, use execute_ffmpeg_command_with_sync_timeout
 pub fn execute_ffmpeg_command(mut command: Command) -> Result<String, String> {
     println!("Executing FFmpeg: {:?}", command);
 
@@ -26,6 +27,31 @@ pub fn execute_ffmpeg_command(mut command: Command) -> Result<String, String> {
     }
 
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+/// Execute FFmpeg command synchronously with timeout to prevent hung processes
+/// This wraps the async version using a Tokio runtime
+/// Default timeout is 5 minutes (300 seconds)
+pub fn execute_ffmpeg_command_with_sync_timeout(
+    command: Command,
+    timeout_secs: Option<u64>,
+) -> Result<String, String> {
+    // Convert std::process::Command to tokio::process::Command
+    let program = command.get_program().to_string_lossy().to_string();
+    let args: Vec<String> = command
+        .get_args()
+        .map(|arg| arg.to_string_lossy().to_string())
+        .collect();
+
+    let mut tokio_command = TokioCommand::new(program);
+    tokio_command.args(&args);
+
+    // Create or get Tokio runtime
+    let runtime = tokio::runtime::Runtime::new()
+        .map_err(|e| format!("Failed to create Tokio runtime: {}", e))?;
+
+    // Execute async version with timeout in the runtime
+    runtime.block_on(execute_ffmpeg_command_with_timeout(tokio_command, timeout_secs))
 }
 
 /// Execute FFmpeg command asynchronously with timeout to prevent hung processes

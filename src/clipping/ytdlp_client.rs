@@ -35,21 +35,31 @@ impl YtDlpClient {
         // Check if yt-dlp is installed
         Self::check_ytdlp_installed().await?;
 
-        // Run yt-dlp command
-        let output = Command::new("yt-dlp")
-            .arg("--format")
-            .arg("bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best")
-            .arg("--output")
-            .arg(output_path)
-            .arg("--no-playlist")
-            .arg("--print")
-            .arg("after_move:filepath,title,duration,width,height")
-            .arg(video_url)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output()
-            .await
-            .map_err(|e| format!("Failed to execute yt-dlp: {}. Make sure yt-dlp is installed.", e))?;
+        // Run yt-dlp command with explicit merge format and 1-hour timeout
+        tracing::info!("⏳ Starting download with 1-hour timeout");
+
+        use tokio::time::{timeout, Duration};
+
+        let output = timeout(
+            Duration::from_secs(3600),  // 1 hour timeout for large videos
+            Command::new("yt-dlp")
+                .arg("--format")
+                .arg("bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best")
+                .arg("--merge-output-format")
+                .arg("mp4")
+                .arg("--output")
+                .arg(output_path)
+                .arg("--no-playlist")
+                .arg("--print")
+                .arg("after_move:filepath,title,duration,width,height")
+                .arg(video_url)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .output()
+        )
+        .await
+        .map_err(|_| "❌ Download timed out after 1 hour".to_string())?
+        .map_err(|e| format!("Failed to execute yt-dlp: {}. Make sure yt-dlp is installed.", e))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -62,6 +72,71 @@ impl YtDlpClient {
 
         // Parse output (yt-dlp prints filepath, title, duration, width, height)
         let lines: Vec<&str> = stdout.lines().collect();
+
+        // Validate the downloaded file
+        tracing::info!("🔍 Validating downloaded video file");
+
+        // Check 1: File exists
+        if !Path::new(output_path).exists() {
+            return Err(format!("❌ Downloaded file does not exist: {}", output_path));
+        }
+
+        // Check 2: File size is reasonable (> 1MB for videos)
+        let metadata = tokio::fs::metadata(output_path)
+            .await
+            .map_err(|e| format!("Failed to read file metadata: {}", e))?;
+
+        if metadata.len() < 1_000_000 {
+            return Err(format!(
+                "❌ Downloaded file is suspiciously small ({} bytes): {}",
+                metadata.len(),
+                output_path
+            ));
+        }
+
+        tracing::info!("✅ File exists and has reasonable size ({:.2} MB)",
+            metadata.len() as f64 / 1_000_000.0);
+
+        // Check 3: Validate with ffprobe (use existing validate_video_file)
+        match crate::core::validate_video_file(output_path) {
+            Ok(true) => {
+                tracing::info!("✅ Downloaded video validated successfully");
+            }
+            Ok(false) => {
+                // Clean up corrupted download
+                let _ = tokio::fs::remove_file(output_path).await;
+                return Err(format!("❌ Downloaded video is corrupted or unreadable: {}", output_path));
+            }
+            Err(e) => {
+                tracing::warn!("⚠️ Video validation check failed: {}", e);
+                // Continue anyway - validation might fail for other reasons
+            }
+        }
+
+        // Check 4: Verify duration matches expected
+        match crate::core::analyze_video(output_path) {
+            Ok(video_meta) => {
+                if video_meta.duration_seconds < 1.0 {
+                    // Clean up corrupted download
+                    let _ = tokio::fs::remove_file(output_path).await;
+                    return Err(format!(
+                        "❌ Downloaded video is too short ({:.1}s), likely corrupted",
+                        video_meta.duration_seconds
+                    ));
+                }
+                tracing::info!(
+                    "✅ Video validated: {}x{} @ {:.1}fps, duration: {:.1}s, format: {}",
+                    video_meta.width,
+                    video_meta.height,
+                    video_meta.fps,
+                    video_meta.duration_seconds,
+                    video_meta.format
+                );
+            }
+            Err(e) => {
+                tracing::warn!("⚠️ Unable to analyze video metadata: {}", e);
+            }
+        }
 
         Ok(VideoDownloadResult {
             file_path: output_path.to_string(),

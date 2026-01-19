@@ -72,7 +72,25 @@ impl ClipUploader {
         // Construct YouTube URL
         let youtube_url = format!("https://youtube.com/shorts/{}", upload_result.id);
 
-        // Step 4: Update database with YouTube video ID and URL
+        // Step 4: Upload custom thumbnail if available (ENHANCEMENT)
+        if let Some(ref thumbnail_path) = clip.custom_thumbnail_path {
+            match self.upload_custom_thumbnail(&access_token, &upload_result.id, thumbnail_path).await {
+                Ok(_) => {
+                    tracing::info!("✅ Custom thumbnail uploaded for video {}", upload_result.id);
+
+                    // Update database to mark thumbnail as uploaded
+                    self.mark_thumbnail_uploaded(clip_db_id).await?;
+                }
+                Err(e) => {
+                    tracing::warn!("⚠️ Failed to upload thumbnail for video {}: {}", upload_result.id, e);
+                    // Continue anyway - video is uploaded successfully
+                }
+            }
+        } else {
+            tracing::info!("ℹ️ No custom thumbnail available, YouTube will use auto-generated thumbnail");
+        }
+
+        // Step 5: Update database with YouTube video ID and URL
         self.update_clip_upload_status(
             clip_db_id,
             &upload_result.id,
@@ -203,6 +221,44 @@ impl ClipUploader {
         .execute(&self.db_pool)
         .await
         .map_err(|e| format!("Failed to mark upload as failed: {}", e))?;
+
+        Ok(())
+    }
+
+    /// Upload custom thumbnail to YouTube (ENHANCEMENT)
+    async fn upload_custom_thumbnail(
+        &self,
+        access_token: &str,
+        video_id: &str,
+        thumbnail_path: &str,
+    ) -> Result<(), String> {
+        tracing::info!("📤 Uploading custom thumbnail for video {}", video_id);
+
+        // Read thumbnail file
+        let thumbnail_bytes = tokio::fs::read(thumbnail_path)
+            .await
+            .map_err(|e| format!("Failed to read thumbnail file: {}", e))?;
+
+        // Upload using YouTube client (JPEG format)
+        self.youtube_client
+            .upload_thumbnail(access_token, video_id, thumbnail_bytes, "image/jpeg")
+            .await
+            .map_err(|e| format!("YouTube thumbnail upload failed: {}", e))?;
+
+        Ok(())
+    }
+
+    /// Mark thumbnail as successfully uploaded
+    async fn mark_thumbnail_uploaded(&self, clip_id: i32) -> Result<(), String> {
+        sqlx::query(
+            "UPDATE extracted_clips
+             SET thumbnail_uploaded_at = NOW()
+             WHERE id = $1",
+        )
+        .bind(clip_id)
+        .execute(&self.db_pool)
+        .await
+        .map_err(|e| format!("Failed to mark thumbnail uploaded: {}", e))?;
 
         Ok(())
     }

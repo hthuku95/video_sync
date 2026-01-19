@@ -1,9 +1,12 @@
 // AI-powered viral clip identification and extraction
 
 use crate::clipping::models::{ClipCandidate, ClippingConfig, ReviewResult};
+use crate::clipping::performance_tracker::PerformanceTracker;
+use crate::clipping::thumbnail_generator::ThumbnailGenerator;
 use crate::services::VideoVectorizationService;
 use crate::AppState;
 use std::sync::Arc;
+use tokio::time::Duration;
 
 pub struct AiClipper {
     pub app_state: Arc<AppState>,
@@ -70,6 +73,17 @@ impl AiClipper {
                         tracing::warn!("Failed to vectorize clip: {}", e);
                     }
 
+                    // ENHANCEMENT: Generate AI thumbnail for the clip
+                    let thumbnail_path = self.generate_clip_thumbnail(
+                        &clip_path,
+                        &candidate.title,
+                        &candidate.viral_factors,
+                    ).await;
+
+                    if let Err(ref e) = thumbnail_path {
+                        tracing::warn!("Failed to generate thumbnail for clip {}: {}", index + 1, e);
+                    }
+
                     // Review the clip
                     let review_result = self.review_clip(&clip_path, &candidate.criteria).await?;
 
@@ -89,6 +103,7 @@ impl AiClipper {
                         ai_tags: candidate.tags.clone(),
                         ai_confidence_score: candidate.confidence,
                         viral_factors: candidate.viral_factors.clone(),
+                        custom_thumbnail_path: thumbnail_path.ok(),  // Store thumbnail path if generation succeeded
                     });
                 }
                 Err(e) => {
@@ -126,22 +141,50 @@ impl AiClipper {
         }
     }
 
-    /// Use AI to identify viral moments in the video
+    /// Use AI to identify viral moments in the video (ENHANCED: uses learned optimal viral factors)
     async fn identify_viral_moments(
         &self,
         video_analysis: &str,
         config: &ClippingConfig,
     ) -> Result<Vec<ClipCandidate>, String> {
+        // ENHANCEMENT: Get learned optimal viral factors from performance data
+        let performance_tracker = PerformanceTracker::new(self.app_state.db_pool.clone());
+        let optimal_factors = performance_tracker
+            .get_optimized_viral_factors()
+            .await
+            .unwrap_or_else(|_| vec![
+                "dramatic_hook".to_string(),
+                "surprising_moment".to_string(),
+                "emotional_peak".to_string(),
+            ]);
+
+        // ENHANCEMENT: Get optimal duration range from learned data
+        let (optimal_min, optimal_max) = performance_tracker
+            .get_optimal_duration_range()
+            .await
+            .unwrap_or((config.min_clip_duration_seconds, config.max_clip_duration_seconds));
+
+        let factors_hint = if !optimal_factors.is_empty() {
+            format!(
+                "PRIORITIZE THESE HIGH-PERFORMING VIRAL FACTORS (learned from past performance):\n{}\n\n",
+                optimal_factors.iter().map(|f| format!("  - {}", f)).collect::<Vec<_>>().join("\n")
+            )
+        } else {
+            String::new()
+        };
+
         let prompt = format!(
             r#"Analyze this video and identify exactly {} viral clip opportunities for YouTube Shorts.
 
 VIDEO ANALYSIS:
 {}
 
-REQUIREMENTS:
+{}REQUIREMENTS:
 - Each clip must be between {} and {} seconds
+- OPTIMAL DURATION (based on learning): {}-{} seconds
 - Focus on: dramatic hooks, surprising moments, emotional peaks, action sequences, plot twists
 - Clips should work as standalone content
+- IMPORTANT: Prioritize the high-performing viral factors listed above if present in the video
 
 For EACH clip, provide in this exact JSON format:
 [
@@ -160,8 +203,11 @@ For EACH clip, provide in this exact JSON format:
 Provide ONLY the JSON array, no other text."#,
             config.clips_per_video,
             video_analysis,
+            factors_hint,
             config.min_clip_duration_seconds,
-            config.max_clip_duration_seconds
+            config.max_clip_duration_seconds,
+            optimal_min,
+            optimal_max
         );
 
         // Call AI agent (Claude or Gemini based on config)
@@ -272,14 +318,36 @@ Provide ONLY the JSON array, no other text."#,
         }
     }
 
+    /// Wait for clip vectorization to complete (FIXED: intelligent polling instead of fixed delay)
+    async fn wait_for_clip_vectorization(&self, clip_path: &str) -> Result<(), String> {
+        let max_attempts = 30; // 30 seconds max
+        for attempt in 0..max_attempts {
+            // Check if embeddings exist in Qdrant
+            match VideoVectorizationService::retrieve_video_analysis(clip_path, &self.app_state).await {
+                Ok(_) => {
+                    tracing::info!("✅ Clip vectorization completed after {} seconds", attempt + 1);
+                    return Ok(());
+                }
+                Err(_) if attempt < max_attempts - 1 => {
+                    // Not ready yet, wait 1 second and try again
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                }
+                Err(e) => {
+                    return Err(format!("Clip vectorization timed out after 30 seconds: {}", e));
+                }
+            }
+        }
+        Err("Clip vectorization timed out".to_string())
+    }
+
     /// Review extracted clip for quality using vectorized analysis
     async fn review_clip(
         &self,
         clip_path: &str,
         original_criteria: &str,
     ) -> Result<ReviewResult, String> {
-        // ENHANCEMENT: Wait briefly for vectorization to complete
-        tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+        // FIXED: Intelligent polling instead of fixed 3-second delay
+        self.wait_for_clip_vectorization(clip_path).await?;
 
         // Retrieve the vectorized clip analysis to actually VIEW the clip
         let clip_analysis = match VideoVectorizationService::retrieve_video_analysis(
@@ -339,6 +407,22 @@ Then provide brief feedback explaining your decision."#,
             feedback: review_response,
         })
     }
+
+    /// Generate AI-powered thumbnail for a clip (HYBRID: best frame + text overlay)
+    async fn generate_clip_thumbnail(
+        &self,
+        clip_path: &str,
+        title: &str,
+        viral_factors: &[String],
+    ) -> Result<String, String> {
+        tracing::info!("🎨 Generating AI thumbnail for clip");
+
+        let thumbnail_generator = ThumbnailGenerator::new(self.app_state.clone());
+
+        thumbnail_generator
+            .generate_thumbnail(clip_path, title, viral_factors)
+            .await
+    }
 }
 
 /// Extracted clip data (before database insertion)
@@ -354,4 +438,5 @@ pub struct ExtractedClipData {
     pub ai_tags: Vec<String>,
     pub ai_confidence_score: f64,
     pub viral_factors: Vec<String>,
+    pub custom_thumbnail_path: Option<String>,  // AI-generated thumbnail
 }

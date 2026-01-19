@@ -1,7 +1,7 @@
 // src/visual.rs
 
 
-use crate::utils::execute_ffmpeg_command;
+use crate::utils::{execute_ffmpeg_command, execute_ffmpeg_command_with_sync_timeout};
 use serde_json::Value;
 use std::process::Command;
 
@@ -151,6 +151,24 @@ pub fn add_text_overlay(
     start_time: f64,
     end_time: f64,
 ) -> Result<String, String> {
+    // Validate input file exists and is readable
+    if !std::path::Path::new(input_file).exists() {
+        return Err(format!("❌ Input file does not exist: {}", input_file));
+    }
+
+    // Validate input file is a valid video (basic check using core::validate_video_file)
+    match crate::core::validate_video_file(input_file) {
+        Ok(is_valid) => {
+            if !is_valid {
+                return Err(format!("❌ Input video is corrupted or unreadable: {}", input_file));
+            }
+        }
+        Err(e) => {
+            tracing::warn!("⚠️ Could not validate input video: {}", e);
+            // Continue anyway - validation might fail for other reasons
+        }
+    }
+
     let filter = format!(
         "drawtext=text='{}':x={}:y={}:fontfile={}:fontsize={}:fontcolor={}:enable='between(t,{},{})'",
         text, x, y, font_file, font_size, font_color, start_time, end_time
@@ -167,7 +185,9 @@ pub fn add_text_overlay(
         .arg("-y")
         .arg(output_file);
 
-    execute_ffmpeg_command(command)
+    // Use timeout version (10 minutes max for text overlay operations)
+    tracing::info!("📝 Adding text overlay to video (with 10-minute timeout)");
+    execute_ffmpeg_command_with_sync_timeout(command, Some(600))
 }
 
 pub fn add_animated_text(

@@ -259,6 +259,140 @@ impl YouTubeAnalyticsClient {
         let data: AnalyticsApiResponse = response.json().await?;
         Ok(data)
     }
+
+    /// Batch fetch analytics for multiple clips (OPTIMIZATION for performance tracking)
+    /// This is much more efficient than individual calls for each clip
+    pub async fn get_batch_clip_analytics(
+        &self,
+        access_token: &str,
+        video_ids: &[String],
+        start_date: &str,
+        end_date: &str,
+    ) -> Result<Vec<ClipPerformanceMetrics>, Box<dyn std::error::Error + Send + Sync>> {
+        if video_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        tracing::info!("Fetching batch analytics for {} clips", video_ids.len());
+
+        let url = "https://youtubeanalytics.googleapis.com/v2/reports";
+        let video_filter = format!("video=={}", video_ids.join(","));
+
+        let response = self
+            .client
+            .get(url)
+            .query(&[
+                ("ids", "channel==MINE".to_string()),
+                ("startDate", start_date.to_string()),
+                ("endDate", end_date.to_string()),
+                ("metrics", "views,likes,dislikes,comments,shares,averageViewPercentage".to_string()),
+                ("dimensions", "video".to_string()),
+                ("filters", video_filter),
+            ])
+            .header("Authorization", format!("Bearer {}", access_token))
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let error_text = response.text().await?;
+            return Err(format!("Batch analytics failed: {}", error_text).into());
+        }
+
+        let analytics_response: AnalyticsApiResponse = response.json().await?;
+
+        // Parse each row as a separate clip's metrics
+        let mut results = Vec::new();
+        for row in analytics_response.rows {
+            let video_id = row.get(0).and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
+            let views = row.get(1).and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+            let likes = row.get(2).and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+            let dislikes = row.get(3).and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+            let comments = row.get(4).and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+            let shares = row.get(5).and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+            let avg_watch_pct = row.get(6).and_then(|v| v.as_f64()).unwrap_or(0.0);
+
+            // Calculate engagement rates
+            let like_rate = if views > 0 { likes as f64 / views as f64 } else { 0.0 };
+            let comment_rate = if views > 0 { comments as f64 / views as f64 } else { 0.0 };
+
+            results.push(ClipPerformanceMetrics {
+                video_id,
+                views,
+                likes,
+                dislikes,
+                comments,
+                shares,
+                like_rate,
+                comment_rate,
+                avg_watch_percentage: avg_watch_pct,
+            });
+        }
+
+        Ok(results)
+    }
+
+    /// Get traffic sources specifically for a Shorts clip
+    /// Optimized for understanding Shorts performance
+    pub async fn get_shorts_traffic_sources(
+        &self,
+        access_token: &str,
+        video_id: &str,
+        start_date: &str,
+        end_date: &str,
+    ) -> Result<ShortsTrafficSources, Box<dyn std::error::Error + Send + Sync>> {
+        let url = "https://youtubeanalytics.googleapis.com/v2/reports";
+
+        let response = self
+            .client
+            .get(url)
+            .query(&[
+                ("ids", "channel==MINE".to_string()),
+                ("startDate", start_date.to_string()),
+                ("endDate", end_date.to_string()),
+                ("metrics", "views".to_string()),
+                ("dimensions", "insightTrafficSourceType".to_string()),
+                ("filters", format!("video=={}", video_id)),
+                ("sort", "-views".to_string()),
+            ])
+            .header("Authorization", format!("Bearer {}", access_token))
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            tracing::warn!("Traffic sources not available for video {}", video_id);
+            return Ok(ShortsTrafficSources::default());
+        }
+
+        let data: TrafficSourcesApiResponse = response.json().await?;
+
+        // Parse into our specialized structure
+        let mut sources = std::collections::HashMap::new();
+        let mut total_views = 0i32;
+
+        for row in data.rows {
+            let source_type = row.get(0).and_then(|v| v.as_str()).unwrap_or("UNKNOWN");
+            let views = row.get(1).and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+            sources.insert(source_type.to_string(), views);
+            total_views += views;
+        }
+
+        // Calculate percentages
+        let calc_pct = |views: i32| -> f64 {
+            if total_views > 0 {
+                (views as f64 / total_views as f64) * 100.0
+            } else {
+                0.0
+            }
+        };
+
+        Ok(ShortsTrafficSources {
+            shorts_feed_pct: calc_pct(*sources.get("SHORTS").unwrap_or(&0)),
+            suggested_videos_pct: calc_pct(*sources.get("RELATED_VIDEO").unwrap_or(&0)),
+            browse_features_pct: calc_pct(*sources.get("BROWSE").unwrap_or(&0)),
+            search_pct: calc_pct(*sources.get("YT_SEARCH").unwrap_or(&0)),
+            external_pct: calc_pct(*sources.get("EXT_URL").unwrap_or(&0)),
+        })
+    }
 }
 
 // ============================================================================
@@ -386,4 +520,30 @@ pub struct ParsedChannelMetrics {
     pub watch_time_minutes: i64,
     pub subscribers_gained: i32,
     pub subscribers_lost: i32,
+}
+
+// ============================================================================
+// Performance Tracking Structures (for learning system)
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClipPerformanceMetrics {
+    pub video_id: String,
+    pub views: i32,
+    pub likes: i32,
+    pub dislikes: i32,
+    pub comments: i32,
+    pub shares: i32,
+    pub like_rate: f64,
+    pub comment_rate: f64,
+    pub avg_watch_percentage: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ShortsTrafficSources {
+    pub shorts_feed_pct: f64,      // % from Shorts feed (most important for Shorts)
+    pub suggested_videos_pct: f64,  // % from suggested/related
+    pub browse_features_pct: f64,   // % from browse/homepage
+    pub search_pct: f64,            // % from search
+    pub external_pct: f64,          // % from external sites
 }

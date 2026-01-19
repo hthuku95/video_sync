@@ -12,8 +12,10 @@ use chrono::{DateTime, Utc};
 pub mod video_job;
 pub mod clipping_job;
 pub mod clipping_worker;
+pub mod analytics_sync_job;
 
 pub use clipping_worker::ClippingWorker;
+pub use analytics_sync_job::AnalyticsSyncJob;
 
 /// Unique identifier for a background job
 pub type JobId = String;

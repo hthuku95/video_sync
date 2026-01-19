@@ -34,6 +34,22 @@ pub async fn execute_clipping_job(
     tracing::info!("Downloading video: {}", video_url);
     let download_result = YtDlpClient::download_video(&video_url, &video_path).await?;
 
+    // Double-check file is readable before proceeding (additional safety layer)
+    if !std::path::Path::new(&video_path).exists() {
+        return Err(format!("Downloaded file not found: {}", video_path).into());
+    }
+
+    match crate::core::validate_video_file(&video_path) {
+        Ok(true) => {
+            tracing::info!("✅ Downloaded video validated and ready for processing");
+        }
+        Ok(false) | Err(_) => {
+            // Clean up the corrupted file
+            let _ = tokio::fs::remove_file(&video_path).await;
+            return Err(format!("Downloaded video is corrupted or unreadable: {}", video_path).into());
+        }
+    }
+
     update_job_status(job_id, "downloaded", 20, None, &app_state.db_pool).await?;
     update_job_video_path(job_id, &video_path, &app_state.db_pool).await?;
 
@@ -248,8 +264,8 @@ async fn save_clips_to_database(
              (clipping_job_id, clip_number, local_clip_path,
               start_time_seconds, end_time_seconds, duration_seconds,
               ai_title, ai_description, ai_tags, ai_confidence_score, viral_factors,
-              destination_channel_id)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+              destination_channel_id, custom_thumbnail_path, thumbnail_generation_method)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
              RETURNING id",
         )
         .bind(job_id)
@@ -264,6 +280,8 @@ async fn save_clips_to_database(
         .bind(clip.ai_confidence_score)
         .bind(&clip.viral_factors)
         .bind(linkage.destination_channel_id)
+        .bind(&clip.custom_thumbnail_path)
+        .bind(clip.custom_thumbnail_path.as_ref().map(|_| "hybrid"))
         .fetch_one(pool)
         .await
         .map_err(|e| format!("Failed to save clip: {}", e))?;

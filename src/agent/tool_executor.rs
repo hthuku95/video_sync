@@ -1869,18 +1869,68 @@ async fn execute_auto_generate_video_claude(args: &Value) -> String {
     tracing::info!("✅ auto_generate_video: Successfully downloaded {} clips", downloaded_files.len());
     result.push_str(&format!("\n✅ Downloaded {} clips\n\n", downloaded_files.len()));
 
-    // Step 3: Merge clips
+    // Step 3: Merge clips with retry logic
     result.push_str("🎞️  Step 3: Merging clips...\n");
     tracing::info!("🎞️ auto_generate_video: Merging {} clips into {}", downloaded_files.len(), output_file);
-    let merge_result = crate::core::merge_videos(&downloaded_files, &output_file).unwrap_or_else(|e| e);
 
-    if merge_result.contains("❌") {
-        tracing::error!("❌ auto_generate_video: Merge failed - {}", merge_result);
-        return format!("{}❌ Failed to merge clips: {}", result, merge_result);
+    let max_merge_attempts = 2;
+    let mut merge_success = false;
+    let mut last_error = String::new();
+
+    for attempt in 1..=max_merge_attempts {
+        if attempt > 1 {
+            tracing::warn!("⚠️ Retry attempt {} of {}", attempt, max_merge_attempts);
+            result.push_str(&format!("⚠️ Retrying merge (attempt {})\n", attempt));
+        }
+
+        match crate::core::merge_videos(&downloaded_files, &output_file) {
+            Ok(_) => {
+                // Validate the merged file exists and is readable
+                if !std::path::Path::new(&output_file).exists() {
+                    last_error = format!("Merged file was not created: {}", output_file);
+                    tracing::error!("❌ auto_generate_video: {}", last_error);
+                    continue;
+                }
+
+                // Additional validation: check file size is reasonable (> 1KB)
+                match std::fs::metadata(&output_file) {
+                    Ok(metadata) => {
+                        if metadata.len() < 1024 {
+                            last_error = format!("Merged file is suspiciously small ({} bytes)", metadata.len());
+                            tracing::error!("❌ auto_generate_video: {}", last_error);
+                            continue;
+                        }
+                    }
+                    Err(e) => {
+                        last_error = format!("Cannot read merged file metadata: {}", e);
+                        tracing::error!("❌ auto_generate_video: {}", last_error);
+                        continue;
+                    }
+                }
+
+                merge_success = true;
+                tracing::info!("✅ auto_generate_video: Clips merged successfully");
+                result.push_str("✅ Clips merged successfully\n\n");
+                break;
+            }
+            Err(e) => {
+                last_error = e;
+                tracing::error!("❌ auto_generate_video: Merge attempt {} failed - {}", attempt, last_error);
+
+                // If this was the last attempt, fail
+                if attempt == max_merge_attempts {
+                    break;
+                }
+
+                // Wait a bit before retrying
+                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+            }
+        }
     }
 
-    tracing::info!("✅ auto_generate_video: Clips merged successfully");
-    result.push_str("✅ Clips merged successfully\n\n");
+    if !merge_success {
+        return format!("{}❌ Failed to merge clips after {} attempts: {}", result, max_merge_attempts, last_error);
+    }
 
     // Step 4: Add text overlays if requested
     if include_text {
@@ -2046,18 +2096,68 @@ async fn execute_auto_generate_video_gemini(args: &HashMap<String, Value>) -> St
     tracing::info!("✅ auto_generate_video: Successfully downloaded {} clips", downloaded_files.len());
     result.push_str(&format!("\n✅ Downloaded {} clips\n\n", downloaded_files.len()));
 
-    // Step 3: Merge clips
+    // Step 3: Merge clips with retry logic
     result.push_str("🎞️  Step 3: Merging clips...\n");
     tracing::info!("🎞️ auto_generate_video: Merging {} clips into {}", downloaded_files.len(), output_file);
-    let merge_result = crate::core::merge_videos(&downloaded_files, &output_file).unwrap_or_else(|e| e);
 
-    if merge_result.contains("❌") {
-        tracing::error!("❌ auto_generate_video: Merge failed - {}", merge_result);
-        return format!("{}❌ Failed to merge clips: {}", result, merge_result);
+    let max_merge_attempts = 2;
+    let mut merge_success = false;
+    let mut last_error = String::new();
+
+    for attempt in 1..=max_merge_attempts {
+        if attempt > 1 {
+            tracing::warn!("⚠️ Retry attempt {} of {}", attempt, max_merge_attempts);
+            result.push_str(&format!("⚠️ Retrying merge (attempt {})\n", attempt));
+        }
+
+        match crate::core::merge_videos(&downloaded_files, &output_file) {
+            Ok(_) => {
+                // Validate the merged file exists and is readable
+                if !std::path::Path::new(&output_file).exists() {
+                    last_error = format!("Merged file was not created: {}", output_file);
+                    tracing::error!("❌ auto_generate_video: {}", last_error);
+                    continue;
+                }
+
+                // Additional validation: check file size is reasonable (> 1KB)
+                match std::fs::metadata(&output_file) {
+                    Ok(metadata) => {
+                        if metadata.len() < 1024 {
+                            last_error = format!("Merged file is suspiciously small ({} bytes)", metadata.len());
+                            tracing::error!("❌ auto_generate_video: {}", last_error);
+                            continue;
+                        }
+                    }
+                    Err(e) => {
+                        last_error = format!("Cannot read merged file metadata: {}", e);
+                        tracing::error!("❌ auto_generate_video: {}", last_error);
+                        continue;
+                    }
+                }
+
+                merge_success = true;
+                tracing::info!("✅ auto_generate_video: Clips merged successfully");
+                result.push_str("✅ Clips merged successfully\n\n");
+                break;
+            }
+            Err(e) => {
+                last_error = e;
+                tracing::error!("❌ auto_generate_video: Merge attempt {} failed - {}", attempt, last_error);
+
+                // If this was the last attempt, fail
+                if attempt == max_merge_attempts {
+                    break;
+                }
+
+                // Wait a bit before retrying
+                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+            }
+        }
     }
 
-    tracing::info!("✅ auto_generate_video: Clips merged successfully");
-    result.push_str("✅ Clips merged successfully\n\n");
+    if !merge_success {
+        return format!("{}❌ Failed to merge clips after {} attempts: {}", result, max_merge_attempts, last_error);
+    }
 
     // Step 4: Add text overlays if requested
     if include_text {
