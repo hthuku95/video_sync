@@ -1,22 +1,34 @@
 -- Add Thumbnail Support to Clipping System
 -- Enables AI-generated custom thumbnails for every clip
 
--- Add thumbnail tracking to extracted_clips table
-ALTER TABLE extracted_clips
-ADD COLUMN custom_thumbnail_path VARCHAR(512),
-ADD COLUMN thumbnail_uploaded_at TIMESTAMPTZ,
-ADD COLUMN thumbnail_generation_method VARCHAR(50);  -- 'ai_generated', 'frame_extraction', 'hybrid'
+-- Add thumbnail tracking to extracted_clips table (idempotent)
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'extracted_clips' AND column_name = 'custom_thumbnail_path') THEN
+        ALTER TABLE extracted_clips ADD COLUMN custom_thumbnail_path VARCHAR(512);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'extracted_clips' AND column_name = 'thumbnail_uploaded_at') THEN
+        ALTER TABLE extracted_clips ADD COLUMN thumbnail_uploaded_at TIMESTAMPTZ;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'extracted_clips' AND column_name = 'thumbnail_generation_method') THEN
+        ALTER TABLE extracted_clips ADD COLUMN thumbnail_generation_method VARCHAR(50);
+    END IF;
+END $$;
 
--- Add indexes for thumbnail queries
-CREATE INDEX idx_extracted_clips_thumbnail_uploaded ON extracted_clips(thumbnail_uploaded_at)
+-- Add indexes for thumbnail queries (idempotent)
+CREATE INDEX IF NOT EXISTS idx_extracted_clips_thumbnail_uploaded ON extracted_clips(thumbnail_uploaded_at)
 WHERE custom_thumbnail_path IS NOT NULL;
 
--- Add thumbnail performance tracking to analytics history
-ALTER TABLE clip_analytics_history
-ADD COLUMN thumbnail_click_through_rate DECIMAL(5,4);  -- CTR = clicks / impressions
+-- Add thumbnail performance tracking to analytics history (idempotent)
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'clip_analytics_history' AND column_name = 'thumbnail_click_through_rate') THEN
+        ALTER TABLE clip_analytics_history ADD COLUMN thumbnail_click_through_rate DECIMAL(5,4);
+    END IF;
+END $$;
 
--- Table: Track thumbnail generation performance for learning
-CREATE TABLE thumbnail_performance_analysis (
+-- Table: Track thumbnail generation performance for learning (idempotent)
+CREATE TABLE IF NOT EXISTS thumbnail_performance_analysis (
     id SERIAL PRIMARY KEY,
     generation_method VARCHAR(50) NOT NULL,  -- 'ai_generated', 'frame_extraction', 'hybrid'
     text_overlay_style VARCHAR(100),  -- Style of text overlay used
@@ -35,10 +47,10 @@ CREATE TABLE thumbnail_performance_analysis (
     UNIQUE(generation_method, text_overlay_style, frame_selection_strategy)
 );
 
-CREATE INDEX idx_thumbnail_performance_score ON thumbnail_performance_analysis(performance_score DESC);
+CREATE INDEX IF NOT EXISTS idx_thumbnail_performance_score ON thumbnail_performance_analysis(performance_score DESC);
 
--- View: Top-performing thumbnail strategies
-CREATE VIEW top_thumbnail_strategies AS
+-- View: Top-performing thumbnail strategies (idempotent)
+CREATE OR REPLACE VIEW top_thumbnail_strategies AS
 SELECT
     generation_method,
     text_overlay_style,
@@ -64,6 +76,19 @@ BEGIN
     );
 END;
 $$ LANGUAGE plpgsql IMMUTABLE;
+
+-- Add UNIQUE constraint to learning_recommendations if not exists
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'learning_recommendations_recommendation_type_key'
+    ) THEN
+        ALTER TABLE learning_recommendations
+        ADD CONSTRAINT learning_recommendations_recommendation_type_key
+        UNIQUE (recommendation_type);
+    END IF;
+END $$;
 
 -- Add learning recommendation type for thumbnails
 INSERT INTO learning_recommendations (recommendation_type, recommendation, confidence, supporting_data, is_active)
