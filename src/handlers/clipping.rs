@@ -48,6 +48,8 @@ pub fn clipping_routes() -> Router {
         .route("/api/clipping/clips", get(list_clips))
         .route("/api/clipping/clips/:id", get(get_clip_details))
         .route("/api/clipping/clips/:id/repost", post(repost_clip))
+        // Access check endpoint
+        .route("/api/clipping/access-check", get(check_access))
         // All routes protected by clipping access middleware
         .layer(axum::middleware::from_fn(clipping_access_middleware))
         .layer(axum::middleware::from_fn(auth_middleware))
@@ -500,4 +502,12 @@ async fn repost_clip(
         "success": true,
         "message": "Clip queued for reposting"
     })))
+}
+
+/// Lightweight endpoint to check if user has clipping access
+/// Returns 200 OK if access granted, 403 if denied
+/// Used by frontend to conditionally show/hide clipping card
+async fn check_access() -> StatusCode {
+    // If middleware allows request through, user has access
+    StatusCode::OK
 }

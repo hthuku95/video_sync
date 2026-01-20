@@ -2214,7 +2214,8 @@ pub async fn dashboard_page() -> Html<String> {
                     <h3>📊 Analytics Dashboard</h3>
                     <p>View YouTube channel performance and video analytics</p>
                 </a>
-                <a href="/clipping/manage" class="action-card">
+                <!-- YouTube Clipping Card (only for admins/whitelisted users) -->
+                <a href="/clipping/manage" class="action-card" id="clipping-action-card" style="display: none;">
                     <h3>✂️ YouTube Clipping</h3>
                     <p>Auto-generate viral clips from popular channels and post to your channel</p>
                 </a>
@@ -2265,6 +2266,24 @@ pub async fn dashboard_page() -> Html<String> {
         const user = JSON.parse(localStorage.getItem('user') || '{}');
         if (user.username) {
             document.getElementById('userWelcome').textContent = `Welcome back, ${user.username}!`;
+        }
+
+        // Show/hide YouTube clipping card based on permissions
+        // Check access via API to include whitelisted users
+        const clippingCard = document.getElementById('clipping-action-card');
+        if (clippingCard) {
+            const authToken = localStorage.getItem('authToken');
+            if (authToken) {
+                fetch('/api/clipping/access-check', {
+                    headers: { 'Authorization': 'Bearer ' + authToken }
+                })
+                .then(response => {
+                    if (response.ok) {
+                        clippingCard.style.display = 'block';
+                    }
+                })
+                .catch(err => console.debug('Clipping access check failed:', err));
+            }
         }
 
         function logout() {
