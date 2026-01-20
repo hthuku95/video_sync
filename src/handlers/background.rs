@@ -111,10 +111,12 @@ pub async fn get_background_image(gemini_client: Arc<GeminiClient>) -> Response 
 
 async fn generate_new_background(gemini_client: &GeminiClient) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
     let prompt = GeminiClient::create_background_image_prompt("dynamic");
-    
+
     tracing::info!("Generating new background image with prompt: {}", prompt);
-    
-    let image_data = gemini_client.generate_image(&prompt, None, None).await?;
+
+    // Use 16:9 aspect ratio for widescreen displays (better for UI backgrounds)
+    // Use 2K resolution for good quality without being too large
+    let image_data = gemini_client.generate_image(&prompt, Some("16:9"), Some("2K")).await?;
     
     // Validate that we got actual image data
     if image_data.len() < 100 {

@@ -351,6 +351,9 @@ impl GeminiClient {
     }
 
     /// Generate an image using Nano Banana Pro (Gemini 3 Pro Image Preview)
+    /// Generate image using Gemini 3 Pro Image (Nano Banana Pro)
+    /// Supports 10 aspect ratios: 1:1, 2:3, 3:2, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, 21:9
+    /// Supports 3 resolutions: 1K (1024px), 2K (2048px), 4K (4096px)
     pub async fn generate_image(
         &self,
         prompt: &str,
@@ -390,12 +393,13 @@ impl GeminiClient {
             "generationConfig": config_map
         });
 
+        // Use Gemini 3 Pro Image (Nano Banana Pro) which supports aspect_ratio and image_size
         let url = format!(
-            "{}/models/gemini-2.5-flash:generateContent?key={}",
+            "{}/models/gemini-3-pro-image-preview:generateContent?key={}",
             self.base_url, self.api_key
         );
 
-        tracing::debug!("Nano Banana Pro Image Request: {}", serde_json::to_string_pretty(&request)?);
+        tracing::debug!("Nano Banana Pro (Gemini 3 Pro Image) Request: {}", serde_json::to_string_pretty(&request)?);
 
         let response = self
             .client
