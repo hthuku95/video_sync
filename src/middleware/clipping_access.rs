@@ -10,15 +10,15 @@ use axum::{
     Extension, Json,
 };
 use crate::models::auth::Claims;
+use crate::AppState;
 use serde_json::json;
-use sqlx::PgPool;
 use std::sync::Arc;
 
 /// Middleware to check if user has access to clipping features
 /// Access granted to: is_staff, is_superuser, OR whitelisted users
 /// Regular users are ALWAYS denied regardless of YouTube feature toggle
 pub async fn clipping_access_middleware(
-    Extension(pool): Extension<Arc<PgPool>>,
+    Extension(state): Extension<Arc<AppState>>,
     mut request: Request,
     next: Next,
 ) -> Result<Response, impl IntoResponse> {
@@ -51,7 +51,7 @@ pub async fn clipping_access_middleware(
         "SELECT EXISTS(SELECT 1 FROM whitelist_emails WHERE email = $1)",
     )
     .bind(&claims.email)
-    .fetch_one(pool.as_ref())
+    .fetch_one(&state.db_pool)
     .await
     .unwrap_or(false);
 

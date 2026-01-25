@@ -12,49 +12,64 @@ pub async fn auth_middleware(
     mut request: Request,
     next: Next,
 ) -> Result<Response, impl IntoResponse> {
-    // Extract the Authorization header
-    let auth_header = match headers.get("Authorization") {
-        Some(header) => header,
-        None => {
+    // Try to extract token from Authorization header first
+    let token = if let Some(auth_header) = headers.get("Authorization") {
+        // Convert header to string
+        let auth_str = match auth_header.to_str() {
+            Ok(str) => str,
+            Err(_) => {
+                return Err((
+                    StatusCode::UNAUTHORIZED,
+                    Json(ErrorResponse {
+                        success: false,
+                        message: "Invalid Authorization header format".to_string(),
+                    }),
+                ));
+            }
+        };
+
+        // Extract token from "Bearer <token>" format
+        if auth_str.starts_with("Bearer ") {
+            auth_str[7..].to_string()
+        } else {
             return Err((
                 StatusCode::UNAUTHORIZED,
                 Json(ErrorResponse {
                     success: false,
-                    message: "Missing Authorization header".to_string(),
+                    message: "Invalid Authorization header format. Expected 'Bearer <token>'".to_string(),
                 }),
             ));
         }
-    };
-
-    // Convert header to string
-    let auth_str = match auth_header.to_str() {
-        Ok(str) => str,
-        Err(_) => {
-            return Err((
-                StatusCode::UNAUTHORIZED,
-                Json(ErrorResponse {
-                    success: false,
-                    message: "Invalid Authorization header format".to_string(),
-                }),
-            ));
-        }
-    };
-
-    // Extract token from "Bearer <token>" format
-    let token = if auth_str.starts_with("Bearer ") {
-        &auth_str[7..]
     } else {
-        return Err((
-            StatusCode::UNAUTHORIZED,
-            Json(ErrorResponse {
-                success: false,
-                message: "Invalid Authorization header format. Expected 'Bearer <token>'".to_string(),
-            }),
-        ));
+        // Fallback: Try to extract token from query parameter (for OAuth redirects)
+        let query = request.uri().query().unwrap_or("");
+        let mut token_from_query = None;
+
+        for pair in query.split('&') {
+            if let Some((key, value)) = pair.split_once('=') {
+                if key == "token" {
+                    token_from_query = Some(value.to_string());
+                    break;
+                }
+            }
+        }
+
+        match token_from_query {
+            Some(t) => t,
+            None => {
+                return Err((
+                    StatusCode::UNAUTHORIZED,
+                    Json(ErrorResponse {
+                        success: false,
+                        message: "Missing Authorization header or token query parameter".to_string(),
+                    }),
+                ));
+            }
+        }
     };
 
     // Verify the JWT token
-    let claims = match verify_jwt_token(token) {
+    let claims = match verify_jwt_token(&token) {
         Ok(claims) => claims,
         Err(e) => {
             tracing::warn!("JWT verification failed: {}", e);

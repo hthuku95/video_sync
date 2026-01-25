@@ -507,7 +507,9 @@ async fn repost_clip(
 /// Lightweight endpoint to check if user has clipping access
 /// Returns 200 OK if access granted, 403 if denied
 /// Used by frontend to conditionally show/hide clipping card
-async fn check_access() -> StatusCode {
+async fn check_access() -> Json<Value> {
     // If middleware allows request through, user has access
-    StatusCode::OK
+    Json(json!({
+        "has_access": true
+    }))
 }

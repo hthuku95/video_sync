@@ -271,6 +271,12 @@ async fn main() {
         workflow_checkpointer,
     });
 
+    // Admin-only routes
+    let admin_only_routes = Router::new()
+        .route("/api/docs", axum::routing::get(api_documentation))
+        .layer(axum::middleware::from_fn(middleware::admin::admin_middleware))
+        .layer(axum::middleware::from_fn(middleware::auth::auth_middleware));
+
     // Build our application with all routes and shared state
     let app = Router::new()
         .merge(handlers::ui::ui_routes())
@@ -283,7 +289,7 @@ async fn main() {
         .merge(handlers::jobs::job_routes()) // 🆕 Job control endpoints
         .merge(handlers::youtube::youtube_routes()) // 📺 YouTube integration
         .merge(handlers::clipping::clipping_routes()) // 📹 YouTube clipping feature
-        .route("/api/docs", axum::routing::get(api_documentation))
+        .merge(admin_only_routes) // Admin-only routes like API docs
         .route("/api/status", axum::routing::get(api_status))
         // .layer(axum::middleware::from_fn(middleware::frontend_rate_limit::frontend_rate_limit_middleware))
         // .layer(axum::middleware::from_fn(middleware::rate_limit::rate_limit_middleware))
