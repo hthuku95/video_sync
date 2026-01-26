@@ -52,6 +52,17 @@ async fn register(
         ));
     }
 
+    // Validate password confirmation
+    if payload.password != payload.confirm_password {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                success: false,
+                message: "Passwords do not match".to_string(),
+            }),
+        ));
+    }
+
     // Check whitelist if enabled
     if let Err(e) = check_whitelist_enabled(&state, &payload.email).await {
         return Err(e);
