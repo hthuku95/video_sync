@@ -17,6 +17,43 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::Arc;
 
+/// Validates redirect URLs to prevent open redirect attacks
+/// Allows:
+/// - Relative paths (e.g., /dashboard) for videosync.video frontend
+/// - Full URLs from allowed origins (configured via ALLOWED_REDIRECT_ORIGINS env)
+fn is_allowed_redirect_url(url: &str) -> bool {
+    // Allow relative paths (for videosync.video frontend)
+    if url.starts_with('/') {
+        return true;
+    }
+
+    // Parse as full URL
+    if let Ok(parsed) = url::Url::parse(url) {
+        let host = parsed.host_str().unwrap_or("");
+
+        // Get allowed origins from environment
+        let allowed_origins = std::env::var("ALLOWED_REDIRECT_ORIGINS")
+            .unwrap_or_else(|_| {
+                "localhost:5173,localhost:3000,cmachine.devthuku.io,www.videosync.video,videosync.video".to_string()
+            });
+
+        // Check if host matches any allowed origin
+        for allowed in allowed_origins.split(',') {
+            let allowed = allowed.trim();
+            if host == allowed {
+                return true;
+            }
+        }
+
+        tracing::warn!("🚫 Rejected redirect to disallowed domain: {}", host);
+        return false;
+    }
+
+    // If can't parse and isn't relative, reject
+    tracing::warn!("🚫 Invalid redirect URL format: {}", url);
+    false
+}
+
 pub fn youtube_routes() -> Router {
     // Public routes (no auth required)
     let public_routes = Router::new()
@@ -122,10 +159,23 @@ pub async fn initiate_youtube_connection(
         )
     })?;
 
+    // Validate and get redirect URL
+    let redirect_to = params.redirect_to.unwrap_or("/youtube/manage".to_string());
+
+    if !is_allowed_redirect_url(&redirect_to) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "success": false,
+                "message": "Invalid redirect URL"
+            }))
+        ));
+    }
+
     // Generate state parameter with user ID and redirect URL
     let state_data = json!({
         "user_id": user_id,
-        "redirect_to": params.redirect_to.unwrap_or("/youtube/manage".to_string()),
+        "redirect_to": redirect_to,
         "timestamp": chrono::Utc::now().timestamp()
     });
     let state_param = base64::prelude::BASE64_URL_SAFE_NO_PAD.encode(state_data.to_string());
@@ -207,6 +257,14 @@ pub async fn youtube_oauth_callback(
         .as_str()
         .unwrap_or("/youtube/manage")
         .to_string();
+
+    // Validate redirect URL for security
+    let redirect_to = if is_allowed_redirect_url(&redirect_to) {
+        redirect_to
+    } else {
+        tracing::warn!("🚫 Invalid redirect URL in callback, falling back to /youtube/manage: {}", redirect_to);
+        "/youtube/manage".to_string()
+    };
 
     // Exchange code for tokens
     let client_id = state.google_oauth_client_id.as_ref().unwrap();

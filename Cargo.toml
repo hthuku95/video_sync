@@ -33,5 +33,6 @@ lazy_static = "1.4"
 regex = "1.11.2"
 rust_decimal = { version = "1.36.0", features = ["serde", "db-postgres"] }
 thiserror = "1.0"
+url = "2.5"
 urlencoding = "2.1"
 
