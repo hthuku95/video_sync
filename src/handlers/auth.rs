@@ -833,8 +833,8 @@ pub async fn google_oauth_callback(
         <h1>✅ Successfully logged in with Google</h1>
         <p>Redirecting...</p>
         <script>
-            localStorage.setItem('authToken', '{}');
-            localStorage.setItem('user', '{}');
+            localStorage.setItem('auth_token', '{}');
+            localStorage.setItem('auth_user', '{}');
             setTimeout(() => window.location.href = '{}', 1000);
         </script>
         </body></html>"#,
