@@ -103,7 +103,10 @@ pub struct PollSchedule {
 
 #[derive(Debug, Deserialize)]
 pub struct AddSourceChannelRequest {
-    pub channel_id: String,
+    /// YouTube channel URL (e.g., https://www.youtube.com/@handle) - preferred for content_machine
+    pub channel_url: Option<String>,
+    /// YouTube channel ID or handle (e.g., @handle or UCxxx) - for backward compatibility with embedded UI
+    pub channel_id: Option<String>,
     pub polling_interval_minutes: Option<i32>,
 }
 

@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sqlx::PgPool;
 use std::sync::Arc;
+use url::Url;
 
 pub fn clipping_routes() -> Router {
     Router::new()
@@ -71,10 +72,66 @@ async fn list_source_channels(
     })))
 }
 
+/// Extract channel identifier from various YouTube URL formats
+/// Supports:
+/// - https://www.youtube.com/@handle -> @handle
+/// - https://www.youtube.com/channel/UC... -> UC...
+/// - https://www.youtube.com/c/CustomName -> CustomName
+/// - Direct handle: @handle -> @handle
+/// - Direct ID: UC... -> UC...
+fn extract_channel_identifier(input: &str) -> String {
+    let trimmed = input.trim();
+
+    // If it's already a handle or channel ID (no URL), return as-is
+    if !trimmed.starts_with("http://") && !trimmed.starts_with("https://") {
+        return trimmed.to_string();
+    }
+
+    // Parse URL and extract path
+    if let Ok(url) = Url::parse(trimmed) {
+        let path = url.path();
+
+        // Handle @username format: //@username or /@username
+        if let Some(handle_pos) = path.find("/@") {
+            return path[handle_pos + 1..].split('/').next().unwrap_or("").to_string();
+        }
+
+        // Handle /channel/UCxxx format
+        if path.starts_with("/channel/") {
+            return path[9..].split('/').next().unwrap_or("").to_string();
+        }
+
+        // Handle /c/CustomName format
+        if path.starts_with("/c/") {
+            return path[3..].split('/').next().unwrap_or("").to_string();
+        }
+
+        // Handle /user/Username format
+        if path.starts_with("/user/") {
+            return path[6..].split('/').next().unwrap_or("").to_string();
+        }
+    }
+
+    // Fallback: return original input
+    trimmed.to_string()
+}
+
 async fn add_source_channel(
     Extension(state): Extension<Arc<AppState>>,
     Json(payload): Json<AddSourceChannelRequest>,
 ) -> Result<Json<Value>, StatusCode> {
+    // Accept either channel_url (from content_machine) or channel_id (from embedded UI)
+    let input = payload.channel_url
+        .or(payload.channel_id)
+        .ok_or(StatusCode::BAD_REQUEST)?;
+
+    // Extract channel identifier from URL or use directly if it's already an ID/handle
+    let channel_id = extract_channel_identifier(&input);
+
+    if channel_id.is_empty() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
     // Fetch channel info from YouTube API
     let youtube_client = state
         .youtube_client
@@ -83,7 +140,7 @@ async fn add_source_channel(
 
     // Search for the channel
     let channel_info = youtube_client
-        .search_channels(None, &payload.channel_id, 1, None)
+        .search_channels(None, &channel_id, 1, None)
         .await
         .map_err(|_| StatusCode::BAD_REQUEST)?;
 
