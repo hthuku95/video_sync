@@ -41,6 +41,11 @@ pub struct WhitelistToggleRequest {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct ToggleActiveRequest {
+    pub is_active: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct WhitelistStatusResponse {
     pub enabled: bool,
     pub total_emails: i64,
