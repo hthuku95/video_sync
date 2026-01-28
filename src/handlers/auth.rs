@@ -31,21 +31,28 @@ fn is_allowed_redirect_url(url: &str) -> bool {
     if let Ok(parsed) = url::Url::parse(url) {
         let host = parsed.host_str().unwrap_or("");
 
+        // Construct host:port string for comparison
+        let host_with_port = if let Some(port) = parsed.port() {
+            format!("{}:{}", host, port)
+        } else {
+            host.to_string()
+        };
+
         // Get allowed origins from environment
         let allowed_origins = std::env::var("ALLOWED_REDIRECT_ORIGINS")
             .unwrap_or_else(|_| {
                 "localhost:5173,localhost:3000,cmachine.devthuku.io,www.videosync.video,videosync.video".to_string()
             });
 
-        // Check if host matches any allowed origin
+        // Check if host:port or just host matches any allowed origin
         for allowed in allowed_origins.split(',') {
             let allowed = allowed.trim();
-            if host == allowed {
+            if host == allowed || host_with_port == allowed {
                 return true;
             }
         }
 
-        tracing::warn!("🚫 Rejected redirect to disallowed domain: {}", host);
+        tracing::warn!("🚫 Rejected redirect to disallowed domain: {} ({})", host, host_with_port);
         return false;
     }
 
@@ -825,7 +832,23 @@ pub async fn google_oauth_callback(
         (StatusCode::INTERNAL_SERVER_ERROR, Html("<h1>Failed to generate token</h1>".to_string()))
     })?;
 
-    // Return HTML that stores token and redirects
+    // Pass token and user data via URL hash to frontend
+    let user_json = json!({
+        "id": user.id,
+        "email": user.email,
+        "username": user.username,
+        "is_staff": user.is_staff,
+        "is_superuser": user.is_superuser
+    }).to_string();
+
+    // URL encode the token and user data for the hash fragment
+    let encoded_token = urlencoding::encode(&token);
+    let encoded_user = urlencoding::encode(&user_json);
+
+    // Construct redirect URL with hash parameters
+    let final_redirect = format!("{}#token={}&user={}", redirect_to, encoded_token, encoded_user);
+
+    // Return HTML that redirects with token in URL hash
     Ok(Html(format!(
         r#"<!DOCTYPE html><html><head><title>Login Successful</title>
         <style>body {{ font-family: Arial; max-width: 600px; margin: 100px auto; text-align: center; }}</style>
@@ -833,19 +856,9 @@ pub async fn google_oauth_callback(
         <h1>✅ Successfully logged in with Google</h1>
         <p>Redirecting...</p>
         <script>
-            localStorage.setItem('auth_token', '{}');
-            localStorage.setItem('auth_user', '{}');
             setTimeout(() => window.location.href = '{}', 1000);
         </script>
         </body></html>"#,
-        token,
-        json!({
-            "id": user.id,
-            "email": user.email,
-            "username": user.username,
-            "is_staff": user.is_staff,
-            "is_superuser": user.is_superuser
-        }).to_string().replace("'", "\\'"),
-        redirect_to
+        final_redirect
     )))
 }
