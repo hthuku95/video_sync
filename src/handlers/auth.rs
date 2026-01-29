@@ -24,6 +24,7 @@ use std::sync::Arc;
 fn is_allowed_redirect_url(url: &str) -> bool {
     // Allow relative paths (for videosync.video frontend)
     if url.starts_with('/') {
+        tracing::debug!("✅ Allowing relative redirect: {}", url);
         return true;
     }
 
@@ -44,15 +45,20 @@ fn is_allowed_redirect_url(url: &str) -> bool {
                 "localhost:5173,localhost:3000,cmachine.devthuku.io,www.videosync.video,videosync.video".to_string()
             });
 
+        tracing::debug!("🔍 Validating redirect URL - host: {}, host_with_port: {}, allowed_origins: {}",
+                       host, host_with_port, allowed_origins);
+
         // Check if host:port or just host matches any allowed origin
         for allowed in allowed_origins.split(',') {
             let allowed = allowed.trim();
             if host == allowed || host_with_port == allowed {
+                tracing::debug!("✅ Matched allowed origin: {}", allowed);
                 return true;
             }
         }
 
-        tracing::warn!("🚫 Rejected redirect to disallowed domain: {} ({})", host, host_with_port);
+        tracing::warn!("🚫 Rejected redirect to disallowed domain: {} ({}). Allowed origins: {}",
+                      host, host_with_port, allowed_origins);
         return false;
     }
 
@@ -560,7 +566,10 @@ pub async fn initiate_google_oauth(
     // Validate and get redirect URL
     let redirect_to = params.redirect_to.unwrap_or("/dashboard".to_string());
 
+    tracing::info!("🔐 Initiating Google OAuth login with redirect_to: {}", redirect_to);
+
     if !is_allowed_redirect_url(&redirect_to) {
+        tracing::error!("🚫 Rejected invalid redirect URL: {}", redirect_to);
         return Err((
             StatusCode::BAD_REQUEST,
             Json(json!({
@@ -593,8 +602,6 @@ pub async fn initiate_google_oauth(
         &scopes,
         &state_param,
     );
-
-    tracing::info!("🔐 Initiating Google OAuth login");
 
     Ok(Redirect::to(&auth_url))
 }
@@ -647,8 +654,11 @@ pub async fn google_oauth_callback(
         .unwrap_or("/dashboard")
         .to_string();
 
+    tracing::info!("🔄 OAuth callback received with redirect_to: {}", redirect_to);
+
     // Validate redirect URL for security
     let redirect_to = if is_allowed_redirect_url(&redirect_to) {
+        tracing::info!("✅ Redirect URL validated: {}", redirect_to);
         redirect_to
     } else {
         tracing::warn!("🚫 Invalid redirect URL in callback, falling back to /dashboard: {}", redirect_to);

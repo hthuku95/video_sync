@@ -24,6 +24,7 @@ use std::sync::Arc;
 fn is_allowed_redirect_url(url: &str) -> bool {
     // Allow relative paths (for videosync.video frontend)
     if url.starts_with('/') {
+        tracing::debug!("✅ Allowing relative redirect: {}", url);
         return true;
     }
 
@@ -31,21 +32,33 @@ fn is_allowed_redirect_url(url: &str) -> bool {
     if let Ok(parsed) = url::Url::parse(url) {
         let host = parsed.host_str().unwrap_or("");
 
+        // Construct host:port string for comparison
+        let host_with_port = if let Some(port) = parsed.port() {
+            format!("{}:{}", host, port)
+        } else {
+            host.to_string()
+        };
+
         // Get allowed origins from environment
         let allowed_origins = std::env::var("ALLOWED_REDIRECT_ORIGINS")
             .unwrap_or_else(|_| {
                 "localhost:5173,localhost:3000,cmachine.devthuku.io,www.videosync.video,videosync.video".to_string()
             });
 
-        // Check if host matches any allowed origin
+        tracing::debug!("🔍 Validating redirect URL - host: {}, host_with_port: {}, allowed_origins: {}",
+                       host, host_with_port, allowed_origins);
+
+        // Check if host:port or just host matches any allowed origin
         for allowed in allowed_origins.split(',') {
             let allowed = allowed.trim();
-            if host == allowed {
+            if host == allowed || host_with_port == allowed {
+                tracing::debug!("✅ Matched allowed origin: {}", allowed);
                 return true;
             }
         }
 
-        tracing::warn!("🚫 Rejected redirect to disallowed domain: {}", host);
+        tracing::warn!("🚫 Rejected redirect to disallowed domain: {} ({}). Allowed origins: {}",
+                      host, host_with_port, allowed_origins);
         return false;
     }
 
@@ -162,7 +175,10 @@ pub async fn initiate_youtube_connection(
     // Validate and get redirect URL
     let redirect_to = params.redirect_to.unwrap_or("/youtube/manage".to_string());
 
+    tracing::info!("🔐 Initiating YouTube OAuth with redirect_to: {}", redirect_to);
+
     if !is_allowed_redirect_url(&redirect_to) {
+        tracing::error!("🚫 Rejected invalid redirect URL: {}", redirect_to);
         return Err((
             StatusCode::BAD_REQUEST,
             Json(json!({
@@ -258,8 +274,11 @@ pub async fn youtube_oauth_callback(
         .unwrap_or("/youtube/manage")
         .to_string();
 
+    tracing::info!("🔄 YouTube OAuth callback received with redirect_to: {}", redirect_to);
+
     // Validate redirect URL for security
     let redirect_to = if is_allowed_redirect_url(&redirect_to) {
+        tracing::info!("✅ Redirect URL validated: {}", redirect_to);
         redirect_to
     } else {
         tracing::warn!("🚫 Invalid redirect URL in callback, falling back to /youtube/manage: {}", redirect_to);
