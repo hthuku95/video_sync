@@ -188,10 +188,20 @@ pub async fn initiate_youtube_connection(
         ));
     }
 
-    // Generate state parameter with user ID and redirect URL
+    // Detect source app from redirect URL to ensure proper redirection
+    let source_app = if redirect_to.contains("cmachine.devthuku.io") {
+        "content_machine"
+    } else if redirect_to.contains("localhost:5173") || redirect_to.contains("localhost:4173") {
+        "content_machine_local"
+    } else {
+        "videosync"
+    };
+
+    // Generate state parameter with user ID, redirect URL, and source app
     let state_data = json!({
         "user_id": user_id,
         "redirect_to": redirect_to,
+        "source_app": source_app,
         "timestamp": chrono::Utc::now().timestamp()
     });
     let state_param = base64::prelude::BASE64_URL_SAFE_NO_PAD.encode(state_data.to_string());
@@ -274,15 +284,26 @@ pub async fn youtube_oauth_callback(
         .unwrap_or("/youtube/manage")
         .to_string();
 
-    tracing::info!("🔄 YouTube OAuth callback received with redirect_to: {}", redirect_to);
+    let source_app = state_data["source_app"]
+        .as_str()
+        .unwrap_or("videosync");
+
+    tracing::info!("🔄 YouTube OAuth callback received - redirect_to: {}, source_app: {}", redirect_to, source_app);
 
     // Validate redirect URL for security
     let redirect_to = if is_allowed_redirect_url(&redirect_to) {
         tracing::info!("✅ Redirect URL validated: {}", redirect_to);
         redirect_to
     } else {
-        tracing::warn!("🚫 Invalid redirect URL in callback, falling back to /youtube/manage: {}", redirect_to);
-        "/youtube/manage".to_string()
+        // Provide appropriate fallback based on source app
+        let fallback = match source_app {
+            "content_machine" => "https://cmachine.devthuku.io/channels/connected",
+            "content_machine_local" => "http://localhost:5173/channels/connected",
+            _ => "/youtube/manage"
+        };
+        tracing::warn!("🚫 Invalid redirect URL in callback, falling back to {} for app {}: {}",
+                      fallback, source_app, redirect_to);
+        fallback.to_string()
     };
 
     // Exchange code for tokens
@@ -3147,8 +3168,8 @@ pub async fn initiate_resumable_upload(
         )
     })?;
 
-    // Get channel
-    let channel = sqlx::query_as::<_, crate::models::youtube::ConnectedYouTubeChannel>(
+    // Get channel and verify ownership
+    let mut channel = sqlx::query_as::<_, crate::models::youtube::ConnectedYouTubeChannel>(
         "SELECT * FROM connected_youtube_channels WHERE id = $1 AND user_id = $2 AND is_active = true"
     )
     .bind(payload.channel_id)
@@ -3168,7 +3189,47 @@ pub async fn initiate_resumable_upload(
         )
     })?;
 
-    // Initiate resumable upload session
+    // Check if token needs refresh (refresh if expiring within 5 minutes)
+    if channel.token_expiry < chrono::Utc::now() + chrono::Duration::minutes(5) {
+        tracing::info!("🔄 Refreshing expired token for channel: {} before resumable upload", channel.channel_name);
+
+        let client_id = state.google_oauth_client_id.as_ref().unwrap();
+        let client_secret = state.google_oauth_client_secret.as_ref().unwrap();
+
+        let token_response = youtube.refresh_access_token(
+            &channel.refresh_token,
+            client_id,
+            client_secret,
+        )
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to refresh token for resumable upload: {}", e);
+            (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({"success": false, "message": "Token expired. Please reconnect your YouTube channel."}))
+            )
+        })?;
+
+        // Update token in memory and database
+        channel.access_token = token_response.access_token.clone();
+        channel.token_expiry = chrono::Utc::now() + chrono::Duration::seconds(token_response.expires_in);
+
+        sqlx::query(
+            "UPDATE connected_youtube_channels
+             SET access_token = $1, token_expiry = $2, updated_at = NOW()
+             WHERE id = $3"
+        )
+        .bind(&channel.access_token)
+        .bind(channel.token_expiry)
+        .bind(payload.channel_id)
+        .execute(&state.db_pool)
+        .await
+        .ok();
+
+        tracing::info!("✅ Token refreshed successfully for channel: {}", channel.channel_name);
+    }
+
+    // Initiate resumable upload session with fresh token
     let session_response = youtube.initiate_resumable_upload(
         &channel.access_token,
         &payload.title,

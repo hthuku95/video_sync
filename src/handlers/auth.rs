@@ -579,9 +579,19 @@ pub async fn initiate_google_oauth(
         ));
     }
 
-    // Generate state parameter with redirect URL
+    // Detect source app from redirect URL to ensure proper redirection
+    let source_app = if redirect_to.contains("cmachine.devthuku.io") {
+        "content_machine"
+    } else if redirect_to.contains("localhost:5173") || redirect_to.contains("localhost:4173") {
+        "content_machine_local"
+    } else {
+        "videosync"
+    };
+
+    // Generate state parameter with redirect URL and source app
     let state_data = json!({
         "redirect_to": redirect_to,
+        "source_app": source_app,
         "timestamp": chrono::Utc::now().timestamp()
     });
     let state_param = base64::prelude::BASE64_URL_SAFE_NO_PAD.encode(state_data.to_string());
@@ -654,15 +664,26 @@ pub async fn google_oauth_callback(
         .unwrap_or("/dashboard")
         .to_string();
 
-    tracing::info!("🔄 OAuth callback received with redirect_to: {}", redirect_to);
+    let source_app = state_data["source_app"]
+        .as_str()
+        .unwrap_or("videosync");
+
+    tracing::info!("🔄 OAuth callback received - redirect_to: {}, source_app: {}", redirect_to, source_app);
 
     // Validate redirect URL for security
     let redirect_to = if is_allowed_redirect_url(&redirect_to) {
         tracing::info!("✅ Redirect URL validated: {}", redirect_to);
         redirect_to
     } else {
-        tracing::warn!("🚫 Invalid redirect URL in callback, falling back to /dashboard: {}", redirect_to);
-        "/dashboard".to_string()
+        // Provide appropriate fallback based on source app
+        let fallback = match source_app {
+            "content_machine" => "https://cmachine.devthuku.io/",
+            "content_machine_local" => "http://localhost:5173/",
+            _ => "/dashboard"
+        };
+        tracing::warn!("🚫 Invalid redirect URL in callback, falling back to {} for app {}: {}",
+                      fallback, source_app, redirect_to);
+        fallback.to_string()
     };
 
     // Exchange code for tokens

@@ -13,9 +13,10 @@ use crate::models::auth::Claims;
 use crate::AppState;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use sqlx::PgPool;
+use sqlx::{PgPool, Row};
 use std::sync::Arc;
 use url::Url;
+use chrono::{DateTime, Utc};
 
 pub fn clipping_routes() -> Router {
     Router::new()
@@ -261,13 +262,54 @@ async fn list_linkages(
     Extension(state): Extension<Arc<AppState>>,
     Extension(claims): Extension<Claims>,
 ) -> Result<Json<Value>, StatusCode> {
-    let linkages = sqlx::query_as::<_, ChannelLinkage>(
-        "SELECT * FROM youtube_channel_linkages WHERE user_id = $1 ORDER BY created_at DESC",
+    let user_id = claims.sub.parse::<i32>().unwrap_or(0);
+
+    // Fetch linkages with channel names via JOINs
+    let rows = sqlx::query(
+        "SELECT
+            l.*,
+            sc.channel_name as source_channel_name,
+            cc.channel_name as destination_channel_name
+         FROM youtube_channel_linkages l
+         LEFT JOIN youtube_source_channels sc ON l.source_channel_id = sc.id
+         LEFT JOIN connected_youtube_channels cc ON l.destination_channel_id = cc.id
+         WHERE l.user_id = $1
+         ORDER BY l.created_at DESC"
     )
-    .bind(claims.sub.parse::<i32>().unwrap_or(0))
+    .bind(user_id)
     .fetch_all(&state.db_pool)
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    // Manually construct the enriched response
+    let mut linkages = Vec::new();
+    for row in rows {
+        let mut linkage_json = json!({
+            "id": row.get::<i32, _>("id"),
+            "user_id": row.get::<i32, _>("user_id"),
+            "source_channel_id": row.get::<i32, _>("source_channel_id"),
+            "destination_channel_id": row.get::<i32, _>("destination_channel_id"),
+            "is_active": row.get::<bool, _>("is_active"),
+            "clips_per_video": row.get::<i32, _>("clips_per_video"),
+            "min_clip_duration_seconds": row.get::<i32, _>("min_clip_duration_seconds"),
+            "max_clip_duration_seconds": row.get::<i32, _>("max_clip_duration_seconds"),
+            "total_clips_generated": row.get::<i32, _>("total_clips_generated"),
+            "total_clips_posted": row.get::<i32, _>("total_clips_posted"),
+            "clipping_cooldown_hours": row.get::<i32, _>("clipping_cooldown_hours"),
+            "created_at": row.get::<DateTime<Utc>, _>("created_at"),
+            "updated_at": row.get::<DateTime<Utc>, _>("updated_at"),
+        });
+
+        // Add enriched channel data
+        if let Ok(source_name) = row.try_get::<String, _>("source_channel_name") {
+            linkage_json["source_channel_name"] = json!(source_name);
+        }
+        if let Ok(dest_name) = row.try_get::<String, _>("destination_channel_name") {
+            linkage_json["destination_channel_name"] = json!(dest_name);
+        }
+
+        linkages.push(linkage_json);
+    }
 
     Ok(Json(json!({
         "success": true,
