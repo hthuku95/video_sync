@@ -21,6 +21,8 @@ mod services;
 mod vector_db;
 mod clipping; // 📹 YouTube clipping feature
 mod tool_selector; // 🔧 Dynamic tool selection for AI agents
+mod utils; // 🔧 Utility modules (FFmpeg utilities, etc.)
+mod token_manager; // 🔧 Centralized YouTube OAuth token refresh
 
 // Video processing modules (from lib.rs)
 mod types;
@@ -30,7 +32,6 @@ mod visual;
 mod transform;
 mod advanced;
 mod export;
-mod utils;
 
 // AppState now holds the database connection pool, vector database clients, Claude/Gemini client, Pexels client, job manager, and workflow checkpointer
 pub struct AppState {
@@ -48,6 +49,7 @@ pub struct AppState {
     pub google_oauth_client_secret: Option<String>, // Google OAuth client secret
     pub job_manager: jobs::SharedJobManager, // 🆕 Background job management
     pub workflow_checkpointer: Option<workflow::checkpoint::WorkflowCheckpointer>, // 🆕 Workflow state persistence
+    pub token_manager: Option<Arc<token_manager::TokenManager>>, // 🔧 Centralized token refresh
 }
 
 #[tokio::main]
@@ -253,6 +255,25 @@ async fn main() {
         }
     }
 
+    // Initialize centralized token manager
+    let token_manager = if let Some(ref yt_client) = youtube_client {
+        if google_oauth_client_id.is_some() && google_oauth_client_secret.is_some() {
+            let tm = token_manager::TokenManager::new(
+                yt_client.clone(),
+                google_oauth_client_id.clone().unwrap(),
+                google_oauth_client_secret.clone().unwrap(),
+                db_pool.clone(),
+            );
+            tracing::info!("🔧 Token manager initialized for centralized YouTube OAuth token refresh");
+            Some(Arc::new(tm))
+        } else {
+            tracing::warn!("Token manager disabled (OAuth credentials not configured)");
+            None
+        }
+    } else {
+        None
+    };
+
     // Create the shared state
     let shared_state = Arc::new(AppState {
         db_pool,
@@ -269,6 +290,7 @@ async fn main() {
         google_oauth_client_secret,
         job_manager,
         workflow_checkpointer,
+        token_manager,
     });
 
     // Admin-only routes
@@ -313,10 +335,21 @@ async fn main() {
             loop {
                 match monitor.poll_all_channels().await {
                     Ok(_) => tracing::debug!("✅ Channel polling cycle completed"),
-                    Err(e) => tracing::error!("❌ Channel polling failed: {}", e),
+                    Err(e) => {
+                        tracing::error!("❌ Channel polling failed: {}", e);
+
+                        // If quota exceeded, pause for 1 hour before retrying
+                        if e.to_string().contains("Quota exceeded") {
+                            tracing::warn!("⏸️ YouTube API quota exhausted. Pausing polling for 3600 seconds (1 hour)");
+                            tokio::time::sleep(tokio::time::Duration::from_secs(3600)).await;
+                            continue;
+                        }
+                    }
                 }
 
-                // Wait 5 minutes before next poll
+                // IMPROVED: Poll every 5 minutes now that we use quota-efficient playlistItems API (1 unit vs 100)
+                // With 10 channels × 288 polls/day × 1 unit = 2,880 quota (only 28.8% of daily 10,000 limit)
+                // Old search API would use: 10 × 288 × 100 = 288,000 quota (28.8x over limit!)
                 tokio::time::sleep(tokio::time::Duration::from_secs(300)).await;
             }
         });

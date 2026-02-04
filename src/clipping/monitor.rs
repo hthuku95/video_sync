@@ -67,15 +67,44 @@ impl ChannelMonitor {
         // Mark as currently polling
         self.mark_polling(channel.id, true).await?;
 
-        // Search YouTube for latest videos from this channel
-        let query = format!("channel:{}", channel.channel_id);
+        // CRITICAL FIX: Use playlistItems API instead of search API to save quota
+        // The YouTube Data API v3 charges:
+        // - search.list() = 100 quota units per call
+        // - playlistItems.list() = 1 quota unit per call
+        // With 10,000 daily quota, search API allows only 100 calls/day (10 channels × 48 times = 480 calls needed)
+        // Using playlistItems allows 10,000 calls/day which is more than sufficient
+
+        // CHANGED: Get videos from channel's upload playlist instead of using search
+        // Every YouTube channel has an "uploads" playlist with ID starting with "UU" + rest of channel ID
+        let playlist_id = if channel.channel_id.starts_with("UC") {
+            format!("UU{}", &channel.channel_id[2..])
+        } else {
+            tracing::error!("Invalid channel ID format: {}", channel.channel_id);
+            self.mark_polling(channel.id, false).await?;
+            return Err(format!("Invalid channel ID format: {}", channel.channel_id));
+        };
+
         let videos = match self
             .youtube_client
-            .search_videos(None, &query, 50, Some("date"))
+            .get_channel_uploads(&playlist_id, 10)
             .await
         {
             Ok(response) => response.items,
             Err(e) => {
+                let error_str = e.to_string();
+
+                // Check if this is a quota exhaustion error
+                if error_str.contains("quotaExceeded") {
+                    tracing::error!(
+                        "⚠️ YouTube API quota exceeded for channel {} ({}). System will pause polling.",
+                        channel.channel_name,
+                        channel.channel_id
+                    );
+                    self.mark_polling(channel.id, false).await?;
+                    self.increment_failure_count(channel.id).await?;
+                    return Err(format!("Quota exceeded, will retry later: {}", e));
+                }
+
                 self.mark_polling(channel.id, false).await?;
                 self.increment_failure_count(channel.id).await?;
                 return Err(format!("YouTube API search failed: {}", e));

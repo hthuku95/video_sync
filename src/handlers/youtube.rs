@@ -2050,7 +2050,7 @@ pub async fn get_video_analytics(
     })?;
 
     // Get channel for access token
-    let channel = sqlx::query_as::<_, crate::models::youtube::ConnectedYouTubeChannel>(
+    let mut channel = sqlx::query_as::<_, crate::models::youtube::ConnectedYouTubeChannel>(
         "SELECT * FROM connected_youtube_channels WHERE id = $1"
     )
     .bind(upload.channel_id)
@@ -2068,6 +2068,45 @@ pub async fn get_video_analytics(
             Json(json!({"success": false, "message": "Channel not found"})),
         )
     })?;
+
+    // Check if token needs refresh before making analytics API call
+    if channel.token_expiry < chrono::Utc::now() + chrono::Duration::minutes(5) {
+        tracing::info!("🔄 Refreshing expired token for channel: {}", channel.channel_name);
+
+        let youtube = state.youtube_client.as_ref().ok_or_else(|| {
+            (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"success": false, "message": "YouTube client not initialized"})))
+        })?;
+
+        let client_id = state.google_oauth_client_id.as_ref().unwrap();
+        let client_secret = state.google_oauth_client_secret.as_ref().unwrap();
+
+        let token_response = youtube.refresh_access_token(
+            &channel.refresh_token,
+            client_id,
+            client_secret,
+        )
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to refresh token: {}", e);
+            (StatusCode::UNAUTHORIZED, Json(json!({"success": false, "message": "Token expired. Please reconnect your channel."})))
+        })?;
+
+        // Update token in memory and database
+        channel.access_token = token_response.access_token.clone();
+        channel.token_expiry = chrono::Utc::now() + chrono::Duration::seconds(token_response.expires_in);
+
+        sqlx::query(
+            "UPDATE connected_youtube_channels
+             SET access_token = $1, token_expiry = $2, updated_at = NOW()
+             WHERE id = $3"
+        )
+        .bind(&channel.access_token)
+        .bind(channel.token_expiry)
+        .bind(upload.channel_id)
+        .execute(&state.db_pool)
+        .await
+        .ok();
+    }
 
     // Check scope
     if !channel.granted_scopes.contains("yt-analytics.readonly") {
@@ -2232,7 +2271,7 @@ pub async fn get_channel_analytics(
     })?;
 
     // Verify ownership
-    let channel = sqlx::query_as::<_, crate::models::youtube::ConnectedYouTubeChannel>(
+    let mut channel = sqlx::query_as::<_, crate::models::youtube::ConnectedYouTubeChannel>(
         "SELECT * FROM connected_youtube_channels WHERE id = $1 AND user_id = $2"
     )
     .bind(channel_id)
@@ -2251,6 +2290,45 @@ pub async fn get_channel_analytics(
             Json(json!({"success": false, "message": "Channel not found"})),
         )
     })?;
+
+    // Check if token needs refresh before making analytics API call
+    if channel.token_expiry < chrono::Utc::now() + chrono::Duration::minutes(5) {
+        tracing::info!("🔄 Refreshing expired token for channel: {}", channel.channel_name);
+
+        let youtube = state.youtube_client.as_ref().ok_or_else(|| {
+            (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"success": false, "message": "YouTube client not initialized"})))
+        })?;
+
+        let client_id = state.google_oauth_client_id.as_ref().unwrap();
+        let client_secret = state.google_oauth_client_secret.as_ref().unwrap();
+
+        let token_response = youtube.refresh_access_token(
+            &channel.refresh_token,
+            client_id,
+            client_secret,
+        )
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to refresh token: {}", e);
+            (StatusCode::UNAUTHORIZED, Json(json!({"success": false, "message": "Token expired. Please reconnect your channel."})))
+        })?;
+
+        // Update token in memory and database
+        channel.access_token = token_response.access_token.clone();
+        channel.token_expiry = chrono::Utc::now() + chrono::Duration::seconds(token_response.expires_in);
+
+        sqlx::query(
+            "UPDATE connected_youtube_channels
+             SET access_token = $1, token_expiry = $2, updated_at = NOW()
+             WHERE id = $3"
+        )
+        .bind(&channel.access_token)
+        .bind(channel.token_expiry)
+        .bind(channel_id)
+        .execute(&state.db_pool)
+        .await
+        .ok();
+    }
 
     // Check scope
     if !channel.granted_scopes.contains("yt-analytics.readonly") {

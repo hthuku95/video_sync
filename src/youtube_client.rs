@@ -799,6 +799,77 @@ impl YouTubeClient {
         Ok(related_response)
     }
 
+    /// Get channel uploads using playlistItems API (1 quota unit vs 100 for search)
+    ///
+    /// This is a CRITICAL quota-saving method for channel monitoring.
+    /// Every YouTube channel has an "uploads" playlist with ID starting with "UU" + rest of channel ID.
+    ///
+    /// # Quota Cost Comparison:
+    /// - search.list() = 100 quota units per call
+    /// - playlistItems.list() = 1 quota unit per call
+    ///
+    /// For 10 channels polled every 30 minutes (48 times/day):
+    /// - search API: 10 × 48 × 100 = 48,000 quota (exceeds 10,000 daily limit by 4.8x!)
+    /// - playlistItems API: 10 × 48 × 1 = 480 quota (uses only 4.8% of daily limit)
+    ///
+    /// # Arguments
+    /// * `playlist_id` - The uploads playlist ID (starts with "UU")
+    /// * `max_results` - Maximum number of videos to retrieve
+    pub async fn get_channel_uploads(
+        &self,
+        playlist_id: &str,
+        max_results: i32,
+    ) -> Result<SearchResponse, Box<dyn std::error::Error + Send + Sync>> {
+        let url = "https://www.googleapis.com/youtube/v3/playlistItems";
+
+        let response = self
+            .client
+            .get(url)
+            .query(&[
+                ("part", "snippet,contentDetails"),
+                ("playlistId", playlist_id),
+                ("maxResults", &max_results.to_string()),
+                ("key", &self.api_key),
+            ])
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let error_text = response.text().await?;
+            return Err(format!("Failed to get channel uploads: {}", error_text).into());
+        }
+
+        // Parse the playlistItems response
+        let playlist_response: PlaylistItemsListResponse = response.json().await?;
+
+        // Convert playlistItems to SearchResponse format for compatibility
+        let items: Vec<SearchResultItem> = playlist_response
+            .items
+            .into_iter()
+            .map(|item| SearchResultItem {
+                id: SearchResultId {
+                    kind: "youtube#video".to_string(),
+                    video_id: item.content_details.video_id.clone(),
+                },
+                snippet: SearchResultSnippet {
+                    title: item.snippet.title.clone(),
+                    description: item.snippet.description.clone(),
+                    channel_id: item.snippet.channel_id.clone(),
+                    channel_title: item.snippet.channel_title.clone(),
+                    thumbnails: serde_json::to_value(&item.snippet.thumbnails).unwrap_or(serde_json::json!({})),
+                    published_at: item.content_details.video_published_at.clone().unwrap_or_else(|| item.snippet.published_at.clone()),
+                },
+            })
+            .collect();
+
+        Ok(SearchResponse {
+            kind: "youtube#searchListResponse".to_string(),
+            items,
+            page_info: playlist_response.page_info,
+            next_page_token: playlist_response.next_page_token,
+        })
+    }
+
     /// Get real-time statistics for a video (uses Data API, not Analytics API)
     pub async fn get_video_realtime_stats(
         &self,
@@ -1334,6 +1405,51 @@ pub struct PlaylistResponse {
     pub status: PlaylistStatus,
     #[serde(rename = "contentDetails")]
     pub content_details: Option<PlaylistContentDetails>,
+}
+
+// PlaylistItems API response (for quota-efficient channel video fetching)
+#[derive(Debug, Deserialize, Serialize)]
+pub struct PlaylistItemsListResponse {
+    pub kind: String,
+    pub items: Vec<PlaylistItemResource>,
+    #[serde(rename = "pageInfo")]
+    pub page_info: PageInfo,
+    #[serde(rename = "nextPageToken")]
+    pub next_page_token: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct PlaylistItemResource {
+    pub id: String,
+    pub snippet: PlaylistItemSnippetFull,
+    #[serde(rename = "contentDetails")]
+    pub content_details: PlaylistItemContentDetails,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct PlaylistItemSnippetFull {
+    #[serde(rename = "publishedAt")]
+    pub published_at: String,
+    #[serde(rename = "channelId")]
+    pub channel_id: String,
+    pub title: String,
+    pub description: String,
+    pub thumbnails: serde_json::Value,
+    #[serde(rename = "channelTitle")]
+    pub channel_title: String,
+    #[serde(rename = "playlistId")]
+    pub playlist_id: String,
+    pub position: i32,
+    #[serde(rename = "resourceId")]
+    pub resource_id: ResourceId,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct PlaylistItemContentDetails {
+    #[serde(rename = "videoId")]
+    pub video_id: String,
+    #[serde(rename = "videoPublishedAt")]
+    pub video_published_at: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
