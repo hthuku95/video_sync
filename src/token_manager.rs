@@ -2,6 +2,8 @@ use crate::models::youtube::ConnectedYouTubeChannel;
 use crate::youtube_client::YouTubeClient;
 use chrono::{Duration, Utc};
 use sqlx::PgPool;
+use backoff::{ExponentialBackoff, backoff::Backoff};
+use std::time::Duration as StdDuration;
 
 /// Token manager for centralized YouTube OAuth token refresh
 pub struct TokenManager {
@@ -26,14 +28,90 @@ impl TokenManager {
         }
     }
 
-    /// Ensure token is fresh, refresh if expiring within 5 minutes
+    /// Check if an error is retryable (network/transient errors)
+    fn is_retryable_error(error_str: &str) -> bool {
+        // Don't retry on permanent errors
+        if error_str.contains("REFRESH_TOKEN_EXPIRED")
+            || error_str.contains("invalid_grant")
+            || error_str.contains("INVALID_CREDENTIALS")
+            || error_str.contains("invalid_client") {
+            return false;
+        }
+
+        // Retry on network errors, timeouts, 5xx errors
+        error_str.contains("network")
+            || error_str.contains("timeout")
+            || error_str.contains("connection")
+            || error_str.contains("500")
+            || error_str.contains("502")
+            || error_str.contains("503")
+            || error_str.contains("504")
+    }
+
+    /// Refresh token with exponential backoff retry
+    async fn refresh_with_retry(
+        &self,
+        refresh_token: &str,
+        channel_name: &str,
+    ) -> Result<crate::youtube_client::TokenRefreshResponse, Box<dyn std::error::Error + Send + Sync>> {
+        let mut backoff = ExponentialBackoff {
+            max_elapsed_time: Some(StdDuration::from_secs(30)),
+            ..Default::default()
+        };
+
+        let mut attempt = 1;
+        loop {
+            match self.youtube_client.refresh_access_token(
+                refresh_token,
+                &self.oauth_client_id,
+                &self.oauth_client_secret,
+            ).await {
+                Ok(response) => {
+                    if attempt > 1 {
+                        tracing::info!("✅ Token refresh succeeded on attempt {} for channel: {}", attempt, channel_name);
+                    }
+                    return Ok(response);
+                }
+                Err(e) => {
+                    let error_str = e.to_string();
+
+                    // Check if error is retryable
+                    if !Self::is_retryable_error(&error_str) {
+                        tracing::error!("🔴 TokenManager: Non-retryable error for channel {}: {}", channel_name, error_str);
+                        return Err(e);
+                    }
+
+                    // Check if we should retry
+                    if let Some(duration) = backoff.next_backoff() {
+                        tracing::warn!(
+                            "⚠️ TokenManager: Attempt {} failed for channel {}. Retrying in {:?}...",
+                            attempt,
+                            channel_name,
+                            duration
+                        );
+                        tokio::time::sleep(duration).await;
+                        attempt += 1;
+                    } else {
+                        tracing::error!(
+                            "🔴 TokenManager: Max retries exceeded for channel {}: {}",
+                            channel_name,
+                            error_str
+                        );
+                        return Err(e);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Ensure token is fresh, refresh if expiring within 30 minutes
     /// Returns the valid access token
     pub async fn ensure_fresh_token(
         &self,
         channel: &mut ConnectedYouTubeChannel,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         let now = Utc::now();
-        let expires_soon = channel.token_expiry < now + Duration::minutes(5);
+        let expires_soon = channel.token_expiry < now + Duration::minutes(30);
 
         if expires_soon {
             tracing::info!(
@@ -41,14 +119,11 @@ impl TokenManager {
                 channel.channel_name
             );
 
-            let token_response = self
-                .youtube_client
-                .refresh_access_token(
-                    &channel.refresh_token,
-                    &self.oauth_client_id,
-                    &self.oauth_client_secret,
-                )
-                .await?;
+            // Use retry wrapper for token refresh
+            let token_response = self.refresh_with_retry(
+                &channel.refresh_token,
+                &channel.channel_name,
+            ).await?;
 
             // Update in-memory channel
             channel.access_token = token_response.access_token.clone();

@@ -349,10 +349,16 @@ async fn create_linkage(
 
 async fn get_linkage(
     Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
     Path(id): Path<i32>,
 ) -> Result<Json<Value>, StatusCode> {
-    let linkage = sqlx::query_as::<_, ChannelLinkage>("SELECT * FROM youtube_channel_linkages WHERE id = $1")
+    let user_id = claims.sub.parse::<i32>().unwrap_or(0);
+
+    let linkage = sqlx::query_as::<_, ChannelLinkage>(
+        "SELECT * FROM youtube_channel_linkages WHERE id = $1 AND user_id = $2"
+    )
         .bind(id)
+        .bind(user_id)
         .fetch_optional(&state.db_pool)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
@@ -366,40 +372,61 @@ async fn get_linkage(
 
 async fn update_linkage(
     Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
     Path(id): Path<i32>,
     Json(payload): Json<UpdateLinkageRequest>,
 ) -> Result<Json<Value>, StatusCode> {
+    let user_id = claims.sub.parse::<i32>().unwrap_or(0);
+
+    // Verify ownership before allowing updates
+    let exists = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM youtube_channel_linkages WHERE id = $1 AND user_id = $2)"
+    )
+    .bind(id)
+    .bind(user_id)
+    .fetch_one(&state.db_pool)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if !exists {
+        return Err(StatusCode::NOT_FOUND);
+    }
+
     if let Some(active) = payload.is_active {
-        sqlx::query("UPDATE youtube_channel_linkages SET is_active = $1 WHERE id = $2")
+        sqlx::query("UPDATE youtube_channel_linkages SET is_active = $1 WHERE id = $2 AND user_id = $3")
             .bind(active)
             .bind(id)
+            .bind(user_id)
             .execute(&state.db_pool)
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     }
 
     if let Some(clips_per_video) = payload.clips_per_video {
-        sqlx::query("UPDATE youtube_channel_linkages SET clips_per_video = $1 WHERE id = $2")
+        sqlx::query("UPDATE youtube_channel_linkages SET clips_per_video = $1 WHERE id = $2 AND user_id = $3")
             .bind(clips_per_video)
             .bind(id)
+            .bind(user_id)
             .execute(&state.db_pool)
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     }
 
     if let Some(min_duration) = payload.min_clip_duration_seconds {
-        sqlx::query("UPDATE youtube_channel_linkages SET min_clip_duration_seconds = $1 WHERE id = $2")
+        sqlx::query("UPDATE youtube_channel_linkages SET min_clip_duration_seconds = $1 WHERE id = $2 AND user_id = $3")
             .bind(min_duration)
             .bind(id)
+            .bind(user_id)
             .execute(&state.db_pool)
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     }
 
     if let Some(max_duration) = payload.max_clip_duration_seconds {
-        sqlx::query("UPDATE youtube_channel_linkages SET max_clip_duration_seconds = $1 WHERE id = $2")
+        sqlx::query("UPDATE youtube_channel_linkages SET max_clip_duration_seconds = $1 WHERE id = $2 AND user_id = $3")
             .bind(max_duration)
             .bind(id)
+            .bind(user_id)
             .execute(&state.db_pool)
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -413,13 +440,21 @@ async fn update_linkage(
 
 async fn delete_linkage(
     Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
     Path(id): Path<i32>,
 ) -> Result<Json<Value>, StatusCode> {
-    sqlx::query("DELETE FROM youtube_channel_linkages WHERE id = $1")
+    let user_id = claims.sub.parse::<i32>().unwrap_or(0);
+
+    let result = sqlx::query("DELETE FROM youtube_channel_linkages WHERE id = $1 AND user_id = $2")
         .bind(id)
+        .bind(user_id)
         .execute(&state.db_pool)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if result.rows_affected() == 0 {
+        return Err(StatusCode::NOT_FOUND);
+    }
 
     Ok(Json(json!({
         "success": true,
@@ -484,10 +519,19 @@ async fn list_jobs(
 
 async fn get_job_status(
     Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
     Path(id): Path<i32>,
 ) -> Result<Json<Value>, StatusCode> {
-    let job = sqlx::query_as::<_, ClippingJob>("SELECT * FROM clipping_jobs WHERE id = $1")
+    let user_id = claims.sub.parse::<i32>().unwrap_or(0);
+
+    // Verify user owns this job through the linkage
+    let job = sqlx::query_as::<_, ClippingJob>(
+        "SELECT cj.* FROM clipping_jobs cj
+         JOIN youtube_channel_linkages ycl ON cj.linkage_id = ycl.id
+         WHERE cj.id = $1 AND ycl.user_id = $2"
+    )
         .bind(id)
+        .bind(user_id)
         .fetch_optional(&state.db_pool)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
@@ -511,13 +555,30 @@ async fn get_job_status(
 
 async fn cancel_job(
     Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
     Path(id): Path<i32>,
 ) -> Result<Json<Value>, StatusCode> {
-    sqlx::query("UPDATE clipping_jobs SET status = 'cancelled' WHERE id = $1 AND status NOT IN ('completed', 'failed')")
+    let user_id = claims.sub.parse::<i32>().unwrap_or(0);
+
+    // Verify ownership and cancel in one query
+    let result = sqlx::query(
+        "UPDATE clipping_jobs cj
+         SET status = 'cancelled'
+         FROM youtube_channel_linkages ycl
+         WHERE cj.id = $1
+         AND cj.linkage_id = ycl.id
+         AND ycl.user_id = $2
+         AND cj.status NOT IN ('completed', 'failed')"
+    )
         .bind(id)
+        .bind(user_id)
         .execute(&state.db_pool)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if result.rows_affected() == 0 {
+        return Err(StatusCode::NOT_FOUND);
+    }
 
     Ok(Json(json!({
         "success": true,
@@ -567,10 +628,20 @@ async fn list_clips(
 
 async fn get_clip_details(
     Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
     Path(id): Path<i32>,
 ) -> Result<Json<Value>, StatusCode> {
-    let clip = sqlx::query_as::<_, ExtractedClip>("SELECT * FROM extracted_clips WHERE id = $1")
+    let user_id = claims.sub.parse::<i32>().unwrap_or(0);
+
+    // Verify user owns this clip through job -> linkage chain
+    let clip = sqlx::query_as::<_, ExtractedClip>(
+        "SELECT ec.* FROM extracted_clips ec
+         JOIN clipping_jobs cj ON ec.clipping_job_id = cj.id
+         JOIN youtube_channel_linkages ycl ON cj.linkage_id = ycl.id
+         WHERE ec.id = $1 AND ycl.user_id = $2"
+    )
         .bind(id)
+        .bind(user_id)
         .fetch_optional(&state.db_pool)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
@@ -584,18 +655,30 @@ async fn get_clip_details(
 
 async fn repost_clip(
     Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
     Path(id): Path<i32>,
 ) -> Result<Json<Value>, StatusCode> {
-    // Reset upload status to retry
-    sqlx::query(
-        "UPDATE extracted_clips
+    let user_id = claims.sub.parse::<i32>().unwrap_or(0);
+
+    // Verify ownership and reset upload status in one query
+    let result = sqlx::query(
+        "UPDATE extracted_clips ec
          SET upload_status = 'pending', upload_error = NULL
-         WHERE id = $1",
+         FROM clipping_jobs cj
+         JOIN youtube_channel_linkages ycl ON cj.linkage_id = ycl.id
+         WHERE ec.id = $1
+         AND ec.clipping_job_id = cj.id
+         AND ycl.user_id = $2"
     )
     .bind(id)
+    .bind(user_id)
     .execute(&state.db_pool)
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if result.rows_affected() == 0 {
+        return Err(StatusCode::NOT_FOUND);
+    }
 
     Ok(Json(json!({
         "success": true,

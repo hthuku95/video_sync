@@ -67,6 +67,30 @@ fn is_allowed_redirect_url(url: &str) -> bool {
     false
 }
 
+/// Helper function to mark a channel as requiring re-authentication
+async fn mark_channel_requires_reauth(
+    db_pool: &sqlx::PgPool,
+    channel_id: i32,
+    reason: &str,
+) -> Result<(), sqlx::Error> {
+    tracing::warn!(
+        "🔴 Marking channel {} as requiring reauth. Reason: {}",
+        channel_id,
+        reason
+    );
+
+    sqlx::query(
+        "UPDATE connected_youtube_channels
+         SET requires_reauth = true, is_active = false, updated_at = NOW()
+         WHERE id = $1"
+    )
+    .bind(channel_id)
+    .execute(db_pool)
+    .await?;
+
+    Ok(())
+}
+
 pub fn youtube_routes() -> Router {
     // Public routes (no auth required)
     let public_routes = Router::new()
@@ -83,6 +107,7 @@ pub fn youtube_routes() -> Router {
         .route("/api/youtube/channels", get(list_connected_channels))
         .route("/api/youtube/channels/:id/disconnect", delete(disconnect_channel))
         .route("/api/youtube/channels/:id/refresh", post(refresh_channel_token))
+        .route("/api/youtube/channels/:id/health", get(check_channel_health))
 
         // Video upload (protected)
         .route("/api/youtube/upload", post(upload_video_to_youtube))
@@ -553,6 +578,59 @@ pub async fn refresh_channel_token(
     })))
 }
 
+/// Check channel health (whether it needs reconnection)
+///
+/// GET /api/youtube/channels/:id/health
+pub async fn check_channel_health(
+    Path(channel_id): Path<i32>,
+    Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<crate::models::auth::Claims>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let user_id = claims.sub.parse::<i32>().unwrap_or(0);
+
+    // Get channel
+    let channel = sqlx::query_as::<_, ConnectedYouTubeChannel>(
+        "SELECT * FROM connected_youtube_channels WHERE id = $1 AND user_id = $2"
+    )
+    .bind(channel_id)
+    .bind(user_id)
+    .fetch_optional(&state.db_pool)
+    .await
+    .map_err(|_| (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(json!({"success": false, "message": "Database error"}))
+    ))?
+    .ok_or_else(|| (
+        StatusCode::NOT_FOUND,
+        Json(json!({"success": false, "message": "Channel not found"}))
+    ))?;
+
+    // Determine health status
+    let needs_reconnect = channel.requires_reauth.unwrap_or(false);
+    let is_active = channel.is_active;
+    let token_expires_soon = channel.token_expiry < chrono::Utc::now() + chrono::Duration::hours(1);
+
+    let reason = if needs_reconnect {
+        "Channel requires re-authentication. Refresh token has expired."
+    } else if !is_active {
+        "Channel is inactive."
+    } else if token_expires_soon {
+        "Access token expires soon (within 1 hour)."
+    } else {
+        "Channel is healthy."
+    };
+
+    Ok(Json(json!({
+        "success": true,
+        "channel_id": channel_id,
+        "needs_reconnect": needs_reconnect,
+        "is_active": is_active,
+        "token_expires_soon": token_expires_soon,
+        "token_expiry": channel.token_expiry,
+        "reason": reason
+    })))
+}
+
 // ============================================================================
 // Video Upload API
 // ============================================================================
@@ -582,8 +660,8 @@ pub async fn upload_video_to_youtube(
         Json(json!({"success": false, "message": "Channel not found or not connected"}))
     ))?;
 
-    // Check if token needs refresh
-    if channel.token_expiry < chrono::Utc::now() + chrono::Duration::minutes(5) {
+    // Check if token needs refresh (refresh 30 minutes before expiry for safety margin)
+    if channel.token_expiry < chrono::Utc::now() + chrono::Duration::minutes(30) {
         tracing::info!("🔄 Refreshing expired token for channel: {}", channel.channel_name);
 
         let youtube = state.youtube_client.as_ref().ok_or_else(|| {
@@ -593,16 +671,35 @@ pub async fn upload_video_to_youtube(
         let client_id = state.google_oauth_client_id.as_ref().unwrap();
         let client_secret = state.google_oauth_client_secret.as_ref().unwrap();
 
-        let token_response = youtube.refresh_access_token(
+        let token_response = match youtube.refresh_access_token(
             &channel.refresh_token,
             client_id,
             client_secret,
-        )
-        .await
-        .map_err(|e| {
-            tracing::error!("Failed to refresh token: {}", e);
-            (StatusCode::UNAUTHORIZED, Json(json!({"success": false, "message": "Token expired. Please reconnect your channel."})))
-        })?;
+        ).await {
+            Ok(response) => response,
+            Err(e) => {
+                let error_str = e.to_string();
+                tracing::error!("Failed to refresh token: {}", error_str);
+
+                // Mark channel as requiring reauth if token expired
+                if error_str.contains("REFRESH_TOKEN_EXPIRED") || error_str.contains("invalid_grant") {
+                    let _ = mark_channel_requires_reauth(&state.db_pool, payload.channel_id, &error_str).await;
+                }
+
+                // Parse error to provide specific user message
+                let user_message = if error_str.contains("REFRESH_TOKEN_EXPIRED") || error_str.contains("invalid_grant") {
+                    "Your YouTube authorization has expired. Please reconnect your channel to continue uploading."
+                } else if error_str.contains("INVALID_CREDENTIALS") {
+                    "YouTube authentication configuration error. Please contact support."
+                } else if error_str.contains("quotaExceeded") {
+                    "YouTube API quota limit reached. Please try again in 1 hour."
+                } else {
+                    "Failed to refresh YouTube authentication. Please reconnect your channel."
+                };
+
+                return Err((StatusCode::UNAUTHORIZED, Json(json!({"success": false, "message": user_message}))));
+            }
+        };
 
         // Update token in memory and database
         channel.access_token = token_response.access_token.clone();
@@ -2069,8 +2166,8 @@ pub async fn get_video_analytics(
         )
     })?;
 
-    // Check if token needs refresh before making analytics API call
-    if channel.token_expiry < chrono::Utc::now() + chrono::Duration::minutes(5) {
+    // Check if token needs refresh before making analytics API call (refresh 30 minutes before expiry for safety margin)
+    if channel.token_expiry < chrono::Utc::now() + chrono::Duration::minutes(30) {
         tracing::info!("🔄 Refreshing expired token for channel: {}", channel.channel_name);
 
         let youtube = state.youtube_client.as_ref().ok_or_else(|| {
@@ -2080,16 +2177,35 @@ pub async fn get_video_analytics(
         let client_id = state.google_oauth_client_id.as_ref().unwrap();
         let client_secret = state.google_oauth_client_secret.as_ref().unwrap();
 
-        let token_response = youtube.refresh_access_token(
+        let token_response = match youtube.refresh_access_token(
             &channel.refresh_token,
             client_id,
             client_secret,
-        )
-        .await
-        .map_err(|e| {
-            tracing::error!("Failed to refresh token: {}", e);
-            (StatusCode::UNAUTHORIZED, Json(json!({"success": false, "message": "Token expired. Please reconnect your channel."})))
-        })?;
+        ).await {
+            Ok(response) => response,
+            Err(e) => {
+                let error_str = e.to_string();
+                tracing::error!("Failed to refresh token: {}", error_str);
+
+                // Mark channel as requiring reauth if token expired
+                if error_str.contains("REFRESH_TOKEN_EXPIRED") || error_str.contains("invalid_grant") {
+                    let _ = mark_channel_requires_reauth(&state.db_pool, upload.channel_id, &error_str).await;
+                }
+
+                // Parse error to provide specific user message
+                let user_message = if error_str.contains("REFRESH_TOKEN_EXPIRED") || error_str.contains("invalid_grant") {
+                    "Your YouTube authorization has expired. Please reconnect your channel to continue uploading."
+                } else if error_str.contains("INVALID_CREDENTIALS") {
+                    "YouTube authentication configuration error. Please contact support."
+                } else if error_str.contains("quotaExceeded") {
+                    "YouTube API quota limit reached. Please try again in 1 hour."
+                } else {
+                    "Failed to refresh YouTube authentication. Please reconnect your channel."
+                };
+
+                return Err((StatusCode::UNAUTHORIZED, Json(json!({"success": false, "message": user_message}))));
+            }
+        };
 
         // Update token in memory and database
         channel.access_token = token_response.access_token.clone();
@@ -2291,8 +2407,8 @@ pub async fn get_channel_analytics(
         )
     })?;
 
-    // Check if token needs refresh before making analytics API call
-    if channel.token_expiry < chrono::Utc::now() + chrono::Duration::minutes(5) {
+    // Check if token needs refresh before making analytics API call (refresh 30 minutes before expiry for safety margin)
+    if channel.token_expiry < chrono::Utc::now() + chrono::Duration::minutes(30) {
         tracing::info!("🔄 Refreshing expired token for channel: {}", channel.channel_name);
 
         let youtube = state.youtube_client.as_ref().ok_or_else(|| {
@@ -2302,16 +2418,35 @@ pub async fn get_channel_analytics(
         let client_id = state.google_oauth_client_id.as_ref().unwrap();
         let client_secret = state.google_oauth_client_secret.as_ref().unwrap();
 
-        let token_response = youtube.refresh_access_token(
+        let token_response = match youtube.refresh_access_token(
             &channel.refresh_token,
             client_id,
             client_secret,
-        )
-        .await
-        .map_err(|e| {
-            tracing::error!("Failed to refresh token: {}", e);
-            (StatusCode::UNAUTHORIZED, Json(json!({"success": false, "message": "Token expired. Please reconnect your channel."})))
-        })?;
+        ).await {
+            Ok(response) => response,
+            Err(e) => {
+                let error_str = e.to_string();
+                tracing::error!("Failed to refresh token: {}", error_str);
+
+                // Mark channel as requiring reauth if token expired
+                if error_str.contains("REFRESH_TOKEN_EXPIRED") || error_str.contains("invalid_grant") {
+                    let _ = mark_channel_requires_reauth(&state.db_pool, channel_id, &error_str).await;
+                }
+
+                // Parse error to provide specific user message
+                let user_message = if error_str.contains("REFRESH_TOKEN_EXPIRED") || error_str.contains("invalid_grant") {
+                    "Your YouTube authorization has expired. Please reconnect your channel to continue uploading."
+                } else if error_str.contains("INVALID_CREDENTIALS") {
+                    "YouTube authentication configuration error. Please contact support."
+                } else if error_str.contains("quotaExceeded") {
+                    "YouTube API quota limit reached. Please try again in 1 hour."
+                } else {
+                    "Failed to refresh YouTube authentication. Please reconnect your channel."
+                };
+
+                return Err((StatusCode::UNAUTHORIZED, Json(json!({"success": false, "message": user_message}))));
+            }
+        };
 
         // Update token in memory and database
         channel.access_token = token_response.access_token.clone();
@@ -3267,26 +3402,45 @@ pub async fn initiate_resumable_upload(
         )
     })?;
 
-    // Check if token needs refresh (refresh if expiring within 5 minutes)
-    if channel.token_expiry < chrono::Utc::now() + chrono::Duration::minutes(5) {
+    // Check if token needs refresh (refresh 30 minutes before expiry for safety margin)
+    if channel.token_expiry < chrono::Utc::now() + chrono::Duration::minutes(30) {
         tracing::info!("🔄 Refreshing expired token for channel: {} before resumable upload", channel.channel_name);
 
         let client_id = state.google_oauth_client_id.as_ref().unwrap();
         let client_secret = state.google_oauth_client_secret.as_ref().unwrap();
 
-        let token_response = youtube.refresh_access_token(
+        let token_response = match youtube.refresh_access_token(
             &channel.refresh_token,
             client_id,
             client_secret,
-        )
-        .await
-        .map_err(|e| {
-            tracing::error!("Failed to refresh token for resumable upload: {}", e);
-            (
-                StatusCode::UNAUTHORIZED,
-                Json(json!({"success": false, "message": "Token expired. Please reconnect your YouTube channel."}))
-            )
-        })?;
+        ).await {
+            Ok(response) => response,
+            Err(e) => {
+                let error_str = e.to_string();
+                tracing::error!("Failed to refresh token for resumable upload: {}", error_str);
+
+                // Mark channel as requiring reauth if token expired
+                if error_str.contains("REFRESH_TOKEN_EXPIRED") || error_str.contains("invalid_grant") {
+                    let _ = mark_channel_requires_reauth(&state.db_pool, payload.channel_id, &error_str).await;
+                }
+
+                // Parse error to provide specific user message
+                let user_message = if error_str.contains("REFRESH_TOKEN_EXPIRED") || error_str.contains("invalid_grant") {
+                    "Your YouTube authorization has expired. Please reconnect your channel to continue uploading."
+                } else if error_str.contains("INVALID_CREDENTIALS") {
+                    "YouTube authentication configuration error. Please contact support."
+                } else if error_str.contains("quotaExceeded") {
+                    "YouTube API quota limit reached. Please try again in 1 hour."
+                } else {
+                    "Failed to refresh YouTube authentication. Please reconnect your channel."
+                };
+
+                return Err((
+                    StatusCode::UNAUTHORIZED,
+                    Json(json!({"success": false, "message": user_message}))
+                ));
+            }
+        };
 
         // Update token in memory and database
         channel.access_token = token_response.access_token.clone();

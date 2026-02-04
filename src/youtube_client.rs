@@ -265,8 +265,43 @@ impl YouTubeClient {
             .await?;
 
         if !response.status().is_success() {
+            let status = response.status();
             let error_text = response.text().await?;
-            return Err(format!("Failed to refresh token: {}", error_text).into());
+
+            // Log detailed error information
+            tracing::error!(
+                "❌ Token refresh failed: HTTP {} - Raw response: {}",
+                status,
+                error_text
+            );
+
+            // Try to parse error JSON to extract specific error reason
+            let error_reason = if let Ok(error_json) = serde_json::from_str::<serde_json::Value>(&error_text) {
+                if let Some(error) = error_json.get("error").and_then(|e| e.as_str()) {
+                    tracing::error!("🔍 Google OAuth Error Code: {}", error);
+                    Some(error.to_string())
+                } else if let Some(error_description) = error_json.get("error_description").and_then(|e| e.as_str()) {
+                    tracing::error!("🔍 Google OAuth Error Description: {}", error_description);
+                    Some(error_description.to_string())
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            // Return error with specific reason if available
+            let error_message = if let Some(reason) = error_reason {
+                match reason.as_str() {
+                    "invalid_grant" => "REFRESH_TOKEN_EXPIRED: Your YouTube authorization has expired and needs to be reconnected.".to_string(),
+                    "invalid_client" => "INVALID_CREDENTIALS: OAuth client credentials are invalid.".to_string(),
+                    _ => format!("TOKEN_REFRESH_FAILED: {} (HTTP {})", reason, status)
+                }
+            } else {
+                format!("TOKEN_REFRESH_FAILED: Unknown error (HTTP {})", status)
+            };
+
+            return Err(error_message.into());
         }
 
         let token_response: TokenRefreshResponse = response.json().await?;

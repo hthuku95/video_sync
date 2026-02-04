@@ -109,9 +109,9 @@ impl ClipUploader {
         &self,
         channel: &ConnectedYouTubeChannel,
     ) -> Result<String, String> {
-        // Check if token expires within 5 minutes (same logic as existing code)
+        // Check if token expires within 30 minutes (proactive refresh for safety)
         let now = Utc::now();
-        let expires_soon = channel.token_expiry < now + chrono::Duration::minutes(5);
+        let expires_soon = channel.token_expiry < now + chrono::Duration::minutes(30);
 
         if expires_soon {
             tracing::info!("Access token expiring soon, refreshing...");
@@ -125,7 +125,17 @@ impl ClipUploader {
                     &self.oauth_client_secret,
                 )
                 .await
-                .map_err(|e| format!("Token refresh failed: {}", e))?;
+                .map_err(|e| {
+                    let error_str = e.to_string();
+                    tracing::error!("🔴 ClipUploader: Token refresh failed for channel {}: {}", channel.channel_name, error_str);
+
+                    // Provide specific error message
+                    if error_str.contains("REFRESH_TOKEN_EXPIRED") || error_str.contains("invalid_grant") {
+                        "Token refresh failed: YouTube authorization expired. Channel needs reconnection.".to_string()
+                    } else {
+                        format!("Token refresh failed: {}", error_str)
+                    }
+                })?;
 
             // Update database with new token
             sqlx::query(
