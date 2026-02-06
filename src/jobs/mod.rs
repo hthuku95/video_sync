@@ -13,6 +13,7 @@ pub mod video_job;
 pub mod clipping_job;
 pub mod clipping_worker;
 pub mod analytics_sync_job;
+pub mod token_refresh;
 
 pub use clipping_worker::ClippingWorker;
 pub use analytics_sync_job::AnalyticsSyncJob;

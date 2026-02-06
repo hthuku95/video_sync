@@ -32,6 +32,7 @@ pub struct ConnectedChannelResponse {
     pub subscriber_count: Option<i64>,
     pub video_count: Option<i64>,
     pub is_active: bool,
+    pub requires_reauth: bool,
     pub connected_at: chrono::DateTime<chrono::Utc>,
 }
 
@@ -46,6 +47,7 @@ impl From<ConnectedYouTubeChannel> for ConnectedChannelResponse {
             subscriber_count: channel.subscriber_count,
             video_count: channel.video_count,
             is_active: channel.is_active,
+            requires_reauth: channel.requires_reauth.unwrap_or(false),
             connected_at: channel.created_at,
         }
     }

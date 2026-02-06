@@ -360,6 +360,32 @@ async fn main() {
             let worker = jobs::ClippingWorker::new(worker_state, 60); // Poll every 60 seconds
             worker.run().await;
         });
+
+        // Start token refresh worker for YouTube channels (runs every 15 minutes)
+        if let Some(token_manager) = shared_state.token_manager.clone() {
+            let db_pool = shared_state.db_pool.clone();
+            tokio::spawn(async move {
+                let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(900)); // 15 minutes
+                loop {
+                    interval.tick().await;
+                    tracing::info!("🔄 Running scheduled token refresh for all YouTube channels...");
+
+                    match jobs::token_refresh::refresh_all_expiring_tokens(&token_manager, &db_pool).await {
+                        Ok(refreshed_count) => {
+                            if refreshed_count > 0 {
+                                tracing::info!("✅ Refreshed {} channel tokens", refreshed_count);
+                            }
+                        }
+                        Err(e) => {
+                            tracing::error!("❌ Token refresh worker error: {}", e);
+                        }
+                    }
+                }
+            });
+            tracing::info!("✅ Token refresh worker started (runs every 15 minutes)");
+        } else {
+            tracing::warn!("TokenManager not available - token refresh worker disabled");
+        }
     } else {
         tracing::warn!("YouTube client not available - clipping polling disabled");
     }

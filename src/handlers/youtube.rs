@@ -81,10 +81,11 @@ async fn mark_channel_requires_reauth(
 
     sqlx::query(
         "UPDATE connected_youtube_channels
-         SET requires_reauth = true, is_active = false, updated_at = NOW()
+         SET requires_reauth = true, reauth_reason = $2, updated_at = NOW()
          WHERE id = $1"
     )
     .bind(channel_id)
+    .bind(reason)
     .execute(db_pool)
     .await?;
 
@@ -457,7 +458,9 @@ pub async fn list_connected_channels(
     let user_id = claims.sub.parse::<i32>().unwrap_or(0);
 
     let channels = sqlx::query_as::<_, ConnectedYouTubeChannel>(
-        "SELECT * FROM connected_youtube_channels WHERE user_id = $1 AND is_active = true ORDER BY created_at DESC"
+        "SELECT * FROM connected_youtube_channels
+         WHERE user_id = $1
+         ORDER BY is_active DESC, COALESCE(requires_reauth, false) ASC, created_at DESC"
     )
     .bind(user_id)
     .fetch_all(&state.db_pool)

@@ -105,11 +105,11 @@ impl TokenManager {
     }
 
     /// Ensure token is fresh, refresh if expiring within 30 minutes
-    /// Returns the valid access token
+    /// Returns (did_refresh, access_token)
     pub async fn ensure_fresh_token(
         &self,
         channel: &mut ConnectedYouTubeChannel,
-    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
         let now = Utc::now();
         let expires_soon = channel.token_expiry < now + Duration::minutes(30);
 
@@ -129,10 +129,14 @@ impl TokenManager {
             channel.access_token = token_response.access_token.clone();
             channel.token_expiry = now + Duration::seconds(token_response.expires_in);
 
-            // Update database
+            // Update database and clear requires_reauth flag on successful refresh
             sqlx::query(
                 "UPDATE connected_youtube_channels
-                 SET access_token = $1, token_expiry = $2, updated_at = NOW()
+                 SET access_token = $1,
+                     token_expiry = $2,
+                     requires_reauth = false,
+                     reauth_reason = NULL,
+                     updated_at = NOW()
                  WHERE id = $3",
             )
             .bind(&channel.access_token)
@@ -142,9 +146,10 @@ impl TokenManager {
             .await?;
 
             tracing::info!("✅ Token refreshed successfully for channel: {}", channel.channel_name);
+            return Ok(true);
         }
 
-        Ok(channel.access_token.clone())
+        Ok(false)
     }
 
     /// Refresh a token by channel ID, returns the fresh token
@@ -159,6 +164,61 @@ impl TokenManager {
         .fetch_one(&self.db_pool)
         .await?;
 
-        self.ensure_fresh_token(&mut channel).await
+        self.ensure_fresh_token(&mut channel).await?;
+        Ok(channel.access_token.clone())
+    }
+
+    /// Refresh tokens for all channels that expire within the next hour
+    /// Returns the count of successfully refreshed tokens
+    pub async fn refresh_all_expiring_tokens(&self) -> Result<usize, String> {
+        let now = Utc::now();
+        let threshold = now + Duration::hours(1);
+
+        // Fetch all channels with tokens expiring soon
+        let channels = sqlx::query_as::<_, ConnectedYouTubeChannel>(
+            "SELECT * FROM connected_youtube_channels
+             WHERE is_active = true
+             AND token_expiry < $1
+             ORDER BY token_expiry ASC"
+        )
+        .bind(threshold)
+        .fetch_all(&self.db_pool)
+        .await
+        .map_err(|e| format!("Failed to fetch expiring channels: {}", e))?;
+
+        if channels.is_empty() {
+            return Ok(0);
+        }
+
+        tracing::info!("🔄 Found {} channels with tokens expiring within 1 hour", channels.len());
+
+        let mut refreshed_count = 0;
+
+        for mut channel in channels {
+            match self.ensure_fresh_token(&mut channel).await {
+                Ok(true) => {
+                    refreshed_count += 1;
+                    tracing::info!(
+                        "✅ Proactively refreshed token for channel: {} ({})",
+                        channel.channel_name,
+                        channel.channel_id
+                    );
+                }
+                Ok(false) => {
+                    // Token still fresh, skip (shouldn't happen with our query but handle anyway)
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "⚠️ Failed to refresh token for channel {} ({}): {}",
+                        channel.channel_name,
+                        channel.channel_id,
+                        e
+                    );
+                    // Don't fail the entire batch - continue with other channels
+                }
+            }
+        }
+
+        Ok(refreshed_count)
     }
 }
