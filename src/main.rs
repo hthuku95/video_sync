@@ -1,4 +1,4 @@
-use axum::{Extension, Router};
+use axum::{Extension, Router, extract::DefaultBodyLimit};
 use std::sync::Arc;
 use tower_http::cors::CorsLayer;
 
@@ -336,6 +336,7 @@ async fn main() {
         // .layer(axum::middleware::from_fn(middleware::rate_limit::rate_limit_middleware))
         .layer(axum::middleware::from_fn(middleware::logging::request_logging_middleware))
         .layer(CorsLayer::permissive())
+        .layer(DefaultBodyLimit::max(100 * 1024 * 1024)) // 100MB limit for video uploads
         .layer(Extension(shared_state.clone()));
 
     // Start background polling task for YouTube clipping
