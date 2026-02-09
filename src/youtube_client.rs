@@ -1282,6 +1282,98 @@ impl YouTubeClient {
         tracing::error!("❌ Failed to upload chunk: {}", error_text);
         Err(format!("Failed to upload chunk: {}", error_text).into())
     }
+
+    /// Upload video file using resumable upload (recommended for files > 5MB)
+    ///
+    /// This is a high-level convenience method that:
+    /// 1. Reads the video file from disk
+    /// 2. Initiates resumable upload session
+    /// 3. Uploads file in 8MB chunks
+    /// 4. Returns the video ID when complete
+    ///
+    /// Use this for clipping uploads and any videos > 5MB
+    pub async fn upload_video_resumable(
+        &self,
+        access_token: &str,
+        video_path: &str,
+        title: &str,
+        description: &str,
+        privacy_status: &str,
+        category_id: Option<&str>,
+        tags: Option<Vec<String>>,
+    ) -> Result<VideoUploadResponse, Box<dyn std::error::Error + Send + Sync>> {
+        // Read file metadata
+        let file_metadata = tokio::fs::metadata(video_path).await?;
+        let file_size = file_metadata.len() as i64;
+
+        tracing::info!("📤 Starting resumable upload: {} ({} bytes)", title, file_size);
+
+        // Step 1: Initiate resumable upload session
+        let session = self.initiate_resumable_upload(
+            access_token,
+            title,
+            description,
+            privacy_status,
+            category_id,
+            tags,
+            file_size,
+        ).await?;
+
+        // Step 2: Read file in chunks and upload
+        let chunk_size = 8 * 1024 * 1024; // 8MB chunks (optimal per YouTube API docs)
+        let mut file = tokio::fs::File::open(video_path).await?;
+        let mut buffer = vec![0u8; chunk_size];
+        let mut bytes_uploaded: i64 = 0;
+
+        loop {
+            use tokio::io::AsyncReadExt;
+
+            let bytes_read = file.read(&mut buffer).await?;
+
+            if bytes_read == 0 {
+                break; // EOF
+            }
+
+            let chunk_data = buffer[..bytes_read].to_vec();
+            let start_byte = bytes_uploaded;
+            let end_byte = start_byte + bytes_read as i64 - 1;
+
+            tracing::debug!("📤 Uploading chunk: bytes {}-{}/{} ({:.1}%)",
+                start_byte, end_byte, file_size,
+                (end_byte as f64 / file_size as f64) * 100.0
+            );
+
+            let chunk_result = self.upload_resumable_chunk(
+                &session.session_url,
+                chunk_data,
+                start_byte,
+                end_byte,
+                file_size,
+            ).await?;
+
+            bytes_uploaded = end_byte + 1;
+
+            if chunk_result.complete {
+                // Upload finished!
+                let video_response = chunk_result.video_response
+                    .ok_or("Upload completed but no video response received")?;
+
+                tracing::info!("✅ Resumable upload complete: {} (ID: {})",
+                    title, video_response.id
+                );
+
+                return Ok(VideoUploadResponse {
+                    id: video_response.id,
+                    snippet: VideoResponseSnippet {
+                        title: title.to_string(),
+                        published_at: chrono::Utc::now().to_rfc3339(),
+                    },
+                });
+            }
+        }
+
+        Err("Upload incomplete - file may have been truncated".into())
+    }
 }
 
 #[derive(Debug, Deserialize)]

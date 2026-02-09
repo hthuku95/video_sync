@@ -52,10 +52,14 @@ impl ClipUploader {
         tracing::debug!("Title: {}", title);
         tracing::debug!("Description: {}", description);
 
-        // Step 3: Upload to YouTube
+        // Step 3: Upload to YouTube using resumable upload (supports clips of any size)
+        // Using resumable instead of multipart because:
+        // - Multipart limited to 5MB (too small for most clips)
+        // - Resumable supports files up to 256GB
+        // - Better for reliability and progress tracking
         let upload_result = self
             .youtube_client
-            .upload_video(
+            .upload_video_resumable(
                 &access_token,
                 &clip.local_clip_path,
                 &title,

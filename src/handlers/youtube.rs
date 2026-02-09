@@ -771,6 +771,32 @@ pub async fn upload_video_to_youtube(
         ));
     }
 
+    // Check file size (multipart upload limited to 5MB by YouTube API)
+    let file_metadata = std::fs::metadata(&payload.video_path).map_err(|_| (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(json!({"success": false, "message": "Failed to read file metadata"}))
+    ))?;
+
+    const MAX_MULTIPART_SIZE: u64 = 5 * 1024 * 1024; // 5MB limit for multipart
+    if file_metadata.len() > MAX_MULTIPART_SIZE {
+        tracing::warn!("⚠️ Video file {} ({} bytes) exceeds 5MB multipart limit. Use resumable upload instead.",
+            payload.video_path, file_metadata.len()
+        );
+        return Err((
+            StatusCode::PAYLOAD_TOO_LARGE,
+            Json(json!({
+                "success": false,
+                "message": format!(
+                    "Video file is too large for direct upload ({:.1}MB). Maximum: 5MB. Please use the resumable upload endpoint instead.",
+                    file_metadata.len() as f64 / (1024.0 * 1024.0)
+                ),
+                "file_size_mb": file_metadata.len() as f64 / (1024.0 * 1024.0),
+                "max_size_mb": 5.0,
+                "recommendation": "Use POST /api/youtube/upload/resumable for files > 5MB"
+            }))
+        ));
+    }
+
     // Create upload record
     let upload_id: i32 = sqlx::query_scalar(
         "INSERT INTO youtube_uploads (
