@@ -79,6 +79,25 @@ async fn main() {
         tracing::info!("Downloads directory ready (for yt-dlp)");
     }
 
+    // Verify yt-dlp is available (fail early on startup)
+    match tokio::process::Command::new("yt-dlp")
+        .arg("--version")
+        .output()
+        .await
+    {
+        Ok(output) if output.status.success() => {
+            let version = String::from_utf8_lossy(&output.stdout);
+            tracing::info!("✅ yt-dlp available: {}", version.trim());
+        }
+        Ok(_) => {
+            tracing::error!("⚠️ yt-dlp found but version check failed");
+        }
+        Err(e) => {
+            tracing::error!("❌ CRITICAL: yt-dlp is not installed or not in PATH: {}", e);
+            tracing::error!("Clipping features will not work. Install with: pip install yt-dlp");
+        }
+    }
+
     // Create the database connection pool
     let db_pool = db::create_pool()
         .await

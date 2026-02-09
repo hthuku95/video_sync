@@ -24,8 +24,15 @@ RUN apt-get update && apt-get install -y \
     libpq5 \
     && rm -rf /var/lib/apt/lists/*
 
-# Install yt-dlp via pip (most current version)
-RUN pip3 install --no-cache-dir yt-dlp --break-system-packages
+# Install yt-dlp via pip with proper PATH configuration
+RUN pip3 install --no-cache-dir yt-dlp --break-system-packages && \
+    # Verify installation
+    yt-dlp --version && \
+    # Create symlink if needed (defensive)
+    ln -sf /usr/local/bin/yt-dlp /usr/bin/yt-dlp && \
+    # Print location for debugging
+    which yt-dlp && \
+    echo "✅ yt-dlp installed successfully: $(yt-dlp --version)"
 
 # Copy compiled binary from builder
 COPY --from=builder /app/target/release/video_editor /usr/local/bin/video_editor

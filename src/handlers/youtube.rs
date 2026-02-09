@@ -353,11 +353,8 @@ pub async fn youtube_oauth_callback(
     })?;
 
     let access_token = &token_response.access_token;
-    let refresh_token = token_response.refresh_token.ok_or_else(|| {
-        (StatusCode::INTERNAL_SERVER_ERROR, Html("<h1>No refresh token received</h1>".to_string()))
-    })?;
 
-    // Get user's YouTube channels
+    // Get user's YouTube channels first (moved from later in function)
     let youtube = state.youtube_client.as_ref().ok_or_else(|| {
         (StatusCode::SERVICE_UNAVAILABLE, Html("<h1>YouTube client not initialized</h1>".to_string()))
     })?;
@@ -377,6 +374,49 @@ pub async fn youtube_oauth_callback(
 <a href="/youtube/manage">Back to Management</a></body></html>
         "#.to_string()));
     }
+
+    // Google only returns refresh_token on FIRST authorization
+    // On reconnection, we need to reuse the stored refresh_token
+    let refresh_token = if let Some(rt) = token_response.refresh_token {
+        tracing::info!("✅ Received new refresh_token from Google OAuth");
+        rt
+    } else {
+        tracing::warn!("⚠️ No refresh_token received from Google (reconnection flow)");
+
+        // Try to find existing refresh_token for this user+channel
+        let channel_id = &channels[0].id;
+
+        let existing_channel = sqlx::query_as::<_, ConnectedYouTubeChannel>(
+            "SELECT * FROM connected_youtube_channels
+             WHERE user_id = $1 AND channel_id = $2"
+        )
+        .bind(user_id)
+        .bind(channel_id)
+        .fetch_optional(&state.db_pool)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to fetch existing channel: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, Html(format!("<h1>Database error: {}</h1>", e)))
+        })?;
+
+        match existing_channel {
+            Some(channel) => {
+                tracing::info!("✅ Reusing stored refresh_token for channel reconnection");
+                channel.refresh_token
+            }
+            None => {
+                tracing::error!("🔴 CRITICAL: First-time OAuth but no refresh_token received");
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Html(r#"<h1>⚠️ OAuth Error</h1>
+                    <p>Google did not provide the necessary credentials for this connection.</p>
+                    <p>This can happen if you previously revoked access to this app.</p>
+                    <p><strong>Solution:</strong> Try again or contact support.</p>
+                    <a href="/youtube/manage">Try Again</a>"#.to_string())
+                ));
+            }
+        }
+    };
 
     // Calculate token expiry
     let token_expiry = chrono::Utc::now() + chrono::Duration::seconds(token_response.expires_in);
@@ -404,6 +444,8 @@ pub async fn youtube_oauth_callback(
                 subscriber_count = $6,
                 video_count = $7,
                 is_active = true,
+                requires_reauth = false,
+                reauth_reason = NULL,
                 updated_at = NOW()
             "#
         )

@@ -20,6 +20,7 @@ pub struct ConnectedYouTubeChannel {
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
     pub requires_reauth: Option<bool>,  // NEW: OAuth scope migration flag
+    pub reauth_reason: Option<String>,  // NEW: Human-readable reason for reauth requirement
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -33,6 +34,7 @@ pub struct ConnectedChannelResponse {
     pub video_count: Option<i64>,
     pub is_active: bool,
     pub requires_reauth: bool,
+    pub reauth_reason: Option<String>,  // NEW: Show reason to frontend
     pub connected_at: chrono::DateTime<chrono::Utc>,
 }
 
@@ -48,6 +50,7 @@ impl From<ConnectedYouTubeChannel> for ConnectedChannelResponse {
             video_count: channel.video_count,
             is_active: channel.is_active,
             requires_reauth: channel.requires_reauth.unwrap_or(false),
+            reauth_reason: channel.reauth_reason,  // NEW: Pass through to API response
             connected_at: channel.created_at,
         }
     }
