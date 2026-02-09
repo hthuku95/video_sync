@@ -22,15 +22,18 @@ RUN apt-get update && apt-get install -y \
     python3-pip \
     ca-certificates \
     libpq5 \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Install yt-dlp via pip with proper PATH configuration
-RUN pip3 install --no-cache-dir yt-dlp --break-system-packages && \
+# Install yt-dlp directly from GitHub (more reliable than pip)
+# CACHE BUSTER: 2026-02-09-v2
+RUN curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp && \
+    chmod a+rx /usr/local/bin/yt-dlp && \
+    ln -sf /usr/local/bin/yt-dlp /usr/bin/yt-dlp && \
     # Verify installation
     yt-dlp --version && \
-    # Create symlink if needed (defensive)
-    ln -sf /usr/local/bin/yt-dlp /usr/bin/yt-dlp && \
-    # Print location for debugging
+    ls -la /usr/bin/yt-dlp && \
+    ls -la /usr/local/bin/yt-dlp && \
     which yt-dlp && \
     echo "✅ yt-dlp installed successfully: $(yt-dlp --version)"
 
