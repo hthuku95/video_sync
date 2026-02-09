@@ -962,26 +962,43 @@ pub async fn youtube_management_page() -> Html<String> {
 
                 if (data.success && data.channels.length > 0) {
                     container.className = 'channels-grid';
-                    container.innerHTML = data.channels.map(channel => `
-                        <div class="channel-card">
+                    container.innerHTML = data.channels.map(channel => {
+                        const needsReauth = channel.requires_reauth || false;
+                        const isActive = channel.is_active !== false;
+                        const statusBadge = needsReauth
+                            ? '<span style="background: #dc3545; color: white; padding: 0.25rem 0.5rem; border-radius: 5px; font-size: 0.75rem; font-weight: 600;">⚠️ Expired</span>'
+                            : isActive
+                            ? '<span style="background: #10b981; color: white; padding: 0.25rem 0.5rem; border-radius: 5px; font-size: 0.75rem; font-weight: 600;">✓ Connected</span>'
+                            : '<span style="background: #6b7280; color: white; padding: 0.25rem 0.5rem; border-radius: 5px; font-size: 0.75rem; font-weight: 600;">Inactive</span>';
+
+                        return `
+                        <div class="channel-card" style="${needsReauth ? 'border-color: rgba(220, 53, 69, 0.5);' : ''}">
                             <div class="channel-header">
                                 ${channel.channel_thumbnail_url ?
                                     `<img src="${channel.channel_thumbnail_url}" class="channel-thumbnail" alt="${channel.channel_name}">` :
                                     '<div class="channel-thumbnail" style="background: linear-gradient(135deg, #3b82f6, #1d4ed8); display: flex; align-items: center; justify-content: center; font-size: 1.5rem;">📺</div>'
                                 }
-                                <div class="channel-info">
-                                    <h3>${channel.channel_name}</h3>
+                                <div class="channel-info" style="flex: 1;">
+                                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.25rem;">
+                                        <h3>${channel.channel_name}</h3>
+                                        ${statusBadge}
+                                    </div>
                                     <div class="channel-stats">
                                         ${channel.subscriber_count !== null ? channel.subscriber_count.toLocaleString() + ' subscribers' : 'N/A'} •
                                         ${channel.video_count !== null ? channel.video_count.toLocaleString() + ' videos' : 'N/A'}
                                     </div>
+                                    ${needsReauth && channel.reauth_reason ? `<div style="color: #f87171; font-size: 0.85rem; margin-top: 0.5rem;">⚠️ ${channel.reauth_reason}</div>` : ''}
                                 </div>
                             </div>
                             <div class="channel-actions">
-                                <button onclick="disconnectChannel(${channel.id}, '${channel.channel_name}')" class="btn btn-danger" style="flex: 1; padding: 0.5rem;">Disconnect</button>
+                                ${needsReauth ?
+                                    `<button onclick="reconnectChannel()" class="btn" style="flex: 1; padding: 0.5rem; background: linear-gradient(135deg, #10b981, #059669);">🔄 Reconnect</button>` :
+                                    `<button onclick="disconnectChannel(${channel.id}, '${channel.channel_name}')" class="btn btn-danger" style="flex: 1; padding: 0.5rem;">Disconnect</button>`
+                                }
                             </div>
                         </div>
-                    `).join('');
+                    `;
+                    }).join('');
                 } else {
                     container.className = 'empty-state';
                     container.innerHTML = `
@@ -1044,8 +1061,14 @@ pub async fn youtube_management_page() -> Html<String> {
             }
         }
 
+        async function reconnectChannel() {
+            // Same as connectNewChannel - initiates OAuth flow
+            // This will update the existing channel record (preserving linkages)
+            connectNewChannel();
+        }
+
         async function disconnectChannel(channelId, channelName) {
-            if (!confirm("Are you sure you want to disconnect " + channelName + "?")) {
+            if (!confirm("Are you sure you want to disconnect " + channelName + "?\n\n⚠️ Warning: This will also delete all clipping linkages for this channel.")) {
                 return;
             }
 
