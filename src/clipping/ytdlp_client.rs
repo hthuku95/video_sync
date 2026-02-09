@@ -40,9 +40,21 @@ impl YtDlpClient {
 
         use tokio::time::{timeout, Duration};
 
+        // Use absolute path to yt-dlp to avoid PATH issues in subprocess
+        // Try multiple locations in order of preference
+        let ytdlp_binary = if Path::new("/usr/bin/yt-dlp").exists() {
+            "/usr/bin/yt-dlp"
+        } else if Path::new("/usr/local/bin/yt-dlp").exists() {
+            "/usr/local/bin/yt-dlp"
+        } else {
+            "yt-dlp" // Fallback to PATH lookup
+        };
+
+        tracing::debug!("Using yt-dlp binary at: {}", ytdlp_binary);
+
         let output = timeout(
             Duration::from_secs(3600),  // 1 hour timeout for large videos
-            Command::new("yt-dlp")
+            Command::new(ytdlp_binary)
                 .arg("--format")
                 .arg("bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best")
                 .arg("--merge-output-format")
@@ -185,6 +197,35 @@ impl YtDlpClient {
 
     /// Check if yt-dlp is installed
     async fn check_ytdlp_installed() -> Result<(), String> {
+        use std::path::Path;
+
+        // Check multiple possible locations for yt-dlp binary
+        let possible_paths = [
+            "/usr/bin/yt-dlp",           // Symlink location from Dockerfile
+            "/usr/local/bin/yt-dlp",     // pip3 default install location
+        ];
+
+        // First, try to find yt-dlp at known locations
+        for path in &possible_paths {
+            if Path::new(path).exists() {
+                tracing::debug!("✅ Found yt-dlp at: {}", path);
+                // Verify it's executable
+                let output = Command::new(path)
+                    .arg("--version")
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status()
+                    .await;
+
+                if let Ok(status) = output {
+                    if status.success() {
+                        return Ok(());
+                    }
+                }
+            }
+        }
+
+        // Fallback: Try PATH lookup
         let output = Command::new("yt-dlp")
             .arg("--version")
             .stdout(Stdio::null())
@@ -193,11 +234,17 @@ impl YtDlpClient {
             .await;
 
         match output {
-            Ok(status) if status.success() => Ok(()),
-            _ => Err(
-                "yt-dlp is not installed. Install it with: pip install yt-dlp OR apt install yt-dlp"
-                    .to_string(),
-            ),
+            Ok(status) if status.success() => {
+                tracing::debug!("✅ Found yt-dlp via PATH");
+                Ok(())
+            }
+            _ => {
+                tracing::error!("❌ yt-dlp not found in any of: {:?} or PATH", possible_paths);
+                Err(
+                    "yt-dlp is not installed. Install it with: pip install yt-dlp OR apt install yt-dlp"
+                        .to_string()
+                )
+            },
         }
     }
 }
