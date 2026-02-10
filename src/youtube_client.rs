@@ -1381,6 +1381,10 @@ pub struct TokenRefreshResponse {
     pub access_token: String,
     pub expires_in: i64,
     pub token_type: String,
+    /// Google may return a new refresh token during refresh (token rotation)
+    /// If present, this MUST replace the old refresh token in storage
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refresh_token: Option<String>,
 }
 
 // ============================================================================

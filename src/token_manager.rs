@@ -129,18 +129,30 @@ impl TokenManager {
             channel.access_token = token_response.access_token.clone();
             channel.token_expiry = now + Duration::seconds(token_response.expires_in);
 
+            // CRITICAL: If Google provides a new refresh token, we MUST use it
+            // This is part of Google's token rotation security policy
+            if let Some(new_refresh_token) = &token_response.refresh_token {
+                tracing::info!(
+                    "🔄 Google provided new refresh token for channel: {} - updating storage",
+                    channel.channel_name
+                );
+                channel.refresh_token = new_refresh_token.clone();
+            }
+
             // Update database and clear requires_reauth flag on successful refresh
             sqlx::query(
                 "UPDATE connected_youtube_channels
                  SET access_token = $1,
                      token_expiry = $2,
+                     refresh_token = $3,
                      requires_reauth = false,
                      reauth_reason = NULL,
                      updated_at = NOW()
-                 WHERE id = $3",
+                 WHERE id = $4",
             )
             .bind(&channel.access_token)
             .bind(channel.token_expiry)
+            .bind(&channel.refresh_token)
             .bind(channel.id)
             .execute(&self.db_pool)
             .await?;
