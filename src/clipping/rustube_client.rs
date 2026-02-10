@@ -1,8 +1,8 @@
 // Pure Rust YouTube video downloader using rustube
 // Eliminates Python/yt-dlp dependency entirely
 
-use rustube::{Id, VideoFetcher};
-use std::path::Path;
+use rustube::{Id, Video};
+use std::path::{Path, PathBuf};
 use tokio::fs;
 
 /// Result of video download
@@ -48,33 +48,31 @@ impl RustubeClient {
 
         tracing::info!("🔍 Fetching video metadata for ID: {}", video_id);
 
-        // Fetch video information
+        // Fetch video using rustube
         let id = Id::from_raw(&video_id)
             .map_err(|e| format!("Invalid video ID {}: {}", video_id, e))?;
 
-        let video = VideoFetcher::from_id(id.into_owned())
-            .map_err(|e| format!("Failed to fetch video: {}", e))?
-            .fetch()
+        let video = Video::from_id(id.into_owned())
             .await
-            .map_err(|e| format!("Failed to fetch video metadata: {}", e))?;
+            .map_err(|e| format!("Failed to fetch video: {}", e))?;
 
-        let video_info = video.video_details();
-        let title = video_info.title.clone();
-        let duration_secs = video_info.length_seconds as f64;
+        let video_details = video.video_details();
+        let title = video_details.title.clone();
+        let duration_secs = video_details.length_seconds as f64;
 
         tracing::info!("📹 Video: {} ({}s)", title, duration_secs);
 
-        // Get the best video stream (with audio)
+        // Get all streams
         let streams = video.streams();
 
-        // Try to get a stream with both video and audio
+        // Try to get a stream with both video and audio (best quality)
         let stream = streams
             .iter()
             .filter(|s| s.includes_video_track && s.includes_audio_track)
             .max_by_key(|s| s.width.unwrap_or(0))
             .or_else(|| {
-                // Fallback: get best video stream (we'll need to merge audio separately)
-                tracing::warn!("⚠️ No combined video+audio stream found, using video-only stream");
+                // Fallback: get best video stream
+                tracing::warn!("⚠️ No combined video+audio stream found, using best video-only stream");
                 streams
                     .iter()
                     .filter(|s| s.includes_video_track)
@@ -96,19 +94,37 @@ impl RustubeClient {
         // Download the video stream
         use tokio::time::{timeout, Duration};
 
-        let download_future = stream.download();
+        tracing::info!("⏳ Starting download with 1-hour timeout");
 
-        let video_data = timeout(Duration::from_secs(3600), download_future)
+        // Download to a temporary location first, then move to final location
+        let temp_path = format!("{}.tmp", output_path);
+
+        let download_future = async {
+            // Download returns PathBuf to the downloaded file
+            let downloaded_path = stream
+                .download()
+                .await
+                .map_err(|e| format!("Failed to download video: {}", e))?;
+
+            // Move the downloaded file to our desired location
+            fs::rename(&downloaded_path, &temp_path)
+                .await
+                .map_err(|e| format!("Failed to move downloaded file: {}", e))?;
+
+            Ok::<(), String>(())
+        };
+
+        timeout(Duration::from_secs(3600), download_future)
             .await
             .map_err(|_| "Download timed out after 1 hour".to_string())?
-            .map_err(|e| format!("Failed to download video: {}", e))?;
+            .map_err(|e: String| e)?;
 
-        tracing::info!("💾 Saving video to: {}", output_path);
-
-        // Save to file
-        fs::write(output_path, video_data)
+        // Move from temp to final location
+        fs::rename(&temp_path, output_path)
             .await
-            .map_err(|e| format!("Failed to write video file: {}", e))?;
+            .map_err(|e| format!("Failed to save final file: {}", e))?;
+
+        tracing::info!("💾 Saved video to: {}", output_path);
 
         // Validate downloaded file
         Self::validate_download(output_path).await?;
@@ -133,9 +149,7 @@ impl RustubeClient {
         let id = Id::from_raw(&video_id)
             .map_err(|e| format!("Invalid video ID: {}", e))?;
 
-        let video = VideoFetcher::from_id(id.into_owned())
-            .map_err(|e| format!("Failed to fetch video: {}", e))?
-            .fetch()
+        let video = Video::from_id(id.into_owned())
             .await
             .map_err(|e| format!("Failed to fetch video metadata: {}", e))?;
 
