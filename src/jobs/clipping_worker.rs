@@ -39,26 +39,58 @@ impl ClippingWorker {
         // Step 1: Auto-retry failed jobs that are eligible for retry
         self.auto_retry_failed_jobs().await?;
 
-        // Step 2: Fetch pending jobs (limit to avoid overload)
+        // Step 2: Fetch pending AND failed jobs (limit to avoid overload)
+        // Note: Failed jobs are also processed directly (in addition to auto-retry)
         let pending_jobs: Vec<i32> = sqlx::query_scalar(
             "SELECT id FROM clipping_jobs
-             WHERE status = 'pending'
-             ORDER BY created_at ASC
+             WHERE status IN ('pending', 'failed')
+             ORDER BY
+               CASE WHEN status = 'pending' THEN 0 ELSE 1 END,
+               created_at ASC
              LIMIT 5",
         )
         .fetch_all(&self.app_state.db_pool)
         .await
-        .map_err(|e| format!("Failed to fetch pending jobs: {}", e))?;
+        .map_err(|e| format!("Failed to fetch jobs: {}", e))?;
 
         if pending_jobs.is_empty() {
-            tracing::debug!("No pending clipping jobs");
+            tracing::debug!("No pending or failed clipping jobs");
             return Ok(());
         }
 
-        tracing::info!("📋 Found {} pending clipping jobs", pending_jobs.len());
+        tracing::info!("📋 Found {} jobs to process (pending + failed)", pending_jobs.len());
 
-        // Process each job
+        // Process each job (both pending and failed)
         for job_id in pending_jobs {
+            // Check current status before processing
+            let current_status: Option<String> = sqlx::query_scalar(
+                "SELECT status FROM clipping_jobs WHERE id = $1"
+            )
+            .bind(job_id)
+            .fetch_optional(&self.app_state.db_pool)
+            .await
+            .ok()
+            .flatten();
+
+            if let Some(status) = current_status {
+                if status == "failed" {
+                    tracing::info!("🔄 Retrying failed job {}", job_id);
+                    // Reset to pending before executing
+                    let _ = sqlx::query(
+                        "UPDATE clipping_jobs
+                         SET status = 'pending',
+                             error_message = NULL,
+                             progress_percent = 0,
+                             current_step = 'queued',
+                             updated_at = NOW()
+                         WHERE id = $1"
+                    )
+                    .bind(job_id)
+                    .execute(&self.app_state.db_pool)
+                    .await;
+                }
+            }
+
             tracing::info!("▶️  Executing clipping job {}", job_id);
 
             match execute_clipping_job(job_id, self.app_state.clone()).await {
