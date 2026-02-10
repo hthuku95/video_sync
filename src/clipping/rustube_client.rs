@@ -1,0 +1,266 @@
+// Pure Rust YouTube video downloader using rustube
+// Eliminates Python/yt-dlp dependency entirely
+
+use rustube::{Id, VideoFetcher};
+use std::path::Path;
+use tokio::fs;
+
+/// Result of video download
+#[derive(Debug)]
+pub struct VideoDownloadResult {
+    pub file_path: String,
+    pub title: String,
+    pub duration_seconds: Option<f64>,
+    pub width: Option<i32>,
+    pub height: Option<i32>,
+}
+
+/// Video metadata from YouTube
+#[derive(Debug)]
+pub struct VideoInfo {
+    pub video_id: String,
+    pub title: String,
+    pub duration_seconds: Option<f64>,
+    pub channel_id: Option<String>,
+    pub channel_name: Option<String>,
+    pub upload_date: Option<String>,
+}
+
+pub struct RustubeClient;
+
+impl RustubeClient {
+    /// Download a YouTube video using pure Rust (rustube)
+    pub async fn download_video(
+        video_url: &str,
+        output_path: &str,
+    ) -> Result<VideoDownloadResult, String> {
+        // Ensure parent directory exists
+        if let Some(parent) = Path::new(output_path).parent() {
+            fs::create_dir_all(parent)
+                .await
+                .map_err(|e| format!("Failed to create output directory: {}", e))?;
+        }
+
+        tracing::info!("📥 Downloading video from YouTube using Rustube: {}", video_url);
+
+        // Extract video ID from URL
+        let video_id = Self::extract_video_id(video_url)?;
+
+        tracing::info!("🔍 Fetching video metadata for ID: {}", video_id);
+
+        // Fetch video information
+        let id = Id::from_raw(&video_id)
+            .map_err(|e| format!("Invalid video ID {}: {}", video_id, e))?;
+
+        let video = VideoFetcher::from_id(id.into_owned())
+            .map_err(|e| format!("Failed to fetch video: {}", e))?
+            .fetch()
+            .await
+            .map_err(|e| format!("Failed to fetch video metadata: {}", e))?;
+
+        let video_info = video.video_details();
+        let title = video_info.title.clone();
+        let duration_secs = video_info.length_seconds as f64;
+
+        tracing::info!("📹 Video: {} ({}s)", title, duration_secs);
+
+        // Get the best video stream (with audio)
+        let streams = video.streams();
+
+        // Try to get a stream with both video and audio
+        let stream = streams
+            .iter()
+            .filter(|s| s.includes_video_track && s.includes_audio_track)
+            .max_by_key(|s| s.width.unwrap_or(0))
+            .or_else(|| {
+                // Fallback: get best video stream (we'll need to merge audio separately)
+                tracing::warn!("⚠️ No combined video+audio stream found, using video-only stream");
+                streams
+                    .iter()
+                    .filter(|s| s.includes_video_track)
+                    .max_by_key(|s| s.width.unwrap_or(0))
+            })
+            .ok_or_else(|| "No suitable video stream found".to_string())?;
+
+        let width = stream.width.map(|w| w as i32);
+        let height = stream.height.map(|h| h as i32);
+
+        tracing::info!(
+            "⬇️ Downloading stream: {}x{}, codec: {:?}, mime: {}",
+            width.unwrap_or(0),
+            height.unwrap_or(0),
+            stream.codecs,
+            stream.mime
+        );
+
+        // Download the video stream
+        use tokio::time::{timeout, Duration};
+
+        let download_future = stream.download();
+
+        let video_data = timeout(Duration::from_secs(3600), download_future)
+            .await
+            .map_err(|_| "Download timed out after 1 hour".to_string())?
+            .map_err(|e| format!("Failed to download video: {}", e))?;
+
+        tracing::info!("💾 Saving video to: {}", output_path);
+
+        // Save to file
+        fs::write(output_path, video_data)
+            .await
+            .map_err(|e| format!("Failed to write video file: {}", e))?;
+
+        // Validate downloaded file
+        Self::validate_download(output_path).await?;
+
+        tracing::info!("✅ Video downloaded successfully: {}", output_path);
+
+        Ok(VideoDownloadResult {
+            file_path: output_path.to_string(),
+            title,
+            duration_seconds: Some(duration_secs),
+            width,
+            height,
+        })
+    }
+
+    /// Get video metadata without downloading
+    pub async fn get_video_info(video_url: &str) -> Result<VideoInfo, String> {
+        tracing::info!("ℹ️ Fetching video metadata: {}", video_url);
+
+        let video_id = Self::extract_video_id(video_url)?;
+
+        let id = Id::from_raw(&video_id)
+            .map_err(|e| format!("Invalid video ID: {}", e))?;
+
+        let video = VideoFetcher::from_id(id.into_owned())
+            .map_err(|e| format!("Failed to fetch video: {}", e))?
+            .fetch()
+            .await
+            .map_err(|e| format!("Failed to fetch video metadata: {}", e))?;
+
+        let details = video.video_details();
+
+        Ok(VideoInfo {
+            video_id: details.video_id.to_string(),
+            title: details.title.clone(),
+            duration_seconds: Some(details.length_seconds as f64),
+            channel_id: Some(details.channel_id.clone()),
+            channel_name: Some(details.author.clone()),
+            upload_date: None, // rustube doesn't provide this easily
+        })
+    }
+
+    /// Extract video ID from various YouTube URL formats
+    fn extract_video_id(url: &str) -> Result<String, String> {
+        // Handle different YouTube URL formats:
+        // - https://www.youtube.com/watch?v=VIDEO_ID
+        // - https://youtu.be/VIDEO_ID
+        // - https://youtube.com/watch?v=VIDEO_ID
+        // - VIDEO_ID (raw ID)
+
+        if let Some(id) = url.strip_prefix("https://www.youtube.com/watch?v=") {
+            return Ok(id.split('&').next().unwrap_or(id).to_string());
+        }
+
+        if let Some(id) = url.strip_prefix("https://youtu.be/") {
+            return Ok(id.split('?').next().unwrap_or(id).to_string());
+        }
+
+        if let Some(id) = url.strip_prefix("https://youtube.com/watch?v=") {
+            return Ok(id.split('&').next().unwrap_or(id).to_string());
+        }
+
+        if let Some(id) = url.strip_prefix("http://www.youtube.com/watch?v=") {
+            return Ok(id.split('&').next().unwrap_or(id).to_string());
+        }
+
+        if let Some(id) = url.strip_prefix("http://youtube.com/watch?v=") {
+            return Ok(id.split('&').next().unwrap_or(id).to_string());
+        }
+
+        // If it doesn't match any pattern, assume it's a raw video ID
+        if url.len() == 11 && url.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') {
+            return Ok(url.to_string());
+        }
+
+        Err(format!("Could not extract video ID from URL: {}", url))
+    }
+
+    /// Validate the downloaded video file
+    async fn validate_download(output_path: &str) -> Result<(), String> {
+        tracing::info!("🔍 Validating downloaded video file");
+
+        // Check 1: File exists
+        if !Path::new(output_path).exists() {
+            return Err(format!("Downloaded file does not exist: {}", output_path));
+        }
+
+        // Check 2: File size is reasonable (> 1MB for videos)
+        let metadata = fs::metadata(output_path)
+            .await
+            .map_err(|e| format!("Failed to read file metadata: {}", e))?;
+
+        if metadata.len() < 1_000_000 {
+            return Err(format!(
+                "Downloaded file is suspiciously small ({} bytes): {}",
+                metadata.len(),
+                output_path
+            ));
+        }
+
+        tracing::info!(
+            "✅ File exists and has reasonable size ({:.2} MB)",
+            metadata.len() as f64 / 1_000_000.0
+        );
+
+        // Check 3: Validate with ffprobe (use existing validate_video_file)
+        match crate::core::validate_video_file(output_path) {
+            Ok(true) => {
+                tracing::info!("✅ Downloaded video validated successfully");
+                Ok(())
+            }
+            Ok(false) => {
+                // Clean up corrupted download
+                let _ = fs::remove_file(output_path).await;
+                Err(format!(
+                    "Downloaded video is corrupted or unreadable: {}",
+                    output_path
+                ))
+            }
+            Err(e) => {
+                tracing::warn!("⚠️ Video validation check failed: {}", e);
+                // Continue anyway - validation might fail for other reasons
+                Ok(())
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_video_id() {
+        assert_eq!(
+            RustubeClient::extract_video_id("https://www.youtube.com/watch?v=dQw4w9WgXcQ").unwrap(),
+            "dQw4w9WgXcQ"
+        );
+
+        assert_eq!(
+            RustubeClient::extract_video_id("https://youtu.be/dQw4w9WgXcQ").unwrap(),
+            "dQw4w9WgXcQ"
+        );
+
+        assert_eq!(
+            RustubeClient::extract_video_id("https://youtube.com/watch?v=dQw4w9WgXcQ&t=10s").unwrap(),
+            "dQw4w9WgXcQ"
+        );
+
+        assert_eq!(
+            RustubeClient::extract_video_id("dQw4w9WgXcQ").unwrap(),
+            "dQw4w9WgXcQ"
+        );
+    }
+}

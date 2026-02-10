@@ -4,7 +4,7 @@ use crate::clipping::{
     ai_clipper::{AiClipper, ExtractedClipData},
     models::{ChannelLinkage, ClippingConfig, ClippingJob},
     uploader::ClipUploader,
-    ytdlp_client::YtDlpClient,
+    rustube_client::RustubeClient, // Using pure Rust client (no Python dependency)
 };
 use crate::models::youtube::ConnectedYouTubeChannel;
 use crate::services::VideoVectorizationService;
@@ -27,12 +27,12 @@ pub async fn execute_clipping_job(
     // Update job status
     update_job_status(job_id, "downloading", 10, None, &app_state.db_pool).await?;
 
-    // Step 1: Download video using yt-dlp
+    // Step 1: Download video using Rustube (pure Rust, no Python dependency)
     let video_url = format!("https://youtube.com/watch?v={}", job.source_video_id);
     let video_path = format!("downloads/clipping_{}_{}.mp4", job_id, job.source_video_id);
 
     tracing::info!("Downloading video: {}", video_url);
-    let download_result = YtDlpClient::download_video(&video_url, &video_path).await?;
+    let download_result = RustubeClient::download_video(&video_url, &video_path).await?;
 
     // Double-check file is readable before proceeding (additional safety layer)
     if !std::path::Path::new(&video_path).exists() {
