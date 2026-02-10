@@ -2,6 +2,7 @@
 // Handles monitoring external channels, downloading videos, AI clip extraction, and posting to YouTube
 
 pub mod models;
+pub mod apify_client;     // Primary downloader (Apify + yt-dlp fallback)
 pub mod ytdlp_client;
 pub mod rustube_client; // Pure Rust YouTube downloader (no Python dependency)
 pub mod monitor;

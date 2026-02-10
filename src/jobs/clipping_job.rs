@@ -4,7 +4,7 @@ use crate::clipping::{
     ai_clipper::{AiClipper, ExtractedClipData},
     models::{ChannelLinkage, ClippingConfig, ClippingJob},
     uploader::ClipUploader,
-    rustube_client::RustubeClient, // Using pure Rust client (no Python dependency)
+    apify_client::ApifyClient, // Primary downloader (Apify + yt-dlp fallback)
 };
 use crate::models::youtube::ConnectedYouTubeChannel;
 use crate::services::VideoVectorizationService;
@@ -27,12 +27,21 @@ pub async fn execute_clipping_job(
     // Update job status
     update_job_status(job_id, "downloading", 10, None, &app_state.db_pool).await?;
 
-    // Step 1: Download video using Rustube (pure Rust, no Python dependency)
+    // Step 1: Download video using Apify (with yt-dlp fallback)
     let video_url = format!("https://youtube.com/watch?v={}", job.source_video_id);
     let video_path = format!("downloads/clipping_{}_{}.mp4", job_id, job.source_video_id);
 
+    // Get Apify credentials from environment
+    let apify_token = std::env::var("APIFY_TOKEN")
+        .map_err(|_| "APIFY_TOKEN not configured")?;
+    let apify_actor = std::env::var("APIFY_YOUTUBE_CLIENT_ACTOR")
+        .map_err(|_| "APIFY_YOUTUBE_CLIENT_ACTOR not configured")?;
+
+    // Initialize Apify client
+    let apify_client = ApifyClient::new(apify_token, apify_actor);
+
     tracing::info!("Downloading video: {}", video_url);
-    let download_result = RustubeClient::download_video(&video_url, &video_path).await?;
+    let download_result = apify_client.download_video(&video_url, &video_path).await?;
 
     // Double-check file is readable before proceeding (additional safety layer)
     if !std::path::Path::new(&video_path).exists() {

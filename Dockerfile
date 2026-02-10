@@ -15,13 +15,22 @@ RUN cargo build --release
 # Stage 2: Runtime image with system dependencies
 FROM debian:bookworm-slim
 
-# Install system dependencies
-# Note: Python/yt-dlp NO LONGER REQUIRED - using pure Rust solution (rustube)
+# Install system dependencies + yt-dlp (for fallback)
 RUN apt-get update && apt-get install -y \
     ffmpeg \
     ca-certificates \
     libpq5 \
+    python3 \
+    curl \
     && rm -rf /var/lib/apt/lists/*
+
+# Install yt-dlp from GitHub (fallback downloader)
+RUN curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp \
+    -o /usr/local/bin/yt-dlp \
+    && chmod a+rx /usr/local/bin/yt-dlp
+
+# Verify installation
+RUN yt-dlp --version || echo "yt-dlp not found (fallback will fail)"
 
 # Copy compiled binary from builder
 COPY --from=builder /app/target/release/video_editor /usr/local/bin/video_editor
