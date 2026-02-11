@@ -1,4 +1,4 @@
-// Apify YouTube downloader with yt-dlp fallback
+// Apify YouTube downloader with rusty_ytdl fallback (pure Rust, no Python)
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use tokio::fs;
@@ -7,6 +7,7 @@ use tokio::io::AsyncWriteExt;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use crate::clipping::rusty_ytdl_client::RustyYtdlClient;
 
 #[derive(Debug)]
 pub struct VideoDownloadResult {
@@ -289,7 +290,7 @@ impl ApifyClient {
         }
     }
 
-    /// Download video using Apify (primary) with yt-dlp fallback
+    /// Download video using Apify (primary) with rusty_ytdl fallback (pure Rust)
     pub async fn download_video(
         &self,
         video_url: &str,
@@ -316,10 +317,10 @@ impl ApifyClient {
                 breaker.get_state()
             };
             tracing::warn!(
-                "⚠️ Circuit breaker {:?} - Skipping Apify, using yt-dlp directly",
+                "⚠️ Circuit breaker {:?} - Skipping Apify, using rusty_ytdl directly",
                 state
             );
-            return self.download_via_ytdlp(video_url, output_path).await;
+            return RustyYtdlClient::download_video(video_url, output_path).await;
         }
 
         // Try Apify first
@@ -340,12 +341,12 @@ impl ApifyClient {
                 }
 
                 tracing::warn!("⚠️ Apify download failed: {}", e);
-                tracing::info!("🔄 Falling back to yt-dlp...");
+                tracing::info!("🔄 Falling back to rusty_ytdl (pure Rust downloader)...");
             }
         }
 
-        // Fallback to yt-dlp
-        self.download_via_ytdlp(video_url, output_path).await
+        // Fallback to rusty_ytdl (pure Rust, no Python dependency)
+        RustyYtdlClient::download_video(video_url, output_path).await
     }
 
     /// Download via Apify API (with residential proxies)
@@ -528,90 +529,8 @@ impl ApifyClient {
         })
     }
 
-    /// Fallback: Download via yt-dlp subprocess
-    async fn download_via_ytdlp(
-        &self,
-        video_url: &str,
-        output_path: &str,
-    ) -> Result<VideoDownloadResult, String> {
-        use tokio::process::Command;
-        use std::process::Stdio;
-
-        tracing::info!("🔧 Using yt-dlp fallback for: {}", video_url);
-
-        // First get video info
-        let info = Self::get_video_info_ytdlp(video_url).await?;
-
-        // Download video
-        let mut cmd = Command::new("yt-dlp");
-        cmd.args([
-            "--format", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
-            "--merge-output-format", "mp4",
-            "--output", output_path,
-            "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "--retries", "3",
-            "--no-playlist",
-            "--socket-timeout", "600",
-            video_url,
-        ]);
-
-        cmd.stdout(Stdio::piped());
-        cmd.stderr(Stdio::piped());
-
-        let output = timeout(Duration::from_secs(3600), cmd.output())
-            .await
-            .map_err(|_| "yt-dlp timed out after 1 hour".to_string())?
-            .map_err(|e| format!("Failed to execute yt-dlp: {}", e))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(format!("yt-dlp failed: {}", stderr));
-        }
-
-        Self::validate_download(output_path).await?;
-
-        Ok(VideoDownloadResult {
-            file_path: output_path.to_string(),
-            title: info.title,
-            duration_seconds: info.duration_seconds,
-            width: None,
-            height: None,
-        })
-    }
-
-    /// Get video info via yt-dlp
-    async fn get_video_info_ytdlp(video_url: &str) -> Result<VideoInfo, String> {
-        use tokio::process::Command;
-        use std::process::Stdio;
-        use serde_json::Value;
-
-        let mut cmd = Command::new("yt-dlp");
-        cmd.args(["--dump-json", "--no-playlist", video_url]);
-        cmd.stdout(Stdio::piped());
-        cmd.stderr(Stdio::piped());
-
-        let output = cmd
-            .output()
-            .await
-            .map_err(|e| format!("Failed to get video info: {}", e))?;
-
-        if !output.status.success() {
-            return Err("Failed to fetch video metadata".to_string());
-        }
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let json: Value = serde_json::from_str(&stdout)
-            .map_err(|e| format!("Failed to parse metadata: {}", e))?;
-
-        Ok(VideoInfo {
-            video_id: json["id"].as_str().unwrap_or("").to_string(),
-            title: json["title"].as_str().unwrap_or("Unknown").to_string(),
-            duration_seconds: json["duration"].as_f64(),
-            channel_id: json["channel_id"].as_str().map(|s| s.to_string()),
-            channel_name: json["uploader"].as_str().map(|s| s.to_string()),
-            upload_date: json["upload_date"].as_str().map(|s| s.to_string()),
-        })
-    }
+    // NOTE: yt-dlp fallback methods removed - now using rusty_ytdl (pure Rust)
+    // See RustyYtdlClient in rusty_ytdl_client.rs for the replacement implementation
 
     /// Validate downloaded video file
     async fn validate_download(output_path: &str) -> Result<(), String> {
@@ -652,9 +571,9 @@ impl ApifyClient {
         }
     }
 
-    /// Get video info (use Apify or fallback)
+    /// Get video info (use rusty_ytdl - pure Rust, no Apify needed for metadata)
     pub async fn get_video_info(&self, video_url: &str) -> Result<VideoInfo, String> {
-        // For simplicity, use yt-dlp for metadata (faster than running full Apify job)
-        Self::get_video_info_ytdlp(video_url).await
+        // Use rusty_ytdl for metadata (faster than running full Apify job, pure Rust)
+        RustyYtdlClient::get_video_info(video_url).await
     }
 }
