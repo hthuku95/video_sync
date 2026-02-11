@@ -1,30 +1,12 @@
 // Pure Rust YouTube video downloader using rustube
-// Eliminates Python/yt-dlp dependency entirely
+// Fallback strategy #1 in the 5-tier system (no external dependencies)
 
 use rustube::{Id, Video};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use tokio::fs;
 
-/// Result of video download
-#[derive(Debug)]
-pub struct VideoDownloadResult {
-    pub file_path: String,
-    pub title: String,
-    pub duration_seconds: Option<f64>,
-    pub width: Option<i32>,
-    pub height: Option<i32>,
-}
-
-/// Video metadata from YouTube
-#[derive(Debug)]
-pub struct VideoInfo {
-    pub video_id: String,
-    pub title: String,
-    pub duration_seconds: Option<f64>,
-    pub channel_id: Option<String>,
-    pub channel_name: Option<String>,
-    pub upload_date: Option<String>,
-}
+// Use shared types from apify_client to ensure compatibility
+use crate::clipping::apify_client::{VideoDownloadResult, VideoInfo};
 
 pub struct RustubeClient;
 

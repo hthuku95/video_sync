@@ -36,4 +36,7 @@ thiserror = "1.0"
 url = "2.5"
 urlencoding = "2.1"
 rusty_ytdl = "0.7.4"
+rustube = "0.6.0"                    # Pure Rust YouTube downloader (fallback #1)
+# yt-dlp is used via CLI in ytdlp_client.rs (no crate needed)
+rust-yt-downloader = "0.1"           # Feature-rich yt-dlp wrapper (fallback #3)
 

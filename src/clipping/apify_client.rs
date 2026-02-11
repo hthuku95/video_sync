@@ -7,7 +7,12 @@ use tokio::io::AsyncWriteExt;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+
+// Import all downloader clients for 5-tier fallback system
 use crate::clipping::rusty_ytdl_client::RustyYtdlClient;
+use crate::clipping::rustube_client::RustubeClient;
+use crate::clipping::ytdlp_client::YtDlpClient;
+use crate::clipping::rust_yt_downloader_client::RustYtDownloaderClient;
 
 #[derive(Debug)]
 pub struct VideoDownloadResult {
@@ -290,7 +295,8 @@ impl ApifyClient {
         }
     }
 
-    /// Download video using Apify (primary) with rusty_ytdl fallback (pure Rust)
+    /// Download video using 5-tier fallback system
+    /// Strategy order: Apify → rustube → yt-dlp → rust-yt-downloader → rusty_ytdl
     pub async fn download_video(
         &self,
         video_url: &str,
@@ -303,50 +309,85 @@ impl ApifyClient {
                 .map_err(|e| format!("Failed to create output directory: {}", e))?;
         }
 
-        tracing::info!("📥 Attempting video download: {}", video_url);
+        tracing::info!("📥 Attempting video download with 5-tier fallback system: {}", video_url);
 
-        // Check circuit breaker before attempting Apify
+        // STRATEGY 1: Apify (with circuit breaker)
         let should_try_apify = {
             let mut breaker = self.circuit_breaker.lock().unwrap();
             breaker.should_allow_request()
         };
 
-        if !should_try_apify {
-            let state = {
-                let breaker = self.circuit_breaker.lock().unwrap();
-                breaker.get_state()
-            };
-            tracing::warn!(
-                "⚠️ Circuit breaker {:?} - Skipping Apify, using rusty_ytdl directly",
-                state
-            );
-            return RustyYtdlClient::download_video(video_url, output_path).await;
-        }
-
-        // Try Apify first
-        match self.download_via_apify(video_url, output_path).await {
-            Ok(result) => {
-                tracing::info!("✅ Apify download successful");
-                // Record success in circuit breaker
-                let mut breaker = self.circuit_breaker.lock().unwrap();
-                breaker.record_success();
-                return Ok(result);
-            }
-            Err(e) => {
-                // Record failure in circuit breaker
-                let is_auth_error = e.contains("403") || e.contains("401");
-                {
+        if should_try_apify {
+            tracing::info!("🔄 Trying Strategy 1 (Apify - paid service)...");
+            match self.download_via_apify(video_url, output_path).await {
+                Ok(result) => {
+                    tracing::info!("✅ Strategy 1 (Apify) succeeded");
+                    let mut breaker = self.circuit_breaker.lock().unwrap();
+                    breaker.record_success();
+                    return Ok(result);
+                }
+                Err(e) => {
+                    tracing::warn!("⚠️ Strategy 1 (Apify) failed: {}", e);
+                    let is_auth_error = e.contains("403") || e.contains("401");
                     let mut breaker = self.circuit_breaker.lock().unwrap();
                     breaker.record_failure(is_auth_error);
                 }
+            }
+        } else {
+            tracing::info!("⏭️ Skipping Strategy 1 (Apify) - circuit breaker open");
+        }
 
-                tracing::warn!("⚠️ Apify download failed: {}", e);
-                tracing::info!("🔄 Falling back to rusty_ytdl (pure Rust downloader)...");
+        // STRATEGY 2: rustube (pure Rust, no external deps)
+        tracing::info!("🔄 Trying Strategy 2 (rustube - pure Rust)...");
+        match RustubeClient::download_video(video_url, output_path).await {
+            Ok(result) => {
+                tracing::info!("✅ Strategy 2 (rustube) succeeded");
+                return Ok(result);
+            }
+            Err(e) => {
+                tracing::warn!("⚠️ Strategy 2 (rustube) failed: {}", e);
             }
         }
 
-        // Fallback to rusty_ytdl (pure Rust, no Python dependency)
-        RustyYtdlClient::download_video(video_url, output_path).await
+        // STRATEGY 3: yt-dlp (CLI wrapper, battle-tested)
+        tracing::info!("🔄 Trying Strategy 3 (yt-dlp CLI wrapper)...");
+        match YtDlpClient::download_video(video_url, output_path).await {
+            Ok(result) => {
+                tracing::info!("✅ Strategy 3 (yt-dlp) succeeded");
+                return Ok(result);
+            }
+            Err(e) => {
+                tracing::warn!("⚠️ Strategy 3 (yt-dlp) failed: {}", e);
+            }
+        }
+
+        // STRATEGY 4: rust-yt-downloader (feature-rich yt-dlp wrapper)
+        tracing::info!("🔄 Trying Strategy 4 (rust-yt-downloader)...");
+        match RustYtDownloaderClient::download_video(video_url, output_path).await {
+            Ok(result) => {
+                tracing::info!("✅ Strategy 4 (rust-yt-downloader) succeeded");
+                return Ok(result);
+            }
+            Err(e) => {
+                tracing::warn!("⚠️ Strategy 4 (rust-yt-downloader) failed: {}", e);
+            }
+        }
+
+        // STRATEGY 5: rusty_ytdl (last resort, pure Rust)
+        tracing::info!("🔄 Trying Strategy 5 (rusty_ytdl - last resort)...");
+        match RustyYtdlClient::download_video(video_url, output_path).await {
+            Ok(result) => {
+                tracing::info!("✅ Strategy 5 (rusty_ytdl) succeeded");
+                return Ok(result);
+            }
+            Err(e) => {
+                tracing::error!("❌ All 5 download strategies failed!");
+                return Err(format!(
+                    "All download strategies exhausted. Last error (rusty_ytdl): {}",
+                    e
+                ));
+            }
+        }
     }
 
     /// Download via Apify API (with residential proxies)

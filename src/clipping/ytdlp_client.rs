@@ -1,19 +1,12 @@
 // yt-dlp client wrapper using command-line tool
-// Calls yt-dlp executable directly to avoid dependency conflicts
+// Fallback strategy #2 in the 5-tier system (CLI wrapper, battle-tested)
 
 use std::path::Path;
 use std::process::Stdio;
 use tokio::process::Command;
 
-/// Result of video download
-#[derive(Debug)]
-pub struct VideoDownloadResult {
-    pub file_path: String,
-    pub title: String,
-    pub duration_seconds: Option<f64>,
-    pub width: Option<i32>,
-    pub height: Option<i32>,
-}
+// Use shared types from apify_client to ensure compatibility
+use crate::clipping::apify_client::{VideoDownloadResult, VideoInfo};
 
 pub struct YtDlpClient;
 
@@ -249,15 +242,4 @@ impl YtDlpClient {
             },
         }
     }
-}
-
-/// Video metadata from yt-dlp
-#[derive(Debug)]
-pub struct VideoInfo {
-    pub video_id: String,
-    pub title: String,
-    pub duration_seconds: Option<f64>,
-    pub channel_id: Option<String>,
-    pub channel_name: Option<String>,
-    pub upload_date: Option<String>,
 }
