@@ -12,6 +12,26 @@ pub async fn process_clipping_jobs_once(app_state: &Arc<AppState>) -> Result<(),
     worker.process_pending_jobs().await
 }
 
+/// Run the clipping worker in a background loop (spawnable)
+pub async fn run_clipping_worker_loop(app_state: Arc<AppState>) {
+    tracing::info!("🔧 Clipping worker started (polling every 60s)");
+    let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(60));
+
+    loop {
+        interval.tick().await;
+
+        // Process jobs using the function-based approach
+        match process_clipping_jobs_once(&app_state).await {
+            Ok(_) => {
+                // Success is logged by the worker itself
+            }
+            Err(e) => {
+                tracing::error!("❌ Clipping worker error: {}", e);
+            }
+        }
+    }
+}
+
 pub struct ClippingWorker {
     app_state: Arc<AppState>,
     poll_interval_seconds: u64,
@@ -56,17 +76,18 @@ impl ClippingWorker {
 
         // Step 3: Fetch pending AND failed jobs (limit to avoid overload)
         // Note: Failed jobs are also processed directly (in addition to auto-retry)
-        let pending_jobs: Vec<i32> = sqlx::query_scalar(
-            "SELECT id FROM clipping_jobs
-             WHERE status IN ('pending', 'failed')
-             ORDER BY
-               CASE WHEN status = 'pending' THEN 0 ELSE 1 END,
-               created_at ASC
-             LIMIT 5",
-        )
-        .fetch_all(&self.app_state.db_pool)
-        .await
-        .map_err(|e| format!("Failed to fetch jobs: {}", e))?;
+        let query = String::from(
+            "SELECT id FROM clipping_jobs \
+             WHERE status IN ('pending', 'failed') \
+             ORDER BY \
+               CASE WHEN status = 'pending' THEN 0 ELSE 1 END, \
+               created_at ASC \
+             LIMIT 5"
+        );
+        let pending_jobs: Vec<i32> = sqlx::query_scalar(&query)
+            .fetch_all(&self.app_state.db_pool)
+            .await
+            .map_err(|e| format!("Failed to fetch jobs: {}", e))?;
 
         if pending_jobs.is_empty() {
             tracing::debug!("No pending or failed clipping jobs");
@@ -78,33 +99,33 @@ impl ClippingWorker {
         // Process each job (both pending and failed)
         for job_id in pending_jobs {
             // Check current status before processing
-            let current_status: Option<String> = sqlx::query_scalar(
-                "SELECT status FROM clipping_jobs WHERE id = $1"
-            )
-            .bind(job_id)
-            .fetch_optional(&self.app_state.db_pool)
-            .await
-            .ok()
-            .flatten();
+            let status_query = String::from("SELECT status FROM clipping_jobs WHERE id = $1");
+            let current_status: Option<String> = sqlx::query_scalar(&status_query)
+                .bind(job_id)
+                .fetch_optional(&self.app_state.db_pool)
+                .await
+                .ok()
+                .flatten();
 
             if let Some(status) = current_status {
                 if status == "failed" {
                     tracing::info!("🔄 Retrying failed job {}", job_id);
                     // Reset to pending before executing and track retry
-                    let _ = sqlx::query(
-                        "UPDATE clipping_jobs
-                         SET status = 'pending',
-                             error_message = NULL,
-                             progress_percent = 0,
-                             current_step = 'queued',
-                             updated_at = NOW(),
-                             retry_count = COALESCE(retry_count, 0) + 1,
-                             last_retry_at = NOW()
+                    let reset_query = String::from(
+                        "UPDATE clipping_jobs \
+                         SET status = 'pending', \
+                             error_message = NULL, \
+                             progress_percent = 0, \
+                             current_step = 'queued', \
+                             updated_at = NOW(), \
+                             retry_count = COALESCE(retry_count, 0) + 1, \
+                             last_retry_at = NOW() \
                          WHERE id = $1"
-                    )
-                    .bind(job_id)
-                    .execute(&self.app_state.db_pool)
-                    .await;
+                    );
+                    let _ = sqlx::query(&reset_query)
+                        .bind(job_id)
+                        .execute(&self.app_state.db_pool)
+                        .await;
                 }
             }
 
@@ -118,15 +139,16 @@ impl ClippingWorker {
                     tracing::error!("❌ Job {} failed: {}", job_id, e);
 
                     // Mark job as failed
-                    let _ = sqlx::query(
-                        "UPDATE clipping_jobs
-                         SET status = 'failed', error_message = $1, completed_at = NOW()
-                         WHERE id = $2",
-                    )
-                    .bind(&e)
-                    .bind(job_id)
-                    .execute(&self.app_state.db_pool)
-                    .await;
+                    let fail_query = String::from(
+                        "UPDATE clipping_jobs \
+                         SET status = 'failed', error_message = $1, completed_at = NOW() \
+                         WHERE id = $2"
+                    );
+                    let _ = sqlx::query(&fail_query)
+                        .bind(&e)
+                        .bind(job_id)
+                        .execute(&self.app_state.db_pool)
+                        .await;
                 }
             }
         }
@@ -142,17 +164,18 @@ impl ClippingWorker {
     /// - Job has been failed for at least 5 minutes (to avoid immediate retry loops)
     async fn auto_retry_failed_jobs(&self) -> Result<(), String> {
         // Find failed jobs eligible for retry
-        let retry_job_ids: Vec<i32> = sqlx::query_scalar(
-            "SELECT id FROM clipping_jobs
-             WHERE status = 'failed'
-             AND completed_at > NOW() - INTERVAL '6 hours'
-             AND completed_at < NOW() - INTERVAL '5 minutes'
-             ORDER BY completed_at ASC
-             LIMIT 10",
-        )
-        .fetch_all(&self.app_state.db_pool)
-        .await
-        .map_err(|e| format!("Failed to fetch failed jobs for retry: {}", e))?;
+        let retry_query = String::from(
+            "SELECT id FROM clipping_jobs \
+             WHERE status = 'failed' \
+             AND completed_at > NOW() - INTERVAL '6 hours' \
+             AND completed_at < NOW() - INTERVAL '5 minutes' \
+             ORDER BY completed_at ASC \
+             LIMIT 10"
+        );
+        let retry_job_ids: Vec<i32> = sqlx::query_scalar(&retry_query)
+            .fetch_all(&self.app_state.db_pool)
+            .await
+            .map_err(|e| format!("Failed to fetch failed jobs for retry: {}", e))?;
 
         if retry_job_ids.is_empty() {
             return Ok(());
@@ -162,23 +185,24 @@ impl ClippingWorker {
 
         // Reset them to pending status
         for job_id in retry_job_ids {
-            match sqlx::query(
-                "UPDATE clipping_jobs
-                 SET status = 'pending',
-                     error_message = NULL,
-                     progress_percent = 0,
-                     current_step = 'queued',
-                     started_at = NULL,
-                     completed_at = NULL,
-                     updated_at = NOW(),
-                     retry_count = COALESCE(retry_count, 0) + 1,
-                     last_retry_at = NOW()
-                 WHERE id = $1
-                 AND status = 'failed'",
-            )
-            .bind(job_id)
-            .execute(&self.app_state.db_pool)
-            .await
+            let reset_query = String::from(
+                "UPDATE clipping_jobs \
+                 SET status = 'pending', \
+                     error_message = NULL, \
+                     progress_percent = 0, \
+                     current_step = 'queued', \
+                     started_at = NULL, \
+                     completed_at = NULL, \
+                     updated_at = NOW(), \
+                     retry_count = COALESCE(retry_count, 0) + 1, \
+                     last_retry_at = NOW() \
+                 WHERE id = $1 \
+                 AND status = 'failed'"
+            );
+            match sqlx::query(&reset_query)
+                .bind(job_id)
+                .execute(&self.app_state.db_pool)
+                .await
             {
                 Ok(_) => {
                     tracing::info!("✅ Job {} automatically reset to pending for retry", job_id);
@@ -205,19 +229,20 @@ impl ClippingWorker {
     /// - posting: 20 minutes (YouTube API uploads can be slow)
     async fn detect_stuck_jobs(&self) -> Result<(), String> {
         // Find jobs stuck in each intermediate state
-        let stuck_jobs: Vec<(i32, String, String)> = sqlx::query_as(
-            "SELECT id, status, updated_at::text
-             FROM clipping_jobs
-             WHERE (
-                 (status = 'downloading' AND updated_at < NOW() - INTERVAL '10 minutes') OR
-                 (status = 'analyzing' AND updated_at < NOW() - INTERVAL '60 minutes') OR
-                 (status = 'extracting_clips' AND updated_at < NOW() - INTERVAL '15 minutes') OR
-                 (status = 'posting' AND updated_at < NOW() - INTERVAL '20 minutes')
+        let stuck_query = String::from(
+            "SELECT id, status, updated_at::text \
+             FROM clipping_jobs \
+             WHERE ( \
+                 (status = 'downloading' AND updated_at < NOW() - INTERVAL '10 minutes') OR \
+                 (status = 'analyzing' AND updated_at < NOW() - INTERVAL '60 minutes') OR \
+                 (status = 'extracting_clips' AND updated_at < NOW() - INTERVAL '15 minutes') OR \
+                 (status = 'posting' AND updated_at < NOW() - INTERVAL '20 minutes') \
              )"
-        )
-        .fetch_all(&self.app_state.db_pool)
-        .await
-        .map_err(|e| format!("Failed to fetch stuck jobs: {}", e))?;
+        );
+        let stuck_jobs: Vec<(i32, String, String)> = sqlx::query_as(&stuck_query)
+            .fetch_all(&self.app_state.db_pool)
+            .await
+            .map_err(|e| format!("Failed to fetch stuck jobs: {}", e))?;
 
         if stuck_jobs.is_empty() {
             return Ok(());
@@ -232,19 +257,20 @@ impl ClippingWorker {
                 status, updated_at
             );
 
-            match sqlx::query(
-                "UPDATE clipping_jobs
-                 SET status = 'failed',
-                     error_message = $1,
-                     completed_at = NOW(),
-                     updated_at = NOW(),
-                     stuck_detection_count = COALESCE(stuck_detection_count, 0) + 1
+            let reset_stuck_query = String::from(
+                "UPDATE clipping_jobs \
+                 SET status = 'failed', \
+                     error_message = $1, \
+                     completed_at = NOW(), \
+                     updated_at = NOW(), \
+                     stuck_detection_count = COALESCE(stuck_detection_count, 0) + 1 \
                  WHERE id = $2"
-            )
-            .bind(&error_message)
-            .bind(job_id)
-            .execute(&self.app_state.db_pool)
-            .await
+            );
+            match sqlx::query(&reset_stuck_query)
+                .bind(&error_message)
+                .bind(job_id)
+                .execute(&self.app_state.db_pool)
+                .await
             {
                 Ok(_) => {
                     tracing::info!(

@@ -15,7 +15,7 @@ pub mod clipping_worker;
 pub mod analytics_sync_job;
 pub mod token_refresh;
 
-pub use clipping_worker::{ClippingWorker, process_clipping_jobs_once};
+pub use clipping_worker::{ClippingWorker, process_clipping_jobs_once, run_clipping_worker_loop};
 pub use analytics_sync_job::AnalyticsSyncJob;
 
 /// Unique identifier for a background job

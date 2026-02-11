@@ -451,14 +451,18 @@ async fn main() {
             }
         });
 
-        // NEW: Start background worker for executing clipping jobs
-        //  TEMPORARILY DISABLED due to Send trait lifetime constraints
-        // TODO: Refactor ClippingWorker to use owned String values in SQL queries
-        // For now, clipping jobs will be processed when manually triggered via API
-        tracing::warn!("⚠️ Clipping worker temporarily disabled - jobs will be processed on-demand");
+        // Start background worker for executing clipping jobs in separate thread
+        // Uses std::thread instead of tokio::spawn to avoid Send trait lifetime issues
+        let worker_state = shared_state.clone();
+        std::thread::spawn(move || {
+            // Create new tokio runtime for this thread
+            let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime for worker");
+            rt.block_on(async move {
+                jobs::clipping_worker::run_clipping_worker_loop(worker_state).await
+            });
+        });
 
-        // Manual alternative: Use cURL or API to trigger job processing:
-        // POST /api/clipping/jobs/:id/retry
+        tracing::info!("✅ Clipping worker enabled - auto-retry and stuck job detection active");
 
         // Start token refresh worker for YouTube channels (runs every 15 minutes)
         if let Some(token_manager) = shared_state.token_manager.clone() {
