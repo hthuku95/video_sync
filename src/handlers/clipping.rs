@@ -47,6 +47,7 @@ pub fn clipping_routes() -> Router {
         .route("/api/clipping/jobs/:id", get(get_job_status))
         .route("/api/clipping/jobs/:id/cancel", post(cancel_job))
         .route("/api/clipping/jobs/:id/retry", post(retry_job))
+        .route("/api/clipping/jobs/:id/reset", post(reset_job))
         // Extracted clips
         .route("/api/clipping/clips", get(list_clips))
         .route("/api/clipping/clips/:id", get(get_clip_details))
@@ -628,6 +629,53 @@ async fn retry_job(
     Ok(Json(json!({
         "success": true,
         "message": "Job queued for retry"
+    })))
+}
+
+/// Reset a stuck clipping job from any intermediate state
+///
+/// POST /api/clipping/jobs/:id/reset
+///
+/// This endpoint allows users to manually reset jobs that are stuck in intermediate states
+/// (downloading, analyzing, extracting_clips, posting) back to 'pending' so they can be retried.
+/// This is useful when jobs hang due to external failures or timeouts.
+async fn reset_job(
+    Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
+    Path(id): Path<i32>,
+) -> Result<Json<Value>, StatusCode> {
+    let user_id = claims.sub.parse::<i32>().unwrap_or(0);
+
+    // Verify ownership and reset in one query
+    // Allow resetting from any intermediate state OR failed state
+    let result = sqlx::query(
+        "UPDATE clipping_jobs cj
+         SET status = 'pending',
+             error_message = NULL,
+             progress_percent = 0,
+             current_step = 'queued',
+             updated_at = NOW()
+         FROM youtube_channel_linkages ycl
+         WHERE cj.id = $1
+         AND cj.linkage_id = ycl.id
+         AND ycl.user_id = $2
+         AND cj.status IN ('downloading', 'analyzing', 'extracting_clips', 'posting', 'failed')"
+    )
+        .bind(id)
+        .bind(user_id)
+        .execute(&state.db_pool)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if result.rows_affected() == 0 {
+        return Err(StatusCode::NOT_FOUND);
+    }
+
+    tracing::info!("🔄 Job {} manually reset to pending by user {} (unstuck operation)", id, user_id);
+
+    Ok(Json(json!({
+        "success": true,
+        "message": "Job reset to pending and queued for processing"
     })))
 }
 

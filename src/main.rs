@@ -52,6 +52,76 @@ pub struct AppState {
     pub token_manager: Option<Arc<token_manager::TokenManager>>, // 🔧 Centralized token refresh
 }
 
+/// Validate Apify API token on startup
+///
+/// Tests the Apify API token to ensure it's valid before starting the clipping service.
+/// Logs a warning if the token is invalid but doesn't fail startup (yt-dlp can still work).
+async fn validate_apify_token() {
+    match (
+        std::env::var("APIFY_TOKEN").ok(),
+        std::env::var("APIFY_YOUTUBE_CLIENT_ACTOR").ok(),
+    ) {
+        (Some(token), Some(actor)) if !token.is_empty() && !actor.is_empty() => {
+            tracing::info!("🔍 Validating Apify API token...");
+
+            let client = clipping::apify_client::ApifyClient::new(token.clone(), actor.clone());
+
+            match client.validate_token().await {
+                Ok(_) => {
+                    tracing::info!("✅ Apify API token validated successfully");
+                }
+                Err(e) => {
+                    tracing::error!(
+                        "⚠️ INVALID APIFY TOKEN: {}. Check your .env file configuration.",
+                        e
+                    );
+                    tracing::warn!("⚠️ Clipping will fall back to yt-dlp (may be slower and less reliable)");
+                }
+            }
+        }
+        _ => {
+            tracing::warn!("⚠️ Apify credentials not configured. Clipping will use yt-dlp only.");
+            tracing::info!("To enable Apify, set: APIFY_TOKEN and APIFY_YOUTUBE_CLIENT_ACTOR");
+        }
+    }
+}
+
+/// Reset orphaned jobs on startup
+///
+/// Jobs that were in intermediate states when the server crashed or was stopped
+/// will be stuck forever unless we reset them. This function runs on startup to
+/// catch any orphaned jobs and reset them to 'failed' so they can be retried.
+///
+/// Threshold: Jobs stuck for more than 1 hour are considered orphaned.
+async fn reset_orphaned_jobs(db_pool: &sqlx::PgPool) {
+    tracing::info!("🔄 Checking for orphaned jobs from previous server session...");
+
+    match sqlx::query(
+        "UPDATE clipping_jobs
+         SET status = 'failed',
+             error_message = 'Job was orphaned (server restarted while job was in progress). Automatically reset on startup.',
+             completed_at = NOW(),
+             updated_at = NOW()
+         WHERE status IN ('downloading', 'analyzing', 'extracting_clips', 'posting')
+         AND updated_at < NOW() - INTERVAL '1 hour'"
+    )
+    .execute(db_pool)
+    .await
+    {
+        Ok(result) => {
+            let count = result.rows_affected();
+            if count > 0 {
+                tracing::warn!("⚠️ Reset {} orphaned job(s) on startup", count);
+            } else {
+                tracing::info!("✅ No orphaned jobs found");
+            }
+        }
+        Err(e) => {
+            tracing::error!("❌ Failed to reset orphaned jobs: {}", e);
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() {
     // Load environment variables from .env file
@@ -102,6 +172,12 @@ async fn main() {
     let db_pool = db::create_pool()
         .await
         .expect("Failed to create database pool.");
+
+    // Reset orphaned jobs on startup (jobs stuck during server crashes)
+    reset_orphaned_jobs(&db_pool).await;
+
+    // Validate Apify API token on startup (if configured)
+    validate_apify_token().await;
 
     // Initialize Astra DB client if credentials are provided
     let vector_db = match (

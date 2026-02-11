@@ -25,12 +25,12 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Install yt-dlp from GitHub (fallback downloader)
+# Build will fail if yt-dlp installation fails - this is intentional!
 RUN curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp \
     -o /usr/local/bin/yt-dlp \
-    && chmod a+rx /usr/local/bin/yt-dlp
-
-# Verify installation
-RUN yt-dlp --version || echo "yt-dlp not found (fallback will fail)"
+    && chmod a+rx /usr/local/bin/yt-dlp \
+    && yt-dlp --version \
+    && echo "✅ yt-dlp installed successfully: $(yt-dlp --version)"
 
 # Copy compiled binary from builder
 COPY --from=builder /app/target/release/video_editor /usr/local/bin/video_editor

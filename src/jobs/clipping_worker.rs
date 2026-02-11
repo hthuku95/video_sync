@@ -36,10 +36,13 @@ impl ClippingWorker {
 
     /// Process all pending clipping jobs
     async fn process_pending_jobs(&self) -> Result<(), String> {
-        // Step 1: Auto-retry failed jobs that are eligible for retry
+        // Step 1: Detect and reset stuck jobs in intermediate states
+        self.detect_stuck_jobs().await?;
+
+        // Step 2: Auto-retry failed jobs that are eligible for retry
         self.auto_retry_failed_jobs().await?;
 
-        // Step 2: Fetch pending AND failed jobs (limit to avoid overload)
+        // Step 3: Fetch pending AND failed jobs (limit to avoid overload)
         // Note: Failed jobs are also processed directly (in addition to auto-retry)
         let pending_jobs: Vec<i32> = sqlx::query_scalar(
             "SELECT id FROM clipping_jobs
@@ -166,6 +169,74 @@ impl ClippingWorker {
                 }
                 Err(e) => {
                     tracing::error!("Failed to reset job {} for retry: {}", job_id, e);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Detect jobs stuck in intermediate states and reset them to 'failed'
+    ///
+    /// Jobs stuck in intermediate states for longer than their timeout threshold are
+    /// automatically marked as failed. This prevents jobs from hanging indefinitely
+    /// due to process crashes, network issues, or other failures.
+    ///
+    /// State-specific timeout thresholds:
+    /// - downloading: 10 minutes (video downloads should complete quickly)
+    /// - analyzing: 60 minutes (vectorization can take long for big videos)
+    /// - extracting_clips: 15 minutes (clip extraction + AI analysis)
+    /// - posting: 20 minutes (YouTube API uploads can be slow)
+    async fn detect_stuck_jobs(&self) -> Result<(), String> {
+        // Find jobs stuck in each intermediate state
+        let stuck_jobs: Vec<(i32, String, String)> = sqlx::query_as(
+            "SELECT id, status, updated_at::text
+             FROM clipping_jobs
+             WHERE (
+                 (status = 'downloading' AND updated_at < NOW() - INTERVAL '10 minutes') OR
+                 (status = 'analyzing' AND updated_at < NOW() - INTERVAL '60 minutes') OR
+                 (status = 'extracting_clips' AND updated_at < NOW() - INTERVAL '15 minutes') OR
+                 (status = 'posting' AND updated_at < NOW() - INTERVAL '20 minutes')
+             )"
+        )
+        .fetch_all(&self.app_state.db_pool)
+        .await
+        .map_err(|e| format!("Failed to fetch stuck jobs: {}", e))?;
+
+        if stuck_jobs.is_empty() {
+            return Ok(());
+        }
+
+        tracing::warn!("🔄 Found {} stuck jobs, resetting to failed", stuck_jobs.len());
+
+        // Reset each stuck job to 'failed' with clear error message
+        for (job_id, status, updated_at) in stuck_jobs {
+            let error_message = format!(
+                "Job stuck/timed out in '{}' state. Last updated: {}. Automatically reset by worker.",
+                status, updated_at
+            );
+
+            match sqlx::query(
+                "UPDATE clipping_jobs
+                 SET status = 'failed',
+                     error_message = $1,
+                     completed_at = NOW(),
+                     updated_at = NOW()
+                 WHERE id = $2"
+            )
+            .bind(&error_message)
+            .bind(job_id)
+            .execute(&self.app_state.db_pool)
+            .await
+            {
+                Ok(_) => {
+                    tracing::info!(
+                        "✅ Job {} reset from '{}' to 'failed' (stuck for too long)",
+                        job_id, status
+                    );
+                }
+                Err(e) => {
+                    tracing::error!("Failed to reset stuck job {}: {}", job_id, e);
                 }
             }
         }

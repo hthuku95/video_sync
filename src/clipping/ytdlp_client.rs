@@ -42,10 +42,11 @@ impl YtDlpClient {
 
         // Use absolute path to yt-dlp to avoid PATH issues in subprocess
         // Try multiple locations in order of preference
-        let ytdlp_binary = if Path::new("/usr/bin/yt-dlp").exists() {
-            "/usr/bin/yt-dlp"
-        } else if Path::new("/usr/local/bin/yt-dlp").exists() {
+        // IMPORTANT: Check /usr/local/bin FIRST as that's where Dockerfile installs it
+        let ytdlp_binary = if Path::new("/usr/local/bin/yt-dlp").exists() {
             "/usr/local/bin/yt-dlp"
+        } else if Path::new("/usr/bin/yt-dlp").exists() {
+            "/usr/bin/yt-dlp"
         } else {
             "yt-dlp" // Fallback to PATH lookup
         };
@@ -200,9 +201,10 @@ impl YtDlpClient {
         use std::path::Path;
 
         // Check multiple possible locations for yt-dlp binary
+        // IMPORTANT: Check /usr/local/bin FIRST as that's where Dockerfile installs it
         let possible_paths = [
-            "/usr/bin/yt-dlp",           // Symlink location from Dockerfile
-            "/usr/local/bin/yt-dlp",     // pip3 default install location
+            "/usr/local/bin/yt-dlp",     // Dockerfile install location (PRIMARY)
+            "/usr/bin/yt-dlp",           // Alternative location / symlink
         ];
 
         // First, try to find yt-dlp at known locations

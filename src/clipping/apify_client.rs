@@ -68,6 +68,34 @@ impl ApifyClient {
         }
     }
 
+    /// Validate API token on startup
+    ///
+    /// Tests API token by making a simple GET request to the actor endpoint.
+    /// Returns Ok(()) if token is valid, Err(message) if invalid or other error.
+    pub async fn validate_token(&self) -> Result<(), String> {
+        let url = format!(
+            "https://api.apify.com/v2/acts/{}/runs/last",
+            self.actor_id
+        );
+
+        let response = self
+            .http_client
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", self.api_token))
+            .send()
+            .await
+            .map_err(|e| format!("Network error during token validation: {}", e))?;
+
+        if response.status().is_success() || response.status() == 404 {
+            // 404 means actor exists but no runs yet - token is valid
+            Ok(())
+        } else if response.status() == 401 || response.status() == 403 {
+            Err(format!("Invalid Apify API token (status: {})", response.status()))
+        } else {
+            Err(format!("Unexpected API response: {}", response.status()))
+        }
+    }
+
     /// Download video using Apify (primary) with yt-dlp fallback
     pub async fn download_video(
         &self,
@@ -126,13 +154,26 @@ impl ApifyClient {
         let run_response = self
             .http_client
             .post(&run_url)
+            .header("Authorization", format!("Bearer {}", self.api_token))
             .json(&input)
             .send()
             .await
             .map_err(|e| format!("Failed to start Apify run: {}", e))?;
 
         if !run_response.status().is_success() {
-            return Err(format!("Apify API error: {}", run_response.status()));
+            let status = run_response.status();
+            let error_body = run_response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Could not read error body".to_string());
+
+            tracing::error!(
+                "❌ Apify API error: status={}, body={}",
+                status,
+                error_body
+            );
+
+            return Err(format!("Apify API error: {} - {}", status, error_body));
         }
 
         let run_data: ApifyRunResponse = run_response
@@ -158,6 +199,7 @@ impl ApifyClient {
             let status_response = self
                 .http_client
                 .get(&status_url)
+                .header("Authorization", format!("Bearer {}", self.api_token))
                 .send()
                 .await
                 .map_err(|e| format!("Failed to check run status: {}", e))?;
@@ -193,6 +235,7 @@ impl ApifyClient {
         let items_response = self
             .http_client
             .get(&dataset_url)
+            .header("Authorization", format!("Bearer {}", self.api_token))
             .send()
             .await
             .map_err(|e| format!("Failed to fetch dataset: {}", e))?;

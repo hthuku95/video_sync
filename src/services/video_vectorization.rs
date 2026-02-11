@@ -45,9 +45,34 @@ impl VideoVectorizationService {
         // Step 1: Extract keyframes from video
         let frames_dir = format!("temp_frames/{}", file_id);
         fs::create_dir_all(&frames_dir).await?;
-        
-        let keyframes = Self::extract_keyframes(video_file_path, &frames_dir).await?;
+
+        let mut keyframes = Self::extract_keyframes(video_file_path, &frames_dir).await?;
         info!("Extracted {} keyframes from video", keyframes.len());
+
+        // Step 1.5: Apply frame limit to prevent excessive processing time
+        let max_frames = std::env::var("MAX_FRAMES_PER_VIDEO")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(100); // Default: 100 frames max
+
+        if keyframes.len() > max_frames {
+            info!(
+                "⚠️ Video has {} frames, sampling down to {} frames for performance",
+                keyframes.len(),
+                max_frames
+            );
+
+            // Sample frames evenly across the video to maintain coverage
+            let step = keyframes.len() / max_frames;
+            keyframes = keyframes
+                .iter()
+                .step_by(step)
+                .take(max_frames)
+                .cloned()
+                .collect();
+
+            info!("✅ Sampled to {} frames (step: {})", keyframes.len(), step);
+        }
 
         // Step 2: Analyze each frame using multimodal vision (Claude OR Gemini)
         // NOTE: Frame ANALYSIS can use Claude vision (preferred for Claude agents) OR Gemini multimodal
