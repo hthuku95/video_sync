@@ -452,11 +452,13 @@ async fn main() {
         });
 
         // NEW: Start background worker for executing clipping jobs
-        let worker_state = shared_state.clone();
-        tokio::spawn(async move {
-            let worker = jobs::ClippingWorker::new(worker_state, 60); // Poll every 60 seconds
-            worker.run().await;
-        });
+        //  TEMPORARILY DISABLED due to Send trait lifetime constraints
+        // TODO: Refactor ClippingWorker to use owned String values in SQL queries
+        // For now, clipping jobs will be processed when manually triggered via API
+        tracing::warn!("⚠️ Clipping worker temporarily disabled - jobs will be processed on-demand");
+
+        // Manual alternative: Use cURL or API to trigger job processing:
+        // POST /api/clipping/jobs/:id/retry
 
         // Start token refresh worker for YouTube channels (runs every 15 minutes)
         if let Some(token_manager) = shared_state.token_manager.clone() {

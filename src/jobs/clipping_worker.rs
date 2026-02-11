@@ -5,6 +5,13 @@ use crate::AppState;
 use std::sync::Arc;
 use tokio::time::{sleep, Duration};
 
+/// Process clipping jobs once (function-based to avoid lifetime issues)
+pub async fn process_clipping_jobs_once(app_state: &Arc<AppState>) -> Result<(), String> {
+    // Create a temporary worker instance
+    let worker = ClippingWorker::new(app_state.clone(), 60);
+    worker.process_pending_jobs().await
+}
+
 pub struct ClippingWorker {
     app_state: Arc<AppState>,
     poll_interval_seconds: u64,
@@ -32,6 +39,11 @@ impl ClippingWorker {
 
             sleep(Duration::from_secs(self.poll_interval_seconds)).await;
         }
+    }
+
+    /// Process all pending clipping jobs (public for external use)
+    pub async fn process_pending_jobs_once(&self) -> Result<(), String> {
+        self.process_pending_jobs().await
     }
 
     /// Process all pending clipping jobs

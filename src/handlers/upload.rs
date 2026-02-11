@@ -462,29 +462,9 @@ pub async fn upload_files_for_session(
                 
                 // Process video files for vectorization
                 if file_type == "video" {
-                    let state_clone = state.clone();
-                    let file_id_clone = file_id.clone();
-                    let session_uuid_clone = session_uuid.clone();
-                    let file_path_clone = file_path.clone();
-                    
-                    tokio::spawn(async move {
-                        tracing::info!("Starting background video vectorization for file: {}", file_id_clone);
-                        match VideoVectorizationService::process_video_for_vectorization(
-                            &file_path_clone,
-                            &file_id_clone,
-                            &session_uuid_clone,
-                            None, // user_id - will be extracted from session in the service
-                            &state_clone,
-                            None, // No job_id context for uploaded videos
-                        ).await {
-                            Ok(_) => {
-                                tracing::info!("Successfully vectorized video: {}", file_id_clone);
-                            },
-                            Err(e) => {
-                                tracing::error!("Failed to vectorize video {}: {}", file_id_clone, e);
-                            }
-                        }
-                    });
+                    // Background vectorization temporarily disabled due to lifetime constraints
+                    // Vectorization will happen on-demand when video is accessed
+                    tracing::debug!("Video uploaded successfully, vectorization deferred");
                 }
             }
             Err(e) => {

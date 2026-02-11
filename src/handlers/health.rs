@@ -8,6 +8,7 @@ use axum::{
 };
 use serde_json::{json, Value};
 use std::sync::Arc;
+use sqlx::Row;
 use crate::AppState;
 
 pub fn health_routes() -> Router {
@@ -307,7 +308,7 @@ async fn get_stuck_jobs_count(state: &Arc<AppState>) -> Value {
                     "posting": stuck_posting
                 },
                 "message": if total == 0 {
-                    "No stuck jobs detected"
+                    "No stuck jobs detected".to_string()
                 } else {
                     format!("{} job(s) appear stuck and will be auto-recovered", total)
                 }
