@@ -22,7 +22,8 @@ pub fn admin_routes() -> Router {
         .route("/admin/login", get(admin_login_page))
         .route("/admin/dashboard", get(admin_dashboard))
         .route("/admin/users", get(admin_users_list))
-        .route("/admin/users/:id", get(admin_user_detail));
+        .route("/admin/users/:id", get(admin_user_detail))
+        .route("/admin/clipping-activity", get(admin_clipping_activity_page));
     
     // API endpoints - protected routes with JWT authentication  
     let protected_admin = Router::new()
@@ -47,6 +48,8 @@ pub fn admin_routes() -> Router {
         .route("/api/admin/default-model", post(update_default_model))
         .route("/api/admin/youtube/status", get(get_youtube_feature_status))
         .route("/api/admin/youtube/toggle", post(toggle_youtube_features))
+        .route("/api/admin/clipping/stats", get(admin_clipping_stats))
+        .route("/api/admin/clipping/user/:user_id/details", get(admin_user_clipping_details))
         .layer(axum::middleware::from_fn(admin_middleware))
         .layer(axum::middleware::from_fn(auth_middleware));
     
@@ -245,6 +248,7 @@ pub async fn admin_dashboard() -> Html<String> {
         <ul>
             <li><a href="/admin/dashboard" class="active">📊 Dashboard</a></li>
             <li><a href="/admin/users">👥 Users</a></li>
+            <li><a href="/admin/clipping-activity">🎬 Clipping Activity</a></li>
             <li><a href="#" onclick="showWhitelist()">🛡️ Whitelist</a></li>
             <li><a href="#" onclick="showYoutube()">🎥 YouTube Features</a></li>
             <li><a href="#" onclick="showPricing()">💰 Model Pricing</a></li>
@@ -1089,7 +1093,7 @@ pub async fn admin_users_list() -> Html<String> {
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f8f9fa; }
-        .sidebar { width: 250px; background: #343a40; height: 100vh; position: fixed; left: 0; top: 0; color: white; padding: 1rem; }
+        .sidebar { width: 250px; background: #343a40; height: 100vh; position: fixed; left: 0; top: 0; color: white; padding: 1rem; overflow-y: auto; }
         .sidebar h2 { color: #dc3545; margin-bottom: 2rem; }
         .sidebar ul { list-style: none; }
         .sidebar li { margin-bottom: 0.5rem; }
@@ -1136,6 +1140,7 @@ pub async fn admin_users_list() -> Html<String> {
         <ul>
             <li><a href="/admin/dashboard">📊 Dashboard</a></li>
             <li><a href="/admin/users" class="active">👥 Users</a></li>
+            <li><a href="/admin/clipping-activity">🎬 Clipping Activity</a></li>
             <li><a href="/api/docs">📚 API Docs</a></li>
             <li><a href="/api/status">⚙️ System Status</a></li>
         </ul>
@@ -1423,6 +1428,7 @@ pub async fn admin_user_detail(Path(id): Path<i32>) -> Html<String> {
         <ul>
             <li><a href="/admin/dashboard">📊 Dashboard</a></li>
             <li><a href="/admin/users" class="active">👥 Users</a></li>
+            <li><a href="/admin/clipping-activity">🎬 Clipping Activity</a></li>
             <li><a href="/api/docs">📚 API Docs</a></li>
             <li><a href="/api/status">⚙️ System Status</a></li>
         </ul>
@@ -3078,4 +3084,417 @@ pub async fn toggle_youtube_features(
         "message": format!("YouTube features {}", if payload.enabled { "enabled for all users" } else { "disabled (testing mode)" }),
         "enabled": payload.enabled
     })))
+}
+
+// ============================================================================
+// CLIPPING ACTIVITY DASHBOARD - Admin monitoring for YouTube clipping jobs
+// ============================================================================
+
+/// Admin API: Get clipping statistics overview and per-user breakdown
+pub async fn admin_clipping_stats(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    // Query 1: Overview stats
+    let overview = sqlx::query!(
+        r#"
+        SELECT
+            COUNT(*) FILTER (WHERE status = 'completed') as "completed!",
+            COUNT(*) FILTER (WHERE status = 'failed') as "failed!",
+            COUNT(*) FILTER (WHERE status IN ('pending', 'downloading', 'analyzing', 'extracting_clips', 'posting')) as "active!",
+            COUNT(*) as "total!",
+            COALESCE(ROUND(100.0 * COUNT(*) FILTER (WHERE status = 'completed') / NULLIF(COUNT(*), 0), 2), 0.0) as "success_rate!"
+        FROM clipping_jobs
+        "#
+    )
+    .fetch_one(&state.db_pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("Failed to fetch clipping overview stats: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    // Query 2: Per-user breakdown
+    let users = sqlx::query!(
+        r#"
+        SELECT
+            u.id as user_id,
+            u.username,
+            u.email,
+            u.is_active,
+            COUNT(DISTINCT ycl.id) as "linkage_count!",
+            COUNT(DISTINCT ycl.source_channel_id) as "source_channel_count!",
+            COUNT(DISTINCT ycl.destination_channel_id) as "destination_channel_count!",
+            COUNT(cj.id) FILTER (WHERE cj.status = 'completed') as "completed_jobs!",
+            COUNT(cj.id) FILTER (WHERE cj.status = 'failed') as "failed_jobs!",
+            COUNT(cj.id) FILTER (WHERE cj.status IN ('pending', 'downloading', 'analyzing', 'extracting_clips', 'posting')) as "active_jobs!",
+            COUNT(cj.id) as "total_jobs!",
+            CASE
+                WHEN COUNT(cj.id) > 0 THEN
+                    ROUND(100.0 * COUNT(cj.id) FILTER (WHERE cj.status = 'completed') / COUNT(cj.id), 2)
+                ELSE 0.0
+            END as "success_rate!",
+            COUNT(ec.id) FILTER (WHERE ec.upload_status = 'published') as "published_clips!",
+            MAX(cj.created_at) as last_job_created,
+            MAX(ec.published_at) as last_clip_published
+        FROM users u
+        LEFT JOIN youtube_channel_linkages ycl ON u.id = ycl.user_id
+        LEFT JOIN clipping_jobs cj ON ycl.id = cj.linkage_id
+        LEFT JOIN extracted_clips ec ON cj.id = ec.clipping_job_id
+        GROUP BY u.id, u.username, u.email, u.is_active
+        HAVING COUNT(DISTINCT ycl.id) > 0
+        ORDER BY total_jobs DESC
+        "#
+    )
+    .fetch_all(&state.db_pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("Failed to fetch per-user clipping stats: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    Ok(Json(json!({
+        "success": true,
+        "overview": {
+            "total_jobs": overview.total,
+            "completed_jobs": overview.completed,
+            "failed_jobs": overview.failed,
+            "active_jobs": overview.active,
+            "success_rate": overview.success_rate
+        },
+        "users": users
+    })))
+}
+
+/// Admin API: Get detailed clipping information for a specific user
+pub async fn admin_user_clipping_details(
+    Extension(state): Extension<Arc<AppState>>,
+    Path(user_id): Path<i32>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    // Query 1: User's linkages with channel details
+    let linkages = sqlx::query!(
+        r#"
+        SELECT
+            ycl.id as linkage_id,
+            ycl.is_active,
+            ysc.channel_id as source_channel_id,
+            ysc.channel_name as source_channel_name,
+            ysc.channel_thumbnail_url as source_thumbnail,
+            cyc.channel_id as dest_channel_id,
+            cyc.channel_name as dest_channel_name,
+            cyc.channel_thumbnail_url as dest_thumbnail,
+            ycl.clips_per_video,
+            ycl.total_clips_generated,
+            ycl.total_clips_posted,
+            ycl.last_clip_generated_at,
+            ycl.created_at as linkage_created
+        FROM youtube_channel_linkages ycl
+        JOIN youtube_source_channels ysc ON ycl.source_channel_id = ysc.id
+        JOIN connected_youtube_channels cyc ON ycl.destination_channel_id = cyc.id
+        WHERE ycl.user_id = $1
+        ORDER BY ycl.created_at DESC
+        "#,
+        user_id
+    )
+    .fetch_all(&state.db_pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("Failed to fetch user linkages: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    // Query 2: Recent jobs
+    let recent_jobs = sqlx::query!(
+        r#"
+        SELECT
+            cj.id,
+            cj.source_video_id,
+            cj.source_video_title,
+            cj.status,
+            cj.current_step,
+            cj.progress_percent,
+            cj.error_message,
+            cj.retry_count,
+            cj.created_at,
+            cj.updated_at,
+            cj.completed_at,
+            ycl.id as linkage_id,
+            ysc.channel_name as source_channel
+        FROM clipping_jobs cj
+        JOIN youtube_channel_linkages ycl ON cj.linkage_id = ycl.id
+        JOIN youtube_source_channels ysc ON ycl.source_channel_id = ysc.id
+        WHERE ycl.user_id = $1
+        ORDER BY cj.created_at DESC
+        LIMIT 10
+        "#,
+        user_id
+    )
+    .fetch_all(&state.db_pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("Failed to fetch recent jobs: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    Ok(Json(json!({
+        "success": true,
+        "linkages": linkages,
+        "recent_jobs": recent_jobs
+    })))
+}
+
+/// Admin HTML Page: Clipping Activity Dashboard
+pub async fn admin_clipping_activity_page() -> Html<String> {
+    let html = r###"
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Clipping Activity - Admin Dashboard</title>
+        <style>
+            * { margin: 0; padding: 0; box-sizing: border-box; }
+            body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f8f9fa; }
+            .sidebar { width: 250px; background: #343a40; height: 100vh; position: fixed; left: 0; top: 0; color: white; padding: 1rem; }
+            .sidebar h2 { color: #dc3545; margin-bottom: 2rem; }
+            .sidebar ul { list-style: none; }
+            .sidebar li { margin-bottom: 0.5rem; }
+            .sidebar a { color: #adb5bd; text-decoration: none; padding: 0.5rem; display: block; border-radius: 5px; }
+            .sidebar a:hover { background: #495057; color: white; }
+            .sidebar a.active { background: #dc3545; color: white; }
+            .main-content { margin-left: 250px; padding: 2rem; }
+            .header { background: white; padding: 1rem 2rem; margin-bottom: 2rem; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+            .header h1 { color: #343a40; margin-bottom: 0.5rem; }
+            .header p { color: #6c757d; }
+            .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1.5rem; margin-bottom: 2rem; }
+            .stat-card { background: white; padding: 1.5rem; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+            .stat-number { font-size: 2rem; font-weight: bold; }
+            .stat-label { color: #6c757d; margin-top: 0.5rem; }
+            .recent-section { background: white; padding: 2rem; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); margin-bottom: 2rem; }
+            .recent-section h2 { color: #343a40; margin-bottom: 1rem; }
+            table { width: 100%; border-collapse: collapse; background: white; border-radius: 8px; overflow: hidden; }
+            th, td { padding: 1rem; text-align: left; border-bottom: 1px solid #eee; }
+            th { background: #f8f9fa; font-weight: 600; }
+            tr:hover { background: #f8f9fa; cursor: pointer; }
+            .badge { padding: 0.25rem 0.75rem; border-radius: 12px; font-size: 0.85rem; font-weight: 500; }
+            .badge-success { background: #d4edda; color: #155724; }
+            .badge-danger { background: #f8d7da; color: #721c24; }
+            .badge-warning { background: #fff3cd; color: #856404; }
+            .badge-secondary { background: #e2e3e5; color: #383d41; }
+            .btn { padding: 0.5rem 1rem; background: #dc3545; color: white; border: none; border-radius: 5px; cursor: pointer; text-decoration: none; display: inline-block; }
+            .btn-secondary { background: #6c757d; }
+            .btn-secondary:hover { background: #5a6268; }
+        </style>
+    </head>
+    <body>
+        <div class="sidebar">
+            <h2>🛡️ Admin Panel</h2>
+            <ul>
+                <li><a href="/admin/dashboard">📊 Dashboard</a></li>
+                <li><a href="/admin/users">👥 Users</a></li>
+                <li><a href="/admin/clipping-activity" class="active">🎬 Clipping Activity</a></li>
+                <li><a href="/api/docs">📚 API Docs</a></li>
+                <li><a href="/api/status">⚙️ System Status</a></li>
+            </ul>
+            <div style="position: absolute; bottom: 1rem;">
+                <button onclick="logout()" class="btn btn-secondary">Logout</button>
+            </div>
+        </div>
+
+        <div class="main-content">
+            <div class="header">
+                <h1>🎬 Clipping Activity Dashboard</h1>
+                <p>Real-time monitoring of YouTube clipping operations</p>
+            </div>
+
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-number" id="totalJobs">-</div>
+                    <div class="stat-label">Total Jobs</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number" id="completedJobs" style="color: #28a745;">-</div>
+                    <div class="stat-label">Completed</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number" id="failedJobs" style="color: #dc3545;">-</div>
+                    <div class="stat-label">Failed</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number" id="activeJobs" style="color: #ffc107;">-</div>
+                    <div class="stat-label">Active</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number" id="successRate">-</div>
+                    <div class="stat-label">Success Rate</div>
+                </div>
+            </div>
+
+            <div class="recent-section">
+                <h2>User Activity Breakdown</h2>
+                <p style="color: #6c757d; margin-bottom: 1rem;">Click on a user to see detailed linkages and recent jobs</p>
+                <table id="userTable">
+                    <thead>
+                        <tr>
+                            <th>User</th>
+                            <th>Linkages</th>
+                            <th>Total Jobs</th>
+                            <th>Completed</th>
+                            <th>Failed</th>
+                            <th>Active</th>
+                            <th>Success Rate</th>
+                            <th>Last Activity</th>
+                        </tr>
+                    </thead>
+                    <tbody id="userTableBody">
+                        <tr><td colspan="8" style="text-align: center; padding: 2rem; color: #6c757d;">Loading...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <div id="userDetails" style="display: none; background: white; padding: 2rem; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
+                <h2>User Details: <span id="detailUsername"></span></h2>
+                <h3 style="margin-top: 1.5rem;">Recent Jobs (Last 10)</h3>
+                <table id="jobsTable">
+                    <thead>
+                        <tr>
+                            <th>Job ID</th>
+                            <th>Video</th>
+                            <th>Status</th>
+                            <th>Progress</th>
+                            <th>Retries</th>
+                            <th>Created</th>
+                            <th>Error</th>
+                        </tr>
+                    </thead>
+                    <tbody id="jobsTableBody"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <script>
+            const token = localStorage.getItem('authToken');
+            const user = JSON.parse(localStorage.getItem('user') || '{}');
+            if (!token || (!user.is_staff && !user.is_superuser)) {
+                window.location.href = '/admin/login';
+            }
+
+            loadClippingStats();
+
+            async function loadClippingStats() {
+                try {
+                    const response = await fetch('/api/admin/clipping/stats', {
+                        headers: { 'Authorization': `Bearer ${token}` }
+                    });
+                    const data = await response.json();
+
+                    document.getElementById('totalJobs').textContent = data.overview.total_jobs;
+                    document.getElementById('completedJobs').textContent = data.overview.completed_jobs;
+                    document.getElementById('failedJobs').textContent = data.overview.failed_jobs;
+                    document.getElementById('activeJobs').textContent = data.overview.active_jobs;
+                    document.getElementById('successRate').textContent = data.overview.success_rate + '%';
+
+                    const tbody = document.getElementById('userTableBody');
+                    tbody.innerHTML = '';
+
+                    if (data.users.length === 0) {
+                        tbody.innerHTML = '<tr><td colspan="8" style="text-align: center; padding: 2rem; color: #6c757d;">No clipping activity yet</td></tr>';
+                        return;
+                    }
+
+                    data.users.forEach(user => {
+                        const row = document.createElement('tr');
+                        row.onclick = () => loadUserDetails(user.user_id, user.username);
+                        row.innerHTML = `
+                            <td><strong>${user.username}</strong><br><small>${user.email}</small></td>
+                            <td>${user.linkage_count}</td>
+                            <td>${user.total_jobs}</td>
+                            <td><span class="badge badge-success">${user.completed_jobs}</span></td>
+                            <td><span class="badge badge-danger">${user.failed_jobs}</span></td>
+                            <td><span class="badge badge-warning">${user.active_jobs}</span></td>
+                            <td>${user.success_rate}%</td>
+                            <td>${formatDate(user.last_job_created)}</td>
+                        `;
+                        tbody.appendChild(row);
+                    });
+                } catch (error) {
+                    console.error('Failed to load stats:', error);
+                    document.getElementById('userTableBody').innerHTML = '<tr><td colspan="8" style="text-align: center; padding: 2rem; color: #dc3545;">Failed to load data</td></tr>';
+                }
+            }
+
+            async function loadUserDetails(userId, username) {
+                try {
+                    const response = await fetch(`/api/admin/clipping/user/${userId}/details`, {
+                        headers: { 'Authorization': `Bearer ${token}` }
+                    });
+                    const data = await response.json();
+
+                    document.getElementById('userDetails').style.display = 'block';
+                    document.getElementById('detailUsername').textContent = username;
+
+                    const jobsBody = document.getElementById('jobsTableBody');
+                    jobsBody.innerHTML = '';
+
+                    if (data.recent_jobs.length === 0) {
+                        jobsBody.innerHTML = '<tr><td colspan="7" style="text-align: center; padding: 2rem; color: #6c757d;">No jobs found</td></tr>';
+                        return;
+                    }
+
+                    data.recent_jobs.forEach(job => {
+                        const row = document.createElement('tr');
+                        row.innerHTML = `
+                            <td>#${job.id}</td>
+                            <td><a href="https://youtube.com/watch?v=${job.source_video_id}" target="_blank" style="color: #dc3545; text-decoration: none;">
+                                ${job.source_video_title || job.source_video_id}
+                            </a></td>
+                            <td><span class="badge badge-${getStatusColor(job.status)}">${job.status}</span></td>
+                            <td>${job.progress_percent}%</td>
+                            <td>${job.retry_count > 0 ? '🔄 ' + job.retry_count : '-'}</td>
+                            <td>${formatDate(job.created_at)}</td>
+                            <td style="max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${job.error_message || ''}">
+                                ${job.error_message ? '⚠️ ' + job.error_message.substring(0, 50) + (job.error_message.length > 50 ? '...' : '') : '-'}
+                            </td>
+                        `;
+                        jobsBody.appendChild(row);
+                    });
+
+                    document.getElementById('userDetails').scrollIntoView({ behavior: 'smooth' });
+                } catch (error) {
+                    console.error('Failed to load user details:', error);
+                    alert('Failed to load user details');
+                }
+            }
+
+            function getStatusColor(status) {
+                const colors = {
+                    'completed': 'success',
+                    'failed': 'danger',
+                    'pending': 'warning',
+                    'downloading': 'warning',
+                    'analyzing': 'warning',
+                    'extracting_clips': 'warning',
+                    'posting': 'warning'
+                };
+                return colors[status] || 'secondary';
+            }
+
+            function formatDate(dateStr) {
+                if (!dateStr) return 'Never';
+                return new Date(dateStr).toLocaleString();
+            }
+
+            function logout() {
+                localStorage.removeItem('authToken');
+                localStorage.removeItem('user');
+                window.location.href = '/admin/login';
+            }
+
+            // Auto-refresh every 30 seconds
+            setInterval(loadClippingStats, 30000);
+        </script>
+    </body>
+    </html>
+    "###;
+
+    Html(html.to_string())
 }
