@@ -129,6 +129,7 @@ pub async fn execute_tool_claude_with_context(
                     &session_id,
                     user_id,
                     &app_state,
+                    None, // No job_id context
                 ).await {
                     tracing::warn!("Failed to vectorize stock video {}: {}", output_path, e);
                 } else {
@@ -265,6 +266,7 @@ pub async fn execute_tool_gemini_with_context(
                     &session_id,
                     user_id,
                     &app_state,
+                    None, // No job_id context
                 ).await {
                     tracing::warn!("Failed to vectorize stock video {}: {}", output_path, e);
                 } else {

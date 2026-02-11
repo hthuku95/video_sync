@@ -66,15 +66,49 @@ pub async fn execute_clipping_job(
     update_job_status(job_id, "analyzing", 30, None, &app_state.db_pool).await?;
 
     tracing::info!("Vectorizing video for AI analysis");
-    VideoVectorizationService::process_video_for_vectorization(
-        &video_path,
-        &job.source_video_id,
-        &format!("clipping_job_{}", job_id),
-        Some(linkage.user_id),
-        &app_state,
+
+    // TIMEOUT PROTECTION: Wrap vectorization with timeout to prevent indefinite hangs
+    // This prevents jobs from being stuck in 'analyzing' state forever
+    use tokio::time::{timeout, Duration};
+
+    let vectorization_timeout_secs = std::env::var("VECTORIZATION_TIMEOUT_SECONDS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(3600); // Default: 60 minutes (3600 seconds)
+
+    tracing::info!(
+        "Starting vectorization with {}s timeout",
+        vectorization_timeout_secs
+    );
+
+    let vectorization_result = timeout(
+        Duration::from_secs(vectorization_timeout_secs),
+        VideoVectorizationService::process_video_for_vectorization(
+            &video_path,
+            &job.source_video_id,
+            &format!("clipping_job_{}", job_id),
+            Some(linkage.user_id),
+            &app_state,
+            Some(job_id), // Pass job_id for heartbeat updates
+        ),
     )
-    .await
-    .map_err(|e| format!("Vectorization failed: {}", e))?;
+    .await;
+
+    match vectorization_result {
+        Ok(Ok(())) => {
+            tracing::info!("✅ Vectorization completed successfully");
+        }
+        Ok(Err(e)) => {
+            return Err(format!("Vectorization failed: {}", e));
+        }
+        Err(_) => {
+            return Err(format!(
+                "Vectorization timed out after {} seconds ({}m). Video may be too long or complex.",
+                vectorization_timeout_secs,
+                vectorization_timeout_secs / 60
+            ));
+        }
+    }
 
     update_job_status(job_id, "vectorized", 40, None, &app_state.db_pool).await?;
 

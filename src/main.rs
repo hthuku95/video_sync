@@ -406,6 +406,7 @@ async fn main() {
         .merge(handlers::jobs::job_routes()) // 🆕 Job control endpoints
         .merge(handlers::youtube::youtube_routes()) // 📺 YouTube integration
         .merge(handlers::clipping::clipping_routes()) // 📹 YouTube clipping feature
+        .merge(handlers::health::health_routes()) // 🏥 Health check and monitoring
         .merge(admin_only_routes) // Admin-only routes like API docs
         .route("/api/status", axum::routing::get(api_status))
         // .layer(axum::middleware::from_fn(middleware::frontend_rate_limit::frontend_rate_limit_middleware))

@@ -32,6 +32,26 @@ pub struct VideoVectorData {
 pub struct VideoVectorizationService;
 
 impl VideoVectorizationService {
+    /// Update job heartbeat to prevent stuck detection during long processing
+    async fn update_heartbeat(job_id: Option<i32>, db_pool: &sqlx::PgPool, message: &str) {
+        if let Some(id) = job_id {
+            match sqlx::query(
+                "UPDATE clipping_jobs SET updated_at = NOW() WHERE id = $1"
+            )
+            .bind(id)
+            .execute(db_pool)
+            .await
+            {
+                Ok(_) => {
+                    tracing::debug!("💓 Heartbeat: Job {} - {}", id, message);
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to update heartbeat for job {}: {}", id, e);
+                }
+            }
+        }
+    }
+
     /// Extract keyframes from video and generate embeddings for storage in Qdrant
     pub async fn process_video_for_vectorization(
         video_file_path: &str,
@@ -39,6 +59,7 @@ impl VideoVectorizationService {
         session_id: &str,
         user_id: Option<i32>,
         state: &Arc<AppState>,
+        job_id: Option<i32>, // For heartbeat updates to prevent stuck detection
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         info!("Starting video vectorization for file: {} ({})", video_file_path, file_id);
 
@@ -48,6 +69,9 @@ impl VideoVectorizationService {
 
         let mut keyframes = Self::extract_keyframes(video_file_path, &frames_dir).await?;
         info!("Extracted {} keyframes from video", keyframes.len());
+
+        // Heartbeat: Keyframe extraction complete
+        Self::update_heartbeat(job_id, &state.db_pool, "Keyframes extracted").await;
 
         // Step 1.5: Apply frame limit to prevent excessive processing time
         let max_frames = std::env::var("MAX_FRAMES_PER_VIDEO")
@@ -77,7 +101,6 @@ impl VideoVectorizationService {
         // Step 2: Analyze each frame using multimodal vision (Claude OR Gemini)
         // NOTE: Frame ANALYSIS can use Claude vision (preferred for Claude agents) OR Gemini multimodal
         // Frame EMBEDDINGS (Step 4) can separately use Voyage AI or Gemini
-        let mut frame_metadata = Vec::new();
 
         // Prefer Claude if available, fallback to Gemini
         let use_claude_vision = state.claude_client.is_some();
@@ -86,24 +109,77 @@ impl VideoVectorizationService {
             return Err("No vision-capable AI model available (need Claude or Gemini)".into());
         }
 
-        for (frame_number, frame_path) in keyframes.iter().enumerate() {
-            let metadata_result = if use_claude_vision {
-                // Use Claude vision
-                Self::analyze_frame_with_claude(frame_path, frame_number as u32, state.claude_client.as_ref().unwrap()).await
-            } else {
-                // Use Gemini vision
-                Self::analyze_frame_with_gemini(frame_path, frame_number as u32, state.gemini_client.as_ref().unwrap()).await
-            };
+        // PERFORMANCE OPTIMIZATION: Parallelize frame analysis
+        // Process multiple frames concurrently to reduce total processing time by 3-5x
+        let concurrency_limit = std::env::var("FRAME_ANALYSIS_CONCURRENCY")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(3); // Default: 3 concurrent frame analyses
 
-            match metadata_result {
-                Ok(metadata) => {
-                    frame_metadata.push(metadata);
-                },
-                Err(e) => {
-                    warn!("Failed to analyze frame {}: {}", frame_number, e);
+        let per_frame_timeout_secs = std::env::var("FRAME_ANALYSIS_TIMEOUT_SECONDS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(30); // Default: 30 second timeout per frame
+
+        info!(
+            "Analyzing {} frames with concurrency={}, timeout={}s per frame",
+            keyframes.len(), concurrency_limit, per_frame_timeout_secs
+        );
+
+        use futures::stream::{self, StreamExt};
+        use tokio::time::{timeout, Duration};
+
+        let frame_futures = keyframes
+            .iter()
+            .enumerate()
+            .map(|(frame_number, frame_path)| {
+                let frame_path = frame_path.clone();
+                let state = state.clone();
+                let frame_timeout = Duration::from_secs(per_frame_timeout_secs);
+
+                async move {
+                    // Wrap frame analysis with timeout
+                    let analysis_future = async {
+                        if use_claude_vision {
+                            Self::analyze_frame_with_claude(
+                                &frame_path,
+                                frame_number as u32,
+                                state.claude_client.as_ref().unwrap()
+                            ).await
+                        } else {
+                            Self::analyze_frame_with_gemini(
+                                &frame_path,
+                                frame_number as u32,
+                                state.gemini_client.as_ref().unwrap()
+                            ).await
+                        }
+                    };
+
+                    match timeout(frame_timeout, analysis_future).await {
+                        Ok(Ok(metadata)) => Some(metadata),
+                        Ok(Err(e)) => {
+                            warn!("Failed to analyze frame {}: {}", frame_number, e);
+                            None
+                        }
+                        Err(_) => {
+                            warn!("Frame {} analysis timed out after {}s", frame_number, per_frame_timeout_secs);
+                            None
+                        }
+                    }
                 }
-            }
-        }
+            });
+
+        // Process frames in parallel with concurrency limit
+        let frame_metadata: Vec<VideoFrameMetadata> = stream::iter(frame_futures)
+            .buffer_unordered(concurrency_limit)
+            .filter_map(|result| async move { result })
+            .collect()
+            .await;
+
+        info!("Successfully analyzed {}/{} frames", frame_metadata.len(), keyframes.len());
+
+        // Heartbeat: Frame analysis complete
+        Self::update_heartbeat(job_id, &state.db_pool, "Frame analysis complete").await;
 
         // Step 3: Generate overall video summary using frame analysis
         let video_summary = if use_claude_vision {
@@ -124,6 +200,9 @@ impl VideoVectorizationService {
         };
 
         Self::store_video_embeddings(&vector_data, state).await?;
+
+        // Heartbeat: Embeddings stored
+        Self::update_heartbeat(job_id, &state.db_pool, "Embeddings stored in Qdrant").await;
 
         // Step 5: Clean up temporary frames
         let _ = fs::remove_dir_all(&frames_dir).await;

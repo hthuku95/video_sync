@@ -598,7 +598,7 @@ async fn retry_job(
 ) -> Result<Json<Value>, StatusCode> {
     let user_id = claims.sub.parse::<i32>().unwrap_or(0);
 
-    // Verify ownership and retry in one query
+    // Verify ownership and retry in one query (track retry count)
     let result = sqlx::query(
         "UPDATE clipping_jobs cj
          SET status = 'pending',
@@ -607,7 +607,9 @@ async fn retry_job(
              current_step = 'queued',
              started_at = NULL,
              completed_at = NULL,
-             updated_at = NOW()
+             updated_at = NOW(),
+             retry_count = COALESCE(cj.retry_count, 0) + 1,
+             last_retry_at = NOW()
          FROM youtube_channel_linkages ycl
          WHERE cj.id = $1
          AND cj.linkage_id = ycl.id
@@ -646,7 +648,7 @@ async fn reset_job(
 ) -> Result<Json<Value>, StatusCode> {
     let user_id = claims.sub.parse::<i32>().unwrap_or(0);
 
-    // Verify ownership and reset in one query
+    // Verify ownership and reset in one query (track retry for manual resets)
     // Allow resetting from any intermediate state OR failed state
     let result = sqlx::query(
         "UPDATE clipping_jobs cj
@@ -654,7 +656,9 @@ async fn reset_job(
              error_message = NULL,
              progress_percent = 0,
              current_step = 'queued',
-             updated_at = NOW()
+             updated_at = NOW(),
+             retry_count = COALESCE(cj.retry_count, 0) + 1,
+             last_retry_at = NOW()
          FROM youtube_channel_linkages ycl
          WHERE cj.id = $1
          AND cj.linkage_id = ycl.id

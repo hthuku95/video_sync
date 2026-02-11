@@ -78,14 +78,16 @@ impl ClippingWorker {
             if let Some(status) = current_status {
                 if status == "failed" {
                     tracing::info!("🔄 Retrying failed job {}", job_id);
-                    // Reset to pending before executing
+                    // Reset to pending before executing and track retry
                     let _ = sqlx::query(
                         "UPDATE clipping_jobs
                          SET status = 'pending',
                              error_message = NULL,
                              progress_percent = 0,
                              current_step = 'queued',
-                             updated_at = NOW()
+                             updated_at = NOW(),
+                             retry_count = COALESCE(retry_count, 0) + 1,
+                             last_retry_at = NOW()
                          WHERE id = $1"
                     )
                     .bind(job_id)
@@ -156,7 +158,9 @@ impl ClippingWorker {
                      current_step = 'queued',
                      started_at = NULL,
                      completed_at = NULL,
-                     updated_at = NOW()
+                     updated_at = NOW(),
+                     retry_count = COALESCE(retry_count, 0) + 1,
+                     last_retry_at = NOW()
                  WHERE id = $1
                  AND status = 'failed'",
             )
@@ -221,7 +225,8 @@ impl ClippingWorker {
                  SET status = 'failed',
                      error_message = $1,
                      completed_at = NOW(),
-                     updated_at = NOW()
+                     updated_at = NOW(),
+                     stuck_detection_count = COALESCE(stuck_detection_count, 0) + 1
                  WHERE id = $2"
             )
             .bind(&error_message)

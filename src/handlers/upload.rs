@@ -475,6 +475,7 @@ pub async fn upload_files_for_session(
                             &session_uuid_clone,
                             None, // user_id - will be extracted from session in the service
                             &state_clone,
+                            None, // No job_id context for uploaded videos
                         ).await {
                             Ok(_) => {
                                 tracing::info!("Successfully vectorized video: {}", file_id_clone);

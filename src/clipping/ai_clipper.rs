@@ -67,6 +67,7 @@ impl AiClipper {
                         &format!("clipping_job_{}", job_id),
                         None,
                         &self.app_state,
+                        None, // No job_id context for clip vectorization
                     )
                     .await
                     {
