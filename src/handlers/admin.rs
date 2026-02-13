@@ -3095,14 +3095,14 @@ pub async fn admin_clipping_stats(
     Extension(state): Extension<Arc<AppState>>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     // Query 1: Overview stats
-    let overview = sqlx::query!(
+    let overview_row = sqlx::query(
         r#"
         SELECT
-            COUNT(*) FILTER (WHERE status = 'completed') as "completed!",
-            COUNT(*) FILTER (WHERE status = 'failed') as "failed!",
-            COUNT(*) FILTER (WHERE status IN ('pending', 'downloading', 'analyzing', 'extracting_clips', 'posting')) as "active!",
-            COUNT(*) as "total!",
-            COALESCE(ROUND(100.0 * COUNT(*) FILTER (WHERE status = 'completed') / NULLIF(COUNT(*), 0), 2), 0.0) as "success_rate!"
+            COUNT(*) FILTER (WHERE status = 'completed') as completed,
+            COUNT(*) FILTER (WHERE status = 'failed') as failed,
+            COUNT(*) FILTER (WHERE status IN ('pending', 'downloading', 'analyzing', 'extracting_clips', 'posting')) as active,
+            COUNT(*) as total,
+            COALESCE(ROUND(100.0 * COUNT(*) FILTER (WHERE status = 'completed') / NULLIF(COUNT(*), 0), 2), 0.0) as success_rate
         FROM clipping_jobs
         "#
     )
@@ -3113,27 +3113,33 @@ pub async fn admin_clipping_stats(
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
+    let completed: i64 = overview_row.try_get("completed").unwrap_or(0);
+    let failed: i64 = overview_row.try_get("failed").unwrap_or(0);
+    let active: i64 = overview_row.try_get("active").unwrap_or(0);
+    let total: i64 = overview_row.try_get("total").unwrap_or(0);
+    let success_rate: rust_decimal::Decimal = overview_row.try_get("success_rate").unwrap_or_else(|_| rust_decimal::Decimal::new(0, 0));
+
     // Query 2: Per-user breakdown
-    let users = sqlx::query!(
+    let user_rows = sqlx::query(
         r#"
         SELECT
             u.id as user_id,
             u.username,
             u.email,
             u.is_active,
-            COUNT(DISTINCT ycl.id) as "linkage_count!",
-            COUNT(DISTINCT ycl.source_channel_id) as "source_channel_count!",
-            COUNT(DISTINCT ycl.destination_channel_id) as "destination_channel_count!",
-            COUNT(cj.id) FILTER (WHERE cj.status = 'completed') as "completed_jobs!",
-            COUNT(cj.id) FILTER (WHERE cj.status = 'failed') as "failed_jobs!",
-            COUNT(cj.id) FILTER (WHERE cj.status IN ('pending', 'downloading', 'analyzing', 'extracting_clips', 'posting')) as "active_jobs!",
-            COUNT(cj.id) as "total_jobs!",
+            COUNT(DISTINCT ycl.id) as linkage_count,
+            COUNT(DISTINCT ycl.source_channel_id) as source_channel_count,
+            COUNT(DISTINCT ycl.destination_channel_id) as destination_channel_count,
+            COUNT(cj.id) FILTER (WHERE cj.status = 'completed') as completed_jobs,
+            COUNT(cj.id) FILTER (WHERE cj.status = 'failed') as failed_jobs,
+            COUNT(cj.id) FILTER (WHERE cj.status IN ('pending', 'downloading', 'analyzing', 'extracting_clips', 'posting')) as active_jobs,
+            COUNT(cj.id) as total_jobs,
             CASE
                 WHEN COUNT(cj.id) > 0 THEN
                     ROUND(100.0 * COUNT(cj.id) FILTER (WHERE cj.status = 'completed') / COUNT(cj.id), 2)
                 ELSE 0.0
-            END as "success_rate!",
-            COUNT(ec.id) FILTER (WHERE ec.upload_status = 'published') as "published_clips!",
+            END as success_rate,
+            COUNT(ec.id) FILTER (WHERE ec.upload_status = 'published') as published_clips,
             MAX(cj.created_at) as last_job_created,
             MAX(ec.published_at) as last_clip_published
         FROM users u
@@ -3142,7 +3148,7 @@ pub async fn admin_clipping_stats(
         LEFT JOIN extracted_clips ec ON cj.id = ec.clipping_job_id
         GROUP BY u.id, u.username, u.email, u.is_active
         HAVING COUNT(DISTINCT ycl.id) > 0
-        ORDER BY total_jobs DESC
+        ORDER BY COUNT(cj.id) DESC
         "#
     )
     .fetch_all(&state.db_pool)
@@ -3152,14 +3158,35 @@ pub async fn admin_clipping_stats(
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
+    let users: Vec<serde_json::Value> = user_rows.iter().map(|row| {
+        use sqlx::Row;
+        json!({
+            "user_id": row.get::<i32, _>("user_id"),
+            "username": row.get::<String, _>("username"),
+            "email": row.get::<String, _>("email"),
+            "is_active": row.get::<bool, _>("is_active"),
+            "linkage_count": row.get::<i64, _>("linkage_count"),
+            "source_channel_count": row.get::<i64, _>("source_channel_count"),
+            "destination_channel_count": row.get::<i64, _>("destination_channel_count"),
+            "completed_jobs": row.get::<i64, _>("completed_jobs"),
+            "failed_jobs": row.get::<i64, _>("failed_jobs"),
+            "active_jobs": row.get::<i64, _>("active_jobs"),
+            "total_jobs": row.get::<i64, _>("total_jobs"),
+            "success_rate": row.get::<rust_decimal::Decimal, _>("success_rate"),
+            "published_clips": row.get::<i64, _>("published_clips"),
+            "last_job_created": row.get::<Option<chrono::NaiveDateTime>, _>("last_job_created"),
+            "last_clip_published": row.get::<Option<chrono::NaiveDateTime>, _>("last_clip_published"),
+        })
+    }).collect();
+
     Ok(Json(json!({
         "success": true,
         "overview": {
-            "total_jobs": overview.total,
-            "completed_jobs": overview.completed,
-            "failed_jobs": overview.failed,
-            "active_jobs": overview.active,
-            "success_rate": overview.success_rate
+            "total_jobs": total,
+            "completed_jobs": completed,
+            "failed_jobs": failed,
+            "active_jobs": active,
+            "success_rate": success_rate
         },
         "users": users
     })))
@@ -3171,7 +3198,7 @@ pub async fn admin_user_clipping_details(
     Path(user_id): Path<i32>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     // Query 1: User's linkages with channel details
-    let linkages = sqlx::query!(
+    let linkage_rows = sqlx::query(
         r#"
         SELECT
             ycl.id as linkage_id,
@@ -3192,9 +3219,9 @@ pub async fn admin_user_clipping_details(
         JOIN connected_youtube_channels cyc ON ycl.destination_channel_id = cyc.id
         WHERE ycl.user_id = $1
         ORDER BY ycl.created_at DESC
-        "#,
-        user_id
+        "#
     )
+    .bind(user_id)
     .fetch_all(&state.db_pool)
     .await
     .map_err(|e| {
@@ -3202,8 +3229,27 @@ pub async fn admin_user_clipping_details(
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
+    let linkages: Vec<serde_json::Value> = linkage_rows.iter().map(|row| {
+        use sqlx::Row;
+        json!({
+            "linkage_id": row.get::<i32, _>("linkage_id"),
+            "is_active": row.get::<bool, _>("is_active"),
+            "source_channel_id": row.get::<String, _>("source_channel_id"),
+            "source_channel_name": row.get::<String, _>("source_channel_name"),
+            "source_thumbnail": row.get::<Option<String>, _>("source_thumbnail"),
+            "dest_channel_id": row.get::<String, _>("dest_channel_id"),
+            "dest_channel_name": row.get::<String, _>("dest_channel_name"),
+            "dest_thumbnail": row.get::<Option<String>, _>("dest_thumbnail"),
+            "clips_per_video": row.get::<Option<i32>, _>("clips_per_video"),
+            "total_clips_generated": row.get::<i32, _>("total_clips_generated"),
+            "total_clips_posted": row.get::<i32, _>("total_clips_posted"),
+            "last_clip_generated_at": row.get::<Option<chrono::NaiveDateTime>, _>("last_clip_generated_at"),
+            "linkage_created": row.get::<chrono::NaiveDateTime, _>("linkage_created"),
+        })
+    }).collect();
+
     // Query 2: Recent jobs
-    let recent_jobs = sqlx::query!(
+    let job_rows = sqlx::query(
         r#"
         SELECT
             cj.id,
@@ -3225,15 +3271,34 @@ pub async fn admin_user_clipping_details(
         WHERE ycl.user_id = $1
         ORDER BY cj.created_at DESC
         LIMIT 10
-        "#,
-        user_id
+        "#
     )
+    .bind(user_id)
     .fetch_all(&state.db_pool)
     .await
     .map_err(|e| {
         tracing::error!("Failed to fetch recent jobs: {}", e);
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
+
+    let recent_jobs: Vec<serde_json::Value> = job_rows.iter().map(|row| {
+        use sqlx::Row;
+        json!({
+            "id": row.get::<i32, _>("id"),
+            "source_video_id": row.get::<String, _>("source_video_id"),
+            "source_video_title": row.get::<Option<String>, _>("source_video_title"),
+            "status": row.get::<String, _>("status"),
+            "current_step": row.get::<Option<String>, _>("current_step"),
+            "progress_percent": row.get::<Option<i32>, _>("progress_percent"),
+            "error_message": row.get::<Option<String>, _>("error_message"),
+            "retry_count": row.get::<i32, _>("retry_count"),
+            "created_at": row.get::<chrono::NaiveDateTime, _>("created_at"),
+            "updated_at": row.get::<chrono::NaiveDateTime, _>("updated_at"),
+            "completed_at": row.get::<Option<chrono::NaiveDateTime>, _>("completed_at"),
+            "linkage_id": row.get::<i32, _>("linkage_id"),
+            "source_channel": row.get::<String, _>("source_channel"),
+        })
+    }).collect();
 
     Ok(Json(json!({
         "success": true,

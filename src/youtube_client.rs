@@ -613,7 +613,7 @@ impl YouTubeClient {
     ) -> Result<PlaylistItemResponse, Box<dyn std::error::Error + Send + Sync>> {
         let url = "https://www.googleapis.com/youtube/v3/playlistItems";
 
-        let mut resource_id = json!({
+        let resource_id = json!({
             "kind": "youtube#video",
             "videoId": video_id,
         });

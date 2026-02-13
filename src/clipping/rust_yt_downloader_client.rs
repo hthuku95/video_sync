@@ -32,13 +32,12 @@ impl RustYtDownloaderClient {
             return Err("yt-dlp is not installed or not available in PATH".to_string());
         }
 
-        let client = YtDlpClient::new();
-
         // Get video info first
         tracing::info!("🔍 Fetching video metadata");
 
         let video_info = tokio::task::spawn_blocking({
             let url = video_url.to_string();
+            let client = YtDlpClient::new(); // Create client inside closure
             move || client.get_video_info(&url)
         })
         .await
@@ -59,6 +58,7 @@ impl RustYtDownloaderClient {
         let download_future = tokio::task::spawn_blocking({
             let url = video_url.to_string();
             let output = output_path.to_string();
+            let client = YtDlpClient::new(); // Create separate client for download
             move || client.download(&url, &output, None) // None means best quality
         });
 

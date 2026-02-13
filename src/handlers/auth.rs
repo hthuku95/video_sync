@@ -742,7 +742,7 @@ pub async fn google_oauth_callback(
         (StatusCode::INTERNAL_SERVER_ERROR, Html("<h1>Database error</h1>".to_string()))
     })?;
 
-    let user = if let Some(mut user) = existing_user {
+    let user = if let Some(user) = existing_user {
         // Update existing user's Google tokens
         sqlx::query(
             "UPDATE users
@@ -772,7 +772,7 @@ pub async fn google_oauth_callback(
         .await
         .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, Html("<h1>Database error</h1>".to_string())))?;
 
-        if let Some(mut user) = email_user {
+        if let Some(user) = email_user {
             // Link Google account to existing user
             sqlx::query(
                 "UPDATE users

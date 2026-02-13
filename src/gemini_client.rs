@@ -248,7 +248,7 @@ impl GeminiClient {
         );
 
         // Debug: Log the request to see if thought signatures are present
-        if let Ok(request_json) = serde_json::to_string_pretty(&request) {
+        if let Ok(_request_json) = serde_json::to_string_pretty(&request) {
             tracing::debug!("Gemini API Request contents count: {}", request.contents.len());
             for (i, content) in request.contents.iter().enumerate() {
                 tracing::debug!("Content[{}]: role={:?}, parts_count={}", i, content.role, content.parts.len());
@@ -2428,8 +2428,8 @@ impl GeminiClient {
             Err(e) => return Err(format!("Failed to read video file: {}", e).into()),
         };
 
-        let encoded_data = base64::encode(&video_data);
-        
+        let encoded_data = BASE64_STANDARD.encode(&video_data);
+
         // Determine MIME type based on file extension
         let mime_type = match std::path::Path::new(video_file_path)
             .extension()

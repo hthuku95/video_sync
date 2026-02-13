@@ -670,7 +670,7 @@ impl VideoVectorizationService {
         };
 
         // Retrieve video-level summary
-        let video_point_id = format!("video_{}", file_id);
+        let _video_point_id = format!("video_{}", file_id);
 
         // Search for video summary point
         let filter = json!({

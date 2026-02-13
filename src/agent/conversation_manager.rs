@@ -344,7 +344,7 @@ impl ConversationManager {
         tools: Option<Vec<Tool>>,
     ) -> Result<GenerateContentRequest, ConversationError> {
         // Get conversation history
-        let mut conversation_history = self.get_conversation_history(session_id, Some(20)).await?;
+        let conversation_history = self.get_conversation_history(session_id, Some(20)).await?;
 
         // Ensure we start with system message (if not already present)
         let has_system_message = conversation_history.iter().any(|msg| matches!(msg.role, MessageRole::System));

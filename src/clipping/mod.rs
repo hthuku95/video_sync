@@ -15,12 +15,21 @@ pub mod thumbnail_generator;
 
 // Re-export commonly used types
 pub use models::*;
+#[allow(unused_imports)] // Exported for external use
 pub use rusty_ytdl_client::RustyYtdlClient;
+#[allow(unused_imports)] // Exported for external use
 pub use rustube_client::RustubeClient;
+#[allow(unused_imports)] // Exported for external use
 pub use ytdlp_client::YtDlpClient;
+#[allow(unused_imports)] // Exported for external use
 pub use rust_yt_downloader_client::RustYtDownloaderClient;
+#[allow(unused_imports)] // Exported for external use
 pub use monitor::ChannelMonitor;
+#[allow(unused_imports)] // Exported for external use
 pub use ai_clipper::AiClipper;
+#[allow(unused_imports)] // Exported for external use
 pub use uploader::ClipUploader;
+#[allow(unused_imports)] // Exported for external use
 pub use performance_tracker::PerformanceTracker;
+#[allow(unused_imports)] // Exported for external use
 pub use thumbnail_generator::ThumbnailGenerator;

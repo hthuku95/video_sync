@@ -210,7 +210,7 @@ impl ApifyClient {
         Fut: std::future::Future<Output = Result<reqwest::Response, reqwest::Error>>,
     {
         let max_retries = 3;
-        let mut delays = vec![
+        let delays = vec![
             Duration::from_secs(5),  // 1st retry: 5 seconds
             Duration::from_secs(15), // 2nd retry: 15 seconds
             Duration::from_secs(45), // 3rd retry: 45 seconds

@@ -3203,10 +3203,10 @@ async fn execute_optimize_youtube_metadata_with_state_gemini(
 /// Analyze YouTube performance
 async fn execute_analyze_youtube_performance_with_state_claude(
     args: &Value,
-    ctx: &ToolExecutionContext,
+    _ctx: &ToolExecutionContext,
 ) -> String {
     let video_id = args["video_id"].as_str().unwrap_or("");
-    let days = args.get("date_range_days").and_then(|v| v.as_i64()).unwrap_or(30).min(365) as i32;
+    let _days = args.get("date_range_days").and_then(|v| v.as_i64()).unwrap_or(30).min(365) as i32;
 
     if video_id.is_empty() {
         return "❌ video_id required".to_string();
@@ -3224,8 +3224,8 @@ async fn execute_analyze_youtube_performance_with_state_gemini(
 
 /// Suggest content ideas
 async fn execute_suggest_content_ideas_with_state_claude(
-    args: &Value,
-    ctx: &ToolExecutionContext,
+    _args: &Value,
+    _ctx: &ToolExecutionContext,
 ) -> String {
     "🚧 Feature coming soon - content strategy integration in progress".to_string()
 }
