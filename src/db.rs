@@ -6,16 +6,52 @@ use std::time::Duration;
 
 pub async fn create_pool() -> Result<PgPool, sqlx::Error> {
     let db_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+
+    // Dynamic connection pool sizing based on worker concurrency
+    // Formula: 5 (API endpoints) + worker_concurrency + 2 (buffer)
+    // Allow manual override via DATABASE_MAX_CONNECTIONS env var
+    let max_connections = if let Ok(max_conn_str) = env::var("DATABASE_MAX_CONNECTIONS") {
+        max_conn_str
+            .parse::<u32>()
+            .unwrap_or_else(|_| {
+                tracing::warn!("Invalid DATABASE_MAX_CONNECTIONS value, using default");
+                calculate_recommended_pool_size()
+            })
+    } else {
+        calculate_recommended_pool_size()
+    };
+
+    tracing::info!("📊 Database connection pool size: {} connections", max_connections);
+
     let pool = PgPoolOptions::new()
-        .max_connections(5)
+        .max_connections(max_connections)
         .acquire_timeout(Duration::from_secs(30))
         .connect(&db_url)
         .await?;
-    
+
     // Run migrations on startup
     run_migrations(&pool).await?;
-    
+
     Ok(pool)
+}
+
+/// Calculate recommended pool size based on worker concurrency
+fn calculate_recommended_pool_size() -> u32 {
+    let worker_concurrency = env::var("CLIPPING_WORKER_CONCURRENCY")
+        .ok()
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(3);
+
+    // Formula: 5 (API) + concurrency + 2 (buffer)
+    let recommended = 5 + worker_concurrency + 2;
+
+    tracing::debug!(
+        "Calculated pool size: 5 (API) + {} (workers) + 2 (buffer) = {}",
+        worker_concurrency,
+        recommended
+    );
+
+    recommended
 }
 
 pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {

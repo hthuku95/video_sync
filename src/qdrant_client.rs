@@ -1,12 +1,58 @@
 use qdrant_client::qdrant::{
-    CreateCollectionBuilder, CreateFieldIndexCollectionBuilder, Distance, PointStruct, 
-    SearchPointsBuilder, UpsertPointsBuilder, VectorParamsBuilder, FieldType
+    CreateCollectionBuilder, CreateFieldIndexCollectionBuilder, Distance, PointStruct,
+    SearchPointsBuilder, UpsertPointsBuilder, VectorParamsBuilder, FieldType,
+    VectorsConfig, VectorParamsMap, Vectors
 };
 use qdrant_client::{Qdrant, Payload};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
 use uuid::Uuid;
+
+/// Embedding provider enum for multi-vector support
+/// Qdrant Named Vectors allow different embedding dimensions in one collection
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EmbeddingProvider {
+    /// Voyage AI embeddings (1024 dimensions) - primary for Claude compatibility
+    Voyage,
+    /// Gemini embeddings (768 dimensions) - fallback provider
+    Gemini,
+}
+
+impl EmbeddingProvider {
+    /// Get the vector name used in Qdrant named vectors
+    pub fn vector_name(&self) -> &str {
+        match self {
+            Self::Voyage => "voyage",
+            Self::Gemini => "gemini",
+        }
+    }
+
+    /// Get zero vector for this provider (used in filter-only searches)
+    pub fn zero_vector(&self) -> Vec<f32> {
+        match self {
+            Self::Voyage => vec![0.0; 1024],
+            Self::Gemini => vec![0.0; 768],
+        }
+    }
+
+    /// Get embedding dimensions for this provider
+    pub fn dimensions(&self) -> usize {
+        match self {
+            Self::Voyage => 1024,
+            Self::Gemini => 768,
+        }
+    }
+
+    /// Infer provider from vector dimensions
+    pub fn from_dimensions(dims: usize) -> Result<Self, String> {
+        match dims {
+            1024 => Ok(Self::Voyage),
+            768 => Ok(Self::Gemini),
+            _ => Err(format!("Unknown embedding dimension: {}. Expected 1024 (Voyage) or 768 (Gemini)", dims)),
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct QdrantClient {
@@ -46,14 +92,32 @@ impl QdrantClient {
     }
 
     pub async fn create_collection(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        tracing::info!("Creating Qdrant collection: {}", self.collection_name);
+        tracing::info!("Creating Qdrant collection with named vectors: {}", self.collection_name);
 
-        // Create collection with 1024 dimensions for Voyage AI embeddings (primary)
-        // Note: Gemini embeddings are 768, but Voyage is 1024 and is our primary provider
+        // Create collection with NAMED VECTORS to support multiple embedding providers
+        // This allows both Voyage (1024 dims) and Gemini (768 dims) in the same collection
+        let mut named_vectors = HashMap::new();
+
+        // Voyage AI vector (1024 dimensions) - primary for Claude compatibility
+        named_vectors.insert(
+            "voyage".to_string(),
+            VectorParamsBuilder::new(1024, Distance::Cosine).build()
+        );
+
+        // Gemini vector (768 dimensions) - fallback provider
+        named_vectors.insert(
+            "gemini".to_string(),
+            VectorParamsBuilder::new(768, Distance::Cosine).build()
+        );
+
         let result = self.client
             .create_collection(
                 CreateCollectionBuilder::new(&self.collection_name)
-                    .vectors_config(VectorParamsBuilder::new(1024, Distance::Cosine))
+                    .vectors_config(VectorsConfig {
+                        config: Some(qdrant_client::qdrant::vectors_config::Config::ParamsMap(
+                            VectorParamsMap { map: named_vectors }
+                        ))
+                    })
             )
             .await;
 
@@ -192,11 +256,34 @@ impl QdrantClient {
             "files_referenced": document.files_referenced
         }).try_into().unwrap();
 
-        // Create point
+        // Create named vectors for Voyage provider
+        let mut named_vectors = HashMap::new();
+        named_vectors.insert(EmbeddingProvider::Voyage.vector_name().to_string(), embedding);
+
+        // Add provider metadata to payload
+        let mut payload_value: serde_json::Value = json!({
+            "session_id": document.session_id,
+            "user_id": document.user_id,
+            "timestamp": document.timestamp.to_rfc3339(),
+            "user_message": document.user_message,
+            "agent_response": document.agent_response,
+            "context": document.context,
+            "files_referenced": document.files_referenced,
+            "embedding_provider": "voyage"
+        });
+
+        let mut qdrant_payload = std::collections::HashMap::new();
+        if let Some(obj) = payload_value.as_object() {
+            for (key, value) in obj {
+                qdrant_payload.insert(key.clone(), value.clone().into());
+            }
+        }
+
+        // Create point with named vector
         let point = PointStruct::new(
             document.id.clone(),
-            embedding,
-            payload
+            Vectors::from(named_vectors),
+            qdrant_payload
         );
 
         // Upsert point to collection
@@ -235,22 +322,34 @@ impl QdrantClient {
             files_referenced,
         };
 
-        // Create payload from document
-        let payload: Payload = json!({
+        // Create named vectors for Gemini provider
+        let mut named_vectors = HashMap::new();
+        named_vectors.insert(EmbeddingProvider::Gemini.vector_name().to_string(), embedding);
+
+        // Add provider metadata to payload
+        let mut payload_value: serde_json::Value = json!({
             "session_id": document.session_id,
             "user_id": document.user_id,
             "timestamp": document.timestamp.to_rfc3339(),
             "user_message": document.user_message,
             "agent_response": document.agent_response,
             "context": document.context,
-            "files_referenced": document.files_referenced
-        }).try_into().unwrap();
+            "files_referenced": document.files_referenced,
+            "embedding_provider": "gemini"
+        });
 
-        // Create point
+        let mut qdrant_payload = std::collections::HashMap::new();
+        if let Some(obj) = payload_value.as_object() {
+            for (key, value) in obj {
+                qdrant_payload.insert(key.clone(), value.clone().into());
+            }
+        }
+
+        // Create point with named vector
         let point = PointStruct::new(
             document.id.clone(),
-            embedding,
-            payload
+            Vectors::from(named_vectors),
+            qdrant_payload
         );
 
         // Upsert point to collection
@@ -261,7 +360,7 @@ impl QdrantClient {
             )
             .await?;
 
-        tracing::debug!("Stored chat memory with ID: {}", document.id);
+        tracing::debug!("Stored chat memory with Gemini embeddings, ID: {}", document.id);
         Ok(document.id)
     }
 
@@ -275,10 +374,11 @@ impl QdrantClient {
         // Generate query embedding using Voyage AI
         let query_embedding = voyage_client.generate_single_embedding(query.to_string()).await?;
 
-        // Search for similar vectors
+        // Search for similar vectors using Voyage named vector
         let search_result = self.client
             .search_points(
                 SearchPointsBuilder::new(&self.collection_name, query_embedding, limit as u64)
+                    .vector_name(EmbeddingProvider::Voyage.vector_name())
                     .filter(qdrant_client::qdrant::Filter {
                         must: vec![qdrant_client::qdrant::Condition {
                             condition_one_of: Some(
@@ -362,10 +462,11 @@ impl QdrantClient {
         // Generate query embedding
         let query_embedding = gemini_client.embed_content(query).await?;
 
-        // Search for similar vectors
+        // Search for similar vectors using Gemini named vector
         let search_result = self.client
             .search_points(
                 SearchPointsBuilder::new(&self.collection_name, query_embedding, limit as u64)
+                    .vector_name(EmbeddingProvider::Gemini.vector_name())
                     .filter(qdrant_client::qdrant::Filter {
                         must: vec![qdrant_client::qdrant::Condition {
                             condition_one_of: Some(
@@ -448,12 +549,15 @@ impl QdrantClient {
         session_id: &str,
         limit: u32,
     ) -> Result<Vec<ChatMemoryDocument>, Box<dyn std::error::Error + Send + Sync>> {
-        // For getting recent history, we can search with a zero vector since we only care about the filter
-        let zero_vector = vec![0.0f32; 768];
-        
+        // For getting recent history, we use a zero vector since we only care about the filter
+        // Try Voyage first (1024 dims), fallback to Gemini (768 dims) if Voyage search fails
+        let provider = EmbeddingProvider::Voyage;
+        let zero_vector = provider.zero_vector();
+
         let search_result = self.client
             .search_points(
                 SearchPointsBuilder::new(&self.collection_name, zero_vector, limit as u64)
+                    .vector_name(provider.vector_name())
                     .filter(qdrant_client::qdrant::Filter {
                         must: vec![qdrant_client::qdrant::Condition {
                             condition_one_of: Some(
@@ -476,7 +580,44 @@ impl QdrantClient {
                     })
                     .with_payload(true)
             )
-            .await?;
+            .await;
+
+        // If Voyage search failed, try Gemini
+        let search_result = if search_result.is_err() {
+            tracing::debug!("Voyage search failed, trying Gemini vector");
+            let gemini_provider = EmbeddingProvider::Gemini;
+            let gemini_zero_vector = gemini_provider.zero_vector();
+
+            self.client
+                .search_points(
+                    SearchPointsBuilder::new(&self.collection_name, gemini_zero_vector, limit as u64)
+                        .vector_name(gemini_provider.vector_name())
+                        .filter(qdrant_client::qdrant::Filter {
+                            must: vec![qdrant_client::qdrant::Condition {
+                                condition_one_of: Some(
+                                    qdrant_client::qdrant::condition::ConditionOneOf::Field(
+                                        qdrant_client::qdrant::FieldCondition {
+                                            key: "session_id".to_string(),
+                                            r#match: Some(qdrant_client::qdrant::Match {
+                                                match_value: Some(
+                                                    qdrant_client::qdrant::r#match::MatchValue::Keyword(
+                                                        session_id.to_string()
+                                                    )
+                                                ),
+                                            }),
+                                            ..Default::default()
+                                        }
+                                    ),
+                                ),
+                            }],
+                            ..Default::default()
+                        })
+                        .with_payload(true)
+                )
+                .await?
+        } else {
+            search_result?
+        };
 
         let mut documents = Vec::new();
         for scored_point in search_result.result {
@@ -612,15 +753,29 @@ impl QdrantClient {
         Ok(context)
     }
 
-    /// Upsert a single point into the collection
+    /// Upsert a single point into the collection with named vector support
+    ///
+    /// This method now requires specifying the embedding provider to use the correct
+    /// named vector in Qdrant (voyage or gemini)
     pub async fn upsert_point(
         &self,
         point_id: &str,
         vector: &[f32],
         payload: &serde_json::Value,
+        provider: EmbeddingProvider,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         use qdrant_client::qdrant::{PointStruct, UpsertPointsBuilder};
-        
+
+        // Validate vector dimensions match provider
+        if vector.len() != provider.dimensions() {
+            return Err(format!(
+                "Vector dimension mismatch: got {} but expected {} for provider {:?}",
+                vector.len(),
+                provider.dimensions(),
+                provider
+            ).into());
+        }
+
         // Convert JSON payload to Qdrant payload format
         let mut qdrant_payload = std::collections::HashMap::new();
         if let Some(obj) = payload.as_object() {
@@ -628,10 +783,20 @@ impl QdrantClient {
                 qdrant_payload.insert(key.clone(), value.clone().into());
             }
         }
-        
+
+        // Add provider metadata to payload for tracking
+        qdrant_payload.insert(
+            "embedding_provider".to_string(),
+            serde_json::Value::String(provider.vector_name().to_string()).into()
+        );
+
+        // Create named vector map
+        let mut named_vectors = HashMap::new();
+        named_vectors.insert(provider.vector_name().to_string(), vector.to_vec());
+
         let point = PointStruct::new(
             point_id.to_string(),
-            vector.to_vec(),
+            Vectors::from(named_vectors),
             qdrant_payload,
         );
 
@@ -642,17 +807,32 @@ impl QdrantClient {
         Ok(())
     }
 
-    /// Search for similar points in the collection
+    /// Search for similar points in the collection with named vector support
+    ///
+    /// This method now requires specifying the embedding provider to search
+    /// the correct named vector in Qdrant
     pub async fn search_points(
         &self,
         query_vector: &[f32],
         limit: usize,
         filter: Option<&serde_json::Value>,
+        provider: EmbeddingProvider,
     ) -> Result<Vec<serde_json::Value>, Box<dyn std::error::Error + Send + Sync>> {
         use qdrant_client::qdrant::{SearchPointsBuilder, Filter, Condition};
-        
+
+        // Validate vector dimensions match provider
+        if query_vector.len() != provider.dimensions() {
+            return Err(format!(
+                "Query vector dimension mismatch: got {} but expected {} for provider {:?}",
+                query_vector.len(),
+                provider.dimensions(),
+                provider
+            ).into());
+        }
+
         let mut search_builder = SearchPointsBuilder::new(&self.collection_name, query_vector.to_vec(), limit as u64)
-            .with_payload(true);
+            .with_payload(true)
+            .vector_name(provider.vector_name());
 
         // Apply filter if provided
         if let Some(filter_json) = filter {
