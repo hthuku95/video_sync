@@ -15,16 +15,20 @@ RUN cargo build --release
 # Stage 2: Runtime image with system dependencies
 FROM debian:bookworm-slim
 
-# Install system dependencies (pure Rust - no Python/yt-dlp needed!)
+# Install system dependencies including Python and yt-dlp
+# yt-dlp is most reliable for bypassing YouTube bot detection
 RUN apt-get update && apt-get install -y \
     ffmpeg \
     ca-certificates \
     libpq5 \
     curl \
+    python3 \
+    python3-pip \
+    && pip3 install --no-cache-dir --break-system-packages yt-dlp \
     && rm -rf /var/lib/apt/lists/*
 
-# NOTE: yt-dlp and Python removed - using rusty_ytdl (pure Rust YouTube downloader)
-# This eliminates Python dependency issues and subprocess PATH problems
+# Verify yt-dlp installation
+RUN yt-dlp --version
 
 # Copy compiled binary from builder
 COPY --from=builder /app/target/release/video_editor /usr/local/bin/video_editor
