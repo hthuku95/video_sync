@@ -7,6 +7,8 @@ use qdrant_client::{Qdrant, Payload};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use uuid::Uuid;
 
 /// Embedding provider enum for multi-vector support
@@ -757,6 +759,14 @@ impl QdrantClient {
     ///
     /// This method now requires specifying the embedding provider to use the correct
     /// named vector in Qdrant (voyage or gemini)
+    /// Convert a string ID to a numeric point ID using hash
+    /// This prevents "Unable to parse UUID" errors for non-UUID strings like "video_5Io13pZlK0M"
+    fn string_to_point_id(s: &str) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        s.hash(&mut hasher);
+        hasher.finish()
+    }
+
     pub async fn upsert_point(
         &self,
         point_id: &str,
@@ -790,12 +800,21 @@ impl QdrantClient {
             serde_json::Value::String(provider.vector_name().to_string()).into()
         );
 
+        // Store original string ID in payload for reference
+        qdrant_payload.insert(
+            "original_point_id".to_string(),
+            serde_json::Value::String(point_id.to_string()).into()
+        );
+
         // Create named vector map
         let mut named_vectors = HashMap::new();
         named_vectors.insert(provider.vector_name().to_string(), vector.to_vec());
 
+        // Use numeric point ID to avoid "Unable to parse UUID" errors
+        let numeric_point_id = Self::string_to_point_id(point_id);
+
         let point = PointStruct::new(
-            point_id.to_string(),
+            numeric_point_id,
             Vectors::from(named_vectors),
             qdrant_payload,
         );
@@ -804,6 +823,7 @@ impl QdrantClient {
             .wait(true);
 
         self.client.upsert_points(upsert_request).await?;
+        tracing::debug!("Upserted point: string_id='{}', numeric_id={}", point_id, numeric_point_id);
         Ok(())
     }
 

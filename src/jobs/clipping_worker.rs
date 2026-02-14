@@ -144,12 +144,13 @@ impl ClippingWorker {
     /// - Job failed within the last 6 hours (to avoid retrying old failures)
     /// - Job has been failed for at least 5 minutes (to avoid immediate retry loops)
     async fn auto_retry_failed_jobs(&self) -> Result<(), String> {
-        // Find failed jobs eligible for retry
+        // Find failed jobs eligible for retry (max 5 retries to prevent infinite loops)
         let retry_query = String::from(
             "SELECT id FROM clipping_jobs \
              WHERE status = 'failed' \
              AND completed_at > NOW() - INTERVAL '6 hours' \
              AND completed_at < NOW() - INTERVAL '5 minutes' \
+             AND COALESCE(retry_count, 0) < 5 \
              ORDER BY completed_at ASC \
              LIMIT 10"
         );
