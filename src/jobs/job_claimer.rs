@@ -20,6 +20,9 @@ impl JobClaimer {
     /// - Workers don't wait on locked rows (skip locked)
     /// - No duplicate processing (transaction safety)
     ///
+    /// The job status remains 'pending' while claimed - coordination is via claimed_by column.
+    /// This avoids violating the valid_status_values constraint which only allows 11 statuses.
+    ///
     /// Returns:
     /// - Ok(Some(job_id)) if a job was successfully claimed
     /// - Ok(None) if no jobs are available
@@ -28,11 +31,10 @@ impl JobClaimer {
         // Clone worker_id to avoid lifetime issues with sqlx bind across await points
         let worker_id = self.worker_id.clone();
 
-        // First transition: pending → claiming (with atomic lock)
+        // Atomically claim job using claimed_by column (status stays 'pending')
         let claimed_job_id: Option<i32> = sqlx::query_scalar(
             "UPDATE clipping_jobs
-             SET status = 'claiming',
-                 claimed_by = $1,
+             SET claimed_by = $1,
                  claimed_at = NOW(),
                  updated_at = NOW()
              WHERE id = (
@@ -51,34 +53,7 @@ impl JobClaimer {
 
         if let Some(job_id) = claimed_job_id {
             tracing::info!("✅ Worker {} claimed job {}", worker_id, job_id);
-
-            // Second transition: claiming → pending (ready for execution)
-            // This two-step process ensures the job is properly claimed before processing
-            let reset_result = sqlx::query(
-                "UPDATE clipping_jobs
-                 SET status = 'pending',
-                     last_processed_by = $1,
-                     updated_at = NOW()
-                 WHERE id = $2 AND claimed_by = $1"
-            )
-            .bind(worker_id.clone())
-            .bind(job_id)
-            .execute(&self.db_pool)
-            .await;
-
-            match reset_result {
-                Ok(_) => Ok(Some(job_id)),
-                Err(e) => {
-                    tracing::error!(
-                        "Failed to reset claimed job {} to pending: {}",
-                        job_id,
-                        e
-                    );
-                    // Release the claim if reset failed
-                    let _ = self.release_claim(job_id).await;
-                    Err(format!("Failed to prepare claimed job: {}", e))
-                }
-            }
+            Ok(Some(job_id))
         } else {
             // No jobs available
             Ok(None)
@@ -91,11 +66,10 @@ impl JobClaimer {
 
         sqlx::query(
             "UPDATE clipping_jobs
-             SET status = 'pending',
-                 claimed_by = NULL,
+             SET claimed_by = NULL,
                  claimed_at = NULL,
                  updated_at = NOW()
-             WHERE id = $1 AND claimed_by = $2"
+             WHERE id = $1 AND claimed_by = $2 AND status = 'pending'"
         )
         .bind(job_id)
         .bind(worker_id.clone())
@@ -128,11 +102,10 @@ impl JobClaimer {
 
         let result = sqlx::query(
             "UPDATE clipping_jobs
-             SET status = 'pending',
-                 claimed_by = NULL,
+             SET claimed_by = NULL,
                  claimed_at = NULL,
                  updated_at = NOW()
-             WHERE claimed_by = $1 AND status IN ('claiming', 'pending')"
+             WHERE claimed_by = $1 AND status = 'pending'"
         )
         .bind(worker_id.clone())
         .execute(&self.db_pool)
