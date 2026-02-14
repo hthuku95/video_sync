@@ -23,7 +23,8 @@ pub fn admin_routes() -> Router {
         .route("/admin/dashboard", get(admin_dashboard))
         .route("/admin/users", get(admin_users_list))
         .route("/admin/users/:id", get(admin_user_detail))
-        .route("/admin/clipping-activity", get(admin_clipping_activity_page));
+        .route("/admin/clipping-activity", get(admin_clipping_activity_page))
+        .route("/admin/clipping-jobs", get(admin_clipping_jobs_page));
     
     // API endpoints - protected routes with JWT authentication  
     let protected_admin = Router::new()
@@ -50,6 +51,11 @@ pub fn admin_routes() -> Router {
         .route("/api/admin/youtube/toggle", post(toggle_youtube_features))
         .route("/api/admin/clipping/stats", get(admin_clipping_stats))
         .route("/api/admin/clipping/user/:user_id/details", get(admin_user_clipping_details))
+        .route("/api/admin/clipping/jobs", get(admin_list_all_jobs))
+        .route("/api/admin/clipping/jobs/:id", get(admin_get_job_details))
+        .route("/api/admin/clipping/jobs/:id/retry", post(admin_retry_job))
+        .route("/api/admin/clipping/jobs/:id/cancel", post(admin_cancel_job))
+        .route("/api/admin/clipping/jobs/:id/clips", get(admin_get_job_clips))
         .layer(axum::middleware::from_fn(admin_middleware))
         .layer(axum::middleware::from_fn(auth_middleware));
     
@@ -91,6 +97,15 @@ pub struct UsersQuery {
     pub page: Option<u32>,
     pub limit: Option<u32>,
     pub search: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct JobsQuery {
+    pub page: Option<u32>,
+    pub limit: Option<u32>,
+    pub status: Option<String>,
+    pub user_id: Option<i32>,
+    pub sort: Option<String>, // "created_desc", "created_asc", "updated_desc"
 }
 
 pub async fn admin_login_page() -> Html<String> {
@@ -3559,6 +3574,1026 @@ pub async fn admin_clipping_activity_page() -> Html<String> {
         </script>
     </body>
     </html>
+    "###;
+
+    Html(html.to_string())
+}
+// ============================================================================
+// ADMIN JOB MANAGEMENT - New Endpoints for Managing ALL Clipping Jobs
+// ============================================================================
+
+/// List all clipping jobs with filters and pagination (admin only)
+pub async fn admin_list_all_jobs(
+    Extension(state): Extension<Arc<AppState>>,
+    Query(query): Query<JobsQuery>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let page = query.page.unwrap_or(1).max(1);
+    let limit = query.limit.unwrap_or(50).min(100); // Max 100 per page
+    let offset = (page - 1) * limit;
+    let sort = query.sort.as_deref().unwrap_or("created_desc");
+
+    // Count total jobs with filters
+    let count_query = if query.status.is_some() || query.user_id.is_some() {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM clipping_jobs cj
+             JOIN youtube_channel_linkages ycl ON cj.linkage_id = ycl.id
+             WHERE ($1::text IS NULL OR cj.status = $1)
+             AND ($2::int IS NULL OR ycl.user_id = $2)"
+        )
+        .bind(&query.status)
+        .bind(query.user_id)
+    } else {
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM clipping_jobs")
+    };
+
+    let total: i64 = count_query
+        .fetch_one(&state.db_pool)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to count jobs: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    // Build dynamic ORDER BY clause
+    let order_clause = match sort {
+        "created_asc" => "cj.created_at ASC",
+        "updated_desc" => "cj.updated_at DESC",
+        "updated_asc" => "cj.updated_at ASC",
+        _ => "cj.created_at DESC", // Default: newest first
+    };
+
+    // Fetch jobs with joins
+    let jobs_query = format!(
+        "SELECT
+            cj.id, cj.linkage_id, cj.source_video_id, cj.source_video_title,
+            cj.source_video_duration_seconds, cj.status, cj.current_step,
+            cj.progress_percent, cj.error_message, cj.retry_count, cj.last_retry_at,
+            cj.claimed_by, cj.claimed_at, cj.created_at, cj.updated_at, cj.completed_at,
+            cj.stuck_detection_count,
+            u.id as user_id, u.username, u.email,
+            ysc.channel_name as source_channel_name,
+            cyc.channel_name as dest_channel_name,
+            EXTRACT(EPOCH FROM (COALESCE(cj.completed_at, NOW()) - cj.created_at))/60 as duration_minutes
+         FROM clipping_jobs cj
+         JOIN youtube_channel_linkages ycl ON cj.linkage_id = ycl.id
+         JOIN users u ON ycl.user_id = u.id
+         JOIN youtube_source_channels ysc ON ycl.source_channel_id = ysc.id
+         JOIN connected_youtube_channels cyc ON ycl.destination_channel_id = cyc.id
+         WHERE ($1::text IS NULL OR cj.status = $1)
+         AND ($2::int IS NULL OR u.id = $2)
+         ORDER BY {}
+         LIMIT $3 OFFSET $4",
+        order_clause
+    );
+
+    let rows = sqlx::query(&jobs_query)
+        .bind(&query.status)
+        .bind(query.user_id)
+        .bind(limit as i64)
+        .bind(offset as i64)
+        .fetch_all(&state.db_pool)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to fetch jobs: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    let jobs: Vec<serde_json::Value> = rows.iter().map(|row| {
+        use sqlx::Row;
+        json!({
+            "id": row.get::<i32, _>("id"),
+            "user_id": row.get::<i32, _>("user_id"),
+            "username": row.get::<String, _>("username"),
+            "email": row.get::<String, _>("email"),
+            "linkage_id": row.get::<i32, _>("linkage_id"),
+            "source_channel_name": row.get::<String, _>("source_channel_name"),
+            "dest_channel_name": row.get::<String, _>("dest_channel_name"),
+            "source_video_id": row.get::<String, _>("source_video_id"),
+            "source_video_title": row.get::<Option<String>, _>("source_video_title"),
+            "status": row.get::<String, _>("status"),
+            "current_step": row.get::<Option<String>, _>("current_step"),
+            "progress_percent": row.get::<i32, _>("progress_percent"),
+            "error_message": row.get::<Option<String>, _>("error_message"),
+            "retry_count": row.get::<i32, _>("retry_count"),
+            "last_retry_at": row.get::<Option<chrono::DateTime<chrono::Utc>>, _>("last_retry_at"),
+            "claimed_by": row.get::<Option<String>, _>("claimed_by"),
+            "claimed_at": row.get::<Option<chrono::DateTime<chrono::Utc>>, _>("claimed_at"),
+            "created_at": row.get::<chrono::DateTime<chrono::Utc>, _>("created_at"),
+            "updated_at": row.get::<chrono::DateTime<chrono::Utc>, _>("updated_at"),
+            "completed_at": row.get::<Option<chrono::DateTime<chrono::Utc>>, _>("completed_at"),
+            "duration_minutes": row.get::<Option<rust_decimal::Decimal>, _>("duration_minutes"),
+        })
+    }).collect();
+
+    let total_pages = ((total as f64) / (limit as f64)).ceil() as u32;
+
+    Ok(Json(json!({
+        "success": true,
+        "jobs": jobs,
+        "pagination": {
+            "page": page,
+            "limit": limit,
+            "total": total,
+            "total_pages": total_pages
+        },
+        "filters_applied": {
+            "status": query.status,
+            "user_id": query.user_id,
+            "sort": sort
+        }
+    })))
+}
+
+/// Get detailed information about a specific job
+pub async fn admin_get_job_details(
+    Extension(state): Extension<Arc<AppState>>,
+    Path(job_id): Path<i32>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    // Fetch job details with joins
+    let job_row = sqlx::query(
+        "SELECT
+            cj.*,
+            u.id as user_id, u.username, u.email,
+            ysc.channel_name as source_channel_name,
+            cyc.channel_name as dest_channel_name,
+            ycl.clips_per_video, ycl.min_clip_duration_seconds, ycl.max_clip_duration_seconds,
+            EXTRACT(EPOCH FROM (COALESCE(cj.completed_at, NOW()) - cj.created_at))/60 as duration_minutes
+         FROM clipping_jobs cj
+         JOIN youtube_channel_linkages ycl ON cj.linkage_id = ycl.id
+         JOIN users u ON ycl.user_id = u.id
+         JOIN youtube_source_channels ysc ON ycl.source_channel_id = ysc.id
+         JOIN connected_youtube_channels cyc ON ycl.destination_channel_id = cyc.id
+         WHERE cj.id = $1"
+    )
+    .bind(job_id)
+    .fetch_optional(&state.db_pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("Failed to fetch job details: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let job_row = match job_row {
+        Some(row) => row,
+        None => return Err(StatusCode::NOT_FOUND),
+    };
+
+    // Fetch extracted clips
+    let clips_rows = sqlx::query(
+        "SELECT * FROM extracted_clips WHERE clipping_job_id = $1 ORDER BY clip_number ASC"
+    )
+    .bind(job_id)
+    .fetch_all(&state.db_pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("Failed to fetch clips: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    use sqlx::Row;
+    let clips: Vec<serde_json::Value> = clips_rows.iter().map(|row| {
+        json!({
+            "id": row.get::<i32, _>("id"),
+            "clip_number": row.get::<i32, _>("clip_number"),
+            "start_time_seconds": row.get::<f64, _>("start_time_seconds"),
+            "end_time_seconds": row.get::<f64, _>("end_time_seconds"),
+            "duration_seconds": row.get::<f64, _>("duration_seconds"),
+            "ai_title": row.get::<Option<String>, _>("ai_title"),
+            "ai_description": row.get::<Option<String>, _>("ai_description"),
+            "ai_confidence_score": row.get::<Option<f64>, _>("ai_confidence_score"),
+            "youtube_video_id": row.get::<Option<String>, _>("youtube_video_id"),
+            "upload_status": row.get::<String, _>("upload_status"),
+            "published_at": row.get::<Option<chrono::NaiveDateTime>, _>("published_at"),
+        })
+    }).collect();
+
+    // Build job details JSON
+    let job = json!({
+        "id": job_row.get::<i32, _>("id"),
+        "user_id": job_row.get::<i32, _>("user_id"),
+        "username": job_row.get::<String, _>("username"),
+        "email": job_row.get::<String, _>("email"),
+        "linkage_id": job_row.get::<i32, _>("linkage_id"),
+        "source_channel_name": job_row.get::<String, _>("source_channel_name"),
+        "dest_channel_name": job_row.get::<String, _>("dest_channel_name"),
+        "source_video_id": job_row.get::<String, _>("source_video_id"),
+        "source_video_title": job_row.get::<Option<String>, _>("source_video_title"),
+        "source_video_duration_seconds": job_row.get::<Option<i32>, _>("source_video_duration_seconds"),
+        "local_video_path": job_row.get::<Option<String>, _>("local_video_path"),
+        "status": job_row.get::<String, _>("status"),
+        "current_step": job_row.get::<Option<String>, _>("current_step"),
+        "progress_percent": job_row.get::<i32, _>("progress_percent"),
+        "error_message": job_row.get::<Option<String>, _>("error_message"),
+        "retry_count": job_row.get::<i32, _>("retry_count"),
+        "last_retry_at": job_row.get::<Option<chrono::NaiveDateTime>, _>("last_retry_at"),
+        "stuck_detection_count": job_row.get::<i32, _>("stuck_detection_count"),
+        "claimed_by": job_row.get::<Option<String>, _>("claimed_by"),
+        "claimed_at": job_row.get::<Option<chrono::NaiveDateTime>, _>("claimed_at"),
+        "started_at": job_row.get::<Option<chrono::NaiveDateTime>, _>("started_at"),
+        "created_at": job_row.get::<chrono::NaiveDateTime, _>("created_at"),
+        "updated_at": job_row.get::<chrono::NaiveDateTime, _>("updated_at"),
+        "completed_at": job_row.get::<Option<chrono::NaiveDateTime>, _>("completed_at"),
+        "duration_minutes": job_row.get::<Option<rust_decimal::Decimal>, _>("duration_minutes"),
+        "clips_per_video": job_row.get::<i32, _>("clips_per_video"),
+        "min_clip_duration": job_row.get::<i32, _>("min_clip_duration_seconds"),
+        "max_clip_duration": job_row.get::<i32, _>("max_clip_duration_seconds"),
+    });
+
+    Ok(Json(json!({
+        "success": true,
+        "job": job,
+        "clips": clips,
+        "clips_count": clips.len()
+    })))
+}
+
+/// Retry a failed or cancelled job (admin can retry ANY job)
+pub async fn admin_retry_job(
+    Extension(state): Extension<Arc<AppState>>,
+    Path(job_id): Path<i32>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    // Reset job to pending (admin can retry any failed/cancelled job)
+    let result = sqlx::query(
+        "UPDATE clipping_jobs SET
+            status = 'pending',
+            error_message = NULL,
+            progress_percent = 0,
+            current_step = 'queued',
+            retry_count = COALESCE(retry_count, 0) + 1,
+            last_retry_at = NOW(),
+            claimed_by = NULL,
+            claimed_at = NULL,
+            updated_at = NOW()
+         WHERE id = $1 AND status IN ('failed', 'cancelled')
+         RETURNING retry_count"
+    )
+    .bind(job_id)
+    .fetch_optional(&state.db_pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("Failed to retry job: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    match result {
+        Some(row) => {
+            let retry_count: i32 = row.get("retry_count");
+            tracing::info!("Admin retried job {} (attempt #{})", job_id, retry_count);
+            Ok(Json(json!({
+                "success": true,
+                "message": format!("Job #{} queued for retry (attempt #{})", job_id, retry_count)
+            })))
+        }
+        None => Ok(Json(json!({
+            "success": false,
+            "message": "Job not found or not in failed/cancelled status"
+        }))),
+    }
+}
+
+/// Cancel a running or stuck job
+pub async fn admin_cancel_job(
+    Extension(state): Extension<Arc<AppState>>,
+    Path(job_id): Path<i32>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    // Cancel job (admin can cancel any non-terminal job)
+    let result = sqlx::query(
+        "UPDATE clipping_jobs SET
+            status = 'cancelled',
+            current_step = 'admin_cancelled',
+            updated_at = NOW(),
+            completed_at = NOW(),
+            claimed_by = NULL,
+            claimed_at = NULL
+         WHERE id = $1 AND status NOT IN ('completed', 'failed', 'cancelled')"
+    )
+    .bind(job_id)
+    .execute(&state.db_pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("Failed to cancel job: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    if result.rows_affected() > 0 {
+        tracing::info!("Admin cancelled job {}", job_id);
+        Ok(Json(json!({
+            "success": true,
+            "message": format!("Job #{} cancelled successfully", job_id)
+        })))
+    } else {
+        Ok(Json(json!({
+            "success": false,
+            "message": "Job not found or already in terminal status"
+        })))
+    }
+}
+
+/// Get all clips for a specific job
+pub async fn admin_get_job_clips(
+    Extension(state): Extension<Arc<AppState>>,
+    Path(job_id): Path<i32>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let clips_rows = sqlx::query(
+        "SELECT * FROM extracted_clips WHERE clipping_job_id = $1 ORDER BY clip_number ASC"
+    )
+    .bind(job_id)
+    .fetch_all(&state.db_pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("Failed to fetch clips: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    use sqlx::Row;
+    let clips: Vec<serde_json::Value> = clips_rows.iter().map(|row| {
+        json!({
+            "id": row.get::<i32, _>("id"),
+            "clip_number": row.get::<i32, _>("clip_number"),
+            "local_clip_path": row.get::<String, _>("local_clip_path"),
+            "start_time_seconds": row.get::<f64, _>("start_time_seconds"),
+            "end_time_seconds": row.get::<f64, _>("end_time_seconds"),
+            "duration_seconds": row.get::<f64, _>("duration_seconds"),
+            "ai_title": row.get::<Option<String>, _>("ai_title"),
+            "ai_description": row.get::<Option<String>, _>("ai_description"),
+            "ai_confidence_score": row.get::<Option<f64>, _>("ai_confidence_score"),
+            "youtube_video_id": row.get::<Option<String>, _>("youtube_video_id"),
+            "youtube_url": row.get::<Option<String>, _>("youtube_url"),
+            "upload_status": row.get::<String, _>("upload_status"),
+            "published_at": row.get::<Option<chrono::NaiveDateTime>, _>("published_at"),
+            "views_24h": row.get::<i32, _>("views_24h"),
+            "likes_24h": row.get::<i32, _>("likes_24h"),
+            "comments_24h": row.get::<i32, _>("comments_24h"),
+        })
+    }).collect();
+
+    Ok(Json(json!({
+        "success": true,
+        "clips": clips,
+        "total": clips.len()
+    })))
+}
+
+/// Admin Clipping Jobs Management Page - HTML Dashboard
+pub async fn admin_clipping_jobs_page() -> Html<String> {
+    let html = r###"
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Clipping Jobs Management - Admin</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: #f8f9fa;
+            color: #343a40;
+        }
+
+        /* Sidebar */
+        .sidebar {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 250px;
+            height: 100vh;
+            background: #343a40;
+            padding: 2rem 0;
+            color: white;
+        }
+
+        .sidebar h2 {
+            padding: 0 1.5rem 2rem;
+            border-bottom: 1px solid #495057;
+            margin-bottom: 1rem;
+            color: #dc3545;
+        }
+
+        .sidebar ul {
+            list-style: none;
+        }
+
+        .sidebar li a {
+            display: block;
+            padding: 0.75rem 1.5rem;
+            color: white;
+            text-decoration: none;
+            transition: background 0.2s;
+        }
+
+        .sidebar li a:hover,
+        .sidebar li a.active {
+            background: #495057;
+        }
+
+        .sidebar li a.active {
+            border-left: 3px solid #dc3545;
+        }
+
+        /* Main Content */
+        .main-content {
+            margin-left: 250px;
+            padding: 2rem;
+        }
+
+        .header {
+            background: white;
+            padding: 1.5rem;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .filters {
+            background: white;
+            padding: 1.5rem;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 2rem;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+        }
+
+        .filter-group {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+
+        .filter-group label {
+            font-weight: 600;
+            color: #495057;
+            font-size: 0.9rem;
+        }
+
+        .filter-group select,
+        .filter-group input {
+            padding: 0.5rem;
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+            font-size: 1rem;
+        }
+
+        .btn {
+            padding: 0.5rem 1rem;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            transition: all 0.2s;
+        }
+
+        .btn-primary {
+            background: #dc3545;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #c82333;
+        }
+
+        .btn-secondary {
+            background: #6c757d;
+            color: white;
+        }
+
+        .btn-secondary:hover {
+            background: #5a6268;
+        }
+
+        .btn-success {
+            background: #28a745;
+            color: white;
+        }
+
+        .btn-sm {
+            padding: 0.25rem 0.5rem;
+            font-size: 0.85rem;
+        }
+
+        /* Jobs Table */
+        .jobs-table {
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        thead {
+            background: #343a40;
+            color: white;
+        }
+
+        th, td {
+            padding: 1rem;
+            text-align: left;
+        }
+
+        tbody tr {
+            border-bottom: 1px solid #dee2e6;
+            transition: background 0.2s;
+        }
+
+        tbody tr:hover {
+            background: #f8f9fa;
+        }
+
+        /* Status Badges */
+        .badge {
+            padding: 0.25rem 0.75rem;
+            border-radius: 12px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            display: inline-block;
+        }
+
+        .badge-success {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .badge-danger {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .badge-warning {
+            background: #fff3cd;
+            color: #856404;
+        }
+
+        .badge-info {
+            background: #d1ecf1;
+            color: #0c5460;
+        }
+
+        .badge-secondary {
+            background: #e2e3e5;
+            color: #383d41;
+        }
+
+        /* Pagination */
+        .pagination {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 1rem;
+            padding: 1.5rem;
+        }
+
+        /* Job Details Modal */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.5);
+            z-index: 1000;
+        }
+
+        .modal-content {
+            background: white;
+            margin: 2% auto;
+            padding: 2rem;
+            max-width: 800px;
+            max-height: 90vh;
+            overflow-y: auto;
+            border-radius: 8px;
+            position: relative;
+        }
+
+        .modal-close {
+            position: absolute;
+            top: 1rem;
+            right: 1rem;
+            font-size: 2rem;
+            cursor: pointer;
+            color: #6c757d;
+        }
+
+        .job-detail-section {
+            margin-bottom: 1.5rem;
+        }
+
+        .job-detail-section h3 {
+            color: #dc3545;
+            margin-bottom: 0.75rem;
+        }
+
+        .detail-row {
+            display: grid;
+            grid-template-columns: 150px 1fr;
+            padding: 0.5rem 0;
+            border-bottom: 1px solid #f1f1f1;
+        }
+
+        .detail-label {
+            font-weight: 600;
+            color: #6c757d;
+        }
+
+        .error-box {
+            background: #f8d7da;
+            border: 1px solid #f5c6cb;
+            border-radius: 4px;
+            padding: 1rem;
+            margin-top: 0.5rem;
+            color: #721c24;
+        }
+
+        .actions {
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 2rem;
+            color: #6c757d;
+        }
+    </style>
+</head>
+<body>
+    <!-- Sidebar -->
+    <div class="sidebar">
+        <h2>Admin Panel</h2>
+        <ul>
+            <li><a href="/admin/dashboard">Dashboard</a></li>
+            <li><a href="/admin/users">Users</a></li>
+            <li><a href="/admin/clipping-jobs" class="active">Clipping Jobs</a></li>
+            <li><a href="/admin/clipping-activity">Activity</a></li>
+            <li><a href="#" onclick="logout()">Logout</a></li>
+        </ul>
+    </div>
+
+    <!-- Main Content -->
+    <div class="main-content">
+        <div class="header">
+            <div>
+                <h1>Clipping Jobs Management</h1>
+                <p>View and manage all YouTube clipping jobs</p>
+            </div>
+            <button class="btn btn-secondary" onclick="loadJobs()">Refresh</button>
+        </div>
+
+        <!-- Filters -->
+        <div class="filters">
+            <div class="filter-group">
+                <label>Status</label>
+                <select id="statusFilter" onchange="filterChanged()">
+                    <option value="">All Statuses</option>
+                    <option value="pending">Pending</option>
+                    <option value="downloading">Downloading</option>
+                    <option value="analyzing">Analyzing</option>
+                    <option value="extracting_clips">Extracting Clips</option>
+                    <option value="posting">Posting</option>
+                    <option value="completed">Completed</option>
+                    <option value="failed">Failed</option>
+                    <option value="cancelled">Cancelled</option>
+                </select>
+            </div>
+            <div class="filter-group">
+                <label>Sort By</label>
+                <select id="sortFilter" onchange="filterChanged()">
+                    <option value="created_desc">Newest First</option>
+                    <option value="created_asc">Oldest First</option>
+                    <option value="updated_desc">Recently Updated</option>
+                    <option value="updated_asc">Least Recently Updated</option>
+                </select>
+            </div>
+            <div class="filter-group">
+                <label>&nbsp;</label>
+                <button class="btn btn-primary" onclick="filterChanged()">Apply Filters</button>
+            </div>
+        </div>
+
+        <!-- Jobs Table -->
+        <div class="jobs-table">
+            <table>
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>User</th>
+                        <th>Video</th>
+                        <th>Channels</th>
+                        <th>Status</th>
+                        <th>Progress</th>
+                        <th>Error</th>
+                        <th>Retries</th>
+                        <th>Created</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="jobsTableBody">
+                    <tr>
+                        <td colspan="10" class="loading">Loading jobs...</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Pagination -->
+        <div class="pagination">
+            <button class="btn btn-secondary" onclick="prevPage()" id="prevBtn">« Previous</button>
+            <span id="pageInfo">Page 1 of 1</span>
+            <button class="btn btn-secondary" onclick="nextPage()" id="nextBtn">Next »</button>
+        </div>
+    </div>
+
+    <!-- Job Details Modal -->
+    <div id="jobModal" class="modal">
+        <div class="modal-content">
+            <span class="modal-close" onclick="closeModal()">&times;</span>
+            <div id="modalBody">
+                <!-- Details loaded here -->
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // State
+        let currentPage = 1;
+        let totalPages = 1;
+        let jobs = [];
+        const authToken = localStorage.getItem('authToken');
+        const user = JSON.parse(localStorage.getItem('user') || '{}');
+
+        // Check auth
+        if (!authToken || (!user.is_staff && !user.is_superuser)) {
+            window.location.href = '/admin/login';
+        }
+
+        // Load jobs
+        async function loadJobs() {
+            const status = document.getElementById('statusFilter').value;
+            const sort = document.getElementById('sortFilter').value;
+
+            const params = new URLSearchParams({
+                page: currentPage,
+                limit: 50
+            });
+            if (status) params.append('status', status);
+            if (sort) params.append('sort', sort);
+
+            try {
+                const response = await fetch(`/api/admin/clipping/jobs?${params}`, {
+                    headers: { 'Authorization': 'Bearer ' + authToken }
+                });
+                const data = await response.json();
+
+                if (data.success) {
+                    jobs = data.jobs;
+                    totalPages = data.pagination.total_pages;
+                    renderJobs();
+                    updatePagination();
+                }
+            } catch (error) {
+                console.error('Error loading jobs:', error);
+                document.getElementById('jobsTableBody').innerHTML = 
+                    '<tr><td colspan="10" class="loading">Error loading jobs</td></tr>';
+            }
+        }
+
+        // Render jobs table
+        function renderJobs() {
+            const tbody = document.getElementById('jobsTableBody');
+            if (jobs.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="10" class="loading">No jobs found</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = jobs.map(job => `
+                <tr onclick="viewJobDetails(${job.id})">
+                    <td>#${job.id}</td>
+                    <td>${job.username}</td>
+                    <td>
+                        <div>${job.source_video_title || job.source_video_id}</div>
+                        <small style="color: #6c757d;">${job.source_video_id}</small>
+                    </td>
+                    <td>
+                        <div>${job.source_channel_name}</div>
+                        <small style="color: #6c757d;">→ ${job.dest_channel_name}</small>
+                    </td>
+                    <td>${getStatusBadge(job.status)}</td>
+                    <td>${job.progress_percent}%</td>
+                    <td>${job.error_message ? '<span style="color: #dc3545">✗</span>' : ''}</td>
+                    <td>${job.retry_count > 0 ? job.retry_count : '-'}</td>
+                    <td>${formatDate(job.created_at)}</td>
+                    <td class="actions" onclick="event.stopPropagation()">
+                        ${job.status === 'failed' || job.status === 'cancelled' ? 
+                            `<button class="btn btn-success btn-sm" onclick="retryJob(${job.id})">Retry</button>` : ''}
+                        ${job.status !== 'completed' && job.status !== 'failed' && job.status !== 'cancelled' ? 
+                            `<button class="btn btn-secondary btn-sm" onclick="cancelJob(${job.id})">Cancel</button>` : ''}
+                    </td>
+                </tr>
+            `).join('');
+        }
+
+        // View job details in modal
+        async function viewJobDetails(jobId) {
+            const modal = document.getElementById('jobModal');
+            const modalBody = document.getElementById('modalBody');
+            modal.style.display = 'block';
+            modalBody.innerHTML = '<div class="loading">Loading job details...</div>';
+
+            try {
+                const response = await fetch(`/api/admin/clipping/jobs/${jobId}`, {
+                    headers: { 'Authorization': 'Bearer ' + authToken }
+                });
+                const data = await response.json();
+
+                if (data.success) {
+                    const job = data.job;
+                    const clips = data.clips;
+
+                    modalBody.innerHTML = `
+                        <h2>Job #${job.id} Details</h2>
+                        
+                        <div class="job-detail-section">
+                            <h3>Basic Information</h3>
+                            <div class="detail-row"><div class="detail-label">Status:</div><div>${getStatusBadge(job.status)}</div></div>
+                            <div class="detail-row"><div class="detail-label">User:</div><div>${job.username} (${job.email})</div></div>
+                            <div class="detail-row"><div class="detail-label">Video ID:</div><div>${job.source_video_id}</div></div>
+                            <div class="detail-row"><div class="detail-label">Video Title:</div><div>${job.source_video_title || 'N/A'}</div></div>
+                            <div class="detail-row"><div class="detail-label">Progress:</div><div>${job.progress_percent}%</div></div>
+                            <div class="detail-row"><div class="detail-label">Current Step:</div><div>${job.current_step || 'N/A'}</div></div>
+                        </div>
+
+                        <div class="job-detail-section">
+                            <h3>Channels</h3>
+                            <div class="detail-row"><div class="detail-label">Source:</div><div>${job.source_channel_name}</div></div>
+                            <div class="detail-row"><div class="detail-label">Destination:</div><div>${job.dest_channel_name}</div></div>
+                            <div class="detail-row"><div class="detail-label">Clips Per Video:</div><div>${job.clips_per_video}</div></div>
+                        </div>
+
+                        <div class="job-detail-section">
+                            <h3>Timing</h3>
+                            <div class="detail-row"><div class="detail-label">Created:</div><div>${formatDate(job.created_at)}</div></div>
+                            <div class="detail-row"><div class="detail-label">Updated:</div><div>${formatDate(job.updated_at)}</div></div>
+                            <div class="detail-row"><div class="detail-label">Completed:</div><div>${formatDate(job.completed_at)}</div></div>
+                            <div class="detail-row"><div class="detail-label">Duration:</div><div>${job.duration_minutes ? Math.round(job.duration_minutes) + ' minutes' : 'N/A'}</div></div>
+                        </div>
+
+                        <div class="job-detail-section">
+                            <h3>Retry & Recovery</h3>
+                            <div class="detail-row"><div class="detail-label">Retry Count:</div><div>${job.retry_count}</div></div>
+                            <div class="detail-row"><div class="detail-label">Last Retry:</div><div>${formatDate(job.last_retry_at)}</div></div>
+                            <div class="detail-row"><div class="detail-label">Stuck Count:</div><div>${job.stuck_detection_count}</div></div>
+                            <div class="detail-row"><div class="detail-label">Claimed By:</div><div>${job.claimed_by || 'None'}</div></div>
+                            <div class="detail-row"><div class="detail-label">Claimed At:</div><div>${formatDate(job.claimed_at)}</div></div>
+                        </div>
+
+                        ${job.error_message ? `
+                            <div class="job-detail-section">
+                                <h3>Error</h3>
+                                <div class="error-box">${job.error_message}</div>
+                            </div>
+                        ` : ''}
+
+                        <div class="job-detail-section">
+                            <h3>Extracted Clips (${clips.length})</h3>
+                            ${clips.length === 0 ? '<p>No clips extracted yet</p>' : clips.map(clip => `
+                                <div class="detail-row">
+                                    <div class="detail-label">Clip ${clip.clip_number}:</div>
+                                    <div>
+                                        ${clip.ai_title || 'Untitled'} (${Math.round(clip.duration_seconds)}s)<br>
+                                        <small>Upload: ${getStatusBadge(clip.upload_status)}</small>
+                                        ${clip.youtube_video_id ? `<br><small>ID: ${clip.youtube_video_id}</small>` : ''}
+                                    </div>
+                                </div>
+                            `).join('')}
+                        </div>
+
+                        <div class="actions" style="margin-top: 2rem;">
+                            ${job.status === 'failed' || job.status === 'cancelled' ? 
+                                `<button class="btn btn-success" onclick="retryJob(${job.id}); closeModal(); setTimeout(loadJobs, 500);">Retry Job</button>` : ''}
+                            ${job.status !== 'completed' && job.status !== 'failed' && job.status !== 'cancelled' ? 
+                                `<button class="btn btn-secondary" onclick="cancelJob(${job.id}); closeModal(); setTimeout(loadJobs, 500);">Cancel Job</button>` : ''}
+                            <button class="btn btn-primary" onclick="closeModal()">Close</button>
+                        </div>
+                    `;
+                }
+            } catch (error) {
+                console.error('Error loading job details:', error);
+                modalBody.innerHTML = '<div class="loading">Error loading details</div>';
+            }
+        }
+
+        function closeModal() {
+            document.getElementById('jobModal').style.display = 'none';
+        }
+
+        // Retry job
+        async function retryJob(jobId) {
+            if (!confirm(`Retry job #${jobId}?`)) return;
+
+            try {
+                const response = await fetch(`/api/admin/clipping/jobs/${jobId}/retry`, {
+                    method: 'POST',
+                    headers: { 'Authorization': 'Bearer ' + authToken }
+                });
+                const data = await response.json();
+                alert(data.message);
+                if (data.success) loadJobs();
+            } catch (error) {
+                alert('Error retrying job');
+            }
+        }
+
+        // Cancel job
+        async function cancelJob(jobId) {
+            if (!confirm(`Cancel job #${jobId}? This cannot be undone.`)) return;
+
+            try {
+                const response = await fetch(`/api/admin/clipping/jobs/${jobId}/cancel`, {
+                    method: 'POST',
+                    headers: { 'Authorization': 'Bearer ' + authToken }
+                });
+                const data = await response.json();
+                alert(data.message);
+                if (data.success) loadJobs();
+            } catch (error) {
+                alert('Error cancelling job');
+            }
+        }
+
+        // Pagination
+        function prevPage() {
+            if (currentPage > 1) {
+                currentPage--;
+                loadJobs();
+            }
+        }
+
+        function nextPage() {
+            if (currentPage < totalPages) {
+                currentPage++;
+                loadJobs();
+            }
+        }
+
+        function updatePagination() {
+            document.getElementById('pageInfo').textContent = `Page ${currentPage} of ${totalPages}`;
+            document.getElementById('prevBtn').disabled = currentPage === 1;
+            document.getElementById('nextBtn').disabled = currentPage === totalPages;
+        }
+
+        function filterChanged() {
+            currentPage = 1;
+            loadJobs();
+        }
+
+        // Helpers
+        function getStatusBadge(status) {
+            const badges = {
+                'completed': 'badge-success',
+                'failed': 'badge-danger',
+                'cancelled': 'badge-secondary',
+                'pending': 'badge-warning',
+                'downloading': 'badge-info',
+                'analyzing': 'badge-info',
+                'extracting_clips': 'badge-info',
+                'posting': 'badge-info'
+            };
+            return `<span class="badge ${badges[status] || 'badge-secondary'}">${status}</span>`;
+        }
+
+        function formatDate(dateStr) {
+            if (!dateStr) return 'Never';
+            return new Date(dateStr).toLocaleString();
+        }
+
+        function logout() {
+            localStorage.removeItem('authToken');
+            localStorage.removeItem('user');
+            window.location.href = '/admin/login';
+        }
+
+        // Load on page load
+        loadJobs();
+
+        // Auto-refresh every 30 seconds
+        setInterval(loadJobs, 30000);
+    </script>
+</body>
+</html>
     "###;
 
     Html(html.to_string())

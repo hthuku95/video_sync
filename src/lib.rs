@@ -1,4 +1,31 @@
 // lib.rs - Main library file that exports all modules
+
+use std::sync::Arc;
+
+// Core modules
+pub mod agent;
+pub mod db;
+pub mod gemini_client;
+pub mod claude_client;
+pub mod voyage_embeddings;
+pub mod elevenlabs_client;
+pub mod youtube_client;
+pub mod youtube_analytics_client;
+pub mod handlers;
+pub mod jobs;
+pub mod workflow;
+pub mod middleware;
+pub mod models;
+pub mod pexels_client;
+pub mod qdrant_client;
+pub mod services;
+pub mod vector_db;
+pub mod clipping;
+pub mod tool_selector;
+pub mod utils;
+pub mod token_manager;
+
+// Video processing modules
 pub mod types;
 pub mod core;
 pub mod audio;
@@ -6,7 +33,6 @@ pub mod visual;
 pub mod transform;
 pub mod advanced;
 pub mod export;
-pub mod utils;
 
 // Re-export commonly used types for convenience
 pub use types::*;
@@ -16,4 +42,22 @@ pub use visual::*;
 pub use transform::*;
 pub use advanced::*;
 pub use export::*;
-pub use utils::*;
+
+// AppState struct for integration tests
+pub struct AppState {
+    pub db_pool: sqlx::PgPool,
+    pub vector_db: Option<vector_db::AstraDBClient>,
+    pub qdrant_client: Option<qdrant_client::QdrantClient>,
+    pub gemini_client: Option<gemini_client::GeminiClient>,
+    pub claude_client: Option<claude_client::ClaudeClient>,
+    pub voyage_embeddings: Option<voyage_embeddings::VoyageEmbeddings>,
+    pub pexels_client: Option<pexels_client::PexelsClient>,
+    pub elevenlabs_client: Option<elevenlabs_client::ElevenLabsClient>,
+    pub youtube_client: Option<youtube_client::YouTubeClient>,
+    pub youtube_analytics_client: Option<youtube_analytics_client::YouTubeAnalyticsClient>,
+    pub google_oauth_client_id: Option<String>,
+    pub google_oauth_client_secret: Option<String>,
+    pub job_manager: jobs::SharedJobManager,
+    pub workflow_checkpointer: Option<workflow::checkpoint::WorkflowCheckpointer>,
+    pub token_manager: Option<Arc<token_manager::TokenManager>>,
+}
