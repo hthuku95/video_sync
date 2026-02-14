@@ -9,10 +9,33 @@ pub struct VoyageEmbeddings {
     model: String,
 }
 
+/// Input type for Voyage AI embeddings
+/// See: https://docs.voyageai.com/docs/embeddings
+#[derive(Debug, Clone, Copy)]
+pub enum InputType {
+    /// Use for documents being stored in vector database
+    /// Prepends: "Represent the document for retrieval: "
+    Document,
+    /// Use for search queries
+    /// Prepends: "Represent the query for retrieving supporting documents: "
+    Query,
+}
+
+impl InputType {
+    fn as_str(&self) -> &str {
+        match self {
+            InputType::Document => "document",
+            InputType::Query => "query",
+        }
+    }
+}
+
 #[derive(Debug, Serialize)]
 struct EmbeddingRequest {
     input: Vec<String>,
     model: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    input_type: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -31,14 +54,27 @@ impl VoyageEmbeddings {
             client: Client::new(),
             api_key,
             base_url: "https://api.voyageai.com/v1".to_string(),
-            model: "voyage-3".to_string(),
+            // Using voyage-3.5 for balanced performance and cost
+            // See: https://docs.voyageai.com/docs/embeddings
+            model: "voyage-3.5".to_string(),
         }
     }
 
-    pub async fn generate_embeddings(&self, texts: Vec<String>) -> Result<Vec<Vec<f32>>, String> {
+    /// Generate embeddings with optional input type specification
+    ///
+    /// # Arguments
+    /// * `texts` - Text content to embed
+    /// * `input_type` - Optional: Specify "document" for stored content or "query" for searches
+    ///                  This significantly improves retrieval quality
+    pub async fn generate_embeddings_with_type(
+        &self,
+        texts: Vec<String>,
+        input_type: Option<InputType>
+    ) -> Result<Vec<Vec<f32>>, String> {
         let request = EmbeddingRequest {
             input: texts,
             model: self.model.clone(),
+            input_type: input_type.map(|t| t.as_str().to_string()),
         };
 
         let response = self
@@ -65,8 +101,28 @@ impl VoyageEmbeddings {
         Ok(embedding_response.data.into_iter().map(|d| d.embedding).collect())
     }
 
+    /// Generate embeddings (backward compatible - defaults to document type)
+    pub async fn generate_embeddings(&self, texts: Vec<String>) -> Result<Vec<Vec<f32>>, String> {
+        self.generate_embeddings_with_type(texts, Some(InputType::Document)).await
+    }
+
+    /// Generate single embedding (backward compatible - defaults to document type)
     pub async fn generate_single_embedding(&self, text: String) -> Result<Vec<f32>, String> {
         let embeddings = self.generate_embeddings(vec![text]).await?;
+        embeddings.into_iter().next()
+            .ok_or_else(|| "No embedding returned".to_string())
+    }
+
+    /// Generate single embedding for a document (explicit type)
+    pub async fn embed_document(&self, text: String) -> Result<Vec<f32>, String> {
+        let embeddings = self.generate_embeddings_with_type(vec![text], Some(InputType::Document)).await?;
+        embeddings.into_iter().next()
+            .ok_or_else(|| "No embedding returned".to_string())
+    }
+
+    /// Generate single embedding for a query (explicit type)
+    pub async fn embed_query(&self, text: String) -> Result<Vec<f32>, String> {
+        let embeddings = self.generate_embeddings_with_type(vec![text], Some(InputType::Query)).await?;
         embeddings.into_iter().next()
             .ok_or_else(|| "No embedding returned".to_string())
     }
