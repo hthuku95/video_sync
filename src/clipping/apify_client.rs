@@ -11,6 +11,7 @@ use serde_json::json;
 // Import all downloader clients for 5-tier fallback system
 use crate::clipping::rusty_ytdl_client::RustyYtdlClient;
 use crate::clipping::rustube_client::RustubeClient;
+use crate::clipping::ytdlp_api_client::YtdlpApiClient;
 use crate::clipping::ytdlp_client::YtDlpClient;
 use crate::clipping::rust_yt_downloader_client::RustYtDownloaderClient;
 
@@ -296,7 +297,7 @@ impl ApifyClient {
     }
 
     /// Download video using 5-tier fallback system
-    /// Strategy order: Apify → rustube → yt-dlp → rust-yt-downloader → rusty_ytdl
+    /// Strategy order: Apify → rustube → FastAPI yt-dlp → rust-yt-downloader → rusty_ytdl
     pub async fn download_video(
         &self,
         video_url: &str,
@@ -349,15 +350,21 @@ impl ApifyClient {
             }
         }
 
-        // STRATEGY 3: yt-dlp (CLI wrapper, battle-tested)
-        tracing::info!("🔄 Trying Strategy 3 (yt-dlp CLI wrapper)...");
-        match YtDlpClient::download_video(video_url, output_path).await {
+        // STRATEGY 3: FastAPI yt-dlp microservice (reliable HTTP API)
+        tracing::info!("🔄 Trying Strategy 3 (FastAPI yt-dlp microservice)...");
+        match YtdlpApiClient::download_video(video_url, output_path).await {
             Ok(result) => {
-                tracing::info!("✅ Strategy 3 (yt-dlp) succeeded");
-                return Ok(result);
+                tracing::info!("✅ Strategy 3 (FastAPI microservice) succeeded");
+                return Ok(VideoDownloadResult {
+                    file_path: result.file_path,
+                    title: result.title,
+                    duration_seconds: Some(result.duration_seconds),
+                    width: result.width.map(|w| w as i32),
+                    height: result.height.map(|h| h as i32),
+                });
             }
             Err(e) => {
-                tracing::warn!("⚠️ Strategy 3 (yt-dlp) failed: {}", e);
+                tracing::warn!("⚠️ Strategy 3 (FastAPI microservice) failed: {}", e);
             }
         }
 

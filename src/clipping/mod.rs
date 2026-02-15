@@ -5,7 +5,8 @@ pub mod models;
 pub mod apify_client;          // Primary downloader with 5-tier fallback system
 pub mod rusty_ytdl_client;     // Strategy #5: Pure Rust YouTube downloader (last resort)
 pub mod rustube_client;        // Strategy #2: Pure Rust downloader (no external deps)
-pub mod ytdlp_client;          // Strategy #3: yt-dlp CLI wrapper (battle-tested)
+pub mod ytdlp_api_client;      // Strategy #3: FastAPI yt-dlp microservice (HTTP API)
+pub mod ytdlp_client;          // Legacy: yt-dlp CLI wrapper (deprecated, kept for compatibility)
 pub mod rust_yt_downloader_client; // Strategy #4: Feature-rich yt-dlp wrapper
 pub mod monitor;
 pub mod ai_clipper;
@@ -19,6 +20,8 @@ pub use models::*;
 pub use rusty_ytdl_client::RustyYtdlClient;
 #[allow(unused_imports)] // Exported for external use
 pub use rustube_client::RustubeClient;
+#[allow(unused_imports)] // Exported for external use
+pub use ytdlp_api_client::YtdlpApiClient;
 #[allow(unused_imports)] // Exported for external use
 pub use ytdlp_client::YtDlpClient;
 #[allow(unused_imports)] // Exported for external use

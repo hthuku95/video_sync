@@ -1,0 +1,396 @@
+/*!
+ * HTTP client for FastAPI yt-dlp microservice
+ *
+ * Replaces Strategy #3 (yt-dlp CLI subprocess) with reliable HTTP API calls
+ * to the standalone FastAPI microservice.
+ */
+
+use reqwest::{Client, StatusCode};
+use serde::{Deserialize, Serialize};
+use std::env;
+use std::path::Path;
+use std::time::Duration;
+use tokio::fs::File;
+use tokio::io::AsyncWriteExt;
+use tracing::{info, warn, error};
+
+// ============================================================================
+// Request/Response Models (matches FastAPI schemas)
+// ============================================================================
+
+#[derive(Debug, Serialize)]
+struct DownloadRequest {
+    video_url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    job_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    quality: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    format: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    prefer_base64: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    timeout_seconds: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DownloadResponse {
+    success: bool,
+    method: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    download_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    file_data: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    expires_at: Option<String>,
+    metadata: VideoMetadata,
+}
+
+#[derive(Debug, Deserialize)]
+struct VideoMetadata {
+    title: String,
+    duration_seconds: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    width: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    height: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    file_size_bytes: Option<u64>,
+    format: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ErrorResponse {
+    success: bool,
+    error: ErrorDetail,
+}
+
+#[derive(Debug, Deserialize)]
+struct ErrorDetail {
+    code: String,
+    message: String,
+    is_transient: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    retry_after_seconds: Option<u32>,
+}
+
+#[derive(Debug, Serialize)]
+struct InfoRequest {
+    video_url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    include_formats: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct InfoResponse {
+    success: bool,
+    metadata: VideoMetadata,
+}
+
+// ============================================================================
+// VideoDownloadResult (shared with other strategies)
+// ============================================================================
+
+/// Shared result type used across all download strategies
+#[derive(Debug, Clone)]
+pub struct VideoDownloadResult {
+    pub file_path: String,
+    pub title: String,
+    pub duration_seconds: f64,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+}
+
+// ============================================================================
+// YtdlpApiClient
+// ============================================================================
+
+pub struct YtdlpApiClient {
+    base_url: String,
+    http_client: Client,
+}
+
+impl YtdlpApiClient {
+    /// Create new client from YTDLP_API_URL environment variable
+    ///
+    /// Returns Err if YTDLP_API_URL is not set (fast-fail, no unnecessary retries)
+    pub fn new() -> Result<Self, String> {
+        let base_url = env::var("YTDLP_API_URL")
+            .map_err(|_| "YTDLP_API_URL environment variable not set".to_string())?;
+
+        if base_url.is_empty() {
+            return Err("YTDLP_API_URL is empty".to_string());
+        }
+
+        let http_client = Client::builder()
+            .timeout(Duration::from_secs(3600))  // 1 hour max
+            .connect_timeout(Duration::from_secs(10))
+            .build()
+            .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+
+        info!("YtdlpApiClient initialized with base_url: {}", base_url);
+
+        Ok(Self {
+            base_url,
+            http_client,
+        })
+    }
+
+    /// Download video via FastAPI microservice
+    ///
+    /// Replaces Strategy #3 (yt-dlp CLI subprocess) in the fallback chain
+    pub async fn download_video(
+        video_url: &str,
+        output_path: &str,
+    ) -> Result<VideoDownloadResult, String> {
+        info!("🌐 YtdlpApiClient::download_video starting: {} → {}", video_url, output_path);
+
+        // Create client (fast-fail if env var not set)
+        let client = Self::new()?;
+
+        // Extract job_id from output path for tracking
+        let job_id = Path::new(output_path)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .map(|s| s.to_string());
+
+        // Retry logic: 3 attempts with exponential backoff (5s, 15s, 45s)
+        let max_retries = 3;
+        let mut retry_count = 0;
+
+        loop {
+            match client._download_attempt(video_url, output_path, job_id.clone()).await {
+                Ok(result) => {
+                    info!("✅ YtdlpApiClient download succeeded on attempt {}/{}", retry_count + 1, max_retries);
+                    return Ok(result);
+                }
+                Err(e) => {
+                    retry_count += 1;
+
+                    // Check if error is transient
+                    let is_transient = e.contains("transient") ||
+                                      e.contains("timeout") ||
+                                      e.contains("network") ||
+                                      e.contains("429") ||
+                                      e.contains("500") ||
+                                      e.contains("502") ||
+                                      e.contains("503") ||
+                                      e.contains("504");
+
+                    if !is_transient || retry_count >= max_retries {
+                        error!("❌ YtdlpApiClient download failed permanently: {}", e);
+                        return Err(e);
+                    }
+
+                    let backoff_secs = match retry_count {
+                        1 => 5,
+                        2 => 15,
+                        _ => 45,
+                    };
+
+                    warn!("⚠️ YtdlpApiClient attempt {}/{} failed (transient): {}. Retrying in {}s...",
+                          retry_count, max_retries, e, backoff_secs);
+
+                    tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
+                }
+            }
+        }
+    }
+
+    /// Single download attempt (no retries)
+    async fn _download_attempt(
+        &self,
+        video_url: &str,
+        output_path: &str,
+        job_id: Option<String>,
+    ) -> Result<VideoDownloadResult, String> {
+        // Build request payload
+        let request_payload = DownloadRequest {
+            video_url: video_url.to_string(),
+            job_id,
+            quality: Some("720p".to_string()),  // Default quality
+            format: Some("mp4".to_string()),
+            prefer_base64: Some(false),  // Always use URL mode for large files
+            timeout_seconds: Some(3600),  // 1 hour
+        };
+
+        // POST to /api/v1/download
+        let endpoint = format!("{}/api/v1/download", self.base_url);
+        info!("📤 POST {}", endpoint);
+
+        let response = self.http_client
+            .post(&endpoint)
+            .json(&request_payload)
+            .send()
+            .await
+            .map_err(|e| format!("HTTP request failed: {}", e))?;
+
+        let status = response.status();
+        info!("📥 Response status: {}", status);
+
+        // Handle error responses
+        if !status.is_success() {
+            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+
+            // Try to parse as ErrorResponse
+            if let Ok(error_response) = serde_json::from_str::<ErrorResponse>(&error_text) {
+                let is_transient_tag = if error_response.error.is_transient { " (transient)" } else { "" };
+                return Err(format!(
+                    "FastAPI error [{}]{}: {}",
+                    error_response.error.code,
+                    is_transient_tag,
+                    error_response.error.message
+                ));
+            }
+
+            return Err(format!("HTTP {} error: {}", status, error_text));
+        }
+
+        // Parse success response
+        let response_text = response.text().await
+            .map_err(|e| format!("Failed to read response body: {}", e))?;
+
+        let download_response: DownloadResponse = serde_json::from_str(&response_text)
+            .map_err(|e| format!("Failed to parse response JSON: {} (body: {})", e, response_text))?;
+
+        if !download_response.success {
+            return Err("Response indicated failure but had 200 status".to_string());
+        }
+
+        info!("📦 Download method: {}", download_response.method);
+
+        // Handle different response methods
+        let file_bytes = match download_response.method.as_str() {
+            "url" => {
+                // Pattern A/B: download_url provided
+                let download_url = download_response.download_url
+                    .ok_or("download_url missing in URL mode")?;
+
+                // Make download_url absolute if relative
+                let full_url = if download_url.starts_with("http") {
+                    download_url
+                } else {
+                    format!("{}{}", self.base_url, download_url)
+                };
+
+                info!("📥 Downloading from: {}", full_url);
+
+                // Download file
+                let file_response = self.http_client
+                    .get(&full_url)
+                    .send()
+                    .await
+                    .map_err(|e| format!("Failed to download file from URL: {}", e))?;
+
+                if !file_response.status().is_success() {
+                    return Err(format!("File download failed with status: {}", file_response.status()));
+                }
+
+                file_response.bytes().await
+                    .map_err(|e| format!("Failed to read file bytes: {}", e))?
+                    .to_vec()
+            }
+            "base64" => {
+                // Pattern C: file_data as base64
+                let file_data = download_response.file_data
+                    .ok_or("file_data missing in base64 mode")?;
+
+                info!("📦 Decoding base64 data ({} chars)", file_data.len());
+
+                use base64::prelude::*;
+                BASE64_STANDARD.decode(&file_data)
+                    .map_err(|e| format!("Failed to decode base64: {}", e))?
+            }
+            method => {
+                return Err(format!("Unknown download method: {}", method));
+            }
+        };
+
+        // Write to output file
+        info!("💾 Writing {} bytes to {}", file_bytes.len(), output_path);
+
+        let mut file = File::create(output_path).await
+            .map_err(|e| format!("Failed to create output file: {}", e))?;
+
+        file.write_all(&file_bytes).await
+            .map_err(|e| format!("Failed to write file: {}", e))?;
+
+        file.flush().await
+            .map_err(|e| format!("Failed to flush file: {}", e))?;
+
+        // Validate file size
+        let file_size = tokio::fs::metadata(output_path).await
+            .map_err(|e| format!("Failed to read file metadata: {}", e))?
+            .len();
+
+        if file_size == 0 {
+            return Err("Downloaded file is empty".to_string());
+        }
+
+        info!("✅ File written successfully: {} bytes", file_size);
+
+        // Build result
+        Ok(VideoDownloadResult {
+            file_path: output_path.to_string(),
+            title: download_response.metadata.title,
+            duration_seconds: download_response.metadata.duration_seconds,
+            width: download_response.metadata.width,
+            height: download_response.metadata.height,
+        })
+    }
+
+    /// Get video metadata without downloading
+    ///
+    /// Useful for checking video availability before downloading
+    pub async fn get_video_info(video_url: &str) -> Result<VideoMetadata, String> {
+        let client = Self::new()?;
+
+        let request_payload = InfoRequest {
+            video_url: video_url.to_string(),
+            include_formats: Some(false),
+        };
+
+        let endpoint = format!("{}/api/v1/info", client.base_url);
+        info!("📤 POST {} (info only)", endpoint);
+
+        let response = client.http_client
+            .post(&endpoint)
+            .json(&request_payload)
+            .send()
+            .await
+            .map_err(|e| format!("HTTP request failed: {}", e))?;
+
+        let status = response.status();
+
+        if !status.is_success() {
+            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            return Err(format!("HTTP {} error: {}", status, error_text));
+        }
+
+        let info_response: InfoResponse = response.json().await
+            .map_err(|e| format!("Failed to parse response: {}", e))?;
+
+        Ok(info_response.metadata)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_client_creation_fails_without_env_var() {
+        env::remove_var("YTDLP_API_URL");
+        let result = YtdlpApiClient::new();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("YTDLP_API_URL"));
+    }
+
+    #[tokio::test]
+    async fn test_client_creation_succeeds_with_env_var() {
+        env::set_var("YTDLP_API_URL", "http://localhost:8000");
+        let result = YtdlpApiClient::new();
+        assert!(result.is_ok());
+        env::remove_var("YTDLP_API_URL");
+    }
+}
