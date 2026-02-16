@@ -3189,8 +3189,8 @@ pub async fn admin_clipping_stats(
             "total_jobs": row.get::<i64, _>("total_jobs"),
             "success_rate": row.get::<rust_decimal::Decimal, _>("success_rate"),
             "published_clips": row.get::<i64, _>("published_clips"),
-            "last_job_created": row.get::<Option<chrono::NaiveDateTime>, _>("last_job_created"),
-            "last_clip_published": row.get::<Option<chrono::NaiveDateTime>, _>("last_clip_published"),
+            "last_job_created": row.get::<Option<chrono::DateTime<chrono::Utc>>, _>("last_job_created"),
+            "last_clip_published": row.get::<Option<chrono::DateTime<chrono::Utc>>, _>("last_clip_published"),
         })
     }).collect();
 
@@ -3258,8 +3258,8 @@ pub async fn admin_user_clipping_details(
             "clips_per_video": row.get::<Option<i32>, _>("clips_per_video"),
             "total_clips_generated": row.get::<i32, _>("total_clips_generated"),
             "total_clips_posted": row.get::<i32, _>("total_clips_posted"),
-            "last_clip_generated_at": row.get::<Option<chrono::NaiveDateTime>, _>("last_clip_generated_at"),
-            "linkage_created": row.get::<chrono::NaiveDateTime, _>("linkage_created"),
+            "last_clip_generated_at": row.get::<Option<chrono::DateTime<chrono::Utc>>, _>("last_clip_generated_at"),
+            "linkage_created": row.get::<chrono::DateTime<chrono::Utc>, _>("linkage_created"),
         })
     }).collect();
 
@@ -3307,9 +3307,9 @@ pub async fn admin_user_clipping_details(
             "progress_percent": row.get::<Option<i32>, _>("progress_percent"),
             "error_message": row.get::<Option<String>, _>("error_message"),
             "retry_count": row.get::<i32, _>("retry_count"),
-            "created_at": row.get::<chrono::NaiveDateTime, _>("created_at"),
-            "updated_at": row.get::<chrono::NaiveDateTime, _>("updated_at"),
-            "completed_at": row.get::<Option<chrono::NaiveDateTime>, _>("completed_at"),
+            "created_at": row.get::<chrono::DateTime<chrono::Utc>, _>("created_at"),
+            "updated_at": row.get::<chrono::DateTime<chrono::Utc>, _>("updated_at"),
+            "completed_at": row.get::<Option<chrono::DateTime<chrono::Utc>>, _>("completed_at"),
             "linkage_id": row.get::<i32, _>("linkage_id"),
             "source_channel": row.get::<String, _>("source_channel"),
         })
@@ -3763,7 +3763,7 @@ pub async fn admin_get_job_details(
             "ai_confidence_score": row.get::<Option<f64>, _>("ai_confidence_score"),
             "youtube_video_id": row.get::<Option<String>, _>("youtube_video_id"),
             "upload_status": row.get::<String, _>("upload_status"),
-            "published_at": row.get::<Option<chrono::NaiveDateTime>, _>("published_at"),
+            "published_at": row.get::<Option<chrono::DateTime<chrono::Utc>>, _>("published_at"),
         })
     }).collect();
 
@@ -3785,14 +3785,14 @@ pub async fn admin_get_job_details(
         "progress_percent": job_row.get::<i32, _>("progress_percent"),
         "error_message": job_row.get::<Option<String>, _>("error_message"),
         "retry_count": job_row.get::<i32, _>("retry_count"),
-        "last_retry_at": job_row.get::<Option<chrono::NaiveDateTime>, _>("last_retry_at"),
+        "last_retry_at": job_row.get::<Option<chrono::DateTime<chrono::Utc>>, _>("last_retry_at"),
         "stuck_detection_count": job_row.get::<i32, _>("stuck_detection_count"),
         "claimed_by": job_row.get::<Option<String>, _>("claimed_by"),
-        "claimed_at": job_row.get::<Option<chrono::NaiveDateTime>, _>("claimed_at"),
-        "started_at": job_row.get::<Option<chrono::NaiveDateTime>, _>("started_at"),
-        "created_at": job_row.get::<chrono::NaiveDateTime, _>("created_at"),
-        "updated_at": job_row.get::<chrono::NaiveDateTime, _>("updated_at"),
-        "completed_at": job_row.get::<Option<chrono::NaiveDateTime>, _>("completed_at"),
+        "claimed_at": job_row.get::<Option<chrono::DateTime<chrono::Utc>>, _>("claimed_at"),
+        "started_at": job_row.get::<Option<chrono::DateTime<chrono::Utc>>, _>("started_at"),
+        "created_at": job_row.get::<chrono::DateTime<chrono::Utc>, _>("created_at"),
+        "updated_at": job_row.get::<chrono::DateTime<chrono::Utc>, _>("updated_at"),
+        "completed_at": job_row.get::<Option<chrono::DateTime<chrono::Utc>>, _>("completed_at"),
         "duration_minutes": job_row.get::<Option<rust_decimal::Decimal>, _>("duration_minutes"),
         "clips_per_video": job_row.get::<i32, _>("clips_per_video"),
         "min_clip_duration": job_row.get::<i32, _>("min_clip_duration_seconds"),
@@ -3920,7 +3920,7 @@ pub async fn admin_get_job_clips(
             "youtube_video_id": row.get::<Option<String>, _>("youtube_video_id"),
             "youtube_url": row.get::<Option<String>, _>("youtube_url"),
             "upload_status": row.get::<String, _>("upload_status"),
-            "published_at": row.get::<Option<chrono::NaiveDateTime>, _>("published_at"),
+            "published_at": row.get::<Option<chrono::DateTime<chrono::Utc>>, _>("published_at"),
             "views_24h": row.get::<i32, _>("views_24h"),
             "likes_24h": row.get::<i32, _>("likes_24h"),
             "comments_24h": row.get::<i32, _>("comments_24h"),
