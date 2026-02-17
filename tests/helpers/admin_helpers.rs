@@ -96,10 +96,27 @@ pub async fn create_test_admin(
     let password_hash = bcrypt::hash(password, bcrypt::DEFAULT_COST)
         .map_err(|e| format!("Failed to hash password: {}", e))?;
 
-    // Insert admin user
+    // Whitelist the email (required by login handler)
+    sqlx::query(
+        "INSERT INTO whitelist_emails (email, created_at)
+         VALUES ($1, NOW())
+         ON CONFLICT (email) DO NOTHING"
+    )
+    .bind(email)
+    .execute(pool)
+    .await
+    .map_err(|e| format!("Failed to whitelist email: {}", e))?;
+
+    // Insert admin user (upsert to handle reruns gracefully)
     let result = sqlx::query(
         "INSERT INTO users (email, username, password_hash, is_superuser, is_staff, is_active, created_at, updated_at)
          VALUES ($1, $2, $3, true, true, true, NOW(), NOW())
+         ON CONFLICT (email) DO UPDATE
+           SET password_hash = EXCLUDED.password_hash,
+               is_superuser = true,
+               is_staff = true,
+               is_active = true,
+               updated_at = NOW()
          RETURNING id, email, username"
     )
     .bind(email)
@@ -321,13 +338,30 @@ pub async fn retry_job(token: &str, job_id: i32) -> Result<(), String> {
     Ok(())
 }
 
-/// Delete admin user (cleanup)
+/// Delete admin user and whitelist entry (cleanup)
 pub async fn delete_test_admin(pool: &PgPool, admin_id: i32) -> Result<(), String> {
+    // Get email before deleting user
+    let row = sqlx::query("SELECT email FROM users WHERE id = $1")
+        .bind(admin_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| format!("Failed to fetch admin email: {}", e))?;
+
     sqlx::query("DELETE FROM users WHERE id = $1")
         .bind(admin_id)
         .execute(pool)
         .await
         .map_err(|e| format!("Failed to delete admin user: {}", e))?;
+
+    // Also remove from whitelist
+    if let Some(row) = row {
+        let email: String = row.get("email");
+        sqlx::query("DELETE FROM whitelist_emails WHERE email = $1")
+            .bind(&email)
+            .execute(pool)
+            .await
+            .map_err(|e| format!("Failed to remove from whitelist: {}", e))?;
+    }
 
     Ok(())
 }
