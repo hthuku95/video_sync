@@ -453,6 +453,7 @@ async fn auto_retry_failed_jobs(app_state: &Arc<AppState>) -> Result<(), String>
          WHERE status = 'failed' \
          AND completed_at > NOW() - INTERVAL '6 hours' \
          AND completed_at < NOW() - INTERVAL '5 minutes' \
+         AND COALESCE(retry_count, 0) < 5 \
          ORDER BY completed_at ASC \
          LIMIT 10"
     );
