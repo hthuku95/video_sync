@@ -2,14 +2,12 @@
 
 use sqlx::{PgPool, Row};
 
-/// Assert job transitioned through expected statuses
+/// Assert job is in the expected final status
 pub async fn assert_job_status_sequence(
     pool: &PgPool,
     job_id: i32,
     expected_statuses: &[&str],
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // This would require status history tracking
-    // For now, just verify final status
     let result = sqlx::query("SELECT status FROM clipping_jobs WHERE id = $1")
         .bind(job_id)
         .fetch_one(pool)
@@ -32,16 +30,16 @@ pub async fn assert_job_has_error(
     pool: &PgPool,
     job_id: i32,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    let result = sqlx::query("SELECT status, error FROM clipping_jobs WHERE id = $1")
+    let result = sqlx::query("SELECT status, error_message FROM clipping_jobs WHERE id = $1")
         .bind(job_id)
         .fetch_one(pool)
         .await?;
 
     let status: String = result.get("status");
-    let error: Option<String> = result.try_get("error").ok();
+    let error: Option<String> = result.try_get("error_message").ok().flatten();
 
     assert_eq!(status, "failed", "Job should be in failed status");
-    assert!(error.is_some(), "Job should have error details");
+    assert!(error.is_some(), "Job should have error_message details");
 
     Ok(error.unwrap())
 }
@@ -57,8 +55,8 @@ pub async fn assert_job_claimed(
         .fetch_one(pool)
         .await?;
 
-    let claimed_by: Option<String> = result.try_get("claimed_by").ok();
-    let claimed_at: Option<chrono::DateTime<chrono::Utc>> = result.try_get("claimed_at").ok();
+    let claimed_by: Option<String> = result.try_get("claimed_by").ok().flatten();
+    let claimed_at: Option<chrono::DateTime<chrono::Utc>> = result.try_get("claimed_at").ok().flatten();
 
     assert!(claimed_by.is_some(), "Job should be claimed");
     assert_eq!(
@@ -81,38 +79,25 @@ pub async fn assert_job_not_claimed(
         .fetch_one(pool)
         .await?;
 
-    let claimed_by: Option<String> = result.try_get("claimed_by").ok();
+    let claimed_by: Option<String> = result.try_get("claimed_by").ok().flatten();
 
     assert!(claimed_by.is_none(), "Job should NOT be claimed");
 
     Ok(())
 }
 
-/// Assert vectors exist in Qdrant
-pub async fn assert_vectors_in_qdrant(
-    job_id: i32,
-    expected_count: usize,
-) -> Result<(), Box<dyn std::error::Error>> {
-    // This would require Qdrant client
-    // For now, we'll check database metadata
-    tracing::info!(
-        "Would verify {} vectors in Qdrant for job {}",
-        expected_count,
-        job_id
-    );
-    Ok(())
-}
-
-/// Assert extracted clips exist
+/// Assert extracted clips exist in DB (column is clipping_job_id, not job_id)
 pub async fn assert_clips_extracted(
     pool: &PgPool,
     job_id: i32,
     min_clips: usize,
 ) -> Result<usize, Box<dyn std::error::Error>> {
-    let result = sqlx::query("SELECT COUNT(*) as count FROM extracted_clips WHERE job_id = $1")
-        .bind(job_id)
-        .fetch_one(pool)
-        .await?;
+    let result = sqlx::query(
+        "SELECT COUNT(*) as count FROM extracted_clips WHERE clipping_job_id = $1"
+    )
+    .bind(job_id)
+    .fetch_one(pool)
+    .await?;
 
     let count: i64 = result.get("count");
 
@@ -143,7 +128,7 @@ pub async fn assert_retry_incremented(
     Ok(retry_count)
 }
 
-/// Assert job completed within time limit
+/// Assert job completed within time limit (max_duration_secs from created_at to completed_at)
 pub async fn assert_completed_within(
     pool: &PgPool,
     job_id: i32,
@@ -157,9 +142,9 @@ pub async fn assert_completed_within(
     .await?;
 
     let created_at: chrono::DateTime<chrono::Utc> = result.get("created_at");
-    let completed_at: Option<chrono::DateTime<chrono::Utc>> = result.try_get("completed_at").ok();
+    let completed_at: Option<chrono::DateTime<chrono::Utc>> = result.try_get("completed_at").ok().flatten();
 
-    assert!(completed_at.is_some(), "Job should be completed");
+    assert!(completed_at.is_some(), "Job should have a completed_at timestamp");
 
     let duration = (completed_at.unwrap() - created_at).num_seconds();
 
@@ -171,4 +156,39 @@ pub async fn assert_completed_within(
     );
 
     Ok(())
+}
+
+/// Assert the job reached the Phase A (Gemini analysis) stage.
+/// Verifies progress_percent > 0 and status is not still 'pending'.
+pub async fn assert_analysis_phase_reached(
+    pool: &PgPool,
+    job_id: i32,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let result = sqlx::query(
+        "SELECT status, progress_percent FROM clipping_jobs WHERE id = $1"
+    )
+    .bind(job_id)
+    .fetch_one(pool)
+    .await?;
+
+    let status: String = result.get("status");
+    let progress: i32 = result.try_get("progress_percent").unwrap_or(0);
+
+    assert_ne!(status, "pending", "Job should have moved past pending");
+    assert!(
+        progress > 0,
+        "Job should have nonzero progress (status: {})",
+        status
+    );
+
+    Ok(())
+}
+
+/// Assert the YTDLP microservice URL is configured
+pub fn assert_ytdlp_api_configured() {
+    let url = std::env::var("YTDLP_API_URL").unwrap_or_default();
+    assert!(
+        !url.is_empty(),
+        "YTDLP_API_URL must be set for download strategy tests"
+    );
 }

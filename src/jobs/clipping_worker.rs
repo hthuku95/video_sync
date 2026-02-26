@@ -36,6 +36,18 @@ pub async fn run_clipping_worker_loop(app_state: Arc<AppState>) {
         config.recommended_db_pool_size()
     );
 
+    // Optional startup delay — allows test binaries time to compile and enqueue jobs
+    // before the first worker cycle runs. Set WORKER_STARTUP_DELAY_SECS=120 for testing.
+    let startup_delay_secs: u64 = std::env::var("WORKER_STARTUP_DELAY_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    if startup_delay_secs > 0 {
+        tracing::info!("⏳ Worker startup delay: {}s (set via WORKER_STARTUP_DELAY_SECS)", startup_delay_secs);
+        sleep(Duration::from_secs(startup_delay_secs)).await;
+        tracing::info!("✅ Startup delay complete, worker is now active");
+    }
+
     let mut interval = tokio::time::interval(
         tokio::time::Duration::from_secs(config.poll_interval_secs)
     );
@@ -97,12 +109,15 @@ impl ClippingWorker {
         self.auto_retry_failed_jobs().await?;
 
         // Fetch a single job and process it (sequential mode)
+        // Test-user jobs (user_id = -1) are prioritized so integration tests don't queue behind production jobs
         let query = String::from(
-            "SELECT id FROM clipping_jobs \
-             WHERE status IN ('pending', 'failed') \
+            "SELECT cj.id FROM clipping_jobs cj \
+             JOIN youtube_channel_linkages l ON l.id = cj.linkage_id \
+             WHERE cj.status IN ('pending', 'failed') \
              ORDER BY \
-               CASE WHEN status = 'pending' THEN 0 ELSE 1 END, \
-               created_at ASC \
+               CASE WHEN l.user_id = -1 THEN 0 ELSE 1 END, \
+               CASE WHEN cj.status = 'pending' THEN 0 ELSE 1 END, \
+               cj.created_at ASC \
              LIMIT 1"
         );
         let job_id: Option<i32> = sqlx::query_scalar(&query)
@@ -210,6 +225,30 @@ impl ClippingWorker {
     /// - extracting_clips: 15 minutes (clip extraction + AI analysis)
     /// - posting: 20 minutes (YouTube API uploads can be slow)
     async fn detect_stuck_jobs(&self) -> Result<(), String> {
+        // Release stale claims — pending jobs with claimed_by set from possibly dead workers
+        let stale_claim_query = String::from(
+            "UPDATE clipping_jobs \
+             SET claimed_by = NULL, claimed_at = NULL, updated_at = NOW() \
+             WHERE status = 'pending' \
+             AND claimed_by IS NOT NULL \
+             AND claimed_at < NOW() - INTERVAL '5 minutes'"
+        );
+        match sqlx::query(&stale_claim_query)
+            .execute(&self.app_state.db_pool)
+            .await
+        {
+            Ok(result) if result.rows_affected() > 0 => {
+                tracing::info!(
+                    "🔓 Released {} stale job claims (pending + claimed_by set for >5 min)",
+                    result.rows_affected()
+                );
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!("Failed to release stale claims (non-fatal): {}", e);
+            }
+        }
+
         // Find jobs stuck in each intermediate state
         let stuck_query = String::from(
             "SELECT id, status, updated_at::text \
@@ -217,7 +256,7 @@ impl ClippingWorker {
              WHERE ( \
                  (status = 'downloading' AND updated_at < NOW() - INTERVAL '10 minutes') OR \
                  (status = 'analyzing' AND updated_at < NOW() - INTERVAL '60 minutes') OR \
-                 (status = 'extracting_clips' AND updated_at < NOW() - INTERVAL '15 minutes') OR \
+                 (status = 'extracting_clips' AND updated_at < NOW() - INTERVAL '10 minutes') OR \
                  (status = 'posting' AND updated_at < NOW() - INTERVAL '20 minutes') \
              )"
         );
@@ -356,16 +395,32 @@ async fn process_single_job_with_claim(
 
     tracing::info!("🎬 Processing job {} (claimed)", job_id);
 
-    // Step 2: Execute the clipping job
-    match execute_clipping_job(job_id, app_state.clone()).await {
-        Ok(msg) => {
+    // Step 2: Execute the clipping job with a per-job timeout.
+    // This prevents any single job (e.g., stuck Gemini/API calls) from
+    // monopolizing the worker and blocking the queue indefinitely.
+    // Default: 10 minutes. Override via JOB_EXECUTION_TIMEOUT_SECS env var.
+    // The full pipeline: download (~1min) + vectorize (~1min) + AI extraction (~2min) +
+    // clip trim + review (~2min) = ~6-8 min total. 10 min gives comfortable headroom.
+    let job_timeout_secs: u64 = std::env::var("JOB_EXECUTION_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(7200); // 2 hours — accommodates new pipeline: warm-up + download + parallel clip extraction
+
+    let execution_result = tokio::time::timeout(
+        tokio::time::Duration::from_secs(job_timeout_secs),
+        execute_clipping_job(job_id, app_state.clone()),
+    )
+    .await;
+
+    match execution_result {
+        Ok(Ok(msg)) => {
             tracing::info!("✅ Job {} completed: {}", job_id, msg);
             Ok(job_id)
         }
-        Err(e) => {
+        Ok(Err(e)) => {
             tracing::error!("❌ Job {} failed: {}", job_id, e);
 
-            // Mark job as failed (release claim implicitly)
+            // Mark job as failed and release claim
             let fail_query = String::from(
                 "UPDATE clipping_jobs \
                  SET status = 'failed', \
@@ -383,18 +438,89 @@ async fn process_single_job_with_claim(
 
             Err(format!("Job {} failed: {}", job_id, e))
         }
+        Err(_timeout) => {
+            let timeout_msg = format!(
+                "Job execution timed out after {}s — API or external service did not respond",
+                job_timeout_secs
+            );
+            tracing::warn!("⏰ Job {} timed out: {}", job_id, timeout_msg);
+
+            // Mark as failed and release claim.
+            // Use the shared pool directly with a short total timeout. Creating a new pool
+            // here (old approach) caused connect() to hang indefinitely — blocking the
+            // entire worker thread. The shared pool (20 connections) is always available.
+            // The independent stuck-detection task (every 60s) will handle the job if
+            // this update somehow fails.
+            let fail_query = "UPDATE clipping_jobs \
+                 SET status = 'failed', \
+                     error_message = $1, \
+                     completed_at = NOW(), \
+                     claimed_by = NULL, \
+                     updated_at = NOW() \
+                 WHERE id = $2";
+
+            match tokio::time::timeout(
+                tokio::time::Duration::from_secs(10),
+                sqlx::query(fail_query)
+                    .bind(&timeout_msg)
+                    .bind(job_id)
+                    .execute(&app_state.db_pool),
+            ).await {
+                Ok(Ok(_)) => {}
+                Ok(Err(e)) => {
+                    tracing::error!("❌ Failed to reset timed-out job {} (pool error): {} — stuck-detection will handle it", job_id, e);
+                }
+                Err(_) => {
+                    tracing::error!("❌ Cleanup for timed-out job {} timed out after 10s — stuck-detection will handle it", job_id);
+                }
+            }
+
+            Err(format!("Job {} timed out", job_id))
+        }
     }
+}
+
+/// Public wrapper — called by the main tokio runtime as an independent background task.
+/// Runs every 60s regardless of whether the worker thread is busy processing a job.
+pub async fn run_stuck_job_detection(app_state: &Arc<AppState>) -> Result<(), String> {
+    detect_stuck_jobs(app_state).await
 }
 
 /// Detect jobs stuck in intermediate states and reset them to 'failed' (standalone function)
 async fn detect_stuck_jobs(app_state: &Arc<AppState>) -> Result<(), String> {
+    // First: release stale claims — jobs that are 'pending' but have a claimed_by set from a
+    // (possibly dead) worker process. This happens when the worker claims a job but then
+    // crashes or loses DB connectivity before it can start executing.
+    let stale_claim_query = String::from(
+        "UPDATE clipping_jobs \
+         SET claimed_by = NULL, claimed_at = NULL, updated_at = NOW() \
+         WHERE status = 'pending' \
+         AND claimed_by IS NOT NULL \
+         AND claimed_at < NOW() - INTERVAL '5 minutes'"
+    );
+    match sqlx::query(&stale_claim_query)
+        .execute(&app_state.db_pool)
+        .await
+    {
+        Ok(result) if result.rows_affected() > 0 => {
+            tracing::info!(
+                "🔓 Released {} stale job claims (pending + claimed_by set for >5 min)",
+                result.rows_affected()
+            );
+        }
+        Ok(_) => {}
+        Err(e) => {
+            tracing::warn!("Failed to release stale claims (non-fatal): {}", e);
+        }
+    }
+
     let stuck_query = String::from(
         "SELECT id, status, updated_at::text \
          FROM clipping_jobs \
          WHERE ( \
              (status = 'downloading' AND updated_at < NOW() - INTERVAL '10 minutes') OR \
              (status = 'analyzing' AND updated_at < NOW() - INTERVAL '60 minutes') OR \
-             (status = 'extracting_clips' AND updated_at < NOW() - INTERVAL '15 minutes') OR \
+             (status = 'extracting_clips' AND updated_at < NOW() - INTERVAL '10 minutes') OR \
              (status = 'posting' AND updated_at < NOW() - INTERVAL '20 minutes') \
          )"
     );

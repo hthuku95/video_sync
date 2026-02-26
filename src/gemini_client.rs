@@ -268,50 +268,92 @@ impl GeminiClient {
             }
         }
 
-        let response = self
-            .client
-            .post(&url)
-            .header("Content-Type", "application/json")
-            .json(&request)
-            .send()
-            .await?;
+        // Retry loop: up to 4 attempts, respecting Gemini rate-limit (429) responses.
+        let max_attempts = 4u32;
+        let mut last_error: Box<dyn std::error::Error + Send + Sync> =
+            "No attempts made".into();
 
-        if response.status().is_success() {
-            let response_text = response.text().await?;
-            tracing::debug!("Gemini API response (truncated): {}...", &response_text[..response_text.len().min(500)]);
+        for attempt in 0..max_attempts {
+            let response = self
+                .client
+                .post(&url)
+                .header("Content-Type", "application/json")
+                .json(&request)
+                .send()
+                .await?;
 
-            // Log thought signature in raw response
-            if response_text.contains("thoughtSignature") {
-                tracing::warn!("✅ Raw response CONTAINS thoughtSignature field");
-            } else {
-                tracing::error!("❌ Raw response MISSING thoughtSignature field");
-            }
+            let status = response.status();
 
-            match serde_json::from_str::<GenerateContentResponse>(&response_text) {
-                Ok(result) => {
-                    // Check if thought signature was deserialized
-                    if let Some(candidate) = result.candidates.first() {
-                        if let Some(ref content) = candidate.content {
-                            for (i, part) in content.parts.iter().enumerate() {
-                                if let Part::FunctionCall { function_call } = part {
-                                    tracing::warn!("🔍 Deserialized Part[{}]: FunctionCall '{}' has_signature={}",
-                                        i, function_call.name, function_call.thought_signature.is_some());
+            if status.is_success() {
+                let response_text = response.text().await?;
+                tracing::debug!("Gemini API response (truncated): {}...", &response_text[..response_text.len().min(500)]);
+
+                // Log thought signature in raw response
+                if response_text.contains("thoughtSignature") {
+                    tracing::warn!("✅ Raw response CONTAINS thoughtSignature field");
+                } else {
+                    tracing::error!("❌ Raw response MISSING thoughtSignature field");
+                }
+
+                match serde_json::from_str::<GenerateContentResponse>(&response_text) {
+                    Ok(result) => {
+                        // Check if thought signature was deserialized
+                        if let Some(candidate) = result.candidates.first() {
+                            if let Some(ref content) = candidate.content {
+                                for (i, part) in content.parts.iter().enumerate() {
+                                    if let Part::FunctionCall { function_call } = part {
+                                        tracing::warn!("🔍 Deserialized Part[{}]: FunctionCall '{}' has_signature={}",
+                                            i, function_call.name, function_call.thought_signature.is_some());
+                                    }
                                 }
                             }
                         }
+                        return Ok(result);
+                    },
+                    Err(parse_error) => {
+                        tracing::error!("Failed to parse Gemini response: {}", parse_error);
+                        tracing::error!("Response body: {}", response_text);
+                        return Err(format!("error decoding response body: {}", parse_error).into());
                     }
-                    Ok(result)
-                },
-                Err(parse_error) => {
-                    tracing::error!("Failed to parse Gemini response: {}", parse_error);
-                    tracing::error!("Response body: {}", response_text);
-                    Err(format!("error decoding response body: {}", parse_error).into())
                 }
             }
-        } else {
+
             let error_text = response.text().await?;
-            Err(format!("Gemini API error: {}", error_text).into())
+
+            // On 429 (rate limit), honour the server-specified retry-after delay and try again.
+            if status.as_u16() == 429 && attempt < max_attempts - 1 {
+                // Parse "Please retry in XX.XXXs." from the JSON body.
+                let retry_secs: f64 = serde_json::from_str::<serde_json::Value>(&error_text)
+                    .ok()
+                    .and_then(|v| {
+                        v["error"]["message"]
+                            .as_str()
+                            .and_then(|msg| {
+                                // Look for "Please retry in 25.755477156s."
+                                let marker = "Please retry in ";
+                                let start = msg.find(marker)? + marker.len();
+                                let end = msg[start..].find('s')? + start;
+                                msg[start..end].parse::<f64>().ok()
+                            })
+                    })
+                    .unwrap_or(30.0);
+
+                let wait_secs = (retry_secs + 2.0) as u64;
+                tracing::warn!(
+                    "⏳ Gemini rate limited (429, attempt {}/{}). \
+                     Waiting {}s before retry…",
+                    attempt + 1, max_attempts, wait_secs
+                );
+                tokio::time::sleep(tokio::time::Duration::from_secs(wait_secs)).await;
+                last_error = format!("Gemini API error (rate limited): {}", error_text).into();
+                continue;
+            }
+
+            // Non-retryable error.
+            return Err(format!("Gemini API error: {}", error_text).into());
         }
+
+        Err(last_error)
     }
 
     pub async fn embed_content(
@@ -2905,5 +2947,198 @@ Generate a well-structured script appropriate for this type of video.",
         }
 
         Err("Failed to generate video script".into())
+    }
+
+    /// Analyze a YouTube video by URL using Gemini's native video understanding.
+    ///
+    /// This replaces the entire frame-by-frame pipeline:
+    /// - ONE API call instead of 100+ sequential frame analyses
+    /// - Gemini sees the full video including motion, audio, and pacing
+    /// - `media_resolution: "low"` processes at ~100 tokens/sec (~60k tokens per 10 min video)
+    /// - Returns structured JSON with viral moments, timestamps, and quality scores
+    ///
+    /// Returns Err if no viral moments meet the quality threshold (fast-fail — skip download)
+    pub async fn analyze_video_from_url(
+        &self,
+        youtube_url: &str,
+        clips_per_video: usize,
+        min_duration_secs: f64,
+        max_duration_secs: f64,
+    ) -> Result<crate::clipping::gemini_video_analyzer::VideoAnalysis, Box<dyn std::error::Error + Send + Sync>> {
+        tracing::info!(
+            "🎬 Analyzing video via YouTube URL (1 Gemini call): {}",
+            youtube_url
+        );
+
+        let prompt = format!(
+            r#"Analyze this YouTube video and identify exactly {clips_per_video} viral clip opportunities for YouTube Shorts.
+
+REQUIREMENTS:
+- Each clip must be between {min_dur:.0} and {max_dur:.0} seconds
+- Focus on: dramatic hooks, surprising moments, emotional peaks, action sequences, plot twists
+- Clips should work as standalone content without needing context
+
+Return ONLY a valid JSON object matching this exact schema:
+{{
+  "video_summary": "<comprehensive plain-text summary of the entire video for search indexing>",
+  "content_type": "<one of: entertainment, tutorial, news, gaming, sports, music, vlog, other>",
+  "overall_quality": <float 0.0-1.0>,
+  "viral_moments": [
+    {{
+      "start_sec": <float seconds>,
+      "end_sec": <float seconds>,
+      "title": "<engaging YouTube Short title, max 60 chars>",
+      "hook": "<first sentence that grabs attention, used as video description opener>",
+      "quality_score": <float 0.0-1.0>,
+      "viral_factors": ["<factor1>", "<factor2>"],
+      "thumbnail_sec": <float seconds — best frame for thumbnail within the clip>,
+      "reason": "<why this moment is viral/engaging>"
+    }}
+  ]
+}}
+
+Provide ONLY the JSON object, no markdown, no code blocks, no other text."#,
+            clips_per_video = clips_per_video,
+            min_dur = min_duration_secs,
+            max_dur = max_duration_secs,
+        );
+
+        // Build request with YouTube fileData part and media_resolution: "low"
+        let request_body = serde_json::json!({
+            "contents": [{
+                "role": "user",
+                "parts": [
+                    {
+                        "fileData": {
+                            "mimeType": "video/*",
+                            "fileUri": youtube_url
+                        }
+                    },
+                    {
+                        "text": prompt
+                    }
+                ]
+            }],
+            "generationConfig": {
+                "temperature": 0.3,
+                "maxOutputTokens": 8192,
+                "responseMimeType": "application/json",
+                "mediaResolution": "low"
+            }
+        });
+
+        let url = format!(
+            "{}/models/gemini-2.5-flash:generateContent?key={}",
+            self.base_url, self.api_key
+        );
+
+        // Retry up to 3 times on transient errors
+        let max_attempts = 3u32;
+        let mut last_error: Box<dyn std::error::Error + Send + Sync> = "No attempts made".into();
+
+        for attempt in 0..max_attempts {
+            let response = self
+                .client
+                .post(&url)
+                .header("Content-Type", "application/json")
+                .json(&request_body)
+                .send()
+                .await?;
+
+            let status = response.status();
+
+            if status.is_success() {
+                let response_text = response.text().await?;
+                tracing::debug!("Gemini video analysis response (first 1000 chars): {}", &response_text[..response_text.len().min(1000)]);
+
+                // Parse Gemini response wrapper
+                let response_json: serde_json::Value = serde_json::from_str(&response_text)
+                    .map_err(|e| format!("Failed to parse Gemini response: {} — body: {}", e, &response_text[..response_text.len().min(500)]))?;
+
+                // Extract text from candidates[0].content.parts[0].text
+                let text = response_json["candidates"][0]["content"]["parts"][0]["text"]
+                    .as_str()
+                    .ok_or("Gemini response missing text content")?;
+
+                // Parse the JSON text content as VideoAnalysis
+                let analysis: crate::clipping::gemini_video_analyzer::VideoAnalysis =
+                    serde_json::from_str(text)
+                        .map_err(|e| format!("Failed to parse VideoAnalysis JSON: {} — text: {}", e, &text[..text.len().min(1000)]))?;
+
+                tracing::info!(
+                    "✅ Video analysis complete: {} viral moments identified (overall quality: {:.2})",
+                    analysis.viral_moments.len(),
+                    analysis.overall_quality
+                );
+
+                return Ok(analysis);
+            }
+
+            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+
+            // On 429 rate limit, back off and retry
+            if status.as_u16() == 429 && attempt < max_attempts - 1 {
+                let retry_secs: f64 = serde_json::from_str::<serde_json::Value>(&error_text)
+                    .ok()
+                    .and_then(|v| {
+                        v["error"]["message"].as_str().and_then(|msg| {
+                            let marker = "Please retry in ";
+                            let start = msg.find(marker)? + marker.len();
+                            let end = msg[start..].find('s')? + start;
+                            msg[start..end].parse::<f64>().ok()
+                        })
+                    })
+                    .unwrap_or(30.0);
+
+                let wait_secs = (retry_secs + 2.0) as u64;
+                tracing::warn!("⏳ Gemini rate limited (429, attempt {}/{}). Waiting {}s…", attempt + 1, max_attempts, wait_secs);
+                tokio::time::sleep(tokio::time::Duration::from_secs(wait_secs)).await;
+                last_error = format!("Gemini rate limited: {}", error_text).into();
+                continue;
+            }
+
+            last_error = format!("Gemini API error (HTTP {}): {}", status, error_text).into();
+
+            if attempt < max_attempts - 1 {
+                tracing::warn!("Gemini attempt {}/{} failed, retrying: {}", attempt + 1, max_attempts, last_error);
+                tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+            }
+        }
+
+        Err(last_error)
+    }
+
+    /// Simple text generation wrapper for the clipping AI agent.
+    /// Used by ai_clipper for calls that need plain text (not structured JSON).
+    pub async fn generate_text(
+        &self,
+        prompt: &str,
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        let request = GenerateContentRequest {
+            contents: vec![Content {
+                role: Some("user".to_string()),
+                parts: vec![Part::Text { text: prompt.to_string() }],
+            }],
+            generation_config: None,
+            tools: None,
+            tool_config: None,
+        };
+
+        let response = self.generate_content(request).await?;
+        let text = response
+            .candidates
+            .first()
+            .and_then(|c| c.content.as_ref())
+            .and_then(|content| content.parts.first())
+            .and_then(|part| {
+                if let Part::Text { text } = part {
+                    Some(text.clone())
+                } else {
+                    None
+                }
+            })
+            .ok_or("Gemini generate_text: no text in response")?;
+
+        Ok(text)
     }
 }

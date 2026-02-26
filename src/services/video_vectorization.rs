@@ -670,19 +670,120 @@ impl VideoVectorizationService {
         Ok(search_results)
     }
 
+    /// Store video analysis from Gemini into the `video_content` Qdrant collection.
+    ///
+    /// This replaces the 100+ frame embedding approach:
+    /// - One embedding from the video summary (Voyage AI preferred, Gemini fallback)
+    /// - Stored in `video_content` collection with full viral moments payload
+    /// - Deterministic point ID from UUID v5 of video_id (idempotent upsert)
+    pub async fn store_video_analysis_from_gemini(
+        video_id: &str,
+        youtube_url: &str,
+        user_id: Option<i32>,
+        channel_id: Option<&str>,
+        analysis: &crate::clipping::gemini_video_analyzer::VideoAnalysis,
+        state: &Arc<AppState>,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let qdrant_client = match &state.qdrant_client {
+            Some(c) => c,
+            None => {
+                warn!("Qdrant client not available — skipping video content storage");
+                return Ok(());
+            }
+        };
+
+        // Generate ONE embedding from the video summary
+        let (embedding, provider) = if let Some(ref voyage) = state.voyage_embeddings {
+            match voyage.generate_single_embedding(analysis.video_summary.clone()).await {
+                Ok(emb) => (emb, crate::qdrant_client::EmbeddingProvider::Voyage),
+                Err(e) => {
+                    warn!("Voyage embedding failed: {} — trying Gemini", e);
+                    if let Some(ref gemini) = state.gemini_client {
+                        let emb = gemini.embed_content(&analysis.video_summary).await?;
+                        (emb, crate::qdrant_client::EmbeddingProvider::Gemini)
+                    } else {
+                        return Err("No embedding provider available".into());
+                    }
+                }
+            }
+        } else if let Some(ref gemini) = state.gemini_client {
+            let emb = gemini.embed_content(&analysis.video_summary).await?;
+            (emb, crate::qdrant_client::EmbeddingProvider::Gemini)
+        } else {
+            return Err("No embedding provider available".into());
+        };
+
+        // Ensure the collection exists
+        let _ = qdrant_client.ensure_video_content_collection().await;
+
+        // Serialize viral moments
+        let viral_moments_json = serde_json::to_string(&analysis.viral_moments)
+            .unwrap_or_else(|_| "[]".to_string());
+
+        // Build payload
+        let payload = serde_json::json!({
+            "video_id": video_id,
+            "source_type": "youtube",
+            "youtube_url": youtube_url,
+            "user_id": user_id.map(|id| id.to_string()),
+            "channel_id": channel_id,
+            "summary": analysis.video_summary,
+            "content_category": analysis.content_type,
+            "overall_quality": analysis.overall_quality,
+            "viral_moments_json": viral_moments_json,
+            "viral_moments_count": analysis.viral_moments.len(),
+            "analyzed_at": chrono::Utc::now().to_rfc3339(),
+            "embedding_provider": provider.vector_name(),
+        });
+
+        qdrant_client.store_video_content(video_id, payload, embedding, provider).await?;
+
+        info!(
+            "✅ Stored video analysis in video_content: video_id={}, {} viral moments, quality={:.2}",
+            video_id, analysis.viral_moments.len(), analysis.overall_quality
+        );
+        Ok(())
+    }
+
     /// Retrieve video analysis from Qdrant by file path
     /// This allows LLMs to "view" a video by reading its vectorized content
     pub async fn retrieve_video_analysis(
         video_file_path: &str,
         state: &Arc<AppState>,
     ) -> Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>> {
-        // Generate file_id from path (same as used during vectorization)
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
+        // Derive file_id from the path in the same way it was set during vectorization.
+        //
+        // Vectorization in clipping_job.rs calls:
+        //   process_video_for_vectorization(&video_path, &job.source_video_id, ...)
+        // so main video file_id = source_video_id = the YouTube video ID.
+        //
+        // For paths like "downloads/clipping_355_jNQXAC9IVRw.mp4":
+        //   stem = "clipping_355_jNQXAC9IVRw" → strip "clipping_{job_id}_" → "jNQXAC9IVRw"
+        //
+        // For clip paths like "outputs/clip_355_1.mp4":
+        //   stem = "clip_355_1" → used as-is (matches format!("clip_{}_{}", job_id, index+1))
+        //
+        // Fallback: hash of full path (old behavior for unknown patterns).
 
-        let mut hasher = DefaultHasher::new();
-        video_file_path.hash(&mut hasher);
-        let file_id = format!("{:x}", hasher.finish());
+        let path_stem = std::path::Path::new(video_file_path)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
+
+        let file_id = if path_stem.starts_with("clipping_") {
+            // "clipping_{job_id}_{video_id}" → extract video_id (last segment after '_')
+            path_stem.rsplit('_').next().unwrap_or(path_stem).to_string()
+        } else if path_stem.starts_with("clip_") {
+            // "clip_{job_id}_{index}" → use full stem
+            path_stem.to_string()
+        } else {
+            // Unknown format: fall back to hash of path
+            use std::collections::hash_map::DefaultHasher;
+            use std::hash::{Hash, Hasher};
+            let mut hasher = DefaultHasher::new();
+            video_file_path.hash(&mut hasher);
+            format!("{:x}", hasher.finish())
+        };
 
         let qdrant_client = match &state.qdrant_client {
             Some(client) => client,

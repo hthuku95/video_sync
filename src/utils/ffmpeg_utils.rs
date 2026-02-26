@@ -30,7 +30,8 @@ pub fn execute_ffmpeg_command(mut command: Command) -> Result<String, String> {
 }
 
 /// Execute FFmpeg command synchronously with timeout to prevent hung processes
-/// This wraps the async version using a Tokio runtime
+/// This wraps the async version using a Tokio runtime.
+/// Safe to call from both async and sync contexts.
 /// Default timeout is 5 minutes (300 seconds)
 pub fn execute_ffmpeg_command_with_sync_timeout(
     command: Command,
@@ -46,12 +47,24 @@ pub fn execute_ffmpeg_command_with_sync_timeout(
     let mut tokio_command = TokioCommand::new(program);
     tokio_command.args(&args);
 
-    // Create or get Tokio runtime
-    let runtime = tokio::runtime::Runtime::new()
-        .map_err(|e| format!("Failed to create Tokio runtime: {}", e))?;
-
-    // Execute async version with timeout in the runtime
-    runtime.block_on(execute_ffmpeg_command_with_timeout(tokio_command, timeout_secs))
+    // If we are already inside a Tokio runtime (e.g. called from an async worker),
+    // creating a second Runtime and calling block_on would panic with
+    // "Cannot start a runtime from within a runtime".
+    // block_in_place tells the scheduler to move other tasks off this thread so
+    // we can safely call handle.block_on() here.
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => {
+            tokio::task::block_in_place(|| {
+                handle.block_on(execute_ffmpeg_command_with_timeout(tokio_command, timeout_secs))
+            })
+        }
+        Err(_) => {
+            // Not inside a runtime — create a temporary one.
+            let runtime = tokio::runtime::Runtime::new()
+                .map_err(|e| format!("Failed to create Tokio runtime: {}", e))?;
+            runtime.block_on(execute_ffmpeg_command_with_timeout(tokio_command, timeout_secs))
+        }
+    }
 }
 
 /// Execute FFmpeg command asynchronously with timeout to prevent hung processes
@@ -350,6 +363,32 @@ pub fn cleanup_temp_files(files: &[String]) {
     for file in files {
         std::fs::remove_file(file).ok();
     }
+}
+
+/// Extract a single frame from a video at a specific timestamp (seconds).
+///
+/// Deterministic thumbnail generation — no AI needed. The timestamp comes from
+/// Gemini's `thumbnail_sec` field in the viral moment analysis.
+///
+/// Returns the path to the extracted frame image (JPEG).
+pub fn extract_frame_at_timestamp(video_path: &str, timestamp_sec: f64, output_path: &str) -> Result<String, String> {
+    let timestamp_str = format!("{:.3}", timestamp_sec);
+    let mut command = Command::new("ffmpeg");
+    command
+        .arg("-ss").arg(&timestamp_str)
+        .arg("-i").arg(video_path)
+        .arg("-vframes").arg("1")
+        .arg("-q:v").arg("2")  // High quality JPEG
+        .arg("-y")
+        .arg(output_path);
+
+    execute_ffmpeg_command(command)?;
+
+    if !std::path::Path::new(output_path).exists() {
+        return Err(format!("Frame extraction failed: output file not found at {}", output_path));
+    }
+
+    Ok(output_path.to_string())
 }
 
 /// Convert time in seconds to FFmpeg time format (HH:MM:SS.mmm)

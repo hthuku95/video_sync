@@ -2,6 +2,7 @@
 // Handles monitoring external channels, downloading videos, AI clip extraction, and posting to YouTube
 
 pub mod models;
+pub mod gemini_video_analyzer; // Single-call YouTube URL analysis (replaces frame-by-frame pipeline)
 pub mod apify_client;          // Primary downloader with 5-tier fallback system
 pub mod rusty_ytdl_client;     // Strategy #5: Pure Rust YouTube downloader (last resort)
 pub mod rustube_client;        // Strategy #2: Pure Rust downloader (no external deps)

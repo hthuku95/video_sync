@@ -1,63 +1,243 @@
-// Comprehensive clipping system integration tests
-// Tests complete E2E workflow from job creation to YouTube upload
+// Clipping system integration tests
+//
+// Tests the full 5-phase pipeline introduced by the new architecture:
+//   Phase A: Gemini video analysis via YouTube URL (1 API call)
+//   Phase B: Download (only if Phase A found quality clips)
+//   Phase C: Parallel FFmpeg clip extraction
+//   Phase D: 1 Voyage AI embedding → video_content Qdrant collection
+//   Phase E: Parallel YouTube upload
+//
+// Run all: cargo test --test clipping_integration_test -- --ignored --nocapture
+// Run one: cargo test --test clipping_integration_test test_name -- --ignored --nocapture
 
 mod helpers;
 
 use helpers::{TestContext, assertions};
-use helpers::test_youtube::{TestYouTubeClient, test_videos};
+use helpers::test_youtube::test_videos;
 use sqlx::Row;
 
+// ============================================================================
+// Test 1: Full end-to-end clipping workflow (primary smoke test)
+// ============================================================================
+
+/// Full E2E test: pending → analyzing → analyzed → downloading → ... → completed
+///
+/// Uses Rick Astley (3:33, always public, good candidate for viral moments).
+/// Verifies every phase of the new 5-phase pipeline completes successfully.
 #[tokio::test]
-#[ignore] // Run with: cargo test --test clipping_integration_test --ignored
+#[ignore]
 async fn test_complete_clipping_workflow() {
-    // Initialize test environment
     let ctx = TestContext::new()
         .await
         .expect("Failed to create test context");
 
-    // Create a clipping job with a short test video
     let job_id = ctx
-        .create_test_job(test_videos::SHORT_VIDEO)
+        .create_test_job(test_videos::MEDIUM_VIDEO)
         .await
         .expect("Failed to create test job");
 
-    tracing::info!("✅ Created test job {}", job_id);
+    eprintln!("✅ Created test job {} for video: {}", job_id, test_videos::MEDIUM_VIDEO);
 
-    // Wait for job to complete (timeout: 8 minutes for full workflow)
+    // New pipeline target: 8–15 min. Allow up to 20 min for cold starts / slow proxies.
+    let timeout_secs: u64 = std::env::var("TEST_TIMEOUT_LONG")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1200);
+
     let completed = ctx
-        .wait_for_status(job_id, "completed", 480)
+        .wait_for_status(job_id, "completed", timeout_secs)
         .await
         .expect("Failed waiting for completion");
 
+    // Fetch final status for a meaningful failure message
+    let final_status = ctx.get_job_status(job_id).await.unwrap_or_else(|_| "unknown".into());
     assert!(
         completed,
-        "Job should complete within 8 minutes (actual workflow: 5-8 min)"
+        "Job {} should reach 'completed' within {} seconds. Final status: '{}'",
+        job_id, timeout_secs, final_status
     );
 
-    // Verify job completed successfully
-    assertions::assert_job_status_sequence(&ctx.pool, job_id, &["pending", "completed"])
-        .await
-        .expect("Job should be completed");
-
-    // Verify clips were extracted
+    // Verify clips were extracted into the DB
     let clip_count = assertions::assert_clips_extracted(&ctx.pool, job_id, 1)
         .await
-        .expect("Should have extracted clips");
+        .expect("Should have at least 1 extracted clip");
 
-    tracing::info!("✅ Extracted {} clips from job {}", clip_count, job_id);
+    eprintln!("✅ Extracted {} clips for job {}", clip_count, job_id);
 
-    // Verify completion time was reasonable
-    assertions::assert_completed_within(&ctx.pool, job_id, 600)
+    // New pipeline completes in 8–15 min — allow 20 min ceiling
+    assertions::assert_completed_within(&ctx.pool, job_id, 1200)
         .await
-        .expect("Job should complete within 10 minutes");
+        .expect("Job should complete within 20 minutes");
 
-    // TODO: Verify YouTube upload when OAuth credentials are available
-    // let youtube_client = TestYouTubeClient::new(access_token);
-    // youtube_client.verify_unlisted(video_id).await.expect("Video should be unlisted");
-
-    // Cleanup
     ctx.cleanup().await.expect("Cleanup failed");
 }
+
+// ============================================================================
+// Test 2: Phase A — Gemini video analysis (fast, no download needed)
+// ============================================================================
+
+/// Verify Phase A (Gemini YouTube URL analysis) completes without downloading.
+///
+/// After submitting a job the worker should transition it out of 'pending' and
+/// into 'analyzing' / 'analyzed' / 'no_clips_found' within a reasonable time.
+/// This test exits as soon as Phase A finishes — it does NOT wait for the
+/// full download+extract pipeline.
+#[tokio::test]
+#[ignore]
+async fn test_gemini_analysis_phase() {
+    let ctx = TestContext::new()
+        .await
+        .expect("Failed to create test context");
+
+    let job_id = ctx
+        .create_test_job(test_videos::MEDIUM_VIDEO)
+        .await
+        .expect("Failed to create test job");
+
+    eprintln!("✅ Created test job {} for Phase A analysis test", job_id);
+
+    // Phase A (1 Gemini call) should finish within 3 minutes even on a cold Gemini model
+    let timeout_secs: u64 = std::env::var("TEST_TIMEOUT_ANALYSIS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(180);
+
+    // Wait until the job moves past 'analyzing' (either 'analyzed', 'downloading',
+    // 'no_clips_found', 'completed', or 'failed')
+    let start = std::time::Instant::now();
+    let mut passed_analysis = false;
+    loop {
+        let status = ctx.get_job_status(job_id).await.unwrap_or_else(|_| "unknown".into());
+        match status.as_str() {
+            "pending" | "analyzing" => {
+                // still in Phase A — keep waiting
+            }
+            "no_clips_found" => {
+                eprintln!("ℹ️  Job {} → no_clips_found (Gemini found no quality moments — still a valid Phase A result)", job_id);
+                passed_analysis = true;
+                break;
+            }
+            "analyzed" | "downloading" | "downloaded" | "extracting_clips"
+            | "clips_extracted" | "vectorizing" | "posting" | "completed" => {
+                eprintln!("✅ Job {} passed Phase A analysis, now at: '{}'", job_id, status);
+                passed_analysis = true;
+                break;
+            }
+            "failed" | "cancelled" => {
+                eprintln!("❌ Job {} failed during analysis: '{}'", job_id, status);
+                break;
+            }
+            _ => {
+                eprintln!("⚠️  Job {} unknown status: '{}'", job_id, status);
+            }
+        }
+
+        if start.elapsed().as_secs() > timeout_secs {
+            eprintln!("⏰ Phase A timed out after {}s — final status: '{}'", timeout_secs, status);
+            break;
+        }
+
+        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+    }
+
+    assert!(
+        passed_analysis,
+        "Job {} should complete Phase A (Gemini analysis) within {} seconds",
+        job_id, timeout_secs
+    );
+
+    // Phase A should have set progress > 0
+    assertions::assert_analysis_phase_reached(&ctx.pool, job_id)
+        .await
+        .expect("Phase A should have advanced job progress");
+
+    ctx.cleanup().await.expect("Cleanup failed");
+}
+
+// ============================================================================
+// Test 3: Download phase (YTDLP microservice)
+// ============================================================================
+
+/// Verify the download phase succeeds via the YTDLP microservice (Strategy #3).
+///
+/// Waits for the job to reach 'downloaded' status, confirming:
+///   - YTDLP microservice is reachable and warm
+///   - Cookies + proxy env vars are working
+///   - File is downloaded and non-empty
+#[tokio::test]
+#[ignore]
+async fn test_download_phase() {
+    assertions::assert_ytdlp_api_configured();
+
+    let ctx = TestContext::new()
+        .await
+        .expect("Failed to create test context");
+
+    let job_id = ctx
+        .create_test_job(test_videos::MEDIUM_VIDEO)
+        .await
+        .expect("Failed to create test job");
+
+    eprintln!("✅ Created test job {} for download phase test", job_id);
+
+    // Allow up to 10 min: 1 min warm-up + analysis + download
+    let timeout_secs: u64 = std::env::var("TEST_TIMEOUT_MEDIUM")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(600);
+
+    // Wait for 'downloaded' (or any later stage meaning download succeeded)
+    let start = std::time::Instant::now();
+    let mut download_succeeded = false;
+    loop {
+        let status = ctx.get_job_status(job_id).await.unwrap_or_else(|_| "unknown".into());
+        match status.as_str() {
+            "downloaded" | "extracting_clips" | "clips_extracted"
+            | "vectorizing" | "posting" | "completed" => {
+                eprintln!("✅ Job {} download confirmed — status: '{}'", job_id, status);
+                download_succeeded = true;
+                break;
+            }
+            "no_clips_found" => {
+                // Phase A found nothing → download was skipped (that's correct behaviour)
+                eprintln!("ℹ️  Job {} → no_clips_found — download correctly skipped", job_id);
+                download_succeeded = true; // skip is also correct behaviour
+                break;
+            }
+            "failed" | "cancelled" => {
+                let err = sqlx::query("SELECT error_message FROM clipping_jobs WHERE id = $1")
+                    .bind(job_id)
+                    .fetch_one(&ctx.pool)
+                    .await
+                    .ok()
+                    .and_then(|r| r.try_get::<Option<String>, _>("error_message").ok().flatten())
+                    .unwrap_or_else(|| "no error message".into());
+                eprintln!("❌ Job {} failed: {}", job_id, err);
+                break;
+            }
+            _ => {}
+        }
+
+        if start.elapsed().as_secs() > timeout_secs {
+            eprintln!("⏰ Download timed out after {}s — final status: '{}'", timeout_secs, status);
+            break;
+        }
+
+        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+    }
+
+    assert!(
+        download_succeeded,
+        "Job {} should reach 'downloaded' (or no_clips_found) within {} seconds",
+        job_id, timeout_secs
+    );
+
+    ctx.cleanup().await.expect("Cleanup failed");
+}
+
+// ============================================================================
+// Test 4: Atomic job claiming (no duplicate processing)
+// ============================================================================
 
 #[tokio::test]
 #[ignore]
@@ -66,109 +246,84 @@ async fn test_job_claiming_atomicity() {
         .await
         .expect("Failed to create test context");
 
-    // Create 5 test jobs
+    // Insert 5 jobs directly — using insert_test_job_raw so that each insert
+    // does NOT call cancel_stale_pending_test_jobs (which would cancel the
+    // previously inserted jobs and leave only 1 pending).
     let mut job_ids = Vec::new();
     for i in 0..5 {
         let job_id = ctx
-            .create_test_job(&format!("https://youtube.com/watch?v=test{}", i))
+            .insert_test_job_raw(&format!("https://youtube.com/watch?v=test{}", i))
             .await
-            .expect("Failed to create test job");
+            .expect("Failed to insert test job");
         job_ids.push(job_id);
     }
 
-    tracing::info!("✅ Created {} test jobs", job_ids.len());
+    eprintln!("✅ Created {} test jobs", job_ids.len());
 
-    // Simulate 3 concurrent workers claiming jobs
     use video_editor::jobs::job_claimer::JobClaimer;
 
     let worker1 = JobClaimer::new("test-worker-1".to_string(), ctx.pool.clone());
     let worker2 = JobClaimer::new("test-worker-2".to_string(), ctx.pool.clone());
     let worker3 = JobClaimer::new("test-worker-3".to_string(), ctx.pool.clone());
 
-    // All workers claim concurrently
-    let claim1_future = worker1.claim_next_job();
-    let claim2_future = worker2.claim_next_job();
-    let claim3_future = worker3.claim_next_job();
-
     let (claim1, claim2, claim3) = tokio::join!(
-        claim1_future,
-        claim2_future,
-        claim3_future
+        worker1.claim_next_job(),
+        worker2.claim_next_job(),
+        worker3.claim_next_job()
     );
 
-    // All should succeed but get different jobs
     let claimed1 = claim1.expect("Worker 1 should claim").expect("Should get job");
     let claimed2 = claim2.expect("Worker 2 should claim").expect("Should get job");
     let claimed3 = claim3.expect("Worker 3 should claim").expect("Should get job");
 
-    // Verify no duplicates
+    // No two workers should claim the same job
     assert_ne!(claimed1, claimed2, "Workers should claim different jobs");
     assert_ne!(claimed2, claimed3, "Workers should claim different jobs");
     assert_ne!(claimed1, claimed3, "Workers should claim different jobs");
 
-    tracing::info!(
-        "✅ Atomic claiming verified: {} != {} != {}",
-        claimed1,
-        claimed2,
-        claimed3
-    );
+    eprintln!("✅ Atomic claiming verified: {} != {} != {}", claimed1, claimed2, claimed3);
 
-    // Verify claims in database
-    assertions::assert_job_claimed(&ctx.pool, claimed1, "test-worker-1")
-        .await
-        .expect("Job should be claimed by worker 1");
+    for (job_id, worker_id) in [
+        (claimed1, "test-worker-1"),
+        (claimed2, "test-worker-2"),
+        (claimed3, "test-worker-3"),
+    ] {
+        let row = sqlx::query("SELECT claimed_by FROM clipping_jobs WHERE id = $1")
+            .bind(job_id)
+            .fetch_optional(&ctx.pool)
+            .await
+            .expect("DB query should succeed");
 
-    assertions::assert_job_claimed(&ctx.pool, claimed2, "test-worker-2")
-        .await
-        .expect("Job should be claimed by worker 2");
+        if let Some(row) = row {
+            let claimed_by: Option<String> = row.try_get("claimed_by").ok().flatten();
+            assert_eq!(
+                claimed_by.as_deref(),
+                Some(worker_id),
+                "Job {} should be claimed by {}, got {:?}",
+                job_id, worker_id, claimed_by
+            );
+        } else {
+            eprintln!("⚠️  Job {} (claimed by {}) no longer in DB — concurrent cleanup", job_id, worker_id);
+        }
+    }
 
-    assertions::assert_job_claimed(&ctx.pool, claimed3, "test-worker-3")
-        .await
-        .expect("Job should be claimed by worker 3");
+    worker1.release_all_claims().await.expect("Should release worker 1 claims");
+    worker2.release_all_claims().await.expect("Should release worker 2 claims");
+    worker3.release_all_claims().await.expect("Should release worker 3 claims");
 
-    // Cleanup
-    ctx.cleanup().await.expect("Cleanup failed");
-}
-
-#[tokio::test]
-#[ignore]
-async fn test_download_strategies_fallback() {
-    let ctx = TestContext::new()
-        .await
-        .expect("Failed to create test context");
-
-    // Create job with a video that might fail on Apify (edge case)
-    let job_id = ctx
-        .create_test_job(test_videos::SHORT_VIDEO)
-        .await
-        .expect("Failed to create test job");
-
-    // Wait for download to complete (will fallback through strategies if needed)
-    let downloaded = ctx
-        .wait_for_status(job_id, "downloaded", 300)
-        .await
-        .expect("Failed waiting for download");
-
-    assert!(
-        downloaded,
-        "Job should successfully download via fallback strategies"
-    );
-
-    // Verify no errors
-    let result = sqlx::query("SELECT error_message FROM clipping_jobs WHERE id = $1")
-        .bind(job_id)
-        .fetch_one(&ctx.pool)
-        .await
-        .expect("Should fetch job");
-
-    let error: Option<String> = result.try_get("error_message").ok().flatten();
-    assert!(error.is_none(), "Should have no errors after successful download");
-
-    tracing::info!("✅ Download fallback system working");
+    eprintln!("✅ All test worker claims released");
 
     ctx.cleanup().await.expect("Cleanup failed");
 }
 
+// ============================================================================
+// Test 5: Stuck job detection (analyzing state > 60 min)
+// ============================================================================
+
+/// Verify that jobs stuck in 'analyzing' for > 60 min are detected.
+///
+/// 'analyzing' is Phase A of the new pipeline — if Gemini hangs, the job
+/// will be stuck there. The worker's stuck-job detector should catch this.
 #[tokio::test]
 #[ignore]
 async fn test_stuck_job_detection() {
@@ -176,14 +331,12 @@ async fn test_stuck_job_detection() {
         .await
         .expect("Failed to create test context");
 
-    // Create a job and manually set it to stuck state
     let job_id = ctx
         .create_test_job(test_videos::SHORT_VIDEO)
         .await
         .expect("Failed to create test job");
 
-    // Manually set job to 'analyzing' status with old timestamp (65 min ago)
-    // NOTE: We need to disable the trigger temporarily because it auto-updates updated_at
+    // Disable updated_at trigger so we can manually back-date the timestamp
     sqlx::query("ALTER TABLE clipping_jobs DISABLE TRIGGER update_clipping_jobs_updated_at")
         .execute(&ctx.pool)
         .await
@@ -205,45 +358,23 @@ async fn test_stuck_job_detection() {
         .await
         .expect("Failed to re-enable trigger");
 
-    tracing::info!("✅ Simulated stuck job {} (analyzing for 65 min)", job_id);
+    eprintln!("✅ Simulated stuck job {} (analyzing for 65 min)", job_id);
 
-    // Debug: Check the actual job state
-    let debug_result = sqlx::query("SELECT status, updated_at, NOW() as current_time FROM clipping_jobs WHERE id = $1")
-        .bind(job_id)
-        .fetch_one(&ctx.pool)
-        .await
-        .expect("Should fetch job for debug");
-
-    let status: String = debug_result.get("status");
-    let updated_at: chrono::DateTime<chrono::Utc> = debug_result.get("updated_at");
-    let current_time: chrono::DateTime<chrono::Utc> = debug_result.get("current_time");
-
-    tracing::info!("🔍 Job status: {}, updated_at: {}, current_time: {}, diff: {} minutes",
-        status, updated_at, current_time, (current_time - updated_at).num_minutes());
-
-    // Trigger stuck job detection (this would normally run in worker)
-    // For now, manually verify the job would be detected
+    // Verify the stuck-job query would find this job
     let result = sqlx::query(
-        "SELECT id, status, updated_at, NOW() - updated_at as age FROM clipping_jobs
+        "SELECT id FROM clipping_jobs
          WHERE status = 'analyzing'
-         AND updated_at < NOW() - INTERVAL '60 minutes'
-         AND id = $1"
+           AND updated_at < NOW() - INTERVAL '60 minutes'
+           AND id = $1"
     )
     .bind(job_id)
     .fetch_optional(&ctx.pool)
     .await
     .expect("Should query stuck jobs");
 
-    if let Some(row) = &result {
-        let age: sqlx::postgres::types::PgInterval = row.get("age");
-        tracing::info!("✅ Found stuck job, age: {:?}", age);
-    } else {
-        tracing::error!("❌ Stuck job NOT detected!");
-    }
+    assert!(result.is_some(), "Stuck job should be detected by the 60-min query");
 
-    assert!(result.is_some(), "Stuck job should be detected");
-
-    // Simulate reset to failed
+    // Simulate worker resetting the stuck job to failed
     sqlx::query(
         "UPDATE clipping_jobs
          SET status = 'failed',
@@ -254,16 +385,19 @@ async fn test_stuck_job_detection() {
     .bind(job_id)
     .execute(&ctx.pool)
     .await
-    .expect("Should reset stuck job");
+    .expect("Should reset stuck job to failed");
 
-    // Verify it's now failed
     let status = ctx.get_job_status(job_id).await.expect("Should get status");
     assert_eq!(status, "failed", "Stuck job should be marked as failed");
 
-    tracing::info!("✅ Stuck job detection working");
+    eprintln!("✅ Stuck job detection working (analyzing → failed)");
 
     ctx.cleanup().await.expect("Cleanup failed");
 }
+
+// ============================================================================
+// Test 6: Auto-retry of recently failed jobs
+// ============================================================================
 
 #[tokio::test]
 #[ignore]
@@ -272,13 +406,12 @@ async fn test_auto_retry_failed_jobs() {
         .await
         .expect("Failed to create test context");
 
-    // Create a failed job
     let job_id = ctx
         .create_test_job(test_videos::SHORT_VIDEO)
         .await
         .expect("Failed to create test job");
 
-    // Manually fail the job (simulate a transient failure)
+    // Simulate a transient failure 6 minutes ago (within the 6-hour retry window)
     sqlx::query(
         "UPDATE clipping_jobs
          SET status = 'failed',
@@ -292,24 +425,25 @@ async fn test_auto_retry_failed_jobs() {
     .await
     .expect("Failed to set failed state");
 
-    tracing::info!("✅ Simulated failed job {} (6 min ago)", job_id);
+    eprintln!("✅ Simulated failed job {} (6 min ago)", job_id);
 
-    // Simulate auto-retry logic (would normally run in worker)
+    // Verify auto-retry query would pick this up
     let retryable = sqlx::query(
         "SELECT id FROM clipping_jobs
          WHERE status = 'failed'
-         AND completed_at > NOW() - INTERVAL '6 hours'
-         AND completed_at < NOW() - INTERVAL '5 minutes'
-         AND id = $1"
+           AND completed_at > NOW() - INTERVAL '6 hours'
+           AND completed_at < NOW() - INTERVAL '5 minutes'
+           AND retry_count < 10
+           AND id = $1"
     )
     .bind(job_id)
     .fetch_optional(&ctx.pool)
     .await
     .expect("Should query retryable jobs");
 
-    assert!(retryable.is_some(), "Failed job should be retryable");
+    assert!(retryable.is_some(), "Failed job should be retryable within the 6h window");
 
-    // Simulate retry
+    // Simulate the retry reset
     sqlx::query(
         "UPDATE clipping_jobs
          SET status = 'pending',
@@ -323,16 +457,99 @@ async fn test_auto_retry_failed_jobs() {
     .await
     .expect("Should reset for retry");
 
-    // Verify retry count incremented
     assertions::assert_retry_incremented(&ctx.pool, job_id)
         .await
         .expect("Retry count should be incremented");
 
-    // Verify status reset to pending
     let status = ctx.get_job_status(job_id).await.expect("Should get status");
-    assert_eq!(status, "pending", "Retried job should be pending");
+    assert_eq!(status, "pending", "Retried job should be back to pending");
 
-    tracing::info!("✅ Auto-retry mechanism working");
+    eprintln!("✅ Auto-retry mechanism working");
+
+    ctx.cleanup().await.expect("Cleanup failed");
+}
+
+// ============================================================================
+// Test 7: no_clips_found fast-fail (short video with no viral moments)
+// ============================================================================
+
+/// Verify that a video with no quality viral moments is fast-failed with
+/// 'no_clips_found' without triggering a download.
+///
+/// "Me at the zoo" (18s) is almost certainly below Gemini's viral moment
+/// quality threshold — it should reach no_clips_found without downloading.
+#[tokio::test]
+#[ignore]
+async fn test_no_clips_found_fast_fail() {
+    let ctx = TestContext::new()
+        .await
+        .expect("Failed to create test context");
+
+    let job_id = ctx
+        .create_test_job(test_videos::SHORT_VIDEO)
+        .await
+        .expect("Failed to create test job");
+
+    eprintln!("✅ Created job {} for no_clips_found test (18s video)", job_id);
+
+    // Phase A + fast-fail should happen within 3 minutes
+    let timeout_secs: u64 = std::env::var("TEST_TIMEOUT_ANALYSIS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(180);
+
+    // Wait until the job leaves 'analyzing' (either fast-fails or proceeds)
+    let start = std::time::Instant::now();
+    let mut reached_terminal = false;
+    let mut final_status = String::from("pending");
+    loop {
+        let status = ctx.get_job_status(job_id).await.unwrap_or_else(|_| "unknown".into());
+        match status.as_str() {
+            "pending" | "analyzing" => {}
+            _ => {
+                final_status = status.clone();
+                reached_terminal = true;
+                break;
+            }
+        }
+
+        if start.elapsed().as_secs() > timeout_secs {
+            final_status = ctx.get_job_status(job_id).await.unwrap_or_else(|_| "unknown".into());
+            break;
+        }
+
+        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+    }
+
+    assert!(
+        reached_terminal,
+        "Job {} should leave 'analyzing' within {} seconds (final: '{}')",
+        job_id, timeout_secs, final_status
+    );
+
+    eprintln!(
+        "ℹ️  Short video job {} ended with status '{}' (expected no_clips_found or completed)",
+        job_id, final_status
+    );
+
+    // The job should NOT have reached 'downloading' — fast-fail skips the download
+    let did_download = sqlx::query(
+        "SELECT id FROM clipping_jobs
+         WHERE id = $1 AND status IN ('downloading','downloaded','extracting_clips',
+                                      'clips_extracted','vectorizing','posting','completed')"
+    )
+    .bind(job_id)
+    .fetch_optional(&ctx.pool)
+    .await
+    .expect("DB query failed");
+
+    // For an 18s video, Gemini very likely returns no_clips_found — but we don't
+    // hard-assert it, because Gemini might surprise us. We just log the outcome.
+    if did_download.is_some() {
+        eprintln!("ℹ️  Gemini found viral moments even in the 18s video — download proceeded (unexpected but not wrong)");
+    } else {
+        eprintln!("✅ Fast-fail confirmed — download was skipped for short video");
+    }
 
     ctx.cleanup().await.expect("Cleanup failed");
 }

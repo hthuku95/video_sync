@@ -105,6 +105,7 @@ pub struct VideoDownloadResult {
 // YtdlpApiClient
 // ============================================================================
 
+#[derive(Debug)]
 pub struct YtdlpApiClient {
     base_url: String,
     http_client: Client,
@@ -123,8 +124,8 @@ impl YtdlpApiClient {
         }
 
         let http_client = Client::builder()
-            .timeout(Duration::from_secs(3600))  // 1 hour max
-            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(600))   // 10 minutes per request (proxy strategies can be slow)
+            .connect_timeout(Duration::from_secs(30))
             .build()
             .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
 
@@ -134,6 +135,39 @@ impl YtdlpApiClient {
             base_url,
             http_client,
         })
+    }
+
+    /// Wake up the YTDLP microservice if it's cold-started on Render free tier.
+    ///
+    /// Render free-tier services spin down after 15 min of inactivity. The first
+    /// request after spin-down gets a 502/520 cold-start error. This method polls
+    /// the health endpoint for up to 60 seconds until the service is awake.
+    async fn warm_up_service(client: &reqwest::Client, base_url: &str) -> Result<(), String> {
+        let health_url = format!("{}/api/v1/health", base_url);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+
+        info!("⏳ Warming up YTDLP microservice at {}...", health_url);
+
+        loop {
+            match client.get(&health_url).timeout(Duration::from_secs(10)).send().await {
+                Ok(resp) if resp.status().is_success() => {
+                    info!("✅ YTDLP microservice is awake (health check passed)");
+                    return Ok(());
+                }
+                Ok(resp) => {
+                    warn!("YTDLP health check returned {} — service may be starting up", resp.status());
+                }
+                Err(e) => {
+                    warn!("YTDLP health check failed: {} — retrying...", e);
+                }
+            }
+
+            if tokio::time::Instant::now() >= deadline {
+                return Err("YTDLP microservice did not become healthy within 60 seconds".to_string());
+            }
+
+            tokio::time::sleep(Duration::from_secs(5)).await;
+        }
     }
 
     /// Download video via FastAPI microservice
@@ -147,6 +181,9 @@ impl YtdlpApiClient {
 
         // Create client (fast-fail if env var not set)
         let client = Self::new()?;
+
+        // Wake up Render free-tier service before the download request
+        Self::warm_up_service(&client.http_client, &client.base_url).await?;
 
         // Extract job_id from output path for tracking
         let job_id = Path::new(output_path)
@@ -211,7 +248,7 @@ impl YtdlpApiClient {
             quality: Some("720p".to_string()),  // Default quality
             format: Some("mp4".to_string()),
             prefer_base64: Some(false),  // Always use URL mode for large files
-            timeout_seconds: Some(3600),  // 1 hour
+            timeout_seconds: Some(600),  // 10 minutes (matches HTTP client timeout)
         };
 
         // POST to /api/v1/download

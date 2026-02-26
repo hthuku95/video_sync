@@ -58,7 +58,7 @@ impl AstraDBClient {
             api_endpoint,
             application_token,
             keyspace,
-            collection: "chat_memory".to_string(),
+            collection: "agent_memory".to_string(),
         }
     }
 

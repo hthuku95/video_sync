@@ -364,6 +364,7 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>, session_uuid: Option
                                     files_referenced.clone(),
                                     context_data.clone(),
                                     voyage_embeddings,
+                                    Some("general"),
                                 ).await {
                                     tracing::warn!("Failed to store in Qdrant (Voyage): {}", e);
                                 }
@@ -376,6 +377,7 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>, session_uuid: Option
                                     files_referenced,
                                     context_data,
                                     gemini_client,
+                                    Some("general"),
                                 ).await {
                                     tracing::warn!("Failed to store in Qdrant (Gemini): {}", e);
                                 }

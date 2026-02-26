@@ -3,6 +3,10 @@
 
 use sqlx::{PgPool, Row, postgres::PgPoolOptions};
 use std::env;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+// Monotonically increasing counter ensures each TestContext in a test run gets unique IDs
+static TEST_CONTEXT_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Test context that manages test user and cleanup
 pub struct TestContext {
@@ -23,6 +27,7 @@ impl TestContext {
         // Create connection pool
         let pool = PgPoolOptions::new()
             .max_connections(5)
+            .acquire_timeout(std::time::Duration::from_secs(60))
             .connect(&database_url)
             .await?;
 
@@ -48,11 +53,16 @@ impl TestContext {
         .await?;
 
         // Create test source channel (YouTube channel to monitor)
-        let test_source_channel_yt_id = format!("TEST_SRC_{}", chrono::Utc::now().timestamp());
+        // Combine timestamp + monotonic counter + process ID for uniqueness across parallel tests
+        let ctx_num = TEST_CONTEXT_COUNTER.fetch_add(1, Ordering::SeqCst);
+        let test_source_channel_yt_id = format!(
+            "TEST_SRC_{}_{}_{}", chrono::Utc::now().timestamp(), ctx_num, std::process::id()
+        );
         let source_result = sqlx::query(
             "INSERT INTO youtube_source_channels
              (channel_id, channel_name, is_active, created_at, updated_at)
              VALUES ($1, $2, $3, NOW(), NOW())
+             ON CONFLICT (channel_id) DO UPDATE SET updated_at = NOW()
              RETURNING id"
         )
         .bind(&test_source_channel_yt_id)
@@ -64,11 +74,14 @@ impl TestContext {
         let test_source_channel_id: i32 = source_result.get("id");
 
         // Create test destination channel (connected YouTube channel for uploads)
-        let test_dest_channel_yt_id = format!("TEST_DEST_{}", chrono::Utc::now().timestamp());
+        let test_dest_channel_yt_id = format!(
+            "TEST_DEST_{}_{}_{}", chrono::Utc::now().timestamp(), ctx_num, std::process::id()
+        );
         let dest_result = sqlx::query(
             "INSERT INTO connected_youtube_channels
              (user_id, channel_id, channel_name, access_token, refresh_token, token_expiry, granted_scopes, created_at, updated_at)
              VALUES ($1, $2, $3, $4, $5, NOW() + INTERVAL '1 hour', $6, NOW(), NOW())
+             ON CONFLICT (user_id, channel_id) DO UPDATE SET updated_at = NOW()
              RETURNING id"
         )
         .bind(test_user_id)
@@ -108,11 +121,79 @@ impl TestContext {
         })
     }
 
+    /// Cancel all non-terminal AND recently-failed test-user jobs before a new test run.
+    ///
+    /// This prevents two interference patterns:
+    ///   1. Non-terminal jobs (pending/in-progress) from previous runs block the new job in the queue.
+    ///   2. Failed test jobs from previous runs get picked up by the auto-retry mechanism
+    ///      (which retries jobs failed within the last 6 hours), causing them to jump the queue
+    ///      ahead of the freshly created test job.
+    ///
+    /// Setting old failed jobs to 'cancelled' stops the auto-retry from re-enqueuing them.
+    pub async fn cancel_stale_pending_test_jobs(&self) -> Result<u64, Box<dyn std::error::Error>> {
+        let result = sqlx::query(
+            "UPDATE clipping_jobs
+             SET status = 'cancelled',
+                 error_message = 'Cancelled by test harness (stale from previous run)',
+                 claimed_by = NULL,
+                 updated_at = NOW()
+             WHERE id IN (
+                 SELECT cj.id FROM clipping_jobs cj
+                 JOIN youtube_channel_linkages l ON l.id = cj.linkage_id
+                 WHERE l.user_id = $1
+                   AND cj.status NOT IN ('completed', 'cancelled')
+             )"
+        )
+        .bind(self.test_user_id)
+        .execute(&self.pool)
+        .await?;
+
+        let cancelled = result.rows_affected();
+        if cancelled > 0 {
+            eprintln!("🧹 Cancelled {} stale test jobs (non-terminal + failed) before starting new test", cancelled);
+        }
+        Ok(cancelled)
+    }
+
+    /// Insert a job directly without triggering stale-job cleanup.
+    /// Use this when you need multiple jobs to coexist (e.g. atomicity tests).
+    pub async fn insert_test_job_raw(
+        &self,
+        video_id: &str,
+    ) -> Result<i32, Box<dyn std::error::Error>> {
+        let youtube_video_id = if video_id.contains("youtube.com") || video_id.contains("youtu.be") {
+            video_id
+                .split("v=")
+                .nth(1)
+                .and_then(|s| s.split('&').next())
+                .or_else(|| video_id.split('/').last())
+                .unwrap_or(video_id)
+        } else {
+            video_id
+        };
+
+        let result = sqlx::query(
+            "INSERT INTO clipping_jobs
+             (linkage_id, source_video_id, status, created_at, updated_at)
+             VALUES ($1, $2, 'pending', NOW(), NOW())
+             RETURNING id"
+        )
+        .bind(self.test_linkage_id)
+        .bind(youtube_video_id)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(result.get("id"))
+    }
+
     /// Create a test clipping job
     pub async fn create_test_job(
         &self,
         video_id: &str,
     ) -> Result<i32, Box<dyn std::error::Error>> {
+        // Cancel any stale pending test jobs first so the new job isn't stuck in queue
+        self.cancel_stale_pending_test_jobs().await?;
+
         // Extract video ID from URL if full URL is provided
         let youtube_video_id = if video_id.contains("youtube.com") || video_id.contains("youtu.be") {
             video_id
@@ -150,6 +231,7 @@ impl TestContext {
     }
 
     /// Wait for job to reach a specific status (with timeout)
+    /// Handles transient DB errors (PoolTimedOut, connection reset) by retrying
     pub async fn wait_for_status(
         &self,
         job_id: i32,
@@ -157,18 +239,41 @@ impl TestContext {
         timeout_secs: u64,
     ) -> Result<bool, Box<dyn std::error::Error>> {
         let start = std::time::Instant::now();
+        let mut consecutive_errors: u32 = 0;
 
         loop {
-            let status = self.get_job_status(job_id).await?;
-            if status == target_status {
-                return Ok(true);
+            match self.get_job_status(job_id).await {
+                Ok(status) => {
+                    consecutive_errors = 0;
+                    if status == target_status {
+                        return Ok(true);
+                    }
+                    // Early exit on all terminal states
+                    // no_clips_found: Phase A fast-fail (Gemini found no quality viral moments)
+                    let terminal_states = ["failed", "cancelled", "no_clips_found"];
+                    if terminal_states.contains(&status.as_str()) {
+                        eprintln!("Job {} reached terminal state '{}', expected '{}'", job_id, status, target_status);
+                        return Ok(false);
+                    }
+                    eprintln!("Job {} status: {} (waiting for {})", job_id, status, target_status);
+                }
+                Err(e) => {
+                    consecutive_errors += 1;
+                    eprintln!("Warning: get_job_status transient error #{} (retrying): {}", consecutive_errors, e);
+                    if consecutive_errors >= 10 {
+                        return Err(e);
+                    }
+                    // Back off before retrying after an error
+                    tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+                    continue;
+                }
             }
 
             if start.elapsed().as_secs() > timeout_secs {
                 return Ok(false);
             }
 
-            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+            tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
         }
     }
 
@@ -210,10 +315,10 @@ impl TestContext {
             .execute(&self.pool)
             .await?;
 
-        sqlx::query("DELETE FROM users WHERE id = $1")
-            .bind(self.test_user_id)
-            .execute(&self.pool)
-            .await?;
+        // NOTE: We intentionally do NOT delete the test user (id = -1).
+        // Deleting it cascades via ON DELETE CASCADE through connected_youtube_channels
+        // → youtube_channel_linkages → clipping_jobs, wiping other parallel tests' data.
+        // The user row is reused across test runs via ON CONFLICT DO NOTHING.
 
         Ok(())
     }
@@ -264,10 +369,8 @@ impl Drop for TestContext {
                 .execute(&pool)
                 .await;
 
-            let _ = sqlx::query("DELETE FROM users WHERE id = $1")
-                .bind(user_id)
-                .execute(&pool)
-                .await;
+            // NOTE: Do NOT delete the test user — see cleanup() for explanation.
+            let _ = user_id; // suppress unused variable warning
         });
     }
 }

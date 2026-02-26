@@ -206,12 +206,13 @@ impl VideoEditingJob {
                     if let Some(ref voyage_embeddings) = self.app_state.voyage_embeddings {
                         if let Err(e) = qdrant_client.store_chat_memory_with_voyage(
                             &session_id,
-                            None, 
+                            None,
                             &raw_input,
                             &response,
                             files_referenced,
                             context_data,
                             voyage_embeddings,
+                            Some("video_editing"),
                         ).await {
                             tracing::warn!("Failed to store conversation in Qdrant (Voyage): {}", e);
                         }
@@ -224,6 +225,7 @@ impl VideoEditingJob {
                             files_referenced,
                             context_data,
                             gemini_client,
+                            Some("video_editing"),
                         ).await {
                             tracing::warn!("Failed to store conversation in Qdrant (Gemini): {}", e);
                         }

@@ -1,14 +1,12 @@
 use qdrant_client::qdrant::{
     CreateCollectionBuilder, CreateFieldIndexCollectionBuilder, Distance, PointStruct,
     SearchPointsBuilder, UpsertPointsBuilder, VectorParamsBuilder, FieldType,
-    VectorsConfig, VectorParamsMap, Vectors
+    VectorsConfig, VectorParamsMap, Vectors, ScrollPointsBuilder, Filter, Condition,
 };
 use qdrant_client::{Qdrant, Payload};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
 use uuid::Uuid;
 
 /// Embedding provider enum for multi-vector support
@@ -89,7 +87,7 @@ impl QdrantClient {
         
         Ok(Self {
             client,
-            collection_name: "chat_memory".to_string(),
+            collection_name: "agent_memory".to_string(),
         })
     }
 
@@ -219,6 +217,52 @@ impl QdrantClient {
             }
         }
         
+        // Create index for file_id field (for video vectorization retrieval)
+        let file_id_index = self.client
+            .create_field_index(
+                CreateFieldIndexCollectionBuilder::new(
+                    &self.collection_name,
+                    "file_id",
+                    FieldType::Keyword,
+                )
+                .wait(true),
+            )
+            .await;
+
+        match file_id_index {
+            Ok(_) => tracing::info!("✅ Created file_id index successfully"),
+            Err(e) => {
+                if e.to_string().contains("already exists") || e.to_string().contains("Index already exists") {
+                    tracing::debug!("file_id index already exists, skipping");
+                } else {
+                    tracing::warn!("Failed to create file_id index: {}", e);
+                }
+            }
+        }
+
+        // Create index for content_type field (for filtering video frames vs summaries)
+        let content_type_index = self.client
+            .create_field_index(
+                CreateFieldIndexCollectionBuilder::new(
+                    &self.collection_name,
+                    "content_type",
+                    FieldType::Keyword,
+                )
+                .wait(true),
+            )
+            .await;
+
+        match content_type_index {
+            Ok(_) => tracing::info!("✅ Created content_type index successfully"),
+            Err(e) => {
+                if e.to_string().contains("already exists") || e.to_string().contains("Index already exists") {
+                    tracing::debug!("content_type index already exists, skipping");
+                } else {
+                    tracing::warn!("Failed to create content_type index: {}", e);
+                }
+            }
+        }
+
         tracing::info!("🎯 Qdrant payload indexing setup complete - enhanced performance for chat history retrieval");
         Ok(())
     }
@@ -232,6 +276,7 @@ impl QdrantClient {
         files_referenced: Vec<String>,
         context: HashMap<String, serde_json::Value>,
         voyage_client: &crate::voyage_embeddings::VoyageEmbeddings,
+        feature: Option<&str>,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         // Generate embedding using Voyage AI
         let embedding = voyage_client.generate_single_embedding(user_message.to_string()).await?;
@@ -247,17 +292,6 @@ impl QdrantClient {
             files_referenced,
         };
 
-        // Create payload from document
-        let payload: Payload = json!({
-            "session_id": document.session_id,
-            "user_id": document.user_id,
-            "timestamp": document.timestamp.to_rfc3339(),
-            "user_message": document.user_message,
-            "agent_response": document.agent_response,
-            "context": document.context,
-            "files_referenced": document.files_referenced
-        }).try_into().unwrap();
-
         // Create named vectors for Voyage provider
         let mut named_vectors = HashMap::new();
         named_vectors.insert(EmbeddingProvider::Voyage.vector_name().to_string(), embedding);
@@ -266,6 +300,7 @@ impl QdrantClient {
         let mut payload_value: serde_json::Value = json!({
             "session_id": document.session_id,
             "user_id": document.user_id,
+            "feature": feature.unwrap_or("general"),
             "timestamp": document.timestamp.to_rfc3339(),
             "user_message": document.user_message,
             "agent_response": document.agent_response,
@@ -309,10 +344,11 @@ impl QdrantClient {
         files_referenced: Vec<String>,
         context: HashMap<String, serde_json::Value>,
         gemini_client: &crate::gemini_client::GeminiClient,
+        feature: Option<&str>,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         // Generate embedding using Gemini
         let embedding = gemini_client.embed_content(user_message).await?;
-        
+
         let document = ChatMemoryDocument {
             id: Uuid::new_v4().to_string(),
             session_id: session_id.to_string(),
@@ -332,6 +368,7 @@ impl QdrantClient {
         let mut payload_value: serde_json::Value = json!({
             "session_id": document.session_id,
             "user_id": document.user_id,
+            "feature": feature.unwrap_or("general"),
             "timestamp": document.timestamp.to_rfc3339(),
             "user_message": document.user_message,
             "agent_response": document.agent_response,
@@ -551,80 +588,30 @@ impl QdrantClient {
         session_id: &str,
         limit: u32,
     ) -> Result<Vec<ChatMemoryDocument>, Box<dyn std::error::Error + Send + Sync>> {
-        // For getting recent history, we use a zero vector since we only care about the filter
-        // Try Voyage first (1024 dims), fallback to Gemini (768 dims) if Voyage search fails
-        let provider = EmbeddingProvider::Voyage;
-        let zero_vector = provider.zero_vector();
-
-        let search_result = self.client
-            .search_points(
-                SearchPointsBuilder::new(&self.collection_name, zero_vector, limit as u64)
-                    .vector_name(provider.vector_name())
-                    .filter(qdrant_client::qdrant::Filter {
-                        must: vec![qdrant_client::qdrant::Condition {
-                            condition_one_of: Some(
-                                qdrant_client::qdrant::condition::ConditionOneOf::Field(
-                                    qdrant_client::qdrant::FieldCondition {
-                                        key: "session_id".to_string(),
-                                        r#match: Some(qdrant_client::qdrant::Match {
-                                            match_value: Some(
-                                                qdrant_client::qdrant::r#match::MatchValue::Keyword(
-                                                    session_id.to_string()
-                                                )
-                                            ),
-                                        }),
-                                        ..Default::default()
-                                    }
-                                ),
-                            ),
-                        }],
-                        ..Default::default()
-                    })
-                    .with_payload(true)
+        // Use Qdrant scroll API instead of zero-vector search.
+        // Scroll is designed for filter-only retrieval — O(log n) via payload index,
+        // not an O(n) scan like searching with a zero vector.
+        let scroll_result = self.client
+            .scroll(
+                ScrollPointsBuilder::new(&self.collection_name)
+                    .filter(Filter::must([Condition::matches("session_id", session_id.to_string())]))
+                    .limit(limit)
+                    .with_payload(true),
             )
             .await;
 
-        // If Voyage search failed, try Gemini
-        let search_result = if search_result.is_err() {
-            tracing::debug!("Voyage search failed, trying Gemini vector");
-            let gemini_provider = EmbeddingProvider::Gemini;
-            let gemini_zero_vector = gemini_provider.zero_vector();
-
-            self.client
-                .search_points(
-                    SearchPointsBuilder::new(&self.collection_name, gemini_zero_vector, limit as u64)
-                        .vector_name(gemini_provider.vector_name())
-                        .filter(qdrant_client::qdrant::Filter {
-                            must: vec![qdrant_client::qdrant::Condition {
-                                condition_one_of: Some(
-                                    qdrant_client::qdrant::condition::ConditionOneOf::Field(
-                                        qdrant_client::qdrant::FieldCondition {
-                                            key: "session_id".to_string(),
-                                            r#match: Some(qdrant_client::qdrant::Match {
-                                                match_value: Some(
-                                                    qdrant_client::qdrant::r#match::MatchValue::Keyword(
-                                                        session_id.to_string()
-                                                    )
-                                                ),
-                                            }),
-                                            ..Default::default()
-                                        }
-                                    ),
-                                ),
-                            }],
-                            ..Default::default()
-                        })
-                        .with_payload(true)
-                )
-                .await?
-        } else {
-            search_result?
+        let scroll_result = match scroll_result {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!("Qdrant scroll failed for session history: {}", e);
+                return Ok(Vec::new());
+            }
         };
 
         let mut documents = Vec::new();
-        for scored_point in search_result.result {
-            let payload = scored_point.payload;
-            let point_id = match scored_point.id {
+        for point in scroll_result.result {
+            let payload = point.payload;
+            let point_id = match point.id {
                 Some(id) => match id.point_id_options {
                     Some(qdrant_client::qdrant::point_id::PointIdOptions::Uuid(uuid)) => uuid,
                     Some(qdrant_client::qdrant::point_id::PointIdOptions::Num(num)) => num.to_string(),
@@ -632,7 +619,7 @@ impl QdrantClient {
                 },
                 None => continue,
             };
-                
+
             let doc = ChatMemoryDocument {
                 id: point_id,
                 session_id: payload.get("session_id")
@@ -673,7 +660,7 @@ impl QdrantClient {
 
         // Sort by timestamp (newest first)
         documents.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
-        
+
         Ok(documents)
     }
 
@@ -759,12 +746,14 @@ impl QdrantClient {
     ///
     /// This method now requires specifying the embedding provider to use the correct
     /// named vector in Qdrant (voyage or gemini)
-    /// Convert a string ID to a numeric point ID using hash
-    /// This prevents "Unable to parse UUID" errors for non-UUID strings like "video_5Io13pZlK0M"
-    fn string_to_point_id(s: &str) -> u64 {
-        let mut hasher = DefaultHasher::new();
-        s.hash(&mut hasher);
-        hasher.finish()
+    /// Convert a string video_id to a deterministic numeric point ID using UUID v5.
+    /// UUID v5 is stable across runs (unlike DefaultHasher) and has negligible collision probability.
+    fn video_id_to_point_id(video_id: &str) -> u64 {
+        // Use UUID v5 with a fixed namespace then fold to u64
+        let ns = uuid::Uuid::NAMESPACE_URL;
+        let v5 = Uuid::new_v5(&ns, video_id.as_bytes());
+        let bytes = v5.as_bytes();
+        u64::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7]])
     }
 
     pub async fn upsert_point(
@@ -810,8 +799,9 @@ impl QdrantClient {
         let mut named_vectors = HashMap::new();
         named_vectors.insert(provider.vector_name().to_string(), vector.to_vec());
 
-        // Use numeric point ID to avoid "Unable to parse UUID" errors
-        let numeric_point_id = Self::string_to_point_id(point_id);
+        // Use deterministic numeric point ID (UUID v5 folded to u64) to avoid
+        // "Unable to parse UUID" errors for non-UUID strings like "video_5Io13pZlK0M"
+        let numeric_point_id = Self::video_id_to_point_id(point_id);
 
         let point = PointStruct::new(
             numeric_point_id,
@@ -905,6 +895,239 @@ impl QdrantClient {
             results.push(serde_json::Value::Object(result_obj));
         }
         
+        Ok(results)
+    }
+
+    // =========================================================================
+    // New collection methods: video_content + extracted_clips
+    // =========================================================================
+
+    /// Create (or verify) the `video_content` collection.
+    /// One point per analyzed video — deduplication, content discovery, editing context.
+    pub async fn ensure_video_content_collection(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let collection_name = "video_content";
+        let mut named_vectors = HashMap::new();
+        named_vectors.insert("voyage".to_string(), VectorParamsBuilder::new(1024, Distance::Cosine).build());
+        named_vectors.insert("gemini".to_string(), VectorParamsBuilder::new(768, Distance::Cosine).build());
+
+        let result = self.client
+            .create_collection(
+                CreateCollectionBuilder::new(collection_name)
+                    .vectors_config(VectorsConfig {
+                        config: Some(qdrant_client::qdrant::vectors_config::Config::ParamsMap(
+                            VectorParamsMap { map: named_vectors }
+                        ))
+                    })
+            )
+            .await;
+
+        match result {
+            Ok(_) => tracing::info!("✅ Created video_content collection"),
+            Err(e) if e.to_string().contains("already exists") => tracing::debug!("video_content collection already exists"),
+            Err(e) => tracing::warn!("Failed to create video_content collection: {}", e),
+        }
+
+        // Payload indexes
+        for (field, field_type) in &[
+            ("video_id", FieldType::Keyword),
+            ("source_type", FieldType::Keyword),
+            ("user_id", FieldType::Keyword),
+            ("channel_id", FieldType::Keyword),
+            ("content_category", FieldType::Keyword),
+        ] {
+            let _ = self.client
+                .create_field_index(
+                    CreateFieldIndexCollectionBuilder::new(collection_name, *field, *field_type).wait(true)
+                )
+                .await;
+        }
+
+        Ok(())
+    }
+
+    /// Create (or verify) the `extracted_clips` collection.
+    /// One point per generated YouTube Short — clip search, quality analytics, upload tracking.
+    pub async fn ensure_extracted_clips_collection(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let collection_name = "extracted_clips";
+        let mut named_vectors = HashMap::new();
+        named_vectors.insert("voyage".to_string(), VectorParamsBuilder::new(1024, Distance::Cosine).build());
+
+        let result = self.client
+            .create_collection(
+                CreateCollectionBuilder::new(collection_name)
+                    .vectors_config(VectorsConfig {
+                        config: Some(qdrant_client::qdrant::vectors_config::Config::ParamsMap(
+                            VectorParamsMap { map: named_vectors }
+                        ))
+                    })
+            )
+            .await;
+
+        match result {
+            Ok(_) => tracing::info!("✅ Created extracted_clips collection"),
+            Err(e) if e.to_string().contains("already exists") => tracing::debug!("extracted_clips collection already exists"),
+            Err(e) => tracing::warn!("Failed to create extracted_clips collection: {}", e),
+        }
+
+        // Payload indexes
+        for (field, field_type) in &[
+            ("clipping_job_id", FieldType::Integer),
+            ("source_video_id", FieldType::Keyword),
+            ("destination_channel_id", FieldType::Keyword),
+            ("upload_status", FieldType::Keyword),
+        ] {
+            let _ = self.client
+                .create_field_index(
+                    CreateFieldIndexCollectionBuilder::new(collection_name, *field, *field_type).wait(true)
+                )
+                .await;
+        }
+
+        Ok(())
+    }
+
+    /// Create (or verify) the `agent_memory` collection (replaces `chat_memory`).
+    /// All AI conversation context — video editing, generation, clipping, general chat.
+    pub async fn ensure_agent_memory_collection(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let collection_name = "agent_memory";
+        let mut named_vectors = HashMap::new();
+        named_vectors.insert("voyage".to_string(), VectorParamsBuilder::new(1024, Distance::Cosine).build());
+        named_vectors.insert("gemini".to_string(), VectorParamsBuilder::new(768, Distance::Cosine).build());
+
+        let result = self.client
+            .create_collection(
+                CreateCollectionBuilder::new(collection_name)
+                    .vectors_config(VectorsConfig {
+                        config: Some(qdrant_client::qdrant::vectors_config::Config::ParamsMap(
+                            VectorParamsMap { map: named_vectors }
+                        ))
+                    })
+            )
+            .await;
+
+        match result {
+            Ok(_) => tracing::info!("✅ Created agent_memory collection"),
+            Err(e) if e.to_string().contains("already exists") => tracing::debug!("agent_memory collection already exists"),
+            Err(e) => tracing::warn!("Failed to create agent_memory collection: {}", e),
+        }
+
+        // Payload indexes
+        for (field, field_type) in &[
+            ("session_id", FieldType::Keyword),
+            ("user_id", FieldType::Keyword),
+            ("feature", FieldType::Keyword),
+            ("timestamp", FieldType::Keyword),
+        ] {
+            let _ = self.client
+                .create_field_index(
+                    CreateFieldIndexCollectionBuilder::new(collection_name, *field, *field_type).wait(true)
+                )
+                .await;
+        }
+
+        Ok(())
+    }
+
+    /// Check if a video has already been analyzed (deduplication check).
+    /// Returns the stored VideoContentEntry payload if found, None otherwise.
+    pub async fn video_already_analyzed(
+        &self,
+        video_id: &str,
+    ) -> Result<Option<serde_json::Value>, Box<dyn std::error::Error + Send + Sync>> {
+        let scroll_result = self.client
+            .scroll(
+                ScrollPointsBuilder::new("video_content")
+                    .filter(Filter::must([Condition::matches("video_id", video_id.to_string())]))
+                    .limit(1)
+                    .with_payload(true),
+            )
+            .await?;
+
+        if let Some(point) = scroll_result.result.into_iter().next() {
+            let payload_json: serde_json::Value = serde_json::to_value(&point.payload)
+                .unwrap_or(serde_json::Value::Null);
+            Ok(Some(payload_json))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Store a video content entry in the `video_content` collection.
+    /// One point per video. Uses UUID v5 of video_id for deterministic deduplication.
+    pub async fn store_video_content(
+        &self,
+        video_id: &str,
+        payload: serde_json::Value,
+        embedding: Vec<f32>,
+        provider: EmbeddingProvider,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let mut qdrant_payload = std::collections::HashMap::new();
+        if let Some(obj) = payload.as_object() {
+            for (key, value) in obj {
+                qdrant_payload.insert(key.clone(), value.clone().into());
+            }
+        }
+
+        let mut named_vectors = HashMap::new();
+        named_vectors.insert(provider.vector_name().to_string(), embedding);
+
+        let point_id = Self::video_id_to_point_id(video_id);
+        let point = PointStruct::new(point_id, Vectors::from(named_vectors), qdrant_payload);
+
+        self.client
+            .upsert_points(UpsertPointsBuilder::new("video_content", vec![point]).wait(true))
+            .await?;
+
+        tracing::info!("✅ Stored video content in Qdrant: video_id={}", video_id);
+        Ok(())
+    }
+
+    /// Store an extracted clip entry in the `extracted_clips` collection.
+    /// Point ID = the PostgreSQL `extracted_clips.id` (integer, no hashing needed).
+    pub async fn store_extracted_clip(
+        &self,
+        clip_db_id: i32,
+        payload: serde_json::Value,
+        embedding: Vec<f32>,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let mut qdrant_payload = std::collections::HashMap::new();
+        if let Some(obj) = payload.as_object() {
+            for (key, value) in obj {
+                qdrant_payload.insert(key.clone(), value.clone().into());
+            }
+        }
+
+        let mut named_vectors = HashMap::new();
+        named_vectors.insert("voyage".to_string(), embedding);
+
+        let point = PointStruct::new(clip_db_id as u64, Vectors::from(named_vectors), qdrant_payload);
+
+        self.client
+            .upsert_points(UpsertPointsBuilder::new("extracted_clips", vec![point]).wait(true))
+            .await?;
+
+        tracing::debug!("Stored extracted clip in Qdrant: clip_id={}", clip_db_id);
+        Ok(())
+    }
+
+    /// Get all clips for a clipping job from the `extracted_clips` collection.
+    pub async fn get_clips_for_job(
+        &self,
+        job_id: i32,
+    ) -> Result<Vec<serde_json::Value>, Box<dyn std::error::Error + Send + Sync>> {
+        let scroll_result = self.client
+            .scroll(
+                ScrollPointsBuilder::new("extracted_clips")
+                    .filter(Filter::must([Condition::matches("clipping_job_id", job_id as i64)]))
+                    .limit(50)
+                    .with_payload(true),
+            )
+            .await?;
+
+        let results = scroll_result.result.into_iter().map(|point| {
+            serde_json::to_value(&point.payload).unwrap_or(serde_json::Value::Null)
+        }).collect();
+
         Ok(results)
     }
 }
