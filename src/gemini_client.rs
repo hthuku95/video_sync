@@ -2954,7 +2954,7 @@ Generate a well-structured script appropriate for this type of video.",
     /// This replaces the entire frame-by-frame pipeline:
     /// - ONE API call instead of 100+ sequential frame analyses
     /// - Gemini sees the full video including motion, audio, and pacing
-    /// - `media_resolution: "low"` processes at ~100 tokens/sec (~60k tokens per 10 min video)
+    /// - `mediaResolution: MEDIA_RESOLUTION_LOW` processes at ~100 tokens/sec (~60k tokens per 10 min video)
     /// - Returns structured JSON with viral moments, timestamps, and quality scores
     ///
     /// Returns Err if no viral moments meet the quality threshold (fast-fail — skip download)
@@ -3003,7 +3003,7 @@ Provide ONLY the JSON object, no markdown, no code blocks, no other text."#,
             max_dur = max_duration_secs,
         );
 
-        // Build request with YouTube fileData part and media_resolution: "low"
+        // Build request with YouTube fileData part and mediaResolution: MEDIA_RESOLUTION_LOW
         let request_body = serde_json::json!({
             "contents": [{
                 "role": "user",
@@ -3023,7 +3023,7 @@ Provide ONLY the JSON object, no markdown, no code blocks, no other text."#,
                 "temperature": 0.3,
                 "maxOutputTokens": 8192,
                 "responseMimeType": "application/json",
-                "mediaResolution": "low"
+                "mediaResolution": "MEDIA_RESOLUTION_LOW"
             }
         });
 
