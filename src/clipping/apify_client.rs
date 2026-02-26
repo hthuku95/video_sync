@@ -297,7 +297,8 @@ impl ApifyClient {
     }
 
     /// Download video using 5-tier fallback system
-    /// Strategy order: Apify → rustube → FastAPI yt-dlp → rust-yt-downloader → rusty_ytdl
+    /// Strategy order: FastAPI yt-dlp → Apify → rustube → rust-yt-downloader → rusty_ytdl
+    /// YTDLPAPI (yt-dlp android) is tried first as it proved most reliable in Feb 2026 testing.
     pub async fn download_video(
         &self,
         video_url: &str,
@@ -312,49 +313,11 @@ impl ApifyClient {
 
         tracing::info!("📥 Attempting video download with 5-tier fallback system: {}", video_url);
 
-        // STRATEGY 1: Apify (with circuit breaker)
-        let should_try_apify = {
-            let mut breaker = self.circuit_breaker.lock().unwrap();
-            breaker.should_allow_request()
-        };
-
-        if should_try_apify {
-            tracing::info!("🔄 Trying Strategy 1 (Apify - paid service)...");
-            match self.download_via_apify(video_url, output_path).await {
-                Ok(result) => {
-                    tracing::info!("✅ Strategy 1 (Apify) succeeded");
-                    let mut breaker = self.circuit_breaker.lock().unwrap();
-                    breaker.record_success();
-                    return Ok(result);
-                }
-                Err(e) => {
-                    tracing::warn!("⚠️ Strategy 1 (Apify) failed: {}", e);
-                    let is_auth_error = e.contains("403") || e.contains("401");
-                    let mut breaker = self.circuit_breaker.lock().unwrap();
-                    breaker.record_failure(is_auth_error);
-                }
-            }
-        } else {
-            tracing::info!("⏭️ Skipping Strategy 1 (Apify) - circuit breaker open");
-        }
-
-        // STRATEGY 2: rustube (pure Rust, no external deps)
-        tracing::info!("🔄 Trying Strategy 2 (rustube - pure Rust)...");
-        match RustubeClient::download_video(video_url, output_path).await {
-            Ok(result) => {
-                tracing::info!("✅ Strategy 2 (rustube) succeeded");
-                return Ok(result);
-            }
-            Err(e) => {
-                tracing::warn!("⚠️ Strategy 2 (rustube) failed: {}", e);
-            }
-        }
-
-        // STRATEGY 3: FastAPI yt-dlp microservice (reliable HTTP API)
-        tracing::info!("🔄 Trying Strategy 3 (FastAPI yt-dlp microservice)...");
+        // STRATEGY 1: FastAPI yt-dlp microservice (yt-dlp android - proven most reliable)
+        tracing::info!("🔄 Trying Strategy 1 (FastAPI yt-dlp microservice - android client)...");
         match YtdlpApiClient::download_video(video_url, output_path).await {
             Ok(result) => {
-                tracing::info!("✅ Strategy 3 (FastAPI microservice) succeeded");
+                tracing::info!("✅ Strategy 1 (FastAPI microservice) succeeded");
                 return Ok(VideoDownloadResult {
                     file_path: result.file_path,
                     title: result.title,
@@ -364,7 +327,45 @@ impl ApifyClient {
                 });
             }
             Err(e) => {
-                tracing::warn!("⚠️ Strategy 3 (FastAPI microservice) failed: {}", e);
+                tracing::warn!("⚠️ Strategy 1 (FastAPI microservice) failed: {}", e);
+            }
+        }
+
+        // STRATEGY 2: Apify (with circuit breaker)
+        let should_try_apify = {
+            let mut breaker = self.circuit_breaker.lock().unwrap();
+            breaker.should_allow_request()
+        };
+
+        if should_try_apify {
+            tracing::info!("🔄 Trying Strategy 2 (Apify - paid service)...");
+            match self.download_via_apify(video_url, output_path).await {
+                Ok(result) => {
+                    tracing::info!("✅ Strategy 2 (Apify) succeeded");
+                    let mut breaker = self.circuit_breaker.lock().unwrap();
+                    breaker.record_success();
+                    return Ok(result);
+                }
+                Err(e) => {
+                    tracing::warn!("⚠️ Strategy 2 (Apify) failed: {}", e);
+                    let is_auth_error = e.contains("403") || e.contains("401");
+                    let mut breaker = self.circuit_breaker.lock().unwrap();
+                    breaker.record_failure(is_auth_error);
+                }
+            }
+        } else {
+            tracing::info!("⏭️ Skipping Strategy 2 (Apify) - circuit breaker open");
+        }
+
+        // STRATEGY 3: rustube (pure Rust, no external deps)
+        tracing::info!("🔄 Trying Strategy 3 (rustube - pure Rust)...");
+        match RustubeClient::download_video(video_url, output_path).await {
+            Ok(result) => {
+                tracing::info!("✅ Strategy 3 (rustube) succeeded");
+                return Ok(result);
+            }
+            Err(e) => {
+                tracing::warn!("⚠️ Strategy 3 (rustube) failed: {}", e);
             }
         }
 

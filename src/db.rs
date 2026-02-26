@@ -25,7 +25,7 @@ pub async fn create_pool() -> Result<PgPool, sqlx::Error> {
 
     let pool = PgPoolOptions::new()
         .max_connections(max_connections)
-        .acquire_timeout(Duration::from_secs(30))
+        .acquire_timeout(Duration::from_secs(60))
         .connect(&db_url)
         .await?;
 
@@ -42,11 +42,13 @@ fn calculate_recommended_pool_size() -> u32 {
         .and_then(|v| v.parse::<u32>().ok())
         .unwrap_or(3);
 
-    // Formula: 5 (API) + concurrency + 2 (buffer)
-    let recommended = 5 + worker_concurrency + 2;
+    // Formula: 5 (API) + concurrency + 10 (background tasks: monitor, token refresh, stuck detection)
+    // Note: background tasks (channel monitor, token refresh, stuck detection, vectorization heartbeats)
+    // can hold connections concurrently with the worker. The old 2-connection buffer was too small.
+    let recommended = 5 + worker_concurrency + 10;
 
     tracing::debug!(
-        "Calculated pool size: 5 (API) + {} (workers) + 2 (buffer) = {}",
+        "Calculated pool size: 5 (API) + {} (workers) + 10 (background) = {}",
         worker_concurrency,
         recommended
     );

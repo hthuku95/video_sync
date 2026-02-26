@@ -96,14 +96,14 @@ impl TestYouTubeClient {
 
 /// Test video URLs for integration testing
 pub mod test_videos {
-    /// Short public domain video for quick tests (< 1 min)
-    pub const SHORT_VIDEO: &str = "https://www.youtube.com/watch?v=aqz-KE-bpKQ";
+    /// Short public domain video for quick tests (18s - "Me at the zoo", first YouTube video, always public)
+    pub const SHORT_VIDEO: &str = "https://www.youtube.com/watch?v=jNQXAC9IVRw";
 
-    /// Medium length video for full workflow tests (2-5 min)
+    /// Medium length video for full workflow tests (3:33 - Rick Astley, reliably public)
     pub const MEDIUM_VIDEO: &str = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
 
     /// Long video for stress testing (10+ min)
-    pub const LONG_VIDEO: &str = "https://www.youtube.com/watch?v=jNQXAC9IVRw";
+    pub const LONG_VIDEO: &str = "https://www.youtube.com/watch?v=9bZkp7q19f0";
 }
 
 /// Assert that a video exists on YouTube with expected properties

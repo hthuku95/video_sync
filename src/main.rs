@@ -452,14 +452,46 @@ async fn main() {
         });
 
         // Start background worker for executing clipping jobs in separate thread
-        // Uses std::thread instead of tokio::spawn to avoid Send trait lifetime issues
+        // Uses std::thread instead of tokio::spawn to avoid Send trait lifetime issues.
+        // A restart loop ensures the worker recovers from unexpected panics.
         let worker_state = shared_state.clone();
         std::thread::spawn(move || {
-            // Create new tokio runtime for this thread
-            let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime for worker");
-            rt.block_on(async move {
-                jobs::clipping_worker::run_clipping_worker_loop(worker_state).await
-            });
+            loop {
+                let state = worker_state.clone();
+                let handle = std::thread::spawn(move || {
+                    let rt = tokio::runtime::Runtime::new()
+                        .expect("Failed to create tokio runtime for worker");
+                    rt.block_on(async move {
+                        jobs::clipping_worker::run_clipping_worker_loop(state).await
+                    });
+                });
+                match handle.join() {
+                    Ok(_) => {
+                        // run_clipping_worker_loop returned normally (shouldn't happen — it loops forever)
+                        tracing::warn!("⚠️ Clipping worker exited unexpectedly. Restarting in 5s...");
+                    }
+                    Err(e) => {
+                        tracing::error!("💥 Clipping worker thread panicked: {:?}. Restarting in 5s...", e);
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_secs(5));
+            }
+        });
+
+        // Start independent stuck-job detection task in the MAIN tokio runtime.
+        // This runs every 60s regardless of whether the worker is busy processing a long job.
+        // Without this, a stuck job can block the worker thread for its full timeout period
+        // (up to 10 minutes) before stuck detection fires.
+        let stuck_detect_state = shared_state.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(60));
+            interval.tick().await; // skip first immediate tick
+            loop {
+                interval.tick().await;
+                if let Err(e) = jobs::clipping_worker::run_stuck_job_detection(&stuck_detect_state).await {
+                    tracing::warn!("Stuck job detection error: {}", e);
+                }
+            }
         });
 
         tracing::info!("✅ Clipping worker enabled - auto-retry and stuck job detection active");

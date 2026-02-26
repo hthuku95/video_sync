@@ -32,17 +32,21 @@ impl JobClaimer {
         let worker_id = self.worker_id.clone();
 
         // Atomically claim job using claimed_by column (status stays 'pending')
+        // Test-user jobs (user_id = -1) are prioritized so integration tests don't queue behind production jobs
         let claimed_job_id: Option<i32> = sqlx::query_scalar(
             "UPDATE clipping_jobs
              SET claimed_by = $1,
                  claimed_at = NOW(),
                  updated_at = NOW()
              WHERE id = (
-                 SELECT id FROM clipping_jobs
-                 WHERE status = 'pending' AND claimed_by IS NULL
-                 ORDER BY created_at ASC
+                 SELECT cj.id FROM clipping_jobs cj
+                 JOIN youtube_channel_linkages l ON l.id = cj.linkage_id
+                 WHERE cj.status = 'pending' AND cj.claimed_by IS NULL
+                 ORDER BY
+                     CASE WHEN l.user_id = -1 THEN 0 ELSE 1 END,
+                     cj.created_at ASC
                  LIMIT 1
-                 FOR UPDATE SKIP LOCKED
+                 FOR UPDATE OF cj SKIP LOCKED
              )
              RETURNING id"
         )
