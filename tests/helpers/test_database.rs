@@ -121,15 +121,18 @@ impl TestContext {
         })
     }
 
-    /// Cancel all non-terminal AND recently-failed test-user jobs before a new test run.
+    /// Cancel all non-terminal AND recently-failed jobs for THIS test's linkage only.
+    ///
+    /// Scoped to `self.test_linkage_id` (not all test-user jobs) so parallel test runs
+    /// don't cancel each other's active jobs. Each TestContext gets a unique linkage_id
+    /// via a monotonic counter, so cancelling by linkage_id is safe.
     ///
     /// This prevents two interference patterns:
-    ///   1. Non-terminal jobs (pending/in-progress) from previous runs block the new job in the queue.
-    ///   2. Failed test jobs from previous runs get picked up by the auto-retry mechanism
-    ///      (which retries jobs failed within the last 6 hours), causing them to jump the queue
-    ///      ahead of the freshly created test job.
-    ///
-    /// Setting old failed jobs to 'cancelled' stops the auto-retry from re-enqueuing them.
+    ///   1. Non-terminal jobs (pending/in-progress) from a previous run of THIS test
+    ///      block the new job in the queue.
+    ///   2. Failed jobs from previous runs of THIS test get picked up by the auto-retry
+    ///      mechanism (which retries jobs failed within the last 6 hours), causing them
+    ///      to jump the queue ahead of the freshly created job.
     pub async fn cancel_stale_pending_test_jobs(&self) -> Result<u64, Box<dyn std::error::Error>> {
         let result = sqlx::query(
             "UPDATE clipping_jobs
@@ -137,14 +140,10 @@ impl TestContext {
                  error_message = 'Cancelled by test harness (stale from previous run)',
                  claimed_by = NULL,
                  updated_at = NOW()
-             WHERE id IN (
-                 SELECT cj.id FROM clipping_jobs cj
-                 JOIN youtube_channel_linkages l ON l.id = cj.linkage_id
-                 WHERE l.user_id = $1
-                   AND cj.status NOT IN ('completed', 'cancelled')
-             )"
+             WHERE linkage_id = $1
+               AND status NOT IN ('completed', 'cancelled')"
         )
-        .bind(self.test_user_id)
+        .bind(self.test_linkage_id)
         .execute(&self.pool)
         .await?;
 
