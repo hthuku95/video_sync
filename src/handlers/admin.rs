@@ -3549,11 +3549,15 @@ pub async fn admin_clipping_activity_page() -> Html<String> {
                 const colors = {
                     'completed': 'success',
                     'failed': 'danger',
+                    'cancelled': 'secondary',
+                    'no_clips_found': 'secondary',
                     'pending': 'warning',
-                    'downloading': 'warning',
-                    'analyzing': 'warning',
-                    'extracting_clips': 'warning',
-                    'posting': 'warning'
+                    'processing': 'info',
+                    // old sequential pipeline step values (backward compat)
+                    'downloading': 'info',
+                    'analyzing': 'info',
+                    'extracting_clips': 'info',
+                    'posting': 'info'
                 };
                 return colors[status] || 'secondary';
             }
@@ -4399,6 +4403,53 @@ pub async fn admin_clipping_jobs_page() -> Html<String> {
             window.location.href = '/admin/login';
         }
 
+        // Per-job WebSocket connections for live progress in table rows
+        const adminJobSockets = {};
+
+        function openAdminJobSocket(jobId) {
+            if (adminJobSockets[jobId]) return;
+            const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+            const ws = new WebSocket(proto + '://' + location.host + '/ws/clipping-jobs/' + jobId);
+            adminJobSockets[jobId] = ws;
+
+            ws.onmessage = function(event) {
+                try { updateAdminTableRow(jobId, JSON.parse(event.data)); } catch(e) {}
+            };
+
+            ws.onclose = function() {
+                delete adminJobSockets[jobId];
+                const row = document.getElementById('job-row-' + jobId);
+                if (row && row.dataset.status === 'processing') {
+                    setTimeout(function() { openAdminJobSocket(jobId); }, 3000);
+                }
+            };
+        }
+
+        function updateAdminTableRow(jobId, update) {
+            const s = update.status;
+            if (!s) return;
+            const status = s.status;
+            const step = s.current_step || '';
+            const pct = s.progress_percent != null ? Math.round(s.progress_percent) : null;
+
+            const statusCell = document.getElementById('job-status-' + jobId);
+            if (statusCell) statusCell.innerHTML = getStatusBadge(status === 'running' ? 'processing' : status);
+
+            const progressCell = document.getElementById('job-progress-' + jobId);
+            if (progressCell && pct !== null) {
+                progressCell.innerHTML = pct + '%' +
+                    (step ? '<br><small style="color: #6c757d;">' + step + '</small>' : '');
+            }
+
+            const row = document.getElementById('job-row-' + jobId);
+            if (row) row.dataset.status = status;
+
+            if (status === 'completed' || status === 'failed') {
+                if (adminJobSockets[jobId]) { adminJobSockets[jobId].close(); delete adminJobSockets[jobId]; }
+                setTimeout(loadJobs, 2000);
+            }
+        }
+
         // Load jobs
         async function loadJobs() {
             const status = document.getElementById('statusFilter').value;
@@ -4439,7 +4490,7 @@ pub async fn admin_clipping_jobs_page() -> Html<String> {
             }
 
             tbody.innerHTML = jobs.map(job => `
-                <tr onclick="viewJobDetails(${job.id})">
+                <tr id="job-row-${job.id}" data-status="${job.status}" onclick="viewJobDetails(${job.id})">
                     <td>#${job.id}</td>
                     <td>${job.username}</td>
                     <td>
@@ -4450,19 +4501,27 @@ pub async fn admin_clipping_jobs_page() -> Html<String> {
                         <div>${job.source_channel_name}</div>
                         <small style="color: #6c757d;">→ ${job.dest_channel_name}</small>
                     </td>
-                    <td>${getStatusBadge(job.status)}</td>
-                    <td>${job.progress_percent}%</td>
+                    <td id="job-status-${job.id}">${getStatusBadge(job.status)}</td>
+                    <td id="job-progress-${job.id}">
+                        ${job.progress_percent}%
+                        ${job.current_step ? `<br><small style="color: #6c757d;">${job.current_step}</small>` : ''}
+                    </td>
                     <td>${job.error_message ? '<span style="color: #dc3545">✗</span>' : ''}</td>
                     <td>${job.retry_count > 0 ? job.retry_count : '-'}</td>
                     <td>${formatDate(job.created_at)}</td>
                     <td class="actions" onclick="event.stopPropagation()">
-                        ${job.status === 'failed' || job.status === 'cancelled' ? 
+                        ${job.status === 'failed' || job.status === 'cancelled' ?
                             `<button class="btn btn-success btn-sm" onclick="retryJob(${job.id})">Retry</button>` : ''}
-                        ${job.status !== 'completed' && job.status !== 'failed' && job.status !== 'cancelled' ? 
+                        ${job.status !== 'completed' && job.status !== 'failed' && job.status !== 'cancelled' ?
                             `<button class="btn btn-secondary btn-sm" onclick="cancelJob(${job.id})">Cancel</button>` : ''}
                     </td>
                 </tr>
             `).join('');
+
+            // Open per-job WebSocket for currently processing jobs
+            jobs.filter(j => j.status === 'processing').forEach(job => {
+                openAdminJobSocket(job.id);
+            });
         }
 
         // View job details in modal
@@ -4517,6 +4576,7 @@ pub async fn admin_clipping_jobs_page() -> Html<String> {
                             <div class="detail-row"><div class="detail-label">Stuck Count:</div><div>${job.stuck_detection_count}</div></div>
                             <div class="detail-row"><div class="detail-label">Claimed By:</div><div>${job.claimed_by || 'None'}</div></div>
                             <div class="detail-row"><div class="detail-label">Claimed At:</div><div>${formatDate(job.claimed_at)}</div></div>
+                            <div class="detail-row"><div class="detail-label">Resume From:</div><div>${job.resume_from || 'N/A (full restart from Phase A)'}</div></div>
                         </div>
 
                         ${job.error_message ? `
@@ -4625,7 +4685,10 @@ pub async fn admin_clipping_jobs_page() -> Html<String> {
                 'completed': 'badge-success',
                 'failed': 'badge-danger',
                 'cancelled': 'badge-secondary',
+                'no_clips_found': 'badge-secondary',
                 'pending': 'badge-warning',
+                'processing': 'badge-info',
+                // old sequential pipeline step values (backward compat)
                 'downloading': 'badge-info',
                 'analyzing': 'badge-info',
                 'extracting_clips': 'badge-info',
