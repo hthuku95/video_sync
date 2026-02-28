@@ -4839,8 +4839,72 @@ pub async fn clipping_management_page() -> Html<String> {
 
         let searchTimeout = null;
 
+        // Per-job WebSocket connections (job_id → WebSocket)
+        const jobSockets = {};
+
+        function openJobWebSocket(jobId) {
+            if (jobSockets[jobId]) return;
+            const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+            const ws = new WebSocket(proto + '://' + location.host + '/ws/clipping-jobs/' + jobId);
+            jobSockets[jobId] = ws;
+
+            ws.onmessage = function(event) {
+                try { updateJobCard(jobId, JSON.parse(event.data)); } catch(e) {}
+            };
+
+            ws.onclose = function() {
+                delete jobSockets[jobId];
+                const card = document.getElementById('job-card-' + jobId);
+                if (card && card.dataset.status === 'processing') {
+                    setTimeout(function() { openJobWebSocket(jobId); }, 3000);
+                }
+            };
+        }
+
+        function updateJobCard(jobId, update) {
+            const s = update.status;
+            if (!s) return;
+            const status = s.status;
+            const step = s.current_step || '';
+            const pct = s.progress_percent != null ? s.progress_percent : 0;
+            const detail = s.current_action_detail || '';
+
+            const stepEl = document.getElementById('job-step-' + jobId);
+            if (stepEl) stepEl.textContent = step || 'Processing...';
+
+            const detailEl = document.getElementById('job-detail-' + jobId);
+            if (detailEl) detailEl.textContent = detail;
+
+            const barEl = document.getElementById('job-progress-bar-' + jobId);
+            const pctEl = document.getElementById('job-progress-pct-' + jobId);
+            if (barEl) barEl.style.width = pct + '%';
+            if (pctEl) pctEl.textContent = Math.round(pct) + '%';
+
+            const statusEl = document.getElementById('job-status-' + jobId);
+            if (statusEl) {
+                const classes = { running: 'status-running', completed: 'status-completed',
+                                  failed: 'status-failed', queued: 'status-pending' };
+                statusEl.className = 'status-badge ' + (classes[status] || 'status-running');
+                statusEl.textContent = status;
+            }
+
+            const card = document.getElementById('job-card-' + jobId);
+            if (card) card.dataset.status = status;
+
+            if (status === 'completed' || status === 'failed') {
+                if (jobSockets[jobId]) { jobSockets[jobId].close(); delete jobSockets[jobId]; }
+                setTimeout(loadJobs, 2000);
+            }
+        }
+
         // Tab switching
         function switchTab(tabName) {
+            // Close any open job WebSocket connections when leaving jobs tab
+            if (tabName !== 'jobs') {
+                Object.values(jobSockets).forEach(function(ws) { ws.close(); });
+                Object.keys(jobSockets).forEach(function(k) { delete jobSockets[k]; });
+            }
+
             document.querySelectorAll('.tab-button').forEach(btn => btn.classList.remove('active'));
             document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
 
@@ -4984,28 +5048,35 @@ pub async fn clipping_management_page() -> Html<String> {
                     const statusClass = job.status === 'completed' ? 'status-completed' :
                                        job.status === 'failed' ? 'status-failed' :
                                        job.status === 'pending' ? 'status-pending' : 'status-running';
+                    const pct = job.progress_percent || 0;
 
                     return `
-                        <div class="job-card">
+                        <div class="job-card" id="job-card-${job.id}" data-status="${job.status}">
                             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
                                 <div>
                                     <h3>${job.source_video_title}</h3>
-                                    <p style="color: #94a3b8; font-size: 0.9rem;">${job.current_step || 'Initializing'}</p>
+                                    <p id="job-step-${job.id}" style="color: #94a3b8; font-size: 0.9rem;">${job.current_step || 'Initializing'}</p>
                                 </div>
-                                <span class="status-badge ${statusClass}">${job.status}</span>
+                                <span id="job-status-${job.id}" class="status-badge ${statusClass}">${job.status}</span>
                             </div>
-                            ${job.progress_percent ? `
+                            <div id="job-progress-wrap-${job.id}">
                                 <div class="progress-bar">
-                                    <div class="progress-fill" style="width: ${job.progress_percent}%"></div>
+                                    <div id="job-progress-bar-${job.id}" class="progress-fill" style="width: ${pct}%"></div>
                                 </div>
-                                <p style="text-align: right; color: #94a3b8; font-size: 0.85rem; margin-top: 0.25rem;">
-                                    ${job.progress_percent}%
+                                <p id="job-progress-pct-${job.id}" style="text-align: right; color: #94a3b8; font-size: 0.85rem; margin-top: 0.25rem;">
+                                    ${Math.round(pct)}%
                                 </p>
-                            ` : ''}
+                            </div>
                             ${job.error_message ? `<p style="color: #ef4444; margin-top: 0.5rem;">${job.error_message}</p>` : ''}
+                            <p id="job-detail-${job.id}" style="color: #64748b; font-size: 0.8rem; margin-top: 0.25rem;"></p>
                         </div>
                     `;
                 }).join('');
+
+                // Open WebSocket for each active job
+                data.filter(j => j.status === 'processing' || j.status === 'pending').forEach(job => {
+                    openJobWebSocket(job.id);
+                });
             } catch (error) {
                 container.className = 'empty-state';
                 container.innerHTML = `<p style="color: #ef4444;">Error loading jobs: ${error.message}</p>`;
