@@ -1,5 +1,6 @@
 // Background worker that polls for pending clipping jobs and executes them
 
+use crate::agent::clipping_agent::GeminiClippingAgent;
 use crate::jobs::clipping_job::execute_clipping_job;
 use crate::jobs::job_claimer::JobClaimer;
 use crate::jobs::worker_config::WorkerConfig;
@@ -113,10 +114,9 @@ impl ClippingWorker {
         let query = String::from(
             "SELECT cj.id FROM clipping_jobs cj \
              JOIN youtube_channel_linkages l ON l.id = cj.linkage_id \
-             WHERE cj.status IN ('pending', 'failed') \
+             WHERE cj.status = 'pending' \
              ORDER BY \
                CASE WHEN l.user_id = -1 THEN 0 ELSE 1 END, \
-               CASE WHEN cj.status = 'pending' THEN 0 ELSE 1 END, \
                cj.created_at ASC \
              LIMIT 1"
         );
@@ -174,6 +174,25 @@ impl ClippingWorker {
         .fetch_all(&self.app_state.db_pool)
         .await
         .map_err(|e| format!("Failed to fetch failed jobs for retry: {}", e))?;
+
+        // Escalate jobs that have exhausted all retries — admin must manually retry via admin API
+        let exhausted: Vec<(i32, Option<String>)> = sqlx::query_as(
+            "SELECT id, error_message FROM clipping_jobs \
+             WHERE status = 'failed' \
+             AND COALESCE(retry_count, 0) >= 5 \
+             AND updated_at > NOW() - INTERVAL '1 hour'"
+        )
+        .fetch_all(&self.app_state.db_pool)
+        .await
+        .unwrap_or_default();
+
+        for (job_id, err) in exhausted {
+            tracing::warn!(
+                "🚨 CLIPPING JOB {} EXHAUSTED ALL 5 RETRIES — admin review required. \
+                 Use POST /api/admin/clipping/jobs/{}/retry to reset. Last error: {:?}",
+                job_id, job_id, err
+            );
+        }
 
         if retry_jobs.is_empty() {
             return Ok(());
@@ -420,21 +439,31 @@ async fn process_single_job_with_claim(
     tracing::info!("🎬 Processing job {} (claimed)", job_id);
 
     // Step 2: Execute the clipping job with a per-job timeout.
-    // This prevents any single job (e.g., stuck Gemini/API calls) from
-    // monopolizing the worker and blocking the queue indefinitely.
-    // Default: 10 minutes. Override via JOB_EXECUTION_TIMEOUT_SECS env var.
-    // The full pipeline: download (~1min) + vectorize (~1min) + AI extraction (~2min) +
-    // clip trim + review (~2min) = ~6-8 min total. 10 min gives comfortable headroom.
+    // Uses ClippingAgent (Claude-orchestrated) when claude_client is configured;
+    // falls back to execute_clipping_job (hardcoded sequential) otherwise.
     let job_timeout_secs: u64 = std::env::var("JOB_EXECUTION_TIMEOUT_SECS")
         .ok()
         .and_then(|v| v.parse().ok())
-        .unwrap_or(7200); // 2 hours — accommodates new pipeline: warm-up + download + parallel clip extraction
+        .unwrap_or(7200); // 2 hours — accommodates new pipeline
 
-    let execution_result = tokio::time::timeout(
-        tokio::time::Duration::from_secs(job_timeout_secs),
-        execute_clipping_job(job_id, app_state.clone()),
-    )
-    .await;
+    let execution_result = if app_state.gemini_client.is_some() {
+        let agent = GeminiClippingAgent::new(app_state.clone());
+        tokio::time::timeout(
+            tokio::time::Duration::from_secs(job_timeout_secs),
+            agent.process_job(job_id),
+        )
+        .await
+    } else {
+        tracing::warn!(
+            "⚠️  GEMINI_API_KEY not configured — falling back to execute_clipping_job for job {}",
+            job_id
+        );
+        tokio::time::timeout(
+            tokio::time::Duration::from_secs(job_timeout_secs),
+            execute_clipping_job(job_id, app_state.clone()),
+        )
+        .await
+    };
 
     match execution_result {
         Ok(Ok(msg)) => {
@@ -615,6 +644,25 @@ async fn auto_retry_failed_jobs(app_state: &Arc<AppState>) -> Result<(), String>
     .fetch_all(&app_state.db_pool)
     .await
     .map_err(|e| format!("Failed to fetch failed jobs for retry: {}", e))?;
+
+    // Escalate jobs that have exhausted all retries — admin must manually retry via admin API
+    let exhausted: Vec<(i32, Option<String>)> = sqlx::query_as(
+        "SELECT id, error_message FROM clipping_jobs \
+         WHERE status = 'failed' \
+         AND COALESCE(retry_count, 0) >= 5 \
+         AND updated_at > NOW() - INTERVAL '1 hour'"
+    )
+    .fetch_all(&app_state.db_pool)
+    .await
+    .unwrap_or_default();
+
+    for (job_id, err) in exhausted {
+        tracing::warn!(
+            "🚨 CLIPPING JOB {} EXHAUSTED ALL 5 RETRIES — admin review required. \
+             Use POST /api/admin/clipping/jobs/{}/retry to reset. Last error: {:?}",
+            job_id, job_id, err
+        );
+    }
 
     if retry_jobs.is_empty() {
         return Ok(());

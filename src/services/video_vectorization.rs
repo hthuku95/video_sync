@@ -421,8 +421,9 @@ impl VideoVectorizationService {
             tools: None,
             generation_config: None,
             tool_config: None,
+            system_instruction: None,
         };
-        
+
         let response = gemini_client.generate_content(request).await?;
         
         // Extract text from response

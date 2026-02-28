@@ -347,6 +347,7 @@ IMPORTANT: You do NOT use AI to generate videos. Instead, you fetch stock media 
                         mode: FunctionCallingMode::Any,  // CRITICAL FIX: Force tool calling like Claude does
                     },
                 }),
+                system_instruction: None,
             };
 
             let response = self.client.generate_content(request).await

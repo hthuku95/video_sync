@@ -630,6 +630,7 @@ For complex multi-step workflows that benefit from parallel execution:
                         mode: crate::gemini_client::FunctionCallingMode::Auto,  // Auto: Let Gemini decide - respond naturally OR call tools
                     },
                 }),
+                system_instruction: None,
             };
 
             let response = self.client.generate_content(request).await

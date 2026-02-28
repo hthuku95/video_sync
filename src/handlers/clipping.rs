@@ -2,8 +2,9 @@
 
 use axum::{
     extract::{Extension, Path, Query},
+    extract::ws::{Message, WebSocket, WebSocketUpgrade},
     http::StatusCode,
-    response::Json,
+    response::{IntoResponse, Json},
     routing::{delete, get, patch, post},
     Router,
 };
@@ -17,9 +18,15 @@ use sqlx::{PgPool, Row};
 use std::sync::Arc;
 use url::Url;
 use chrono::{DateTime, Utc};
+use futures::{sink::SinkExt, stream::StreamExt};
 
 pub fn clipping_routes() -> Router {
-    Router::new()
+    // Public WebSocket route — no auth middleware (progress is read-only, job_id is opaque)
+    let ws_routes = Router::new()
+        .route("/ws/clipping-jobs/:job_id", get(ws_clipping_job_progress));
+
+    // Protected API routes
+    let api_routes = Router::new()
         // Source channel management
         .route(
             "/api/clipping/source-channels",
@@ -54,9 +61,81 @@ pub fn clipping_routes() -> Router {
         .route("/api/clipping/clips/:id/repost", post(repost_clip))
         // Access check endpoint
         .route("/api/clipping/access-check", get(check_access))
-        // All routes protected by clipping access middleware
+        // All API routes protected
         .layer(axum::middleware::from_fn(clipping_access_middleware))
-        .layer(axum::middleware::from_fn(auth_middleware))
+        .layer(axum::middleware::from_fn(auth_middleware));
+
+    ws_routes.merge(api_routes)
+}
+
+/// WebSocket handler — subscribe to real-time progress for a specific clipping job.
+///
+/// Connects to JobManager using job_id.to_string() as the routing key.
+/// The agent sends ProgressUpdate messages via job_manager.send_progress(job_id.to_string(), …).
+/// This handler registers a receiver and forwards updates to the connected client as JSON.
+///
+/// Usage: `ws://host/ws/clipping-jobs/123`
+async fn ws_clipping_job_progress(
+    ws: WebSocketUpgrade,
+    Path(job_id): Path<i32>,
+    Extension(state): Extension<Arc<AppState>>,
+) -> impl IntoResponse {
+    ws.on_upgrade(move |socket| clipping_job_ws(socket, state, job_id))
+}
+
+async fn clipping_job_ws(stream: WebSocket, state: Arc<AppState>, job_id: i32) {
+    let (mut sender, mut receiver) = stream.split();
+    let session_key = job_id.to_string();
+
+    tracing::info!("🔌 WebSocket connected for clipping job {}", job_id);
+
+    // Register a channel to receive progress updates for this job
+    let (progress_tx, mut progress_rx) =
+        tokio::sync::mpsc::unbounded_channel::<crate::jobs::ProgressUpdate>();
+    state
+        .job_manager
+        .register_progress_sender(session_key.clone(), progress_tx)
+        .await;
+
+    // Forward progress updates to the WebSocket client
+    let send_loop = async {
+        loop {
+            tokio::select! {
+                // Progress from agent
+                Some(update) = progress_rx.recv() => {
+                    match serde_json::to_string(&update) {
+                        Ok(text) => {
+                            if sender.send(Message::Text(text)).await.is_err() {
+                                break; // Client disconnected
+                            }
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to serialize progress update: {}", e);
+                        }
+                    }
+                }
+                // Handle incoming client messages (ping/pong or close)
+                msg = receiver.next() => {
+                    match msg {
+                        Some(Ok(Message::Close(_))) | None => break,
+                        Some(Ok(Message::Ping(data))) => {
+                            let _ = sender.send(Message::Pong(data)).await;
+                        }
+                        _ => {} // Ignore other client messages
+                    }
+                }
+            }
+        }
+    };
+
+    send_loop.await;
+
+    // Cleanup on disconnect
+    state
+        .job_manager
+        .unregister_progress_sender(&session_key)
+        .await;
+    tracing::info!("🔌 WebSocket disconnected for clipping job {}", job_id);
 }
 
 // Source Channel Handlers

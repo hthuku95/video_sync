@@ -190,6 +190,7 @@ No explanation, just the number."#,
             generation_config: None,
             tools: None,
             tool_config: None,
+            system_instruction: None,
         };
 
         let response = gemini_client
@@ -286,6 +287,7 @@ OUTPUT: A polished YouTube thumbnail (16:9 aspect ratio, 1280x720px minimum)"#,
             }),
             tools: None,
             tool_config: None,
+            system_instruction: None,
         };
 
         // Generate thumbnail with overlay

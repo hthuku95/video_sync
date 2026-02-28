@@ -384,6 +384,7 @@ impl ConversationManager {
                     mode: FunctionCallingMode::Any,
                 },
             }),
+            system_instruction: None,
         })
     }
 

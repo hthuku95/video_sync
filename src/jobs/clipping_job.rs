@@ -347,6 +347,21 @@ pub async fn execute_clipping_job(
     update_linkage_session_timestamp(linkage.id, &app_state.db_pool).await?;
     update_linkage_stats(linkage.id, clips.len() as i32, uploaded_count, &app_state.db_pool).await?;
 
+    // Mark video as successfully clipped — only written here (job completion), never at job creation.
+    // This ensures the monitor can re-queue a video whose job previously failed or was cancelled.
+    sqlx::query(
+        "INSERT INTO clipped_source_videos
+         (source_channel_id, video_id, video_title)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (source_channel_id, video_id) DO NOTHING"
+    )
+    .bind(linkage.source_channel_id)
+    .bind(&job.source_video_id)
+    .bind(job.source_video_title.as_deref().unwrap_or(""))
+    .execute(&app_state.db_pool)
+    .await
+    .ok(); // non-fatal
+
     // Cleanup downloaded video (clips in outputs/ are kept for potential re-processing)
     let _ = tokio::fs::remove_file(&video_path).await;
 
@@ -363,7 +378,7 @@ pub async fn execute_clipping_job(
 /// Returns only clips with upload_status != 'published' so we retry failed/pending
 /// clips without re-uploading clips that already succeeded on a previous partial run.
 /// Returns (clips, clip_db_ids) — empty vecs if all clips are already published.
-async fn load_clips_from_db(
+pub async fn load_clips_from_db(
     job_id: i32,
     pool: &PgPool,
 ) -> Result<(Vec<ExtractedClipData>, Vec<i32>), String> {
@@ -465,7 +480,7 @@ async fn store_clip_in_qdrant(
 
 // Helper functions
 
-async fn fetch_job_details(job_id: i32, pool: &PgPool) -> Result<ClippingJob, String> {
+pub async fn fetch_job_details(job_id: i32, pool: &PgPool) -> Result<ClippingJob, String> {
     sqlx::query_as::<_, ClippingJob>("SELECT * FROM clipping_jobs WHERE id = $1")
         .bind(job_id)
         .fetch_one(pool)
@@ -473,7 +488,7 @@ async fn fetch_job_details(job_id: i32, pool: &PgPool) -> Result<ClippingJob, St
         .map_err(|e| format!("Failed to fetch job: {}", e))
 }
 
-async fn fetch_linkage(linkage_id: i32, pool: &PgPool) -> Result<ChannelLinkage, String> {
+pub async fn fetch_linkage(linkage_id: i32, pool: &PgPool) -> Result<ChannelLinkage, String> {
     sqlx::query_as::<_, ChannelLinkage>("SELECT * FROM youtube_channel_linkages WHERE id = $1")
         .bind(linkage_id)
         .fetch_one(pool)
@@ -481,7 +496,7 @@ async fn fetch_linkage(linkage_id: i32, pool: &PgPool) -> Result<ChannelLinkage,
         .map_err(|e| format!("Failed to fetch linkage: {}", e))
 }
 
-async fn fetch_destination_channel(
+pub async fn fetch_destination_channel(
     channel_id: i32,
     pool: &PgPool,
 ) -> Result<ConnectedYouTubeChannel, String> {
@@ -494,7 +509,7 @@ async fn fetch_destination_channel(
     .map_err(|e| format!("Failed to fetch destination channel: {}", e))
 }
 
-async fn update_job_status(
+pub async fn update_job_status(
     job_id: i32,
     status: &str,
     progress: i32,
@@ -533,7 +548,7 @@ async fn update_job_video_path(
     Ok(())
 }
 
-async fn mark_job_completed(job_id: i32, pool: &PgPool) -> Result<(), String> {
+pub async fn mark_job_completed(job_id: i32, pool: &PgPool) -> Result<(), String> {
     sqlx::query("UPDATE clipping_jobs SET completed_at = $1 WHERE id = $2")
         .bind(Utc::now())
         .bind(job_id)
@@ -544,7 +559,7 @@ async fn mark_job_completed(job_id: i32, pool: &PgPool) -> Result<(), String> {
     Ok(())
 }
 
-async fn update_linkage_session_timestamp(linkage_id: i32, pool: &PgPool) -> Result<(), String> {
+pub async fn update_linkage_session_timestamp(linkage_id: i32, pool: &PgPool) -> Result<(), String> {
     sqlx::query(
         "UPDATE youtube_channel_linkages SET last_clipping_session_at = NOW() WHERE id = $1",
     )
@@ -556,7 +571,7 @@ async fn update_linkage_session_timestamp(linkage_id: i32, pool: &PgPool) -> Res
     Ok(())
 }
 
-async fn save_clips_to_database(
+pub async fn save_clips_to_database(
     job_id: i32,
     clips: &[ExtractedClipData],
     linkage: &ChannelLinkage,
@@ -607,7 +622,7 @@ async fn save_clips_to_database(
 }
 
 /// Count clips successfully published for a destination channel in the last 24 hours.
-async fn count_clips_posted_today(destination_channel_id: i32, pool: &PgPool) -> Result<i64, String> {
+pub async fn count_clips_posted_today(destination_channel_id: i32, pool: &PgPool) -> Result<i64, String> {
     sqlx::query_scalar::<_, i64>(
         "SELECT COUNT(*) FROM extracted_clips
          WHERE destination_channel_id = $1
@@ -620,7 +635,7 @@ async fn count_clips_posted_today(destination_channel_id: i32, pool: &PgPool) ->
     .map_err(|e| format!("Failed to count daily clips: {}", e))
 }
 
-async fn update_linkage_stats(
+pub async fn update_linkage_stats(
     linkage_id: i32,
     clips_generated: i32,
     clips_posted: i32,

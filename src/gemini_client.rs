@@ -20,6 +20,8 @@ pub struct GenerateContentRequest {
     pub generation_config: Option<GenerationConfig>,
     #[serde(rename = "toolConfig", skip_serializing_if = "Option::is_none")]
     pub tool_config: Option<ToolConfig>,
+    #[serde(rename = "systemInstruction", skip_serializing_if = "Option::is_none")]
+    pub system_instruction: Option<Content>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -82,7 +84,7 @@ pub struct FunctionResponse {
     pub thought_signature: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Tool {
     #[serde(rename = "functionDeclarations")]
     pub function_declarations: Vec<FunctionDeclaration>,
@@ -112,7 +114,7 @@ pub struct PropertyDefinition {
     pub items: Option<Box<PropertyDefinition>>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GenerationConfig {
     pub temperature: f32,
     #[serde(rename = "topK")]
@@ -123,18 +125,18 @@ pub struct GenerationConfig {
     pub max_output_tokens: u32,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolConfig {
     #[serde(rename = "functionCallingConfig")]
     pub function_calling_config: FunctionCallingConfig,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FunctionCallingConfig {
     pub mode: FunctionCallingMode,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum FunctionCallingMode {
     #[serde(rename = "AUTO")]
     Auto,
@@ -2085,6 +2087,7 @@ impl GeminiClient {
                 max_output_tokens: 2048,
             }),
             tool_config: None,
+            system_instruction: None,
         };
 
         let response = self.generate_content(request).await?;
@@ -2134,6 +2137,7 @@ impl GeminiClient {
                 max_output_tokens: 4096,
             }),
             tool_config: None,
+            system_instruction: None,
         };
 
         // Add the response modalities for image generation
@@ -2210,6 +2214,7 @@ impl GeminiClient {
                 max_output_tokens: 150,
             }),
             tool_config: None,
+            system_instruction: None,
         };
 
         let url = format!(
@@ -2524,6 +2529,7 @@ impl GeminiClient {
                 max_output_tokens: 2048, // Increased for detailed analysis
             }),
             tool_config: None,
+            system_instruction: None,
         };
 
         let url = format!(
@@ -2731,6 +2737,7 @@ Generate ONLY the script text that will be spoken, no stage directions or format
                 max_output_tokens: 1024,
             }),
             tool_config: None,
+            system_instruction: None,
         };
 
         tracing::info!("🎬 Generating advertisement script for {} ({}s duration)", company_name, duration_seconds);
@@ -2927,6 +2934,7 @@ Generate a well-structured script appropriate for this type of video.",
                 max_output_tokens: 2048,
             }),
             tool_config: None,
+            system_instruction: None,
         };
 
         tracing::info!("🎬 Generating {} video script for '{}' ({}s duration)", video_type, subject, duration_seconds);
@@ -3122,6 +3130,7 @@ Provide ONLY the JSON object, no markdown, no code blocks, no other text."#,
             generation_config: None,
             tools: None,
             tool_config: None,
+            system_instruction: None,
         };
 
         let response = self.generate_content(request).await?;

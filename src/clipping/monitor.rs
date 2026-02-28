@@ -327,20 +327,10 @@ impl ChannelMonitor {
             .await
             .map_err(|e| format!("Failed to create clipping job: {}", e))?;
 
-            // Mark video as clipped in tracking table
-            sqlx::query(
-                "INSERT INTO clipped_source_videos
-                 (source_channel_id, video_id, video_title, video_published_at)
-                 VALUES ($1, $2, $3, $4)
-                 ON CONFLICT (source_channel_id, video_id) DO NOTHING",
-            )
-            .bind(channel.id)
-            .bind(&video.id.video_id)
-            .bind(&video.snippet.title)
-            .bind(&video.snippet.published_at)
-            .execute(&self.db_pool)
-            .await
-            .map_err(|e| format!("Failed to mark video as clipped: {}", e))?;
+            // NOTE: clipped_source_videos is NOT inserted here.
+            // It is only written upon successful job completion in execute_clipping_job().
+            // This allows the monitor to re-queue a video whose job previously failed or
+            // was cancelled, since filter_new_videos() checks clipped_source_videos first.
 
             tracing::info!(
                 "✅ Created clipping job for video '{}' (linkage: {})",

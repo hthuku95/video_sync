@@ -3170,6 +3170,7 @@ async fn execute_optimize_youtube_metadata_with_state_claude(
                 tools: None,
                 generation_config: None,
                 tool_config: None,
+                system_instruction: None,
             };
 
             match gemini.generate_content(request).await {
