@@ -198,6 +198,20 @@ pub async fn execute_clipping_job(
 
     let mut uploaded_count = 0;
     for (clip, clip_id) in clips.iter().zip(clip_db_ids.iter()) {
+        // Enforce daily 4-clip limit at upload time (not just at job-creation time).
+        // This prevents race conditions where two concurrent jobs each see clips_today=0
+        // and both upload, resulting in more than 4 clips posted in a day.
+        let clips_today = count_clips_posted_today(destination_channel.id, &app_state.db_pool)
+            .await
+            .unwrap_or(0);
+        if clips_today >= 4 {
+            tracing::info!(
+                "Daily upload limit (4 clips) reached for channel '{}' — stopping uploads for job {}",
+                destination_channel.channel_name, job_id
+            );
+            break;
+        }
+
         match uploader.upload_clip(clip, *clip_id, &destination_channel).await {
             Ok(_) => {
                 uploaded_count += 1;
@@ -214,7 +228,27 @@ pub async fn execute_clipping_job(
         }
     }
 
-    // Mark job completed
+    // If ALL uploads failed, mark job as failed so the auto-retry worker can retry it.
+    // Do NOT trigger the 24-hour cooldown or mark_job_completed — that would permanently
+    // block re-processing the source video and waste the cooldown window on a failed job.
+    if uploaded_count == 0 {
+        update_job_status(
+            job_id,
+            "failed",
+            0,
+            Some("All clip uploads failed. Job will retry when OAuth tokens are valid."),
+            &app_state.db_pool,
+        ).await?;
+        update_linkage_stats(linkage.id, clips.len() as i32, 0, &app_state.db_pool).await?;
+        let _ = tokio::fs::remove_file(&video_path).await;
+        tracing::error!(
+            "❌ Clipping job {} marked failed: 0/{} clips uploaded",
+            job_id, clips.len()
+        );
+        return Err("All clip uploads failed — check OAuth token validity".to_string());
+    }
+
+    // At least 1 clip was uploaded successfully — mark job completed and set cooldown.
     update_job_status(job_id, "completed", 100, None, &app_state.db_pool).await?;
     mark_job_completed(job_id, &app_state.db_pool).await?;
     update_linkage_session_timestamp(linkage.id, &app_state.db_pool).await?;
@@ -380,6 +414,15 @@ async fn save_clips_to_database(
     linkage: &ChannelLinkage,
     pool: &PgPool,
 ) -> Result<Vec<i32>, String> {
+    // Delete any stale clips from a previous failed attempt for this job.
+    // Without this, retried jobs accumulate duplicate extracted_clips rows
+    // because the INSERT has no ON CONFLICT clause.
+    sqlx::query("DELETE FROM extracted_clips WHERE clipping_job_id = $1")
+        .bind(job_id)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to clean stale clips before save: {}", e))?;
+
     let mut clip_ids = Vec::new();
 
     for clip in clips {
@@ -414,6 +457,21 @@ async fn save_clips_to_database(
     }
 
     Ok(clip_ids)
+}
+
+/// Count clips successfully published for a destination channel in the last 24 hours.
+/// Used to enforce the 4-clip/day limit at upload time.
+async fn count_clips_posted_today(destination_channel_id: i32, pool: &PgPool) -> Result<i64, String> {
+    sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM extracted_clips
+         WHERE destination_channel_id = $1
+           AND upload_status = 'published'
+           AND published_at >= NOW() - INTERVAL '24 hours'",
+    )
+    .bind(destination_channel_id)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| format!("Failed to count daily clips: {}", e))
 }
 
 async fn update_linkage_stats(
