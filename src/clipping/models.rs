@@ -60,6 +60,14 @@ pub struct ClippingJob {
     pub stuck_detection_count: i32,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// Full VideoAnalysis from Phase A stored as JSONB; allows retries to skip Gemini re-analysis.
+    pub viral_moments_json: Option<serde_json::Value>,
+    /// Overall video quality score from Phase A (0.0–1.0).
+    pub analysis_quality: Option<f64>,
+    /// Phase resume hint set by auto_retry_failed_jobs; cleared at the start of execution.
+    /// Values: "analyzed" (skip to Phase B), "downloaded" (skip to Phase C),
+    /// "clips_extracted" (skip to Phase E), or NULL (start from Phase A).
+    pub resume_from: Option<String>,
 }
 
 /// Extracted clip from long-form video

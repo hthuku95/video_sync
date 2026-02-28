@@ -3807,20 +3807,72 @@ pub async fn admin_get_job_details(
     })))
 }
 
-/// Retry a failed or cancelled job (admin can retry ANY job)
+/// Retry a failed or cancelled job (admin can retry ANY job).
+///
+/// Phase-aware: reads current_step to determine resume_from so the job skips
+/// already-completed phases instead of restarting from Phase A every time.
 pub async fn admin_retry_job(
     Extension(state): Extension<Arc<AppState>>,
     Path(job_id): Path<i32>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    // Reset job to pending (admin can retry any failed/cancelled job)
+    // Step 1: Read current_step so we can compute the resume phase.
+    let current_step: Option<String> = sqlx::query_scalar(
+        "SELECT current_step FROM clipping_jobs WHERE id = $1 AND status IN ('failed', 'cancelled')"
+    )
+    .bind(job_id)
+    .fetch_optional(&state.db_pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("Failed to read job current_step: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?
+    .flatten();
+
+    if current_step.is_none() {
+        // Job doesn't exist or isn't in a retryable status — check which.
+        let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM clipping_jobs WHERE id = $1)")
+            .bind(job_id)
+            .fetch_one(&state.db_pool)
+            .await
+            .unwrap_or(false);
+        return Ok(Json(json!({
+            "success": false,
+            "message": if exists {
+                "Job is not in failed or cancelled status"
+            } else {
+                "Job not found"
+            }
+        })));
+    }
+
+    // Step 2: Map current_step → resume_from (same logic as auto_retry_failed_jobs).
+    let step = current_step.as_deref().unwrap_or("");
+    let resume_from: Option<&str> = match step {
+        s if s.contains("posting") || s.contains("upload") => Some("clips_extracted"),
+        s if s.contains("vectoriz")                         => Some("clips_extracted"),
+        s if s.contains("extracting") || s == "clips_extracted" => Some("downloaded"),
+        s if s.contains("download")                         => Some("analyzed"),
+        _                                                   => None,
+    };
+
+    if let Some(phase) = resume_from {
+        tracing::info!("Admin retrying job {} — resuming from '{}' (was at: {:?})", job_id, phase, step);
+    } else {
+        tracing::info!("Admin retrying job {} — restarting from Phase A (current_step: {:?})", job_id, step);
+    }
+
+    // Step 3: Reset to pending with the computed resume_from.
     let result = sqlx::query(
         "UPDATE clipping_jobs SET
             status = 'pending',
+            resume_from = $2,
             error_message = NULL,
             progress_percent = 0,
             current_step = 'queued',
             retry_count = COALESCE(retry_count, 0) + 1,
             last_retry_at = NOW(),
+            started_at = NULL,
+            completed_at = NULL,
             claimed_by = NULL,
             claimed_at = NULL,
             updated_at = NOW()
@@ -3828,6 +3880,7 @@ pub async fn admin_retry_job(
          RETURNING retry_count"
     )
     .bind(job_id)
+    .bind(resume_from)
     .fetch_optional(&state.db_pool)
     .await
     .map_err(|e| {
@@ -3838,10 +3891,12 @@ pub async fn admin_retry_job(
     match result {
         Some(row) => {
             let retry_count: i32 = row.get("retry_count");
-            tracing::info!("Admin retried job {} (attempt #{})", job_id, retry_count);
+            let phase_msg = resume_from
+                .map(|p| format!(" (resuming from {})", p))
+                .unwrap_or_else(|| " (starting from Phase A)".to_string());
             Ok(Json(json!({
                 "success": true,
-                "message": format!("Job #{} queued for retry (attempt #{})", job_id, retry_count)
+                "message": format!("Job #{} queued for retry attempt #{}{}", job_id, retry_count, phase_msg)
             })))
         }
         None => Ok(Json(json!({
@@ -3851,16 +3906,20 @@ pub async fn admin_retry_job(
     }
 }
 
-/// Cancel a running or stuck job
+/// Cancel a running or stuck job.
+///
+/// Preserves current_step so that a subsequent admin retry can resume from the
+/// correct phase rather than restarting from Phase A.
 pub async fn admin_cancel_job(
     Extension(state): Extension<Arc<AppState>>,
     Path(job_id): Path<i32>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    // Cancel job (admin can cancel any non-terminal job)
+    // Cancel job (admin can cancel any non-terminal job).
+    // current_step is intentionally NOT overwritten — the retry handler reads it
+    // to determine which pipeline phase to resume from.
     let result = sqlx::query(
         "UPDATE clipping_jobs SET
             status = 'cancelled',
-            current_step = 'admin_cancelled',
             updated_at = NOW(),
             completed_at = NOW(),
             claimed_by = NULL,

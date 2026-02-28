@@ -1,10 +1,34 @@
 // Admin-based integration tests
-// Tests admin dashboard functionality with real production data
+//
+// Tests admin dashboard functionality with real production data.
+//
+// Prerequisites:
+//   - A superuser account must exist in the DB (create with `cargo run --bin createsuperuser`)
+//   - Set TEST_ADMIN_EMAIL and TEST_ADMIN_PASSWORD in .env.test (or the environment)
+//
+// Run all: cargo test --test admin_integration_test -- --ignored --nocapture
+// Run one: cargo test --test admin_integration_test test_admin_authentication -- --ignored --nocapture
 
 mod helpers;
 
-use helpers::{admin_helpers, TestContext};
-use sqlx::Row;
+use helpers::admin_helpers;
+
+/// Load admin credentials from environment.
+/// Panics with a clear message if not set — the user must create a superuser first.
+fn get_admin_credentials() -> (String, String) {
+    let email = std::env::var("TEST_ADMIN_EMAIL")
+        .expect(
+            "TEST_ADMIN_EMAIL not set. \
+             Run `cargo run --bin createsuperuser` to create an admin account, \
+             then add TEST_ADMIN_EMAIL=<email> to .env.test"
+        );
+    let password = std::env::var("TEST_ADMIN_PASSWORD")
+        .expect(
+            "TEST_ADMIN_PASSWORD not set. \
+             Add TEST_ADMIN_PASSWORD=<password> to .env.test"
+        );
+    (email, password)
+}
 
 /// Test 1: Admin Authentication & Authorization
 #[tokio::test]
@@ -12,27 +36,12 @@ use sqlx::Row;
 async fn test_admin_authentication() {
     println!("\n🔐 Test 1: Admin Authentication & Authorization\n");
 
-    // Setup: Get database connection
-    let ctx = TestContext::new()
-        .await
-        .expect("Failed to create test context");
-
-    // Create test admin user
-    let admin = admin_helpers::create_test_admin(
-        &ctx.pool,
-        "test_admin_auth@test.com",
-        "test_admin_auth",
-        "test_password_123",
-    )
-    .await
-    .expect("Failed to create admin user");
-
-    println!("✅ Created test admin: {} (ID: {})", admin.email, admin.id);
+    let (email, password) = get_admin_credentials();
 
     // Login and get JWT token
-    let token = admin_helpers::admin_login(&admin.email, "test_password_123")
+    let token = admin_helpers::admin_login(&email, &password)
         .await
-        .expect("Admin login should succeed");
+        .expect("Admin login should succeed — check TEST_ADMIN_EMAIL/PASSWORD in .env.test");
 
     println!("✅ Admin login successful, got JWT token");
 
@@ -49,11 +58,6 @@ async fn test_admin_authentication() {
         "Admin should see production jobs"
     );
 
-    // Cleanup
-    admin_helpers::delete_test_admin(&ctx.pool, admin.id)
-        .await
-        .expect("Failed to cleanup admin user");
-
     println!("✅ Test completed: Admin authentication works correctly\n");
 }
 
@@ -63,18 +67,8 @@ async fn test_admin_authentication() {
 async fn test_admin_view_production_jobs() {
     println!("\n📊 Test 2: View Real Production Jobs\n");
 
-    let ctx = TestContext::new().await.expect("Failed to create test context");
-
-    let admin = admin_helpers::create_test_admin(
-        &ctx.pool,
-        "test_admin_view@test.com",
-        "test_admin_view",
-        "test_password_123",
-    )
-    .await
-    .expect("Failed to create admin user");
-
-    let token = admin_helpers::admin_login(&admin.email, "test_password_123")
+    let (email, password) = get_admin_credentials();
+    let token = admin_helpers::admin_login(&email, &password)
         .await
         .expect("Admin login failed");
 
@@ -131,11 +125,6 @@ async fn test_admin_view_production_jobs() {
         );
     }
 
-    // Cleanup
-    admin_helpers::delete_test_admin(&ctx.pool, admin.id)
-        .await
-        .expect("Failed to cleanup");
-
     println!("\n✅ Test completed: Job filtering works correctly\n");
 }
 
@@ -145,18 +134,8 @@ async fn test_admin_view_production_jobs() {
 async fn test_admin_analyze_failed_jobs() {
     println!("\n🔍 Test 3: Analyze Failed Jobs\n");
 
-    let ctx = TestContext::new().await.expect("Failed to create test context");
-
-    let admin = admin_helpers::create_test_admin(
-        &ctx.pool,
-        "test_admin_analyze@test.com",
-        "test_admin_analyze",
-        "test_password_123",
-    )
-    .await
-    .expect("Failed to create admin user");
-
-    let token = admin_helpers::admin_login(&admin.email, "test_password_123")
+    let (email, password) = get_admin_credentials();
+    let token = admin_helpers::admin_login(&email, &password)
         .await
         .expect("Admin login failed");
 
@@ -169,9 +148,6 @@ async fn test_admin_analyze_failed_jobs() {
 
     if failed_jobs.pagination.total == 0 {
         println!("✅ No failed jobs found - system is healthy!");
-        admin_helpers::delete_test_admin(&ctx.pool, admin.id)
-            .await
-            .ok();
         return;
     }
 
@@ -201,7 +177,6 @@ async fn test_admin_analyze_failed_jobs() {
     println!("   📥 Download failures: {} jobs", download_failed_jobs.len());
     println!("   ❓ Other failures: {} jobs", other_failures.len());
 
-    // Show details of each category
     if !private_video_jobs.is_empty() {
         println!("\n🔒 Private Video Jobs (should be cancelled):");
         for job in private_video_jobs.iter().take(3) {
@@ -232,7 +207,7 @@ async fn test_admin_analyze_failed_jobs() {
         }
     }
 
-    // Verify high retry counts
+    // Warn about high retry counts
     let high_retry_jobs: Vec<_> = failed_jobs
         .jobs
         .iter()
@@ -252,11 +227,6 @@ async fn test_admin_analyze_failed_jobs() {
         }
     }
 
-    // Cleanup
-    admin_helpers::delete_test_admin(&ctx.pool, admin.id)
-        .await
-        .ok();
-
     println!("\n✅ Test completed: Failed jobs analyzed successfully\n");
 }
 
@@ -266,18 +236,8 @@ async fn test_admin_analyze_failed_jobs() {
 async fn test_admin_cancel_jobs() {
     println!("\n🚫 Test 4: Admin Cancel Jobs\n");
 
-    let ctx = TestContext::new().await.expect("Failed to create test context");
-
-    let admin = admin_helpers::create_test_admin(
-        &ctx.pool,
-        "test_admin_cancel@test.com",
-        "test_admin_cancel",
-        "test_password_123",
-    )
-    .await
-    .expect("Failed to create admin user");
-
-    let token = admin_helpers::admin_login(&admin.email, "test_password_123")
+    let (email, password) = get_admin_credentials();
+    let token = admin_helpers::admin_login(&email, &password)
         .await
         .expect("Admin login failed");
 
@@ -300,9 +260,6 @@ async fn test_admin_cancel_jobs() {
 
     if private_video_jobs.is_empty() {
         println!("✅ No private video jobs to cancel - system is clean!");
-        admin_helpers::delete_test_admin(&ctx.pool, admin.id)
-            .await
-            .ok();
         return;
     }
 
@@ -342,11 +299,6 @@ async fn test_admin_cancel_jobs() {
     println!("   UPDATE clipping_jobs SET status='cancelled'");
     println!("   WHERE error_message LIKE '%Video is private%' AND retry_count > 50;");
 
-    // Cleanup
-    admin_helpers::delete_test_admin(&ctx.pool, admin.id)
-        .await
-        .ok();
-
     println!("\n✅ Test completed: Job cancellation works correctly\n");
 }
 
@@ -356,18 +308,8 @@ async fn test_admin_cancel_jobs() {
 async fn test_admin_retry_jobs() {
     println!("\n🔄 Test 5: Admin Retry Jobs\n");
 
-    let ctx = TestContext::new().await.expect("Failed to create test context");
-
-    let admin = admin_helpers::create_test_admin(
-        &ctx.pool,
-        "test_admin_retry@test.com",
-        "test_admin_retry",
-        "test_password_123",
-    )
-    .await
-    .expect("Failed to create admin user");
-
-    let token = admin_helpers::admin_login(&admin.email, "test_password_123")
+    let (email, password) = get_admin_credentials();
+    let token = admin_helpers::admin_login(&email, &password)
         .await
         .expect("Admin login failed");
 
@@ -400,7 +342,6 @@ async fn test_admin_retry_jobs() {
             Ok(_) => {
                 println!("   ✅ Job queued for retry");
 
-                // Verify status changed to pending
                 tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
 
                 let updated = admin_helpers::get_job_details(&token, job.id)
@@ -435,11 +376,6 @@ async fn test_admin_retry_jobs() {
         }
     }
 
-    // Cleanup
-    admin_helpers::delete_test_admin(&ctx.pool, admin.id)
-        .await
-        .ok();
-
     println!("\n✅ Test completed: Job retry mechanism works correctly\n");
 }
 
@@ -449,18 +385,8 @@ async fn test_admin_retry_jobs() {
 async fn test_admin_job_statistics() {
     println!("\n📊 Test 6: Job Statistics & Monitoring\n");
 
-    let ctx = TestContext::new().await.expect("Failed to create test context");
-
-    let admin = admin_helpers::create_test_admin(
-        &ctx.pool,
-        "test_admin_stats@test.com",
-        "test_admin_stats",
-        "test_password_123",
-    )
-    .await
-    .expect("Failed to create admin user");
-
-    let token = admin_helpers::admin_login(&admin.email, "test_password_123")
+    let (email, password) = get_admin_credentials();
+    let token = admin_helpers::admin_login(&email, &password)
         .await
         .expect("Admin login failed");
 
@@ -480,7 +406,7 @@ async fn test_admin_job_statistics() {
 
     println!("\n📊 Jobs by Status:");
     for (status, count) in status_counts.iter() {
-        let percentage = (*count as f64 / all_jobs.jobs.len() as f64) * 100.0;
+        let percentage = (*count as f64 / all_jobs.jobs.len().max(1) as f64) * 100.0;
         println!("   {}: {} ({:.1}%)", status, count, percentage);
     }
 
@@ -513,11 +439,6 @@ async fn test_admin_job_statistics() {
     for (user_id, count) in user_job_counts.iter().take(5) {
         println!("   User {}: {} jobs", user_id, count);
     }
-
-    // Cleanup
-    admin_helpers::delete_test_admin(&ctx.pool, admin.id)
-        .await
-        .ok();
 
     println!("\n✅ Test completed: Statistics collected successfully\n");
 }

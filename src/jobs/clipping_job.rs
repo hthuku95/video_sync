@@ -1,13 +1,18 @@
-// Background job for clipping workflow orchestration — NEW 5-PHASE ARCHITECTURE
+// Background job for clipping workflow orchestration — 5-PHASE ARCHITECTURE
 //
 // Phase A: Single Gemini video analysis via YouTube URL (replaces frame-by-frame pipeline)
 // Phase B: Download video (only if Phase A found quality clips)
 // Phase C: Parallel FFmpeg clip extraction
 // Phase D: Lightweight vectorization (1 embedding into video_content collection)
 // Phase E: Parallel YouTube upload + store_extracted_clip per clip
+//
+// Smart Resumption: Jobs that fail mid-pipeline resume from the appropriate phase rather
+// than re-running from Phase A. auto_retry_failed_jobs() sets job.resume_from to indicate
+// the entry point; execute_clipping_job() reads it and skips completed phases.
 
 use crate::clipping::{
     ai_clipper::{AiClipper, ExtractedClipData},
+    gemini_video_analyzer::VideoAnalysis,
     models::{ChannelLinkage, ClippingConfig, ClippingJob},
     uploader::ClipUploader,
     apify_client::ApifyClient,
@@ -16,17 +21,25 @@ use crate::models::youtube::ConnectedYouTubeChannel;
 use crate::services::VideoVectorizationService;
 use crate::AppState;
 use chrono::Utc;
-use sqlx::PgPool;
+use sqlx::{PgPool, Row};
 use std::sync::Arc;
+
+/// Phase determination for smart job resumption.
+#[derive(Debug, PartialEq, PartialOrd)]
+enum StartingPhase {
+    A, // Gemini analysis (default — start from scratch)
+    B, // Download only (Phase A already done; analysis stored in viral_moments_json)
+    C, // Clip extraction only (Phase A + B done; video file on disk)
+    E, // Upload only (Phases A–D done; clips already in extracted_clips table)
+}
 
 /// Execute clipping job workflow
 pub async fn execute_clipping_job(
     job_id: i32,
     app_state: Arc<AppState>,
 ) -> Result<String, String> {
-    tracing::info!("🎬 Starting clipping job {} (new 5-phase architecture)", job_id);
+    tracing::info!("🎬 Starting clipping job {} (5-phase pipeline)", job_id);
 
-    // Fetch job details
     let job = fetch_job_details(job_id, &app_state.db_pool).await?;
     let linkage = fetch_linkage(job.linkage_id, &app_state.db_pool).await?;
 
@@ -39,132 +52,214 @@ pub async fn execute_clipping_job(
     let video_url = format!("https://youtube.com/watch?v={}", job.source_video_id);
 
     // =========================================================================
-    // Phase A: Single Gemini video analysis via YouTube URL
+    // Phase Determination — Smart Resume via resume_from column
     // =========================================================================
-    update_job_status(job_id, "analyzing", 10, None, &app_state.db_pool).await?;
-    tracing::info!("🔍 Phase A: Analyzing via YouTube URL (1 Gemini call)");
+    let starting_phase = match job.resume_from.as_deref().unwrap_or("") {
+        "analyzed"        => StartingPhase::B,
+        "downloaded"      => StartingPhase::C,
+        "clips_extracted" => StartingPhase::E,
+        _                 => StartingPhase::A,
+    };
 
-    let gemini_client = app_state.gemini_client.as_ref()
-        .ok_or("Gemini client not configured — required for YouTube URL analysis")?;
-
-    let analysis = tokio::time::timeout(
-        tokio::time::Duration::from_secs(180), // 3 min for analysis
-        gemini_client.analyze_video_from_url(
-            &video_url,
-            config.clips_per_video as usize,
-            config.min_clip_duration_seconds as f64,
-            config.max_clip_duration_seconds as f64,
-        ),
-    )
-    .await
-    .map_err(|_| "Gemini video analysis timed out after 180 seconds".to_string())?
-    .map_err(|e| format!("Gemini video analysis failed: {}", e))?;
-
-    // Fast-fail: if no moments meet quality threshold, skip download entirely
-    let qualified_moments = analysis.qualified_moments(0.6);
-    if qualified_moments.is_empty() {
-        let status_msg = format!(
-            "No viral moments found with quality >= 0.6 (overall quality: {:.2}). Video may not be suitable for clips.",
-            analysis.overall_quality
+    if starting_phase != StartingPhase::A {
+        tracing::info!(
+            "⏭️  Job {}: Resuming from {:?} (resume_from='{}')",
+            job_id,
+            starting_phase,
+            job.resume_from.as_deref().unwrap_or("")
         );
-        update_job_status(job_id, "no_clips_found", 100, Some(&status_msg), &app_state.db_pool).await?;
-        mark_job_completed(job_id, &app_state.db_pool).await?;
-        return Ok(format!("No qualifying clips found (overall_quality={:.2})", analysis.overall_quality));
+        // Clear resume_from so subsequent failures use fresh auto_retry_failed_jobs logic
+        sqlx::query("UPDATE clipping_jobs SET resume_from = NULL WHERE id = $1")
+            .bind(job_id)
+            .execute(&app_state.db_pool)
+            .await
+            .ok(); // non-fatal
     }
 
-    // Take top N moments up to clips_per_video
-    let moments: Vec<_> = analysis.top_moments(config.clips_per_video as usize)
-        .into_iter()
-        .cloned()
-        .collect();
-
-    tracing::info!(
-        "✅ Phase A complete: {} viral moments identified ({} qualify with score ≥ 0.6)",
-        analysis.viral_moments.len(),
-        qualified_moments.len()
-    );
-
-    update_job_status(job_id, "analyzed", 20, None, &app_state.db_pool).await?;
-
     // =========================================================================
-    // Phase B: Download video (only now that we know clips exist)
+    // Phase A: Single Gemini video analysis OR load from DB (resume path)
     // =========================================================================
-    update_job_status(job_id, "downloading", 25, None, &app_state.db_pool).await?;
-    tracing::info!("⬇️  Phase B: Downloading video");
+    let (moments, analysis) = if starting_phase == StartingPhase::A {
+        update_job_status(job_id, "analyzing", 10, None, &app_state.db_pool).await?;
+        tracing::info!("🔍 Phase A: Analyzing via YouTube URL (1 Gemini call)");
 
-    let video_path = format!("downloads/clipping_{}_{}.mp4", job_id, job.source_video_id);
+        let gemini_client = app_state.gemini_client.as_ref()
+            .ok_or("Gemini client not configured — required for YouTube URL analysis")?;
 
-    let apify_token = std::env::var("APIFY_TOKEN")
-        .map_err(|_| "APIFY_TOKEN not configured")?;
-    let apify_actor = std::env::var("APIFY_YOUTUBE_CLIENT_ACTOR")
-        .map_err(|_| "APIFY_YOUTUBE_CLIENT_ACTOR not configured")?;
+        let analysis = tokio::time::timeout(
+            tokio::time::Duration::from_secs(180), // 3 min for analysis
+            gemini_client.analyze_video_from_url(
+                &video_url,
+                config.clips_per_video as usize,
+                config.min_clip_duration_seconds as f64,
+                config.max_clip_duration_seconds as f64,
+            ),
+        )
+        .await
+        .map_err(|_| "Gemini video analysis timed out after 180 seconds".to_string())?
+        .map_err(|e| format!("Gemini video analysis failed: {}", e))?;
 
-    let apify_client = ApifyClient::new(apify_token, apify_actor);
-
-    tracing::info!("Downloading video: {}", video_url);
-    let _download_result = apify_client.download_video(&video_url, &video_path).await
-        .map_err(|e| format!("Download failed: {}", e))?;
-
-    // Validate downloaded file
-    if !std::path::Path::new(&video_path).exists() {
-        return Err(format!("Downloaded file not found: {}", video_path));
-    }
-
-    match crate::core::validate_video_file(&video_path) {
-        Ok(true) => tracing::info!("✅ Downloaded video validated"),
-        Ok(false) | Err(_) => {
-            let _ = tokio::fs::remove_file(&video_path).await;
-            return Err(format!("Downloaded video is corrupted: {}", video_path));
+        // Fast-fail: if no moments meet quality threshold, skip download entirely
+        let qualified_moments = analysis.qualified_moments(0.6);
+        if qualified_moments.is_empty() {
+            let status_msg = format!(
+                "No viral moments found with quality >= 0.6 (overall quality: {:.2}). Video may not be suitable for clips.",
+                analysis.overall_quality
+            );
+            update_job_status(job_id, "no_clips_found", 100, Some(&status_msg), &app_state.db_pool).await?;
+            mark_job_completed(job_id, &app_state.db_pool).await?;
+            return Ok(format!("No qualifying clips found (overall_quality={:.2})", analysis.overall_quality));
         }
-    }
 
-    update_job_status(job_id, "downloaded", 40, None, &app_state.db_pool).await?;
-    update_job_video_path(job_id, &video_path, &app_state.db_pool).await?;
+        let moments: Vec<_> = analysis.top_moments(config.clips_per_video as usize)
+            .into_iter()
+            .cloned()
+            .collect();
+
+        tracing::info!(
+            "✅ Phase A complete: {} viral moments identified ({} qualify with score ≥ 0.6)",
+            analysis.viral_moments.len(),
+            qualified_moments.len()
+        );
+
+        // Persist full VideoAnalysis to DB so retries can skip Gemini re-analysis.
+        // Storing VideoAnalysis (not just Vec<ViralMoment>) so Phase D can reconstruct
+        // the analysis object for vectorization on Phase B/C resume paths.
+        sqlx::query(
+            "UPDATE clipping_jobs
+             SET viral_moments_json = $1, analysis_quality = $2
+             WHERE id = $3"
+        )
+        .bind(serde_json::to_value(&analysis).unwrap_or(serde_json::Value::Null))
+        .bind(analysis.overall_quality)
+        .bind(job_id)
+        .execute(&app_state.db_pool)
+        .await
+        .ok(); // non-fatal: failure just means retry re-runs Phase A
+
+        update_job_status(job_id, "analyzed", 20, None, &app_state.db_pool).await?;
+        (moments, analysis)
+    } else {
+        // Resume: load VideoAnalysis from DB (avoids Gemini re-call + API cost)
+        tracing::info!("⏭️  Phase A skipped: loading analysis from DB");
+        let analysis_value = job.viral_moments_json.ok_or_else(|| {
+            "viral_moments_json not in DB — cannot resume; will restart from Phase A".to_string()
+        })?;
+        let analysis: VideoAnalysis = serde_json::from_value(analysis_value)
+            .map_err(|e| format!("Failed to deserialize VideoAnalysis from DB: {}", e))?;
+
+        let moments: Vec<_> = analysis.top_moments(config.clips_per_video as usize)
+            .into_iter()
+            .cloned()
+            .collect();
+
+        tracing::info!("✅ Loaded {} moments from DB (overall_quality={:.2})", moments.len(), analysis.overall_quality);
+        (moments, analysis)
+    };
 
     // =========================================================================
-    // Phase C: Parallel clip extraction
+    // Phase B: Download video (skipped if video already on disk)
     // =========================================================================
-    update_job_status(job_id, "extracting_clips", 50, None, &app_state.db_pool).await?;
-    tracing::info!("✂️  Phase C: Parallel clip extraction ({} clips)", moments.len());
+    let video_path = if starting_phase <= StartingPhase::B {
+        let path = format!("downloads/clipping_{}_{}.mp4", job_id, job.source_video_id);
 
-    // Create output directory
-    tokio::fs::create_dir_all("outputs").await
-        .map_err(|e| format!("Failed to create outputs directory: {}", e))?;
+        update_job_status(job_id, "downloading", 25, None, &app_state.db_pool).await?;
+        tracing::info!("⬇️  Phase B: Downloading video");
 
-    let clipper = AiClipper::new(app_state.clone());
-    let clips = clipper
-        .extract_clips_from_moments(job_id, &video_path, &moments)
-        .await?;
+        let apify_token = std::env::var("APIFY_TOKEN")
+            .map_err(|_| "APIFY_TOKEN not configured")?;
+        let apify_actor = std::env::var("APIFY_YOUTUBE_CLIENT_ACTOR")
+            .map_err(|_| "APIFY_YOUTUBE_CLIENT_ACTOR not configured")?;
 
-    if clips.is_empty() {
-        return Err("All clip extractions failed".to_string());
-    }
+        let apify_client = ApifyClient::new(apify_token, apify_actor);
 
-    tracing::info!("✅ Phase C complete: {}/{} clips extracted", clips.len(), moments.len());
-    update_job_status(job_id, "clips_extracted", 60, None, &app_state.db_pool).await?;
+        tracing::info!("Downloading video: {}", video_url);
+        let _download_result = apify_client.download_video(&video_url, &path).await
+            .map_err(|e| format!("Download failed: {}", e))?;
+
+        // Validate downloaded file
+        if !std::path::Path::new(&path).exists() {
+            return Err(format!("Downloaded file not found: {}", path));
+        }
+
+        match crate::core::validate_video_file(&path) {
+            Ok(true) => tracing::info!("✅ Downloaded video validated"),
+            Ok(false) | Err(_) => {
+                let _ = tokio::fs::remove_file(&path).await;
+                return Err(format!("Downloaded video is corrupted: {}", path));
+            }
+        }
+
+        update_job_status(job_id, "downloaded", 40, None, &app_state.db_pool).await?;
+        update_job_video_path(job_id, &path, &app_state.db_pool).await?;
+        path
+    } else {
+        // Resume from Phase C or E: use the path stored in DB at download time
+        let path = job.local_video_path.clone()
+            .unwrap_or_else(|| format!("downloads/clipping_{}_{}.mp4", job_id, job.source_video_id));
+        tracing::info!("⏭️  Phase B skipped: using stored path '{}'", path);
+        path
+    };
 
     // =========================================================================
-    // Phase D: Lightweight vectorization (1 embedding into video_content)
+    // Phase C: Parallel clip extraction + Phase D: Lightweight vectorization
+    // (Skipped entirely on Phase E resume — clips already in extracted_clips table)
     // =========================================================================
-    update_job_status(job_id, "vectorizing", 65, None, &app_state.db_pool).await?;
-    tracing::info!("🔢 Phase D: Storing video analysis (1 embedding)");
+    let (clips, clip_db_ids) = if starting_phase <= StartingPhase::C {
+        update_job_status(job_id, "extracting_clips", 50, None, &app_state.db_pool).await?;
+        tracing::info!("✂️  Phase C: Parallel clip extraction ({} clips)", moments.len());
 
-    match VideoVectorizationService::store_video_analysis_from_gemini(
-        &job.source_video_id,
-        &video_url,
-        Some(linkage.user_id),
-        None, // channel_id set from linkage if needed
-        &analysis,
-        &app_state,
-    ).await {
-        Ok(()) => tracing::info!("✅ Phase D complete: video_content stored"),
-        Err(e) => tracing::warn!("Phase D vectorization failed (non-fatal): {}", e),
-    }
+        // Create output directory
+        tokio::fs::create_dir_all("outputs").await
+            .map_err(|e| format!("Failed to create outputs directory: {}", e))?;
 
-    // =========================================================================
-    // Phase D continued: Save clips to database
-    // =========================================================================
-    let clip_db_ids = save_clips_to_database(job_id, &clips, &linkage, &app_state.db_pool).await?;
+        let clipper = AiClipper::new(app_state.clone());
+        let clips = clipper
+            .extract_clips_from_moments(job_id, &video_path, &moments)
+            .await?;
+
+        if clips.is_empty() {
+            return Err("All clip extractions failed".to_string());
+        }
+
+        tracing::info!("✅ Phase C complete: {}/{} clips extracted", clips.len(), moments.len());
+        update_job_status(job_id, "clips_extracted", 60, None, &app_state.db_pool).await?;
+
+        // Phase D: Lightweight vectorization (1 embedding into video_content)
+        update_job_status(job_id, "vectorizing", 65, None, &app_state.db_pool).await?;
+        tracing::info!("🔢 Phase D: Storing video analysis (1 embedding)");
+
+        match VideoVectorizationService::store_video_analysis_from_gemini(
+            &job.source_video_id,
+            &video_url,
+            Some(linkage.user_id),
+            None, // channel_id set from linkage if needed
+            &analysis,
+            &app_state,
+        ).await {
+            Ok(()) => tracing::info!("✅ Phase D complete: video_content stored"),
+            Err(e) => tracing::warn!("Phase D vectorization failed (non-fatal): {}", e),
+        }
+
+        // Save clips to database (idempotent: deletes stale clips first)
+        let clip_db_ids = save_clips_to_database(job_id, &clips, &linkage, &app_state.db_pool).await?;
+        (clips, clip_db_ids)
+    } else {
+        // Phase E resume: clips already extracted and saved — load from DB
+        tracing::info!("⏭️  Phases C/D skipped: loading existing clips from DB for upload retry");
+        let (db_clips, db_ids) = load_clips_from_db(job_id, &app_state.db_pool).await?;
+
+        if db_clips.is_empty() {
+            // All clips already published on a previous partial run — job is done
+            tracing::info!("Job {}: all clips already published, marking complete", job_id);
+            update_job_status(job_id, "completed", 100, None, &app_state.db_pool).await?;
+            mark_job_completed(job_id, &app_state.db_pool).await?;
+            return Ok("All clips already published (Phase E resume)".to_string());
+        }
+
+        tracing::info!("Loaded {} unpublished clips from DB for retry", db_clips.len());
+        (db_clips, db_ids)
+    };
 
     // =========================================================================
     // Phase E: Parallel YouTube upload
@@ -199,8 +294,6 @@ pub async fn execute_clipping_job(
     let mut uploaded_count = 0;
     for (clip, clip_id) in clips.iter().zip(clip_db_ids.iter()) {
         // Enforce daily 4-clip limit at upload time (not just at job-creation time).
-        // This prevents race conditions where two concurrent jobs each see clips_today=0
-        // and both upload, resulting in more than 4 clips posted in a day.
         let clips_today = count_clips_posted_today(destination_channel.id, &app_state.db_pool)
             .await
             .unwrap_or(0);
@@ -228,9 +321,9 @@ pub async fn execute_clipping_job(
         }
     }
 
-    // If ALL uploads failed, mark job as failed so the auto-retry worker can retry it.
-    // Do NOT trigger the 24-hour cooldown or mark_job_completed — that would permanently
-    // block re-processing the source video and waste the cooldown window on a failed job.
+    // If ALL uploads failed, mark job as failed so auto-retry can resume from Phase E.
+    // The auto_retry_failed_jobs() function will set resume_from='clips_extracted' so the
+    // next attempt skips Phases A-D entirely and goes straight to upload.
     if uploaded_count == 0 {
         update_job_status(
             job_id,
@@ -248,13 +341,13 @@ pub async fn execute_clipping_job(
         return Err("All clip uploads failed — check OAuth token validity".to_string());
     }
 
-    // At least 1 clip was uploaded successfully — mark job completed and set cooldown.
+    // At least 1 clip uploaded successfully — mark job completed.
     update_job_status(job_id, "completed", 100, None, &app_state.db_pool).await?;
     mark_job_completed(job_id, &app_state.db_pool).await?;
     update_linkage_session_timestamp(linkage.id, &app_state.db_pool).await?;
     update_linkage_stats(linkage.id, clips.len() as i32, uploaded_count, &app_state.db_pool).await?;
 
-    // Cleanup downloaded video
+    // Cleanup downloaded video (clips in outputs/ are kept for potential re-processing)
     let _ = tokio::fs::remove_file(&video_path).await;
 
     tracing::info!(
@@ -263,6 +356,61 @@ pub async fn execute_clipping_job(
     );
 
     Ok(format!("Successfully posted {}/{} clips", uploaded_count, clips.len()))
+}
+
+/// Load unpublished clips from the extracted_clips table for Phase E resume.
+///
+/// Returns only clips with upload_status != 'published' so we retry failed/pending
+/// clips without re-uploading clips that already succeeded on a previous partial run.
+/// Returns (clips, clip_db_ids) — empty vecs if all clips are already published.
+async fn load_clips_from_db(
+    job_id: i32,
+    pool: &PgPool,
+) -> Result<(Vec<ExtractedClipData>, Vec<i32>), String> {
+    let rows = sqlx::query(
+        "SELECT id, clip_number, local_clip_path,
+                start_time_seconds, end_time_seconds, duration_seconds,
+                ai_title, ai_description, ai_tags, ai_confidence_score,
+                viral_factors, custom_thumbnail_path
+         FROM extracted_clips
+         WHERE clipping_job_id = $1
+           AND upload_status != 'published'
+         ORDER BY clip_number"
+    )
+    .bind(job_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("Failed to load clips from DB for Phase E resume: {}", e))?;
+
+    let mut clips = Vec::new();
+    let mut ids = Vec::new();
+
+    for row in rows {
+        let id: i32 = row.get("id");
+        let ai_title: Option<String> = row.try_get("ai_title").ok().flatten();
+        let ai_description: Option<String> = row.try_get("ai_description").ok().flatten();
+        let ai_tags: Option<Vec<String>> = row.try_get("ai_tags").ok().flatten();
+        let ai_confidence_score: Option<f64> = row.try_get("ai_confidence_score").ok().flatten();
+        let viral_factors: Option<Vec<String>> = row.try_get("viral_factors").ok().flatten();
+        let custom_thumbnail_path: Option<String> = row.try_get("custom_thumbnail_path").ok().flatten();
+
+        clips.push(ExtractedClipData {
+            clip_number: row.get("clip_number"),
+            local_clip_path: row.get("local_clip_path"),
+            start_time_seconds: row.get("start_time_seconds"),
+            end_time_seconds: row.get("end_time_seconds"),
+            duration_seconds: row.get("duration_seconds"),
+            ai_title: ai_title.unwrap_or_else(|| "Untitled".to_string()),
+            ai_description: ai_description.unwrap_or_default(),
+            ai_tags: ai_tags.unwrap_or_default(),
+            ai_confidence_score: ai_confidence_score.unwrap_or(0.0),
+            viral_factors: viral_factors.unwrap_or_default(),
+            custom_thumbnail_path,
+        });
+        ids.push(id);
+    }
+
+    Ok((clips, ids))
 }
 
 /// Store an extracted clip in the Qdrant extracted_clips collection (best-effort, non-fatal).
@@ -415,8 +563,7 @@ async fn save_clips_to_database(
     pool: &PgPool,
 ) -> Result<Vec<i32>, String> {
     // Delete any stale clips from a previous failed attempt for this job.
-    // Without this, retried jobs accumulate duplicate extracted_clips rows
-    // because the INSERT has no ON CONFLICT clause.
+    // Without this, retried jobs accumulate duplicate extracted_clips rows.
     sqlx::query("DELETE FROM extracted_clips WHERE clipping_job_id = $1")
         .bind(job_id)
         .execute(pool)
@@ -460,7 +607,6 @@ async fn save_clips_to_database(
 }
 
 /// Count clips successfully published for a destination channel in the last 24 hours.
-/// Used to enforce the 4-clip/day limit at upload time.
 async fn count_clips_posted_today(destination_channel_id: i32, pool: &PgPool) -> Result<i64, String> {
     sqlx::query_scalar::<_, i64>(
         "SELECT COUNT(*) FROM extracted_clips

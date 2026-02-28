@@ -158,52 +158,76 @@ impl ClippingWorker {
     /// - Job status is 'failed'
     /// - Job failed within the last 6 hours (to avoid retrying old failures)
     /// - Job has been failed for at least 5 minutes (to avoid immediate retry loops)
+    ///
+    /// Phase-aware: sets resume_from based on current_step so retries skip completed phases.
     async fn auto_retry_failed_jobs(&self) -> Result<(), String> {
-        // Find failed jobs eligible for retry (max 5 retries to prevent infinite loops)
-        let retry_query = String::from(
-            "SELECT id FROM clipping_jobs \
+        // Fetch id + current_step to determine the appropriate resume point
+        let retry_jobs: Vec<(i32, Option<String>)> = sqlx::query_as(
+            "SELECT id, current_step FROM clipping_jobs \
              WHERE status = 'failed' \
              AND completed_at > NOW() - INTERVAL '6 hours' \
              AND completed_at < NOW() - INTERVAL '5 minutes' \
              AND COALESCE(retry_count, 0) < 5 \
              ORDER BY completed_at ASC \
              LIMIT 10"
-        );
-        let retry_job_ids: Vec<i32> = sqlx::query_scalar(&retry_query)
-            .fetch_all(&self.app_state.db_pool)
-            .await
-            .map_err(|e| format!("Failed to fetch failed jobs for retry: {}", e))?;
+        )
+        .fetch_all(&self.app_state.db_pool)
+        .await
+        .map_err(|e| format!("Failed to fetch failed jobs for retry: {}", e))?;
 
-        if retry_job_ids.is_empty() {
+        if retry_jobs.is_empty() {
             return Ok(());
         }
 
-        tracing::info!("🔄 Found {} failed jobs eligible for automatic retry", retry_job_ids.len());
+        tracing::info!("🔄 Found {} failed jobs eligible for automatic retry", retry_jobs.len());
 
-        // Reset them to pending status
-        for job_id in retry_job_ids {
+        for (job_id, current_step) in retry_jobs {
+            // Determine the resume point based on where the job was when it failed.
+            // current_step mirrors the last status set by update_job_status().
+            let resume_from: Option<&str> = match current_step.as_deref().unwrap_or("") {
+                s if s.contains("posting") || s.contains("upload") => Some("clips_extracted"),
+                s if s.contains("vectoriz")                         => Some("clips_extracted"),
+                s if s.contains("extracting") || s == "clips_extracted" => Some("downloaded"),
+                s if s.contains("download")                         => Some("analyzed"),
+                _                                                   => None,
+            };
+
+            if let Some(phase) = resume_from {
+                tracing::info!(
+                    "✅ Job {} will retry from '{}' (was stuck at: {:?})",
+                    job_id, phase, current_step
+                );
+            } else {
+                tracing::info!(
+                    "✅ Job {} will retry from Phase A (current_step: {:?})",
+                    job_id, current_step
+                );
+            }
+
             let reset_query = String::from(
                 "UPDATE clipping_jobs \
                  SET status = 'pending', \
+                     resume_from = $1, \
                      error_message = NULL, \
                      progress_percent = 0, \
                      current_step = 'queued', \
                      started_at = NULL, \
                      completed_at = NULL, \
+                     claimed_by = NULL, \
+                     claimed_at = NULL, \
                      updated_at = NOW(), \
                      retry_count = COALESCE(retry_count, 0) + 1, \
                      last_retry_at = NOW() \
-                 WHERE id = $1 \
+                 WHERE id = $2 \
                  AND status = 'failed'"
             );
             match sqlx::query(&reset_query)
+                .bind(resume_from)
                 .bind(job_id)
                 .execute(&self.app_state.db_pool)
                 .await
             {
-                Ok(_) => {
-                    tracing::info!("✅ Job {} automatically reset to pending for retry", job_id);
-                }
+                Ok(_) => {}
                 Err(e) => {
                     tracing::error!("Failed to reset job {} for retry: {}", job_id, e);
                 }
@@ -573,31 +597,58 @@ async fn detect_stuck_jobs(app_state: &Arc<AppState>) -> Result<(), String> {
 }
 
 /// Automatically retry failed jobs that meet retry criteria (standalone function)
+///
+/// Phase-aware: sets resume_from so retries skip completed phases rather than re-running
+/// from Phase A every time. A job that failed at "posting" resumes at "clips_extracted",
+/// skipping Gemini re-analysis, re-download, and re-extraction.
 async fn auto_retry_failed_jobs(app_state: &Arc<AppState>) -> Result<(), String> {
-    let retry_query = String::from(
-        "SELECT id FROM clipping_jobs \
+    // Fetch id + current_step to determine the appropriate resume point per job
+    let retry_jobs: Vec<(i32, Option<String>)> = sqlx::query_as(
+        "SELECT id, current_step FROM clipping_jobs \
          WHERE status = 'failed' \
          AND completed_at > NOW() - INTERVAL '6 hours' \
          AND completed_at < NOW() - INTERVAL '5 minutes' \
          AND COALESCE(retry_count, 0) < 5 \
          ORDER BY completed_at ASC \
          LIMIT 10"
-    );
-    let retry_job_ids: Vec<i32> = sqlx::query_scalar(&retry_query)
-        .fetch_all(&app_state.db_pool)
-        .await
-        .map_err(|e| format!("Failed to fetch failed jobs for retry: {}", e))?;
+    )
+    .fetch_all(&app_state.db_pool)
+    .await
+    .map_err(|e| format!("Failed to fetch failed jobs for retry: {}", e))?;
 
-    if retry_job_ids.is_empty() {
+    if retry_jobs.is_empty() {
         return Ok(());
     }
 
-    tracing::info!("🔄 Found {} failed jobs eligible for automatic retry", retry_job_ids.len());
+    tracing::info!("🔄 Found {} failed jobs eligible for automatic retry", retry_jobs.len());
 
-    for job_id in retry_job_ids {
+    for (job_id, current_step) in retry_jobs {
+        // Map current_step → resume_from so execute_clipping_job() skips already-done phases.
+        // current_step is set by update_job_status() and mirrors the last known status.
+        let resume_from: Option<&str> = match current_step.as_deref().unwrap_or("") {
+            s if s.contains("posting") || s.contains("upload") => Some("clips_extracted"),
+            s if s.contains("vectoriz")                         => Some("clips_extracted"),
+            s if s.contains("extracting") || s == "clips_extracted" => Some("downloaded"),
+            s if s.contains("download")                         => Some("analyzed"),
+            _                                                   => None,
+        };
+
+        if let Some(phase) = resume_from {
+            tracing::info!(
+                "✅ Job {} reset to pending, will resume from '{}' (was at: {:?})",
+                job_id, phase, current_step
+            );
+        } else {
+            tracing::info!(
+                "✅ Job {} reset to pending, will restart from Phase A (current_step: {:?})",
+                job_id, current_step
+            );
+        }
+
         let reset_query = String::from(
             "UPDATE clipping_jobs \
              SET status = 'pending', \
+                 resume_from = $1, \
                  error_message = NULL, \
                  progress_percent = 0, \
                  current_step = 'queued', \
@@ -608,17 +659,16 @@ async fn auto_retry_failed_jobs(app_state: &Arc<AppState>) -> Result<(), String>
                  updated_at = NOW(), \
                  retry_count = COALESCE(retry_count, 0) + 1, \
                  last_retry_at = NOW() \
-             WHERE id = $1 \
+             WHERE id = $2 \
              AND status = 'failed'"
         );
         match sqlx::query(&reset_query)
+            .bind(resume_from)
             .bind(job_id)
             .execute(&app_state.db_pool)
             .await
         {
-            Ok(_) => {
-                tracing::info!("✅ Job {} automatically reset to pending for retry", job_id);
-            }
+            Ok(_) => {}
             Err(e) => {
                 tracing::error!("Failed to reset job {} for retry: {}", job_id, e);
             }

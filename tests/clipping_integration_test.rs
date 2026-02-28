@@ -22,23 +22,50 @@ use sqlx::Row;
 
 /// Full E2E test: pending → analyzing → analyzed → downloading → ... → completed
 ///
-/// Uses Rick Astley (3:33, always public, good candidate for viral moments).
-/// Verifies every phase of the new 5-phase pipeline completes successfully.
+/// Resume-first: checks whether a resumable job already exists for the linkage before
+/// creating a new one. This avoids wasting a Gemini call + re-download on every run.
+/// On the first run it creates a job; on subsequent runs it resumes the existing one.
+///
+/// Uses Rick Astley (dQw4w9WgXcQ, 3:33, always public, good candidate for viral moments).
+/// Verifies the full pipeline completes and at least 1 clip is published to YouTube.
 #[tokio::test]
 #[ignore]
 async fn test_complete_clipping_workflow() {
     let ctx = TestContext::new()
         .await
-        .expect("Failed to create test context");
+        .expect(
+            "Failed to create test context — ensure a channel linkage with valid OAuth exists"
+        );
 
-    let job_id = ctx
-        .create_test_job(test_videos::MEDIUM_VIDEO)
-        .await
-        .expect("Failed to create test job");
+    // 1. Look for an existing non-terminal job on this linkage — resume if found
+    let existing_job = sqlx::query(
+        "SELECT id, status FROM clipping_jobs
+         WHERE linkage_id = $1
+           AND status NOT IN ('completed', 'cancelled')
+         ORDER BY created_at DESC
+         LIMIT 1"
+    )
+    .bind(ctx.linkage_id)
+    .fetch_optional(&ctx.pool)
+    .await
+    .expect("DB query failed");
 
-    eprintln!("✅ Created test job {} for video: {}", job_id, test_videos::MEDIUM_VIDEO);
+    let job_id = if let Some(row) = existing_job {
+        let id: i32 = row.get("id");
+        let status: String = row.get("status");
+        eprintln!("⏭️  Resuming existing job {} (status={})", id, status);
+        id
+    } else {
+        // No resumable job — create a fresh one
+        let id = ctx
+            .create_test_job("dQw4w9WgXcQ")
+            .await
+            .expect("Failed to create test job");
+        eprintln!("✅ Created new test job {} for video: dQw4w9WgXcQ", id);
+        id
+    };
 
-    // New pipeline target: 8–15 min. Allow up to 20 min for cold starts / slow proxies.
+    // 2. Wait up to 20 minutes for completion
     let timeout_secs: u64 = std::env::var("TEST_TIMEOUT_LONG")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -49,7 +76,6 @@ async fn test_complete_clipping_workflow() {
         .await
         .expect("Failed waiting for completion");
 
-    // Fetch final status for a meaningful failure message
     let final_status = ctx.get_job_status(job_id).await.unwrap_or_else(|_| "unknown".into());
     assert!(
         completed,
@@ -57,19 +83,47 @@ async fn test_complete_clipping_workflow() {
         job_id, timeout_secs, final_status
     );
 
-    // Verify clips were extracted into the DB
+    // 3. Verify clips were extracted into the DB
     let clip_count = assertions::assert_clips_extracted(&ctx.pool, job_id, 1)
         .await
         .expect("Should have at least 1 extracted clip");
 
     eprintln!("✅ Extracted {} clips for job {}", clip_count, job_id);
 
-    // New pipeline completes in 8–15 min — allow 20 min ceiling
+    // 4. Verify at least 1 clip was actually published to YouTube
+    let clips = sqlx::query(
+        "SELECT youtube_video_id, upload_status FROM extracted_clips
+         WHERE clipping_job_id = $1"
+    )
+    .bind(job_id)
+    .fetch_all(&ctx.pool)
+    .await
+    .expect("Failed to fetch clips");
+
+    assert!(!clips.is_empty(), "No clips in extracted_clips table for job {}", job_id);
+
+    let published = clips
+        .iter()
+        .filter(|row| {
+            let status: String = row.get("upload_status");
+            status == "published"
+        })
+        .count();
+
+    assert!(
+        published >= 1,
+        "Expected at least 1 published clip for job {} but got {} (total clips: {})",
+        job_id, published, clips.len()
+    );
+
+    eprintln!("✅ {} clip(s) published to YouTube for job {}", published, job_id);
+
+    // 5. Verify timing (new pipeline should complete within 20 minutes)
     assertions::assert_completed_within(&ctx.pool, job_id, 1200)
         .await
         .expect("Job should complete within 20 minutes");
 
-    ctx.cleanup().await.expect("Cleanup failed");
+    // NOTE: No cleanup() call — the job is a real production run; keep it in the DB.
 }
 
 // ============================================================================

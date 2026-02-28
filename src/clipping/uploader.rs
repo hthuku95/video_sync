@@ -121,25 +121,43 @@ impl ClipUploader {
             tracing::info!("Access token expiring soon, refreshing...");
 
             // Refresh token using YouTube client
-            let new_token = self
+            let token_result = self
                 .youtube_client
                 .refresh_access_token(
                     &channel.refresh_token,
                     &self.oauth_client_id,
                     &self.oauth_client_secret,
                 )
-                .await
-                .map_err(|e| {
+                .await;
+
+            let new_token = match token_result {
+                Ok(t) => t,
+                Err(e) => {
                     let error_str = e.to_string();
                     tracing::error!("🔴 ClipUploader: Token refresh failed for channel {}: {}", channel.channel_name, error_str);
 
-                    // Provide specific error message
                     if error_str.contains("REFRESH_TOKEN_EXPIRED") || error_str.contains("invalid_grant") {
-                        "Token refresh failed: YouTube authorization expired. Channel needs reconnection.".to_string()
+                        // Mark channel as requiring re-authorization so users see the prompt in the UI
+                        let _ = sqlx::query(
+                            "UPDATE connected_youtube_channels
+                             SET requires_reauth = true,
+                                 reauth_reason = 'YouTube authorization expired. Please reconnect your channel.'
+                             WHERE id = $1",
+                        )
+                        .bind(channel.id)
+                        .execute(&self.db_pool)
+                        .await;
+
+                        tracing::warn!(
+                            "⚠️ Marked channel {} (id={}) as requires_reauth=true",
+                            channel.channel_name, channel.id
+                        );
+                        return Err("Token refresh failed: YouTube authorization expired. Channel needs reconnection.".to_string());
                     } else {
-                        format!("Token refresh failed: {}", error_str)
+                        return Err(format!("Token refresh failed: {}", error_str));
                     }
-                })?;
+                }
+            };
 
             // Update database with new token
             sqlx::query(

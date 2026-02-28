@@ -38,19 +38,39 @@ impl ChannelMonitor {
 
         tracing::info!("📺 Polling {} channels", channels.len());
 
-        for channel in channels {
-            if let Err(e) = self.poll_channel(&channel).await {
+        let mut success_count = 0i32;
+        let mut fail_count = 0i32;
+
+        for channel in &channels {
+            if let Err(e) = self.poll_channel(channel).await {
+                fail_count += 1;
                 tracing::error!(
                     "Failed to poll channel {} ({}): {}",
                     channel.channel_name,
                     channel.channel_id,
                     e
                 );
-                // Continue with other channels even if one fails
+            } else {
+                success_count += 1;
             }
         }
 
-        tracing::info!("✅ Channel polling cycle completed");
+        if fail_count > 0 && success_count == 0 {
+            tracing::error!(
+                "🚨 ALL {} channel polls failed this cycle — verify YOUTUBE_API_KEY is valid on Render",
+                fail_count
+            );
+        } else if fail_count > 0 {
+            tracing::warn!(
+                "{}/{} channel polls failed this cycle",
+                fail_count, channels.len()
+            );
+        }
+
+        tracing::info!(
+            "✅ Channel polling cycle completed ({} succeeded, {} failed)",
+            success_count, fail_count
+        );
         Ok(())
     }
 
@@ -66,6 +86,17 @@ impl ChannelMonitor {
 
         // Mark as currently polling
         self.mark_polling(channel.id, true).await?;
+
+        // Update last_polled_at immediately so the timestamp always reflects the most recent
+        // attempt, even if the YouTube API call below fails. Without this, a persistent API
+        // failure leaves last_polled_at stale (e.g., 5 days old) making it impossible to tell
+        // from the DB whether the monitor is running at all.
+        let _ = sqlx::query(
+            "UPDATE youtube_source_channels SET last_polled_at = NOW() WHERE id = $1",
+        )
+        .bind(channel.id)
+        .execute(&self.db_pool)
+        .await;
 
         // CRITICAL FIX: Use playlistItems API instead of search API to save quota
         // The YouTube Data API v3 charges:
@@ -190,9 +221,14 @@ impl ChannelMonitor {
                 continue;
             }
 
-            // Also check pending jobs (job may exist but not in clipped table yet)
+            // Also check for active/completed jobs (job may exist but not in clipped table yet).
+            // Exclude 'failed' and 'cancelled' statuses so videos with failed jobs can be re-queued.
             let job_exists = sqlx::query_scalar::<_, bool>(
-                "SELECT EXISTS(SELECT 1 FROM clipping_jobs WHERE source_video_id = $1)",
+                "SELECT EXISTS(
+                    SELECT 1 FROM clipping_jobs
+                    WHERE source_video_id = $1
+                      AND status NOT IN ('failed', 'cancelled')
+                )",
             )
             .bind(&video.id.video_id)
             .fetch_one(&self.db_pool)
