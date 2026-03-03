@@ -420,7 +420,14 @@ async fn create_linkage(
     .bind(payload.max_clip_duration_seconds.unwrap_or(120))
     .fetch_one(&state.db_pool)
     .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    .map_err(|e| {
+        if let sqlx::Error::Database(db_err) = &e {
+            if db_err.code().as_deref() == Some("23505") {
+                return StatusCode::CONFLICT;
+            }
+        }
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
 
     Ok(Json(json!({
         "success": true,
