@@ -403,6 +403,18 @@ async fn process_clipping_jobs_parallel(
                 if e.contains("No jobs available") {
                     // No more jobs, exit loop
                     break;
+                } else if e.contains("RESOURCE_EXHAUSTED") || e.contains("Resource has been exhausted") {
+                    // Gemini quota exhausted — pause this entire cycle to prevent the
+                    // 429 death spiral (claim → fail → claim → fail → ...).
+                    // The auto-retry logic uses a 30-minute delay for 429 failures.
+                    total_failed += 1;
+                    tracing::warn!(
+                        "⏸️  Gemini quota exhausted (429). Pausing worker cycle for 120s \
+                         to let quota recover. {} jobs failed this cycle.",
+                        total_failed
+                    );
+                    sleep(Duration::from_secs(120)).await;
+                    break; // Stop claiming more jobs this cycle
                 } else {
                     total_failed += 1;
                     tracing::error!("❌ Job processing failed: {}", e);
@@ -632,12 +644,18 @@ async fn detect_stuck_jobs(app_state: &Arc<AppState>) -> Result<(), String> {
 /// skipping Gemini re-analysis, re-download, and re-extraction.
 async fn auto_retry_failed_jobs(app_state: &Arc<AppState>) -> Result<(), String> {
     // Fetch id + current_step to determine the appropriate resume point per job
+    // Jobs that failed with Gemini quota errors (429/RESOURCE_EXHAUSTED) need a longer
+    // cooldown (30 min) before retry. Other failures retry after 5 minutes.
     let retry_jobs: Vec<(i32, Option<String>)> = sqlx::query_as(
         "SELECT id, current_step FROM clipping_jobs \
          WHERE status = 'failed' \
          AND completed_at > NOW() - INTERVAL '6 hours' \
-         AND completed_at < NOW() - INTERVAL '5 minutes' \
          AND COALESCE(retry_count, 0) < 5 \
+         AND ( \
+             (error_message NOT LIKE '%RESOURCE_EXHAUSTED%' AND completed_at < NOW() - INTERVAL '5 minutes') \
+             OR \
+             (error_message LIKE '%RESOURCE_EXHAUSTED%' AND completed_at < NOW() - INTERVAL '30 minutes') \
+         ) \
          ORDER BY completed_at ASC \
          LIMIT 10"
     )

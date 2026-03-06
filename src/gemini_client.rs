@@ -3012,6 +3012,7 @@ Provide ONLY the JSON object, no markdown, no code blocks, no other text."#,
         );
 
         // Build request with YouTube fileData part and mediaResolution: MEDIA_RESOLUTION_LOW
+        // thinkingBudget: 0 disables hidden thinking tokens on gemini-2.5-flash (saves 1k-5k tokens/call)
         let request_body = serde_json::json!({
             "contents": [{
                 "role": "user",
@@ -3031,7 +3032,10 @@ Provide ONLY the JSON object, no markdown, no code blocks, no other text."#,
                 "temperature": 0.3,
                 "maxOutputTokens": 8192,
                 "responseMimeType": "application/json",
-                "mediaResolution": "MEDIA_RESOLUTION_LOW"
+                "mediaResolution": "MEDIA_RESOLUTION_LOW",
+                "thinkingConfig": {
+                    "thinkingBudget": 0
+                }
             }
         });
 
@@ -3116,37 +3120,44 @@ Provide ONLY the JSON object, no markdown, no code blocks, no other text."#,
         Err(last_error)
     }
 
-    /// Simple text generation wrapper for the clipping AI agent.
-    /// Used by ai_clipper for calls that need plain text (not structured JSON).
+    /// Simple text generation — used by Twitch mapper and other plain-text callers.
+    /// Uses raw JSON with thinkingBudget:0 to avoid burning thinking-token quota.
     pub async fn generate_text(
         &self,
         prompt: &str,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        let request = GenerateContentRequest {
-            contents: vec![Content {
-                role: Some("user".to_string()),
-                parts: vec![Part::Text { text: prompt.to_string() }],
-            }],
-            generation_config: None,
-            tools: None,
-            tool_config: None,
-            system_instruction: None,
-        };
+        let url = format!(
+            "{}/models/gemini-2.5-flash:generateContent?key={}",
+            self.base_url, self.api_key
+        );
 
-        let response = self.generate_content(request).await?;
-        let text = response
-            .candidates
-            .first()
-            .and_then(|c| c.content.as_ref())
-            .and_then(|content| content.parts.first())
-            .and_then(|part| {
-                if let Part::Text { text } = part {
-                    Some(text.clone())
-                } else {
-                    None
-                }
-            })
-            .ok_or("Gemini generate_text: no text in response")?;
+        let request_body = serde_json::json!({
+            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "temperature": 0.1,
+                "maxOutputTokens": 512,
+                "thinkingConfig": {"thinkingBudget": 0}
+            }
+        });
+
+        let response = self
+            .client
+            .post(&url)
+            .header("Content-Type", "application/json")
+            .json(&request_body)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let err = response.text().await.unwrap_or_default();
+            return Err(format!("Gemini API error: {}", err).into());
+        }
+
+        let json: serde_json::Value = response.json().await?;
+        let text = json["candidates"][0]["content"]["parts"][0]["text"]
+            .as_str()
+            .ok_or("Gemini generate_text: no text in response")?
+            .to_string();
 
         Ok(text)
     }

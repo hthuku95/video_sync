@@ -1,9 +1,9 @@
-// Stateful Gemini-based clipping agent — LangGraph-style checkpointing.
+// Stateful Gemini-based clipping agent — deterministic 5-phase pipeline with PostgreSQL checkpointing.
 //
-// Architecture mirrors LangGraph:
-//   - ClippingAgentState: business-logic struct checkpointed to PostgreSQL after every tool call.
-//   - ClippingAgentCheckpointer: save/load/delete checkpoints (crash → resume from last tool).
-//   - GeminiClippingAgent: Gemini function-calling loop (max 15 iterations).
+// Architecture:
+//   - ClippingAgentState: business-logic struct checkpointed to PostgreSQL after every phase.
+//   - ClippingAgentCheckpointer: save/load/delete checkpoints (crash → resume from last phase).
+//   - GeminiClippingAgent: deterministic pipeline — only ONE Gemini call per job (Phase A analysis).
 //
 // Gemini ONLY — no Claude references. Model split: video editing = Claude+Gemini, clipping = Gemini.
 //
@@ -17,11 +17,7 @@ use crate::clipping::{
     gemini_video_analyzer::VideoAnalysis,
     uploader::ClipUploader,
 };
-use crate::gemini_client::{
-    Content, FunctionCall, FunctionCallingConfig, FunctionCallingMode, FunctionDeclaration,
-    FunctionResponse, GenerateContentRequest, GenerationConfig, Parameters, Part, PropertyDefinition,
-    Tool, ToolConfig,
-};
+use crate::gemini_client::Content;
 use crate::jobs::{JobStatus, ProgressUpdate};
 use crate::jobs::clipping_job::{
     count_clips_posted_today, fetch_destination_channel, fetch_job_details, fetch_linkage,
@@ -220,196 +216,174 @@ impl GeminiClippingAgent {
         }
     }
 
-    /// Entry point: process one clipping job with Gemini function-calling.
-    /// Returns Ok(summary) on success, Err(reason) on failure.
+    /// Entry point: process one clipping job via deterministic 5-phase pipeline.
+    ///
+    /// Uses exactly ONE Gemini API call per job (Phase A: video analysis).
+    /// All other phases (download, extract, vectorize, upload) run without Gemini.
+    /// Crash-safe: state is checkpointed to PostgreSQL after every phase.
     pub async fn process_job(&self, job_id: i32) -> Result<String, String> {
-        let gemini = self
-            .app_state
+        // Gemini is needed for Phase A video analysis
+        self.app_state
             .gemini_client
             .as_ref()
-            .ok_or("Gemini client not configured — required for agentic clipping")?;
+            .ok_or("Gemini client not configured — required for Phase A video analysis")?;
 
-        // 1. Load checkpoint (crash resumption) or create fresh state
-        let (mut state, mut history) = self.load_or_init_state(job_id).await?;
+        // Load checkpoint (crash resumption) or create fresh state from resume_from
+        let (mut state, _history) = self.load_or_init_state(job_id).await?;
 
         tracing::info!(
-            "🤖 GeminiClippingAgent job {}: starting (checkpoint_num={}, phase_flags={:?})",
+            "🤖 GeminiClippingAgent job {}: deterministic pipeline \
+             (checkpoint_num={}, phase_flags=[{},{},{},{},{}])",
             job_id,
             state.checkpoint_num,
-            [
-                state.phase_a_complete,
-                state.phase_b_complete,
-                state.phase_c_complete,
-                state.phase_d_complete,
-                state.phase_e_complete
-            ]
+            state.phase_a_complete, state.phase_b_complete, state.phase_c_complete,
+            state.phase_d_complete, state.phase_e_complete,
         );
 
         self.send_progress(job_id, &state, "Agent started", "starting").await;
 
-        let tools = vec![Tool {
-            function_declarations: Self::get_function_declarations(),
-        }];
-
-        let system_prompt = Self::build_system_prompt(job_id);
-        let system_instruction = Some(Content {
-            parts: vec![Part::Text {
-                text: system_prompt,
-            }],
-            role: None,
-        });
-
-        // If history is empty (fresh start), seed with initial user message
-        if history.is_empty() {
-            history.push(Content {
-                parts: vec![Part::Text {
-                    text: format!(
-                        "Execute clipping job {}. Start by calling get_job_context.",
-                        job_id
-                    ),
-                }],
-                role: Some("user".to_string()),
-            });
-        }
-
-        for _iteration in 0..15 {
-            let request = GenerateContentRequest {
-                contents: history.clone(),
-                tools: Some(tools.clone()),
-                generation_config: Some(GenerationConfig {
-                    temperature: 0.1,
-                    top_k: 40,
-                    top_p: 0.9,
-                    max_output_tokens: 2048,
-                }),
-                tool_config: Some(ToolConfig {
-                    function_calling_config: FunctionCallingConfig {
-                        mode: FunctionCallingMode::Any, // Force tool call every iteration
-                    },
-                }),
-                system_instruction: system_instruction.clone(),
-            };
-
-            let response = gemini
-                .generate_content(request)
-                .await
-                .map_err(|e| format!("Gemini API error: {}", e))?;
-
-            // Extract model content and append to history
-            let model_content = response
-                .candidates
-                .first()
-                .and_then(|c| c.content.clone())
-                .ok_or("Gemini returned empty candidates")?;
-
-            history.push(model_content.clone());
-
-            // Extract function call from model content
-            let fn_call = model_content
-                .parts
-                .iter()
-                .find_map(|p| {
-                    if let Part::FunctionCall { function_call } = p {
-                        Some(function_call.clone())
-                    } else {
-                        None
+        // ── Phase A: Video analysis (ONE Gemini call per job) ────────────────
+        if !state.phase_a_complete {
+            self.send_progress(job_id, &state, "analyze_video_for_clips", "running").await;
+            match self.tool_analyze_video(&mut state, job_id).await {
+                Ok(result) => {
+                    let quality = result["overall_quality"].as_f64().unwrap_or(0.0);
+                    if quality < 0.6 {
+                        let reason = format!(
+                            "Video quality {:.2} is below minimum threshold 0.60 — skipping download",
+                            quality
+                        );
+                        let mut args = HashMap::new();
+                        args.insert("reason".to_string(), json!(reason));
+                        self.tool_mark_failed(&args, &mut state, job_id).await.ok();
+                        self.checkpointer.delete_all(job_id).await.ok();
+                        return Ok(format!("Job {} terminated: quality_too_low ({:.2})", job_id, quality));
                     }
-                })
-                .ok_or_else(|| {
-                    // No function call — model produced text; treat as completion
-                    let text = model_content
-                        .parts
-                        .iter()
-                        .find_map(|p| {
-                            if let Part::Text { text } = p {
-                                Some(text.clone())
-                            } else {
-                                None
-                            }
-                        })
-                        .unwrap_or_default();
-                    format!("Agent returned text (no tool call): {}", text)
-                });
-
-            let fn_call = match fn_call {
-                Ok(fc) => fc,
-                Err(reason) => {
-                    // Text-only response means agent is done or confused
-                    tracing::info!("GeminiClippingAgent job {}: {}", job_id, reason);
-                    break;
+                    self.advance_checkpoint(&mut state).await;
                 }
-            };
-
-            tracing::info!(
-                "🔧 GeminiClippingAgent job {}: calling tool '{}'",
-                job_id,
-                fn_call.name
-            );
-
-            // Execute tool
-            let tool_result = self.execute_tool(&fn_call, &mut state, job_id).await;
-            let tool_result_str = match &tool_result {
-                Ok(v) => v.to_string(),
-                Err(e) => json!({"success": false, "error": e}).to_string(),
-            };
-
-            // Append FunctionResponse to history
-            let mut response_map: HashMap<String, Value> =
-                serde_json::from_str(&tool_result_str).unwrap_or_default();
-            if response_map.is_empty() {
-                response_map.insert("result".to_string(), Value::String(tool_result_str.clone()));
+                Err(e) => {
+                    let mut args = HashMap::new();
+                    args.insert("reason".to_string(), json!(e));
+                    self.tool_mark_failed(&args, &mut state, job_id).await.ok();
+                    self.checkpointer.delete_all(job_id).await.ok();
+                    return Err(format!("Phase A (video analysis) failed: {}", e));
+                }
             }
-
-            history.push(Content {
-                parts: vec![Part::FunctionResponse {
-                    function_response: FunctionResponse {
-                        name: fn_call.name.clone(),
-                        response: response_map,
-                        thought_signature: fn_call.thought_signature.clone(),
-                    },
-                }],
-                role: Some("user".to_string()),
-            });
-
-            // Check terminal condition BEFORE checkpointing
-            if fn_call.name == "mark_job_complete" || fn_call.name == "mark_job_failed" {
-                state.checkpoint_num += 1;
-                self.checkpointer
-                    .save(&state, &history, Some(&fn_call.name))
-                    .await
-                    .ok();
-                self.checkpointer.delete_all(job_id).await.ok();
-
-                let summary = if fn_call.name == "mark_job_complete" {
-                    format!(
-                        "Job {} completed: {}/{} clips uploaded",
-                        job_id, state.clips_uploaded, state.clips_total
-                    )
-                } else {
-                    format!(
-                        "Job {} failed: {}",
-                        job_id,
-                        state.error_message.as_deref().unwrap_or("unknown error")
-                    )
-                };
-                return Ok(summary);
-            }
-
-            // Checkpoint after every non-terminal tool call
-            state.checkpoint_num += 1;
-            state.step_count += 1;
-            state.last_checkpoint_at = Utc::now();
-            self.checkpointer.save(&state, &history, None).await.ok();
-
-            // Send WebSocket progress
-            self.send_progress(job_id, &state, &fn_call.name, "running")
-                .await;
         }
 
-        Err(format!(
-            "GeminiClippingAgent job {} exceeded 15 iterations without terminal call",
-            job_id
+        // ── Phase B: Download video (with Twitch fallback) ───────────────────
+        if !state.phase_b_complete {
+            self.send_progress(job_id, &state, "download_video", "running").await;
+            match self.tool_download_video(&mut state, job_id).await {
+                Ok(ref result) if result["twitch_fallback"].as_bool() == Some(true) => {
+                    // Twitch fallback: re-run Phase A on Twitch URL, then re-download
+                    tracing::info!("Job {}: Twitch fallback triggered — re-analyzing Twitch VOD", job_id);
+                    match self.tool_analyze_video(&mut state, job_id).await {
+                        Ok(reresult) => {
+                            let quality = reresult["overall_quality"].as_f64().unwrap_or(0.0);
+                            if quality < 0.6 {
+                                let mut args = HashMap::new();
+                                args.insert("reason".to_string(), json!("Twitch VOD quality below threshold"));
+                                self.tool_mark_failed(&args, &mut state, job_id).await.ok();
+                                self.checkpointer.delete_all(job_id).await.ok();
+                                return Ok(format!("Job {} terminated: twitch_vod_quality_too_low", job_id));
+                            }
+                        }
+                        Err(e) => {
+                            let mut args = HashMap::new();
+                            args.insert(
+                                "reason".to_string(),
+                                json!(format!("Twitch re-analysis failed: {}", e)),
+                            );
+                            self.tool_mark_failed(&args, &mut state, job_id).await.ok();
+                            self.checkpointer.delete_all(job_id).await.ok();
+                            return Err(format!("Phase A (Twitch fallback) failed: {}", e));
+                        }
+                    }
+                    // Download the Twitch VOD
+                    match self.tool_download_video(&mut state, job_id).await {
+                        Ok(_) => { self.advance_checkpoint(&mut state).await; }
+                        Err(e) => {
+                            let mut args = HashMap::new();
+                            args.insert("reason".to_string(), json!(e));
+                            self.tool_mark_failed(&args, &mut state, job_id).await.ok();
+                            self.checkpointer.delete_all(job_id).await.ok();
+                            return Err(format!("Phase B (Twitch download) failed: {}", e));
+                        }
+                    }
+                }
+                Ok(_) => { self.advance_checkpoint(&mut state).await; }
+                Err(e) => {
+                    let mut args = HashMap::new();
+                    args.insert("reason".to_string(), json!(e));
+                    self.tool_mark_failed(&args, &mut state, job_id).await.ok();
+                    self.checkpointer.delete_all(job_id).await.ok();
+                    return Err(format!("Phase B (download) failed: {}", e));
+                }
+            }
+        }
+
+        // ── Phase C: Extract clips via FFmpeg ────────────────────────────────
+        if !state.phase_c_complete {
+            self.send_progress(job_id, &state, "extract_clips_from_video", "running").await;
+            match self.tool_extract_clips(&mut state, job_id).await {
+                Ok(_) => { self.advance_checkpoint(&mut state).await; }
+                Err(e) => {
+                    let mut args = HashMap::new();
+                    args.insert("reason".to_string(), json!(e));
+                    self.tool_mark_failed(&args, &mut state, job_id).await.ok();
+                    self.checkpointer.delete_all(job_id).await.ok();
+                    return Err(format!("Phase C (clip extraction) failed: {}", e));
+                }
+            }
+        }
+
+        // ── Phase D: Vectorize (non-fatal — Qdrant outage must not block uploads) ─
+        if !state.phase_d_complete {
+            self.send_progress(job_id, &state, "vectorize_clips", "running").await;
+            self.tool_vectorize_clips(&mut state, job_id).await.ok();
+            state.phase_d_complete = true;
+            self.advance_checkpoint(&mut state).await;
+        }
+
+        // ── Phase E: Upload clips to YouTube ─────────────────────────────────
+        if !state.phase_e_complete {
+            self.send_progress(job_id, &state, "upload_clips_to_youtube", "running").await;
+            match self.tool_upload_clips(&mut state, job_id).await {
+                Ok(result) => {
+                    state.clips_uploaded = result["uploaded"].as_i64().unwrap_or(0) as i32;
+                    state.clips_total = result["total"].as_i64().unwrap_or(0) as i32;
+                    self.advance_checkpoint(&mut state).await;
+                }
+                Err(e) => {
+                    let mut args = HashMap::new();
+                    args.insert("reason".to_string(), json!(e));
+                    self.tool_mark_failed(&args, &mut state, job_id).await.ok();
+                    self.checkpointer.delete_all(job_id).await.ok();
+                    return Err(format!("Phase E (upload) failed: {}", e));
+                }
+            }
+        }
+
+        // ── Mark complete ─────────────────────────────────────────────────────
+        let mut complete_args = HashMap::new();
+        complete_args.insert("clips_uploaded".to_string(), json!(state.clips_uploaded));
+        complete_args.insert("clips_total".to_string(), json!(state.clips_total));
+        self.tool_mark_complete(&complete_args, &mut state, job_id).await?;
+        self.checkpointer.delete_all(job_id).await.ok();
+
+        Ok(format!(
+            "Job {} completed: {}/{} clips uploaded",
+            job_id, state.clips_uploaded, state.clips_total
         ))
+    }
+
+    /// Persist state to DB after a phase completes. No conversation history in deterministic mode.
+    async fn advance_checkpoint(&self, state: &mut ClippingAgentState) {
+        state.checkpoint_num += 1;
+        state.step_count += 1;
+        state.last_checkpoint_at = Utc::now();
+        self.checkpointer.save(state, &[], None).await.ok();
     }
 
     /// Load checkpoint from DB (crash resumption) or init fresh state from clipping_jobs.resume_from.
@@ -498,199 +472,8 @@ impl GeminiClippingAgent {
     }
 
     // =========================================================================
-    // Gemini tool definitions
-    // =========================================================================
-
-    fn prop(prop_type: &str, description: &str) -> PropertyDefinition {
-        PropertyDefinition {
-            prop_type: prop_type.to_string(),
-            description: description.to_string(),
-            items: None,
-        }
-    }
-
-    fn get_function_declarations() -> Vec<FunctionDeclaration> {
-        vec![
-            FunctionDeclaration {
-                name: "get_job_context".to_string(),
-                description: "Fetch current job state: status, phase flags, source_video_id, linkage config. ALWAYS call this first.".to_string(),
-                parameters: Parameters {
-                    param_type: "object".to_string(),
-                    properties: HashMap::new(),
-                    required: vec![],
-                },
-            },
-            FunctionDeclaration {
-                name: "analyze_video_for_clips".to_string(),
-                description: "Phase A: Gemini video analysis for viral moments. Saves analysis to DB. Returns overall_quality and moment counts. Skip if phase_a_complete=true.".to_string(),
-                parameters: Parameters {
-                    param_type: "object".to_string(),
-                    properties: HashMap::new(),
-                    required: vec![],
-                },
-            },
-            FunctionDeclaration {
-                name: "download_video".to_string(),
-                description: "Phase B: Download the YouTube video. Saves local path to DB. Skip if phase_b_complete=true.".to_string(),
-                parameters: Parameters {
-                    param_type: "object".to_string(),
-                    properties: HashMap::new(),
-                    required: vec![],
-                },
-            },
-            FunctionDeclaration {
-                name: "extract_clips_from_video".to_string(),
-                description: "Phase C: Extract clips via FFmpeg from viral moments stored in DB. Saves clips to extracted_clips table. Skip if phase_c_complete=true.".to_string(),
-                parameters: Parameters {
-                    param_type: "object".to_string(),
-                    properties: HashMap::new(),
-                    required: vec![],
-                },
-            },
-            FunctionDeclaration {
-                name: "vectorize_clips".to_string(),
-                description: "Phase D: Store one video embedding in Qdrant video_content collection. Non-fatal if Qdrant is unavailable. Skip if phase_d_complete=true.".to_string(),
-                parameters: Parameters {
-                    param_type: "object".to_string(),
-                    properties: HashMap::new(),
-                    required: vec![],
-                },
-            },
-            FunctionDeclaration {
-                name: "upload_clips_to_youtube".to_string(),
-                description: "Phase E: Upload saved clips as YouTube Shorts to destination channel. Returns uploaded and total counts. Skip if phase_e_complete=true.".to_string(),
-                parameters: Parameters {
-                    param_type: "object".to_string(),
-                    properties: HashMap::new(),
-                    required: vec![],
-                },
-            },
-            FunctionDeclaration {
-                name: "mark_job_complete".to_string(),
-                description: "TERMINAL: Mark job as completed, update linkage stats, insert video into clipped_source_videos. Call after phase_e_complete=true.".to_string(),
-                parameters: Parameters {
-                    param_type: "object".to_string(),
-                    properties: {
-                        let mut m = HashMap::new();
-                        m.insert("clips_uploaded".to_string(), Self::prop("integer", "Number of clips successfully uploaded"));
-                        m.insert("clips_total".to_string(), Self::prop("integer", "Total number of clips extracted"));
-                        m
-                    },
-                    required: vec!["clips_uploaded".to_string(), "clips_total".to_string()],
-                },
-            },
-            FunctionDeclaration {
-                name: "mark_job_failed".to_string(),
-                description: "TERMINAL: Mark job as failed with a reason. Call if any tool returns success=false.".to_string(),
-                parameters: Parameters {
-                    param_type: "object".to_string(),
-                    properties: {
-                        let mut m = HashMap::new();
-                        m.insert("reason".to_string(), Self::prop("string", "Human-readable failure reason"));
-                        m
-                    },
-                    required: vec!["reason".to_string()],
-                },
-            },
-        ]
-    }
-
-    fn build_system_prompt(job_id: i32) -> String {
-        format!(
-            r#"You are an automated YouTube clipping pipeline executor for job {job_id}.
-
-ALWAYS start by calling get_job_context. It returns phase completion flags.
-
-Pipeline order — skip phases where phase_X_complete = true:
-1. analyze_video_for_clips  → check overall_quality in result
-2. Quality gate: if overall_quality < 0.6, call mark_job_failed with reason "quality_too_low"
-3. download_video
-4. extract_clips_from_video
-5. vectorize_clips
-6. upload_clips_to_youtube
-7. mark_job_complete (with clips_uploaded and clips_total from upload result)
-
-TWITCH FALLBACK: If download_video returns {{"success": false, "twitch_fallback": true}},
-it means the system has already switched to a Twitch VOD source. You must:
-  a) Call analyze_video_for_clips again (uses the Twitch URL automatically)
-  b) Call download_video again (downloads the Twitch VOD)
-  c) Continue with extract_clips_from_video → vectorize_clips → upload_clips_to_youtube → mark_job_complete
-
-Error handling: if any tool returns "success": false without twitch_fallback=true, call mark_job_failed.
-Never call a tool for a phase that is already complete (phase_X_complete = true).
-You MUST call a tool on every response — never produce text-only responses.
-"#,
-            job_id = job_id
-        )
-    }
-
-    // =========================================================================
-    // Tool dispatch
-    // =========================================================================
-
-    async fn execute_tool(
-        &self,
-        fn_call: &FunctionCall,
-        state: &mut ClippingAgentState,
-        job_id: i32,
-    ) -> Result<Value, String> {
-        match fn_call.name.as_str() {
-            "get_job_context" => self.tool_get_job_context(state, job_id).await,
-            "analyze_video_for_clips" => self.tool_analyze_video(state, job_id).await,
-            "download_video" => self.tool_download_video(state, job_id).await,
-            "extract_clips_from_video" => self.tool_extract_clips(state, job_id).await,
-            "vectorize_clips" => self.tool_vectorize_clips(state, job_id).await,
-            "upload_clips_to_youtube" => self.tool_upload_clips(state, job_id).await,
-            "mark_job_complete" => self.tool_mark_complete(&fn_call.args, state, job_id).await,
-            "mark_job_failed" => self.tool_mark_failed(&fn_call.args, state, job_id).await,
-            other => Err(format!("Unknown tool: {}", other)),
-        }
-    }
-
-    // =========================================================================
     // Tool implementations
     // =========================================================================
-
-    async fn tool_get_job_context(
-        &self,
-        state: &ClippingAgentState,
-        job_id: i32,
-    ) -> Result<Value, String> {
-        let job = fetch_job_details(job_id, &self.app_state.db_pool).await?;
-        let linkage = fetch_linkage(job.linkage_id, &self.app_state.db_pool).await?;
-        // Determine the active video URL (Twitch override or YouTube default)
-        let active_url = state
-            .active_video_url
-            .clone()
-            .or_else(|| job.active_video_url.clone())
-            .unwrap_or_else(|| format!("https://youtube.com/watch?v={}", job.source_video_id));
-
-        Ok(json!({
-            "success": true,
-            "job_id": job_id,
-            "status": job.status,
-            "source_video_id": job.source_video_id,
-            "source_video_url": format!("https://youtube.com/watch?v={}", job.source_video_id),
-            "active_video_url": active_url,
-            "source_video_title": job.source_video_title,
-            "local_video_path": job.local_video_path,
-            "retry_count": job.retry_count,
-            "has_viral_moments_in_db": job.viral_moments_json.is_some(),
-            "used_twitch_fallback": state.twitch_fallback_triggered || job.used_twitch_fallback,
-            "twitch_video_id": job.twitch_video_id,
-            "linkage_id": linkage.id,
-            "clips_per_video": linkage.clips_per_video,
-            "min_clip_duration_secs": linkage.min_clip_duration_seconds,
-            "max_clip_duration_secs": linkage.max_clip_duration_seconds,
-            "destination_channel_id": linkage.destination_channel_id,
-            // Phase completion flags from in-memory state (accurate after crash resumption)
-            "phase_a_complete": state.phase_a_complete,
-            "phase_b_complete": state.phase_b_complete,
-            "phase_c_complete": state.phase_c_complete,
-            "phase_d_complete": state.phase_d_complete,
-            "phase_e_complete": state.phase_e_complete,
-        }))
-    }
 
     async fn tool_analyze_video(
         &self,
