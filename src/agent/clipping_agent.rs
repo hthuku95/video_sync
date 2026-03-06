@@ -62,6 +62,12 @@ pub struct ClippingAgentState {
     pub terminal_status: Option<String>, // "completed", "no_clips_found", "failed"
     pub error_message: Option<String>,
 
+    // Twitch fallback
+    /// True once we have switched from YouTube to a Twitch VOD.
+    pub twitch_fallback_triggered: bool,
+    /// When set, this URL overrides the YouTube URL for Phase A and Phase B.
+    pub active_video_url: Option<String>,
+
     // Metadata
     pub step_count: usize,
     pub started_at: DateTime<Utc>,
@@ -604,7 +610,13 @@ Pipeline order — skip phases where phase_X_complete = true:
 6. upload_clips_to_youtube
 7. mark_job_complete (with clips_uploaded and clips_total from upload result)
 
-Error handling: if any tool returns "success": false, immediately call mark_job_failed.
+TWITCH FALLBACK: If download_video returns {{"success": false, "twitch_fallback": true}},
+it means the system has already switched to a Twitch VOD source. You must:
+  a) Call analyze_video_for_clips again (uses the Twitch URL automatically)
+  b) Call download_video again (downloads the Twitch VOD)
+  c) Continue with extract_clips_from_video → vectorize_clips → upload_clips_to_youtube → mark_job_complete
+
+Error handling: if any tool returns "success": false without twitch_fallback=true, call mark_job_failed.
 Never call a tool for a phase that is already complete (phase_X_complete = true).
 You MUST call a tool on every response — never produce text-only responses.
 "#,
@@ -646,16 +658,26 @@ You MUST call a tool on every response — never produce text-only responses.
     ) -> Result<Value, String> {
         let job = fetch_job_details(job_id, &self.app_state.db_pool).await?;
         let linkage = fetch_linkage(job.linkage_id, &self.app_state.db_pool).await?;
+        // Determine the active video URL (Twitch override or YouTube default)
+        let active_url = state
+            .active_video_url
+            .clone()
+            .or_else(|| job.active_video_url.clone())
+            .unwrap_or_else(|| format!("https://youtube.com/watch?v={}", job.source_video_id));
+
         Ok(json!({
             "success": true,
             "job_id": job_id,
             "status": job.status,
             "source_video_id": job.source_video_id,
             "source_video_url": format!("https://youtube.com/watch?v={}", job.source_video_id),
+            "active_video_url": active_url,
             "source_video_title": job.source_video_title,
             "local_video_path": job.local_video_path,
             "retry_count": job.retry_count,
             "has_viral_moments_in_db": job.viral_moments_json.is_some(),
+            "used_twitch_fallback": state.twitch_fallback_triggered || job.used_twitch_fallback,
+            "twitch_video_id": job.twitch_video_id,
             "linkage_id": linkage.id,
             "clips_per_video": linkage.clips_per_video,
             "min_clip_duration_secs": linkage.min_clip_duration_seconds,
@@ -681,7 +703,13 @@ You MUST call a tool on every response — never produce text-only responses.
 
         let job = fetch_job_details(job_id, &self.app_state.db_pool).await?;
         let linkage = fetch_linkage(job.linkage_id, &self.app_state.db_pool).await?;
-        let video_url = format!("https://youtube.com/watch?v={}", job.source_video_id);
+
+        // Use Twitch URL override if fallback was triggered, otherwise default to YouTube
+        let video_url = state
+            .active_video_url
+            .clone()
+            .or_else(|| job.active_video_url.clone())
+            .unwrap_or_else(|| format!("https://youtube.com/watch?v={}", job.source_video_id));
 
         update_job_status(job_id, "analyzing", 10, None, &self.app_state.db_pool).await?;
 
@@ -743,11 +771,117 @@ You MUST call a tool on every response — never produce text-only responses.
         }
 
         let job = fetch_job_details(job_id, &self.app_state.db_pool).await?;
-        let video_url = format!("https://youtube.com/watch?v={}", job.source_video_id);
+
+        // Determine which URL to download: Twitch override or default YouTube
+        let video_url = state
+            .active_video_url
+            .clone()
+            .or_else(|| job.active_video_url.clone())
+            .unwrap_or_else(|| format!("https://youtube.com/watch?v={}", job.source_video_id));
+
         let path = format!("downloads/clipping_{}_{}.mp4", job_id, job.source_video_id);
 
         update_job_status(job_id, "downloading", 25, None, &self.app_state.db_pool).await?;
 
+        let download_result = self.download_via_apify(&video_url, &path).await;
+
+        match download_result {
+            Ok(_) => {
+                // Validate file
+                if !std::path::Path::new(&path).exists() {
+                    return Err(format!("Downloaded file not found: {}", path));
+                }
+                match crate::core::validate_video_file(&path) {
+                    Ok(true) => {}
+                    _ => {
+                        let _ = tokio::fs::remove_file(&path).await;
+                        return Err(format!("Downloaded video is corrupted: {}", path));
+                    }
+                }
+
+                // If this was a Twitch fallback download, record it in clipped_twitch_videos
+                if state.twitch_fallback_triggered {
+                    if let Some(twitch_vid_id) = &job.twitch_video_id {
+                        self.record_clipped_twitch_video(job_id, twitch_vid_id, &job.source_video_title)
+                            .await;
+                    }
+                }
+
+                // Persist path to DB
+                sqlx::query(
+                    "UPDATE clipping_jobs SET local_video_path = $1, started_at = $2 WHERE id = $3",
+                )
+                .bind(&path)
+                .bind(Utc::now())
+                .bind(job_id)
+                .execute(&self.app_state.db_pool)
+                .await
+                .ok();
+
+                update_job_status(job_id, "downloaded", 40, None, &self.app_state.db_pool).await?;
+
+                state.phase_b_complete = true;
+                state.local_video_path = Some(path.clone());
+
+                Ok(json!({"success": true, "video_path": path}))
+            }
+            Err(download_err) => {
+                // Already on Twitch fallback — give up
+                if state.twitch_fallback_triggered {
+                    return Err(format!(
+                        "Twitch download also failed: {}",
+                        download_err
+                    ));
+                }
+
+                // Try Twitch fallback
+                tracing::warn!(
+                    "Job {}: YouTube download failed ({}), attempting Twitch fallback",
+                    job_id,
+                    download_err
+                );
+
+                match self.pick_twitch_vod(job_id).await {
+                    Some(twitch_vod) => {
+                        // Persist fallback metadata to DB
+                        sqlx::query(
+                            "UPDATE clipping_jobs
+                             SET used_twitch_fallback = true,
+                                 twitch_video_id = $1,
+                                 active_video_url = $2
+                             WHERE id = $3",
+                        )
+                        .bind(&twitch_vod.id)
+                        .bind(&twitch_vod.url)
+                        .bind(job_id)
+                        .execute(&self.app_state.db_pool)
+                        .await
+                        .ok();
+
+                        // Reset Phase A so Gemini re-analyzes the Twitch video
+                        state.twitch_fallback_triggered = true;
+                        state.active_video_url = Some(twitch_vod.url.clone());
+                        state.phase_a_complete = false;
+
+                        Ok(json!({
+                            "success": false,
+                            "twitch_fallback": true,
+                            "twitch_url": twitch_vod.url,
+                            "message": "YouTube download failed. Switched to Twitch VOD. \
+                                        Call analyze_video_for_clips then download_video again."
+                        }))
+                    }
+                    None => Err(format!(
+                        "All YouTube download strategies failed and no Twitch mapping exists: {}",
+                        download_err
+                    )),
+                }
+            }
+        }
+    }
+
+    /// Call Apify (the existing download path) for any URL.
+    async fn download_via_apify(&self, video_url: &str, path: &str) -> Result<(), String> {
         let apify_token =
             std::env::var("APIFY_TOKEN").map_err(|_| "APIFY_TOKEN not configured")?;
         let apify_actor = std::env::var("APIFY_YOUTUBE_CLIENT_ACTOR")
@@ -755,40 +889,125 @@ You MUST call a tool on every response — never produce text-only responses.
 
         let apify = ApifyClient::new(apify_token, apify_actor);
         apify
-            .download_video(&video_url, &path)
+            .download_video(video_url, path)
             .await
-            .map_err(|e| format!("Download failed: {}", e))?;
+            .map(|_| ()) // discard VideoDownloadResult; file is at `path`
+            .map_err(|e| format!("Download failed: {}", e))
+    }
 
-        if !std::path::Path::new(&path).exists() {
-            return Err(format!("Downloaded file not found: {}", path));
-        }
+    /// Find the oldest unclipped Twitch VOD for the mapped Twitch channel of this job's
+    /// YouTube source channel. Returns `None` if no mapping exists or all VODs are used.
+    async fn pick_twitch_vod(&self, job_id: i32) -> Option<crate::twitch_client::TwitchVideo> {
+        let twitch_client = self.app_state.twitch_client.as_ref()?;
 
-        match crate::core::validate_video_file(&path) {
-            Ok(true) => {}
-            _ => {
-                let _ = tokio::fs::remove_file(&path).await;
-                return Err(format!("Downloaded video is corrupted: {}", path));
+        // Get the job to find its linkage → source channel → twitch mapping
+        let job = fetch_job_details(job_id, &self.app_state.db_pool).await.ok()?;
+        let linkage = fetch_linkage(job.linkage_id, &self.app_state.db_pool).await.ok()?;
+
+        // Resolve: youtube_source_channel → youtube_twitch_channel_mappings → twitch_source_channels
+        let row: Option<(i32, String)> = sqlx::query_as::<_, (i32, String)>(
+            "SELECT tsc.id, tsc.broadcaster_id
+             FROM youtube_twitch_channel_mappings ytm
+             JOIN twitch_source_channels tsc ON tsc.id = ytm.twitch_source_channel_id
+             WHERE ytm.youtube_source_channel_id = $1",
+        )
+        .bind(linkage.source_channel_id)
+        .fetch_optional(&self.app_state.db_pool)
+        .await
+        .ok()?;
+
+        let (twitch_db_id, broadcaster_id) = row?;
+
+        // Paginate through Twitch VODs; prefer oldest unclipped (FIFO)
+        let mut cursor: Option<String> = None;
+        let mut all_candidates: Vec<crate::twitch_client::TwitchVideo> = Vec::new();
+
+        for _page in 0..5 {
+            match twitch_client
+                .get_videos(&broadcaster_id, cursor.as_deref(), 20)
+                .await
+            {
+                Ok((videos, next_cursor)) => {
+                    if videos.is_empty() {
+                        break;
+                    }
+                    all_candidates.extend(videos);
+                    cursor = next_cursor;
+                    if cursor.is_none() {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Twitch get_videos failed for job {}: {}", job_id, e);
+                    break;
+                }
             }
         }
 
-        // Persist path to DB
-        sqlx::query(
-            "UPDATE clipping_jobs SET local_video_path = $1, started_at = $2 WHERE id = $3",
+        if all_candidates.is_empty() {
+            tracing::info!("No Twitch VODs found for broadcaster {}", broadcaster_id);
+            return None;
+        }
+
+        // Fetch IDs of already-clipped VODs for this channel
+        let used_ids: Vec<String> = sqlx::query_scalar(
+            "SELECT video_id FROM clipped_twitch_videos WHERE twitch_channel_id = $1",
         )
-        .bind(&path)
-        .bind(Utc::now())
-        .bind(job_id)
-        .execute(&self.app_state.db_pool)
+        .bind(twitch_db_id)
+        .fetch_all(&self.app_state.db_pool)
         .await
-        .ok();
+        .unwrap_or_default();
 
-        update_job_status(job_id, "downloaded", 40, None, &self.app_state.db_pool).await?;
+        // Filter out used VODs, sort oldest first
+        let mut candidates: Vec<crate::twitch_client::TwitchVideo> = all_candidates
+            .into_iter()
+            .filter(|v| !used_ids.contains(&v.id))
+            .collect();
 
-        // Update state
-        state.phase_b_complete = true;
-        state.local_video_path = Some(path.clone());
+        candidates.sort_by_key(|v| v.published_at);
 
-        Ok(json!({"success": true, "video_path": path}))
+        candidates.into_iter().next()
+    }
+
+    /// Record a Twitch VOD as clipped so it won't be reused.
+    async fn record_clipped_twitch_video(
+        &self,
+        job_id: i32,
+        twitch_video_id: &str,
+        video_title: &Option<String>,
+    ) {
+        // Look up the twitch_channel_id via the job's linkage
+        let channel_id: Option<i32> = async {
+            let job = fetch_job_details(job_id, &self.app_state.db_pool).await.ok()?;
+            let linkage = fetch_linkage(job.linkage_id, &self.app_state.db_pool).await.ok()?;
+            let row: (i32,) = sqlx::query_as::<_, (i32,)>(
+                "SELECT tsc.id FROM youtube_twitch_channel_mappings ytm
+                 JOIN twitch_source_channels tsc ON tsc.id = ytm.twitch_source_channel_id
+                 WHERE ytm.youtube_source_channel_id = $1",
+            )
+            .bind(linkage.source_channel_id)
+            .fetch_optional(&self.app_state.db_pool)
+            .await
+            .ok()??;
+            Some(row.0)
+        }
+        .await;
+
+        if let Some(tcid) = channel_id {
+            sqlx::query(
+                "INSERT INTO clipped_twitch_videos
+                     (twitch_channel_id, video_id, video_title, clipping_job_id)
+                 VALUES ($1, $2, $3, $4)
+                 ON CONFLICT DO NOTHING",
+            )
+            .bind(tcid)
+            .bind(twitch_video_id)
+            .bind(video_title.as_deref().unwrap_or(""))
+            .bind(job_id)
+            .execute(&self.app_state.db_pool)
+            .await
+            .ok();
+        }
     }
 
     async fn tool_extract_clips(

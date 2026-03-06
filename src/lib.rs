@@ -11,6 +11,7 @@ pub mod voyage_embeddings;
 pub mod elevenlabs_client;
 pub mod youtube_client;
 pub mod youtube_analytics_client;
+pub mod twitch_client;
 pub mod handlers;
 pub mod jobs;
 pub mod workflow;
@@ -60,4 +61,5 @@ pub struct AppState {
     pub job_manager: jobs::SharedJobManager,
     pub workflow_checkpointer: Option<workflow::checkpoint::WorkflowCheckpointer>,
     pub token_manager: Option<Arc<token_manager::TokenManager>>,
+    pub twitch_client: Option<Arc<twitch_client::TwitchClient>>,
 }

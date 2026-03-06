@@ -68,6 +68,57 @@ pub struct ClippingJob {
     /// Values: "analyzed" (skip to Phase B), "downloaded" (skip to Phase C),
     /// "clips_extracted" (skip to Phase E), or NULL (start from Phase A).
     pub resume_from: Option<String>,
+    /// True when this job used a Twitch VOD instead of the YouTube source video.
+    pub used_twitch_fallback: bool,
+    /// Twitch video ID used as fallback source (if any).
+    pub twitch_video_id: Option<String>,
+    /// Overrides source_video_id URL when Twitch fallback is active.
+    pub active_video_url: Option<String>,
+}
+
+// ─────────────────────────── Twitch models ────────────────────────────────────
+
+/// A Twitch broadcaster account added as a potential fallback source.
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct TwitchSourceChannel {
+    pub id: i32,
+    pub broadcaster_id: String,
+    pub broadcaster_login: String,
+    pub display_name: String,
+    pub profile_image_url: Option<String>,
+    pub is_active: bool,
+    pub last_polled_at: Option<DateTime<Utc>>,
+    pub last_video_checked: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// 1:1 mapping between a YouTube source channel and its Twitch equivalent.
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct YoutubeTwitchMapping {
+    pub id: i32,
+    pub youtube_source_channel_id: i32,
+    pub twitch_source_channel_id: i32,
+    pub created_at: DateTime<Utc>,
+}
+
+// ─────────────────────────── Twitch request DTOs ──────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct SearchTwitchChannelsRequest {
+    pub query: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AddTwitchSourceChannelRequest {
+    /// Twitch broadcaster_id (numeric string) returned by the search endpoint.
+    pub broadcaster_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateTwitchMappingRequest {
+    pub youtube_source_channel_id: i32,
+    pub twitch_source_channel_id: i32,
 }
 
 /// Extracted clip from long-form video

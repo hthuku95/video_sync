@@ -61,6 +61,28 @@ pub fn clipping_routes() -> Router {
         .route("/api/clipping/clips/:id/repost", post(repost_clip))
         // Access check endpoint
         .route("/api/clipping/access-check", get(check_access))
+        // Twitch source channels
+        .route(
+            "/api/clipping/twitch/source-channels",
+            get(list_twitch_source_channels).post(add_twitch_source_channel),
+        )
+        .route(
+            "/api/clipping/twitch/source-channels/search",
+            post(search_twitch_channels),
+        )
+        .route(
+            "/api/clipping/twitch/source-channels/:id",
+            delete(remove_twitch_source_channel),
+        )
+        // Twitch ↔ YouTube mappings
+        .route(
+            "/api/clipping/twitch/mappings",
+            get(list_twitch_mappings).post(create_twitch_mapping),
+        )
+        .route(
+            "/api/clipping/twitch/mappings/:id",
+            delete(delete_twitch_mapping),
+        )
         // All API routes protected
         .layer(axum::middleware::from_fn(clipping_access_middleware))
         .layer(axum::middleware::from_fn(auth_middleware));
@@ -877,4 +899,342 @@ async fn check_access() -> Json<Value> {
     Json(json!({
         "has_access": true
     }))
+}
+
+// ─────────────────────────── Twitch handlers ─────────────────────────────────
+
+/// POST /api/clipping/twitch/source-channels/search
+/// Search Twitch for channels matching a query. Does NOT write to DB.
+async fn search_twitch_channels(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(body): Json<crate::clipping::models::SearchTwitchChannelsRequest>,
+) -> impl IntoResponse {
+    let twitch = match &state.twitch_client {
+        Some(c) => c,
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({"error": "Twitch client not configured"})),
+            )
+                .into_response();
+        }
+    };
+
+    match twitch.search_channels(&body.query, 10).await {
+        Ok(channels) => (StatusCode::OK, Json(json!({"channels": channels}))).into_response(),
+        Err(e) => (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({"error": format!("Twitch search failed: {}", e)})),
+        )
+            .into_response(),
+    }
+}
+
+/// POST /api/clipping/twitch/source-channels
+/// Add a Twitch channel to twitch_source_channels table.
+async fn add_twitch_source_channel(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(body): Json<crate::clipping::models::AddTwitchSourceChannelRequest>,
+) -> impl IntoResponse {
+    let twitch = match &state.twitch_client {
+        Some(c) => c,
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({"error": "Twitch client not configured"})),
+            )
+                .into_response();
+        }
+    };
+
+    // Fetch full channel metadata from Twitch by broadcaster_id via user lookup
+    // (broadcaster_id is numeric; look up by querying /users?id= instead of ?login=)
+    let user_resp = state
+        .twitch_client
+        .as_ref()
+        .unwrap()
+        .get_user_by_login(&body.broadcaster_id)
+        .await;
+
+    // Actually we need to look up by broadcaster ID. The TwitchClient only has get_user_by_login.
+    // We'll search channels instead to resolve the metadata.
+    let channel = match twitch.search_channels(&body.broadcaster_id, 1).await {
+        Ok(mut results) if !results.is_empty() => {
+            // Match exact broadcaster_id
+            results
+                .into_iter()
+                .find(|c| c.broadcaster_id == body.broadcaster_id)
+                .or_else(|| {
+                    // fallback: just use the first result
+                    None
+                })
+        }
+        _ => None,
+    };
+
+    let channel = match channel {
+        Some(c) => c,
+        None => {
+            // Try by login name as fallback
+            match user_resp {
+                Ok(Some(u)) => u,
+                _ => {
+                    return (
+                        StatusCode::NOT_FOUND,
+                        Json(json!({"error": "Twitch channel not found"})),
+                    )
+                        .into_response();
+                }
+            }
+        }
+    };
+
+    match sqlx::query_as::<_, crate::clipping::models::TwitchSourceChannel>(
+        "INSERT INTO twitch_source_channels
+             (broadcaster_id, broadcaster_login, display_name, profile_image_url)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (broadcaster_id) DO UPDATE
+           SET broadcaster_login = EXCLUDED.broadcaster_login,
+               display_name      = EXCLUDED.display_name,
+               profile_image_url = EXCLUDED.profile_image_url,
+               updated_at        = NOW()
+         RETURNING *",
+    )
+    .bind(&channel.broadcaster_id)
+    .bind(&channel.broadcaster_login)
+    .bind(&channel.display_name)
+    .bind(&channel.profile_image_url)
+    .fetch_one(&state.db_pool)
+    .await
+    {
+        Ok(row) => (StatusCode::CREATED, Json(json!(row))).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": format!("DB insert failed: {}", e)})),
+        )
+            .into_response(),
+    }
+}
+
+/// GET /api/clipping/twitch/source-channels
+/// List all Twitch source channels, annotated with their mapped YouTube channel (if any).
+async fn list_twitch_source_channels(
+    Extension(state): Extension<Arc<AppState>>,
+) -> impl IntoResponse {
+    let rows = sqlx::query(
+        "SELECT tsc.*,
+                ysc.channel_name AS mapped_youtube_channel_name
+         FROM twitch_source_channels tsc
+         LEFT JOIN youtube_twitch_channel_mappings ytm ON ytm.twitch_source_channel_id = tsc.id
+         LEFT JOIN youtube_source_channels ysc ON ysc.id = ytm.youtube_source_channel_id
+         ORDER BY tsc.created_at DESC",
+    )
+    .fetch_all(&state.db_pool)
+    .await;
+
+    match rows {
+        Ok(rows) => {
+            let channels: Vec<Value> = rows
+                .iter()
+                .map(|r| {
+                    json!({
+                        "id": r.try_get::<i32, _>("id").unwrap_or(0),
+                        "broadcaster_id": r.try_get::<String, _>("broadcaster_id").unwrap_or_default(),
+                        "broadcaster_login": r.try_get::<String, _>("broadcaster_login").unwrap_or_default(),
+                        "display_name": r.try_get::<String, _>("display_name").unwrap_or_default(),
+                        "profile_image_url": r.try_get::<Option<String>, _>("profile_image_url").ok().flatten(),
+                        "is_active": r.try_get::<bool, _>("is_active").unwrap_or(true),
+                        "mapped_youtube_channel_name": r.try_get::<Option<String>, _>("mapped_youtube_channel_name").ok().flatten(),
+                        "created_at": r.try_get::<DateTime<Utc>, _>("created_at").ok(),
+                    })
+                })
+                .collect();
+            Json(json!({"channels": channels})).into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": format!("DB query failed: {}", e)})),
+        )
+            .into_response(),
+    }
+}
+
+/// DELETE /api/clipping/twitch/source-channels/:id
+async fn remove_twitch_source_channel(
+    Path(id): Path<i32>,
+    Extension(state): Extension<Arc<AppState>>,
+) -> impl IntoResponse {
+    match sqlx::query("DELETE FROM twitch_source_channels WHERE id = $1")
+        .bind(id)
+        .execute(&state.db_pool)
+        .await
+    {
+        Ok(r) if r.rows_affected() > 0 => {
+            Json(json!({"message": "Twitch channel removed"})).into_response()
+        }
+        Ok(_) => (StatusCode::NOT_FOUND, Json(json!({"error": "Not found"}))).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": format!("DB error: {}", e)})),
+        )
+            .into_response(),
+    }
+}
+
+/// POST /api/clipping/twitch/mappings
+/// Manually create a YouTube ↔ Twitch mapping.
+async fn create_twitch_mapping(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(body): Json<crate::clipping::models::CreateTwitchMappingRequest>,
+) -> impl IntoResponse {
+    // Verify both IDs exist
+    let yt_exists: Option<(i32,)> =
+        sqlx::query_as::<_, (i32,)>("SELECT id FROM youtube_source_channels WHERE id = $1")
+            .bind(body.youtube_source_channel_id)
+            .fetch_optional(&state.db_pool)
+            .await
+            .unwrap_or(None);
+    if yt_exists.is_none() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "YouTube source channel not found"})),
+        )
+            .into_response();
+    }
+
+    let tw_exists: Option<(i32,)> =
+        sqlx::query_as::<_, (i32,)>("SELECT id FROM twitch_source_channels WHERE id = $1")
+            .bind(body.twitch_source_channel_id)
+            .fetch_optional(&state.db_pool)
+            .await
+            .unwrap_or(None);
+    if tw_exists.is_none() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "Twitch source channel not found"})),
+        )
+            .into_response();
+    }
+
+    match sqlx::query(
+        "INSERT INTO youtube_twitch_channel_mappings
+             (youtube_source_channel_id, twitch_source_channel_id)
+         VALUES ($1, $2)",
+    )
+    .bind(body.youtube_source_channel_id)
+    .bind(body.twitch_source_channel_id)
+    .execute(&state.db_pool)
+    .await
+    {
+        Ok(_) => {
+            // Update twitch_mapping_status on the YouTube channel
+            sqlx::query(
+                "UPDATE youtube_source_channels SET twitch_mapping_status = 'mapped' WHERE id = $1",
+            )
+            .bind(body.youtube_source_channel_id)
+            .execute(&state.db_pool)
+            .await
+            .ok();
+
+            (
+                StatusCode::CREATED,
+                Json(json!({"message": "Mapping created"})),
+            )
+                .into_response()
+        }
+        Err(e) if e.to_string().contains("duplicate") || e.to_string().contains("unique") => (
+            StatusCode::CONFLICT,
+            Json(json!({"error": "Mapping already exists for this YouTube channel"})),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": format!("DB error: {}", e)})),
+        )
+            .into_response(),
+    }
+}
+
+/// GET /api/clipping/twitch/mappings
+async fn list_twitch_mappings(Extension(state): Extension<Arc<AppState>>) -> impl IntoResponse {
+    let rows = sqlx::query(
+        "SELECT ytm.id,
+                ytm.youtube_source_channel_id,
+                ytm.twitch_source_channel_id,
+                ytm.created_at,
+                ysc.channel_name AS youtube_channel_name,
+                tsc.broadcaster_login,
+                tsc.display_name AS twitch_display_name
+         FROM youtube_twitch_channel_mappings ytm
+         JOIN youtube_source_channels ysc ON ysc.id = ytm.youtube_source_channel_id
+         JOIN twitch_source_channels tsc ON tsc.id = ytm.twitch_source_channel_id
+         ORDER BY ytm.created_at DESC",
+    )
+    .fetch_all(&state.db_pool)
+    .await;
+
+    match rows {
+        Ok(rows) => {
+            let mappings: Vec<Value> = rows
+                .iter()
+                .map(|r| {
+                    json!({
+                        "id": r.try_get::<i32, _>("id").unwrap_or(0),
+                        "youtube_source_channel_id": r.try_get::<i32, _>("youtube_source_channel_id").unwrap_or(0),
+                        "twitch_source_channel_id": r.try_get::<i32, _>("twitch_source_channel_id").unwrap_or(0),
+                        "youtube_channel_name": r.try_get::<String, _>("youtube_channel_name").unwrap_or_default(),
+                        "broadcaster_login": r.try_get::<String, _>("broadcaster_login").unwrap_or_default(),
+                        "twitch_display_name": r.try_get::<String, _>("twitch_display_name").unwrap_or_default(),
+                        "created_at": r.try_get::<DateTime<Utc>, _>("created_at").ok(),
+                    })
+                })
+                .collect();
+            Json(json!({"mappings": mappings})).into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": format!("DB error: {}", e)})),
+        )
+            .into_response(),
+    }
+}
+
+/// DELETE /api/clipping/twitch/mappings/:id
+async fn delete_twitch_mapping(
+    Path(id): Path<i32>,
+    Extension(state): Extension<Arc<AppState>>,
+) -> impl IntoResponse {
+    // Get youtube_source_channel_id before deleting so we can update mapping status
+    let yt_id: Option<(i32,)> = sqlx::query_as::<_, (i32,)>(
+        "SELECT youtube_source_channel_id FROM youtube_twitch_channel_mappings WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(&state.db_pool)
+    .await
+    .unwrap_or(None);
+
+    match sqlx::query("DELETE FROM youtube_twitch_channel_mappings WHERE id = $1")
+        .bind(id)
+        .execute(&state.db_pool)
+        .await
+    {
+        Ok(r) if r.rows_affected() > 0 => {
+            if let Some((yt_ch_id,)) = yt_id {
+                sqlx::query(
+                    "UPDATE youtube_source_channels SET twitch_mapping_status = 'unmapped' WHERE id = $1",
+                )
+                .bind(yt_ch_id)
+                .execute(&state.db_pool)
+                .await
+                .ok();
+            }
+            Json(json!({"message": "Mapping deleted"})).into_response()
+        }
+        Ok(_) => (StatusCode::NOT_FOUND, Json(json!({"error": "Not found"}))).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": format!("DB error: {}", e)})),
+        )
+            .into_response(),
+    }
 }

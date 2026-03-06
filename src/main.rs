@@ -10,6 +10,7 @@ mod voyage_embeddings;
 mod elevenlabs_client; // 🎙️ Eleven Labs TTS, Sound Effects, Music
 mod youtube_client; // 📺 YouTube Data API v3 for video uploads
 mod youtube_analytics_client; // 📊 YouTube Analytics API for metrics and insights
+mod twitch_client; // 📺 Twitch Helix API client
 mod handlers;
 mod jobs; // 🆕 Background job system for video editing
 mod workflow; // 🆕 LangGraph-style workflow orchestration
@@ -50,6 +51,7 @@ pub struct AppState {
     pub job_manager: jobs::SharedJobManager, // 🆕 Background job management
     pub workflow_checkpointer: Option<workflow::checkpoint::WorkflowCheckpointer>, // 🆕 Workflow state persistence
     pub token_manager: Option<Arc<token_manager::TokenManager>>, // 🔧 Centralized token refresh
+    pub twitch_client: Option<Arc<twitch_client::TwitchClient>>, // 📺 Twitch Helix API
 }
 
 /// Validate Apify API token on startup
@@ -350,6 +352,27 @@ async fn main() {
         }
     }
 
+    // Initialize Twitch client if credentials are provided
+    let twitch_client_opt: Option<Arc<twitch_client::TwitchClient>> = match (
+        std::env::var("TWITCH_TV_CLIENT_ID").ok(),
+        std::env::var("TWITCH_TV_CLIENT_SECRET").ok(),
+    ) {
+        (Some(id), Some(secret)) if !id.is_empty() && !secret.is_empty() => {
+            tracing::info!("📺 Initializing Twitch Helix API client...");
+            Some(Arc::new(twitch_client::TwitchClient::new(
+                id,
+                secret,
+                db_pool.clone(),
+            )))
+        }
+        _ => {
+            tracing::warn!(
+                "Twitch client not configured (set TWITCH_TV_CLIENT_ID and TWITCH_TV_CLIENT_SECRET)"
+            );
+            None
+        }
+    };
+
     // Initialize centralized token manager
     let token_manager = if let Some(ref yt_client) = youtube_client {
         if google_oauth_client_id.is_some() && google_oauth_client_secret.is_some() {
@@ -386,6 +409,7 @@ async fn main() {
         job_manager,
         workflow_checkpointer,
         token_manager,
+        twitch_client: twitch_client_opt,
     });
 
     // Admin-only routes
@@ -523,6 +547,18 @@ async fn main() {
         }
     } else {
         tracing::warn!("YouTube client not available - clipping polling disabled");
+    }
+
+    // Spawn Twitch → YouTube channel auto-mapper cron (10-minute interval)
+    if shared_state.twitch_client.is_some() {
+        let twitch_mapper_state = shared_state.clone();
+        tokio::spawn(async move {
+            tracing::info!("📺 Starting Twitch channel auto-mapper cron (10-minute interval)...");
+            jobs::twitch_mapper_job::run_twitch_mapping_cron(twitch_mapper_state).await;
+        });
+        tracing::info!("✅ Twitch mapper cron started");
+    } else {
+        tracing::info!("Twitch mapper cron disabled (Twitch client not configured)");
     }
 
     // Run the server with ConnectInfo to provide socket addresses for rate limiting
