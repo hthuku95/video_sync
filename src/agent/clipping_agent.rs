@@ -502,6 +502,30 @@ impl GeminiClippingAgent {
             .as_ref()
             .ok_or("Gemini client not configured")?;
 
+        // Emit heartbeat every 30s during Gemini analysis (up to 180s)
+        let (stop_tx_a, stop_rx_a) = tokio::sync::watch::channel(false);
+        let hb_db_a = self.app_state.db_pool.clone();
+        let hb_job_id_a = job_id;
+        let heartbeat_handle_a = tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(tokio::time::Duration::from_secs(30));
+            let mut rx = stop_rx_a;
+            loop {
+                tokio::select! {
+                    _ = ticker.tick() => {
+                        let _ = sqlx::query(
+                            "UPDATE clipping_jobs \
+                             SET worker_heartbeat_at = NOW(), updated_at = NOW() \
+                             WHERE id = $1 AND status NOT IN ('completed','failed','cancelled','discarded')"
+                        )
+                        .bind(hb_job_id_a)
+                        .execute(&hb_db_a)
+                        .await;
+                    }
+                    _ = rx.changed() => break,
+                }
+            }
+        });
+
         let analysis = tokio::time::timeout(
             tokio::time::Duration::from_secs(180),
             gemini.analyze_video_from_url(
@@ -514,6 +538,9 @@ impl GeminiClippingAgent {
         .await
         .map_err(|_| "Gemini analysis timed out after 180s".to_string())?
         .map_err(|e| format!("Gemini analysis failed: {}", e))?;
+
+        let _ = stop_tx_a.send(true);
+        let _ = heartbeat_handle_a.await;
 
         let overall_quality = analysis.overall_quality;
         let moments_count = analysis.viral_moments.len();
@@ -566,7 +593,34 @@ impl GeminiClippingAgent {
 
         update_job_status(job_id, "downloading", 25, None, &self.app_state.db_pool).await?;
 
+        // Emit heartbeat every 30s during download (can take up to 25 min for large VODs)
+        let (stop_tx_b, stop_rx_b) = tokio::sync::watch::channel(false);
+        let hb_db_b = self.app_state.db_pool.clone();
+        let hb_job_id_b = job_id;
+        let heartbeat_handle_b = tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(tokio::time::Duration::from_secs(30));
+            let mut rx = stop_rx_b;
+            loop {
+                tokio::select! {
+                    _ = ticker.tick() => {
+                        let _ = sqlx::query(
+                            "UPDATE clipping_jobs \
+                             SET worker_heartbeat_at = NOW(), updated_at = NOW() \
+                             WHERE id = $1 AND status NOT IN ('completed','failed','cancelled','discarded')"
+                        )
+                        .bind(hb_job_id_b)
+                        .execute(&hb_db_b)
+                        .await;
+                    }
+                    _ = rx.changed() => break,
+                }
+            }
+        });
+
         let download_result = self.download_via_apify(&video_url, &path).await;
+
+        let _ = stop_tx_b.send(true);
+        let _ = heartbeat_handle_b.await;
 
         match download_result {
             Ok(_) => {

@@ -441,7 +441,7 @@ async fn main() {
         .layer(DefaultBodyLimit::max(100 * 1024 * 1024)) // 100MB limit for video uploads
         .layer(Extension(shared_state.clone()));
 
-    // Start background polling task for YouTube clipping
+    // Start background polling task for YouTube clipping (requires youtube_client)
     if shared_state.youtube_client.is_some() {
         let polling_state = shared_state.clone();
         tokio::spawn(async move {
@@ -476,51 +476,6 @@ async fn main() {
             }
         });
 
-        // Start background worker for executing clipping jobs in separate thread
-        // Uses std::thread instead of tokio::spawn to avoid Send trait lifetime issues.
-        // A restart loop ensures the worker recovers from unexpected panics.
-        let worker_state = shared_state.clone();
-        std::thread::spawn(move || {
-            loop {
-                let state = worker_state.clone();
-                let handle = std::thread::spawn(move || {
-                    let rt = tokio::runtime::Runtime::new()
-                        .expect("Failed to create tokio runtime for worker");
-                    rt.block_on(async move {
-                        jobs::clipping_worker::run_clipping_worker_loop(state).await
-                    });
-                });
-                match handle.join() {
-                    Ok(_) => {
-                        // run_clipping_worker_loop returned normally (shouldn't happen — it loops forever)
-                        tracing::warn!("⚠️ Clipping worker exited unexpectedly. Restarting in 5s...");
-                    }
-                    Err(e) => {
-                        tracing::error!("💥 Clipping worker thread panicked: {:?}. Restarting in 5s...", e);
-                    }
-                }
-                std::thread::sleep(std::time::Duration::from_secs(5));
-            }
-        });
-
-        // Start independent stuck-job detection task in the MAIN tokio runtime.
-        // This runs every 60s regardless of whether the worker is busy processing a long job.
-        // Without this, a stuck job can block the worker thread for its full timeout period
-        // (up to 10 minutes) before stuck detection fires.
-        let stuck_detect_state = shared_state.clone();
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(60));
-            interval.tick().await; // skip first immediate tick
-            loop {
-                interval.tick().await;
-                if let Err(e) = jobs::clipping_worker::run_stuck_job_detection(&stuck_detect_state).await {
-                    tracing::warn!("Stuck job detection error: {}", e);
-                }
-            }
-        });
-
-        tracing::info!("✅ Clipping worker enabled - auto-retry and stuck job detection active");
-
         // Start token refresh worker for YouTube channels (runs every 15 minutes)
         if let Some(token_manager) = shared_state.token_manager.clone() {
             let db_pool = shared_state.db_pool.clone();
@@ -547,7 +502,67 @@ async fn main() {
             tracing::warn!("TokenManager not available - token refresh worker disabled");
         }
     } else {
-        tracing::warn!("YouTube client not available - clipping polling disabled");
+        tracing::warn!("YouTube client not available - YouTube channel polling disabled");
+    }
+
+    // ── Clipping worker and health tasks — always start regardless of youtube_client ──
+    // V1 fix: worker must run even when YOUTUBE_API_KEY is not set. Only the channel
+    // polling monitor (above) needs youtube_client. The worker itself only needs gemini_client.
+    {
+        // Background worker for executing clipping jobs in separate thread.
+        // Uses std::thread + restart loop to recover from unexpected panics.
+        let worker_state = shared_state.clone();
+        std::thread::spawn(move || {
+            loop {
+                let state = worker_state.clone();
+                let handle = std::thread::spawn(move || {
+                    let rt = tokio::runtime::Runtime::new()
+                        .expect("Failed to create tokio runtime for worker");
+                    rt.block_on(async move {
+                        jobs::clipping_worker::run_clipping_worker_loop(state).await
+                    });
+                });
+                match handle.join() {
+                    Ok(_) => {
+                        tracing::warn!("⚠️ Clipping worker exited unexpectedly. Restarting in 5s...");
+                    }
+                    Err(e) => {
+                        tracing::error!("💥 Clipping worker thread panicked: {:?}. Restarting in 5s...", e);
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_secs(5));
+            }
+        });
+
+        // Independent stuck-job detection task — runs every 60s in the main tokio runtime.
+        let stuck_detect_state = shared_state.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(60));
+            interval.tick().await; // skip first immediate tick
+            loop {
+                interval.tick().await;
+                if let Err(e) = jobs::clipping_worker::run_stuck_job_detection(&stuck_detect_state).await {
+                    tracing::warn!("Stuck job detection error: {}", e);
+                }
+            }
+        });
+
+        // Worker process-level heartbeat — 30s interval, independent of job execution.
+        // Health endpoint reads this to determine if the worker process is alive.
+        let hb_state = shared_state.clone();
+        let hb_worker_id = {
+            let config = jobs::worker_config::WorkerConfig::from_env();
+            config.worker_id.clone()
+        };
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(30));
+            loop {
+                interval.tick().await;
+                jobs::clipping_worker::update_worker_heartbeat(&hb_state, &hb_worker_id, None).await;
+            }
+        });
+
+        tracing::info!("✅ Clipping worker enabled — auto-retry, stuck detection, and heartbeat active");
     }
 
     // Spawn Twitch → YouTube channel auto-mapper cron (10-minute interval)

@@ -2,7 +2,7 @@
 use axum::{
     extract::Extension,
     http::StatusCode,
-    response::Json,
+    response::{IntoResponse, Json},
     routing::get,
     Router,
 };
@@ -18,14 +18,134 @@ pub fn health_routes() -> Router {
         .route("/health/circuit-breaker", get(circuit_breaker_status))
 }
 
-/// Simple health check endpoint
-/// Returns 200 OK if service is running
-async fn health_check() -> Json<Value> {
-    Json(json!({
-        "status": "ok",
-        "service": "video-editor-backend",
-        "timestamp": chrono::Utc::now().to_rfc3339()
-    }))
+/// Health check endpoint — IETF Health Check draft format.
+/// Used by Render.com to determine if the service is healthy.
+/// HTTP 200 = pass, 207 = warn (degraded but alive), 503 = fail.
+async fn health_check(
+    Extension(state): Extension<Arc<AppState>>,
+) -> impl axum::response::IntoResponse {
+    let start = std::time::Instant::now();
+
+    // Database check
+    let db_start = std::time::Instant::now();
+    let db_ok = sqlx::query("SELECT 1")
+        .fetch_one(&state.db_pool)
+        .await
+        .is_ok();
+    let db_ms = db_start.elapsed().as_millis();
+
+    // Worker liveness check (last heartbeat must be within 3 minutes)
+    let worker_row: Option<(String, i32, i32, Option<i32>)> = sqlx::query_as(
+        "SELECT worker_id, jobs_processed, jobs_failed, current_job_id \
+         FROM worker_heartbeats \
+         ORDER BY last_seen_at DESC \
+         LIMIT 1"
+    )
+    .fetch_optional(&state.db_pool)
+    .await
+    .ok()
+    .flatten();
+
+    let worker_alive: bool = sqlx::query_scalar(
+        "SELECT COUNT(*) > 0 FROM worker_heartbeats \
+         WHERE last_seen_at > NOW() - INTERVAL '3 minutes'"
+    )
+    .fetch_one(&state.db_pool)
+    .await
+    .unwrap_or(false);
+
+    let worker_last_heartbeat: Option<String> = sqlx::query_scalar(
+        "SELECT last_seen_at::text FROM worker_heartbeats \
+         ORDER BY last_seen_at DESC LIMIT 1"
+    )
+    .fetch_optional(&state.db_pool)
+    .await
+    .ok()
+    .flatten()
+    .flatten();
+
+    // Queue depth
+    let pending_total: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM clipping_jobs WHERE status = 'pending'"
+    )
+    .fetch_one(&state.db_pool)
+    .await
+    .unwrap_or(0);
+
+    let pending_old: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM clipping_jobs \
+         WHERE status = 'pending' AND claimed_by IS NULL \
+         AND created_at < NOW() - INTERVAL '15 minutes'"
+    )
+    .fetch_one(&state.db_pool)
+    .await
+    .unwrap_or(0);
+
+    let failed_jobs: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM clipping_jobs WHERE status = 'failed'"
+    )
+    .fetch_one(&state.db_pool)
+    .await
+    .unwrap_or(0);
+
+    let discarded_jobs: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM clipping_jobs WHERE status = 'discarded'"
+    )
+    .fetch_one(&state.db_pool)
+    .await
+    .unwrap_or(0);
+
+    // Determine overall status
+    let db_status = if db_ok { "pass" } else { "fail" };
+    let worker_status = if worker_alive { "pass" } else { "warn" };
+    let queue_status = if pending_old > 0 { "warn" } else { "pass" };
+
+    let overall = if !db_ok {
+        "fail"
+    } else if !worker_alive || pending_old > 0 {
+        "warn"
+    } else {
+        "pass"
+    };
+
+    let (jobs_processed, jobs_failed, current_job_id) = worker_row
+        .map(|(_, p, f, c)| (p, f, c))
+        .unwrap_or((0, 0, None));
+
+    let body = json!({
+        "status": overall,
+        "version": "1",
+        "description": "VideoSync clipping system health",
+        "responseTimeMs": start.elapsed().as_millis(),
+        "checks": {
+            "database": [{
+                "status": db_status,
+                "responseTimeMs": db_ms
+            }],
+            "worker": [{
+                "status": worker_status,
+                "lastHeartbeat": worker_last_heartbeat,
+                "jobsProcessed": jobs_processed,
+                "jobsFailed": jobs_failed,
+                "currentJobId": current_job_id
+            }],
+            "queue": [{
+                "status": queue_status,
+                "pendingJobs": pending_total,
+                "pendingOlderThan15Min": pending_old,
+                "failedJobs": failed_jobs,
+                "discardedJobs": discarded_jobs
+            }]
+        }
+    });
+
+    let http_status = match overall {
+        "fail" => StatusCode::SERVICE_UNAVAILABLE,
+        "warn" => StatusCode::MULTI_STATUS,
+        _ => StatusCode::OK,
+    };
+
+    (http_status, Json(body))
 }
 
 /// Detailed health check with all system components

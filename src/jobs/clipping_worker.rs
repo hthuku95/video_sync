@@ -2,10 +2,12 @@
 
 use crate::agent::clipping_agent::GeminiClippingAgent;
 use crate::jobs::clipping_job::execute_clipping_job;
+use crate::jobs::error_classifier::{classify, ErrorClass};
 use crate::jobs::job_claimer::JobClaimer;
 use crate::jobs::worker_config::WorkerConfig;
 use crate::AppState;
 use std::sync::Arc;
+use tokio::task::JoinSet;
 use tokio::time::{sleep, Duration};
 
 /// Process clipping jobs once (function-based to avoid lifetime issues)
@@ -16,7 +18,7 @@ pub async fn process_clipping_jobs_once(app_state: &Arc<AppState>) -> Result<(),
 }
 
 /// Run the clipping worker in a background loop (spawnable)
-/// Now supports parallel job processing with configurable concurrency
+/// Supports true parallel job processing via JoinSet.
 pub async fn run_clipping_worker_loop(app_state: Arc<AppState>) {
     // Load and validate configuration
     let config = WorkerConfig::from_env();
@@ -38,7 +40,6 @@ pub async fn run_clipping_worker_loop(app_state: Arc<AppState>) {
     );
 
     // Optional startup delay — allows test binaries time to compile and enqueue jobs
-    // before the first worker cycle runs. Set WORKER_STARTUP_DELAY_SECS=120 for testing.
     let startup_delay_secs: u64 = std::env::var("WORKER_STARTUP_DELAY_SECS")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -55,12 +56,10 @@ pub async fn run_clipping_worker_loop(app_state: Arc<AppState>) {
 
     loop {
         interval.tick().await;
+        update_worker_heartbeat(&app_state, &config.worker_id, None).await;
 
-        // Process jobs in parallel using the new architecture
         match process_clipping_jobs_parallel(&app_state, &config).await {
-            Ok(_) => {
-                // Success is logged by the worker itself
-            }
+            Ok(_) => {}
             Err(e) => {
                 tracing::error!("❌ Clipping worker error: {}", e);
             }
@@ -104,13 +103,9 @@ impl ClippingWorker {
 
     /// Process all pending clipping jobs (backward compatibility)
     async fn process_pending_jobs(&self) -> Result<(), String> {
-        // Legacy method - redirects to sequential processing for backward compatibility
-        // This ensures existing code that calls this method continues to work
         self.detect_stuck_jobs().await?;
         self.auto_retry_failed_jobs().await?;
 
-        // Fetch a single job and process it (sequential mode)
-        // Test-user jobs (user_id = -1) are prioritized so integration tests don't queue behind production jobs
         let query = String::from(
             "SELECT cj.id FROM clipping_jobs cj \
              JOIN youtube_channel_linkages l ON l.id = cj.linkage_id \
@@ -135,10 +130,16 @@ impl ClippingWorker {
                 Err(e) => {
                     tracing::error!("❌ Job {} failed: {}", job_id, e);
 
-                    let fail_query = String::from(
+                    let new_status = match classify(&e) {
+                        ErrorClass::Permanent => "cancelled",
+                        _ => "failed",
+                    };
+
+                    let fail_query = format!(
                         "UPDATE clipping_jobs \
-                         SET status = 'failed', error_message = $1, completed_at = NOW() \
-                         WHERE id = $2"
+                         SET status = '{}', error_message = $1, completed_at = NOW() \
+                         WHERE id = $2",
+                        new_status
                     );
                     let _ = sqlx::query(&fail_query)
                         .bind(&e)
@@ -152,218 +153,38 @@ impl ClippingWorker {
         Ok(())
     }
 
-    /// Automatically retry failed jobs that meet retry criteria
-    ///
-    /// Retry criteria:
-    /// - Job status is 'failed'
-    /// - Job failed within the last 6 hours (to avoid retrying old failures)
-    /// - Job has been failed for at least 5 minutes (to avoid immediate retry loops)
-    ///
-    /// Phase-aware: sets resume_from based on current_step so retries skip completed phases.
+    /// Automatically retry failed jobs — delegates to standalone function
     async fn auto_retry_failed_jobs(&self) -> Result<(), String> {
-        // Fetch id + current_step to determine the appropriate resume point
-        let retry_jobs: Vec<(i32, Option<String>)> = sqlx::query_as(
-            "SELECT id, current_step FROM clipping_jobs \
-             WHERE status = 'failed' \
-             AND completed_at > NOW() - INTERVAL '6 hours' \
-             AND completed_at < NOW() - INTERVAL '5 minutes' \
-             AND COALESCE(retry_count, 0) < 5 \
-             ORDER BY completed_at ASC \
-             LIMIT 10"
-        )
-        .fetch_all(&self.app_state.db_pool)
-        .await
-        .map_err(|e| format!("Failed to fetch failed jobs for retry: {}", e))?;
-
-        // Escalate jobs that have exhausted all retries — admin must manually retry via admin API
-        let exhausted: Vec<(i32, Option<String>)> = sqlx::query_as(
-            "SELECT id, error_message FROM clipping_jobs \
-             WHERE status = 'failed' \
-             AND COALESCE(retry_count, 0) >= 5 \
-             AND updated_at > NOW() - INTERVAL '1 hour'"
-        )
-        .fetch_all(&self.app_state.db_pool)
-        .await
-        .unwrap_or_default();
-
-        for (job_id, err) in exhausted {
-            tracing::warn!(
-                "🚨 CLIPPING JOB {} EXHAUSTED ALL 5 RETRIES — admin review required. \
-                 Use POST /api/admin/clipping/jobs/{}/retry to reset. Last error: {:?}",
-                job_id, job_id, err
-            );
-        }
-
-        if retry_jobs.is_empty() {
-            return Ok(());
-        }
-
-        tracing::info!("🔄 Found {} failed jobs eligible for automatic retry", retry_jobs.len());
-
-        for (job_id, current_step) in retry_jobs {
-            // Determine the resume point based on where the job was when it failed.
-            // current_step mirrors the last status set by update_job_status().
-            let resume_from: Option<&str> = match current_step.as_deref().unwrap_or("") {
-                s if s.contains("posting") || s.contains("upload") => Some("clips_extracted"),
-                s if s.contains("vectoriz")                         => Some("clips_extracted"),
-                s if s.contains("extracting") || s == "clips_extracted" => Some("downloaded"),
-                s if s.contains("download")                         => Some("analyzed"),
-                _                                                   => None,
-            };
-
-            if let Some(phase) = resume_from {
-                tracing::info!(
-                    "✅ Job {} will retry from '{}' (was stuck at: {:?})",
-                    job_id, phase, current_step
-                );
-            } else {
-                tracing::info!(
-                    "✅ Job {} will retry from Phase A (current_step: {:?})",
-                    job_id, current_step
-                );
-            }
-
-            let reset_query = String::from(
-                "UPDATE clipping_jobs \
-                 SET status = 'pending', \
-                     resume_from = $1, \
-                     error_message = NULL, \
-                     progress_percent = 0, \
-                     current_step = 'queued', \
-                     started_at = NULL, \
-                     completed_at = NULL, \
-                     claimed_by = NULL, \
-                     claimed_at = NULL, \
-                     updated_at = NOW(), \
-                     retry_count = COALESCE(retry_count, 0) + 1, \
-                     last_retry_at = NOW() \
-                 WHERE id = $2 \
-                 AND status = 'failed'"
-            );
-            match sqlx::query(&reset_query)
-                .bind(resume_from)
-                .bind(job_id)
-                .execute(&self.app_state.db_pool)
-                .await
-            {
-                Ok(_) => {}
-                Err(e) => {
-                    tracing::error!("Failed to reset job {} for retry: {}", job_id, e);
-                }
-            }
-        }
-
-        Ok(())
+        auto_retry_failed_jobs(&self.app_state).await
     }
 
-    /// Detect jobs stuck in intermediate states and reset them to 'failed'
-    ///
-    /// Jobs stuck in intermediate states for longer than their timeout threshold are
-    /// automatically marked as failed. This prevents jobs from hanging indefinitely
-    /// due to process crashes, network issues, or other failures.
-    ///
-    /// State-specific timeout thresholds:
-    /// - downloading: 10 minutes (video downloads should complete quickly)
-    /// - analyzing: 60 minutes (vectorization can take long for big videos)
-    /// - extracting_clips: 15 minutes (clip extraction + AI analysis)
-    /// - posting: 20 minutes (YouTube API uploads can be slow)
+    /// Detect stuck jobs — delegates to standalone function
     async fn detect_stuck_jobs(&self) -> Result<(), String> {
-        // Release stale claims — pending jobs with claimed_by set from possibly dead workers
-        let stale_claim_query = String::from(
-            "UPDATE clipping_jobs \
-             SET claimed_by = NULL, claimed_at = NULL, updated_at = NOW() \
-             WHERE status = 'pending' \
-             AND claimed_by IS NOT NULL \
-             AND claimed_at < NOW() - INTERVAL '5 minutes'"
-        );
-        match sqlx::query(&stale_claim_query)
-            .execute(&self.app_state.db_pool)
-            .await
-        {
-            Ok(result) if result.rows_affected() > 0 => {
-                tracing::info!(
-                    "🔓 Released {} stale job claims (pending + claimed_by set for >5 min)",
-                    result.rows_affected()
-                );
-            }
-            Ok(_) => {}
-            Err(e) => {
-                tracing::warn!("Failed to release stale claims (non-fatal): {}", e);
-            }
-        }
-
-        // Find jobs stuck in each intermediate state
-        let stuck_query = String::from(
-            "SELECT id, status, updated_at::text \
-             FROM clipping_jobs \
-             WHERE ( \
-                 (status = 'downloading' AND updated_at < NOW() - INTERVAL '10 minutes') OR \
-                 (status = 'analyzing' AND updated_at < NOW() - INTERVAL '60 minutes') OR \
-                 (status = 'extracting_clips' AND updated_at < NOW() - INTERVAL '10 minutes') OR \
-                 (status = 'posting' AND updated_at < NOW() - INTERVAL '20 minutes') \
-             )"
-        );
-        let stuck_jobs: Vec<(i32, String, String)> = sqlx::query_as(&stuck_query)
-            .fetch_all(&self.app_state.db_pool)
-            .await
-            .map_err(|e| format!("Failed to fetch stuck jobs: {}", e))?;
-
-        if stuck_jobs.is_empty() {
-            return Ok(());
-        }
-
-        tracing::warn!("🔄 Found {} stuck jobs, resetting to failed", stuck_jobs.len());
-
-        // Reset each stuck job to 'failed' with clear error message
-        for (job_id, status, updated_at) in stuck_jobs {
-            let error_message = format!(
-                "Job stuck/timed out in '{}' state. Last updated: {}. Automatically reset by worker.",
-                status, updated_at
-            );
-
-            let reset_stuck_query = String::from(
-                "UPDATE clipping_jobs \
-                 SET status = 'failed', \
-                     error_message = $1, \
-                     completed_at = NOW(), \
-                     updated_at = NOW(), \
-                     stuck_detection_count = COALESCE(stuck_detection_count, 0) + 1 \
-                 WHERE id = $2"
-            );
-            match sqlx::query(&reset_stuck_query)
-                .bind(&error_message)
-                .bind(job_id)
-                .execute(&self.app_state.db_pool)
-                .await
-            {
-                Ok(_) => {
-                    tracing::info!(
-                        "✅ Job {} reset from '{}' to 'failed' (stuck for too long)",
-                        job_id, status
-                    );
-                }
-                Err(e) => {
-                    tracing::error!("Failed to reset stuck job {}: {}", job_id, e);
-                }
-            }
-        }
-
-        Ok(())
+        detect_stuck_jobs(&self.app_state).await
     }
 }
 
-/// Process clipping jobs in parallel using JoinSet
-/// This is the new high-performance parallel job processor
+// ============================================================================
+// True parallel job processor — JoinSet-based
+// ============================================================================
+
+/// Process clipping jobs in parallel using JoinSet.
+/// Fill JoinSet to concurrency limit, drain one slot before claiming next job.
 async fn process_clipping_jobs_parallel(
     app_state: &Arc<AppState>,
     config: &WorkerConfig,
 ) -> Result<(), String> {
-    // Step 1: Pre-processing (stuck jobs, auto-retry) - keep sequential
-    // These are quick operations that prepare jobs for parallel execution
     detect_stuck_jobs(app_state).await?;
     auto_retry_failed_jobs(app_state).await?;
+    check_pending_too_long(app_state).await;
 
-    // Step 2: Check if there are any jobs to process
+    // Compile-time assertion: GeminiClippingAgent must be Send + 'static for JoinSet::spawn
+    #[allow(dead_code)]
+    fn _assert_agent_send() {
+        fn is_send<T: Send + 'static>() {}
+        is_send::<GeminiClippingAgent>();
+    }
+
     let pending_count: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM clipping_jobs WHERE status = 'pending' AND claimed_by IS NULL"
     )
@@ -382,81 +203,87 @@ async fn process_clipping_jobs_parallel(
         config.concurrency
     );
 
-    // Step 3: Process jobs using atomic claiming (sequential for now)
-    // TODO: Implement true parallel execution once Send trait lifetime issues are resolved
-    // The current implementation uses atomic job claiming which prevents race conditions
-    // but processes jobs sequentially. This is still an improvement over the old implementation.
+    let mut join_set: JoinSet<Result<i32, String>> = JoinSet::new();
+    let mut quota_exhausted = false;
+    let mut total_completed = 0usize;
+    let mut total_failed = 0usize;
     let worker_id = config.worker_id.clone();
-    let mut total_completed = 0;
-    let mut total_failed = 0;
 
-    // Process up to concurrency * 5 jobs per cycle (burst processing)
-    let max_jobs_per_cycle = config.concurrency * 5;
+    loop {
+        // Claim new jobs up to concurrency limit
+        while join_set.len() < config.concurrency && !quota_exhausted {
+            let state = Arc::clone(app_state);
+            let wid = worker_id.clone();
 
-    for _ in 0..max_jobs_per_cycle {
-        match process_single_job_with_claim(app_state.clone(), worker_id.clone()).await {
-            Ok(job_id) => {
-                total_completed += 1;
-                tracing::info!("✅ Job {} completed successfully", job_id);
-            }
-            Err(e) => {
-                if e.contains("No jobs available") {
-                    // No more jobs, exit loop
+            match JobClaimer::new(wid, state.db_pool.clone())
+                .claim_next_job()
+                .await
+            {
+                Ok(Some(job_id)) => {
+                    join_set.spawn(async move {
+                        execute_claimed_job(state, job_id).await
+                    });
+                }
+                Ok(None) => break, // no unclaimed pending jobs
+                Err(e) => {
+                    tracing::error!("Claim error: {}", e);
                     break;
-                } else if e.contains("RESOURCE_EXHAUSTED") || e.contains("Resource has been exhausted") {
-                    // Gemini quota exhausted — pause this entire cycle to prevent the
-                    // 429 death spiral (claim → fail → claim → fail → ...).
-                    // The auto-retry logic uses a 30-minute delay for 429 failures.
-                    total_failed += 1;
-                    tracing::warn!(
-                        "⏸️  Gemini quota exhausted (429). Pausing worker cycle for 120s \
-                         to let quota recover. {} jobs failed this cycle.",
-                        total_failed
-                    );
-                    sleep(Duration::from_secs(120)).await;
-                    break; // Stop claiming more jobs this cycle
-                } else {
-                    total_failed += 1;
-                    tracing::error!("❌ Job processing failed: {}", e);
                 }
             }
         }
+
+        // If nothing is running, we're done for this cycle
+        if join_set.is_empty() {
+            break;
+        }
+
+        // Wait for any one task to finish, then loop back to claim a new one
+        match join_set.join_next().await {
+            Some(Ok(Ok(job_id))) => {
+                total_completed += 1;
+                tracing::info!("✅ Job {} completed", job_id);
+            }
+            Some(Ok(Err(e))) => {
+                total_failed += 1;
+                if e.contains("RESOURCE_EXHAUSTED") || e.contains("Resource has been exhausted") || e.contains("quota") {
+                    quota_exhausted = true;
+                    tracing::warn!("⏸️  Gemini quota hit — stopping new claims this cycle");
+                }
+                tracing::error!("❌ {}", e);
+            }
+            Some(Err(join_err)) => {
+                total_failed += 1;
+                tracing::error!("❌ Task panicked: {}", join_err);
+            }
+            None => break,
+        }
+    }
+
+    // Drain any remaining tasks (e.g., if quota_exhausted stopped intake mid-flight)
+    while let Some(_) = join_set.join_next().await {}
+
+    if quota_exhausted {
+        tracing::warn!("⏸️  Pausing 120s for Gemini quota recovery");
+        sleep(Duration::from_secs(120)).await;
     }
 
     if total_completed > 0 || total_failed > 0 {
-        tracing::info!(
-            "📊 Processing cycle complete: {} completed, {} failed",
-            total_completed,
-            total_failed
-        );
+        tracing::info!("📊 Cycle: {} completed, {} failed", total_completed, total_failed);
     }
 
     Ok(())
 }
 
-/// Process a single job with atomic claiming
-async fn process_single_job_with_claim(
-    app_state: Arc<AppState>,
-    worker_id: String,
-) -> Result<i32, String> {
-    // Create job claimer for this task
-    let claimer = JobClaimer::new(worker_id, app_state.db_pool.clone());
-
-    // Step 1: Atomically claim next available job
-    let job_id = match claimer.claim_next_job().await? {
-        Some(id) => id,
-        None => return Err("No jobs available".to_string()),
-    };
-
+/// Execute a single claimed job. Used as the JoinSet task body.
+/// Runs GeminiClippingAgent::process_job or falls back to execute_clipping_job.
+/// On failure, classifies error and sets 'cancelled' for permanent failures.
+async fn execute_claimed_job(app_state: Arc<AppState>, job_id: i32) -> Result<i32, String> {
     tracing::info!("🎬 Processing job {} (claimed)", job_id);
 
-    // Step 2: Execute the clipping job with a per-job timeout.
-    // Uses ClippingAgent (Claude-orchestrated) when claude_client is configured;
-    // falls back to execute_clipping_job (hardcoded sequential) otherwise.
     let job_timeout_secs: u64 = std::env::var("JOB_EXECUTION_TIMEOUT_SECS")
         .ok()
         .and_then(|v| v.parse().ok())
-        .unwrap_or(7200); // 2 hours — accommodates new pipeline
+        .unwrap_or(7200); // 2 hours
 
     let execution_result = if app_state.gemini_client.is_some() {
         let agent = GeminiClippingAgent::new(app_state.clone());
@@ -485,15 +312,24 @@ async fn process_single_job_with_claim(
         Ok(Err(e)) => {
             tracing::error!("❌ Job {} failed: {}", job_id, e);
 
-            // Mark job as failed and release claim
-            let fail_query = String::from(
+            let new_status = match classify(&e) {
+                ErrorClass::Permanent => {
+                    tracing::warn!("🚫 Job {} permanently failed ({}), setting status=cancelled", job_id, e);
+                    "cancelled"
+                }
+                _ => "failed",
+            };
+
+            let fail_query = format!(
                 "UPDATE clipping_jobs \
-                 SET status = 'failed', \
+                 SET status = '{}', \
                      error_message = $1, \
                      completed_at = NOW(), \
                      claimed_by = NULL, \
+                     worker_heartbeat_at = NULL, \
                      updated_at = NOW() \
-                 WHERE id = $2"
+                 WHERE id = $2",
+                new_status
             );
             let _ = sqlx::query(&fail_query)
                 .bind(&e)
@@ -510,17 +346,12 @@ async fn process_single_job_with_claim(
             );
             tracing::warn!("⏰ Job {} timed out: {}", job_id, timeout_msg);
 
-            // Mark as failed and release claim.
-            // Use the shared pool directly with a short total timeout. Creating a new pool
-            // here (old approach) caused connect() to hang indefinitely — blocking the
-            // entire worker thread. The shared pool (20 connections) is always available.
-            // The independent stuck-detection task (every 60s) will handle the job if
-            // this update somehow fails.
             let fail_query = "UPDATE clipping_jobs \
                  SET status = 'failed', \
                      error_message = $1, \
                      completed_at = NOW(), \
                      claimed_by = NULL, \
+                     worker_heartbeat_at = NULL, \
                      updated_at = NOW() \
                  WHERE id = $2";
 
@@ -533,7 +364,7 @@ async fn process_single_job_with_claim(
             ).await {
                 Ok(Ok(_)) => {}
                 Ok(Err(e)) => {
-                    tracing::error!("❌ Failed to reset timed-out job {} (pool error): {} — stuck-detection will handle it", job_id, e);
+                    tracing::error!("❌ Failed to reset timed-out job {}: {} — stuck-detection will handle it", job_id, e);
                 }
                 Err(_) => {
                     tracing::error!("❌ Cleanup for timed-out job {} timed out after 10s — stuck-detection will handle it", job_id);
@@ -545,17 +376,46 @@ async fn process_single_job_with_claim(
     }
 }
 
+// ============================================================================
+// Standalone functions called by main.rs tasks
+// ============================================================================
+
 /// Public wrapper — called by the main tokio runtime as an independent background task.
 /// Runs every 60s regardless of whether the worker thread is busy processing a job.
 pub async fn run_stuck_job_detection(app_state: &Arc<AppState>) -> Result<(), String> {
     detect_stuck_jobs(app_state).await
 }
 
-/// Detect jobs stuck in intermediate states and reset them to 'failed' (standalone function)
+/// Update the worker_heartbeats table with current liveness data.
+/// Called from the main loop and the independent heartbeat task.
+pub async fn update_worker_heartbeat(
+    app_state: &Arc<AppState>,
+    worker_id: &str,
+    current_job_id: Option<i32>,
+) {
+    let _ = sqlx::query(
+        "INSERT INTO worker_heartbeats (worker_id, last_seen_at, updated_at, current_job_id)
+         VALUES ($1, NOW(), NOW(), $2)
+         ON CONFLICT (worker_id) DO UPDATE
+           SET last_seen_at = NOW(), updated_at = NOW(), current_job_id = EXCLUDED.current_job_id"
+    )
+    .bind(worker_id)
+    .bind(current_job_id)
+    .execute(&app_state.db_pool)
+    .await;
+}
+
+// ============================================================================
+// V2: Heartbeat-aware stuck detection + pending-too-long alert
+// ============================================================================
+
+/// Detect jobs stuck in intermediate states and reset them to 'failed'.
+///
+/// Two-tier detection:
+/// 1. Jobs WITH heartbeat: stuck if no heartbeat for 3 minutes (definitive crash signal).
+/// 2. Jobs WITHOUT heartbeat (legacy): use conservative per-stage timeouts via updated_at.
 async fn detect_stuck_jobs(app_state: &Arc<AppState>) -> Result<(), String> {
-    // First: release stale claims — jobs that are 'pending' but have a claimed_by set from a
-    // (possibly dead) worker process. This happens when the worker claims a job but then
-    // crashes or loses DB connectivity before it can start executing.
+    // Release stale claims — pending jobs with claimed_by set from a possibly dead worker
     let stale_claim_query = String::from(
         "UPDATE clipping_jobs \
          SET claimed_by = NULL, claimed_at = NULL, updated_at = NOW() \
@@ -579,15 +439,23 @@ async fn detect_stuck_jobs(app_state: &Arc<AppState>) -> Result<(), String> {
         }
     }
 
+    // Heartbeat-aware stuck detection: 3-minute heartbeat timeout for jobs that have it,
+    // legacy per-stage timeouts for jobs that pre-date the heartbeat column.
     let stuck_query = String::from(
-        "SELECT id, status, updated_at::text \
+        "SELECT id, status, COALESCE(worker_heartbeat_at, updated_at)::text AS last_seen \
          FROM clipping_jobs \
-         WHERE ( \
-             (status = 'downloading' AND updated_at < NOW() - INTERVAL '10 minutes') OR \
-             (status = 'analyzing' AND updated_at < NOW() - INTERVAL '60 minutes') OR \
-             (status = 'extracting_clips' AND updated_at < NOW() - INTERVAL '10 minutes') OR \
-             (status = 'posting' AND updated_at < NOW() - INTERVAL '20 minutes') \
-         )"
+         WHERE status IN ('downloading', 'analyzing', 'extracting_clips', 'posting') \
+           AND ( \
+               (worker_heartbeat_at IS NOT NULL \
+                AND worker_heartbeat_at < NOW() - INTERVAL '3 minutes') \
+               OR \
+               (worker_heartbeat_at IS NULL AND ( \
+                   (status = 'downloading'      AND updated_at < NOW() - INTERVAL '25 minutes') OR \
+                   (status = 'analyzing'        AND updated_at < NOW() - INTERVAL '10 minutes') OR \
+                   (status = 'extracting_clips' AND updated_at < NOW() - INTERVAL '15 minutes') OR \
+                   (status = 'posting'          AND updated_at < NOW() - INTERVAL '30 minutes') \
+               )) \
+           )"
     );
     let stuck_jobs: Vec<(i32, String, String)> = sqlx::query_as(&stuck_query)
         .fetch_all(&app_state.db_pool)
@@ -600,10 +468,10 @@ async fn detect_stuck_jobs(app_state: &Arc<AppState>) -> Result<(), String> {
 
     tracing::warn!("🔄 Found {} stuck jobs, resetting to failed", stuck_jobs.len());
 
-    for (job_id, status, updated_at) in stuck_jobs {
+    for (job_id, status, last_seen) in stuck_jobs {
         let error_message = format!(
-            "Job stuck/timed out in '{}' state. Last updated: {}. Automatically reset by worker.",
-            status, updated_at
+            "Job stuck/timed out in '{}' state. Last heartbeat/update: {}. Automatically reset by worker.",
+            status, last_seen
         );
 
         let reset_stuck_query = String::from(
@@ -613,6 +481,7 @@ async fn detect_stuck_jobs(app_state: &Arc<AppState>) -> Result<(), String> {
                  completed_at = NOW(), \
                  updated_at = NOW(), \
                  claimed_by = NULL, \
+                 worker_heartbeat_at = NULL, \
                  stuck_detection_count = COALESCE(stuck_detection_count, 0) + 1 \
              WHERE id = $2"
         );
@@ -624,8 +493,8 @@ async fn detect_stuck_jobs(app_state: &Arc<AppState>) -> Result<(), String> {
         {
             Ok(_) => {
                 tracing::info!(
-                    "✅ Job {} reset from '{}' to 'failed' (stuck for too long)",
-                    job_id, status
+                    "✅ Job {} reset from '{}' to 'failed' (stuck for too long, last seen: {})",
+                    job_id, status, last_seen
                 );
             }
             Err(e) => {
@@ -637,24 +506,112 @@ async fn detect_stuck_jobs(app_state: &Arc<AppState>) -> Result<(), String> {
     Ok(())
 }
 
-/// Automatically retry failed jobs that meet retry criteria (standalone function)
+/// V2: Check for pending jobs that have been waiting too long without being claimed.
 ///
-/// Phase-aware: sets resume_from so retries skip completed phases rather than re-running
-/// from Phase A every time. A job that failed at "posting" resumes at "clips_extracted",
-/// skipping Gemini re-analysis, re-download, and re-extraction.
+/// Does NOT fail these jobs — they are legitimately pending.
+/// Only logs warnings/errors so operators can diagnose worker issues.
+async fn check_pending_too_long(app_state: &Arc<AppState>) {
+    let result: Option<(i64, Option<String>)> = sqlx::query_as(
+        "SELECT COUNT(*) AS stuck_count, MIN(created_at)::text AS oldest \
+         FROM clipping_jobs \
+         WHERE status = 'pending' \
+           AND claimed_by IS NULL \
+           AND created_at < NOW() - INTERVAL '15 minutes'"
+    )
+    .fetch_optional(&app_state.db_pool)
+    .await
+    .ok()
+    .flatten();
+
+    if let Some((count, oldest_opt)) = result {
+        if count > 0 {
+            let oldest = oldest_opt.unwrap_or_default();
+
+            // Determine how old the oldest job is
+            let is_critical: bool = sqlx::query_scalar(
+                "SELECT COUNT(*) > 0 FROM clipping_jobs \
+                 WHERE status = 'pending' \
+                   AND claimed_by IS NULL \
+                   AND created_at < NOW() - INTERVAL '60 minutes'"
+            )
+            .fetch_one(&app_state.db_pool)
+            .await
+            .unwrap_or(false);
+
+            if is_critical {
+                tracing::error!(
+                    "🚨 WORKER ALERT: {} jobs pending >15 min unclaimed (oldest: {}). \
+                     Worker may be down or severely overloaded!",
+                    count, oldest
+                );
+            } else {
+                tracing::warn!(
+                    "⚠️  {} jobs pending >15 min unclaimed (oldest: {}). \
+                     Worker may be slow or restarting.",
+                    count, oldest
+                );
+            }
+        }
+    }
+}
+
+// ============================================================================
+// V3 + V4: Auto-retry with 7-day window, exponential backoff, discard at 10 retries
+// ============================================================================
+
+/// Automatically retry failed jobs that meet retry criteria.
+///
+/// V3: Extended retry window to 7 days (was 6 hours).
+/// V4a: Exponential backoff — 2^retry_count minutes cooldown.
+/// V4b: Error classification — permanent failures are already 'cancelled' (not retried).
+/// V4c: Discard after 10 retries — moves to dead-letter queue.
 async fn auto_retry_failed_jobs(app_state: &Arc<AppState>) -> Result<(), String> {
-    // Fetch id + current_step to determine the appropriate resume point per job
-    // Jobs that failed with Gemini quota errors (429/RESOURCE_EXHAUSTED) need a longer
-    // cooldown (30 min) before retry. Other failures retry after 5 minutes.
+    // First: discard exhausted jobs (>= 10 retries) — move to dead-letter
+    let _ = sqlx::query(
+        "UPDATE clipping_jobs \
+         SET status = 'discarded', \
+             error_message = 'Exhausted all 10 retries. Use admin API to retry manually.', \
+             updated_at = NOW() \
+         WHERE status = 'failed' \
+           AND COALESCE(retry_count, 0) >= 10 \
+           AND updated_at > NOW() - INTERVAL '1 hour' \
+         RETURNING id"
+    )
+    .execute(&app_state.db_pool)
+    .await;
+
+    // Warn about jobs approaching discard threshold
+    let exhausted: Vec<(i32, Option<String>)> = sqlx::query_as(
+        "SELECT id, error_message FROM clipping_jobs \
+         WHERE status = 'discarded' \
+         AND updated_at > NOW() - INTERVAL '1 hour'"
+    )
+    .fetch_all(&app_state.db_pool)
+    .await
+    .unwrap_or_default();
+
+    for (job_id, err) in exhausted {
+        tracing::error!(
+            "🚨 CLIPPING JOB {} DISCARDED (exhausted 10 retries) — admin review required. \
+             Use POST /api/admin/clipping/jobs/{}/retry to reset. Last error: {:?}",
+            job_id, job_id, err
+        );
+    }
+
+    // Fetch failed jobs eligible for retry.
+    // Exponential backoff: cooldown = 2^retry_count minutes (capped at 256 min = ~4h).
+    // Quota errors always get an extra 30-minute floor via OR clause.
     let retry_jobs: Vec<(i32, Option<String>)> = sqlx::query_as(
         "SELECT id, current_step FROM clipping_jobs \
          WHERE status = 'failed' \
-         AND completed_at > NOW() - INTERVAL '6 hours' \
-         AND COALESCE(retry_count, 0) < 5 \
+         AND completed_at > NOW() - INTERVAL '7 days' \
+         AND COALESCE(retry_count, 0) < 10 \
          AND ( \
-             (error_message NOT LIKE '%RESOURCE_EXHAUSTED%' AND completed_at < NOW() - INTERVAL '5 minutes') \
+             (error_message NOT LIKE '%RESOURCE_EXHAUSTED%' \
+              AND completed_at < NOW() - (INTERVAL '1 minute' * POWER(2, LEAST(COALESCE(retry_count, 0), 8)))) \
              OR \
-             (error_message LIKE '%RESOURCE_EXHAUSTED%' AND completed_at < NOW() - INTERVAL '30 minutes') \
+             (error_message LIKE '%RESOURCE_EXHAUSTED%' \
+              AND completed_at < NOW() - INTERVAL '30 minutes') \
          ) \
          ORDER BY completed_at ASC \
          LIMIT 10"
@@ -663,25 +620,6 @@ async fn auto_retry_failed_jobs(app_state: &Arc<AppState>) -> Result<(), String>
     .await
     .map_err(|e| format!("Failed to fetch failed jobs for retry: {}", e))?;
 
-    // Escalate jobs that have exhausted all retries — admin must manually retry via admin API
-    let exhausted: Vec<(i32, Option<String>)> = sqlx::query_as(
-        "SELECT id, error_message FROM clipping_jobs \
-         WHERE status = 'failed' \
-         AND COALESCE(retry_count, 0) >= 5 \
-         AND updated_at > NOW() - INTERVAL '1 hour'"
-    )
-    .fetch_all(&app_state.db_pool)
-    .await
-    .unwrap_or_default();
-
-    for (job_id, err) in exhausted {
-        tracing::warn!(
-            "🚨 CLIPPING JOB {} EXHAUSTED ALL 5 RETRIES — admin review required. \
-             Use POST /api/admin/clipping/jobs/{}/retry to reset. Last error: {:?}",
-            job_id, job_id, err
-        );
-    }
-
     if retry_jobs.is_empty() {
         return Ok(());
     }
@@ -689,8 +627,6 @@ async fn auto_retry_failed_jobs(app_state: &Arc<AppState>) -> Result<(), String>
     tracing::info!("🔄 Found {} failed jobs eligible for automatic retry", retry_jobs.len());
 
     for (job_id, current_step) in retry_jobs {
-        // Map current_step → resume_from so execute_clipping_job() skips already-done phases.
-        // current_step is set by update_job_status() and mirrors the last known status.
         let resume_from: Option<&str> = match current_step.as_deref().unwrap_or("") {
             s if s.contains("posting") || s.contains("upload") => Some("clips_extracted"),
             s if s.contains("vectoriz")                         => Some("clips_extracted"),
@@ -722,6 +658,7 @@ async fn auto_retry_failed_jobs(app_state: &Arc<AppState>) -> Result<(), String>
                  completed_at = NULL, \
                  claimed_by = NULL, \
                  claimed_at = NULL, \
+                 worker_heartbeat_at = NULL, \
                  updated_at = NOW(), \
                  retry_count = COALESCE(retry_count, 0) + 1, \
                  last_retry_at = NOW() \

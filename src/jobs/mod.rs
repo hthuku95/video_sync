@@ -17,6 +17,7 @@ pub mod token_refresh;
 pub mod worker_config;
 pub mod job_claimer;
 pub mod twitch_mapper_job;
+pub mod error_classifier;
 
 pub use clipping_worker::{ClippingWorker, process_clipping_jobs_once, run_clipping_worker_loop};
 pub use analytics_sync_job::AnalyticsSyncJob;
