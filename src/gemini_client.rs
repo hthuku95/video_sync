@@ -12,6 +12,40 @@ pub struct GeminiClient {
     base_url: String,
 }
 
+/// Parse the retry delay from a Gemini 429 error body.
+///
+/// The API embeds the hint in `error.details[].retryDelay` (e.g. "52s")
+/// per the `google.rpc.RetryInfo` proto. Falls back to scanning the
+/// human-readable message for "Please retry in Xs", then to `default_secs`.
+fn parse_gemini_retry_delay(error_body: &str, default_secs: f64) -> f64 {
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(error_body) {
+        // Primary: error.details[].retryDelay (e.g. "52s" or "52.5s")
+        if let Some(details) = v["error"]["details"].as_array() {
+            for detail in details {
+                if let Some(rd) = detail["retryDelay"].as_str() {
+                    let secs_str = rd.trim_end_matches('s');
+                    if let Ok(secs) = secs_str.parse::<f64>() {
+                        return secs;
+                    }
+                }
+            }
+        }
+        // Fallback: "Please retry in 25.755477156s." in error.message
+        if let Some(msg) = v["error"]["message"].as_str() {
+            let marker = "Please retry in ";
+            if let Some(start) = msg.find(marker) {
+                let rest = &msg[start + marker.len()..];
+                if let Some(end) = rest.find('s') {
+                    if let Ok(secs) = rest[..end].parse::<f64>() {
+                        return secs;
+                    }
+                }
+            }
+        }
+    }
+    default_secs
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct GenerateContentRequest {
     pub contents: Vec<Content>,
@@ -324,23 +358,8 @@ impl GeminiClient {
 
             // On 429 (rate limit), honour the server-specified retry-after delay and try again.
             if status.as_u16() == 429 && attempt < max_attempts - 1 {
-                // Parse "Please retry in XX.XXXs." from the JSON body.
-                let retry_secs: f64 = serde_json::from_str::<serde_json::Value>(&error_text)
-                    .ok()
-                    .and_then(|v| {
-                        v["error"]["message"]
-                            .as_str()
-                            .and_then(|msg| {
-                                // Look for "Please retry in 25.755477156s."
-                                let marker = "Please retry in ";
-                                let start = msg.find(marker)? + marker.len();
-                                let end = msg[start..].find('s')? + start;
-                                msg[start..end].parse::<f64>().ok()
-                            })
-                    })
-                    .unwrap_or(30.0);
-
-                let wait_secs = (retry_secs + 2.0) as u64;
+                let retry_secs = parse_gemini_retry_delay(&error_text, 30.0);
+                let wait_secs = (retry_secs + 5.0) as u64;
                 tracing::warn!(
                     "⏳ Gemini rate limited (429, attempt {}/{}). \
                      Waiting {}s before retry…",
@@ -3090,19 +3109,8 @@ Provide ONLY the JSON object, no markdown, no code blocks, no other text."#,
 
             // On 429 rate limit, back off and retry
             if status.as_u16() == 429 && attempt < max_attempts - 1 {
-                let retry_secs: f64 = serde_json::from_str::<serde_json::Value>(&error_text)
-                    .ok()
-                    .and_then(|v| {
-                        v["error"]["message"].as_str().and_then(|msg| {
-                            let marker = "Please retry in ";
-                            let start = msg.find(marker)? + marker.len();
-                            let end = msg[start..].find('s')? + start;
-                            msg[start..end].parse::<f64>().ok()
-                        })
-                    })
-                    .unwrap_or(30.0);
-
-                let wait_secs = (retry_secs + 2.0) as u64;
+                let retry_secs = parse_gemini_retry_delay(&error_text, 30.0);
+                let wait_secs = (retry_secs + 5.0) as u64;
                 tracing::warn!("⏳ Gemini rate limited (429, attempt {}/{}). Waiting {}s…", attempt + 1, max_attempts, wait_secs);
                 tokio::time::sleep(tokio::time::Duration::from_secs(wait_secs)).await;
                 last_error = format!("Gemini rate limited: {}", error_text).into();
@@ -3168,17 +3176,7 @@ Provide ONLY the JSON object, no markdown, no code blocks, no other text."#,
             let err_body = response.text().await.unwrap_or_default();
 
             if status.as_u16() == 429 && attempt < max_attempts - 1 {
-                let wait: u64 = serde_json::from_str::<serde_json::Value>(&err_body)
-                    .ok()
-                    .and_then(|v| {
-                        let msg = v["error"]["message"].as_str()?.to_string();
-                        let marker = "Please retry in ";
-                        let start = msg.find(marker)? + marker.len();
-                        let end = msg[start..].find('s')? + start;
-                        msg[start..end].parse::<u64>().ok()
-                    })
-                    .unwrap_or(60);
-                let wait = wait + 5;
+                let wait = (parse_gemini_retry_delay(&err_body, 60.0) + 5.0) as u64;
                 tracing::warn!(
                     "⏳ generate_text: Gemini 429 (attempt {}/{}). Waiting {}s…",
                     attempt + 1, max_attempts, wait
