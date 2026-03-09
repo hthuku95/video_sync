@@ -1,7 +1,7 @@
 // Periodic cron job: auto-map unmapped YouTube source channels to Twitch.
 //
-// Runs every 10 minutes. Processes at most 10 unmapped channels per cycle to
-// avoid burning Gemini quota (2s delay between calls).
+// Runs every 10 minutes. Processes at most 3 unmapped channels per cycle to
+// stay well within the Gemini free-tier RPM limit (15s delay between calls).
 
 use crate::AppState;
 use crate::clipping::models::SourceChannel;
@@ -36,7 +36,7 @@ async fn run_mapping_pass(
         "SELECT * FROM youtube_source_channels
          WHERE twitch_mapping_status = 'unmapped' AND is_active = true
          ORDER BY created_at ASC
-         LIMIT 10",
+         LIMIT 3",
     )
     .fetch_all(db)
     .await
@@ -83,7 +83,7 @@ async fn run_mapping_pass(
             }
         }
 
-        // 2-second delay between Gemini calls to avoid 429
-        tokio::time::sleep(Duration::from_secs(2)).await;
+        // 15-second delay between Gemini calls — free tier is 10 RPM shared with clipping worker
+        tokio::time::sleep(Duration::from_secs(15)).await;
     }
 }

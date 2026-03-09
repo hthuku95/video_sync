@@ -3122,6 +3122,7 @@ Provide ONLY the JSON object, no markdown, no code blocks, no other text."#,
 
     /// Simple text generation — used by Twitch mapper and other plain-text callers.
     /// Uses raw JSON with thinkingBudget:0 to avoid burning thinking-token quota.
+    /// Retries up to 3 times on 429 RESOURCE_EXHAUSTED with back-off.
     pub async fn generate_text(
         &self,
         prompt: &str,
@@ -3140,25 +3141,59 @@ Provide ONLY the JSON object, no markdown, no code blocks, no other text."#,
             }
         });
 
-        let response = self
-            .client
-            .post(&url)
-            .header("Content-Type", "application/json")
-            .json(&request_body)
-            .send()
-            .await?;
+        let max_attempts = 3u32;
+        let mut last_err: Box<dyn std::error::Error + Send + Sync> =
+            "generate_text: no attempts made".into();
 
-        if !response.status().is_success() {
-            let err = response.text().await.unwrap_or_default();
-            return Err(format!("Gemini API error: {}", err).into());
+        for attempt in 0..max_attempts {
+            let response = self
+                .client
+                .post(&url)
+                .header("Content-Type", "application/json")
+                .json(&request_body)
+                .send()
+                .await?;
+
+            let status = response.status();
+
+            if status.is_success() {
+                let json: serde_json::Value = response.json().await?;
+                let text = json["candidates"][0]["content"]["parts"][0]["text"]
+                    .as_str()
+                    .ok_or("Gemini generate_text: no text in response")?
+                    .to_string();
+                return Ok(text);
+            }
+
+            let err_body = response.text().await.unwrap_or_default();
+
+            if status.as_u16() == 429 && attempt < max_attempts - 1 {
+                let wait: u64 = serde_json::from_str::<serde_json::Value>(&err_body)
+                    .ok()
+                    .and_then(|v| {
+                        let msg = v["error"]["message"].as_str()?.to_string();
+                        let marker = "Please retry in ";
+                        let start = msg.find(marker)? + marker.len();
+                        let end = msg[start..].find('s')? + start;
+                        msg[start..end].parse::<u64>().ok()
+                    })
+                    .unwrap_or(60);
+                let wait = wait + 5;
+                tracing::warn!(
+                    "⏳ generate_text: Gemini 429 (attempt {}/{}). Waiting {}s…",
+                    attempt + 1, max_attempts, wait
+                );
+                tokio::time::sleep(tokio::time::Duration::from_secs(wait)).await;
+                last_err = format!("Gemini API error: {}", err_body).into();
+                continue;
+            }
+
+            last_err = format!("Gemini API error: {}", err_body).into();
+            if attempt < max_attempts - 1 {
+                tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+            }
         }
 
-        let json: serde_json::Value = response.json().await?;
-        let text = json["candidates"][0]["content"]["parts"][0]["text"]
-            .as_str()
-            .ok_or("Gemini generate_text: no text in response")?
-            .to_string();
-
-        Ok(text)
+        Err(last_err)
     }
 }
