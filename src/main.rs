@@ -1,4 +1,4 @@
-// Build: 2026-03-07 — deploy with TWITCH_TV_CLIENT_SECRET env var
+// Build: 2026-03-10 — deploy with YOUTUBE_API_KEY + Gemini retry fixes
 use axum::{Extension, Router, extract::DefaultBodyLimit};
 use std::sync::Arc;
 use tower_http::cors::CorsLayer;
