@@ -17,51 +17,59 @@ impl ThumbnailGenerator {
     }
 
     /// Generate optimal thumbnail for a clip.
-    /// Steps:
-    /// 1. Extract multiple frames from the clip at strategic timestamps
-    /// 2. Use Gemini vision to select the best frame
-    /// 3. Save the selected frame as the final thumbnail
     ///
-    /// Note: text overlay via image generation is not implemented yet —
-    /// the standard Gemini text API does not return image data.
+    /// Pipeline:
+    /// 1. Extract 3 candidate frames (10 / 40 / 70 % of clip duration)
+    /// 2. Gemini vision selects the most impactful frame
+    /// 3. Gemini image-edit overlays the clip title onto the selected frame
+    /// 4. Falls back to the raw selected frame if image editing fails (e.g. quota)
     pub async fn generate_thumbnail(
         &self,
         clip_path: &str,
-        _clip_title: &str,
+        clip_title: &str,
         viral_factors: &[String],
     ) -> Result<String, String> {
         tracing::info!("🎨 Generating AI thumbnail for clip: {}", clip_path);
 
-        // Step 1: Extract candidate frames at strategic timestamps
+        // Step 1: Extract candidate frames
         let candidate_frames = self.extract_candidate_frames(clip_path).await?;
-
         if candidate_frames.is_empty() {
             return Err("Failed to extract any frames from clip".to_string());
         }
 
-        // Step 2: Select best frame using Gemini vision
+        // Step 2: Gemini picks the best frame
         let best_frame_path = self.select_best_frame(&candidate_frames, viral_factors).await?;
-
         tracing::info!("✅ AI selected best frame: {}", best_frame_path);
 
-        // Step 3: Copy selected frame to outputs/ alongside the clip file
-        let thumbnail_path = format!(
-            "outputs/ai_thumb_{}.jpg",
-            Path::new(clip_path)
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("clip")
-        );
-        tokio::fs::copy(&best_frame_path, &thumbnail_path)
-            .await
-            .map_err(|e| format!("Failed to save AI thumbnail: {}", e))?;
+        let stem = Path::new(clip_path)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("clip")
+            .to_string();
+        let thumbnail_path = format!("outputs/ai_thumb_{}.jpg", stem);
+
+        // Step 3: Gemini image-edit overlays the title on the selected frame
+        let overlay_result = self
+            .generate_thumbnail_with_overlay(&best_frame_path, clip_title, &thumbnail_path)
+            .await;
+
+        if let Err(ref e) = overlay_result {
+            tracing::warn!(
+                "Thumbnail overlay failed (using raw best frame as fallback): {}",
+                e
+            );
+            // Fallback: copy the raw selected frame as the thumbnail
+            tokio::fs::copy(&best_frame_path, &thumbnail_path)
+                .await
+                .map_err(|e| format!("Failed to save fallback thumbnail: {}", e))?;
+        }
 
         // Cleanup all temporary candidate frames
         for frame_path in &candidate_frames {
             let _ = tokio::fs::remove_file(frame_path).await;
         }
 
-        tracing::info!("✅ AI thumbnail saved: {}", thumbnail_path);
+        tracing::info!("✅ Thumbnail ready: {}", thumbnail_path);
         Ok(thumbnail_path)
     }
 
@@ -235,16 +243,62 @@ No explanation, just the number."#,
         Ok(candidate_frames[selected_index].clone())
     }
 
-    /// Generate final thumbnail with text overlay using Gemini image generation
-    /// This creates a polished, professional thumbnail with the clip title overlaid
+    /// Overlay the clip title onto the best frame using Gemini image editing.
+    ///
+    /// Calls `generate_image_from_frame` which passes the frame + a styling prompt
+    /// to `gemini-3-pro-image-preview` and returns the edited image bytes.
+    /// Writes the result to `output_path` and returns `Ok(())` on success.
     async fn generate_thumbnail_with_overlay(
         &self,
         base_frame_path: &str,
         clip_title: &str,
-    ) -> Result<String, String> {
-        tracing::info!("🎨 Generating thumbnail with text overlay");
+        output_path: &str,
+    ) -> Result<(), String> {
+        tracing::info!("🎨 Generating thumbnail overlay for: {}", clip_title);
 
         let gemini_client = self
+            .app_state
+            .gemini_client
+            .as_ref()
+            .ok_or("Gemini client not available")?;
+
+        // Read the selected base frame
+        let base_frame_bytes = tokio::fs::read(base_frame_path)
+            .await
+            .map_err(|e| format!("Failed to read base frame: {}", e))?;
+
+        let prompt = format!(
+            "Edit this video frame into a professional YouTube thumbnail. \
+             Keep the original composition intact. \
+             Add bold, large, eye-catching text overlay reading: \"{}\". \
+             Use white text with a black drop shadow positioned in the lower third. \
+             Make the text large enough to read on a mobile screen. \
+             Output a 16:9 image at 1280x720 minimum resolution.",
+            clip_title
+        );
+
+        let image_bytes = gemini_client
+            .generate_image_from_frame(&prompt, &base_frame_bytes, Some("16:9"))
+            .await
+            .map_err(|e| format!("Gemini image edit failed: {}", e))?;
+
+        tokio::fs::write(output_path, &image_bytes)
+            .await
+            .map_err(|e| format!("Failed to write overlay thumbnail: {}", e))?;
+
+        tracing::info!("✅ Overlay thumbnail saved: {}", output_path);
+        Ok(())
+    }
+
+    // Legacy method preserved for reference — was using generateContent text API
+    // which does not return image data. Replaced by generate_thumbnail_with_overlay above.
+    #[allow(dead_code)]
+    async fn _legacy_overlay_attempt(
+        &self,
+        base_frame_path: &str,
+        clip_title: &str,
+    ) -> Result<String, String> {
+        let _gemini_client = self
             .app_state
             .gemini_client
             .as_ref()
@@ -302,7 +356,7 @@ OUTPUT: A polished YouTube thumbnail (16:9 aspect ratio, 1280x720px minimum)"#,
         };
 
         // Generate thumbnail with overlay
-        let response = gemini_client
+        let response = _gemini_client
             .generate_content(request)
             .await
             .map_err(|e| format!("Thumbnail generation failed: {}", e))?;

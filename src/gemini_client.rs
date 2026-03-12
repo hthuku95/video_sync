@@ -505,6 +505,99 @@ impl GeminiClient {
         }
     }
 
+    /// Edit an existing image using Gemini image generation (image-in → image-out).
+    ///
+    /// Passes `image_bytes` as an inline JPEG alongside a text `prompt` describing
+    /// the desired edits (e.g. "add bold white title text at the top"). Returns the
+    /// generated/edited image as raw bytes.
+    ///
+    /// Uses `gemini-3-pro-image-preview` with `responseModalities: ["TEXT", "IMAGE"]`.
+    pub async fn generate_image_from_frame(
+        &self,
+        prompt: &str,
+        image_bytes: &[u8],
+        aspect_ratio: Option<&str>,
+    ) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
+        let image_b64 = BASE64_STANDARD.encode(image_bytes);
+
+        let mut config_map = serde_json::Map::new();
+        config_map.insert(
+            "responseModalities".to_string(),
+            serde_json::json!(["TEXT", "IMAGE"]),
+        );
+        let mut image_config = serde_json::Map::new();
+        image_config.insert(
+            "aspectRatio".to_string(),
+            serde_json::Value::String(aspect_ratio.unwrap_or("16:9").to_string()),
+        );
+        config_map.insert(
+            "imageConfig".to_string(),
+            serde_json::Value::Object(image_config),
+        );
+
+        let request = serde_json::json!({
+            "contents": [{
+                "role": "user",
+                "parts": [
+                    { "text": prompt },
+                    {
+                        "inlineData": {
+                            "mimeType": "image/jpeg",
+                            "data": image_b64
+                        }
+                    }
+                ]
+            }],
+            "generationConfig": config_map
+        });
+
+        let url = format!(
+            "{}/models/gemini-3-pro-image-preview:generateContent?key={}",
+            self.base_url, self.api_key
+        );
+
+        tracing::debug!("generate_image_from_frame request prompt: {}", prompt);
+
+        let response = self
+            .client
+            .post(&url)
+            .header("Content-Type", "application/json")
+            .json(&request)
+            .send()
+            .await?;
+
+        if response.status().is_success() {
+            let response_text = response.text().await?;
+            let response_json: serde_json::Value = serde_json::from_str(&response_text)?;
+
+            if let Some(candidates) = response_json["candidates"].as_array() {
+                if let Some(candidate) = candidates.first() {
+                    if let Some(parts) = candidate["content"]["parts"].as_array() {
+                        for part in parts {
+                            if let Some(inline_data) = part.get("inlineData") {
+                                if let Some(data) = inline_data["data"].as_str() {
+                                    let bytes = BASE64_STANDARD
+                                        .decode(data)
+                                        .map_err(|e| format!("Failed to decode image: {}", e))?;
+                                    return Ok(bytes);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Err(format!(
+                "No image data in response: {}",
+                &response_text[..response_text.len().min(300)]
+            )
+            .into())
+        } else {
+            let error_text = response.text().await?;
+            Err(format!("Gemini image edit API error: {}", error_text).into())
+        }
+    }
+
     pub fn create_video_editing_tools() -> Vec<FunctionDeclaration> {
         vec![
             FunctionDeclaration {
