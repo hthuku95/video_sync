@@ -608,9 +608,13 @@ async fn auto_retry_failed_jobs(app_state: &Arc<AppState>) -> Result<(), String>
          AND COALESCE(retry_count, 0) < 10 \
          AND ( \
              (error_message NOT LIKE '%RESOURCE_EXHAUSTED%' \
+              AND error_message NOT LIKE '%429%' \
+              AND error_message NOT LIKE '%Too Many Requests%' \
               AND completed_at < NOW() - (INTERVAL '1 minute' * POWER(2, LEAST(COALESCE(retry_count, 0), 8)))) \
              OR \
-             (error_message LIKE '%RESOURCE_EXHAUSTED%' \
+             ((error_message LIKE '%RESOURCE_EXHAUSTED%' \
+               OR error_message LIKE '%429%' \
+               OR error_message LIKE '%Too Many Requests%') \
               AND completed_at < NOW() - INTERVAL '30 minutes') \
          ) \
          ORDER BY completed_at ASC \

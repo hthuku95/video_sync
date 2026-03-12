@@ -36,6 +36,7 @@ use std::sync::Arc;
 // ============================================================================
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct ClippingAgentState {
     pub job_id: i32,
     pub checkpoint_num: usize,

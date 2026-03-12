@@ -27,6 +27,8 @@ pub fn classify(err: &str) -> ErrorClass {
         "403 Forbidden",
         "Unable to parse UUID",
         "No Twitch mapping exists",
+        "Cannot fetch content from the provided URL",
+        "Request contains an invalid argument",
     ];
     for p in permanent_patterns {
         if err.contains(p) {
@@ -39,6 +41,8 @@ pub fn classify(err: &str) -> ErrorClass {
         || err.contains("quota exceeded")
         || err.contains("Quota exceeded")
         || err.contains("Resource has been exhausted")
+        || err.contains("429")
+        || err.contains("Too Many Requests")
     {
         return ErrorClass::Quota;
     }
