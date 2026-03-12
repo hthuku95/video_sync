@@ -16,19 +16,21 @@ impl ThumbnailGenerator {
         Self { app_state }
     }
 
-    /// Generate optimal thumbnail for a clip using hybrid approach
+    /// Generate optimal thumbnail for a clip.
     /// Steps:
-    /// 1. Extract multiple frames from the clip
-    /// 2. Use AI to select the best frame
-    /// 3. Generate text overlay with title
-    /// 4. Return path to generated thumbnail
+    /// 1. Extract multiple frames from the clip at strategic timestamps
+    /// 2. Use Gemini vision to select the best frame
+    /// 3. Save the selected frame as the final thumbnail
+    ///
+    /// Note: text overlay via image generation is not implemented yet —
+    /// the standard Gemini text API does not return image data.
     pub async fn generate_thumbnail(
         &self,
         clip_path: &str,
-        clip_title: &str,
+        _clip_title: &str,
         viral_factors: &[String],
     ) -> Result<String, String> {
-        tracing::info!("🎨 Generating thumbnail for clip: {}", clip_path);
+        tracing::info!("🎨 Generating AI thumbnail for clip: {}", clip_path);
 
         // Step 1: Extract candidate frames at strategic timestamps
         let candidate_frames = self.extract_candidate_frames(clip_path).await?;
@@ -37,20 +39,29 @@ impl ThumbnailGenerator {
             return Err("Failed to extract any frames from clip".to_string());
         }
 
-        // Step 2: Select best frame using AI vision analysis
+        // Step 2: Select best frame using Gemini vision
         let best_frame_path = self.select_best_frame(&candidate_frames, viral_factors).await?;
 
-        tracing::info!("✅ Selected best frame: {}", best_frame_path);
+        tracing::info!("✅ AI selected best frame: {}", best_frame_path);
 
-        // Step 3: Generate thumbnail with text overlay using Gemini
-        let thumbnail_path = self
-            .generate_thumbnail_with_overlay(&best_frame_path, clip_title)
-            .await?;
+        // Step 3: Copy selected frame to outputs/ alongside the clip file
+        let thumbnail_path = format!(
+            "outputs/ai_thumb_{}.jpg",
+            Path::new(clip_path)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("clip")
+        );
+        tokio::fs::copy(&best_frame_path, &thumbnail_path)
+            .await
+            .map_err(|e| format!("Failed to save AI thumbnail: {}", e))?;
 
-        // Cleanup: Remove temporary candidate frames
-        self.cleanup_candidate_frames(&candidate_frames, &best_frame_path).await;
+        // Cleanup all temporary candidate frames
+        for frame_path in &candidate_frames {
+            let _ = tokio::fs::remove_file(frame_path).await;
+        }
 
-        tracing::info!("✅ Thumbnail generated: {}", thumbnail_path);
+        tracing::info!("✅ AI thumbnail saved: {}", thumbnail_path);
         Ok(thumbnail_path)
     }
 

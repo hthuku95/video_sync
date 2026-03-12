@@ -12,6 +12,7 @@
 
 use crate::clipping::gemini_video_analyzer::ViralMoment;
 use crate::clipping::models::ClippingConfig;
+use crate::clipping::thumbnail_generator::ThumbnailGenerator;
 use crate::AppState;
 use std::sync::Arc;
 
@@ -87,6 +88,34 @@ impl AiClipper {
             job_id
         );
 
+        // Phase C+: AI thumbnail selection — replace ffmpeg frame with Gemini-selected best frame.
+        // Falls back to ffmpeg thumbnail if Gemini is unavailable or rate-limited.
+        if self.app_state.gemini_client.is_some() {
+            let thumbnail_gen = ThumbnailGenerator::new(self.app_state.clone());
+            for clip in &mut extracted_clips {
+                match thumbnail_gen
+                    .generate_thumbnail(&clip.local_clip_path, &clip.ai_title, &clip.viral_factors)
+                    .await
+                {
+                    Ok(ai_thumb) => {
+                        tracing::info!(
+                            "🎨 AI thumbnail for clip {}: {}",
+                            clip.clip_number,
+                            ai_thumb
+                        );
+                        clip.custom_thumbnail_path = Some(ai_thumb);
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "AI thumbnail for clip {} failed (keeping ffmpeg fallback): {}",
+                            clip.clip_number,
+                            e
+                        );
+                    }
+                }
+            }
+        }
+
         Ok(extracted_clips)
     }
 }
@@ -116,12 +145,40 @@ fn extract_single_clip(
         moment.end_sec,
     ).map_err(|e| format!("Clip {} trim failed: {}", clip_number, e))?;
 
-    // Extract thumbnail at the Gemini-specified timestamp
-    let custom_thumbnail = crate::utils::ffmpeg_utils::extract_frame_at_timestamp(
-        clip_path,
-        moment.thumbnail_sec - moment.start_sec, // Relative to clip start
-        thumbnail_path,
-    ).ok(); // Non-fatal: thumbnail extraction is best-effort
+    // Extract thumbnail at the Gemini-specified timestamp.
+    // Retry up to 3 times with a brief sleep — the trimmed file may not be
+    // fully flushed on the first attempt when clips are extracted in parallel.
+    let relative_ts = (moment.thumbnail_sec - moment.start_sec).max(0.0);
+    let custom_thumbnail = {
+        let mut result = None;
+        for attempt in 1u32..=3 {
+            match crate::utils::ffmpeg_utils::extract_frame_at_timestamp(
+                clip_path,
+                relative_ts,
+                thumbnail_path,
+            ) {
+                Ok(path) => {
+                    result = Some(path);
+                    break;
+                }
+                Err(e) => {
+                    if attempt < 3 {
+                        tracing::warn!(
+                            "Clip {} thumbnail attempt {}/3 failed: {}. Retrying in {}ms...",
+                            clip_number, attempt, e, 200 * attempt
+                        );
+                        std::thread::sleep(std::time::Duration::from_millis(200 * attempt as u64));
+                    } else {
+                        tracing::warn!(
+                            "Clip {} thumbnail failed after 3 attempts: {}",
+                            clip_number, e
+                        );
+                    }
+                }
+            }
+        }
+        result
+    };
 
     Ok(ExtractedClipData {
         clip_number,
