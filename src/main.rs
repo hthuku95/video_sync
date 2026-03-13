@@ -1,6 +1,7 @@
 // Build: 2026-03-10 — deploy with YOUTUBE_API_KEY + Gemini retry fixes
 use axum::{Extension, Router, extract::DefaultBodyLimit};
 use std::sync::Arc;
+use tokio::sync::Semaphore;
 use tower_http::cors::CorsLayer;
 
 mod agent;
@@ -53,6 +54,7 @@ pub struct AppState {
     pub workflow_checkpointer: Option<workflow::checkpoint::WorkflowCheckpointer>, // 🆕 Workflow state persistence
     pub token_manager: Option<Arc<token_manager::TokenManager>>, // 🔧 Centralized token refresh
     pub twitch_client: Option<Arc<twitch_client::TwitchClient>>, // 📺 Twitch Helix API
+    pub download_semaphore: Arc<Semaphore>, // 🔒 Limits concurrent downloads to 2
 }
 
 /// Validate Apify API token on startup
@@ -411,6 +413,7 @@ async fn main() {
         workflow_checkpointer,
         token_manager,
         twitch_client: twitch_client_opt,
+        download_semaphore: Arc::new(Semaphore::new(2)),
     });
 
     // Admin-only routes

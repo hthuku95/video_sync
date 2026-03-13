@@ -3829,7 +3829,7 @@ pub async fn admin_retry_job(
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     // Step 1: Read current_step so we can compute the resume phase.
     let current_step: Option<String> = sqlx::query_scalar(
-        "SELECT current_step FROM clipping_jobs WHERE id = $1 AND status IN ('failed', 'cancelled')"
+        "SELECT current_step FROM clipping_jobs WHERE id = $1 AND status IN ('failed', 'cancelled', 'discarded')"
     )
     .bind(job_id)
     .fetch_optional(&state.db_pool)
@@ -3850,7 +3850,7 @@ pub async fn admin_retry_job(
         return Ok(Json(json!({
             "success": false,
             "message": if exists {
-                "Job is not in failed or cancelled status"
+                "Job is not in failed, cancelled, or discarded status"
             } else {
                 "Job not found"
             }
@@ -3888,7 +3888,7 @@ pub async fn admin_retry_job(
             claimed_by = NULL,
             claimed_at = NULL,
             updated_at = NOW()
-         WHERE id = $1 AND status IN ('failed', 'cancelled')
+         WHERE id = $1 AND status IN ('failed', 'cancelled', 'discarded')
          RETURNING retry_count"
     )
     .bind(job_id)
@@ -3913,7 +3913,7 @@ pub async fn admin_retry_job(
         }
         None => Ok(Json(json!({
             "success": false,
-            "message": "Job not found or not in failed/cancelled status"
+            "message": "Job not found or not in failed/cancelled/discarded status"
         }))),
     }
 }
@@ -4339,6 +4339,7 @@ pub async fn admin_clipping_jobs_page() -> Html<String> {
                     <option value="completed">Completed</option>
                     <option value="failed">Failed</option>
                     <option value="cancelled">Cancelled</option>
+                    <option value="discarded">Discarded</option>
                 </select>
             </div>
             <div class="filter-group">
@@ -4521,7 +4522,9 @@ pub async fn admin_clipping_jobs_page() -> Html<String> {
                     <td class="actions" onclick="event.stopPropagation()">
                         ${job.status === 'failed' || job.status === 'cancelled' ?
                             `<button class="btn btn-success btn-sm" onclick="retryJob(${job.id})">Retry</button>` : ''}
-                        ${job.status !== 'completed' && job.status !== 'failed' && job.status !== 'cancelled' ?
+                        ${job.status === 'discarded' ?
+                            `<button class="btn btn-warning btn-sm" onclick="retryJob(${job.id})">Force Retry</button>` : ''}
+                        ${job.status !== 'completed' && job.status !== 'failed' && job.status !== 'cancelled' && job.status !== 'discarded' ?
                             `<button class="btn btn-secondary btn-sm" onclick="cancelJob(${job.id})">Cancel</button>` : ''}
                     </td>
                 </tr>
@@ -4610,9 +4613,11 @@ pub async fn admin_clipping_jobs_page() -> Html<String> {
                         </div>
 
                         <div class="actions" style="margin-top: 2rem;">
-                            ${job.status === 'failed' || job.status === 'cancelled' ? 
+                            ${job.status === 'failed' || job.status === 'cancelled' ?
                                 `<button class="btn btn-success" onclick="retryJob(${job.id}); closeModal(); setTimeout(loadJobs, 500);">Retry Job</button>` : ''}
-                            ${job.status !== 'completed' && job.status !== 'failed' && job.status !== 'cancelled' ? 
+                            ${job.status === 'discarded' ?
+                                `<button class="btn btn-warning" onclick="retryJob(${job.id}); closeModal(); setTimeout(loadJobs, 500);">Force Retry</button>` : ''}
+                            ${job.status !== 'completed' && job.status !== 'failed' && job.status !== 'cancelled' && job.status !== 'discarded' ?
                                 `<button class="btn btn-secondary" onclick="cancelJob(${job.id}); closeModal(); setTimeout(loadJobs, 500);">Cancel Job</button>` : ''}
                             <button class="btn btn-primary" onclick="closeModal()">Close</button>
                         </div>

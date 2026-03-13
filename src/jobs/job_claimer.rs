@@ -41,9 +41,11 @@ impl JobClaimer {
              WHERE id = (
                  SELECT cj.id FROM clipping_jobs cj
                  JOIN youtube_channel_linkages l ON l.id = cj.linkage_id
+                 LEFT JOIN source_channel_health sch ON sch.source_channel_id = l.source_channel_id
                  WHERE cj.status = 'pending' AND cj.claimed_by IS NULL
                  ORDER BY
                      CASE WHEN l.user_id = -1 THEN 0 ELSE 1 END,
+                     COALESCE(sch.health_score, 1.0) DESC,
                      cj.created_at ASC
                  LIMIT 1
                  FOR UPDATE OF cj SKIP LOCKED

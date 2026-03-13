@@ -1,6 +1,7 @@
 // lib.rs - Main library file that exports all modules
 
 use std::sync::Arc;
+use tokio::sync::Semaphore;
 
 // Core modules
 pub mod agent;
@@ -62,4 +63,5 @@ pub struct AppState {
     pub workflow_checkpointer: Option<workflow::checkpoint::WorkflowCheckpointer>,
     pub token_manager: Option<Arc<token_manager::TokenManager>>,
     pub twitch_client: Option<Arc<twitch_client::TwitchClient>>,
+    pub download_semaphore: Arc<Semaphore>,
 }

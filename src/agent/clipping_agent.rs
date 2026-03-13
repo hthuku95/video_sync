@@ -635,6 +635,12 @@ impl GeminiClippingAgent {
             }
         });
 
+        // Acquire download semaphore — limits concurrent downloads to 2 to avoid
+        // overwhelming the ytdlp/Apify service. Permit is held for the duration of
+        // the download and released automatically when _download_permit is dropped.
+        let _download_permit = self.app_state.download_semaphore.acquire().await
+            .map_err(|e| format!("Download semaphore closed: {}", e))?;
+
         let download_result = self.download_via_apify(&video_url, &path).await;
 
         let _ = stop_tx_b.send(true);
