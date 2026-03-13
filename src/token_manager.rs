@@ -220,12 +220,37 @@ impl TokenManager {
                     // Token still fresh, skip (shouldn't happen with our query but handle anyway)
                 }
                 Err(e) => {
+                    let error_str = e.to_string();
                     tracing::warn!(
                         "⚠️ Failed to refresh token for channel {} ({}): {}",
                         channel.channel_name,
                         channel.channel_id,
-                        e
+                        error_str
                     );
+
+                    // Mark channel as requiring re-auth when refresh token is permanently invalid
+                    if error_str.contains("invalid_grant")
+                        || error_str.contains("REFRESH_TOKEN_EXPIRED")
+                        || error_str.contains("INVALID_CREDENTIALS")
+                        || error_str.contains("token has been expired or revoked")
+                    {
+                        let _ = sqlx::query(
+                            "UPDATE connected_youtube_channels
+                             SET requires_reauth = true,
+                                 reauth_reason = 'YouTube authorization expired. Please reconnect your channel.',
+                                 updated_at = NOW()
+                             WHERE id = $1",
+                        )
+                        .bind(channel.id)
+                        .execute(&self.db_pool)
+                        .await;
+
+                        tracing::warn!(
+                            "🔴 Marked channel {} (id={}) as requires_reauth=true (invalid_grant)",
+                            channel.channel_name,
+                            channel.id
+                        );
+                    }
                     // Don't fail the entire batch - continue with other channels
                 }
             }
