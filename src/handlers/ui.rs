@@ -4929,8 +4929,9 @@ pub async fn clipping_management_page() -> Html<String> {
                     headers: { 'Authorization': 'Bearer ' + authToken }
                 });
                 const data = await response.json();
+                const channels = data.channels || data || [];
 
-                if (data.length === 0) {
+                if (channels.length === 0) {
                     container.className = 'empty-state';
                     container.innerHTML = `
                         <div class="empty-state-icon">📺</div>
@@ -4941,7 +4942,7 @@ pub async fn clipping_management_page() -> Html<String> {
                 }
 
                 container.className = 'grid';
-                container.innerHTML = data.map(channel => `
+                container.innerHTML = channels.map(channel => `
                     <div class="channel-card">
                         <div class="channel-header">
                             <img src="${channel.channel_thumbnail_url || '/placeholder.png'}"
@@ -4981,8 +4982,9 @@ pub async fn clipping_management_page() -> Html<String> {
                     headers: { 'Authorization': 'Bearer ' + authToken }
                 });
                 const data = await response.json();
+                const linkages = data.linkages || data || [];
 
-                if (data.length === 0) {
+                if (linkages.length === 0) {
                     container.className = 'empty-state';
                     container.innerHTML = `
                         <div class="empty-state-icon">🔗</div>
@@ -4992,7 +4994,7 @@ pub async fn clipping_management_page() -> Html<String> {
                     return;
                 }
 
-                container.innerHTML = data.map(linkage => `
+                container.innerHTML = linkages.map(linkage => `
                     <div class="linkage-card">
                         <div class="linkage-flow">
                             <div>
@@ -5033,8 +5035,9 @@ pub async fn clipping_management_page() -> Html<String> {
                     headers: { 'Authorization': 'Bearer ' + authToken }
                 });
                 const data = await response.json();
+                const jobs = data.jobs || data || [];
 
-                if (data.length === 0) {
+                if (jobs.length === 0) {
                     container.className = 'empty-state';
                     container.innerHTML = `
                         <div class="empty-state-icon">⚙️</div>
@@ -5044,7 +5047,7 @@ pub async fn clipping_management_page() -> Html<String> {
                     return;
                 }
 
-                container.innerHTML = data.map(job => {
+                container.innerHTML = jobs.map(job => {
                     const statusClass = job.status === 'completed' ? 'status-completed' :
                                        job.status === 'failed' ? 'status-failed' :
                                        job.status === 'pending' ? 'status-pending' : 'status-running';
@@ -5074,7 +5077,7 @@ pub async fn clipping_management_page() -> Html<String> {
                 }).join('');
 
                 // Open WebSocket for each active job
-                data.filter(j => j.status === 'processing' || j.status === 'pending').forEach(job => {
+                jobs.filter(j => j.status === 'processing' || j.status === 'pending').forEach(job => {
                     openJobWebSocket(job.id);
                 });
             } catch (error) {
@@ -5094,8 +5097,9 @@ pub async fn clipping_management_page() -> Html<String> {
                     headers: { 'Authorization': 'Bearer ' + authToken }
                 });
                 const data = await response.json();
+                const clips = data.clips || data || [];
 
-                if (data.length === 0) {
+                if (clips.length === 0) {
                     container.className = 'empty-state';
                     container.innerHTML = `
                         <div class="empty-state-icon">🎬</div>
@@ -5106,7 +5110,7 @@ pub async fn clipping_management_page() -> Html<String> {
                 }
 
                 container.className = 'grid';
-                container.innerHTML = data.map(clip => {
+                container.innerHTML = clips.map(clip => {
                     const statusClass = clip.upload_status === 'published' ? 'status-completed' :
                                        clip.upload_status === 'failed' ? 'status-failed' :
                                        clip.upload_status === 'uploading' ? 'status-running' : 'status-pending';
@@ -5251,13 +5255,15 @@ pub async fn clipping_management_page() -> Html<String> {
             const sourcesResponse = await fetch('/api/clipping/source-channels', {
                 headers: { 'Authorization': 'Bearer ' + authToken }
             });
-            const sources = await sourcesResponse.json();
+            const sourcesData = await sourcesResponse.json();
+            const sources = sourcesData.channels || sourcesData || [];
 
             // Load user's YouTube channels
             const channelsResponse = await fetch('/api/youtube/channels', {
                 headers: { 'Authorization': 'Bearer ' + authToken }
             });
-            const channels = await channelsResponse.json();
+            const channelsData = await channelsResponse.json();
+            const channels = channelsData.channels || channelsData || [];
 
             document.getElementById('linkageSourceChannel').innerHTML = sources.map(s =>
                 `<option value="${s.id}">${s.channel_name}</option>`

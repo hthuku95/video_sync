@@ -577,6 +577,18 @@ async fn main() {
         tracing::info!("Twitch mapper cron disabled (Twitch client not configured)");
     }
 
+    // Spawn YouTube Analytics sync job (runs every 6 hours)
+    // Syncs view/like/comment counts from YouTube Analytics API for all published clips,
+    // then refreshes viral_factor_performance and duration_performance tables.
+    {
+        let analytics_db = shared_state.db_pool.clone();
+        tokio::spawn(async move {
+            tracing::info!("📊 Starting YouTube Analytics sync job (every 6 hours)...");
+            jobs::AnalyticsSyncJob::new(analytics_db).start().await;
+        });
+        tracing::info!("✅ Analytics sync job started");
+    }
+
     // Run the server with ConnectInfo to provide socket addresses for rate limiting
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
         .await

@@ -93,6 +93,7 @@ pub async fn execute_clipping_job(
                 config.clips_per_video as usize,
                 config.min_clip_duration_seconds as f64,
                 config.max_clip_duration_seconds as f64,
+                &[],
             ),
         )
         .await

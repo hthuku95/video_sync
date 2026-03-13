@@ -527,6 +527,22 @@ impl GeminiClippingAgent {
             }
         });
 
+        // Fetch top-performing viral factors from performance tracker to bias selection
+        let learned_factors: Vec<String> = sqlx::query_scalar(
+            "SELECT viral_factor FROM viral_factor_performance \
+             WHERE total_clips >= 3 ORDER BY performance_score DESC LIMIT 5"
+        )
+        .fetch_all(&self.app_state.db_pool)
+        .await
+        .unwrap_or_default();
+
+        if !learned_factors.is_empty() {
+            tracing::info!(
+                "📈 Passing {} learned high-performing factors to Gemini analysis",
+                learned_factors.len()
+            );
+        }
+
         let analysis = tokio::time::timeout(
             tokio::time::Duration::from_secs(180),
             gemini.analyze_video_from_url(
@@ -534,6 +550,7 @@ impl GeminiClippingAgent {
                 linkage.clips_per_video as usize,
                 linkage.min_clip_duration_seconds as f64,
                 linkage.max_clip_duration_seconds as f64,
+                &learned_factors,
             ),
         )
         .await
@@ -1104,6 +1121,14 @@ impl GeminiClippingAgent {
         .await
         .ok();
 
+        // Update channel health score on successful completion
+        let _ = sqlx::query(
+            "SELECT recalculate_channel_health($1)"
+        )
+        .bind(linkage.source_channel_id)
+        .execute(&self.app_state.db_pool)
+        .await;
+
         state.terminal_status = Some("completed".to_string());
         state.clips_uploaded = clips_uploaded;
         state.clips_total = clips_total;
@@ -1145,6 +1170,30 @@ impl GeminiClippingAgent {
 
         state.terminal_status = Some("failed".to_string());
         state.error_message = Some(reason.to_string());
+
+        // Update channel health score on failure (recalculate from job history)
+        if let Ok(job) = fetch_job_details(job_id, &self.app_state.db_pool).await {
+            if let Ok(linkage) = fetch_linkage(job.linkage_id, &self.app_state.db_pool).await {
+                // Also record the last error on the channel health row
+                let _ = sqlx::query(
+                    "INSERT INTO source_channel_health (source_channel_id, last_error, last_error_at, updated_at)
+                     VALUES ($1, $2, NOW(), NOW())
+                     ON CONFLICT (source_channel_id) DO UPDATE
+                     SET last_error = EXCLUDED.last_error,
+                         last_error_at = EXCLUDED.last_error_at,
+                         updated_at = EXCLUDED.updated_at"
+                )
+                .bind(linkage.source_channel_id)
+                .bind(reason)
+                .execute(&self.app_state.db_pool)
+                .await;
+
+                let _ = sqlx::query("SELECT recalculate_channel_health($1)")
+                    .bind(linkage.source_channel_id)
+                    .execute(&self.app_state.db_pool)
+                    .await;
+            }
+        }
 
         tracing::warn!("❌ GeminiClippingAgent job {} FAILED: {}", job_id, reason);
 

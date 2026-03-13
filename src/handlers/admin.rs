@@ -56,6 +56,9 @@ pub fn admin_routes() -> Router {
         .route("/api/admin/clipping/jobs/:id/retry", post(admin_retry_job))
         .route("/api/admin/clipping/jobs/:id/cancel", post(admin_cancel_job))
         .route("/api/admin/clipping/jobs/:id/clips", get(admin_get_job_clips))
+        .route("/api/admin/performance/viral-factors", get(admin_viral_factor_performance))
+        .route("/api/admin/performance/channel-health", get(admin_channel_health))
+        .route("/api/admin/performance/recommendations", get(admin_learning_recommendations))
         .layer(axum::middleware::from_fn(admin_middleware))
         .layer(axum::middleware::from_fn(auth_middleware));
     
@@ -4719,4 +4722,114 @@ pub async fn admin_clipping_jobs_page() -> Html<String> {
     "###;
 
     Html(html.to_string())
+}
+
+// ── Performance Tracking & Channel Health API endpoints ────────────────────
+
+/// GET /api/admin/performance/viral-factors
+/// Returns all viral factors with their performance scores, ordered by best-performing.
+pub async fn admin_viral_factor_performance(
+    Extension(state): Extension<Arc<crate::AppState>>,
+) -> impl axum::response::IntoResponse {
+    let rows = sqlx::query(
+        "SELECT viral_factor, times_used, total_clips, avg_views, avg_like_rate,
+                avg_comment_rate, avg_watch_percentage, performance_score, rank,
+                last_calculated_at
+         FROM viral_factor_performance
+         WHERE viral_factor != 'initialization'
+         ORDER BY performance_score DESC"
+    )
+    .fetch_all(&state.db_pool)
+    .await;
+
+    match rows {
+        Ok(rows) => {
+            let factors: Vec<serde_json::Value> = rows.iter().map(|r| {
+                serde_json::json!({
+                    "viral_factor": r.try_get::<String, _>("viral_factor").unwrap_or_default(),
+                    "times_used": r.try_get::<i32, _>("times_used").unwrap_or(0),
+                    "total_clips": r.try_get::<i32, _>("total_clips").unwrap_or(0),
+                    "avg_views": r.try_get::<rust_decimal::Decimal, _>("avg_views").map(|v| v.to_string()).unwrap_or_default(),
+                    "avg_like_rate": r.try_get::<rust_decimal::Decimal, _>("avg_like_rate").map(|v| v.to_string()).unwrap_or_default(),
+                    "avg_comment_rate": r.try_get::<rust_decimal::Decimal, _>("avg_comment_rate").map(|v| v.to_string()).unwrap_or_default(),
+                    "performance_score": r.try_get::<rust_decimal::Decimal, _>("performance_score").map(|v| v.to_string()).unwrap_or_default(),
+                    "rank": r.try_get::<Option<i32>, _>("rank").unwrap_or(None),
+                })
+            }).collect();
+            axum::Json(serde_json::json!({ "success": true, "factors": factors }))
+        }
+        Err(e) => axum::Json(serde_json::json!({ "success": false, "error": e.to_string() })),
+    }
+}
+
+/// GET /api/admin/performance/channel-health
+/// Returns health score and job stats for every source channel.
+pub async fn admin_channel_health(
+    Extension(state): Extension<Arc<crate::AppState>>,
+) -> impl axum::response::IntoResponse {
+    let rows = sqlx::query(
+        "SELECT sc.id as source_id, sc.channel_name, sc.channel_id, sc.is_active,
+                COALESCE(sch.jobs_attempted, 0) as jobs_attempted,
+                COALESCE(sch.jobs_succeeded, 0) as jobs_succeeded,
+                COALESCE(sch.health_score, 1.0) as health_score,
+                sch.last_error,
+                sch.last_error_at,
+                sch.last_calculated_at
+         FROM youtube_source_channels sc
+         LEFT JOIN source_channel_health sch ON sch.source_channel_id = sc.id
+         ORDER BY COALESCE(sch.health_score, 1.0) ASC, sc.channel_name"
+    )
+    .fetch_all(&state.db_pool)
+    .await;
+
+    match rows {
+        Ok(rows) => {
+            let channels: Vec<serde_json::Value> = rows.iter().map(|r| {
+                serde_json::json!({
+                    "source_id": r.try_get::<i32, _>("source_id").unwrap_or(0),
+                    "channel_name": r.try_get::<String, _>("channel_name").unwrap_or_default(),
+                    "channel_id": r.try_get::<String, _>("channel_id").unwrap_or_default(),
+                    "is_active": r.try_get::<bool, _>("is_active").unwrap_or(true),
+                    "jobs_attempted": r.try_get::<i64, _>("jobs_attempted").unwrap_or(0),
+                    "jobs_succeeded": r.try_get::<i64, _>("jobs_succeeded").unwrap_or(0),
+                    "health_score": r.try_get::<rust_decimal::Decimal, _>("health_score").map(|v| v.to_string()).unwrap_or("1.0".to_string()),
+                    "last_error": r.try_get::<Option<String>, _>("last_error").unwrap_or(None),
+                    "last_error_at": r.try_get::<Option<chrono::DateTime<chrono::Utc>>, _>("last_error_at").unwrap_or(None),
+                })
+            }).collect();
+            axum::Json(serde_json::json!({ "success": true, "channels": channels }))
+        }
+        Err(e) => axum::Json(serde_json::json!({ "success": false, "error": e.to_string() })),
+    }
+}
+
+/// GET /api/admin/performance/recommendations
+/// Returns current active learning recommendations.
+pub async fn admin_learning_recommendations(
+    Extension(state): Extension<Arc<crate::AppState>>,
+) -> impl axum::response::IntoResponse {
+    let rows = sqlx::query(
+        "SELECT recommendation_type, recommendation, confidence, supporting_data,
+                is_active, created_at, updated_at
+         FROM learning_recommendations
+         WHERE is_active = true
+         ORDER BY confidence DESC"
+    )
+    .fetch_all(&state.db_pool)
+    .await;
+
+    match rows {
+        Ok(rows) => {
+            let recs: Vec<serde_json::Value> = rows.iter().map(|r| {
+                serde_json::json!({
+                    "type": r.try_get::<String, _>("recommendation_type").unwrap_or_default(),
+                    "recommendation": r.try_get::<String, _>("recommendation").unwrap_or_default(),
+                    "confidence": r.try_get::<rust_decimal::Decimal, _>("confidence").map(|v| v.to_string()).unwrap_or_default(),
+                    "updated_at": r.try_get::<chrono::DateTime<chrono::Utc>, _>("updated_at").ok(),
+                })
+            }).collect();
+            axum::Json(serde_json::json!({ "success": true, "recommendations": recs }))
+        }
+        Err(e) => axum::Json(serde_json::json!({ "success": false, "error": e.to_string() })),
+    }
 }

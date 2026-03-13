@@ -3099,6 +3099,7 @@ Generate a well-structured script appropriate for this type of video.",
         clips_per_video: usize,
         min_duration_secs: f64,
         max_duration_secs: f64,
+        high_performing_factors: &[String],
     ) -> Result<crate::clipping::gemini_video_analyzer::VideoAnalysis, Box<dyn std::error::Error + Send + Sync>> {
         // Acquire concurrency permit for this expensive video analysis call.
         let _permit = self.semaphore.acquire().await
@@ -3109,13 +3110,22 @@ Generate a well-structured script appropriate for this type of video.",
             youtube_url
         );
 
+        let learned_factors_hint = if !high_performing_factors.is_empty() {
+            format!(
+                "\nLEARNED HIGH-PERFORMING FACTORS (prioritize moments containing these): {}\n",
+                high_performing_factors.join(", ")
+            )
+        } else {
+            String::new()
+        };
+
         let prompt = format!(
             r#"Analyze this YouTube video and identify exactly {clips_per_video} viral clip opportunities for YouTube Shorts.
 
 REQUIREMENTS:
 - Each clip must be between {min_dur:.0} and {max_dur:.0} seconds
 - Focus on: dramatic hooks, surprising moments, emotional peaks, action sequences, plot twists
-- Clips should work as standalone content without needing context
+- Clips should work as standalone content without needing context{learned_hint}
 
 Return ONLY a valid JSON object matching this exact schema:
 {{
@@ -3140,6 +3150,7 @@ Provide ONLY the JSON object, no markdown, no code blocks, no other text."#,
             clips_per_video = clips_per_video,
             min_dur = min_duration_secs,
             max_dur = max_duration_secs,
+            learned_hint = learned_factors_hint,
         );
 
         // Build request with YouTube fileData part and mediaResolution: MEDIA_RESOLUTION_LOW
