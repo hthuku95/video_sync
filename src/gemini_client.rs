@@ -2,14 +2,21 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
+use std::sync::Arc;
 use rand::Rng;
 use base64::prelude::*;
+
+/// Maximum number of concurrent Gemini API calls across the entire process.
+/// Keeping this low prevents hitting per-minute quota limits when many jobs run in parallel.
+const GEMINI_MAX_CONCURRENT: usize = 3;
 
 #[derive(Debug, Clone)]
 pub struct GeminiClient {
     client: Client,
     api_key: String,
     base_url: String,
+    /// Semaphore that limits concurrent in-flight Gemini API calls.
+    semaphore: Arc<tokio::sync::Semaphore>,
 }
 
 /// Parse the retry delay from a Gemini 429 error body.
@@ -271,6 +278,7 @@ impl GeminiClient {
             client: Client::new(),
             api_key,
             base_url: "https://generativelanguage.googleapis.com/v1beta".to_string(),
+            semaphore: Arc::new(tokio::sync::Semaphore::new(GEMINI_MAX_CONCURRENT)),
         }
     }
 
@@ -278,6 +286,10 @@ impl GeminiClient {
         &self,
         request: GenerateContentRequest,
     ) -> Result<GenerateContentResponse, Box<dyn std::error::Error + Send + Sync>> {
+        // Acquire concurrency permit — released automatically when _permit is dropped.
+        let _permit = self.semaphore.acquire().await
+            .map_err(|e| format!("Gemini semaphore error: {}", e))?;
+
         let url = format!(
             "{}/models/gemini-2.5-flash:generateContent?key={}",
             self.base_url, self.api_key
@@ -518,6 +530,9 @@ impl GeminiClient {
         image_bytes: &[u8],
         aspect_ratio: Option<&str>,
     ) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
+        let _permit = self.semaphore.acquire().await
+            .map_err(|e| format!("Gemini semaphore error: {}", e))?;
+
         let image_b64 = BASE64_STANDARD.encode(image_bytes);
 
         let mut config_map = serde_json::Map::new();
@@ -3085,6 +3100,10 @@ Generate a well-structured script appropriate for this type of video.",
         min_duration_secs: f64,
         max_duration_secs: f64,
     ) -> Result<crate::clipping::gemini_video_analyzer::VideoAnalysis, Box<dyn std::error::Error + Send + Sync>> {
+        // Acquire concurrency permit for this expensive video analysis call.
+        let _permit = self.semaphore.acquire().await
+            .map_err(|e| format!("Gemini semaphore error: {}", e))?;
+
         tracing::info!(
             "🎬 Analyzing video via YouTube URL (1 Gemini call): {}",
             youtube_url
@@ -3228,6 +3247,9 @@ Provide ONLY the JSON object, no markdown, no code blocks, no other text."#,
         &self,
         prompt: &str,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        let _permit = self.semaphore.acquire().await
+            .map_err(|e| format!("Gemini semaphore error: {}", e))?;
+
         let url = format!(
             "{}/models/gemini-2.5-flash:generateContent?key={}",
             self.base_url, self.api_key

@@ -350,3 +350,13 @@ restore_points/
 dev_tools/
 debug_output/
 VideoSyncIntegrations
+
+# Proxy and cookie files (sensitive credentials)
+"Webshare 10 proxies (1).txt"
+Webshare*.txt
+cookies.txt
+*.Zone.Identifier
+*:Zone.Identifier
+
+# Local research/debug images
+images_for_claude/
