@@ -24,7 +24,8 @@ pub fn admin_routes() -> Router {
         .route("/admin/users", get(admin_users_list))
         .route("/admin/users/:id", get(admin_user_detail))
         .route("/admin/clipping-activity", get(admin_clipping_activity_page))
-        .route("/admin/clipping-jobs", get(admin_clipping_jobs_page));
+        .route("/admin/clipping-jobs", get(admin_clipping_jobs_page))
+        .route("/admin/performance", get(admin_performance_page));
     
     // API endpoints - protected routes with JWT authentication  
     let protected_admin = Router::new()
@@ -267,6 +268,7 @@ pub async fn admin_dashboard() -> Html<String> {
             <li><a href="/admin/dashboard" class="active">📊 Dashboard</a></li>
             <li><a href="/admin/users">👥 Users</a></li>
             <li><a href="/admin/clipping-activity">🎬 Clipping Activity</a></li>
+            <li><a href="/admin/performance">📈 Performance</a></li>
             <li><a href="#" onclick="showWhitelist()">🛡️ Whitelist</a></li>
             <li><a href="#" onclick="showYoutube()">🎥 YouTube Features</a></li>
             <li><a href="#" onclick="showPricing()">💰 Model Pricing</a></li>
@@ -1159,6 +1161,7 @@ pub async fn admin_users_list() -> Html<String> {
             <li><a href="/admin/dashboard">📊 Dashboard</a></li>
             <li><a href="/admin/users" class="active">👥 Users</a></li>
             <li><a href="/admin/clipping-activity">🎬 Clipping Activity</a></li>
+            <li><a href="/admin/performance">📈 Performance</a></li>
             <li><a href="/api/docs">📚 API Docs</a></li>
             <li><a href="/api/status">⚙️ System Status</a></li>
         </ul>
@@ -1447,6 +1450,7 @@ pub async fn admin_user_detail(Path(id): Path<i32>) -> Html<String> {
             <li><a href="/admin/dashboard">📊 Dashboard</a></li>
             <li><a href="/admin/users" class="active">👥 Users</a></li>
             <li><a href="/admin/clipping-activity">🎬 Clipping Activity</a></li>
+            <li><a href="/admin/performance">📈 Performance</a></li>
             <li><a href="/api/docs">📚 API Docs</a></li>
             <li><a href="/api/status">⚙️ System Status</a></li>
         </ul>
@@ -3375,6 +3379,7 @@ pub async fn admin_clipping_activity_page() -> Html<String> {
                 <li><a href="/admin/dashboard">📊 Dashboard</a></li>
                 <li><a href="/admin/users">👥 Users</a></li>
                 <li><a href="/admin/clipping-activity" class="active">🎬 Clipping Activity</a></li>
+                <li><a href="/admin/performance">📈 Performance</a></li>
                 <li><a href="/api/docs">📚 API Docs</a></li>
                 <li><a href="/api/status">⚙️ System Status</a></li>
             </ul>
@@ -4305,6 +4310,7 @@ pub async fn admin_clipping_jobs_page() -> Html<String> {
             <li><a href="/admin/users">Users</a></li>
             <li><a href="/admin/clipping-jobs" class="active">Clipping Jobs</a></li>
             <li><a href="/admin/clipping-activity">Activity</a></li>
+            <li><a href="/admin/performance">Performance</a></li>
             <li><a href="#" onclick="logout()">Logout</a></li>
         </ul>
     </div>
@@ -4832,4 +4838,550 @@ pub async fn admin_learning_recommendations(
         }
         Err(e) => axum::Json(serde_json::json!({ "success": false, "error": e.to_string() })),
     }
+}
+
+// ── Performance Dashboard UI ────────────────────────────────────────────────
+
+pub async fn admin_performance_page() -> Html<String> {
+    let html = r###"
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Performance Dashboard - Admin</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: #f8f9fa;
+            color: #343a40;
+        }
+        .sidebar {
+            position: fixed;
+            top: 0; left: 0;
+            width: 250px; height: 100vh;
+            background: #343a40;
+            padding: 2rem 0;
+            color: white;
+        }
+        .sidebar h2 {
+            padding: 0 1.5rem 2rem;
+            border-bottom: 1px solid #495057;
+            margin-bottom: 1rem;
+            color: #dc3545;
+        }
+        .sidebar ul { list-style: none; }
+        .sidebar li a {
+            display: block;
+            padding: 0.75rem 1.5rem;
+            color: white;
+            text-decoration: none;
+            transition: background 0.2s;
+        }
+        .sidebar li a:hover, .sidebar li a.active { background: #495057; }
+        .sidebar li a.active { border-left: 3px solid #dc3545; }
+        .main-content { margin-left: 250px; padding: 2rem; }
+        .page-header {
+            background: white;
+            padding: 1.5rem;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .page-header h1 { font-size: 1.75rem; }
+        .page-header p { color: #6c757d; margin-top: 0.25rem; }
+        .tabs {
+            display: flex;
+            gap: 0;
+            margin-bottom: 2rem;
+            border-bottom: 2px solid #dee2e6;
+        }
+        .tab-btn {
+            padding: 0.75rem 1.5rem;
+            border: none;
+            background: none;
+            cursor: pointer;
+            font-size: 0.95rem;
+            color: #6c757d;
+            border-bottom: 3px solid transparent;
+            margin-bottom: -2px;
+            transition: all 0.2s;
+        }
+        .tab-btn:hover { color: #343a40; }
+        .tab-btn.active { color: #dc3545; border-bottom-color: #dc3545; font-weight: 600; }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+        .card {
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+        .card-title {
+            font-size: 1.1rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+            padding-bottom: 0.75rem;
+            border-bottom: 1px solid #dee2e6;
+            color: #343a40;
+        }
+        table { width: 100%; border-collapse: collapse; }
+        thead th {
+            background: #f8f9fa;
+            padding: 0.75rem 1rem;
+            text-align: left;
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: #6c757d;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            border-bottom: 2px solid #dee2e6;
+        }
+        tbody tr { border-bottom: 1px solid #f0f0f0; }
+        tbody tr:hover { background: #fafafa; }
+        tbody td { padding: 0.75rem 1rem; font-size: 0.9rem; }
+        .rank-badge {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 28px; height: 28px;
+            border-radius: 50%;
+            font-weight: 700;
+            font-size: 0.85rem;
+        }
+        .rank-1 { background: #ffd700; color: #7a5800; }
+        .rank-2 { background: #c0c0c0; color: #444; }
+        .rank-3 { background: #cd7f32; color: white; }
+        .rank-other { background: #e9ecef; color: #6c757d; }
+        .score-bar-wrap {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .score-bar {
+            flex: 1;
+            height: 8px;
+            background: #e9ecef;
+            border-radius: 4px;
+            overflow: hidden;
+            max-width: 120px;
+        }
+        .score-bar-fill {
+            height: 100%;
+            border-radius: 4px;
+            transition: width 0.6s ease;
+        }
+        .score-bar-fill.high { background: #28a745; }
+        .score-bar-fill.mid  { background: #ffc107; }
+        .score-bar-fill.low  { background: #dc3545; }
+        .score-val { font-weight: 600; font-size: 0.9rem; min-width: 3rem; }
+        .health-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 1rem;
+        }
+        .health-card {
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+            padding: 1rem;
+            position: relative;
+            overflow: hidden;
+        }
+        .health-card::before {
+            content: '';
+            position: absolute;
+            left: 0; top: 0; bottom: 0;
+            width: 4px;
+        }
+        .health-card.healthy::before  { background: #28a745; }
+        .health-card.warning::before  { background: #ffc107; }
+        .health-card.critical::before { background: #dc3545; }
+        .health-card.unknown::before  { background: #6c757d; }
+        .health-channel-name {
+            font-weight: 600;
+            font-size: 0.95rem;
+            margin-bottom: 0.25rem;
+        }
+        .health-channel-meta {
+            font-size: 0.8rem;
+            color: #6c757d;
+            margin-bottom: 0.75rem;
+        }
+        .health-score-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 0.5rem;
+        }
+        .health-score-number {
+            font-size: 1.75rem;
+            font-weight: 700;
+            line-height: 1;
+        }
+        .health-score-number.healthy  { color: #28a745; }
+        .health-score-number.warning  { color: #ffc107; }
+        .health-score-number.critical { color: #dc3545; }
+        .health-score-number.unknown  { color: #6c757d; }
+        .health-stats {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 0.25rem 1rem;
+            font-size: 0.8rem;
+            color: #6c757d;
+            margin-top: 0.5rem;
+        }
+        .health-stats span { display: flex; gap: 0.3rem; }
+        .health-stats span strong { color: #343a40; }
+        .rec-card {
+            border-left: 4px solid #007bff;
+            padding: 1rem 1.25rem;
+            background: #f0f8ff;
+            border-radius: 0 8px 8px 0;
+            margin-bottom: 0.75rem;
+        }
+        .rec-card.warning { border-left-color: #ffc107; background: #fffdf0; }
+        .rec-card.danger  { border-left-color: #dc3545; background: #fff5f5; }
+        .rec-type {
+            font-size: 0.75rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: #6c757d;
+            margin-bottom: 0.35rem;
+        }
+        .rec-text {
+            font-size: 0.95rem;
+            color: #343a40;
+            line-height: 1.5;
+        }
+        .rec-confidence {
+            margin-top: 0.35rem;
+            font-size: 0.8rem;
+            color: #6c757d;
+        }
+        .btn {
+            padding: 0.5rem 1rem;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            transition: all 0.2s;
+        }
+        .btn-secondary { background: #6c757d; color: white; }
+        .btn-secondary:hover { background: #545b62; }
+        .loading { text-align: center; padding: 3rem; color: #6c757d; }
+        .empty { text-align: center; padding: 2rem; color: #adb5bd; font-style: italic; }
+        .summary-row {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+        }
+        .summary-box {
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            padding: 1.25rem;
+            text-align: center;
+        }
+        .summary-box .number {
+            font-size: 2rem;
+            font-weight: 700;
+            color: #dc3545;
+        }
+        .summary-box .label {
+            font-size: 0.8rem;
+            color: #6c757d;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-top: 0.25rem;
+        }
+        .last-updated {
+            font-size: 0.75rem;
+            color: #adb5bd;
+            text-align: right;
+            margin-top: 0.5rem;
+        }
+    </style>
+</head>
+<body>
+    <!-- Sidebar -->
+    <div class="sidebar">
+        <h2>Admin Panel</h2>
+        <ul>
+            <li><a href="/admin/dashboard">Dashboard</a></li>
+            <li><a href="/admin/users">Users</a></li>
+            <li><a href="/admin/clipping-jobs">Clipping Jobs</a></li>
+            <li><a href="/admin/clipping-activity">Activity</a></li>
+            <li><a href="/admin/performance" class="active">Performance</a></li>
+            <li><a href="#" onclick="logout()">Logout</a></li>
+        </ul>
+    </div>
+
+    <!-- Main Content -->
+    <div class="main-content">
+        <div class="page-header">
+            <div>
+                <h1>Performance Dashboard</h1>
+                <p>Viral factor analytics, channel health scores &amp; AI learning insights</p>
+            </div>
+            <button class="btn btn-secondary" onclick="refreshAll()">Refresh</button>
+        </div>
+
+        <!-- Summary Row -->
+        <div class="summary-row">
+            <div class="summary-box"><div class="number" id="sumFactors">—</div><div class="label">Tracked Factors</div></div>
+            <div class="summary-box"><div class="number" id="sumChannels">—</div><div class="label">Monitored Channels</div></div>
+            <div class="summary-box"><div class="number" id="sumHealthy">—</div><div class="label">Healthy Channels</div></div>
+            <div class="summary-box"><div class="number" id="sumRecs">—</div><div class="label">Active Recommendations</div></div>
+        </div>
+
+        <!-- Tabs -->
+        <div class="tabs">
+            <button class="tab-btn active" onclick="switchTab('viral', this)">Viral Factors</button>
+            <button class="tab-btn" onclick="switchTab('health', this)">Channel Health</button>
+            <button class="tab-btn" onclick="switchTab('recs', this)">Recommendations</button>
+        </div>
+
+        <!-- Tab: Viral Factors -->
+        <div id="tab-viral" class="tab-content active">
+            <div class="card">
+                <div class="card-title">Top Viral Factors — ranked by performance score</div>
+                <div id="viralTable"><div class="loading">Loading...</div></div>
+            </div>
+        </div>
+
+        <!-- Tab: Channel Health -->
+        <div id="tab-health" class="tab-content">
+            <div class="card">
+                <div class="card-title">Source Channel Health Scores — 30-day rolling window</div>
+                <div id="healthGrid"><div class="loading">Loading...</div></div>
+            </div>
+        </div>
+
+        <!-- Tab: Recommendations -->
+        <div id="tab-recs" class="tab-content">
+            <div class="card">
+                <div class="card-title">Active Learning Recommendations</div>
+                <div id="recsList"><div class="loading">Loading...</div></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const authToken = localStorage.getItem('authToken');
+        const user = JSON.parse(localStorage.getItem('user') || '{}');
+        if (!authToken || (!user.is_staff && !user.is_superuser)) {
+            window.location.href = '/admin/login';
+        }
+
+        function switchTab(name, btn) {
+            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+            btn.classList.add('active');
+            document.getElementById('tab-' + name).classList.add('active');
+        }
+
+        async function loadViralFactors() {
+            try {
+                const res = await fetch('/api/admin/performance/viral-factors', {
+                    headers: { 'Authorization': 'Bearer ' + authToken }
+                });
+                const data = await res.json();
+                if (!data.success) throw new Error(data.error || 'Failed');
+
+                const factors = data.viral_factors || [];
+                document.getElementById('sumFactors').textContent = factors.length;
+
+                if (factors.length === 0) {
+                    document.getElementById('viralTable').innerHTML =
+                        '<div class="empty">No viral factor data yet. Run the analytics sync job to populate this table.</div>';
+                    return;
+                }
+
+                const maxScore = Math.max(...factors.map(f => parseFloat(f.performance_score) || 0));
+
+                const rows = factors.map(f => {
+                    const score = parseFloat(f.performance_score) || 0;
+                    const pct = maxScore > 0 ? (score / maxScore * 100).toFixed(1) : 0;
+                    const fillClass = score >= 0.7 ? 'high' : score >= 0.4 ? 'mid' : 'low';
+                    const rank = parseInt(f.rank) || 99;
+                    const rankHtml = rank === 1 ? '<span class="rank-badge rank-1">1</span>'
+                                   : rank === 2 ? '<span class="rank-badge rank-2">2</span>'
+                                   : rank === 3 ? '<span class="rank-badge rank-3">3</span>'
+                                   : '<span class="rank-badge rank-other">' + rank + '</span>';
+                    return '<tr><td>' + rankHtml + '</td>'
+                        + '<td style="font-weight:500;">' + escHtml(f.viral_factor) + '</td>'
+                        + '<td>' + (f.times_used || 0) + '</td>'
+                        + '<td>' + (f.total_clips || 0) + '</td>'
+                        + '<td>' + formatNum(f.avg_views) + '</td>'
+                        + '<td>' + formatPct(f.avg_like_rate) + '</td>'
+                        + '<td>' + formatPct(f.avg_watch_percentage) + '</td>'
+                        + '<td><div class="score-bar-wrap"><div class="score-bar"><div class="score-bar-fill ' + fillClass + '" style="width:' + pct + '%"></div></div>'
+                        + '<span class="score-val">' + score.toFixed(3) + '</span></div></td>'
+                        + '<td style="font-size:0.75rem;color:#6c757d;">' + formatDate(f.last_calculated_at) + '</td></tr>';
+                }).join('');
+
+                document.getElementById('viralTable').innerHTML =
+                    '<table><thead><tr>'
+                    + '<th>Rank</th><th>Viral Factor</th><th>Used</th><th>Clips</th>'
+                    + '<th>Avg Views</th><th>Like Rate</th><th>Watch %</th><th>Score</th><th>Updated</th>'
+                    + '</tr></thead><tbody>' + rows + '</tbody></table>'
+                    + '<div class="last-updated">Data from analytics sync job (runs every 6 hours)</div>';
+            } catch (e) {
+                document.getElementById('viralTable').innerHTML =
+                    '<div class="loading">Error: ' + escHtml(e.message) + '</div>';
+            }
+        }
+
+        async function loadChannelHealth() {
+            try {
+                const res = await fetch('/api/admin/performance/channel-health', {
+                    headers: { 'Authorization': 'Bearer ' + authToken }
+                });
+                const data = await res.json();
+                if (!data.success) throw new Error(data.error || 'Failed');
+
+                const channels = data.channels || [];
+                const healthyCount = channels.filter(c => {
+                    const s = parseFloat(c.health_score);
+                    return !isNaN(s) && s >= 0.7;
+                }).length;
+                document.getElementById('sumChannels').textContent = channels.length;
+                document.getElementById('sumHealthy').textContent = healthyCount;
+
+                if (channels.length === 0) {
+                    document.getElementById('healthGrid').innerHTML =
+                        '<div class="empty">No source channels found.</div>';
+                    return;
+                }
+
+                const cards = channels.map(c => {
+                    const score = c.health_score != null ? parseFloat(c.health_score) : null;
+                    let tier = 'unknown', tierLabel = 'No Data';
+                    if (score !== null) {
+                        if (score >= 0.75)      { tier = 'healthy';  tierLabel = 'Healthy'; }
+                        else if (score >= 0.45) { tier = 'warning';  tierLabel = 'At Risk'; }
+                        else                    { tier = 'critical'; tierLabel = 'Critical'; }
+                    }
+                    const scoreDisplay = score !== null ? (score * 100).toFixed(0) + '%' : '—';
+                    const tierBg = tier==='healthy' ? '#d4edda' : tier==='warning' ? '#fff3cd' : tier==='critical' ? '#f8d7da' : '#e9ecef';
+                    const tierColor = tier==='healthy' ? '#155724' : tier==='warning' ? '#856404' : tier==='critical' ? '#721c24' : '#6c757d';
+                    const lastErrorHtml = c.last_error
+                        ? '<span title="' + escHtml(c.last_error) + '" style="cursor:help;text-decoration:underline dotted;">See last error</span>'
+                        : 'None';
+                    return '<div class="health-card ' + tier + '">'
+                        + '<div class="health-channel-name">' + escHtml(c.channel_name || 'Unknown') + '</div>'
+                        + '<div class="health-channel-meta">' + escHtml(c.channel_id || '') + '</div>'
+                        + '<div class="health-score-row">'
+                        +   '<div><div style="font-size:0.7rem;color:#6c757d;text-transform:uppercase;letter-spacing:0.06em;">Health Score</div>'
+                        +   '<div class="health-score-number ' + tier + '">' + scoreDisplay + '</div></div>'
+                        +   '<span style="padding:0.2rem 0.6rem;border-radius:12px;font-size:0.75rem;font-weight:600;background:' + tierBg + ';color:' + tierColor + ';">' + tierLabel + '</span>'
+                        + '</div>'
+                        + '<div class="health-stats">'
+                        +   '<span><strong>' + (c.jobs_succeeded || 0) + '</strong> succeeded</span>'
+                        +   '<span><strong>' + (c.jobs_attempted || 0) + '</strong> attempted</span>'
+                        +   '<span>Last error: ' + lastErrorHtml + '</span>'
+                        +   '<span>Updated: ' + formatDateShort(c.last_health_check) + '</span>'
+                        + '</div></div>';
+                }).join('');
+
+                document.getElementById('healthGrid').innerHTML = '<div class="health-grid">' + cards + '</div>';
+            } catch (e) {
+                document.getElementById('healthGrid').innerHTML =
+                    '<div class="loading">Error: ' + escHtml(e.message) + '</div>';
+            }
+        }
+
+        async function loadRecommendations() {
+            try {
+                const res = await fetch('/api/admin/performance/recommendations', {
+                    headers: { 'Authorization': 'Bearer ' + authToken }
+                });
+                const data = await res.json();
+                if (!data.success) throw new Error(data.error || 'Failed');
+
+                const recs = data.recommendations || [];
+                document.getElementById('sumRecs').textContent = recs.length;
+
+                if (recs.length === 0) {
+                    document.getElementById('recsList').innerHTML =
+                        '<div class="empty">No active recommendations. The system will generate insights as more jobs complete.</div>';
+                    return;
+                }
+
+                const cards = recs.map(r => {
+                    const conf = parseFloat(r.confidence) || 0;
+                    const tier = conf >= 0.8 ? '' : conf >= 0.5 ? 'warning' : 'danger';
+                    return '<div class="rec-card ' + tier + '">'
+                        + '<div class="rec-type">' + escHtml(r.type || 'General') + '</div>'
+                        + '<div class="rec-text">' + escHtml(r.recommendation) + '</div>'
+                        + '<div class="rec-confidence">Confidence: ' + (conf * 100).toFixed(0) + '% · Updated: ' + formatDate(r.updated_at) + '</div>'
+                        + '</div>';
+                }).join('');
+
+                document.getElementById('recsList').innerHTML = cards;
+            } catch (e) {
+                document.getElementById('recsList').innerHTML =
+                    '<div class="loading">Error: ' + escHtml(e.message) + '</div>';
+            }
+        }
+
+        function escHtml(s) {
+            if (!s) return '';
+            return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+                            .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+        }
+
+        function formatNum(n) {
+            if (n == null || n === '') return '—';
+            const v = parseFloat(n);
+            if (isNaN(v)) return '—';
+            if (v >= 1000000) return (v / 1000000).toFixed(1) + 'M';
+            if (v >= 1000) return (v / 1000).toFixed(1) + 'K';
+            return v.toFixed(0);
+        }
+
+        function formatPct(n) {
+            if (n == null || n === '') return '—';
+            const v = parseFloat(n);
+            if (isNaN(v)) return '—';
+            return (v * 100).toFixed(1) + '%';
+        }
+
+        function formatDate(d) {
+            if (!d) return 'Never';
+            return new Date(d).toLocaleString();
+        }
+
+        function formatDateShort(d) {
+            if (!d) return 'Never';
+            return new Date(d).toLocaleDateString();
+        }
+
+        function logout() {
+            localStorage.removeItem('authToken');
+            localStorage.removeItem('user');
+            window.location.href = '/admin/login';
+        }
+
+        function refreshAll() {
+            loadViralFactors();
+            loadChannelHealth();
+            loadRecommendations();
+        }
+
+        refreshAll();
+        setInterval(refreshAll, 300000);
+    </script>
+</body>
+</html>
+    "###;
+
+    Html(html.to_string())
 }
