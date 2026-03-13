@@ -4752,6 +4752,7 @@ pub async fn clipping_management_page() -> Html<String> {
             <button class="tab-button" onclick="switchTab('linkages')">🔗 Channel Linkages</button>
             <button class="tab-button" onclick="switchTab('jobs')">⚙️ Active Jobs</button>
             <button class="tab-button" onclick="switchTab('clips')">🎬 Generated Clips</button>
+            <button class="tab-button" onclick="switchTab('review')">🔍 Review Queue</button>
         </div>
 
         <!-- Tab 1: Source Channels -->
@@ -4782,6 +4783,37 @@ pub async fn clipping_management_page() -> Html<String> {
         <div id="clipsTab" class="tab-content">
             <h2 style="margin-bottom: 1.5rem;">Generated Clips Gallery</h2>
             <div id="clipsContainer" class="loading">Loading clips...</div>
+        </div>
+
+        <!-- Tab 5: Review Queue + Content Management -->
+        <div id="reviewTab" class="tab-content">
+            <h2 style="margin-bottom: 1.5rem;">Review Queue</h2>
+            <p style="color: #94a3b8; margin-bottom: 1.5rem;">
+                Clips awaiting human approval before upload. Enable per-linkage approval in the Linkages tab.
+            </p>
+            <div id="reviewContainer" class="loading">Loading pending clips...</div>
+
+            <!-- Content Management Agent -->
+            <div class="card" style="margin-top: 2rem;">
+                <h3 style="margin-bottom: 1rem;">🤖 Content Management Agent</h3>
+                <p style="color: #94a3b8; margin-bottom: 1rem; font-size: 0.9rem;">
+                    Type a natural-language instruction to manage your published clips (update metadata, delete, repost).
+                </p>
+                <div class="form-group">
+                    <label>Select Destination Channel</label>
+                    <select id="cmChannelSelect" style="width:100%; padding:0.75rem; background:rgba(30,30,52,0.8); border:1px solid rgba(59,130,246,0.3); border-radius:10px; color:#e8e8e8; font-size:1rem;">
+                        <option value="">Loading channels...</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Instruction</label>
+                    <textarea id="cmInstruction" rows="3"
+                        placeholder="e.g. Take down clip 3 and repost it with title: Better Title"
+                        style="width:100%; padding:0.75rem; background:rgba(30,30,52,0.8); border:1px solid rgba(59,130,246,0.3); border-radius:10px; color:#e8e8e8; font-size:1rem; resize:vertical;"></textarea>
+                </div>
+                <button onclick="startContentManagement()" class="btn">Run Agent</button>
+                <div id="cmStatus" style="margin-top:1rem; display:none;"></div>
+            </div>
         </div>
     </div>
 
@@ -4916,6 +4948,195 @@ pub async fn clipping_management_page() -> Html<String> {
             else if (tabName === 'linkages') loadLinkages();
             else if (tabName === 'jobs') loadJobs();
             else if (tabName === 'clips') loadClips();
+            else if (tabName === 'review') { loadPendingReview(); loadCMChannels(); }
+        }
+
+        // Load pending review clips
+        async function loadPendingReview() {
+            const container = document.getElementById('reviewContainer');
+            container.className = 'loading';
+            container.innerHTML = 'Loading pending clips...';
+
+            try {
+                const response = await fetch('/api/clipping/clips/pending-review', {
+                    headers: { 'Authorization': 'Bearer ' + authToken }
+                });
+                const data = await response.json();
+                const clips = data.clips || [];
+
+                if (clips.length === 0) {
+                    container.className = 'empty-state';
+                    container.innerHTML = '<div class="empty-state-icon">✅</div><h3>No clips pending review</h3><p>All clips have been reviewed or auto-published</p>';
+                    return;
+                }
+
+                container.className = 'grid';
+                container.innerHTML = clips.map(clip => `
+                    <div class="clip-card" id="review-clip-${clip.id}">
+                        <div class="clip-thumbnail">🎬 ${(clip.duration_seconds || 0).toFixed(1)}s</div>
+                        <p style="color:#94a3b8; font-size:0.8rem; margin-bottom:0.5rem;">${clip.source_video_title || 'Unknown source'}</p>
+                        <div class="form-group" style="margin-bottom:0.5rem;">
+                            <label style="font-size:0.85rem;">Title</label>
+                            <input type="text" id="review-title-${clip.id}" value="${(clip.proposed_title || clip.ai_title || '').replace(/"/g, '&quot;')}"
+                                   style="width:100%; padding:0.5rem; background:rgba(30,30,52,0.8); border:1px solid rgba(59,130,246,0.3); border-radius:8px; color:#e8e8e8; font-size:0.9rem;">
+                        </div>
+                        <div class="form-group" style="margin-bottom:0.75rem;">
+                            <label style="font-size:0.85rem;">Description</label>
+                            <textarea id="review-desc-${clip.id}" rows="2"
+                                      style="width:100%; padding:0.5rem; background:rgba(30,30,52,0.8); border:1px solid rgba(59,130,246,0.3); border-radius:8px; color:#e8e8e8; font-size:0.9rem; resize:vertical;">${clip.proposed_description || ''}</textarea>
+                        </div>
+                        <div style="display:flex; gap:0.5rem;">
+                            <button onclick="saveAndApproveClip(${clip.id})" class="btn btn-small" style="background:linear-gradient(135deg,#22c55e,#16a34a);">Approve & Upload</button>
+                            <button onclick="rejectReviewClip(${clip.id})" class="btn btn-danger btn-small">Reject</button>
+                        </div>
+                    </div>
+                `).join('');
+            } catch (error) {
+                container.className = 'empty-state';
+                container.innerHTML = '<p style="color:#ef4444;">Error: ' + error.message + '</p>';
+            }
+        }
+
+        async function saveAndApproveClip(clipId) {
+            const title = document.getElementById('review-title-' + clipId).value;
+            const desc = document.getElementById('review-desc-' + clipId).value;
+
+            // Save edits first
+            if (title || desc) {
+                await fetch('/api/clipping/clips/' + clipId + '/propose-edit', {
+                    method: 'PUT',
+                    headers: { 'Authorization': 'Bearer ' + authToken, 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ proposed_title: title, proposed_description: desc })
+                });
+            }
+
+            // Approve (triggers upload)
+            try {
+                const r = await fetch('/api/clipping/clips/' + clipId + '/approve', {
+                    method: 'PUT',
+                    headers: { 'Authorization': 'Bearer ' + authToken }
+                });
+                const data = await r.json();
+                if (data.success) {
+                    const card = document.getElementById('review-clip-' + clipId);
+                    if (card) card.remove();
+                    alert('Clip approved and uploading to YouTube!');
+                } else {
+                    alert('Approval failed. Check server logs.');
+                }
+            } catch (e) {
+                alert('Error: ' + e.message);
+            }
+        }
+
+        async function rejectReviewClip(clipId) {
+            const reason = prompt('Reason for rejection (optional):');
+            try {
+                const r = await fetch('/api/clipping/clips/' + clipId + '/reject', {
+                    method: 'PUT',
+                    headers: { 'Authorization': 'Bearer ' + authToken, 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ reason })
+                });
+                if (r.ok) {
+                    const card = document.getElementById('review-clip-' + clipId);
+                    if (card) card.remove();
+                } else {
+                    alert('Rejection failed.');
+                }
+            } catch (e) {
+                alert('Error: ' + e.message);
+            }
+        }
+
+        // Load channels for content management agent dropdown
+        async function loadCMChannels() {
+            try {
+                const r = await fetch('/api/youtube/channels', {
+                    headers: { 'Authorization': 'Bearer ' + authToken }
+                });
+                const data = await r.json();
+                const channels = data.channels || [];
+                document.getElementById('cmChannelSelect').innerHTML = channels.map(c =>
+                    '<option value="' + c.id + '">' + c.channel_name + '</option>'
+                ).join('') || '<option value="">No channels connected</option>';
+            } catch (e) {}
+        }
+
+        // Start content management session
+        let cmSessionId = null;
+        let cmPollInterval = null;
+
+        async function startContentManagement() {
+            const instruction = document.getElementById('cmInstruction').value.trim();
+            const channelId = parseInt(document.getElementById('cmChannelSelect').value);
+            if (!instruction) { alert('Please enter an instruction.'); return; }
+            if (!channelId) { alert('Please select a channel.'); return; }
+
+            const statusDiv = document.getElementById('cmStatus');
+            statusDiv.style.display = 'block';
+            statusDiv.innerHTML = '<div class="loading">Starting agent...</div>';
+
+            try {
+                const r = await fetch('/api/clipping/manage-content', {
+                    method: 'POST',
+                    headers: { 'Authorization': 'Bearer ' + authToken, 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ instruction, destination_channel_id: channelId })
+                });
+                const data = await r.json();
+                cmSessionId = data.session_id;
+                statusDiv.innerHTML = '<p>Session #' + cmSessionId + ' started. Polling for updates...</p><div id="cmStatusBody"></div>';
+                if (cmPollInterval) clearInterval(cmPollInterval);
+                cmPollInterval = setInterval(pollCMSession, 3000);
+            } catch (e) {
+                statusDiv.innerHTML = '<p style="color:#ef4444;">Error: ' + e.message + '</p>';
+            }
+        }
+
+        async function pollCMSession() {
+            if (!cmSessionId) return;
+            try {
+                const r = await fetch('/api/clipping/manage-content/' + cmSessionId, {
+                    headers: { 'Authorization': 'Bearer ' + authToken }
+                });
+                const data = await r.json();
+                const session = data.session;
+                const body = document.getElementById('cmStatusBody');
+                if (!body) return;
+
+                let html = '<p><strong>Status:</strong> <span style="color:' +
+                    (session.status === 'completed' ? '#22c55e' : session.status === 'failed' ? '#ef4444' : '#3b82f6') +
+                    '">' + session.status + '</span></p>';
+
+                if (session.status === 'awaiting_confirmation' && session.confirmation_required) {
+                    const cr = session.confirmation_required;
+                    html += '<div style="background:rgba(239,68,68,0.15); border:1px solid rgba(239,68,68,0.4); border-radius:10px; padding:1rem; margin-top:0.75rem;">';
+                    html += '<strong>AI wants to:</strong> ' + (cr.action_summary || '') + '<br>';
+                    html += '<div style="margin-top:0.75rem; display:flex; gap:0.5rem;">';
+                    html += '<button onclick="confirmCMAction(true)" class="btn btn-small" style="background:linear-gradient(135deg,#22c55e,#16a34a);">Confirm</button>';
+                    html += '<button onclick="confirmCMAction(false)" class="btn btn-danger btn-small">Cancel</button>';
+                    html += '</div></div>';
+                }
+
+                if (session.result_summary) {
+                    html += '<div style="margin-top:0.75rem; background:rgba(59,130,246,0.1); padding:0.75rem; border-radius:8px;"><strong>Result:</strong> ' + session.result_summary + '</div>';
+                }
+
+                body.innerHTML = html;
+
+                if (session.status === 'completed' || session.status === 'failed') {
+                    clearInterval(cmPollInterval);
+                    cmPollInterval = null;
+                }
+            } catch (e) {}
+        }
+
+        async function confirmCMAction(confirmed) {
+            if (!cmSessionId) return;
+            await fetch('/api/clipping/manage-content/' + cmSessionId + '/confirm', {
+                method: 'POST',
+                headers: { 'Authorization': 'Bearer ' + authToken, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ confirmed })
+            });
         }
 
         // Load source channels

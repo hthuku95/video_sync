@@ -407,6 +407,134 @@ impl YouTubeClient {
         Ok(update_response)
     }
 
+    /// Fetch current video metadata (snippet + status) for a video.
+    ///
+    /// Used internally before updates to preserve existing fields.
+    pub async fn get_video_metadata(
+        &self,
+        access_token: &str,
+        video_id: &str,
+    ) -> Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>> {
+        let url = "https://www.googleapis.com/youtube/v3/videos";
+
+        let response = self
+            .client
+            .get(url)
+            .query(&[("part", "snippet,status"), ("id", video_id)])
+            .header("Authorization", format!("Bearer {}", access_token))
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let error_text = response.text().await?;
+            return Err(format!("Failed to get video metadata: {}", error_text).into());
+        }
+
+        let body: serde_json::Value = response.json().await?;
+        let item = body["items"]
+            .as_array()
+            .and_then(|items| items.first())
+            .cloned()
+            .ok_or_else(|| format!("Video {} not found", video_id))?;
+
+        Ok(item)
+    }
+
+    /// Set a video's privacy status to `private` (soft-delete before re-upload).
+    ///
+    /// Fetches current snippet first so no metadata is accidentally erased.
+    pub async fn set_video_private(
+        &self,
+        access_token: &str,
+        video_id: &str,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        tracing::info!("🔒 Setting video {} to private", video_id);
+
+        let item = self.get_video_metadata(access_token, video_id).await?;
+        let snippet = item["snippet"].clone();
+        let url = "https://www.googleapis.com/youtube/v3/videos";
+
+        let body = json!({
+            "id": video_id,
+            "snippet": snippet,
+            "status": { "privacyStatus": "private" }
+        });
+
+        let response = self
+            .client
+            .put(url)
+            .query(&[("part", "snippet,status")])
+            .header("Authorization", format!("Bearer {}", access_token))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let error_text = response.text().await?;
+            return Err(format!("Failed to set video private: {}", error_text).into());
+        }
+
+        tracing::info!("✅ Video {} is now private", video_id);
+        Ok(())
+    }
+
+    /// Update video title/description/tags, merging with existing values.
+    ///
+    /// Only non-None fields are overridden; existing values are preserved for others.
+    pub async fn update_video_metadata(
+        &self,
+        access_token: &str,
+        video_id: &str,
+        title: Option<&str>,
+        description: Option<&str>,
+        tags: Option<&[String]>,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        tracing::info!("📝 Updating metadata for video {}", video_id);
+
+        // Fetch current metadata to preserve untouched fields
+        let item = self.get_video_metadata(access_token, video_id).await?;
+        let mut snippet = item["snippet"].clone();
+
+        if let Some(t) = title {
+            snippet["title"] = json!(t);
+        }
+        if let Some(d) = description {
+            snippet["description"] = json!(d);
+        }
+        if let Some(t) = tags {
+            snippet["tags"] = json!(t);
+        }
+
+        // Preserve current status (privacy)
+        let status = item["status"].clone();
+
+        let url = "https://www.googleapis.com/youtube/v3/videos";
+        let body = json!({
+            "id": video_id,
+            "snippet": snippet,
+            "status": status,
+        });
+
+        let response = self
+            .client
+            .put(url)
+            .query(&[("part", "snippet,status")])
+            .header("Authorization", format!("Bearer {}", access_token))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let error_text = response.text().await?;
+            return Err(format!("Failed to update video metadata: {}", error_text).into());
+        }
+
+        tracing::info!("✅ Video {} metadata updated", video_id);
+        Ok(())
+    }
+
     /// Upload a custom thumbnail for a video
     ///
     /// Required scope: https://www.googleapis.com/auth/youtube.force-ssl

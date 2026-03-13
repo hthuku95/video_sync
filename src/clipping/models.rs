@@ -36,6 +36,9 @@ pub struct ChannelLinkage {
     pub last_clip_generated_at: Option<DateTime<Utc>>,
     pub last_clipping_session_at: Option<DateTime<Utc>>,
     pub clipping_cooldown_hours: i32,
+    /// When true, generated clips are queued for human review instead of being auto-published.
+    #[serde(default)]
+    pub requires_human_approval: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -146,6 +149,14 @@ pub struct ExtractedClip {
     pub comments_24h: i32,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    // Review system fields (added by migration 20260313000001)
+    #[serde(default)]
+    pub review_status: String,
+    pub proposed_title: Option<String>,
+    pub proposed_description: Option<String>,
+    pub reviewed_by: Option<i32>,
+    pub reviewed_at: Option<DateTime<Utc>>,
+    pub review_notes: Option<String>,
 }
 
 /// Polling schedule for source channels

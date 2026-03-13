@@ -8,3 +8,4 @@ pub mod react_agent;
 pub mod video_workflow_state;
 pub mod stateful_agent;
 pub mod clipping_agent;
+pub mod content_management_agent;

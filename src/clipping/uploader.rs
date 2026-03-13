@@ -29,13 +29,54 @@ impl ClipUploader {
         }
     }
 
-    /// Upload a clip to YouTube as a Short
+    /// Upload a clip to YouTube as a Short.
+    ///
+    /// If `requires_human_approval` is true (set per-linkage), the clip is queued for
+    /// review instead of being immediately uploaded.  The proposed title/description are
+    /// saved to the DB so the reviewer can inspect and approve them.
     pub async fn upload_clip(
         &self,
         clip: &ExtractedClipData,
         clip_db_id: i32,
         destination_channel: &ConnectedYouTubeChannel,
+        requires_human_approval: bool,
     ) -> Result<YouTubeUploadResult, String> {
+        // Prepare metadata optimized for YouTube Shorts
+        let title = self.optimize_title(&clip.ai_title);
+        let description = self.format_description(&clip.ai_description, &clip.ai_tags);
+
+        // ── Human review gate ────────────────────────────────────────────────
+        if requires_human_approval {
+            tracing::info!(
+                "🔍 Clip {} queued for human review (linkage requires_human_approval=true)",
+                clip_db_id
+            );
+
+            // Persist the proposed metadata so the reviewer can see it
+            sqlx::query(
+                "UPDATE extracted_clips
+                 SET review_status = 'pending_review',
+                     proposed_title = $1,
+                     proposed_description = $2,
+                     upload_status = 'pending_review',
+                     updated_at = NOW()
+                 WHERE id = $3",
+            )
+            .bind(&title)
+            .bind(&description)
+            .bind(clip_db_id)
+            .execute(&self.db_pool)
+            .await
+            .map_err(|e| format!("Failed to queue clip for review: {}", e))?;
+
+            // Return a placeholder result — no actual upload happened
+            return Ok(YouTubeUploadResult {
+                video_id: String::new(),
+                url: String::new(),
+            });
+        }
+
+        // ── Normal auto-publish flow ─────────────────────────────────────────
         tracing::info!(
             "📤 Uploading clip '{}' to YouTube channel {}",
             clip.ai_title,
@@ -45,14 +86,10 @@ impl ClipUploader {
         // Step 1: Ensure access token is valid
         let access_token = self.ensure_valid_token(destination_channel).await?;
 
-        // Step 2: Prepare metadata optimized for YouTube Shorts
-        let title = self.optimize_title(&clip.ai_title);
-        let description = self.format_description(&clip.ai_description, &clip.ai_tags);
-
         tracing::debug!("Title: {}", title);
         tracing::debug!("Description: {}", description);
 
-        // Step 3: Upload to YouTube using resumable upload (supports clips of any size)
+        // Step 2: Upload to YouTube using resumable upload (supports clips of any size)
         // Using resumable instead of multipart because:
         // - Multipart limited to 5MB (too small for most clips)
         // - Resumable supports files up to 256GB
@@ -76,7 +113,7 @@ impl ClipUploader {
         // Construct YouTube URL
         let youtube_url = format!("https://youtube.com/shorts/{}", upload_result.id);
 
-        // Step 4: Upload custom thumbnail if available (ENHANCEMENT)
+        // Step 3: Upload custom thumbnail if available (ENHANCEMENT)
         if let Some(ref thumbnail_path) = clip.custom_thumbnail_path {
             match self.upload_custom_thumbnail(&access_token, &upload_result.id, thumbnail_path).await {
                 Ok(_) => {
@@ -94,7 +131,7 @@ impl ClipUploader {
             tracing::info!("ℹ️ No custom thumbnail available, YouTube will use auto-generated thumbnail");
         }
 
-        // Step 5: Update database with YouTube video ID and URL
+        // Step 4: Update database with YouTube video ID and URL
         self.update_clip_upload_status(
             clip_db_id,
             &upload_result.id,

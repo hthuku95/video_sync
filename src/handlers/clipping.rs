@@ -8,7 +8,9 @@ use axum::{
     routing::{delete, get, patch, post},
     Router,
 };
+use crate::agent::content_management_agent::ContentManagementAgent;
 use crate::clipping::models::*;
+use crate::clipping::uploader::ClipUploader;
 use crate::middleware::{auth::auth_middleware, clipping_access::clipping_access_middleware};
 use crate::models::auth::Claims;
 use crate::AppState;
@@ -59,6 +61,15 @@ pub fn clipping_routes() -> Router {
         .route("/api/clipping/clips", get(list_clips))
         .route("/api/clipping/clips/:id", get(get_clip_details))
         .route("/api/clipping/clips/:id/repost", post(repost_clip))
+        // Clip review system
+        .route("/api/clipping/clips/pending-review", get(list_pending_review_clips))
+        .route("/api/clipping/clips/:id/approve", axum::routing::put(approve_clip))
+        .route("/api/clipping/clips/:id/reject", axum::routing::put(reject_clip))
+        .route("/api/clipping/clips/:id/propose-edit", axum::routing::put(propose_edit_clip))
+        // Content management agent
+        .route("/api/clipping/manage-content", post(start_content_management_session))
+        .route("/api/clipping/manage-content/:session_id", get(get_content_management_session))
+        .route("/api/clipping/manage-content/:session_id/confirm", post(confirm_content_management_action))
         // Access check endpoint
         .route("/api/clipping/access-check", get(check_access))
         // Twitch source channels
@@ -1197,6 +1208,433 @@ async fn list_twitch_mappings(Extension(state): Extension<Arc<AppState>>) -> imp
         )
             .into_response(),
     }
+}
+
+// ─────────────────────────── Clip Review Handlers ────────────────────────────
+
+/// GET /api/clipping/clips/pending-review
+/// List all clips with review_status = 'pending_review' owned by the current user.
+async fn list_pending_review_clips(
+    Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
+) -> Result<Json<Value>, StatusCode> {
+    let user_id = claims.sub.parse::<i32>().unwrap_or(0);
+
+    let rows = sqlx::query(
+        "SELECT ec.*, cj.source_video_title
+         FROM extracted_clips ec
+         JOIN clipping_jobs cj ON ec.clipping_job_id = cj.id
+         JOIN youtube_channel_linkages ycl ON cj.linkage_id = ycl.id
+         WHERE ycl.user_id = $1 AND ec.review_status = 'pending_review'
+         ORDER BY ec.created_at DESC",
+    )
+    .bind(user_id)
+    .fetch_all(&state.db_pool)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let clips: Vec<Value> = rows
+        .iter()
+        .map(|r| {
+            json!({
+                "id": r.try_get::<i32, _>("id").unwrap_or(0),
+                "clipping_job_id": r.try_get::<i32, _>("clipping_job_id").unwrap_or(0),
+                "clip_number": r.try_get::<i32, _>("clip_number").unwrap_or(0),
+                "local_clip_path": r.try_get::<String, _>("local_clip_path").unwrap_or_default(),
+                "duration_seconds": r.try_get::<f64, _>("duration_seconds").unwrap_or(0.0),
+                "ai_title": r.try_get::<Option<String>, _>("ai_title").ok().flatten(),
+                "proposed_title": r.try_get::<Option<String>, _>("proposed_title").ok().flatten(),
+                "proposed_description": r.try_get::<Option<String>, _>("proposed_description").ok().flatten(),
+                "review_status": r.try_get::<String, _>("review_status").unwrap_or_default(),
+                "source_video_title": r.try_get::<Option<String>, _>("source_video_title").ok().flatten(),
+                "created_at": r.try_get::<DateTime<Utc>, _>("created_at").ok(),
+            })
+        })
+        .collect();
+
+    Ok(Json(json!({
+        "success": true,
+        "clips": clips,
+        "count": clips.len()
+    })))
+}
+
+#[derive(Deserialize)]
+struct RejectClipRequest {
+    reason: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ProposeEditRequest {
+    proposed_title: Option<String>,
+    proposed_description: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct StartContentMgmtRequest {
+    instruction: String,
+    destination_channel_id: i32,
+}
+
+/// PUT /api/clipping/clips/:id/approve
+/// Approve a pending-review clip: trigger actual YouTube upload now.
+async fn approve_clip(
+    Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
+    Path(id): Path<i32>,
+) -> Result<Json<Value>, StatusCode> {
+    let user_id = claims.sub.parse::<i32>().unwrap_or(0);
+
+    // Verify ownership and fetch clip + linkage info in one query
+    let row = sqlx::query(
+        "SELECT ec.id, ec.local_clip_path, ec.proposed_title, ec.proposed_description,
+                ec.review_status, ec.ai_tags, ec.custom_thumbnail_path,
+                ec.clip_number,
+                ycl.destination_channel_id, ycl.id AS linkage_id
+         FROM extracted_clips ec
+         JOIN clipping_jobs cj ON ec.clipping_job_id = cj.id
+         JOIN youtube_channel_linkages ycl ON cj.linkage_id = ycl.id
+         WHERE ec.id = $1 AND ycl.user_id = $2",
+    )
+    .bind(id)
+    .bind(user_id)
+    .fetch_optional(&state.db_pool)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    .ok_or(StatusCode::NOT_FOUND)?;
+
+    let review_status: String = row.try_get("review_status").unwrap_or_default();
+    if review_status != "pending_review" {
+        return Err(StatusCode::CONFLICT);
+    }
+
+    let local_clip_path: String = row.try_get("local_clip_path").unwrap_or_default();
+    let proposed_title: Option<String> = row.try_get("proposed_title").unwrap_or(None);
+    let proposed_description: Option<String> = row.try_get("proposed_description").unwrap_or(None);
+    let ai_tags: Option<serde_json::Value> = row.try_get("ai_tags").unwrap_or(None);
+    let custom_thumbnail_path: Option<String> = row.try_get("custom_thumbnail_path").unwrap_or(None);
+    let clip_number: i32 = row.try_get("clip_number").unwrap_or(0);
+    let destination_channel_id: i32 = row.try_get("destination_channel_id").unwrap_or(0);
+
+    // Fetch destination channel with tokens
+    let dest_channel = sqlx::query_as::<_, crate::models::youtube::ConnectedYouTubeChannel>(
+        "SELECT * FROM connected_youtube_channels WHERE id = $1",
+    )
+    .bind(destination_channel_id)
+    .fetch_optional(&state.db_pool)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    .ok_or(StatusCode::NOT_FOUND)?;
+
+    let youtube_client = state
+        .youtube_client
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+
+    let oauth_client_id = state
+        .google_oauth_client_id
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+
+    let oauth_client_secret = state
+        .google_oauth_client_secret
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+
+    let uploader = ClipUploader::new(
+        Arc::new(youtube_client.clone()),
+        state.db_pool.clone(),
+        oauth_client_id.clone(),
+        oauth_client_secret.clone(),
+    );
+
+    // Build an ExtractedClipData from the DB row for the uploader
+    let title = proposed_title.unwrap_or_else(|| format!("Clip {}", clip_number));
+    let description = proposed_description.unwrap_or_default();
+    let tags: Vec<String> = ai_tags
+        .as_ref()
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+
+    let clip_data = crate::clipping::ai_clipper::ExtractedClipData {
+        clip_number,
+        local_clip_path: local_clip_path.clone(),
+        start_time_seconds: 0.0,
+        end_time_seconds: 0.0,
+        duration_seconds: 0.0,
+        ai_title: title,
+        ai_description: description,
+        ai_tags: tags,
+        ai_confidence_score: 1.0,
+        viral_factors: vec![],
+        custom_thumbnail_path,
+    };
+
+    // Upload — requires_human_approval=false so it goes through immediately
+    match uploader.upload_clip(&clip_data, id, &dest_channel, false).await {
+        Ok(result) => {
+            // Mark as approved in DB
+            sqlx::query(
+                "UPDATE extracted_clips
+                 SET review_status = 'approved',
+                     reviewed_by = $1,
+                     reviewed_at = NOW(),
+                     updated_at = NOW()
+                 WHERE id = $2",
+            )
+            .bind(user_id)
+            .bind(id)
+            .execute(&state.db_pool)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+            Ok(Json(json!({
+                "success": true,
+                "youtube_video_id": result.video_id,
+                "youtube_url": result.url
+            })))
+        }
+        Err(e) => {
+            tracing::error!("approve_clip: upload failed for clip {}: {}", id, e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+/// PUT /api/clipping/clips/:id/reject
+/// Reject a pending-review clip with an optional reason.
+async fn reject_clip(
+    Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
+    Path(id): Path<i32>,
+    payload: Option<Json<RejectClipRequest>>,
+) -> Result<Json<Value>, StatusCode> {
+    let user_id = claims.sub.parse::<i32>().unwrap_or(0);
+
+    let reason = payload.and_then(|p| p.reason.clone());
+
+    let result = sqlx::query(
+        "UPDATE extracted_clips ec
+         SET review_status = 'rejected',
+             review_notes = $1,
+             reviewed_by = $2,
+             reviewed_at = NOW(),
+             upload_status = 'rejected',
+             updated_at = NOW()
+         FROM clipping_jobs cj
+         JOIN youtube_channel_linkages ycl ON cj.linkage_id = ycl.id
+         WHERE ec.id = $3
+           AND ec.clipping_job_id = cj.id
+           AND ycl.user_id = $2",
+    )
+    .bind(&reason)
+    .bind(user_id)
+    .bind(id)
+    .execute(&state.db_pool)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if result.rows_affected() == 0 {
+        return Err(StatusCode::NOT_FOUND);
+    }
+
+    Ok(Json(json!({"success": true, "message": "Clip rejected"})))
+}
+
+/// PUT /api/clipping/clips/:id/propose-edit
+/// Update the proposed title/description before approving.
+async fn propose_edit_clip(
+    Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
+    Path(id): Path<i32>,
+    Json(payload): Json<ProposeEditRequest>,
+) -> Result<Json<Value>, StatusCode> {
+    let user_id = claims.sub.parse::<i32>().unwrap_or(0);
+
+    // Verify ownership
+    let exists = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(
+             SELECT 1 FROM extracted_clips ec
+             JOIN clipping_jobs cj ON ec.clipping_job_id = cj.id
+             JOIN youtube_channel_linkages ycl ON cj.linkage_id = ycl.id
+             WHERE ec.id = $1 AND ycl.user_id = $2
+         )",
+    )
+    .bind(id)
+    .bind(user_id)
+    .fetch_one(&state.db_pool)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if !exists {
+        return Err(StatusCode::NOT_FOUND);
+    }
+
+    if let Some(ref title) = payload.proposed_title {
+        sqlx::query(
+            "UPDATE extracted_clips SET proposed_title = $1, updated_at = NOW() WHERE id = $2",
+        )
+        .bind(title)
+        .bind(id)
+        .execute(&state.db_pool)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    }
+
+    if let Some(ref desc) = payload.proposed_description {
+        sqlx::query(
+            "UPDATE extracted_clips SET proposed_description = $1, updated_at = NOW() WHERE id = $2",
+        )
+        .bind(desc)
+        .bind(id)
+        .execute(&state.db_pool)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    }
+
+    Ok(Json(json!({"success": true, "message": "Proposed edit saved"})))
+}
+
+// ─────────────────────────── Content Management Handlers ─────────────────────
+
+/// POST /api/clipping/manage-content
+/// Start a new content management agent session.
+async fn start_content_management_session(
+    Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
+    Json(payload): Json<StartContentMgmtRequest>,
+) -> Result<Json<Value>, StatusCode> {
+    let user_id = claims.sub.parse::<i32>().unwrap_or(0);
+
+    // Create the session row in DB
+    let session_id: i32 = sqlx::query_scalar(
+        "INSERT INTO content_management_sessions
+             (user_id, destination_channel_id, instruction, status)
+         VALUES ($1, $2, $3, 'running')
+         RETURNING id",
+    )
+    .bind(user_id)
+    .bind(payload.destination_channel_id)
+    .bind(&payload.instruction)
+    .fetch_one(&state.db_pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("Failed to create content management session: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    // Spawn the agent in a background task
+    let state_clone = state.clone();
+    let instruction = payload.instruction.clone();
+    let channel_id = payload.destination_channel_id;
+    tokio::spawn(async move {
+        ContentManagementAgent::run(session_id, &instruction, channel_id, state_clone).await;
+    });
+
+    Ok(Json(json!({
+        "success": true,
+        "session_id": session_id
+    })))
+}
+
+/// GET /api/clipping/manage-content/:session_id
+/// Get the current status of a content management session.
+async fn get_content_management_session(
+    Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
+    Path(session_id): Path<i32>,
+) -> Result<Json<Value>, StatusCode> {
+    let user_id = claims.sub.parse::<i32>().unwrap_or(0);
+
+    let row = sqlx::query(
+        "SELECT id, status, instruction, result_summary, confirmation_required,
+                confirmation_granted, agent_state, created_at, updated_at
+         FROM content_management_sessions
+         WHERE id = $1 AND user_id = $2",
+    )
+    .bind(session_id)
+    .bind(user_id)
+    .fetch_optional(&state.db_pool)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    .ok_or(StatusCode::NOT_FOUND)?;
+
+    Ok(Json(json!({
+        "success": true,
+        "session": {
+            "id": row.try_get::<i32, _>("id").unwrap_or(0),
+            "status": row.try_get::<String, _>("status").unwrap_or_default(),
+            "instruction": row.try_get::<String, _>("instruction").unwrap_or_default(),
+            "result_summary": row.try_get::<Option<String>, _>("result_summary").ok().flatten(),
+            "confirmation_required": row.try_get::<Option<serde_json::Value>, _>("confirmation_required").ok().flatten(),
+            "confirmation_granted": row.try_get::<bool, _>("confirmation_granted").unwrap_or(false),
+            "created_at": row.try_get::<DateTime<Utc>, _>("created_at").ok(),
+            "updated_at": row.try_get::<DateTime<Utc>, _>("updated_at").ok(),
+        }
+    })))
+}
+
+/// POST /api/clipping/manage-content/:session_id/confirm
+/// Human confirms (or cancels) a pending destructive action in a content management session.
+async fn confirm_content_management_action(
+    Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
+    Path(session_id): Path<i32>,
+    payload: Option<Json<Value>>,
+) -> Result<Json<Value>, StatusCode> {
+    let user_id = claims.sub.parse::<i32>().unwrap_or(0);
+
+    let confirmed = payload
+        .as_ref()
+        .and_then(|p| p.get("confirmed"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+
+    // Verify ownership
+    let exists = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM content_management_sessions WHERE id = $1 AND user_id = $2)",
+    )
+    .bind(session_id)
+    .bind(user_id)
+    .fetch_one(&state.db_pool)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if !exists {
+        return Err(StatusCode::NOT_FOUND);
+    }
+
+    if confirmed {
+        sqlx::query(
+            "UPDATE content_management_sessions
+             SET confirmation_granted = true,
+                 status = 'running',
+                 updated_at = NOW()
+             WHERE id = $1",
+        )
+        .bind(session_id)
+        .execute(&state.db_pool)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    } else {
+        // User cancelled — mark session as failed
+        sqlx::query(
+            "UPDATE content_management_sessions
+             SET status = 'failed',
+                 result_summary = 'Action cancelled by user',
+                 updated_at = NOW()
+             WHERE id = $1",
+        )
+        .bind(session_id)
+        .execute(&state.db_pool)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    }
+
+    Ok(Json(json!({
+        "success": true,
+        "confirmed": confirmed
+    })))
 }
 
 /// DELETE /api/clipping/twitch/mappings/:id

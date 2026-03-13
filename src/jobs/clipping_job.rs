@@ -306,7 +306,7 @@ pub async fn execute_clipping_job(
             break;
         }
 
-        match uploader.upload_clip(clip, *clip_id, &destination_channel).await {
+        match uploader.upload_clip(clip, *clip_id, &destination_channel, linkage.requires_human_approval).await {
             Ok(_) => {
                 uploaded_count += 1;
                 let progress = 70 + (uploaded_count * 30 / clips.len() as i32);

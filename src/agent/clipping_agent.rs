@@ -1048,7 +1048,7 @@ impl GeminiClippingAgent {
             }
 
             match uploader
-                .upload_clip(clip, *clip_id, &destination_channel)
+                .upload_clip(clip, *clip_id, &destination_channel, linkage.requires_human_approval)
                 .await
             {
                 Ok(_) => {
