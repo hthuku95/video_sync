@@ -252,6 +252,12 @@ pub async fn execute_tool_claude(name: &str, args: &Value) -> String {
         "add_overlay" => execute_add_overlay_claude(args),
         "adjust_color" => execute_adjust_color_claude(args),
         "add_subtitles" => execute_add_subtitles_claude(args),
+        "add_transition" => execute_add_transition_claude(args),
+        "add_animated_text" => execute_add_animated_text_claude(args),
+        "apply_filter_chain" => execute_apply_filter_chain_claude(args),
+        "apply_audio_effect" => execute_apply_audio_effect_claude(args),
+        "deinterlace_video" => execute_deinterlace_video_claude(args),
+        "export_custom_quality" => execute_export_custom_quality_claude(args),
 
         // Transform operations
         "resize_video" => execute_resize_video_claude(args),
@@ -302,6 +308,307 @@ pub async fn execute_tool_claude(name: &str, args: &Value) -> String {
         // Control tools
         "submit_final_answer" => execute_submit_final_answer_claude(args),
 
+        // New tools — Batch 1
+        "create_thumbnail_hd" => execute_create_thumbnail_hd_claude(args),
+        "get_video_duration" => execute_get_video_duration_claude(args),
+
+        // New tools — Batch 2 Color Grading
+        "adjust_hue" => execute_adjust_hue_claude(args),
+        "color_balance" => execute_color_balance_claude(args),
+        "normalize_video" => execute_normalize_video_claude(args),
+        "apply_lut" => execute_apply_lut_claude(args),
+
+        // New tools — Batch 3 Denoising & Sharpening
+        "denoise_video" => execute_denoise_video_claude(args),
+        "unsharp_mask" => execute_unsharp_mask_claude(args),
+        "reduce_noise" => execute_reduce_noise_claude(args),
+
+        // New tools — Batch 4 Audio Processing
+        "compress_audio" => execute_compress_audio_claude(args),
+        "normalize_audio" => execute_normalize_audio_claude(args),
+        "equalize_audio" => execute_equalize_audio_claude(args),
+        "gate_audio" => execute_gate_audio_claude(args),
+        "denoise_audio" => execute_denoise_audio_claude(args),
+
+        // New tools — Batch 5 Composition & Layout
+        "pad_video" => execute_pad_video_claude(args),
+        "blend_videos" => execute_blend_videos_claude(args),
+        "stack_videos" => execute_stack_videos_claude(args),
+        "add_vignette" => execute_add_vignette_claude(args),
+        "draw_box" => execute_draw_box_claude(args),
+
+        // New tools — Batch 6 Motion, Time & Frame
+        "reverse_video" => execute_reverse_video_claude(args),
+        "loop_video" => execute_loop_video_claude(args),
+        "zoompan" => execute_zoompan_claude(args),
+        "minterpolate" => execute_minterpolate_claude(args),
+
+        // New tools — Batch 7 Media Analysis
+        "detect_scene_changes" => execute_detect_scene_changes_claude(args),
+        "measure_loudness" => execute_measure_loudness_claude(args),
+        "detect_silence" => execute_detect_silence_claude(args),
+
+        // New tools — Batch 8 Advanced Color Grading
+        "adjust_curves" => execute_adjust_curves_claude(args),
+        "adjust_levels" => execute_adjust_levels_claude(args),
+        "split_tone" => execute_split_tone_claude(args),
+        "convert_colorspace" => execute_convert_colorspace_claude(args),
+        "apply_tonemap" => execute_apply_tonemap_claude(args),
+
+        // New tools — Batch 9 Audio Tone Shaping
+        "filter_highpass" => execute_filter_highpass_claude(args),
+        "filter_lowpass" => execute_filter_lowpass_claude(args),
+        "adjust_bass" => execute_adjust_bass_claude(args),
+        "adjust_treble" => execute_adjust_treble_claude(args),
+        "audio_compand" => execute_audio_compand_claude(args),
+        "add_audio_delay" => execute_add_audio_delay_claude(args),
+        "add_phaser" => execute_add_phaser_claude(args),
+
+        // New tools — Batch 10 Audio Restoration
+        "remove_clicks" => execute_remove_clicks_claude(args),
+        "restore_clipping" => execute_restore_clipping_claude(args),
+        "remove_silence" => execute_remove_silence_claude(args),
+
+        // New tools — Batch 11 Quality Metrics
+        "compare_ssim" => execute_compare_ssim_claude(args),
+        "compare_psnr" => execute_compare_psnr_claude(args),
+        "analyze_audio_stats" => execute_analyze_audio_stats_claude(args),
+        "analyze_video_signal" => execute_analyze_video_signal_claude(args),
+
+        // New tools — Batch 12 Geometric Transforms
+        "correct_perspective" => execute_correct_perspective_claude(args),
+        "correct_lens" => execute_correct_lens_claude(args),
+        "apply_shear" => execute_apply_shear_claude(args),
+
+        // New tools — Batch 13 Temporal Frame Effects
+        "blend_frames" => execute_blend_frames_claude(args),
+        "temporal_median" => execute_temporal_median_claude(args),
+        "convert_framerate" => execute_convert_framerate_claude(args),
+        "tile_frames" => execute_tile_frames_claude(args),
+
+        // New tools — Batch 14 Spatial Audio
+        "adjust_stereo_width" => execute_adjust_stereo_width_claude(args),
+        "apply_stereo_widen" => execute_apply_stereo_widen_claude(args),
+        "mix_audio_channels" => execute_mix_audio_channels_claude(args),
+
+        // Phase D — Professional Finishing
+        "adjust_color_temperature" => execute_adjust_color_temperature_claude(args),
+        "adjust_vibrance" => execute_adjust_vibrance_claude(args),
+        "remove_flicker" => execute_remove_flicker_claude(args),
+        "denoise_video_bm3d" => execute_denoise_video_bm3d_claude(args),
+        "deshake_video" => execute_deshake_video_claude(args),
+        "measure_lufs" => execute_measure_lufs_claude(args),
+        "parametric_eq" => execute_parametric_eq_claude(args),
+        "audio_limiter" => execute_audio_limiter_claude(args),
+        "reduce_sibilance" => execute_reduce_sibilance_claude(args),
+        "denoise_speech_rnn" => execute_denoise_speech_rnn_claude(args),
+
+        // Phase E — Vectorscope, Waveform, Grid, LumaKey, Binaural, Modulation
+        "analyze_vectorscope" => execute_analyze_vectorscope_claude(args),
+        "analyze_waveform" => execute_analyze_waveform_claude(args),
+        "draw_grid" => execute_draw_grid_claude(args),
+        "grid_stack_videos" => execute_grid_stack_videos_claude(args),
+        "luma_key" => execute_luma_key_claude(args),
+        "render_binaural" => execute_render_binaural_claude(args),
+        "add_vibrato" => execute_add_vibrato_claude(args),
+        "add_tremolo" => execute_add_tremolo_claude(args),
+        "add_flanger" => execute_add_flanger_claude(args),
+        "denoise_audio_nlm" => execute_denoise_audio_nlm_claude(args),
+
+        // Phase F — Niche/Specialised
+        "displace_video" => execute_displace_video_claude(args),
+        "decimate_frames" => execute_decimate_frames_claude(args),
+        "denoise_video_owden" => execute_denoise_video_owden_claude(args),
+        "despill_video" => execute_despill_video_claude(args),
+        "remap_pixels" => execute_remap_pixels_claude(args),
+        "adjust_exposure" => execute_adjust_exposure_claude(args),
+        "measure_vmaf" => execute_measure_vmaf_claude(args),
+        "shift_audio_frequency" => execute_shift_audio_frequency_claude(args),
+        "apply_audio_pulsator" => execute_apply_audio_pulsator_claude(args),
+        "enhance_dialogue" => execute_enhance_dialogue_claude(args),
+        "split_audio_channels" => execute_split_audio_channels_claude(args),
+        "map_audio_channels" => execute_map_audio_channels_claude(args),
+        "merge_audio_inputs" => execute_merge_audio_inputs_claude(args),
+        "apply_crossfeed" => execute_apply_crossfeed_claude(args),
+        "apply_extrastereo" => execute_apply_extrastereo_claude(args),
+        "apply_firequalizer" => execute_apply_firequalizer_claude(args),
+        "apply_biquad" => execute_apply_biquad_claude(args),
+        "filter_bandpass" => execute_filter_bandpass_claude(args),
+        "filter_bandreject" => execute_filter_bandreject_claude(args),
+        "boost_sub_bass" => execute_boost_sub_bass_claude(args),
+        "detect_objects_dnn" => execute_detect_objects_dnn_claude(args),
+        "classify_frames_dnn" => execute_classify_frames_dnn_claude(args),
+        "upscale_super_resolution" => execute_upscale_super_resolution_claude(args),
+        "remove_rain_ai" => execute_remove_rain_ai_claude(args),
+        "detect_frozen_frames" => execute_detect_frozen_frames_claude(args),
+        "apply_edgedetect" => execute_apply_edgedetect_claude(args),
+        "zoom_pan" => execute_zoom_pan_claude(args),
+        "chromatic_aberration" => execute_chromatic_aberration_claude(args),
+        "temporal_blend" => execute_temporal_blend_claude(args),
+        "motion_interpolate" => execute_motion_interpolate_claude(args),
+        "correct_lens_simple" => execute_correct_lens_simple_claude(args),
+        "deinterlace_yadif" => execute_deinterlace_yadif_claude(args),
+        "correct_perspective_linear" => execute_correct_perspective_linear_claude(args),
+        "colorize_video" => execute_colorize_video_claude(args),
+        "denoise_hqdn3d" => execute_denoise_hqdn3d_claude(args),
+        "add_echo" => execute_add_echo_claude(args),
+        "noise_gate" => execute_noise_gate_claude(args),
+        "compress_dynamics" => execute_compress_dynamics_claude(args),
+        "add_chorus" => execute_add_chorus_claude(args),
+        "widen_stereo" => execute_widen_stereo_claude(args),
+        "normalize_speech" => execute_normalize_speech_claude(args),
+        "remove_silence_simple" => execute_remove_silence_simple_claude(args),
+        "soft_clip_audio" => execute_soft_clip_audio_claude(args),
+        "segment_video" => execute_segment_video_claude(args),
+        "pad_video_time" => execute_pad_video_time_claude(args),
+        "encode_vp9" => execute_encode_vp9_claude(args),
+        "encode_av1" => execute_encode_av1_claude(args),
+        "encode_hevc" => execute_encode_hevc_claude(args),
+        "encode_opus" => execute_encode_opus_claude(args),
+        "encode_hdr10" => execute_encode_hdr10_claude(args),
+        "encode_nvenc" => execute_encode_nvenc_claude(args),
+        "encode_vaapi" => execute_encode_vaapi_claude(args),
+        "encode_qsv" => execute_encode_qsv_claude(args),
+        "encode_prores" => execute_encode_prores_claude(args),
+        "encode_dnxhd" => execute_encode_dnxhd_claude(args),
+        "encode_gif" => execute_encode_gif_claude(args),
+        "encode_webm" => execute_encode_webm_claude(args),
+        "stabilize_video_2pass" => execute_stabilize_video_2pass_claude(args),
+        "apply_lut_rgb" => execute_apply_lut_rgb_claude(args),
+        "apply_hsvhold" => execute_apply_hsvhold_claude(args),
+        "convert_pixel_format" => execute_convert_pixel_format_claude(args),
+        "apply_setsar" => execute_apply_setsar_claude(args),
+        "apply_random_frames" => execute_apply_random_frames_claude(args),
+        "visualize_cqt" => execute_visualize_cqt_claude(args),
+        "visualize_frequencies" => execute_visualize_frequencies_claude(args),
+        "apply_audio_iir" => execute_apply_audio_iir_claude(args),
+        "apply_audio_expression" => execute_apply_audio_expression_claude(args),
+        "convert_audio_format" => execute_convert_audio_format_claude(args),
+        "apply_cross_correlate" => execute_apply_cross_correlate_claude(args),
+        "apply_audio_multiply" => execute_apply_audio_multiply_claude(args),
+        "apply_audio_contrast" => execute_apply_audio_contrast_claude(args),
+        "decode_hdcd" => execute_decode_hdcd_claude(args),
+        "scale_to_reference" => execute_scale_to_reference_claude(args),
+        "apply_fieldorder" => execute_apply_fieldorder_claude(args),
+        "optimize_gif_palette" => execute_optimize_gif_palette_claude(args),
+        "apply_hsv_key" => execute_apply_hsv_key_claude(args),
+        "apply_lut_yuv" => execute_apply_lut_yuv_claude(args),
+        "apply_freezeframes" => execute_apply_freezeframes_claude(args),
+        "draw_signal_graph" => execute_draw_signal_graph_claude(args),
+        "measure_video_entropy" => execute_measure_video_entropy_claude(args),
+        "apply_compensation_delay" => execute_apply_compensation_delay_claude(args),
+        "apply_earwax" => execute_apply_earwax_claude(args),
+        "apply_allpass_filter" => execute_apply_allpass_filter_claude(args),
+        "apply_highshelf" => execute_apply_highshelf_claude(args),
+        "apply_lowshelf" => execute_apply_lowshelf_claude(args),
+        "apply_surround_upmix" => execute_apply_surround_upmix_claude(args),
+        "detect_volume_levels" => execute_detect_volume_levels_claude(args),
+        "extract_alpha_channel" => execute_extract_alpha_channel_claude(args),
+        "merge_alpha_channel" => execute_merge_alpha_channel_claude(args),
+        "apply_framestep" => execute_apply_framestep_claude(args),
+        "apply_swaprect" => execute_apply_swaprect_claude(args),
+        "apply_fillborders" => execute_apply_fillborders_claude(args),
+        "apply_chromanr" => execute_apply_chromanr_claude(args),
+        "apply_weave" => execute_apply_weave_claude(args),
+        "apply_interlace" => execute_apply_interlace_claude(args),
+        "denoise_audio_fft" => execute_denoise_audio_fft_claude(args),
+        "loop_audio" => execute_loop_audio_claude(args),
+        "apply_dc_shift" => execute_apply_dc_shift_claude(args),
+        "measure_dynamic_range" => execute_measure_dynamic_range_claude(args),
+        "apply_single_eq_band" => execute_apply_single_eq_band_claude(args),
+        "apply_stereotools" => execute_apply_stereotools_claude(args),
+        "apply_asetrate" => execute_apply_asetrate_claude(args),
+        "apply_xfade_transition" => execute_apply_xfade_transition_claude(args),
+        "apply_color_key" => execute_apply_color_key_claude(args),
+        "apply_monochrome" => execute_apply_monochrome_claude(args),
+        "apply_maskedmerge" => execute_apply_maskedmerge_claude(args),
+        "convert_360_video" => execute_convert_360_video_claude(args),
+        "fix_banding" => execute_fix_banding_claude(args),
+        "apply_greyedge" => execute_apply_greyedge_claude(args),
+        "apply_fade_video" => execute_apply_fade_video_claude(args),
+        "normalize_loudness" => execute_normalize_loudness_claude(args),
+        "dynamic_audio_normalize" => execute_dynamic_audio_normalize_claude(args),
+        "resample_audio" => execute_resample_audio_claude(args),
+        "trim_audio" => execute_trim_audio_claude(args),
+        "apply_crystalizer" => execute_apply_crystalizer_claude(args),
+        "multiband_compress" => execute_multiband_compress_claude(args),
+        "apply_super_equalizer" => execute_apply_super_equalizer_claude(args),
+        "apply_colormatrix" => execute_apply_colormatrix_claude(args),
+        "apply_chromashift" => execute_apply_chromashift_claude(args),
+        "apply_cas" => execute_apply_cas_claude(args),
+        "apply_nlmeans_video" => execute_apply_nlmeans_video_claude(args),
+        "apply_spp" => execute_apply_spp_claude(args),
+        "apply_pp" => execute_apply_pp_claude(args),
+        "apply_mestimate" => execute_apply_mestimate_claude(args),
+        "apply_midequalizer" => execute_apply_midequalizer_claude(args),
+        "apply_median_spatial" => execute_apply_median_spatial_claude(args),
+        "apply_acrusher" => execute_apply_acrusher_claude(args),
+        "apply_atempo" => execute_apply_atempo_claude(args),
+        "apply_asetnsamples" => execute_apply_asetnsamples_claude(args),
+        "apply_apad" => execute_apply_apad_claude(args),
+        "apply_asubcut" => execute_apply_asubcut_claude(args),
+        "apply_asupercut" => execute_apply_asupercut_claude(args),
+        "apply_threshold" => execute_apply_threshold_claude(args),
+        "apply_maskedclamp" => execute_apply_maskedclamp_claude(args),
+        "apply_roberts" => execute_apply_roberts_claude(args),
+        "apply_sobel" => execute_apply_sobel_claude(args),
+        "apply_prewitt" => execute_apply_prewitt_claude(args),
+        "apply_kirsch" => execute_apply_kirsch_claude(args),
+        "apply_video_limiter" => execute_apply_video_limiter_claude(args),
+        "apply_bilateral" => execute_apply_bilateral_claude(args),
+        "apply_unsharp_mask" => execute_apply_unsharp_mask_claude(args),
+        "apply_lagfun" => execute_apply_lagfun_claude(args),
+        "apply_tinterlace" => execute_apply_tinterlace_claude(args),
+        "apply_datascope" => execute_apply_datascope_claude(args),
+        "apply_fspp" => execute_apply_fspp_claude(args),
+        "apply_haas" => execute_apply_haas_claude(args),
+        "apply_aemphasis" => execute_apply_aemphasis_claude(args),
+        "apply_negate" => execute_apply_negate_claude(args),
+        "apply_pixelize" => execute_apply_pixelize_claude(args),
+        "apply_colorlevels" => execute_apply_colorlevels_claude(args),
+        "apply_pseudocolor" => execute_apply_pseudocolor_claude(args),
+        "apply_colorhold" => execute_apply_colorhold_claude(args),
+        "apply_shuffleplanes" => execute_apply_shuffleplanes_claude(args),
+        "detect_black_frames" => execute_detect_black_frames_claude(args),
+        "detect_interlace_type" => execute_detect_interlace_type_claude(args),
+        "apply_vstack" => execute_apply_vstack_claude(args),
+        "apply_hstack" => execute_apply_hstack_claude(args),
+        "apply_setdar" => execute_apply_setdar_claude(args),
+        "apply_stereo3d" => execute_apply_stereo3d_claude(args),
+        "apply_telecine" => execute_apply_telecine_claude(args),
+        "apply_pullup" => execute_apply_pullup_claude(args),
+        "select_thumbnail_frame" => execute_select_thumbnail_frame_claude(args),
+        "apply_gaussian_blur" => execute_apply_gaussian_blur_claude(args),
+        "apply_box_blur" => execute_apply_box_blur_claude(args),
+        "apply_smart_blur" => execute_apply_smart_blur_claude(args),
+        "add_film_grain" => execute_add_film_grain_claude(args),
+        "apply_rotate_angle" => execute_apply_rotate_angle_claude(args),
+        "apply_geq" => execute_apply_geq_claude(args),
+        "apply_colorchannelmixer" => execute_apply_colorchannelmixer_claude(args),
+        "apply_atadenoise" => execute_apply_atadenoise_claude(args),
+        "apply_vaguedenoiser" => execute_apply_vaguedenoiser_claude(args),
+        "apply_fftdnoiz" => execute_apply_fftdnoiz_claude(args),
+        "generate_waveform_video" => execute_generate_waveform_video_claude(args),
+        "apply_lut3d" => execute_apply_lut3d_claude(args),
+        "measure_siti" => execute_measure_siti_claude(args),
+        "create_test_pattern" => execute_create_test_pattern_claude(args),
+        "apply_amplify" => execute_apply_amplify_claude(args),
+        "select_frames" => execute_select_frames_claude(args),
+        "posterize_video" => execute_posterize_video_claude(args),
+        "solarize_video" => execute_solarize_video_claude(args),
+        "apply_dilation" => execute_apply_dilation_claude(args),
+        "apply_erosion" => execute_apply_erosion_claude(args),
+        "apply_median_filter" => execute_apply_median_filter_claude(args),
+        "apply_histogram_eq" => execute_apply_histogram_eq_claude(args),
+        "apply_clahe" => execute_apply_clahe_claude(args),
+        "apply_deblock" => execute_apply_deblock_claude(args),
+        "adjust_hue_saturation" => execute_adjust_hue_saturation_claude(args),
+        "apply_convolution" => execute_apply_convolution_claude(args),
+        "reverse_audio" => execute_reverse_audio_claude(args),
+        "blend_audio_streams" => execute_blend_audio_streams_claude(args),
+        "measure_silence" => execute_measure_silence_claude(args),
+        "measure_audio_spectrum" => execute_measure_audio_spectrum_claude(args),
+
         _ => format!("❌ Unknown tool: {}", name),
     }
 }
@@ -321,6 +628,12 @@ pub async fn execute_tool_gemini(name: &str, args: &HashMap<String, Value>) -> S
         "add_overlay" => execute_add_overlay_gemini(args),
         "adjust_color" => execute_adjust_color_gemini(args),
         "add_subtitles" => execute_add_subtitles_gemini(args),
+        "add_transition" => execute_add_transition_gemini(args),
+        "add_animated_text" => execute_add_animated_text_gemini(args),
+        "apply_filter_chain" => execute_apply_filter_chain_gemini(args),
+        "apply_audio_effect" => execute_apply_audio_effect_gemini(args),
+        "deinterlace_video" => execute_deinterlace_video_gemini(args),
+        "export_custom_quality" => execute_export_custom_quality_gemini(args),
 
         // Transform operations
         "resize_video" => execute_resize_video_gemini(args),
@@ -370,6 +683,307 @@ pub async fn execute_tool_gemini(name: &str, args: &HashMap<String, Value>) -> S
 
         // Control tools
         "submit_final_answer" => execute_submit_final_answer_gemini(args),
+
+        // New tools — Batch 1
+        "create_thumbnail_hd" => execute_create_thumbnail_hd_gemini(args),
+        "get_video_duration" => execute_get_video_duration_gemini(args),
+
+        // New tools — Batch 2 Color Grading
+        "adjust_hue" => execute_adjust_hue_gemini(args),
+        "color_balance" => execute_color_balance_gemini(args),
+        "normalize_video" => execute_normalize_video_gemini(args),
+        "apply_lut" => execute_apply_lut_gemini(args),
+
+        // New tools — Batch 3 Denoising & Sharpening
+        "denoise_video" => execute_denoise_video_gemini(args),
+        "unsharp_mask" => execute_unsharp_mask_gemini(args),
+        "reduce_noise" => execute_reduce_noise_gemini(args),
+
+        // New tools — Batch 4 Audio Processing
+        "compress_audio" => execute_compress_audio_gemini(args),
+        "normalize_audio" => execute_normalize_audio_gemini(args),
+        "equalize_audio" => execute_equalize_audio_gemini(args),
+        "gate_audio" => execute_gate_audio_gemini(args),
+        "denoise_audio" => execute_denoise_audio_gemini(args),
+
+        // New tools — Batch 5 Composition & Layout
+        "pad_video" => execute_pad_video_gemini(args),
+        "blend_videos" => execute_blend_videos_gemini(args),
+        "stack_videos" => execute_stack_videos_gemini(args),
+        "add_vignette" => execute_add_vignette_gemini(args),
+        "draw_box" => execute_draw_box_gemini(args),
+
+        // New tools — Batch 6 Motion, Time & Frame
+        "reverse_video" => execute_reverse_video_gemini(args),
+        "loop_video" => execute_loop_video_gemini(args),
+        "zoompan" => execute_zoompan_gemini(args),
+        "minterpolate" => execute_minterpolate_gemini(args),
+
+        // New tools — Batch 7 Media Analysis
+        "detect_scene_changes" => execute_detect_scene_changes_gemini(args),
+        "measure_loudness" => execute_measure_loudness_gemini(args),
+        "detect_silence" => execute_detect_silence_gemini(args),
+
+        // New tools — Batch 8 Advanced Color Grading
+        "adjust_curves" => execute_adjust_curves_gemini(args),
+        "adjust_levels" => execute_adjust_levels_gemini(args),
+        "split_tone" => execute_split_tone_gemini(args),
+        "convert_colorspace" => execute_convert_colorspace_gemini(args),
+        "apply_tonemap" => execute_apply_tonemap_gemini(args),
+
+        // New tools — Batch 9 Audio Tone Shaping
+        "filter_highpass" => execute_filter_highpass_gemini(args),
+        "filter_lowpass" => execute_filter_lowpass_gemini(args),
+        "adjust_bass" => execute_adjust_bass_gemini(args),
+        "adjust_treble" => execute_adjust_treble_gemini(args),
+        "audio_compand" => execute_audio_compand_gemini(args),
+        "add_audio_delay" => execute_add_audio_delay_gemini(args),
+        "add_phaser" => execute_add_phaser_gemini(args),
+
+        // New tools — Batch 10 Audio Restoration
+        "remove_clicks" => execute_remove_clicks_gemini(args),
+        "restore_clipping" => execute_restore_clipping_gemini(args),
+        "remove_silence" => execute_remove_silence_gemini(args),
+
+        // New tools — Batch 11 Quality Metrics
+        "compare_ssim" => execute_compare_ssim_gemini(args),
+        "compare_psnr" => execute_compare_psnr_gemini(args),
+        "analyze_audio_stats" => execute_analyze_audio_stats_gemini(args),
+        "analyze_video_signal" => execute_analyze_video_signal_gemini(args),
+
+        // New tools — Batch 12 Geometric Transforms
+        "correct_perspective" => execute_correct_perspective_gemini(args),
+        "correct_lens" => execute_correct_lens_gemini(args),
+        "apply_shear" => execute_apply_shear_gemini(args),
+
+        // New tools — Batch 13 Temporal Frame Effects
+        "blend_frames" => execute_blend_frames_gemini(args),
+        "temporal_median" => execute_temporal_median_gemini(args),
+        "convert_framerate" => execute_convert_framerate_gemini(args),
+        "tile_frames" => execute_tile_frames_gemini(args),
+
+        // New tools — Batch 14 Spatial Audio
+        "adjust_stereo_width" => execute_adjust_stereo_width_gemini(args),
+        "apply_stereo_widen" => execute_apply_stereo_widen_gemini(args),
+        "mix_audio_channels" => execute_mix_audio_channels_gemini(args),
+
+        // Phase D — Professional Finishing
+        "adjust_color_temperature" => execute_adjust_color_temperature_gemini(args),
+        "adjust_vibrance" => execute_adjust_vibrance_gemini(args),
+        "remove_flicker" => execute_remove_flicker_gemini(args),
+        "denoise_video_bm3d" => execute_denoise_video_bm3d_gemini(args),
+        "deshake_video" => execute_deshake_video_gemini(args),
+        "measure_lufs" => execute_measure_lufs_gemini(args),
+        "parametric_eq" => execute_parametric_eq_gemini(args),
+        "audio_limiter" => execute_audio_limiter_gemini(args),
+        "reduce_sibilance" => execute_reduce_sibilance_gemini(args),
+        "denoise_speech_rnn" => execute_denoise_speech_rnn_gemini(args),
+
+        // Phase E — Vectorscope, Waveform, Grid, LumaKey, Binaural, Modulation
+        "analyze_vectorscope" => execute_analyze_vectorscope_gemini(args),
+        "analyze_waveform" => execute_analyze_waveform_gemini(args),
+        "draw_grid" => execute_draw_grid_gemini(args),
+        "grid_stack_videos" => execute_grid_stack_videos_gemini(args),
+        "luma_key" => execute_luma_key_gemini(args),
+        "render_binaural" => execute_render_binaural_gemini(args),
+        "add_vibrato" => execute_add_vibrato_gemini(args),
+        "add_tremolo" => execute_add_tremolo_gemini(args),
+        "add_flanger" => execute_add_flanger_gemini(args),
+        "denoise_audio_nlm" => execute_denoise_audio_nlm_gemini(args),
+
+        // Phase F — Niche/Specialised
+        "displace_video" => execute_displace_video_gemini(args),
+        "decimate_frames" => execute_decimate_frames_gemini(args),
+        "denoise_video_owden" => execute_denoise_video_owden_gemini(args),
+        "despill_video" => execute_despill_video_gemini(args),
+        "remap_pixels" => execute_remap_pixels_gemini(args),
+        "adjust_exposure" => execute_adjust_exposure_gemini(args),
+        "measure_vmaf" => execute_measure_vmaf_gemini(args),
+        "shift_audio_frequency" => execute_shift_audio_frequency_gemini(args),
+        "apply_audio_pulsator" => execute_apply_audio_pulsator_gemini(args),
+        "enhance_dialogue" => execute_enhance_dialogue_gemini(args),
+        "split_audio_channels" => execute_split_audio_channels_gemini(args),
+        "map_audio_channels" => execute_map_audio_channels_gemini(args),
+        "merge_audio_inputs" => execute_merge_audio_inputs_gemini(args),
+        "apply_crossfeed" => execute_apply_crossfeed_gemini(args),
+        "apply_extrastereo" => execute_apply_extrastereo_gemini(args),
+        "apply_firequalizer" => execute_apply_firequalizer_gemini(args),
+        "apply_biquad" => execute_apply_biquad_gemini(args),
+        "filter_bandpass" => execute_filter_bandpass_gemini(args),
+        "filter_bandreject" => execute_filter_bandreject_gemini(args),
+        "boost_sub_bass" => execute_boost_sub_bass_gemini(args),
+        "detect_objects_dnn" => execute_detect_objects_dnn_gemini(args),
+        "classify_frames_dnn" => execute_classify_frames_dnn_gemini(args),
+        "upscale_super_resolution" => execute_upscale_super_resolution_gemini(args),
+        "remove_rain_ai" => execute_remove_rain_ai_gemini(args),
+        "detect_frozen_frames" => execute_detect_frozen_frames_gemini(args),
+        "apply_edgedetect" => execute_apply_edgedetect_gemini(args),
+        "zoom_pan" => execute_zoom_pan_gemini(args),
+        "chromatic_aberration" => execute_chromatic_aberration_gemini(args),
+        "temporal_blend" => execute_temporal_blend_gemini(args),
+        "motion_interpolate" => execute_motion_interpolate_gemini(args),
+        "correct_lens_simple" => execute_correct_lens_simple_gemini(args),
+        "deinterlace_yadif" => execute_deinterlace_yadif_gemini(args),
+        "correct_perspective_linear" => execute_correct_perspective_linear_gemini(args),
+        "colorize_video" => execute_colorize_video_gemini(args),
+        "denoise_hqdn3d" => execute_denoise_hqdn3d_gemini(args),
+        "add_echo" => execute_add_echo_gemini(args),
+        "noise_gate" => execute_noise_gate_gemini(args),
+        "compress_dynamics" => execute_compress_dynamics_gemini(args),
+        "add_chorus" => execute_add_chorus_gemini(args),
+        "widen_stereo" => execute_widen_stereo_gemini(args),
+        "normalize_speech" => execute_normalize_speech_gemini(args),
+        "remove_silence_simple" => execute_remove_silence_simple_gemini(args),
+        "soft_clip_audio" => execute_soft_clip_audio_gemini(args),
+        "segment_video" => execute_segment_video_gemini(args),
+        "pad_video_time" => execute_pad_video_time_gemini(args),
+        "encode_vp9" => execute_encode_vp9_gemini(args),
+        "encode_av1" => execute_encode_av1_gemini(args),
+        "encode_hevc" => execute_encode_hevc_gemini(args),
+        "encode_opus" => execute_encode_opus_gemini(args),
+        "encode_hdr10" => execute_encode_hdr10_gemini(args),
+        "encode_nvenc" => execute_encode_nvenc_gemini(args),
+        "encode_vaapi" => execute_encode_vaapi_gemini(args),
+        "encode_qsv" => execute_encode_qsv_gemini(args),
+        "encode_prores" => execute_encode_prores_gemini(args),
+        "encode_dnxhd" => execute_encode_dnxhd_gemini(args),
+        "encode_gif" => execute_encode_gif_gemini(args),
+        "encode_webm" => execute_encode_webm_gemini(args),
+        "stabilize_video_2pass" => execute_stabilize_video_2pass_gemini(args),
+        "apply_lut_rgb" => execute_apply_lut_rgb_gemini(args),
+        "apply_hsvhold" => execute_apply_hsvhold_gemini(args),
+        "convert_pixel_format" => execute_convert_pixel_format_gemini(args),
+        "apply_setsar" => execute_apply_setsar_gemini(args),
+        "apply_random_frames" => execute_apply_random_frames_gemini(args),
+        "visualize_cqt" => execute_visualize_cqt_gemini(args),
+        "visualize_frequencies" => execute_visualize_frequencies_gemini(args),
+        "apply_audio_iir" => execute_apply_audio_iir_gemini(args),
+        "apply_audio_expression" => execute_apply_audio_expression_gemini(args),
+        "convert_audio_format" => execute_convert_audio_format_gemini(args),
+        "apply_cross_correlate" => execute_apply_cross_correlate_gemini(args),
+        "apply_audio_multiply" => execute_apply_audio_multiply_gemini(args),
+        "apply_audio_contrast" => execute_apply_audio_contrast_gemini(args),
+        "decode_hdcd" => execute_decode_hdcd_gemini(args),
+        "scale_to_reference" => execute_scale_to_reference_gemini(args),
+        "apply_fieldorder" => execute_apply_fieldorder_gemini(args),
+        "optimize_gif_palette" => execute_optimize_gif_palette_gemini(args),
+        "apply_hsv_key" => execute_apply_hsv_key_gemini(args),
+        "apply_lut_yuv" => execute_apply_lut_yuv_gemini(args),
+        "apply_freezeframes" => execute_apply_freezeframes_gemini(args),
+        "draw_signal_graph" => execute_draw_signal_graph_gemini(args),
+        "measure_video_entropy" => execute_measure_video_entropy_gemini(args),
+        "apply_compensation_delay" => execute_apply_compensation_delay_gemini(args),
+        "apply_earwax" => execute_apply_earwax_gemini(args),
+        "apply_allpass_filter" => execute_apply_allpass_filter_gemini(args),
+        "apply_highshelf" => execute_apply_highshelf_gemini(args),
+        "apply_lowshelf" => execute_apply_lowshelf_gemini(args),
+        "apply_surround_upmix" => execute_apply_surround_upmix_gemini(args),
+        "detect_volume_levels" => execute_detect_volume_levels_gemini(args),
+        "extract_alpha_channel" => execute_extract_alpha_channel_gemini(args),
+        "merge_alpha_channel" => execute_merge_alpha_channel_gemini(args),
+        "apply_framestep" => execute_apply_framestep_gemini(args),
+        "apply_swaprect" => execute_apply_swaprect_gemini(args),
+        "apply_fillborders" => execute_apply_fillborders_gemini(args),
+        "apply_chromanr" => execute_apply_chromanr_gemini(args),
+        "apply_weave" => execute_apply_weave_gemini(args),
+        "apply_interlace" => execute_apply_interlace_gemini(args),
+        "denoise_audio_fft" => execute_denoise_audio_fft_gemini(args),
+        "loop_audio" => execute_loop_audio_gemini(args),
+        "apply_dc_shift" => execute_apply_dc_shift_gemini(args),
+        "measure_dynamic_range" => execute_measure_dynamic_range_gemini(args),
+        "apply_single_eq_band" => execute_apply_single_eq_band_gemini(args),
+        "apply_stereotools" => execute_apply_stereotools_gemini(args),
+        "apply_asetrate" => execute_apply_asetrate_gemini(args),
+        "apply_xfade_transition" => execute_apply_xfade_transition_gemini(args),
+        "apply_color_key" => execute_apply_color_key_gemini(args),
+        "apply_monochrome" => execute_apply_monochrome_gemini(args),
+        "apply_maskedmerge" => execute_apply_maskedmerge_gemini(args),
+        "convert_360_video" => execute_convert_360_video_gemini(args),
+        "fix_banding" => execute_fix_banding_gemini(args),
+        "apply_greyedge" => execute_apply_greyedge_gemini(args),
+        "apply_fade_video" => execute_apply_fade_video_gemini(args),
+        "normalize_loudness" => execute_normalize_loudness_gemini(args),
+        "dynamic_audio_normalize" => execute_dynamic_audio_normalize_gemini(args),
+        "resample_audio" => execute_resample_audio_gemini(args),
+        "trim_audio" => execute_trim_audio_gemini(args),
+        "apply_crystalizer" => execute_apply_crystalizer_gemini(args),
+        "multiband_compress" => execute_multiband_compress_gemini(args),
+        "apply_super_equalizer" => execute_apply_super_equalizer_gemini(args),
+        "apply_colormatrix" => execute_apply_colormatrix_gemini(args),
+        "apply_chromashift" => execute_apply_chromashift_gemini(args),
+        "apply_cas" => execute_apply_cas_gemini(args),
+        "apply_nlmeans_video" => execute_apply_nlmeans_video_gemini(args),
+        "apply_spp" => execute_apply_spp_gemini(args),
+        "apply_pp" => execute_apply_pp_gemini(args),
+        "apply_mestimate" => execute_apply_mestimate_gemini(args),
+        "apply_midequalizer" => execute_apply_midequalizer_gemini(args),
+        "apply_median_spatial" => execute_apply_median_spatial_gemini(args),
+        "apply_acrusher" => execute_apply_acrusher_gemini(args),
+        "apply_atempo" => execute_apply_atempo_gemini(args),
+        "apply_asetnsamples" => execute_apply_asetnsamples_gemini(args),
+        "apply_apad" => execute_apply_apad_gemini(args),
+        "apply_asubcut" => execute_apply_asubcut_gemini(args),
+        "apply_asupercut" => execute_apply_asupercut_gemini(args),
+        "apply_threshold" => execute_apply_threshold_gemini(args),
+        "apply_maskedclamp" => execute_apply_maskedclamp_gemini(args),
+        "apply_roberts" => execute_apply_roberts_gemini(args),
+        "apply_sobel" => execute_apply_sobel_gemini(args),
+        "apply_prewitt" => execute_apply_prewitt_gemini(args),
+        "apply_kirsch" => execute_apply_kirsch_gemini(args),
+        "apply_video_limiter" => execute_apply_video_limiter_gemini(args),
+        "apply_bilateral" => execute_apply_bilateral_gemini(args),
+        "apply_unsharp_mask" => execute_apply_unsharp_mask_gemini(args),
+        "apply_lagfun" => execute_apply_lagfun_gemini(args),
+        "apply_tinterlace" => execute_apply_tinterlace_gemini(args),
+        "apply_datascope" => execute_apply_datascope_gemini(args),
+        "apply_fspp" => execute_apply_fspp_gemini(args),
+        "apply_haas" => execute_apply_haas_gemini(args),
+        "apply_aemphasis" => execute_apply_aemphasis_gemini(args),
+        "apply_negate" => execute_apply_negate_gemini(args),
+        "apply_pixelize" => execute_apply_pixelize_gemini(args),
+        "apply_colorlevels" => execute_apply_colorlevels_gemini(args),
+        "apply_pseudocolor" => execute_apply_pseudocolor_gemini(args),
+        "apply_colorhold" => execute_apply_colorhold_gemini(args),
+        "apply_shuffleplanes" => execute_apply_shuffleplanes_gemini(args),
+        "detect_black_frames" => execute_detect_black_frames_gemini(args),
+        "detect_interlace_type" => execute_detect_interlace_type_gemini(args),
+        "apply_vstack" => execute_apply_vstack_gemini(args),
+        "apply_hstack" => execute_apply_hstack_gemini(args),
+        "apply_setdar" => execute_apply_setdar_gemini(args),
+        "apply_stereo3d" => execute_apply_stereo3d_gemini(args),
+        "apply_telecine" => execute_apply_telecine_gemini(args),
+        "apply_pullup" => execute_apply_pullup_gemini(args),
+        "select_thumbnail_frame" => execute_select_thumbnail_frame_gemini(args),
+        "apply_gaussian_blur" => execute_apply_gaussian_blur_gemini(args),
+        "apply_box_blur" => execute_apply_box_blur_gemini(args),
+        "apply_smart_blur" => execute_apply_smart_blur_gemini(args),
+        "add_film_grain" => execute_add_film_grain_gemini(args),
+        "apply_rotate_angle" => execute_apply_rotate_angle_gemini(args),
+        "apply_geq" => execute_apply_geq_gemini(args),
+        "apply_colorchannelmixer" => execute_apply_colorchannelmixer_gemini(args),
+        "apply_atadenoise" => execute_apply_atadenoise_gemini(args),
+        "apply_vaguedenoiser" => execute_apply_vaguedenoiser_gemini(args),
+        "apply_fftdnoiz" => execute_apply_fftdnoiz_gemini(args),
+        "generate_waveform_video" => execute_generate_waveform_video_gemini(args),
+        "apply_lut3d" => execute_apply_lut3d_gemini(args),
+        "measure_siti" => execute_measure_siti_gemini(args),
+        "create_test_pattern" => execute_create_test_pattern_gemini(args),
+        "apply_amplify" => execute_apply_amplify_gemini(args),
+        "select_frames" => execute_select_frames_gemini(args),
+        "posterize_video" => execute_posterize_video_gemini(args),
+        "solarize_video" => execute_solarize_video_gemini(args),
+        "apply_dilation" => execute_apply_dilation_gemini(args),
+        "apply_erosion" => execute_apply_erosion_gemini(args),
+        "apply_median_filter" => execute_apply_median_filter_gemini(args),
+        "apply_histogram_eq" => execute_apply_histogram_eq_gemini(args),
+        "apply_clahe" => execute_apply_clahe_gemini(args),
+        "apply_deblock" => execute_apply_deblock_gemini(args),
+        "adjust_hue_saturation" => execute_adjust_hue_saturation_gemini(args),
+        "apply_convolution" => execute_apply_convolution_gemini(args),
+        "reverse_audio" => execute_reverse_audio_gemini(args),
+        "blend_audio_streams" => execute_blend_audio_streams_gemini(args),
+        "measure_silence" => execute_measure_silence_gemini(args),
+        "measure_audio_spectrum" => execute_measure_audio_spectrum_gemini(args),
 
         _ => format!("❌ Unknown tool: {}", name),
     }
@@ -587,6 +1201,75 @@ fn execute_fade_audio_claude(args: &Value) -> String {
     // fade_audio requires total duration as 5th parameter - use analyze_video to get it or estimate
     let duration = 60.0; // Default estimate - ideally should analyze video first
     crate::audio::fade_audio(input, &output, fade_in_duration, fade_out_duration, duration).unwrap_or_else(|e| e)
+}
+
+fn execute_add_transition_claude(args: &Value) -> String {
+    let input1 = args["input_file1"].as_str().unwrap_or("");
+    let input2 = args["input_file2"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let transition_type = args["transition_type"].as_str().unwrap_or("fade");
+    let duration = args["duration_seconds"].as_f64().unwrap_or(1.0);
+    let offset = args["offset_seconds"].as_f64().unwrap_or(0.0);
+    crate::visual::add_transition(input1, input2, &output, transition_type, duration, offset).unwrap_or_else(|e| e)
+}
+
+fn execute_add_animated_text_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let text = args["text"].as_str().unwrap_or("");
+    let animation_type = args["animation_type"].as_str().unwrap_or("fade_in");
+    let start_time = args["start_time"].as_f64().unwrap_or(0.0);
+    let duration = args["duration"].as_f64().unwrap_or(3.0);
+    crate::visual::add_animated_text(input, &output, text, animation_type, start_time, duration).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_filter_chain_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let filters: Vec<(String, serde_json::Value)> = args["filters"]
+        .as_array()
+        .unwrap_or(&vec![])
+        .iter()
+        .filter_map(|f| {
+            let name = f["name"].as_str()?.to_string();
+            let value = f["value"].clone();
+            Some((name, value))
+        })
+        .collect();
+    crate::visual::apply_filter_chain(input, &output, &filters).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_audio_effect_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let effect = args["effect"].as_str().unwrap_or("echo");
+    let intensity = args["intensity"].as_f64().unwrap_or(0.5);
+    crate::audio::apply_audio_effect(input, &output, effect, intensity).unwrap_or_else(|e| e)
+}
+
+fn execute_deinterlace_video_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let mode = args["mode"].as_str().unwrap_or("0");
+    crate::transform::deinterlace_video(input, &output, mode).unwrap_or_else(|e| e)
+}
+
+fn execute_export_custom_quality_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let quality = args["quality"].as_str().unwrap_or("medium");
+    let resolution = match (args["width"].as_u64(), args["height"].as_u64()) {
+        (Some(w), Some(h)) => Some((w as u32, h as u32)),
+        _ => None,
+    };
+    let bitrate = args["bitrate_kbps"].as_u64().map(|b| b as u32);
+    crate::export::export_custom_quality(input, &output, quality, resolution, bitrate).unwrap_or_else(|e| e)
 }
 
 fn execute_convert_format_claude(args: &Value) -> String {
@@ -1173,6 +1856,79 @@ fn execute_fade_audio_gemini(args: &HashMap<String, Value>) -> String {
     // fade_audio requires total duration as 5th parameter - use analyze_video to get it or estimate
     let duration = 60.0; // Default estimate - ideally should analyze video first
     crate::audio::fade_audio(input, &output, fade_in_duration, fade_out_duration, duration).unwrap_or_else(|e| e)
+}
+
+fn execute_add_transition_gemini(args: &HashMap<String, Value>) -> String {
+    let input1 = args.get("input_file1").and_then(|v| v.as_str()).unwrap_or("");
+    let input2 = args.get("input_file2").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let transition_type = args.get("transition_type").and_then(|v| v.as_str()).unwrap_or("fade");
+    let duration = args.get("duration_seconds").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let offset = args.get("offset_seconds").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    crate::visual::add_transition(input1, input2, &output, transition_type, duration, offset).unwrap_or_else(|e| e)
+}
+
+fn execute_add_animated_text_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let text = args.get("text").and_then(|v| v.as_str()).unwrap_or("");
+    let animation_type = args.get("animation_type").and_then(|v| v.as_str()).unwrap_or("fade_in");
+    let start_time = args.get("start_time").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let duration = args.get("duration").and_then(|v| v.as_f64()).unwrap_or(3.0);
+    crate::visual::add_animated_text(input, &output, text, animation_type, start_time, duration).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_filter_chain_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let filters: Vec<(String, serde_json::Value)> = args
+        .get("filters")
+        .and_then(|v| v.as_array())
+        .unwrap_or(&vec![])
+        .iter()
+        .filter_map(|f| {
+            let name = f["name"].as_str()?.to_string();
+            let value = f["value"].clone();
+            Some((name, value))
+        })
+        .collect();
+    crate::visual::apply_filter_chain(input, &output, &filters).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_audio_effect_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let effect = args.get("effect").and_then(|v| v.as_str()).unwrap_or("echo");
+    let intensity = args.get("intensity").and_then(|v| v.as_f64()).unwrap_or(0.5);
+    crate::audio::apply_audio_effect(input, &output, effect, intensity).unwrap_or_else(|e| e)
+}
+
+fn execute_deinterlace_video_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("0");
+    crate::transform::deinterlace_video(input, &output, mode).unwrap_or_else(|e| e)
+}
+
+fn execute_export_custom_quality_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let quality = args.get("quality").and_then(|v| v.as_str()).unwrap_or("medium");
+    let resolution = match (
+        args.get("width").and_then(|v| v.as_u64()),
+        args.get("height").and_then(|v| v.as_u64()),
+    ) {
+        (Some(w), Some(h)) => Some((w as u32, h as u32)),
+        _ => None,
+    };
+    let bitrate = args.get("bitrate_kbps").and_then(|v| v.as_u64()).map(|b| b as u32);
+    crate::export::export_custom_quality(input, &output, quality, resolution, bitrate).unwrap_or_else(|e| e)
 }
 
 fn execute_convert_format_gemini(args: &HashMap<String, Value>) -> String {
@@ -3328,4 +4084,5414 @@ async fn execute_search_youtube_channels_with_state_gemini(
     ctx: &ToolExecutionContext,
 ) -> String {
     execute_search_youtube_channels_with_state_claude(&serde_json::to_value(args).unwrap_or_default(), ctx).await
+}
+
+// ============================================================================
+// NEW TOOL EXECUTORS — BATCH 1 (Wire existing Rust functions)
+// ============================================================================
+
+fn execute_create_thumbnail_hd_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let timestamp = args.get("timestamp").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let width = args.get("width").and_then(|v| v.as_u64()).unwrap_or(1280) as u32;
+    let height = args.get("height").and_then(|v| v.as_u64()).unwrap_or(720) as u32;
+    crate::transform::create_thumbnail_scaled(input, &output, timestamp, width, height).unwrap_or_else(|e| e)
+}
+
+fn execute_create_thumbnail_hd_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let timestamp = args.get("timestamp").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let width = args.get("width").and_then(|v| v.as_u64()).unwrap_or(1280) as u32;
+    let height = args.get("height").and_then(|v| v.as_u64()).unwrap_or(720) as u32;
+    crate::transform::create_thumbnail_scaled(input, &output, timestamp, width, height).unwrap_or_else(|e| e)
+}
+
+fn execute_get_video_duration_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    match crate::core::get_video_duration(input) {
+        Ok(dur) => format!("Duration: {} seconds", dur),
+        Err(e) => e,
+    }
+}
+
+fn execute_get_video_duration_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    match crate::core::get_video_duration(input) {
+        Ok(dur) => format!("Duration: {} seconds", dur),
+        Err(e) => e,
+    }
+}
+
+// ============================================================================
+// NEW TOOL EXECUTORS — BATCH 2 (Color Grading)
+// ============================================================================
+
+fn execute_adjust_hue_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let hue_degrees = args.get("hue_degrees").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let saturation_factor = args.get("saturation_factor").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    crate::visual::adjust_hue(input, &output, hue_degrees, saturation_factor).unwrap_or_else(|e| e)
+}
+
+fn execute_adjust_hue_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let hue_degrees = args.get("hue_degrees").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let saturation_factor = args.get("saturation_factor").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    crate::visual::adjust_hue(input, &output, hue_degrees, saturation_factor).unwrap_or_else(|e| e)
+}
+
+fn execute_color_balance_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let shadows = (
+        args.get("shadows_r").and_then(|v| v.as_f64()).unwrap_or(0.0),
+        args.get("shadows_g").and_then(|v| v.as_f64()).unwrap_or(0.0),
+        args.get("shadows_b").and_then(|v| v.as_f64()).unwrap_or(0.0),
+    );
+    let midtones = (
+        args.get("midtones_r").and_then(|v| v.as_f64()).unwrap_or(0.0),
+        args.get("midtones_g").and_then(|v| v.as_f64()).unwrap_or(0.0),
+        args.get("midtones_b").and_then(|v| v.as_f64()).unwrap_or(0.0),
+    );
+    let highlights = (
+        args.get("highlights_r").and_then(|v| v.as_f64()).unwrap_or(0.0),
+        args.get("highlights_g").and_then(|v| v.as_f64()).unwrap_or(0.0),
+        args.get("highlights_b").and_then(|v| v.as_f64()).unwrap_or(0.0),
+    );
+    crate::visual::color_balance(input, &output, shadows, midtones, highlights).unwrap_or_else(|e| e)
+}
+
+fn execute_color_balance_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let shadows = (
+        args.get("shadows_r").and_then(|v| v.as_f64()).unwrap_or(0.0),
+        args.get("shadows_g").and_then(|v| v.as_f64()).unwrap_or(0.0),
+        args.get("shadows_b").and_then(|v| v.as_f64()).unwrap_or(0.0),
+    );
+    let midtones = (
+        args.get("midtones_r").and_then(|v| v.as_f64()).unwrap_or(0.0),
+        args.get("midtones_g").and_then(|v| v.as_f64()).unwrap_or(0.0),
+        args.get("midtones_b").and_then(|v| v.as_f64()).unwrap_or(0.0),
+    );
+    let highlights = (
+        args.get("highlights_r").and_then(|v| v.as_f64()).unwrap_or(0.0),
+        args.get("highlights_g").and_then(|v| v.as_f64()).unwrap_or(0.0),
+        args.get("highlights_b").and_then(|v| v.as_f64()).unwrap_or(0.0),
+    );
+    crate::visual::color_balance(input, &output, shadows, midtones, highlights).unwrap_or_else(|e| e)
+}
+
+fn execute_normalize_video_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let smoothing = args.get("smoothing").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    crate::visual::normalize_video(input, &output, smoothing).unwrap_or_else(|e| e)
+}
+
+fn execute_normalize_video_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let smoothing = args.get("smoothing").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    crate::visual::normalize_video(input, &output, smoothing).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_lut_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let lut_file = args.get("lut_file").and_then(|v| v.as_str()).unwrap_or("");
+    let interp = args.get("interp").and_then(|v| v.as_str()).unwrap_or("tetrahedral");
+    crate::visual::apply_lut(input, &output, lut_file, interp).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_lut_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let lut_file = args.get("lut_file").and_then(|v| v.as_str()).unwrap_or("");
+    let interp = args.get("interp").and_then(|v| v.as_str()).unwrap_or("tetrahedral");
+    crate::visual::apply_lut(input, &output, lut_file, interp).unwrap_or_else(|e| e)
+}
+
+// ============================================================================
+// NEW TOOL EXECUTORS — BATCH 3 (Denoising & Sharpening)
+// ============================================================================
+
+fn execute_denoise_video_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let luma_spatial = args.get("luma_spatial").and_then(|v| v.as_f64()).unwrap_or(4.0);
+    let luma_temporal = args.get("luma_temporal").and_then(|v| v.as_f64()).unwrap_or(6.0);
+    let chroma_spatial = args.get("chroma_spatial").and_then(|v| v.as_f64()).unwrap_or(3.0);
+    let chroma_temporal = args.get("chroma_temporal").and_then(|v| v.as_f64()).unwrap_or(4.5);
+    crate::visual::denoise_video(input, &output, luma_spatial, luma_temporal, chroma_spatial, chroma_temporal).unwrap_or_else(|e| e)
+}
+
+fn execute_denoise_video_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let luma_spatial = args.get("luma_spatial").and_then(|v| v.as_f64()).unwrap_or(4.0);
+    let luma_temporal = args.get("luma_temporal").and_then(|v| v.as_f64()).unwrap_or(6.0);
+    let chroma_spatial = args.get("chroma_spatial").and_then(|v| v.as_f64()).unwrap_or(3.0);
+    let chroma_temporal = args.get("chroma_temporal").and_then(|v| v.as_f64()).unwrap_or(4.5);
+    crate::visual::denoise_video(input, &output, luma_spatial, luma_temporal, chroma_spatial, chroma_temporal).unwrap_or_else(|e| e)
+}
+
+fn execute_unsharp_mask_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let luma_msize_x = args.get("luma_msize_x").and_then(|v| v.as_u64()).unwrap_or(5) as u32;
+    let luma_msize_y = args.get("luma_msize_y").and_then(|v| v.as_u64()).unwrap_or(5) as u32;
+    let luma_amount = args.get("luma_amount").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    crate::visual::unsharp_mask(input, &output, luma_msize_x, luma_msize_y, luma_amount).unwrap_or_else(|e| e)
+}
+
+fn execute_unsharp_mask_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let luma_msize_x = args.get("luma_msize_x").and_then(|v| v.as_u64()).unwrap_or(5) as u32;
+    let luma_msize_y = args.get("luma_msize_y").and_then(|v| v.as_u64()).unwrap_or(5) as u32;
+    let luma_amount = args.get("luma_amount").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    crate::visual::unsharp_mask(input, &output, luma_msize_x, luma_msize_y, luma_amount).unwrap_or_else(|e| e)
+}
+
+fn execute_reduce_noise_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let strength = args.get("strength").and_then(|v| v.as_f64()).unwrap_or(8.0);
+    let research_size = args.get("research_size").and_then(|v| v.as_u64()).unwrap_or(15) as u32;
+    let patch_size = args.get("patch_size").and_then(|v| v.as_u64()).unwrap_or(7) as u32;
+    crate::visual::reduce_noise(input, &output, strength, research_size, patch_size).unwrap_or_else(|e| e)
+}
+
+fn execute_reduce_noise_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let strength = args.get("strength").and_then(|v| v.as_f64()).unwrap_or(8.0);
+    let research_size = args.get("research_size").and_then(|v| v.as_u64()).unwrap_or(15) as u32;
+    let patch_size = args.get("patch_size").and_then(|v| v.as_u64()).unwrap_or(7) as u32;
+    crate::visual::reduce_noise(input, &output, strength, research_size, patch_size).unwrap_or_else(|e| e)
+}
+
+// ============================================================================
+// NEW TOOL EXECUTORS — BATCH 4 (Audio Processing)
+// ============================================================================
+
+fn execute_compress_audio_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let threshold_db = args.get("threshold_db").and_then(|v| v.as_f64()).unwrap_or(-20.0);
+    let ratio = args.get("ratio").and_then(|v| v.as_f64()).unwrap_or(4.0);
+    let attack_ms = args.get("attack_ms").and_then(|v| v.as_f64()).unwrap_or(20.0);
+    let release_ms = args.get("release_ms").and_then(|v| v.as_f64()).unwrap_or(250.0);
+    let makeup_gain_db = args.get("makeup_gain_db").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    crate::audio::compress_audio(input, &output, threshold_db, ratio, attack_ms, release_ms, makeup_gain_db).unwrap_or_else(|e| e)
+}
+
+fn execute_compress_audio_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let threshold_db = args.get("threshold_db").and_then(|v| v.as_f64()).unwrap_or(-20.0);
+    let ratio = args.get("ratio").and_then(|v| v.as_f64()).unwrap_or(4.0);
+    let attack_ms = args.get("attack_ms").and_then(|v| v.as_f64()).unwrap_or(20.0);
+    let release_ms = args.get("release_ms").and_then(|v| v.as_f64()).unwrap_or(250.0);
+    let makeup_gain_db = args.get("makeup_gain_db").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    crate::audio::compress_audio(input, &output, threshold_db, ratio, attack_ms, release_ms, makeup_gain_db).unwrap_or_else(|e| e)
+}
+
+fn execute_normalize_audio_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let target_lufs = args.get("target_lufs").and_then(|v| v.as_f64()).unwrap_or(-16.0);
+    let loudness_range_target = args.get("loudness_range_target").and_then(|v| v.as_f64()).unwrap_or(11.0);
+    let true_peak_dbtp = args.get("true_peak_dbtp").and_then(|v| v.as_f64()).unwrap_or(-1.0);
+    crate::audio::normalize_audio(input, &output, target_lufs, loudness_range_target, true_peak_dbtp).unwrap_or_else(|e| e)
+}
+
+fn execute_normalize_audio_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let target_lufs = args.get("target_lufs").and_then(|v| v.as_f64()).unwrap_or(-16.0);
+    let loudness_range_target = args.get("loudness_range_target").and_then(|v| v.as_f64()).unwrap_or(11.0);
+    let true_peak_dbtp = args.get("true_peak_dbtp").and_then(|v| v.as_f64()).unwrap_or(-1.0);
+    crate::audio::normalize_audio(input, &output, target_lufs, loudness_range_target, true_peak_dbtp).unwrap_or_else(|e| e)
+}
+
+fn execute_equalize_audio_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let frequency_hz = args.get("frequency_hz").and_then(|v| v.as_f64()).unwrap_or(1000.0);
+    let gain_db = args.get("gain_db").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let bandwidth_hz = args.get("bandwidth_hz").and_then(|v| v.as_f64()).unwrap_or(200.0);
+    let eq_type = args.get("eq_type").and_then(|v| v.as_str()).unwrap_or("peak");
+    crate::audio::equalize_audio(input, &output, frequency_hz, gain_db, bandwidth_hz, eq_type).unwrap_or_else(|e| e)
+}
+
+fn execute_equalize_audio_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let frequency_hz = args.get("frequency_hz").and_then(|v| v.as_f64()).unwrap_or(1000.0);
+    let gain_db = args.get("gain_db").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let bandwidth_hz = args.get("bandwidth_hz").and_then(|v| v.as_f64()).unwrap_or(200.0);
+    let eq_type = args.get("eq_type").and_then(|v| v.as_str()).unwrap_or("peak");
+    crate::audio::equalize_audio(input, &output, frequency_hz, gain_db, bandwidth_hz, eq_type).unwrap_or_else(|e| e)
+}
+
+fn execute_gate_audio_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let threshold_db = args.get("threshold_db").and_then(|v| v.as_f64()).unwrap_or(-40.0);
+    let ratio = args.get("ratio").and_then(|v| v.as_f64()).unwrap_or(2.0);
+    let attack_ms = args.get("attack_ms").and_then(|v| v.as_f64()).unwrap_or(20.0);
+    let release_ms = args.get("release_ms").and_then(|v| v.as_f64()).unwrap_or(250.0);
+    crate::audio::gate_audio(input, &output, threshold_db, ratio, attack_ms, release_ms).unwrap_or_else(|e| e)
+}
+
+fn execute_gate_audio_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let threshold_db = args.get("threshold_db").and_then(|v| v.as_f64()).unwrap_or(-40.0);
+    let ratio = args.get("ratio").and_then(|v| v.as_f64()).unwrap_or(2.0);
+    let attack_ms = args.get("attack_ms").and_then(|v| v.as_f64()).unwrap_or(20.0);
+    let release_ms = args.get("release_ms").and_then(|v| v.as_f64()).unwrap_or(250.0);
+    crate::audio::gate_audio(input, &output, threshold_db, ratio, attack_ms, release_ms).unwrap_or_else(|e| e)
+}
+
+fn execute_denoise_audio_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let noise_floor_db = args.get("noise_floor_db").and_then(|v| v.as_f64()).unwrap_or(-40.0);
+    let noise_reduction_db = args.get("noise_reduction_db").and_then(|v| v.as_f64()).unwrap_or(12.0);
+    let track_noise = args.get("track_noise").and_then(|v| v.as_bool()).unwrap_or(false);
+    crate::audio::denoise_audio(input, &output, noise_floor_db, noise_reduction_db, track_noise).unwrap_or_else(|e| e)
+}
+
+fn execute_denoise_audio_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let noise_floor_db = args.get("noise_floor_db").and_then(|v| v.as_f64()).unwrap_or(-40.0);
+    let noise_reduction_db = args.get("noise_reduction_db").and_then(|v| v.as_f64()).unwrap_or(12.0);
+    let track_noise = args.get("track_noise").and_then(|v| v.as_bool()).unwrap_or(false);
+    crate::audio::denoise_audio(input, &output, noise_floor_db, noise_reduction_db, track_noise).unwrap_or_else(|e| e)
+}
+
+// ============================================================================
+// NEW TOOL EXECUTORS — BATCH 5 (Video Composition & Layout)
+// ============================================================================
+
+fn execute_pad_video_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let width = args.get("width").and_then(|v| v.as_u64()).unwrap_or(1920) as u32;
+    let height = args.get("height").and_then(|v| v.as_u64()).unwrap_or(1080) as u32;
+    let x_offset = args.get("x_offset").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let y_offset = args.get("y_offset").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let color = args.get("color").and_then(|v| v.as_str()).unwrap_or("black");
+    crate::visual::pad_video(input, &output, width, height, x_offset, y_offset, color).unwrap_or_else(|e| e)
+}
+
+fn execute_pad_video_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let width = args.get("width").and_then(|v| v.as_u64()).unwrap_or(1920) as u32;
+    let height = args.get("height").and_then(|v| v.as_u64()).unwrap_or(1080) as u32;
+    let x_offset = args.get("x_offset").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let y_offset = args.get("y_offset").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let color = args.get("color").and_then(|v| v.as_str()).unwrap_or("black");
+    crate::visual::pad_video(input, &output, width, height, x_offset, y_offset, color).unwrap_or_else(|e| e)
+}
+
+fn execute_blend_videos_claude(args: &Value) -> String {
+    let input1 = args.get("input_file1").and_then(|v| v.as_str()).unwrap_or("");
+    let input2 = args.get("input_file2").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let blend_mode = args.get("blend_mode").and_then(|v| v.as_str()).unwrap_or("overlay");
+    let opacity = args.get("opacity").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    crate::visual::blend_videos(input1, input2, &output, blend_mode, opacity).unwrap_or_else(|e| e)
+}
+
+fn execute_blend_videos_gemini(args: &HashMap<String, Value>) -> String {
+    let input1 = args.get("input_file1").and_then(|v| v.as_str()).unwrap_or("");
+    let input2 = args.get("input_file2").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let blend_mode = args.get("blend_mode").and_then(|v| v.as_str()).unwrap_or("overlay");
+    let opacity = args.get("opacity").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    crate::visual::blend_videos(input1, input2, &output, blend_mode, opacity).unwrap_or_else(|e| e)
+}
+
+fn execute_stack_videos_claude(args: &Value) -> String {
+    let input1 = args.get("input_file1").and_then(|v| v.as_str()).unwrap_or("");
+    let input2 = args.get("input_file2").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let direction = args.get("direction").and_then(|v| v.as_str()).unwrap_or("horizontal");
+    crate::visual::stack_videos(input1, input2, &output, direction).unwrap_or_else(|e| e)
+}
+
+fn execute_stack_videos_gemini(args: &HashMap<String, Value>) -> String {
+    let input1 = args.get("input_file1").and_then(|v| v.as_str()).unwrap_or("");
+    let input2 = args.get("input_file2").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let direction = args.get("direction").and_then(|v| v.as_str()).unwrap_or("horizontal");
+    crate::visual::stack_videos(input1, input2, &output, direction).unwrap_or_else(|e| e)
+}
+
+fn execute_add_vignette_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let angle = args.get("angle").and_then(|v| v.as_f64()).unwrap_or(std::f64::consts::PI / 4.0);
+    let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("forward");
+    crate::visual::add_vignette(input, &output, angle, mode).unwrap_or_else(|e| e)
+}
+
+fn execute_add_vignette_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let angle = args.get("angle").and_then(|v| v.as_f64()).unwrap_or(std::f64::consts::PI / 4.0);
+    let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("forward");
+    crate::visual::add_vignette(input, &output, angle, mode).unwrap_or_else(|e| e)
+}
+
+fn execute_draw_box_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let x = args.get("x").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let y = args.get("y").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let width = args.get("width").and_then(|v| v.as_u64()).unwrap_or(100) as u32;
+    let height = args.get("height").and_then(|v| v.as_u64()).unwrap_or(100) as u32;
+    let color = args.get("color").and_then(|v| v.as_str()).unwrap_or("white");
+    let thickness = args.get("thickness").and_then(|v| v.as_i64()).unwrap_or(2) as i32;
+    crate::visual::draw_box(input, &output, x, y, width, height, color, thickness).unwrap_or_else(|e| e)
+}
+
+fn execute_draw_box_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let x = args.get("x").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let y = args.get("y").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let width = args.get("width").and_then(|v| v.as_u64()).unwrap_or(100) as u32;
+    let height = args.get("height").and_then(|v| v.as_u64()).unwrap_or(100) as u32;
+    let color = args.get("color").and_then(|v| v.as_str()).unwrap_or("white");
+    let thickness = args.get("thickness").and_then(|v| v.as_i64()).unwrap_or(2) as i32;
+    crate::visual::draw_box(input, &output, x, y, width, height, color, thickness).unwrap_or_else(|e| e)
+}
+
+// ============================================================================
+// NEW TOOL EXECUTORS — BATCH 6 (Motion, Time & Frame Effects)
+// ============================================================================
+
+fn execute_reverse_video_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    crate::transform::reverse_video(input, &output).unwrap_or_else(|e| e)
+}
+
+fn execute_reverse_video_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    crate::transform::reverse_video(input, &output).unwrap_or_else(|e| e)
+}
+
+fn execute_loop_video_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let loop_count = args.get("loop_count").and_then(|v| v.as_i64()).unwrap_or(2) as i32;
+    let loop_duration_sec = args.get("loop_duration_sec").and_then(|v| v.as_f64()).unwrap_or(30.0);
+    crate::transform::loop_video(input, &output, loop_count, loop_duration_sec).unwrap_or_else(|e| e)
+}
+
+fn execute_loop_video_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let loop_count = args.get("loop_count").and_then(|v| v.as_i64()).unwrap_or(2) as i32;
+    let loop_duration_sec = args.get("loop_duration_sec").and_then(|v| v.as_f64()).unwrap_or(30.0);
+    crate::transform::loop_video(input, &output, loop_count, loop_duration_sec).unwrap_or_else(|e| e)
+}
+
+fn execute_zoompan_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let zoom_factor = args.get("zoom_factor").and_then(|v| v.as_f64()).unwrap_or(1.5);
+    let x_expr = args.get("x_expr").and_then(|v| v.as_str()).unwrap_or("iw/2-(iw/zoom/2)");
+    let y_expr = args.get("y_expr").and_then(|v| v.as_str()).unwrap_or("ih/2-(ih/zoom/2)");
+    let duration_frames = args.get("duration_frames").and_then(|v| v.as_u64()).unwrap_or(125) as u32;
+    let fps = args.get("fps").and_then(|v| v.as_u64()).unwrap_or(25) as u32;
+    crate::visual::zoompan(input, &output, zoom_factor, x_expr, y_expr, duration_frames, fps).unwrap_or_else(|e| e)
+}
+
+fn execute_zoompan_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let zoom_factor = args.get("zoom_factor").and_then(|v| v.as_f64()).unwrap_or(1.5);
+    let x_expr = args.get("x_expr").and_then(|v| v.as_str()).unwrap_or("iw/2-(iw/zoom/2)");
+    let y_expr = args.get("y_expr").and_then(|v| v.as_str()).unwrap_or("ih/2-(ih/zoom/2)");
+    let duration_frames = args.get("duration_frames").and_then(|v| v.as_u64()).unwrap_or(125) as u32;
+    let fps = args.get("fps").and_then(|v| v.as_u64()).unwrap_or(25) as u32;
+    crate::visual::zoompan(input, &output, zoom_factor, x_expr, y_expr, duration_frames, fps).unwrap_or_else(|e| e)
+}
+
+fn execute_minterpolate_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let fps_target = args.get("fps_target").and_then(|v| v.as_u64()).unwrap_or(60) as u32;
+    let mi_mode = args.get("mi_mode").and_then(|v| v.as_str()).unwrap_or("mci");
+    crate::visual::minterpolate(input, &output, fps_target, mi_mode).unwrap_or_else(|e| e)
+}
+
+fn execute_minterpolate_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let fps_target = args.get("fps_target").and_then(|v| v.as_u64()).unwrap_or(60) as u32;
+    let mi_mode = args.get("mi_mode").and_then(|v| v.as_str()).unwrap_or("mci");
+    crate::visual::minterpolate(input, &output, fps_target, mi_mode).unwrap_or_else(|e| e)
+}
+
+// ============================================================================
+// NEW TOOL EXECUTORS — BATCH 7 (Media Analysis Tools)
+// ============================================================================
+
+fn execute_detect_scene_changes_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let threshold = args.get("threshold").and_then(|v| v.as_f64()).unwrap_or(40.0);
+    crate::core::detect_scene_changes(input, threshold).unwrap_or_else(|e| e)
+}
+
+fn execute_detect_scene_changes_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let threshold = args.get("threshold").and_then(|v| v.as_f64()).unwrap_or(40.0);
+    crate::core::detect_scene_changes(input, threshold).unwrap_or_else(|e| e)
+}
+
+fn execute_measure_loudness_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    crate::core::measure_loudness(input).unwrap_or_else(|e| e)
+}
+
+fn execute_measure_loudness_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    crate::core::measure_loudness(input).unwrap_or_else(|e| e)
+}
+
+fn execute_detect_silence_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let noise_tolerance_db = args.get("noise_tolerance_db").and_then(|v| v.as_f64()).unwrap_or(-60.0);
+    let min_duration_sec = args.get("min_duration_sec").and_then(|v| v.as_f64()).unwrap_or(0.1);
+    crate::core::detect_silence(input, noise_tolerance_db, min_duration_sec).unwrap_or_else(|e| e)
+}
+
+fn execute_detect_silence_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let noise_tolerance_db = args.get("noise_tolerance_db").and_then(|v| v.as_f64()).unwrap_or(-60.0);
+    let min_duration_sec = args.get("min_duration_sec").and_then(|v| v.as_f64()).unwrap_or(0.1);
+    crate::core::detect_silence(input, noise_tolerance_db, min_duration_sec).unwrap_or_else(|e| e)
+}
+
+// ============================================================================
+// BATCH 8 — Advanced Color Grading executor functions
+// ============================================================================
+
+fn execute_adjust_curves_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let preset = args.get("preset").and_then(|v| v.as_str()).unwrap_or("");
+    let master = args.get("master").and_then(|v| v.as_str()).unwrap_or("");
+    let red = args.get("red_channel").and_then(|v| v.as_str()).unwrap_or("");
+    let green = args.get("green_channel").and_then(|v| v.as_str()).unwrap_or("");
+    let blue = args.get("blue_channel").and_then(|v| v.as_str()).unwrap_or("");
+    crate::visual::adjust_curves(input, &output, preset, master, red, green, blue).unwrap_or_else(|e| e)
+}
+
+fn execute_adjust_curves_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let preset = args.get("preset").and_then(|v| v.as_str()).unwrap_or("");
+    let master = args.get("master").and_then(|v| v.as_str()).unwrap_or("");
+    let red = args.get("red_channel").and_then(|v| v.as_str()).unwrap_or("");
+    let green = args.get("green_channel").and_then(|v| v.as_str()).unwrap_or("");
+    let blue = args.get("blue_channel").and_then(|v| v.as_str()).unwrap_or("");
+    crate::visual::adjust_curves(input, output, preset, master, red, green, blue).unwrap_or_else(|e| e)
+}
+
+fn execute_adjust_levels_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let rimin = args.get("rimin").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let rimax = args.get("rimax").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let gimin = args.get("gimin").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let gimax = args.get("gimax").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let bimin = args.get("bimin").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let bimax = args.get("bimax").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let romin = args.get("romin").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let romax = args.get("romax").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let gomin = args.get("gomin").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let gomax = args.get("gomax").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let bomin = args.get("bomin").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let bomax = args.get("bomax").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    crate::visual::adjust_levels(input, &output, rimin, rimax, gimin, gimax, bimin, bimax, romin, romax, gomin, gomax, bomin, bomax).unwrap_or_else(|e| e)
+}
+
+fn execute_adjust_levels_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let rimin = args.get("rimin").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let rimax = args.get("rimax").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let gimin = args.get("gimin").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let gimax = args.get("gimax").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let bimin = args.get("bimin").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let bimax = args.get("bimax").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let romin = args.get("romin").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let romax = args.get("romax").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let gomin = args.get("gomin").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let gomax = args.get("gomax").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let bomin = args.get("bomin").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let bomax = args.get("bomax").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    crate::visual::adjust_levels(input, output, rimin, rimax, gimin, gimax, bimin, bimax, romin, romax, gomin, gomax, bomin, bomax).unwrap_or_else(|e| e)
+}
+
+fn execute_split_tone_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let shadow_hue = args.get("shadow_hue").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let shadow_sat = args.get("shadow_saturation").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let highlight_hue = args.get("highlight_hue").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let highlight_sat = args.get("highlight_saturation").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let balance = args.get("balance").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    crate::visual::split_tone(input, &output, shadow_hue, shadow_sat, highlight_hue, highlight_sat, balance).unwrap_or_else(|e| e)
+}
+
+fn execute_split_tone_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let shadow_hue = args.get("shadow_hue").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let shadow_sat = args.get("shadow_saturation").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let highlight_hue = args.get("highlight_hue").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let highlight_sat = args.get("highlight_saturation").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let balance = args.get("balance").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    crate::visual::split_tone(input, output, shadow_hue, shadow_sat, highlight_hue, highlight_sat, balance).unwrap_or_else(|e| e)
+}
+
+fn execute_convert_colorspace_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let colorspace = args["colorspace"].as_str().unwrap_or("bt709");
+    let trc = args.get("transfer_characteristics").and_then(|v| v.as_str()).unwrap_or("");
+    let primaries = args.get("color_primaries").and_then(|v| v.as_str()).unwrap_or("");
+    crate::visual::convert_colorspace(input, &output, colorspace, trc, primaries).unwrap_or_else(|e| e)
+}
+
+fn execute_convert_colorspace_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let colorspace = args.get("colorspace").and_then(|v| v.as_str()).unwrap_or("bt709");
+    let trc = args.get("transfer_characteristics").and_then(|v| v.as_str()).unwrap_or("");
+    let primaries = args.get("color_primaries").and_then(|v| v.as_str()).unwrap_or("");
+    crate::visual::convert_colorspace(input, output, colorspace, trc, primaries).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_tonemap_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let algorithm = args["algorithm"].as_str().unwrap_or("reinhard");
+    let peak = args.get("peak").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let desat = args.get("desat").and_then(|v| v.as_f64()).unwrap_or(0.5);
+    crate::visual::apply_tonemap(input, &output, algorithm, peak, desat).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_tonemap_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let algorithm = args.get("algorithm").and_then(|v| v.as_str()).unwrap_or("reinhard");
+    let peak = args.get("peak").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let desat = args.get("desat").and_then(|v| v.as_f64()).unwrap_or(0.5);
+    crate::visual::apply_tonemap(input, output, algorithm, peak, desat).unwrap_or_else(|e| e)
+}
+
+// ============================================================================
+// BATCH 9 — Audio Tone Shaping executor functions
+// ============================================================================
+
+fn execute_filter_highpass_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let freq = args["frequency_hz"].as_f64().unwrap_or(80.0);
+    let poles = args.get("poles").and_then(|v| v.as_u64()).unwrap_or(2) as u32;
+    let width = args.get("width_hz").and_then(|v| v.as_f64()).unwrap_or(0.707);
+    crate::audio::filter_highpass(input, &output, freq, poles, width).unwrap_or_else(|e| e)
+}
+
+fn execute_filter_highpass_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let freq = args.get("frequency_hz").and_then(|v| v.as_f64()).unwrap_or(80.0);
+    let poles = args.get("poles").and_then(|v| v.as_u64()).unwrap_or(2) as u32;
+    let width = args.get("width_hz").and_then(|v| v.as_f64()).unwrap_or(0.707);
+    crate::audio::filter_highpass(input, output, freq, poles, width).unwrap_or_else(|e| e)
+}
+
+fn execute_filter_lowpass_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let freq = args["frequency_hz"].as_f64().unwrap_or(8000.0);
+    let poles = args.get("poles").and_then(|v| v.as_u64()).unwrap_or(2) as u32;
+    let width = args.get("width_hz").and_then(|v| v.as_f64()).unwrap_or(0.707);
+    crate::audio::filter_lowpass(input, &output, freq, poles, width).unwrap_or_else(|e| e)
+}
+
+fn execute_filter_lowpass_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let freq = args.get("frequency_hz").and_then(|v| v.as_f64()).unwrap_or(8000.0);
+    let poles = args.get("poles").and_then(|v| v.as_u64()).unwrap_or(2) as u32;
+    let width = args.get("width_hz").and_then(|v| v.as_f64()).unwrap_or(0.707);
+    crate::audio::filter_lowpass(input, output, freq, poles, width).unwrap_or_else(|e| e)
+}
+
+fn execute_adjust_bass_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let gain_db = args["gain_db"].as_f64().unwrap_or(0.0);
+    let freq = args.get("frequency_hz").and_then(|v| v.as_f64()).unwrap_or(100.0);
+    let width = args.get("width_hz").and_then(|v| v.as_f64()).unwrap_or(0.5);
+    crate::audio::adjust_bass(input, &output, gain_db, freq, width).unwrap_or_else(|e| e)
+}
+
+fn execute_adjust_bass_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let gain_db = args.get("gain_db").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let freq = args.get("frequency_hz").and_then(|v| v.as_f64()).unwrap_or(100.0);
+    let width = args.get("width_hz").and_then(|v| v.as_f64()).unwrap_or(0.5);
+    crate::audio::adjust_bass(input, output, gain_db, freq, width).unwrap_or_else(|e| e)
+}
+
+fn execute_adjust_treble_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let gain_db = args["gain_db"].as_f64().unwrap_or(0.0);
+    let freq = args.get("frequency_hz").and_then(|v| v.as_f64()).unwrap_or(3000.0);
+    let width = args.get("width_hz").and_then(|v| v.as_f64()).unwrap_or(0.5);
+    crate::audio::adjust_treble(input, &output, gain_db, freq, width).unwrap_or_else(|e| e)
+}
+
+fn execute_adjust_treble_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let gain_db = args.get("gain_db").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let freq = args.get("frequency_hz").and_then(|v| v.as_f64()).unwrap_or(3000.0);
+    let width = args.get("width_hz").and_then(|v| v.as_f64()).unwrap_or(0.5);
+    crate::audio::adjust_treble(input, output, gain_db, freq, width).unwrap_or_else(|e| e)
+}
+
+fn execute_audio_compand_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let attacks = args.get("attacks").and_then(|v| v.as_str()).unwrap_or("0.3");
+    let decays = args.get("decays").and_then(|v| v.as_str()).unwrap_or("0.8");
+    let points = args.get("points").and_then(|v| v.as_str()).unwrap_or("-70/-70 -60/-20 1/0");
+    let soft_knee = args.get("soft_knee_db").and_then(|v| v.as_f64()).unwrap_or(0.01);
+    let gain = args.get("gain_db").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    crate::audio::audio_compand(input, &output, attacks, decays, points, soft_knee, gain).unwrap_or_else(|e| e)
+}
+
+fn execute_audio_compand_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let attacks = args.get("attacks").and_then(|v| v.as_str()).unwrap_or("0.3");
+    let decays = args.get("decays").and_then(|v| v.as_str()).unwrap_or("0.8");
+    let points = args.get("points").and_then(|v| v.as_str()).unwrap_or("-70/-70 -60/-20 1/0");
+    let soft_knee = args.get("soft_knee_db").and_then(|v| v.as_f64()).unwrap_or(0.01);
+    let gain = args.get("gain_db").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    crate::audio::audio_compand(input, output, attacks, decays, points, soft_knee, gain).unwrap_or_else(|e| e)
+}
+
+fn execute_add_audio_delay_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let delays_ms = args["delays_ms"].as_str().unwrap_or("500");
+    let all_channels = args.get("all_channels").and_then(|v| v.as_bool()).unwrap_or(true);
+    crate::audio::add_audio_delay(input, &output, delays_ms, all_channels).unwrap_or_else(|e| e)
+}
+
+fn execute_add_audio_delay_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let delays_ms = args.get("delays_ms").and_then(|v| v.as_str()).unwrap_or("500");
+    let all_channels = args.get("all_channels").and_then(|v| v.as_bool()).unwrap_or(true);
+    crate::audio::add_audio_delay(input, output, delays_ms, all_channels).unwrap_or_else(|e| e)
+}
+
+fn execute_add_phaser_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let in_gain = args.get("in_gain").and_then(|v| v.as_f64()).unwrap_or(0.4);
+    let out_gain = args.get("out_gain").and_then(|v| v.as_f64()).unwrap_or(0.74);
+    let delay = args.get("delay_ms").and_then(|v| v.as_f64()).unwrap_or(3.0);
+    let decay = args.get("decay").and_then(|v| v.as_f64()).unwrap_or(0.4);
+    let speed = args.get("speed_hz").and_then(|v| v.as_f64()).unwrap_or(0.5);
+    let phaser_type = args.get("type").and_then(|v| v.as_str()).unwrap_or("triangular");
+    crate::audio::add_phaser(input, &output, in_gain, out_gain, delay, decay, speed, phaser_type).unwrap_or_else(|e| e)
+}
+
+fn execute_add_phaser_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let in_gain = args.get("in_gain").and_then(|v| v.as_f64()).unwrap_or(0.4);
+    let out_gain = args.get("out_gain").and_then(|v| v.as_f64()).unwrap_or(0.74);
+    let delay = args.get("delay_ms").and_then(|v| v.as_f64()).unwrap_or(3.0);
+    let decay = args.get("decay").and_then(|v| v.as_f64()).unwrap_or(0.4);
+    let speed = args.get("speed_hz").and_then(|v| v.as_f64()).unwrap_or(0.5);
+    let phaser_type = args.get("type").and_then(|v| v.as_str()).unwrap_or("triangular");
+    crate::audio::add_phaser(input, output, in_gain, out_gain, delay, decay, speed, phaser_type).unwrap_or_else(|e| e)
+}
+
+// ============================================================================
+// BATCH 10 — Audio Restoration executor functions
+// ============================================================================
+
+fn execute_remove_clicks_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let window = args.get("window_ms").and_then(|v| v.as_f64()).unwrap_or(55.0);
+    let overlap = args.get("overlap_pct").and_then(|v| v.as_f64()).unwrap_or(75.0);
+    let arorder = args.get("ar_order").and_then(|v| v.as_u64()).unwrap_or(2) as u32;
+    let threshold = args.get("threshold").and_then(|v| v.as_f64()).unwrap_or(2.0);
+    crate::audio::remove_clicks(input, &output, window, overlap, arorder, threshold).unwrap_or_else(|e| e)
+}
+
+fn execute_remove_clicks_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let window = args.get("window_ms").and_then(|v| v.as_f64()).unwrap_or(55.0);
+    let overlap = args.get("overlap_pct").and_then(|v| v.as_f64()).unwrap_or(75.0);
+    let arorder = args.get("ar_order").and_then(|v| v.as_u64()).unwrap_or(2) as u32;
+    let threshold = args.get("threshold").and_then(|v| v.as_f64()).unwrap_or(2.0);
+    crate::audio::remove_clicks(input, output, window, overlap, arorder, threshold).unwrap_or_else(|e| e)
+}
+
+fn execute_restore_clipping_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let window = args.get("window_ms").and_then(|v| v.as_f64()).unwrap_or(55.0);
+    let overlap = args.get("overlap_pct").and_then(|v| v.as_f64()).unwrap_or(75.0);
+    let arorder = args.get("ar_order").and_then(|v| v.as_u64()).unwrap_or(8) as u32;
+    let threshold = args.get("threshold").and_then(|v| v.as_f64()).unwrap_or(10.0);
+    crate::audio::restore_clipping(input, &output, window, overlap, arorder, threshold).unwrap_or_else(|e| e)
+}
+
+fn execute_restore_clipping_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let window = args.get("window_ms").and_then(|v| v.as_f64()).unwrap_or(55.0);
+    let overlap = args.get("overlap_pct").and_then(|v| v.as_f64()).unwrap_or(75.0);
+    let arorder = args.get("ar_order").and_then(|v| v.as_u64()).unwrap_or(8) as u32;
+    let threshold = args.get("threshold").and_then(|v| v.as_f64()).unwrap_or(10.0);
+    crate::audio::restore_clipping(input, output, window, overlap, arorder, threshold).unwrap_or_else(|e| e)
+}
+
+fn execute_remove_silence_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let start_periods = args.get("start_periods").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
+    let start_threshold_db = args.get("start_threshold_db").and_then(|v| v.as_f64()).unwrap_or(-50.0);
+    let stop_periods = args.get("stop_periods").and_then(|v| v.as_i64()).unwrap_or(-1) as i32;
+    let stop_threshold_db = args.get("stop_threshold_db").and_then(|v| v.as_f64()).unwrap_or(-50.0);
+    let stop_duration = args.get("stop_duration_sec").and_then(|v| v.as_f64()).unwrap_or(0.1);
+    crate::audio::remove_silence(input, &output, start_periods, start_threshold_db, stop_periods, stop_threshold_db, stop_duration).unwrap_or_else(|e| e)
+}
+
+fn execute_remove_silence_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let start_periods = args.get("start_periods").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
+    let start_threshold_db = args.get("start_threshold_db").and_then(|v| v.as_f64()).unwrap_or(-50.0);
+    let stop_periods = args.get("stop_periods").and_then(|v| v.as_i64()).unwrap_or(-1) as i32;
+    let stop_threshold_db = args.get("stop_threshold_db").and_then(|v| v.as_f64()).unwrap_or(-50.0);
+    let stop_duration = args.get("stop_duration_sec").and_then(|v| v.as_f64()).unwrap_or(0.1);
+    crate::audio::remove_silence(input, output, start_periods, start_threshold_db, stop_periods, stop_threshold_db, stop_duration).unwrap_or_else(|e| e)
+}
+
+// ============================================================================
+// BATCH 11 — Quality Metrics executor functions
+// ============================================================================
+
+fn execute_compare_ssim_claude(args: &Value) -> String {
+    let reference = args["reference_file"].as_str().unwrap_or("");
+    let distorted = args["distorted_file"].as_str().unwrap_or("");
+    crate::core::compare_ssim(reference, distorted).unwrap_or_else(|e| e)
+}
+
+fn execute_compare_ssim_gemini(args: &HashMap<String, Value>) -> String {
+    let reference = args.get("reference_file").and_then(|v| v.as_str()).unwrap_or("");
+    let distorted = args.get("distorted_file").and_then(|v| v.as_str()).unwrap_or("");
+    crate::core::compare_ssim(reference, distorted).unwrap_or_else(|e| e)
+}
+
+fn execute_compare_psnr_claude(args: &Value) -> String {
+    let reference = args["reference_file"].as_str().unwrap_or("");
+    let distorted = args["distorted_file"].as_str().unwrap_or("");
+    crate::core::compare_psnr(reference, distorted).unwrap_or_else(|e| e)
+}
+
+fn execute_compare_psnr_gemini(args: &HashMap<String, Value>) -> String {
+    let reference = args.get("reference_file").and_then(|v| v.as_str()).unwrap_or("");
+    let distorted = args.get("distorted_file").and_then(|v| v.as_str()).unwrap_or("");
+    crate::core::compare_psnr(reference, distorted).unwrap_or_else(|e| e)
+}
+
+fn execute_analyze_audio_stats_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let reset = args.get("reset_interval").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    crate::core::analyze_audio_stats(input, reset).unwrap_or_else(|e| e)
+}
+
+fn execute_analyze_audio_stats_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let reset = args.get("reset_interval").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    crate::core::analyze_audio_stats(input, reset).unwrap_or_else(|e| e)
+}
+
+fn execute_analyze_video_signal_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    crate::core::analyze_video_signal(input).unwrap_or_else(|e| e)
+}
+
+fn execute_analyze_video_signal_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    crate::core::analyze_video_signal(input).unwrap_or_else(|e| e)
+}
+
+// ============================================================================
+// BATCH 12 — Geometric Transforms executor functions
+// ============================================================================
+
+fn execute_correct_perspective_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let x0 = args.get("x0").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let y0 = args.get("y0").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let x1 = args.get("x1").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let y1 = args.get("y1").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let x2 = args.get("x2").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let y2 = args.get("y2").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let x3 = args.get("x3").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let y3 = args.get("y3").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let interp = args.get("interpolation").and_then(|v| v.as_str()).unwrap_or("linear");
+    crate::visual::correct_perspective(input, &output, x0, y0, x1, y1, x2, y2, x3, y3, interp).unwrap_or_else(|e| e)
+}
+
+fn execute_correct_perspective_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let x0 = args.get("x0").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let y0 = args.get("y0").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let x1 = args.get("x1").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let y1 = args.get("y1").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let x2 = args.get("x2").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let y2 = args.get("y2").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let x3 = args.get("x3").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let y3 = args.get("y3").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let interp = args.get("interpolation").and_then(|v| v.as_str()).unwrap_or("linear");
+    crate::visual::correct_perspective(input, output, x0, y0, x1, y1, x2, y2, x3, y3, interp).unwrap_or_else(|e| e)
+}
+
+fn execute_correct_lens_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let k1 = args["k1"].as_f64().unwrap_or(0.0);
+    let k2 = args.get("k2").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let cx = args.get("center_x").and_then(|v| v.as_f64()).unwrap_or(0.5);
+    let cy = args.get("center_y").and_then(|v| v.as_f64()).unwrap_or(0.5);
+    let interp = args.get("interpolation").and_then(|v| v.as_str()).unwrap_or("bilinear");
+    crate::visual::correct_lens(input, &output, k1, k2, cx, cy, interp).unwrap_or_else(|e| e)
+}
+
+fn execute_correct_lens_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let k1 = args.get("k1").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let k2 = args.get("k2").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let cx = args.get("center_x").and_then(|v| v.as_f64()).unwrap_or(0.5);
+    let cy = args.get("center_y").and_then(|v| v.as_f64()).unwrap_or(0.5);
+    let interp = args.get("interpolation").and_then(|v| v.as_str()).unwrap_or("bilinear");
+    crate::visual::correct_lens(input, output, k1, k2, cx, cy, interp).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_shear_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let shx = args.get("shear_x").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let shy = args.get("shear_y").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let fillcolor = args.get("fill_color").and_then(|v| v.as_str()).unwrap_or("black");
+    let interp = args.get("interpolation").and_then(|v| v.as_str()).unwrap_or("bilinear");
+    crate::visual::apply_shear(input, &output, shx, shy, fillcolor, interp).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_shear_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let shx = args.get("shear_x").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let shy = args.get("shear_y").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let fillcolor = args.get("fill_color").and_then(|v| v.as_str()).unwrap_or("black");
+    let interp = args.get("interpolation").and_then(|v| v.as_str()).unwrap_or("bilinear");
+    crate::visual::apply_shear(input, output, shx, shy, fillcolor, interp).unwrap_or_else(|e| e)
+}
+
+// ============================================================================
+// BATCH 13 — Temporal Frame Effects executor functions
+// ============================================================================
+
+fn execute_blend_frames_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let blend_mode = args.get("blend_mode").and_then(|v| v.as_str()).unwrap_or("average");
+    let opacity = args.get("opacity").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    crate::visual::blend_frames(input, &output, blend_mode, opacity).unwrap_or_else(|e| e)
+}
+
+fn execute_blend_frames_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let blend_mode = args.get("blend_mode").and_then(|v| v.as_str()).unwrap_or("average");
+    let opacity = args.get("opacity").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    crate::visual::blend_frames(input, output, blend_mode, opacity).unwrap_or_else(|e| e)
+}
+
+fn execute_temporal_median_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let radius = args.get("radius").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
+    crate::visual::temporal_median(input, &output, radius).unwrap_or_else(|e| e)
+}
+
+fn execute_temporal_median_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let radius = args.get("radius").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
+    crate::visual::temporal_median(input, output, radius).unwrap_or_else(|e| e)
+}
+
+fn execute_convert_framerate_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let target_fps = args["target_fps"].as_f64().unwrap_or(30.0);
+    let round = args.get("round_mode").and_then(|v| v.as_str()).unwrap_or("near");
+    crate::visual::convert_framerate(input, &output, target_fps, round).unwrap_or_else(|e| e)
+}
+
+fn execute_convert_framerate_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let target_fps = args.get("target_fps").and_then(|v| v.as_f64()).unwrap_or(30.0);
+    let round = args.get("round_mode").and_then(|v| v.as_str()).unwrap_or("near");
+    crate::visual::convert_framerate(input, output, target_fps, round).unwrap_or_else(|e| e)
+}
+
+fn execute_tile_frames_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let columns = args["columns"].as_u64().unwrap_or(4) as u32;
+    let rows = args["rows"].as_u64().unwrap_or(3) as u32;
+    let frame_gap = args.get("frame_gap").and_then(|v| v.as_u64()).unwrap_or(2) as u32;
+    crate::visual::tile_frames(input, &output, columns, rows, frame_gap).unwrap_or_else(|e| e)
+}
+
+fn execute_tile_frames_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let columns = args.get("columns").and_then(|v| v.as_u64()).unwrap_or(4) as u32;
+    let rows = args.get("rows").and_then(|v| v.as_u64()).unwrap_or(3) as u32;
+    let frame_gap = args.get("frame_gap").and_then(|v| v.as_u64()).unwrap_or(2) as u32;
+    crate::visual::tile_frames(input, output, columns, rows, frame_gap).unwrap_or_else(|e| e)
+}
+
+// ============================================================================
+// BATCH 14 — Spatial Audio executor functions
+// ============================================================================
+
+fn execute_adjust_stereo_width_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let width = args.get("width").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let balance = args.get("balance").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("lr>lr");
+    crate::audio::adjust_stereo_width(input, &output, width, balance, mode).unwrap_or_else(|e| e)
+}
+
+fn execute_adjust_stereo_width_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let width = args.get("width").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let balance = args.get("balance").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("lr>lr");
+    crate::audio::adjust_stereo_width(input, output, width, balance, mode).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_stereo_widen_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let delay_ms = args.get("delay_ms").and_then(|v| v.as_f64()).unwrap_or(20.0);
+    let feedback = args.get("feedback").and_then(|v| v.as_f64()).unwrap_or(0.3);
+    let crossfeed = args.get("crossfeed").and_then(|v| v.as_f64()).unwrap_or(0.3);
+    let drymix = args.get("drymix").and_then(|v| v.as_f64()).unwrap_or(0.8);
+    crate::audio::apply_stereo_widen(input, &output, delay_ms, feedback, crossfeed, drymix).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_stereo_widen_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let delay_ms = args.get("delay_ms").and_then(|v| v.as_f64()).unwrap_or(20.0);
+    let feedback = args.get("feedback").and_then(|v| v.as_f64()).unwrap_or(0.3);
+    let crossfeed = args.get("crossfeed").and_then(|v| v.as_f64()).unwrap_or(0.3);
+    let drymix = args.get("drymix").and_then(|v| v.as_f64()).unwrap_or(0.8);
+    crate::audio::apply_stereo_widen(input, output, delay_ms, feedback, crossfeed, drymix).unwrap_or_else(|e| e)
+}
+
+fn execute_mix_audio_channels_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let layout = args["channel_layout"].as_str().unwrap_or("stereo");
+    let mix_str = args["channel_mix"].as_str().unwrap_or("c0=c0|c1=c1");
+    let exprs: Vec<String> = mix_str.split('|').map(|s| s.to_string()).collect();
+    crate::audio::mix_audio_channels(input, &output, layout, &exprs).unwrap_or_else(|e| e)
+}
+
+fn execute_mix_audio_channels_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let layout = args.get("channel_layout").and_then(|v| v.as_str()).unwrap_or("stereo");
+    let mix_str = args.get("channel_mix").and_then(|v| v.as_str()).unwrap_or("c0=c0|c1=c1");
+    let exprs: Vec<String> = mix_str.split('|').map(|s| s.to_string()).collect();
+    crate::audio::mix_audio_channels(input, output, layout, &exprs).unwrap_or_else(|e| e)
+}
+
+// ============================================================================
+// PHASE D — Professional Finishing executor functions
+// ============================================================================
+
+fn execute_adjust_color_temperature_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let temperature = args.get("temperature").and_then(|v| v.as_f64()).unwrap_or(6500.0);
+    let mix = args.get("mix").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    crate::visual::adjust_color_temperature(input, &output, temperature, mix).unwrap_or_else(|e| e)
+}
+
+fn execute_adjust_color_temperature_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let temperature = args.get("temperature").and_then(|v| v.as_f64()).unwrap_or(6500.0);
+    let mix = args.get("mix").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    crate::visual::adjust_color_temperature(input, &output, temperature, mix).unwrap_or_else(|e| e)
+}
+
+fn execute_adjust_vibrance_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let intensity = args.get("intensity").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let rbal = args.get("red_balance").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let gbal = args.get("green_balance").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let bbal = args.get("blue_balance").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    crate::visual::adjust_vibrance(input, &output, intensity, rbal, gbal, bbal).unwrap_or_else(|e| e)
+}
+
+fn execute_adjust_vibrance_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let intensity = args.get("intensity").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let rbal = args.get("red_balance").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let gbal = args.get("green_balance").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let bbal = args.get("blue_balance").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    crate::visual::adjust_vibrance(input, &output, intensity, rbal, gbal, bbal).unwrap_or_else(|e| e)
+}
+
+fn execute_remove_flicker_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let size = args.get("size").and_then(|v| v.as_u64()).unwrap_or(5) as u32;
+    let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("am");
+    crate::visual::remove_flicker(input, &output, size, mode).unwrap_or_else(|e| e)
+}
+
+fn execute_remove_flicker_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let size = args.get("size").and_then(|v| v.as_u64()).unwrap_or(5) as u32;
+    let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("am");
+    crate::visual::remove_flicker(input, &output, size, mode).unwrap_or_else(|e| e)
+}
+
+fn execute_denoise_video_bm3d_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let sigma = args.get("sigma").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let block_size = args.get("block_size").and_then(|v| v.as_u64()).unwrap_or(16) as u32;
+    let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("basic");
+    crate::visual::denoise_video_bm3d(input, &output, sigma, block_size, mode).unwrap_or_else(|e| e)
+}
+
+fn execute_denoise_video_bm3d_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let sigma = args.get("sigma").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let block_size = args.get("block_size").and_then(|v| v.as_u64()).unwrap_or(16) as u32;
+    let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("basic");
+    crate::visual::denoise_video_bm3d(input, &output, sigma, block_size, mode).unwrap_or_else(|e| e)
+}
+
+fn execute_deshake_video_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let x = args.get("x").and_then(|v| v.as_i64()).unwrap_or(-1) as i32;
+    let y = args.get("y").and_then(|v| v.as_i64()).unwrap_or(-1) as i32;
+    let w = args.get("w").and_then(|v| v.as_i64()).unwrap_or(-1) as i32;
+    let h = args.get("h").and_then(|v| v.as_i64()).unwrap_or(-1) as i32;
+    let rx = args.get("rx").and_then(|v| v.as_u64()).unwrap_or(16) as u32;
+    let ry = args.get("ry").and_then(|v| v.as_u64()).unwrap_or(16) as u32;
+    crate::transform::deshake_video(input, &output, x, y, w, h, rx, ry).unwrap_or_else(|e| e)
+}
+
+fn execute_deshake_video_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let x = args.get("x").and_then(|v| v.as_i64()).unwrap_or(-1) as i32;
+    let y = args.get("y").and_then(|v| v.as_i64()).unwrap_or(-1) as i32;
+    let w = args.get("w").and_then(|v| v.as_i64()).unwrap_or(-1) as i32;
+    let h = args.get("h").and_then(|v| v.as_i64()).unwrap_or(-1) as i32;
+    let rx = args.get("rx").and_then(|v| v.as_u64()).unwrap_or(16) as u32;
+    let ry = args.get("ry").and_then(|v| v.as_u64()).unwrap_or(16) as u32;
+    crate::transform::deshake_video(input, &output, x, y, w, h, rx, ry).unwrap_or_else(|e| e)
+}
+
+fn execute_measure_lufs_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let target = args.get("target_lufs").and_then(|v| v.as_f64()).unwrap_or(-23.0);
+    crate::audio::measure_lufs(input, target).unwrap_or_else(|e| e)
+}
+
+fn execute_measure_lufs_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let target = args.get("target_lufs").and_then(|v| v.as_f64()).unwrap_or(-23.0);
+    crate::audio::measure_lufs(input, target).unwrap_or_else(|e| e)
+}
+
+fn execute_parametric_eq_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let params = args["eq_params"].as_str().unwrap_or("");
+    crate::audio::parametric_eq(input, &output, params).unwrap_or_else(|e| e)
+}
+
+fn execute_parametric_eq_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let params = args.get("eq_params").and_then(|v| v.as_str()).unwrap_or("");
+    crate::audio::parametric_eq(input, &output, params).unwrap_or_else(|e| e)
+}
+
+fn execute_audio_limiter_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let limit = args.get("limit_db").and_then(|v| v.as_f64()).unwrap_or(-1.0);
+    let attack = args.get("attack_ms").and_then(|v| v.as_f64()).unwrap_or(5.0);
+    let release = args.get("release_ms").and_then(|v| v.as_f64()).unwrap_or(50.0);
+    let asc = args.get("auto_sc").and_then(|v| v.as_bool()).unwrap_or(false);
+    crate::audio::audio_limiter(input, &output, limit, attack, release, asc).unwrap_or_else(|e| e)
+}
+
+fn execute_audio_limiter_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let limit = args.get("limit_db").and_then(|v| v.as_f64()).unwrap_or(-1.0);
+    let attack = args.get("attack_ms").and_then(|v| v.as_f64()).unwrap_or(5.0);
+    let release = args.get("release_ms").and_then(|v| v.as_f64()).unwrap_or(50.0);
+    let asc = args.get("auto_sc").and_then(|v| v.as_bool()).unwrap_or(false);
+    crate::audio::audio_limiter(input, &output, limit, attack, release, asc).unwrap_or_else(|e| e)
+}
+
+fn execute_reduce_sibilance_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let split = args.get("split_hz").and_then(|v| v.as_f64()).unwrap_or(8500.0);
+    let threshold = args.get("threshold").and_then(|v| v.as_f64()).unwrap_or(0.1);
+    let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("split");
+    crate::audio::reduce_sibilance(input, &output, split, threshold, mode).unwrap_or_else(|e| e)
+}
+
+fn execute_reduce_sibilance_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let split = args.get("split_hz").and_then(|v| v.as_f64()).unwrap_or(8500.0);
+    let threshold = args.get("threshold").and_then(|v| v.as_f64()).unwrap_or(0.1);
+    let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("split");
+    crate::audio::reduce_sibilance(input, &output, split, threshold, mode).unwrap_or_else(|e| e)
+}
+
+fn execute_denoise_speech_rnn_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let model = args.get("model_file").and_then(|v| v.as_str()).unwrap_or("");
+    let mix = args.get("mix").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    crate::audio::denoise_speech_rnn(input, &output, model, mix).unwrap_or_else(|e| e)
+}
+
+fn execute_denoise_speech_rnn_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let model = args.get("model_file").and_then(|v| v.as_str()).unwrap_or("");
+    let mix = args.get("mix").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    crate::audio::denoise_speech_rnn(input, &output, model, mix).unwrap_or_else(|e| e)
+}
+
+// ============================================================================
+// PHASE E executor functions
+// ============================================================================
+
+fn execute_analyze_vectorscope_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("color");
+    crate::visual::analyze_vectorscope(input, &output, mode).unwrap_or_else(|e| e)
+}
+
+fn execute_analyze_vectorscope_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("color");
+    crate::visual::analyze_vectorscope(input, &output, mode).unwrap_or_else(|e| e)
+}
+
+fn execute_analyze_waveform_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("row");
+    let filter_type = args.get("filter_type").and_then(|v| v.as_str()).unwrap_or("lowpass");
+    crate::visual::analyze_waveform(input, &output, mode, filter_type).unwrap_or_else(|e| e)
+}
+
+fn execute_analyze_waveform_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("row");
+    let filter_type = args.get("filter_type").and_then(|v| v.as_str()).unwrap_or("lowpass");
+    crate::visual::analyze_waveform(input, &output, mode, filter_type).unwrap_or_else(|e| e)
+}
+
+fn execute_draw_grid_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let width = args.get("width").and_then(|v| v.as_u64()).unwrap_or(100) as u32;
+    let height = args.get("height").and_then(|v| v.as_u64()).unwrap_or(100) as u32;
+    let thickness = args.get("thickness").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
+    let color = args.get("color").and_then(|v| v.as_str()).unwrap_or("white@0.5");
+    crate::visual::draw_grid(input, &output, width, height, thickness, color).unwrap_or_else(|e| e)
+}
+
+fn execute_draw_grid_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let width = args.get("width").and_then(|v| v.as_u64()).unwrap_or(100) as u32;
+    let height = args.get("height").and_then(|v| v.as_u64()).unwrap_or(100) as u32;
+    let thickness = args.get("thickness").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
+    let color = args.get("color").and_then(|v| v.as_str()).unwrap_or("white@0.5");
+    crate::visual::draw_grid(input, &output, width, height, thickness, color).unwrap_or_else(|e| e)
+}
+
+fn execute_grid_stack_videos_claude(args: &Value) -> String {
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let layout = args.get("layout").and_then(|v| v.as_str()).unwrap_or("");
+    let files: Vec<String> = if let Some(arr) = args.get("input_files").and_then(|v| v.as_array()) {
+        arr.iter().filter_map(|v| v.as_str()).map(|s| s.to_string()).collect()
+    } else if let Some(s) = args.get("input_files").and_then(|v| v.as_str()) {
+        s.split(',').map(|s| s.trim().to_string()).collect()
+    } else {
+        return "❌ No input files provided for grid_stack_videos".to_string();
+    };
+    crate::visual::grid_stack_videos(&files, &output, layout).unwrap_or_else(|e| e)
+}
+
+fn execute_grid_stack_videos_gemini(args: &HashMap<String, Value>) -> String {
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let layout = args.get("layout").and_then(|v| v.as_str()).unwrap_or("");
+    let files: Vec<String> = if let Some(s) = args.get("input_files").and_then(|v| v.as_str()) {
+        s.split(',').map(|s| s.trim().to_string()).collect()
+    } else {
+        return "❌ No input files provided for grid_stack_videos".to_string();
+    };
+    crate::visual::grid_stack_videos(&files, &output, layout).unwrap_or_else(|e| e)
+}
+
+fn execute_luma_key_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let threshold = args.get("threshold").and_then(|v| v.as_f64()).unwrap_or(0.1);
+    let tolerance = args.get("tolerance").and_then(|v| v.as_f64()).unwrap_or(0.1);
+    let softness = args.get("softness").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    crate::visual::luma_key(input, &output, threshold, tolerance, softness).unwrap_or_else(|e| e)
+}
+
+fn execute_luma_key_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let threshold = args.get("threshold").and_then(|v| v.as_f64()).unwrap_or(0.1);
+    let tolerance = args.get("tolerance").and_then(|v| v.as_f64()).unwrap_or(0.1);
+    let softness = args.get("softness").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    crate::visual::luma_key(input, &output, threshold, tolerance, softness).unwrap_or_else(|e| e)
+}
+
+fn execute_render_binaural_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let hrir_type = args.get("hrir_type").and_then(|v| v.as_str()).unwrap_or("stereo");
+    crate::audio::render_binaural(input, &output, hrir_type).unwrap_or_else(|e| e)
+}
+
+fn execute_render_binaural_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let hrir_type = args.get("hrir_type").and_then(|v| v.as_str()).unwrap_or("stereo");
+    crate::audio::render_binaural(input, &output, hrir_type).unwrap_or_else(|e| e)
+}
+
+fn execute_add_vibrato_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let frequency = args.get("frequency").and_then(|v| v.as_f64()).unwrap_or(5.0);
+    let depth = args.get("depth").and_then(|v| v.as_f64()).unwrap_or(0.5);
+    crate::audio::add_vibrato(input, &output, frequency, depth).unwrap_or_else(|e| e)
+}
+
+fn execute_add_vibrato_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let frequency = args.get("frequency").and_then(|v| v.as_f64()).unwrap_or(5.0);
+    let depth = args.get("depth").and_then(|v| v.as_f64()).unwrap_or(0.5);
+    crate::audio::add_vibrato(input, &output, frequency, depth).unwrap_or_else(|e| e)
+}
+
+fn execute_add_tremolo_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let frequency = args.get("frequency").and_then(|v| v.as_f64()).unwrap_or(5.0);
+    let depth = args.get("depth").and_then(|v| v.as_f64()).unwrap_or(0.5);
+    crate::audio::add_tremolo(input, &output, frequency, depth).unwrap_or_else(|e| e)
+}
+
+fn execute_add_tremolo_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let frequency = args.get("frequency").and_then(|v| v.as_f64()).unwrap_or(5.0);
+    let depth = args.get("depth").and_then(|v| v.as_f64()).unwrap_or(0.5);
+    crate::audio::add_tremolo(input, &output, frequency, depth).unwrap_or_else(|e| e)
+}
+
+fn execute_add_flanger_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let delay = args.get("delay").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let depth = args.get("depth").and_then(|v| v.as_f64()).unwrap_or(2.0);
+    let speed = args.get("speed").and_then(|v| v.as_f64()).unwrap_or(0.5);
+    let shape = args.get("shape").and_then(|v| v.as_str()).unwrap_or("sinusoidal");
+    crate::audio::add_flanger(input, &output, delay, depth, speed, shape).unwrap_or_else(|e| e)
+}
+
+fn execute_add_flanger_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let delay = args.get("delay").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let depth = args.get("depth").and_then(|v| v.as_f64()).unwrap_or(2.0);
+    let speed = args.get("speed").and_then(|v| v.as_f64()).unwrap_or(0.5);
+    let shape = args.get("shape").and_then(|v| v.as_str()).unwrap_or("sinusoidal");
+    crate::audio::add_flanger(input, &output, delay, depth, speed, shape).unwrap_or_else(|e| e)
+}
+
+fn execute_denoise_audio_nlm_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let strength = args.get("strength").and_then(|v| v.as_f64()).unwrap_or(0.0001);
+    let patch_size = args.get("patch_size").and_then(|v| v.as_f64()).unwrap_or(0.002);
+    let research_size = args.get("research_size").and_then(|v| v.as_f64()).unwrap_or(0.002);
+    crate::audio::denoise_audio_nlm(input, &output, strength, patch_size, research_size).unwrap_or_else(|e| e)
+}
+
+fn execute_denoise_audio_nlm_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let strength = args.get("strength").and_then(|v| v.as_f64()).unwrap_or(0.0001);
+    let patch_size = args.get("patch_size").and_then(|v| v.as_f64()).unwrap_or(0.002);
+    let research_size = args.get("research_size").and_then(|v| v.as_f64()).unwrap_or(0.002);
+    crate::audio::denoise_audio_nlm(input, &output, strength, patch_size, research_size).unwrap_or_else(|e| e)
+}
+
+// ============================================================================
+// PHASE F executor functions
+// ============================================================================
+
+fn execute_displace_video_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let xmap = args["xmap_file"].as_str().unwrap_or("");
+    let ymap = args["ymap_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let edge = args.get("edge").and_then(|v| v.as_str()).unwrap_or("smear");
+    crate::visual::displace_video(input, xmap, ymap, &output, edge).unwrap_or_else(|e| e)
+}
+
+fn execute_displace_video_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let xmap = args.get("xmap_file").and_then(|v| v.as_str()).unwrap_or("");
+    let ymap = args.get("ymap_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let edge = args.get("edge").and_then(|v| v.as_str()).unwrap_or("smear");
+    crate::visual::displace_video(input, xmap, ymap, &output, edge).unwrap_or_else(|e| e)
+}
+
+fn execute_decimate_frames_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let cycle = args.get("cycle").and_then(|v| v.as_u64()).unwrap_or(5) as u32;
+    let dupthresh = args.get("dupthresh").and_then(|v| v.as_f64()).unwrap_or(1.1);
+    let scthresh = args.get("scthresh").and_then(|v| v.as_f64()).unwrap_or(15.0);
+    crate::visual::decimate_frames(input, &output, cycle, dupthresh, scthresh).unwrap_or_else(|e| e)
+}
+
+fn execute_decimate_frames_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let cycle = args.get("cycle").and_then(|v| v.as_u64()).unwrap_or(5) as u32;
+    let dupthresh = args.get("dupthresh").and_then(|v| v.as_f64()).unwrap_or(1.1);
+    let scthresh = args.get("scthresh").and_then(|v| v.as_f64()).unwrap_or(15.0);
+    crate::visual::decimate_frames(input, &output, cycle, dupthresh, scthresh).unwrap_or_else(|e| e)
+}
+
+fn execute_denoise_video_owden_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let luma = args.get("luma_strength").and_then(|v| v.as_f64()).unwrap_or(10.0);
+    let chroma = args.get("chroma_strength").and_then(|v| v.as_f64()).unwrap_or(10.0);
+    crate::visual::denoise_video_owden(input, &output, luma, chroma).unwrap_or_else(|e| e)
+}
+
+fn execute_denoise_video_owden_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let luma = args.get("luma_strength").and_then(|v| v.as_f64()).unwrap_or(10.0);
+    let chroma = args.get("chroma_strength").and_then(|v| v.as_f64()).unwrap_or(10.0);
+    crate::visual::denoise_video_owden(input, &output, luma, chroma).unwrap_or_else(|e| e)
+}
+
+fn execute_despill_video_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let spill_type = args.get("spill_type").and_then(|v| v.as_str()).unwrap_or("green");
+    let mix = args.get("mix").and_then(|v| v.as_f64()).unwrap_or(0.5);
+    let expand = args.get("expand").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    crate::visual::despill_video(input, &output, spill_type, mix, expand).unwrap_or_else(|e| e)
+}
+
+fn execute_despill_video_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let spill_type = args.get("spill_type").and_then(|v| v.as_str()).unwrap_or("green");
+    let mix = args.get("mix").and_then(|v| v.as_f64()).unwrap_or(0.5);
+    let expand = args.get("expand").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    crate::visual::despill_video(input, &output, spill_type, mix, expand).unwrap_or_else(|e| e)
+}
+
+fn execute_remap_pixels_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let xmap = args["xmap_file"].as_str().unwrap_or("");
+    let ymap = args["ymap_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let fill = args.get("fill").and_then(|v| v.as_str()).unwrap_or("black");
+    crate::visual::remap_pixels(input, xmap, ymap, &output, fill).unwrap_or_else(|e| e)
+}
+
+fn execute_remap_pixels_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let xmap = args.get("xmap_file").and_then(|v| v.as_str()).unwrap_or("");
+    let ymap = args.get("ymap_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let fill = args.get("fill").and_then(|v| v.as_str()).unwrap_or("black");
+    crate::visual::remap_pixels(input, xmap, ymap, &output, fill).unwrap_or_else(|e| e)
+}
+
+fn execute_adjust_exposure_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let exposure = args.get("exposure").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let black = args.get("black").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    crate::visual::adjust_exposure(input, &output, exposure, black).unwrap_or_else(|e| e)
+}
+
+fn execute_adjust_exposure_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let exposure = args.get("exposure").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let black = args.get("black").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    crate::visual::adjust_exposure(input, &output, exposure, black).unwrap_or_else(|e| e)
+}
+
+fn execute_measure_vmaf_claude(args: &Value) -> String {
+    let distorted = args["distorted_file"].as_str().unwrap_or("");
+    let reference = args["reference_file"].as_str().unwrap_or("");
+    let model = args.get("model_path").and_then(|v| v.as_str()).unwrap_or("");
+    crate::visual::measure_vmaf(distorted, reference, model).unwrap_or_else(|e| e)
+}
+
+fn execute_measure_vmaf_gemini(args: &HashMap<String, Value>) -> String {
+    let distorted = args.get("distorted_file").and_then(|v| v.as_str()).unwrap_or("");
+    let reference = args.get("reference_file").and_then(|v| v.as_str()).unwrap_or("");
+    let model = args.get("model_path").and_then(|v| v.as_str()).unwrap_or("");
+    crate::visual::measure_vmaf(distorted, reference, model).unwrap_or_else(|e| e)
+}
+
+fn execute_shift_audio_frequency_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let shift = args["shift"].as_f64().unwrap_or(0.0);
+    crate::audio::shift_audio_frequency(input, &output, shift).unwrap_or_else(|e| e)
+}
+
+fn execute_shift_audio_frequency_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let shift = args.get("shift").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    crate::audio::shift_audio_frequency(input, &output, shift).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_audio_pulsator_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let hz = args.get("hz").and_then(|v| v.as_f64()).unwrap_or(2.0);
+    let amount = args.get("amount").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let offset_l = args.get("offset_l").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let offset_r = args.get("offset_r").and_then(|v| v.as_f64()).unwrap_or(0.5);
+    let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("sine");
+    crate::audio::apply_audio_pulsator(input, &output, hz, amount, offset_l, offset_r, mode).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_audio_pulsator_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let hz = args.get("hz").and_then(|v| v.as_f64()).unwrap_or(2.0);
+    let amount = args.get("amount").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let offset_l = args.get("offset_l").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let offset_r = args.get("offset_r").and_then(|v| v.as_f64()).unwrap_or(0.5);
+    let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("sine");
+    crate::audio::apply_audio_pulsator(input, &output, hz, amount, offset_l, offset_r, mode).unwrap_or_else(|e| e)
+}
+
+fn execute_enhance_dialogue_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let original = args.get("original").and_then(|v| v.as_f64()).unwrap_or(0.5);
+    let expand = args.get("expand").and_then(|v| v.as_f64()).unwrap_or(2.0);
+    crate::audio::enhance_dialogue(input, &output, original, expand).unwrap_or_else(|e| e)
+}
+
+fn execute_enhance_dialogue_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let original = args.get("original").and_then(|v| v.as_f64()).unwrap_or(0.5);
+    let expand = args.get("expand").and_then(|v| v.as_f64()).unwrap_or(2.0);
+    crate::audio::enhance_dialogue(input, &output, original, expand).unwrap_or_else(|e| e)
+}
+
+fn execute_split_audio_channels_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let layout = args.get("channel_layout").and_then(|v| v.as_str()).unwrap_or("stereo");
+    let channel = args.get("channel").and_then(|v| v.as_str()).unwrap_or("FL");
+    crate::audio::split_audio_channels(input, &output, layout, channel).unwrap_or_else(|e| e)
+}
+
+fn execute_split_audio_channels_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let layout = args.get("channel_layout").and_then(|v| v.as_str()).unwrap_or("stereo");
+    let channel = args.get("channel").and_then(|v| v.as_str()).unwrap_or("FL");
+    crate::audio::split_audio_channels(input, &output, layout, channel).unwrap_or_else(|e| e)
+}
+
+fn execute_map_audio_channels_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let map = args.get("channel_map").and_then(|v| v.as_str()).unwrap_or("FL-FL|FR-FR");
+    let layout = args.get("channel_layout").and_then(|v| v.as_str()).unwrap_or("stereo");
+    crate::audio::map_audio_channels(input, &output, map, layout).unwrap_or_else(|e| e)
+}
+
+fn execute_map_audio_channels_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let map = args.get("channel_map").and_then(|v| v.as_str()).unwrap_or("FL-FL|FR-FR");
+    let layout = args.get("channel_layout").and_then(|v| v.as_str()).unwrap_or("stereo");
+    crate::audio::map_audio_channels(input, &output, map, layout).unwrap_or_else(|e| e)
+}
+
+fn execute_merge_audio_inputs_claude(args: &Value) -> String {
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let files: Vec<String> = if let Some(arr) = args.get("input_files").and_then(|v| v.as_array()) {
+        arr.iter().filter_map(|v| v.as_str()).map(|s| s.to_string()).collect()
+    } else if let Some(s) = args.get("input_files").and_then(|v| v.as_str()) {
+        s.split(',').map(|s| s.trim().to_string()).collect()
+    } else {
+        return "❌ No input files provided for merge_audio_inputs".to_string();
+    };
+    crate::audio::merge_audio_inputs(&files, &output).unwrap_or_else(|e| e)
+}
+
+fn execute_merge_audio_inputs_gemini(args: &HashMap<String, Value>) -> String {
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let files: Vec<String> = if let Some(s) = args.get("input_files").and_then(|v| v.as_str()) {
+        s.split(',').map(|s| s.trim().to_string()).collect()
+    } else {
+        return "❌ No input files provided for merge_audio_inputs".to_string();
+    };
+    crate::audio::merge_audio_inputs(&files, &output).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_crossfeed_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let strength = args.get("strength").and_then(|v| v.as_f64()).unwrap_or(0.5);
+    let slope = args.get("slope").and_then(|v| v.as_f64()).unwrap_or(0.5);
+    let level_in = args.get("level_in").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let level_out = args.get("level_out").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    crate::audio::apply_crossfeed(input, &output, strength, slope, level_in, level_out).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_crossfeed_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let strength = args.get("strength").and_then(|v| v.as_f64()).unwrap_or(0.5);
+    let slope = args.get("slope").and_then(|v| v.as_f64()).unwrap_or(0.5);
+    let level_in = args.get("level_in").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let level_out = args.get("level_out").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    crate::audio::apply_crossfeed(input, &output, strength, slope, level_in, level_out).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_extrastereo_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let multiplier = args.get("multiplier").and_then(|v| v.as_f64()).unwrap_or(2.5);
+    let clipping = args.get("clipping").and_then(|v| v.as_bool()).unwrap_or(false);
+    crate::audio::apply_extrastereo(input, &output, multiplier, clipping).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_extrastereo_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let multiplier = args.get("multiplier").and_then(|v| v.as_f64()).unwrap_or(2.5);
+    let clipping = args.get("clipping").and_then(|v| v.as_bool()).unwrap_or(false);
+    crate::audio::apply_extrastereo(input, &output, multiplier, clipping).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_firequalizer_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let gain_entry = args["gain_entry"].as_str().unwrap_or("entry(0,0);entry(22050,0)");
+    crate::audio::apply_firequalizer(input, &output, gain_entry).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_firequalizer_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let gain_entry = args.get("gain_entry").and_then(|v| v.as_str()).unwrap_or("entry(0,0);entry(22050,0)");
+    crate::audio::apply_firequalizer(input, &output, gain_entry).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_biquad_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let b0 = args.get("b0").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let b1 = args.get("b1").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let b2 = args.get("b2").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let a0 = args.get("a0").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let a1 = args.get("a1").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let a2 = args.get("a2").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    crate::audio::apply_biquad(input, &output, b0, b1, b2, a0, a1, a2).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_biquad_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let b0 = args.get("b0").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let b1 = args.get("b1").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let b2 = args.get("b2").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let a0 = args.get("a0").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let a1 = args.get("a1").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let a2 = args.get("a2").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    crate::audio::apply_biquad(input, &output, b0, b1, b2, a0, a1, a2).unwrap_or_else(|e| e)
+}
+
+fn execute_filter_bandpass_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let frequency = args.get("frequency").and_then(|v| v.as_f64()).unwrap_or(3000.0);
+    let width = args.get("width").and_then(|v| v.as_f64()).unwrap_or(200.0);
+    let width_type = args.get("width_type").and_then(|v| v.as_str()).unwrap_or("h");
+    crate::audio::filter_bandpass(input, &output, frequency, width, width_type).unwrap_or_else(|e| e)
+}
+
+fn execute_filter_bandpass_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let frequency = args.get("frequency").and_then(|v| v.as_f64()).unwrap_or(3000.0);
+    let width = args.get("width").and_then(|v| v.as_f64()).unwrap_or(200.0);
+    let width_type = args.get("width_type").and_then(|v| v.as_str()).unwrap_or("h");
+    crate::audio::filter_bandpass(input, &output, frequency, width, width_type).unwrap_or_else(|e| e)
+}
+
+fn execute_filter_bandreject_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let frequency = args.get("frequency").and_then(|v| v.as_f64()).unwrap_or(3000.0);
+    let width = args.get("width").and_then(|v| v.as_f64()).unwrap_or(200.0);
+    let width_type = args.get("width_type").and_then(|v| v.as_str()).unwrap_or("h");
+    crate::audio::filter_bandreject(input, &output, frequency, width, width_type).unwrap_or_else(|e| e)
+}
+
+fn execute_filter_bandreject_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let frequency = args.get("frequency").and_then(|v| v.as_f64()).unwrap_or(3000.0);
+    let width = args.get("width").and_then(|v| v.as_f64()).unwrap_or(200.0);
+    let width_type = args.get("width_type").and_then(|v| v.as_str()).unwrap_or("h");
+    crate::audio::filter_bandreject(input, &output, frequency, width, width_type).unwrap_or_else(|e| e)
+}
+
+fn execute_boost_sub_bass_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let dry = args.get("dry").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let wet = args.get("wet").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let freq = args.get("freq").and_then(|v| v.as_f64()).unwrap_or(20.0);
+    let decay = args.get("decay").and_then(|v| v.as_f64()).unwrap_or(0.7);
+    crate::audio::boost_sub_bass(input, &output, dry, wet, freq, decay).unwrap_or_else(|e| e)
+}
+
+fn execute_boost_sub_bass_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let dry = args.get("dry").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let wet = args.get("wet").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let freq = args.get("freq").and_then(|v| v.as_f64()).unwrap_or(20.0);
+    let decay = args.get("decay").and_then(|v| v.as_f64()).unwrap_or(0.7);
+    crate::audio::boost_sub_bass(input, &output, dry, wet, freq, decay).unwrap_or_else(|e| e)
+}
+
+// ================================================================
+// PHASE G — AI/ML Filters
+// ================================================================
+
+fn execute_detect_objects_dnn_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let model = args["model"].as_str().unwrap_or("");
+    let backend = args.get("backend").and_then(|v| v.as_str()).unwrap_or("native");
+    let confidence = args.get("confidence").and_then(|v| v.as_f64()).unwrap_or(0.5);
+    let labels = args.get("labels").and_then(|v| v.as_str()).unwrap_or("");
+    crate::visual::detect_objects_dnn(input, &output, model, backend, confidence, labels).unwrap_or_else(|e| e)
+}
+
+fn execute_detect_objects_dnn_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let model = args.get("model").and_then(|v| v.as_str()).unwrap_or("");
+    let backend = args.get("backend").and_then(|v| v.as_str()).unwrap_or("native");
+    let confidence = args.get("confidence").and_then(|v| v.as_f64()).unwrap_or(0.5);
+    let labels = args.get("labels").and_then(|v| v.as_str()).unwrap_or("");
+    crate::visual::detect_objects_dnn(input, &output, model, backend, confidence, labels).unwrap_or_else(|e| e)
+}
+
+fn execute_classify_frames_dnn_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let model = args["model"].as_str().unwrap_or("");
+    let backend = args.get("backend").and_then(|v| v.as_str()).unwrap_or("native");
+    let labels = args.get("labels").and_then(|v| v.as_str()).unwrap_or("");
+    crate::visual::classify_frames_dnn(input, &output, model, backend, labels).unwrap_or_else(|e| e)
+}
+
+fn execute_classify_frames_dnn_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let model = args.get("model").and_then(|v| v.as_str()).unwrap_or("");
+    let backend = args.get("backend").and_then(|v| v.as_str()).unwrap_or("native");
+    let labels = args.get("labels").and_then(|v| v.as_str()).unwrap_or("");
+    crate::visual::classify_frames_dnn(input, &output, model, backend, labels).unwrap_or_else(|e| e)
+}
+
+fn execute_upscale_super_resolution_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let scale_factor = args.get("scale_factor").and_then(|v| v.as_u64()).unwrap_or(2) as u32;
+    let model = args.get("model").and_then(|v| v.as_str()).unwrap_or("");
+    let backend = args.get("backend").and_then(|v| v.as_str()).unwrap_or("native");
+    crate::visual::upscale_super_resolution(input, &output, scale_factor, model, backend).unwrap_or_else(|e| e)
+}
+
+fn execute_upscale_super_resolution_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let scale_factor = args.get("scale_factor").and_then(|v| v.as_u64()).unwrap_or(2) as u32;
+    let model = args.get("model").and_then(|v| v.as_str()).unwrap_or("");
+    let backend = args.get("backend").and_then(|v| v.as_str()).unwrap_or("native");
+    crate::visual::upscale_super_resolution(input, &output, scale_factor, model, backend).unwrap_or_else(|e| e)
+}
+
+fn execute_remove_rain_ai_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let model = args["model"].as_str().unwrap_or("");
+    let backend = args.get("backend").and_then(|v| v.as_str()).unwrap_or("native");
+    crate::visual::remove_rain_ai(input, &output, model, backend).unwrap_or_else(|e| e)
+}
+
+fn execute_remove_rain_ai_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let model = args.get("model").and_then(|v| v.as_str()).unwrap_or("");
+    let backend = args.get("backend").and_then(|v| v.as_str()).unwrap_or("native");
+    crate::visual::remove_rain_ai(input, &output, model, backend).unwrap_or_else(|e| e)
+}
+
+fn execute_detect_frozen_frames_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let noise_db = args.get("noise_db").and_then(|v| v.as_f64()).unwrap_or(-60.0);
+    let duration = args.get("duration").and_then(|v| v.as_f64()).unwrap_or(2.0);
+    crate::visual::detect_frozen_frames(input, noise_db, duration).unwrap_or_else(|e| e)
+}
+
+fn execute_detect_frozen_frames_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let noise_db = args.get("noise_db").and_then(|v| v.as_f64()).unwrap_or(-60.0);
+    let duration = args.get("duration").and_then(|v| v.as_f64()).unwrap_or(2.0);
+    crate::visual::detect_frozen_frames(input, noise_db, duration).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_edgedetect_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let low = args.get("low").and_then(|v| v.as_f64()).unwrap_or(0.0625);
+    let high = args.get("high").and_then(|v| v.as_f64()).unwrap_or(0.1875);
+    let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("wires");
+    crate::visual::apply_edgedetect(input, &output, low, high, mode).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_edgedetect_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let low = args.get("low").and_then(|v| v.as_f64()).unwrap_or(0.0625);
+    let high = args.get("high").and_then(|v| v.as_f64()).unwrap_or(0.1875);
+    let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("wires");
+    crate::visual::apply_edgedetect(input, &output, low, high, mode).unwrap_or_else(|e| e)
+}
+
+// ================================================================
+// PHASE H — Codec / Format Depth
+// ================================================================
+
+fn execute_encode_vp9_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let crf = args.get("crf").and_then(|v| v.as_u64()).unwrap_or(31) as u32;
+    let bitrate = args.get("bitrate").and_then(|v| v.as_str()).unwrap_or("");
+    let speed = args.get("speed").and_then(|v| v.as_u64()).unwrap_or(2) as u32;
+    let threads = args.get("threads").and_then(|v| v.as_u64()).unwrap_or(4) as u32;
+    crate::core::encode_vp9(input, &output, crf, bitrate, speed, threads).unwrap_or_else(|e| e)
+}
+
+fn execute_encode_vp9_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let crf = args.get("crf").and_then(|v| v.as_u64()).unwrap_or(31) as u32;
+    let bitrate = args.get("bitrate").and_then(|v| v.as_str()).unwrap_or("");
+    let speed = args.get("speed").and_then(|v| v.as_u64()).unwrap_or(2) as u32;
+    let threads = args.get("threads").and_then(|v| v.as_u64()).unwrap_or(4) as u32;
+    crate::core::encode_vp9(input, &output, crf, bitrate, speed, threads).unwrap_or_else(|e| e)
+}
+
+fn execute_encode_av1_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let crf = args.get("crf").and_then(|v| v.as_u64()).unwrap_or(30) as u32;
+    let speed = args.get("speed").and_then(|v| v.as_u64()).unwrap_or(4) as u32;
+    let threads = args.get("threads").and_then(|v| v.as_u64()).unwrap_or(4) as u32;
+    let encoder = args.get("encoder").and_then(|v| v.as_str()).unwrap_or("");
+    crate::core::encode_av1(input, &output, crf, speed, threads, encoder).unwrap_or_else(|e| e)
+}
+
+fn execute_encode_av1_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let crf = args.get("crf").and_then(|v| v.as_u64()).unwrap_or(30) as u32;
+    let speed = args.get("speed").and_then(|v| v.as_u64()).unwrap_or(4) as u32;
+    let threads = args.get("threads").and_then(|v| v.as_u64()).unwrap_or(4) as u32;
+    let encoder = args.get("encoder").and_then(|v| v.as_str()).unwrap_or("");
+    crate::core::encode_av1(input, &output, crf, speed, threads, encoder).unwrap_or_else(|e| e)
+}
+
+fn execute_encode_hevc_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let crf = args.get("crf").and_then(|v| v.as_u64()).unwrap_or(28) as u32;
+    let preset = args.get("preset").and_then(|v| v.as_str()).unwrap_or("");
+    let tune = args.get("tune").and_then(|v| v.as_str()).unwrap_or("");
+    crate::core::encode_hevc(input, &output, crf, preset, tune).unwrap_or_else(|e| e)
+}
+
+fn execute_encode_hevc_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let crf = args.get("crf").and_then(|v| v.as_u64()).unwrap_or(28) as u32;
+    let preset = args.get("preset").and_then(|v| v.as_str()).unwrap_or("");
+    let tune = args.get("tune").and_then(|v| v.as_str()).unwrap_or("");
+    crate::core::encode_hevc(input, &output, crf, preset, tune).unwrap_or_else(|e| e)
+}
+
+fn execute_encode_opus_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let bitrate_kbps = args.get("bitrate_kbps").and_then(|v| v.as_u64()).unwrap_or(128) as u32;
+    let vbr_str = args.get("vbr").and_then(|v| v.as_str()).unwrap_or("true");
+    let vbr = vbr_str != "false";
+    let compression = args.get("compression").and_then(|v| v.as_u64()).unwrap_or(10) as u32;
+    crate::core::encode_opus(input, &output, bitrate_kbps, vbr, compression).unwrap_or_else(|e| e)
+}
+
+fn execute_encode_opus_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let bitrate_kbps = args.get("bitrate_kbps").and_then(|v| v.as_u64()).unwrap_or(128) as u32;
+    let vbr_str = args.get("vbr").and_then(|v| v.as_str()).unwrap_or("true");
+    let vbr = vbr_str != "false";
+    let compression = args.get("compression").and_then(|v| v.as_u64()).unwrap_or(10) as u32;
+    crate::core::encode_opus(input, &output, bitrate_kbps, vbr, compression).unwrap_or_else(|e| e)
+}
+
+fn execute_encode_hdr10_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let crf = args.get("crf").and_then(|v| v.as_u64()).unwrap_or(22) as u32;
+    let preset = args.get("preset").and_then(|v| v.as_str()).unwrap_or("");
+    let master_display = args.get("master_display").and_then(|v| v.as_str()).unwrap_or("");
+    let max_cll = args.get("max_cll").and_then(|v| v.as_str()).unwrap_or("");
+    crate::core::encode_hdr10(input, &output, crf, preset, master_display, max_cll).unwrap_or_else(|e| e)
+}
+
+fn execute_encode_hdr10_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let crf = args.get("crf").and_then(|v| v.as_u64()).unwrap_or(22) as u32;
+    let preset = args.get("preset").and_then(|v| v.as_str()).unwrap_or("");
+    let master_display = args.get("master_display").and_then(|v| v.as_str()).unwrap_or("");
+    let max_cll = args.get("max_cll").and_then(|v| v.as_str()).unwrap_or("");
+    crate::core::encode_hdr10(input, &output, crf, preset, master_display, max_cll).unwrap_or_else(|e| e)
+}
+
+fn execute_encode_nvenc_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let codec = args.get("codec").and_then(|v| v.as_str()).unwrap_or("h264");
+    let preset = args.get("preset").and_then(|v| v.as_str()).unwrap_or("");
+    let bitrate = args.get("bitrate").and_then(|v| v.as_str()).unwrap_or("");
+    let cq = args.get("cq").and_then(|v| v.as_u64()).unwrap_or(23) as u32;
+    crate::core::encode_nvenc(input, &output, codec, preset, bitrate, cq).unwrap_or_else(|e| e)
+}
+
+fn execute_encode_nvenc_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let codec = args.get("codec").and_then(|v| v.as_str()).unwrap_or("h264");
+    let preset = args.get("preset").and_then(|v| v.as_str()).unwrap_or("");
+    let bitrate = args.get("bitrate").and_then(|v| v.as_str()).unwrap_or("");
+    let cq = args.get("cq").and_then(|v| v.as_u64()).unwrap_or(23) as u32;
+    crate::core::encode_nvenc(input, &output, codec, preset, bitrate, cq).unwrap_or_else(|e| e)
+}
+
+fn execute_encode_vaapi_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let codec = args.get("codec").and_then(|v| v.as_str()).unwrap_or("h264");
+    let quality = args.get("quality").and_then(|v| v.as_u64()).unwrap_or(23) as u32;
+    let profile = args.get("profile").and_then(|v| v.as_str()).unwrap_or("");
+    crate::core::encode_vaapi(input, &output, codec, quality, profile).unwrap_or_else(|e| e)
+}
+
+fn execute_encode_vaapi_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let codec = args.get("codec").and_then(|v| v.as_str()).unwrap_or("h264");
+    let quality = args.get("quality").and_then(|v| v.as_u64()).unwrap_or(23) as u32;
+    let profile = args.get("profile").and_then(|v| v.as_str()).unwrap_or("");
+    crate::core::encode_vaapi(input, &output, codec, quality, profile).unwrap_or_else(|e| e)
+}
+
+fn execute_encode_qsv_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let codec = args.get("codec").and_then(|v| v.as_str()).unwrap_or("h264");
+    let preset = args.get("preset").and_then(|v| v.as_str()).unwrap_or("");
+    let bitrate = args.get("bitrate").and_then(|v| v.as_str()).unwrap_or("");
+    crate::core::encode_qsv(input, &output, codec, preset, bitrate).unwrap_or_else(|e| e)
+}
+
+fn execute_encode_qsv_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let codec = args.get("codec").and_then(|v| v.as_str()).unwrap_or("h264");
+    let preset = args.get("preset").and_then(|v| v.as_str()).unwrap_or("");
+    let bitrate = args.get("bitrate").and_then(|v| v.as_str()).unwrap_or("");
+    crate::core::encode_qsv(input, &output, codec, preset, bitrate).unwrap_or_else(|e| e)
+}
+
+fn execute_encode_prores_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let profile = args.get("profile").and_then(|v| v.as_u64()).unwrap_or(3) as u32;
+    let vendor = args.get("vendor").and_then(|v| v.as_str()).unwrap_or("");
+    crate::core::encode_prores(input, &output, profile, vendor).unwrap_or_else(|e| e)
+}
+
+fn execute_encode_prores_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let profile = args.get("profile").and_then(|v| v.as_u64()).unwrap_or(3) as u32;
+    let vendor = args.get("vendor").and_then(|v| v.as_str()).unwrap_or("");
+    crate::core::encode_prores(input, &output, profile, vendor).unwrap_or_else(|e| e)
+}
+
+fn execute_encode_dnxhd_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let profile = args.get("profile").and_then(|v| v.as_str()).unwrap_or("");
+    crate::core::encode_dnxhd(input, &output, profile).unwrap_or_else(|e| e)
+}
+
+fn execute_encode_dnxhd_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let profile = args.get("profile").and_then(|v| v.as_str()).unwrap_or("");
+    crate::core::encode_dnxhd(input, &output, profile).unwrap_or_else(|e| e)
+}
+
+fn execute_encode_gif_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let fps = args.get("fps").and_then(|v| v.as_f64()).unwrap_or(15.0);
+    let scale = args.get("scale").and_then(|v| v.as_u64()).unwrap_or(480) as u32;
+    let loop_count = args.get("loop_count").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+    crate::core::encode_gif(input, &output, fps, scale, loop_count).unwrap_or_else(|e| e)
+}
+
+fn execute_encode_gif_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let fps = args.get("fps").and_then(|v| v.as_f64()).unwrap_or(15.0);
+    let scale = args.get("scale").and_then(|v| v.as_u64()).unwrap_or(480) as u32;
+    let loop_count = args.get("loop_count").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+    crate::core::encode_gif(input, &output, fps, scale, loop_count).unwrap_or_else(|e| e)
+}
+
+fn execute_encode_webm_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let video_codec = args.get("video_codec").and_then(|v| v.as_str()).unwrap_or("vp8");
+    let audio_codec = args.get("audio_codec").and_then(|v| v.as_str()).unwrap_or("vorbis");
+    let crf = args.get("crf").and_then(|v| v.as_u64()).unwrap_or(10) as u32;
+    let bitrate = args.get("bitrate").and_then(|v| v.as_str()).unwrap_or("");
+    crate::core::encode_webm(input, &output, video_codec, audio_codec, crf, bitrate).unwrap_or_else(|e| e)
+}
+
+fn execute_encode_webm_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let video_codec = args.get("video_codec").and_then(|v| v.as_str()).unwrap_or("vp8");
+    let audio_codec = args.get("audio_codec").and_then(|v| v.as_str()).unwrap_or("vorbis");
+    let crf = args.get("crf").and_then(|v| v.as_u64()).unwrap_or(10) as u32;
+    let bitrate = args.get("bitrate").and_then(|v| v.as_str()).unwrap_or("");
+    crate::core::encode_webm(input, &output, video_codec, audio_codec, crf, bitrate).unwrap_or_else(|e| e)
+}
+
+// ================================================================
+// PHASE I — Long-tail sweep, Batch 1
+// ================================================================
+
+fn execute_zoom_pan_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let zoom = args.get("zoom").and_then(|v| v.as_f64()).unwrap_or(1.5);
+    let x_expr = args.get("x_expr").and_then(|v| v.as_str()).unwrap_or("");
+    let y_expr = args.get("y_expr").and_then(|v| v.as_str()).unwrap_or("");
+    let duration_frames = args.get("duration_frames").and_then(|v| v.as_u64()).unwrap_or(125) as u32;
+    let fps = args.get("fps").and_then(|v| v.as_f64()).unwrap_or(25.0);
+    crate::visual::zoom_pan(input, &output, zoom, x_expr, y_expr, duration_frames, fps).unwrap_or_else(|e| e)
+}
+
+fn execute_zoom_pan_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let zoom = args.get("zoom").and_then(|v| v.as_f64()).unwrap_or(1.5);
+    let x_expr = args.get("x_expr").and_then(|v| v.as_str()).unwrap_or("");
+    let y_expr = args.get("y_expr").and_then(|v| v.as_str()).unwrap_or("");
+    let duration_frames = args.get("duration_frames").and_then(|v| v.as_u64()).unwrap_or(125) as u32;
+    let fps = args.get("fps").and_then(|v| v.as_f64()).unwrap_or(25.0);
+    crate::visual::zoom_pan(input, &output, zoom, x_expr, y_expr, duration_frames, fps).unwrap_or_else(|e| e)
+}
+
+fn execute_chromatic_aberration_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let rh = args.get("rh").and_then(|v| v.as_i64()).unwrap_or(5) as i32;
+    let rv = args.get("rv").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+    let bh = args.get("bh").and_then(|v| v.as_i64()).unwrap_or(-5) as i32;
+    let bv = args.get("bv").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+    crate::visual::chromatic_aberration(input, &output, rh, rv, bh, bv).unwrap_or_else(|e| e)
+}
+
+fn execute_chromatic_aberration_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let rh = args.get("rh").and_then(|v| v.as_i64()).unwrap_or(5) as i32;
+    let rv = args.get("rv").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+    let bh = args.get("bh").and_then(|v| v.as_i64()).unwrap_or(-5) as i32;
+    let bv = args.get("bv").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+    crate::visual::chromatic_aberration(input, &output, rh, rv, bh, bv).unwrap_or_else(|e| e)
+}
+
+fn execute_temporal_blend_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("average");
+    let opacity = args.get("opacity").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    crate::visual::temporal_blend(input, &output, mode, opacity).unwrap_or_else(|e| e)
+}
+
+fn execute_temporal_blend_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("average");
+    let opacity = args.get("opacity").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    crate::visual::temporal_blend(input, &output, mode, opacity).unwrap_or_else(|e| e)
+}
+
+fn execute_motion_interpolate_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let target_fps = args.get("target_fps").and_then(|v| v.as_f64()).unwrap_or(60.0);
+    let mi_mode = args.get("mi_mode").and_then(|v| v.as_str()).unwrap_or("mci");
+    crate::visual::motion_interpolate(input, &output, target_fps, mi_mode).unwrap_or_else(|e| e)
+}
+
+fn execute_motion_interpolate_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let target_fps = args.get("target_fps").and_then(|v| v.as_f64()).unwrap_or(60.0);
+    let mi_mode = args.get("mi_mode").and_then(|v| v.as_str()).unwrap_or("mci");
+    crate::visual::motion_interpolate(input, &output, target_fps, mi_mode).unwrap_or_else(|e| e)
+}
+
+fn execute_correct_lens_simple_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let k1 = args.get("k1").and_then(|v| v.as_f64()).unwrap_or(-0.1);
+    let k2 = args.get("k2").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    crate::visual::correct_lens_simple(input, &output, k1, k2).unwrap_or_else(|e| e)
+}
+
+fn execute_correct_lens_simple_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let k1 = args.get("k1").and_then(|v| v.as_f64()).unwrap_or(-0.1);
+    let k2 = args.get("k2").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    crate::visual::correct_lens_simple(input, &output, k1, k2).unwrap_or_else(|e| e)
+}
+
+fn execute_deinterlace_yadif_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let mode = args.get("mode").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let parity = args.get("parity").and_then(|v| v.as_i64()).unwrap_or(-1) as i32;
+    crate::visual::deinterlace_yadif(input, &output, mode, parity).unwrap_or_else(|e| e)
+}
+
+fn execute_deinterlace_yadif_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let mode = args.get("mode").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let parity = args.get("parity").and_then(|v| v.as_i64()).unwrap_or(-1) as i32;
+    crate::visual::deinterlace_yadif(input, &output, mode, parity).unwrap_or_else(|e| e)
+}
+
+fn execute_correct_perspective_linear_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let x0 = args.get("x0").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let y0 = args.get("y0").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let x1 = args.get("x1").and_then(|v| v.as_f64()).unwrap_or(1920.0);
+    let y1 = args.get("y1").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let x2 = args.get("x2").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let y2 = args.get("y2").and_then(|v| v.as_f64()).unwrap_or(1080.0);
+    let x3 = args.get("x3").and_then(|v| v.as_f64()).unwrap_or(1920.0);
+    let y3 = args.get("y3").and_then(|v| v.as_f64()).unwrap_or(1080.0);
+    crate::visual::correct_perspective_linear(input, &output, x0, y0, x1, y1, x2, y2, x3, y3).unwrap_or_else(|e| e)
+}
+
+fn execute_correct_perspective_linear_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let x0 = args.get("x0").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let y0 = args.get("y0").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let x1 = args.get("x1").and_then(|v| v.as_f64()).unwrap_or(1920.0);
+    let y1 = args.get("y1").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let x2 = args.get("x2").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let y2 = args.get("y2").and_then(|v| v.as_f64()).unwrap_or(1080.0);
+    let x3 = args.get("x3").and_then(|v| v.as_f64()).unwrap_or(1920.0);
+    let y3 = args.get("y3").and_then(|v| v.as_f64()).unwrap_or(1080.0);
+    crate::visual::correct_perspective_linear(input, &output, x0, y0, x1, y1, x2, y2, x3, y3).unwrap_or_else(|e| e)
+}
+
+fn execute_colorize_video_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let hue = args.get("hue").and_then(|v| v.as_f64()).unwrap_or(210.0);
+    let saturation = args.get("saturation").and_then(|v| v.as_f64()).unwrap_or(0.5);
+    let lightness = args.get("lightness").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    crate::visual::colorize_video(input, &output, hue, saturation, lightness).unwrap_or_else(|e| e)
+}
+
+fn execute_colorize_video_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let hue = args.get("hue").and_then(|v| v.as_f64()).unwrap_or(210.0);
+    let saturation = args.get("saturation").and_then(|v| v.as_f64()).unwrap_or(0.5);
+    let lightness = args.get("lightness").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    crate::visual::colorize_video(input, &output, hue, saturation, lightness).unwrap_or_else(|e| e)
+}
+
+fn execute_denoise_hqdn3d_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let ls = args.get("luma_spatial").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let cs = args.get("chroma_spatial").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let lt = args.get("luma_tmp").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let ct = args.get("chroma_tmp").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    crate::visual::denoise_hqdn3d(input, &output, ls, cs, lt, ct).unwrap_or_else(|e| e)
+}
+
+fn execute_denoise_hqdn3d_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let ls = args.get("luma_spatial").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let cs = args.get("chroma_spatial").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let lt = args.get("luma_tmp").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let ct = args.get("chroma_tmp").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    crate::visual::denoise_hqdn3d(input, &output, ls, cs, lt, ct).unwrap_or_else(|e| e)
+}
+
+fn execute_add_echo_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let in_gain = args.get("in_gain").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let out_gain = args.get("out_gain").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let delays = args.get("delays").and_then(|v| v.as_str()).unwrap_or("");
+    let decays = args.get("decays").and_then(|v| v.as_str()).unwrap_or("");
+    crate::audio::add_echo(input, &output, in_gain, out_gain, delays, decays).unwrap_or_else(|e| e)
+}
+
+fn execute_add_echo_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let in_gain = args.get("in_gain").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let out_gain = args.get("out_gain").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let delays = args.get("delays").and_then(|v| v.as_str()).unwrap_or("");
+    let decays = args.get("decays").and_then(|v| v.as_str()).unwrap_or("");
+    crate::audio::add_echo(input, &output, in_gain, out_gain, delays, decays).unwrap_or_else(|e| e)
+}
+
+fn execute_noise_gate_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let threshold = args.get("threshold").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let range = args.get("range").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let attack = args.get("attack").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let release = args.get("release").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    crate::audio::noise_gate(input, &output, threshold, range, attack, release).unwrap_or_else(|e| e)
+}
+
+fn execute_noise_gate_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let threshold = args.get("threshold").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let range = args.get("range").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let attack = args.get("attack").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let release = args.get("release").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    crate::audio::noise_gate(input, &output, threshold, range, attack, release).unwrap_or_else(|e| e)
+}
+
+fn execute_compress_dynamics_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let threshold = args.get("threshold").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let ratio = args.get("ratio").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let attack = args.get("attack").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let release = args.get("release").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let makeup = args.get("makeup").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    crate::audio::compress_dynamics(input, &output, threshold, ratio, attack, release, makeup).unwrap_or_else(|e| e)
+}
+
+fn execute_compress_dynamics_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let threshold = args.get("threshold").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let ratio = args.get("ratio").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let attack = args.get("attack").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let release = args.get("release").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let makeup = args.get("makeup").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    crate::audio::compress_dynamics(input, &output, threshold, ratio, attack, release, makeup).unwrap_or_else(|e| e)
+}
+
+fn execute_add_chorus_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let in_gain = args.get("in_gain").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let out_gain = args.get("out_gain").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let delays = args.get("delays").and_then(|v| v.as_str()).unwrap_or("");
+    let decays = args.get("decays").and_then(|v| v.as_str()).unwrap_or("");
+    let speeds = args.get("speeds").and_then(|v| v.as_str()).unwrap_or("");
+    let depths = args.get("depths").and_then(|v| v.as_str()).unwrap_or("");
+    crate::audio::add_chorus(input, &output, in_gain, out_gain, delays, decays, speeds, depths).unwrap_or_else(|e| e)
+}
+
+fn execute_add_chorus_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let in_gain = args.get("in_gain").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let out_gain = args.get("out_gain").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let delays = args.get("delays").and_then(|v| v.as_str()).unwrap_or("");
+    let decays = args.get("decays").and_then(|v| v.as_str()).unwrap_or("");
+    let speeds = args.get("speeds").and_then(|v| v.as_str()).unwrap_or("");
+    let depths = args.get("depths").and_then(|v| v.as_str()).unwrap_or("");
+    crate::audio::add_chorus(input, &output, in_gain, out_gain, delays, decays, speeds, depths).unwrap_or_else(|e| e)
+}
+
+fn execute_widen_stereo_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let delay = args.get("delay").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let feedback = args.get("feedback").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let crossfeed = args.get("crossfeed").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let drymix = args.get("drymix").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    crate::audio::widen_stereo(input, &output, delay, feedback, crossfeed, drymix).unwrap_or_else(|e| e)
+}
+
+fn execute_widen_stereo_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let delay = args.get("delay").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let feedback = args.get("feedback").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let crossfeed = args.get("crossfeed").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let drymix = args.get("drymix").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    crate::audio::widen_stereo(input, &output, delay, feedback, crossfeed, drymix).unwrap_or_else(|e| e)
+}
+
+fn execute_normalize_speech_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let peak = args.get("peak").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let strength = args.get("strength").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    crate::audio::normalize_speech(input, &output, peak, strength).unwrap_or_else(|e| e)
+}
+
+fn execute_normalize_speech_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let peak = args.get("peak").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let strength = args.get("strength").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    crate::audio::normalize_speech(input, &output, peak, strength).unwrap_or_else(|e| e)
+}
+
+fn execute_remove_silence_simple_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let threshold = args.get("threshold").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let duration = args.get("duration").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let periods = args.get("periods").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+    crate::audio::remove_silence_simple(input, &output, threshold, duration, periods).unwrap_or_else(|e| e)
+}
+
+fn execute_remove_silence_simple_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let threshold = args.get("threshold").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let duration = args.get("duration").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let periods = args.get("periods").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+    crate::audio::remove_silence_simple(input, &output, threshold, duration, periods).unwrap_or_else(|e| e)
+}
+
+fn execute_soft_clip_audio_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let clip_type = args.get("clip_type").and_then(|v| v.as_str()).unwrap_or("tanh");
+    let param = args.get("param").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    crate::audio::soft_clip_audio(input, &output, clip_type, param).unwrap_or_else(|e| e)
+}
+
+fn execute_soft_clip_audio_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let clip_type = args.get("clip_type").and_then(|v| v.as_str()).unwrap_or("tanh");
+    let param = args.get("param").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    crate::audio::soft_clip_audio(input, &output, clip_type, param).unwrap_or_else(|e| e)
+}
+
+fn execute_segment_video_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_pattern = args["output_pattern"].as_str().unwrap_or("");
+    let output_pattern_out = ensure_outputs_directory(output_pattern);
+    let segment_time = args.get("segment_time").and_then(|v| v.as_f64()).unwrap_or(60.0);
+    let reset_str = args.get("reset_timestamps").and_then(|v| v.as_str()).unwrap_or("true");
+    let reset = reset_str != "false";
+    crate::core::segment_video(input, &output_pattern_out, segment_time, reset).unwrap_or_else(|e| e)
+}
+
+fn execute_segment_video_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_pattern = args.get("output_pattern").and_then(|v| v.as_str()).unwrap_or("");
+    let output_pattern_out = ensure_outputs_directory(output_pattern);
+    let segment_time = args.get("segment_time").and_then(|v| v.as_f64()).unwrap_or(60.0);
+    let reset_str = args.get("reset_timestamps").and_then(|v| v.as_str()).unwrap_or("true");
+    let reset = reset_str != "false";
+    crate::core::segment_video(input, &output_pattern_out, segment_time, reset).unwrap_or_else(|e| e)
+}
+
+fn execute_pad_video_time_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let start_duration = args.get("start_duration").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let stop_duration = args.get("stop_duration").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let color = args.get("color").and_then(|v| v.as_str()).unwrap_or("black");
+    crate::core::pad_video_time(input, &output, start_duration, stop_duration, color).unwrap_or_else(|e| e)
+}
+
+fn execute_pad_video_time_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let start_duration = args.get("start_duration").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let stop_duration = args.get("stop_duration").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let color = args.get("color").and_then(|v| v.as_str()).unwrap_or("black");
+    crate::core::pad_video_time(input, &output, start_duration, stop_duration, color).unwrap_or_else(|e| e)
+}
+
+// ============================================================================
+// PHASE I BATCH 2 — Executor Functions
+// ============================================================================
+
+fn execute_select_frames_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let expr = args.get("expr").and_then(|v| v.as_str()).unwrap_or("");
+    let fps = args.get("fps").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    crate::visual::select_frames(input, &output, expr, fps).unwrap_or_else(|e| e)
+}
+
+fn execute_select_frames_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let expr = args.get("expr").and_then(|v| v.as_str()).unwrap_or("");
+    let fps = args.get("fps").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    crate::visual::select_frames(input, &output, expr, fps).unwrap_or_else(|e| e)
+}
+
+fn execute_posterize_video_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let levels = args.get("levels").and_then(|v| v.as_u64()).unwrap_or(5) as u32;
+    crate::visual::posterize_video(input, &output, levels).unwrap_or_else(|e| e)
+}
+
+fn execute_posterize_video_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let levels = args.get("levels").and_then(|v| v.as_u64()).unwrap_or(5) as u32;
+    crate::visual::posterize_video(input, &output, levels).unwrap_or_else(|e| e)
+}
+
+fn execute_solarize_video_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let threshold = args.get("threshold").and_then(|v| v.as_u64()).unwrap_or(128) as u32;
+    crate::visual::solarize_video(input, &output, threshold).unwrap_or_else(|e| e)
+}
+
+fn execute_solarize_video_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let threshold = args.get("threshold").and_then(|v| v.as_u64()).unwrap_or(128) as u32;
+    crate::visual::solarize_video(input, &output, threshold).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_dilation_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let t0 = args.get("threshold0").and_then(|v| v.as_u64()).unwrap_or(65535) as u32;
+    let t1 = args.get("threshold1").and_then(|v| v.as_u64()).unwrap_or(65535) as u32;
+    let t2 = args.get("threshold2").and_then(|v| v.as_u64()).unwrap_or(65535) as u32;
+    let t3 = args.get("threshold3").and_then(|v| v.as_u64()).unwrap_or(65535) as u32;
+    let coords = args.get("coordinates").and_then(|v| v.as_u64()).unwrap_or(255) as u32;
+    crate::visual::apply_dilation(input, &output, t0, t1, t2, t3, coords).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_dilation_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let t0 = args.get("threshold0").and_then(|v| v.as_u64()).unwrap_or(65535) as u32;
+    let t1 = args.get("threshold1").and_then(|v| v.as_u64()).unwrap_or(65535) as u32;
+    let t2 = args.get("threshold2").and_then(|v| v.as_u64()).unwrap_or(65535) as u32;
+    let t3 = args.get("threshold3").and_then(|v| v.as_u64()).unwrap_or(65535) as u32;
+    let coords = args.get("coordinates").and_then(|v| v.as_u64()).unwrap_or(255) as u32;
+    crate::visual::apply_dilation(input, &output, t0, t1, t2, t3, coords).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_erosion_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let t0 = args.get("threshold0").and_then(|v| v.as_u64()).unwrap_or(65535) as u32;
+    let t1 = args.get("threshold1").and_then(|v| v.as_u64()).unwrap_or(65535) as u32;
+    let t2 = args.get("threshold2").and_then(|v| v.as_u64()).unwrap_or(65535) as u32;
+    let t3 = args.get("threshold3").and_then(|v| v.as_u64()).unwrap_or(65535) as u32;
+    let coords = args.get("coordinates").and_then(|v| v.as_u64()).unwrap_or(255) as u32;
+    crate::visual::apply_erosion(input, &output, t0, t1, t2, t3, coords).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_erosion_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let t0 = args.get("threshold0").and_then(|v| v.as_u64()).unwrap_or(65535) as u32;
+    let t1 = args.get("threshold1").and_then(|v| v.as_u64()).unwrap_or(65535) as u32;
+    let t2 = args.get("threshold2").and_then(|v| v.as_u64()).unwrap_or(65535) as u32;
+    let t3 = args.get("threshold3").and_then(|v| v.as_u64()).unwrap_or(65535) as u32;
+    let coords = args.get("coordinates").and_then(|v| v.as_u64()).unwrap_or(255) as u32;
+    crate::visual::apply_erosion(input, &output, t0, t1, t2, t3, coords).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_median_filter_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let radius = args.get("radius").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
+    let planes = args.get("planes").and_then(|v| v.as_u64()).unwrap_or(15) as u32;
+    crate::visual::apply_median_filter(input, &output, radius, planes).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_median_filter_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let radius = args.get("radius").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
+    let planes = args.get("planes").and_then(|v| v.as_u64()).unwrap_or(15) as u32;
+    crate::visual::apply_median_filter(input, &output, radius, planes).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_histogram_eq_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let strength = args.get("strength").and_then(|v| v.as_f64()).unwrap_or(0.2);
+    let intensity = args.get("intensity").and_then(|v| v.as_f64()).unwrap_or(0.21);
+    let antibanding = args.get("antibanding").and_then(|v| v.as_str()).unwrap_or("none");
+    crate::visual::apply_histogram_eq(input, &output, strength, intensity, antibanding).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_histogram_eq_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let strength = args.get("strength").and_then(|v| v.as_f64()).unwrap_or(0.2);
+    let intensity = args.get("intensity").and_then(|v| v.as_f64()).unwrap_or(0.21);
+    let antibanding = args.get("antibanding").and_then(|v| v.as_str()).unwrap_or("none");
+    crate::visual::apply_histogram_eq(input, &output, strength, intensity, antibanding).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_clahe_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let clip_limit = args.get("clip_limit").and_then(|v| v.as_f64()).unwrap_or(25.0);
+    let nb_tiles_x = args.get("nb_tiles_x").and_then(|v| v.as_u64()).unwrap_or(8) as u32;
+    let nb_tiles_y = args.get("nb_tiles_y").and_then(|v| v.as_u64()).unwrap_or(8) as u32;
+    crate::visual::apply_clahe(input, &output, clip_limit, nb_tiles_x, nb_tiles_y).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_clahe_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let clip_limit = args.get("clip_limit").and_then(|v| v.as_f64()).unwrap_or(25.0);
+    let nb_tiles_x = args.get("nb_tiles_x").and_then(|v| v.as_u64()).unwrap_or(8) as u32;
+    let nb_tiles_y = args.get("nb_tiles_y").and_then(|v| v.as_u64()).unwrap_or(8) as u32;
+    crate::visual::apply_clahe(input, &output, clip_limit, nb_tiles_x, nb_tiles_y).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_deblock_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let filter_type = args.get("filter_type").and_then(|v| v.as_u64()).unwrap_or(4) as u32;
+    let block_size = args.get("block_size").and_then(|v| v.as_u64()).unwrap_or(8) as u32;
+    let strength = args.get("strength").and_then(|v| v.as_f64()).unwrap_or(0.5);
+    let planes = args.get("planes").and_then(|v| v.as_u64()).unwrap_or(15) as u32;
+    crate::visual::apply_deblock(input, &output, filter_type, block_size, strength, planes).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_deblock_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let filter_type = args.get("filter_type").and_then(|v| v.as_u64()).unwrap_or(4) as u32;
+    let block_size = args.get("block_size").and_then(|v| v.as_u64()).unwrap_or(8) as u32;
+    let strength = args.get("strength").and_then(|v| v.as_f64()).unwrap_or(0.5);
+    let planes = args.get("planes").and_then(|v| v.as_u64()).unwrap_or(15) as u32;
+    crate::visual::apply_deblock(input, &output, filter_type, block_size, strength, planes).unwrap_or_else(|e| e)
+}
+
+fn execute_adjust_hue_saturation_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let hue = args.get("hue").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let saturation = args.get("saturation").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let intensity = args.get("intensity").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let lightness = args.get("lightness").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    crate::visual::adjust_hue_saturation(input, &output, hue, saturation, intensity, lightness).unwrap_or_else(|e| e)
+}
+
+fn execute_adjust_hue_saturation_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let hue = args.get("hue").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let saturation = args.get("saturation").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let intensity = args.get("intensity").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let lightness = args.get("lightness").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    crate::visual::adjust_hue_saturation(input, &output, hue, saturation, intensity, lightness).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_convolution_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let matrix = args.get("matrix").and_then(|v| v.as_str()).unwrap_or("");
+    let rdiv = args.get("rdiv").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let bias = args.get("bias").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let planes = args.get("planes").and_then(|v| v.as_u64()).unwrap_or(15) as u32;
+    crate::visual::apply_convolution(input, &output, matrix, rdiv, bias, planes).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_convolution_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let matrix = args.get("matrix").and_then(|v| v.as_str()).unwrap_or("");
+    let rdiv = args.get("rdiv").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let bias = args.get("bias").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let planes = args.get("planes").and_then(|v| v.as_u64()).unwrap_or(15) as u32;
+    crate::visual::apply_convolution(input, &output, matrix, rdiv, bias, planes).unwrap_or_else(|e| e)
+}
+
+fn execute_reverse_audio_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    crate::audio::reverse_audio(input, &output).unwrap_or_else(|e| e)
+}
+
+fn execute_reverse_audio_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    crate::audio::reverse_audio(input, &output).unwrap_or_else(|e| e)
+}
+
+fn execute_blend_audio_streams_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let secondary = args["secondary_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let duration = args.get("duration").and_then(|v| v.as_str()).unwrap_or("longest");
+    let dropout = args.get("dropout_transition").and_then(|v| v.as_f64()).unwrap_or(2.0);
+    crate::audio::blend_audio_streams(input, secondary, &output, duration, dropout).unwrap_or_else(|e| e)
+}
+
+fn execute_blend_audio_streams_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let secondary = args.get("secondary_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let duration = args.get("duration").and_then(|v| v.as_str()).unwrap_or("longest");
+    let dropout = args.get("dropout_transition").and_then(|v| v.as_f64()).unwrap_or(2.0);
+    crate::audio::blend_audio_streams(input, secondary, &output, duration, dropout).unwrap_or_else(|e| e)
+}
+
+fn execute_measure_silence_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let noise_db = args.get("noise_db").and_then(|v| v.as_f64()).unwrap_or(-30.0);
+    let duration_s = args.get("duration_s").and_then(|v| v.as_f64()).unwrap_or(0.5);
+    crate::audio::measure_silence(input, noise_db, duration_s).unwrap_or_else(|e| e)
+}
+
+fn execute_measure_silence_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let noise_db = args.get("noise_db").and_then(|v| v.as_f64()).unwrap_or(-30.0);
+    let duration_s = args.get("duration_s").and_then(|v| v.as_f64()).unwrap_or(0.5);
+    crate::audio::measure_silence(input, noise_db, duration_s).unwrap_or_else(|e| e)
+}
+
+fn execute_measure_audio_spectrum_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let width = args.get("width").and_then(|v| v.as_u64()).unwrap_or(1024) as u32;
+    let height = args.get("height").and_then(|v| v.as_u64()).unwrap_or(512) as u32;
+    let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("combined");
+    let color = args.get("color").and_then(|v| v.as_str()).unwrap_or("intensity");
+    crate::audio::measure_audio_spectrum(input, &output, width, height, mode, color).unwrap_or_else(|e| e)
+}
+
+fn execute_measure_audio_spectrum_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let width = args.get("width").and_then(|v| v.as_u64()).unwrap_or(1024) as u32;
+    let height = args.get("height").and_then(|v| v.as_u64()).unwrap_or(512) as u32;
+    let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("combined");
+    let color = args.get("color").and_then(|v| v.as_str()).unwrap_or("intensity");
+    crate::audio::measure_audio_spectrum(input, &output, width, height, mode, color).unwrap_or_else(|e| e)
+}
+
+// ============================================================================
+// PHASE I BATCH 4 — Executor Functions
+// ============================================================================
+
+fn execute_apply_negate_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let components = args.get("components").and_then(|v| v.as_u64()).unwrap_or(7) as u32;
+    crate::visual::apply_negate(input, &output, components).unwrap_or_else(|e| e)
+}
+fn execute_apply_negate_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let components = args.get("components").and_then(|v| v.as_u64()).unwrap_or(7) as u32;
+    crate::visual::apply_negate(input, &output, components).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_pixelize_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let width = args.get("width").and_then(|v| v.as_u64()).unwrap_or(16) as u32;
+    let height = args.get("height").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let mode = args.get("mode").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    crate::visual::apply_pixelize(input, &output, width, height, mode).unwrap_or_else(|e| e)
+}
+fn execute_apply_pixelize_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let width = args.get("width").and_then(|v| v.as_u64()).unwrap_or(16) as u32;
+    let height = args.get("height").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let mode = args.get("mode").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    crate::visual::apply_pixelize(input, &output, width, height, mode).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_colorlevels_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let rimin = args.get("rimin").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let rimax = args.get("rimax").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let gimin = args.get("gimin").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let gimax = args.get("gimax").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let bimin = args.get("bimin").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let bimax = args.get("bimax").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let romin = args.get("romin").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let romax = args.get("romax").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    crate::visual::apply_colorlevels(input, &output, rimin, rimax, gimin, gimax, bimin, bimax, romin, romax).unwrap_or_else(|e| e)
+}
+fn execute_apply_colorlevels_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let rimin = args.get("rimin").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let rimax = args.get("rimax").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let gimin = args.get("gimin").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let gimax = args.get("gimax").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let bimin = args.get("bimin").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let bimax = args.get("bimax").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let romin = args.get("romin").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let romax = args.get("romax").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    crate::visual::apply_colorlevels(input, &output, rimin, rimax, gimin, gimax, bimin, bimax, romin, romax).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_pseudocolor_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let preset = args.get("preset").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+    let opacity = args.get("opacity").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    crate::visual::apply_pseudocolor(input, &output, preset, opacity).unwrap_or_else(|e| e)
+}
+fn execute_apply_pseudocolor_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let preset = args.get("preset").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+    let opacity = args.get("opacity").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    crate::visual::apply_pseudocolor(input, &output, preset, opacity).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_colorhold_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let color = args.get("color").and_then(|v| v.as_str()).unwrap_or("red");
+    let similarity = args.get("similarity").and_then(|v| v.as_f64()).unwrap_or(0.1);
+    let blend = args.get("blend").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    crate::visual::apply_colorhold(input, &output, color, similarity, blend).unwrap_or_else(|e| e)
+}
+fn execute_apply_colorhold_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let color = args.get("color").and_then(|v| v.as_str()).unwrap_or("red");
+    let similarity = args.get("similarity").and_then(|v| v.as_f64()).unwrap_or(0.1);
+    let blend = args.get("blend").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    crate::visual::apply_colorhold(input, &output, color, similarity, blend).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_shuffleplanes_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let map0 = args.get("map0").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let map1 = args.get("map1").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
+    let map2 = args.get("map2").and_then(|v| v.as_u64()).unwrap_or(2) as u32;
+    let map3 = args.get("map3").and_then(|v| v.as_u64()).unwrap_or(3) as u32;
+    crate::visual::apply_shuffleplanes(input, &output, map0, map1, map2, map3).unwrap_or_else(|e| e)
+}
+fn execute_apply_shuffleplanes_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let map0 = args.get("map0").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let map1 = args.get("map1").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
+    let map2 = args.get("map2").and_then(|v| v.as_u64()).unwrap_or(2) as u32;
+    let map3 = args.get("map3").and_then(|v| v.as_u64()).unwrap_or(3) as u32;
+    crate::visual::apply_shuffleplanes(input, &output, map0, map1, map2, map3).unwrap_or_else(|e| e)
+}
+
+fn execute_detect_black_frames_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let d = args.get("black_min_duration").and_then(|v| v.as_f64()).unwrap_or(2.0);
+    let pbr = args.get("picture_black_ratio_th").and_then(|v| v.as_f64()).unwrap_or(0.98);
+    let pbt = args.get("pixel_black_th").and_then(|v| v.as_f64()).unwrap_or(0.10);
+    crate::visual::detect_black_frames(input, d, pbr, pbt).unwrap_or_else(|e| e)
+}
+fn execute_detect_black_frames_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let d = args.get("black_min_duration").and_then(|v| v.as_f64()).unwrap_or(2.0);
+    let pbr = args.get("picture_black_ratio_th").and_then(|v| v.as_f64()).unwrap_or(0.98);
+    let pbt = args.get("pixel_black_th").and_then(|v| v.as_f64()).unwrap_or(0.10);
+    crate::visual::detect_black_frames(input, d, pbr, pbt).unwrap_or_else(|e| e)
+}
+
+fn execute_detect_interlace_type_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    crate::visual::detect_interlace_type(input).unwrap_or_else(|e| e)
+}
+fn execute_detect_interlace_type_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    crate::visual::detect_interlace_type(input).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_vstack_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let secondary = args["secondary_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let shortest = args.get("shortest").and_then(|v| v.as_bool()).unwrap_or(false);
+    crate::visual::apply_vstack(input, secondary, &output, shortest).unwrap_or_else(|e| e)
+}
+fn execute_apply_vstack_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let secondary = args.get("secondary_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let shortest = args.get("shortest").and_then(|v| v.as_bool()).unwrap_or(false);
+    crate::visual::apply_vstack(input, secondary, &output, shortest).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_hstack_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let secondary = args["secondary_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let shortest = args.get("shortest").and_then(|v| v.as_bool()).unwrap_or(false);
+    crate::visual::apply_hstack(input, secondary, &output, shortest).unwrap_or_else(|e| e)
+}
+fn execute_apply_hstack_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let secondary = args.get("secondary_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let shortest = args.get("shortest").and_then(|v| v.as_bool()).unwrap_or(false);
+    crate::visual::apply_hstack(input, secondary, &output, shortest).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_setdar_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let dar = args.get("dar").and_then(|v| v.as_str()).unwrap_or("16/9");
+    crate::visual::apply_setdar(input, &output, dar).unwrap_or_else(|e| e)
+}
+fn execute_apply_setdar_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let dar = args.get("dar").and_then(|v| v.as_str()).unwrap_or("16/9");
+    crate::visual::apply_setdar(input, &output, dar).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_stereo3d_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let inf = args.get("input_format").and_then(|v| v.as_str()).unwrap_or("sbsl");
+    let outf = args.get("output_format").and_then(|v| v.as_str()).unwrap_or("arcd");
+    crate::visual::apply_stereo3d(input, &output, inf, outf).unwrap_or_else(|e| e)
+}
+fn execute_apply_stereo3d_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let inf = args.get("input_format").and_then(|v| v.as_str()).unwrap_or("sbsl");
+    let outf = args.get("output_format").and_then(|v| v.as_str()).unwrap_or("arcd");
+    crate::visual::apply_stereo3d(input, &output, inf, outf).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_telecine_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let pattern = args.get("pattern").and_then(|v| v.as_str()).unwrap_or("23");
+    let first_field = args.get("first_field").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    crate::visual::apply_telecine(input, &output, pattern, first_field).unwrap_or_else(|e| e)
+}
+fn execute_apply_telecine_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let pattern = args.get("pattern").and_then(|v| v.as_str()).unwrap_or("23");
+    let first_field = args.get("first_field").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    crate::visual::apply_telecine(input, &output, pattern, first_field).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_pullup_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    crate::visual::apply_pullup(input, &output).unwrap_or_else(|e| e)
+}
+fn execute_apply_pullup_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    crate::visual::apply_pullup(input, &output).unwrap_or_else(|e| e)
+}
+
+fn execute_select_thumbnail_frame_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let n = args.get("n").and_then(|v| v.as_u64()).unwrap_or(100) as u32;
+    crate::visual::select_thumbnail_frame(input, &output, n).unwrap_or_else(|e| e)
+}
+fn execute_select_thumbnail_frame_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let n = args.get("n").and_then(|v| v.as_u64()).unwrap_or(100) as u32;
+    crate::visual::select_thumbnail_frame(input, &output, n).unwrap_or_else(|e| e)
+}
+
+// ============================================================================
+// PHASE I BATCH 3 — Executor Functions
+// ============================================================================
+
+fn execute_apply_gaussian_blur_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let sigma = args.get("sigma").and_then(|v| v.as_f64()).unwrap_or(3.0);
+    let steps = args.get("steps").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
+    let planes = args.get("planes").and_then(|v| v.as_u64()).unwrap_or(15) as u32;
+    crate::visual::apply_gaussian_blur(input, &output, sigma, steps, planes).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_gaussian_blur_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let sigma = args.get("sigma").and_then(|v| v.as_f64()).unwrap_or(3.0);
+    let steps = args.get("steps").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
+    let planes = args.get("planes").and_then(|v| v.as_u64()).unwrap_or(15) as u32;
+    crate::visual::apply_gaussian_blur(input, &output, sigma, steps, planes).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_box_blur_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let size_x = args.get("size_x").and_then(|v| v.as_u64()).unwrap_or(3) as u32;
+    let size_y = args.get("size_y").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let planes = args.get("planes").and_then(|v| v.as_u64()).unwrap_or(15) as u32;
+    crate::visual::apply_box_blur(input, &output, size_x, size_y, planes).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_box_blur_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let size_x = args.get("size_x").and_then(|v| v.as_u64()).unwrap_or(3) as u32;
+    let size_y = args.get("size_y").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let planes = args.get("planes").and_then(|v| v.as_u64()).unwrap_or(15) as u32;
+    crate::visual::apply_box_blur(input, &output, size_x, size_y, planes).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_smart_blur_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let luma_radius = args.get("luma_radius").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let luma_strength = args.get("luma_strength").and_then(|v| v.as_f64()).unwrap_or(-0.3);
+    let luma_threshold = args.get("luma_threshold").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+    crate::visual::apply_smart_blur(input, &output, luma_radius, luma_strength, luma_threshold).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_smart_blur_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let luma_radius = args.get("luma_radius").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let luma_strength = args.get("luma_strength").and_then(|v| v.as_f64()).unwrap_or(-0.3);
+    let luma_threshold = args.get("luma_threshold").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+    crate::visual::apply_smart_blur(input, &output, luma_radius, luma_strength, luma_threshold).unwrap_or_else(|e| e)
+}
+
+fn execute_add_film_grain_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let all_strength = args.get("all_strength").and_then(|v| v.as_u64()).unwrap_or(8) as u32;
+    let flags = args.get("flags").and_then(|v| v.as_str()).unwrap_or("a");
+    crate::visual::add_film_grain(input, &output, all_strength, flags).unwrap_or_else(|e| e)
+}
+
+fn execute_add_film_grain_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let all_strength = args.get("all_strength").and_then(|v| v.as_u64()).unwrap_or(8) as u32;
+    let flags = args.get("flags").and_then(|v| v.as_str()).unwrap_or("a");
+    crate::visual::add_film_grain(input, &output, all_strength, flags).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_rotate_angle_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let angle_rad = args.get("angle_rad").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let fillcolor = args.get("fillcolor").and_then(|v| v.as_str()).unwrap_or("black");
+    let expand = args.get("expand").and_then(|v| v.as_bool()).unwrap_or(false);
+    crate::transform::apply_rotate_angle(input, &output, angle_rad, fillcolor, expand).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_rotate_angle_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let angle_rad = args.get("angle_rad").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let fillcolor = args.get("fillcolor").and_then(|v| v.as_str()).unwrap_or("black");
+    let expand = args.get("expand").and_then(|v| v.as_bool()).unwrap_or(false);
+    crate::transform::apply_rotate_angle(input, &output, angle_rad, fillcolor, expand).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_geq_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let lum_expr = args.get("lum_expr").and_then(|v| v.as_str()).unwrap_or("");
+    let cb_expr = args.get("cb_expr").and_then(|v| v.as_str()).unwrap_or("");
+    let cr_expr = args.get("cr_expr").and_then(|v| v.as_str()).unwrap_or("");
+    crate::visual::apply_geq(input, &output, lum_expr, cb_expr, cr_expr).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_geq_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let lum_expr = args.get("lum_expr").and_then(|v| v.as_str()).unwrap_or("");
+    let cb_expr = args.get("cb_expr").and_then(|v| v.as_str()).unwrap_or("");
+    let cr_expr = args.get("cr_expr").and_then(|v| v.as_str()).unwrap_or("");
+    crate::visual::apply_geq(input, &output, lum_expr, cb_expr, cr_expr).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_colorchannelmixer_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let rr = args.get("rr").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let rg = args.get("rg").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let rb = args.get("rb").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let gr = args.get("gr").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let gg = args.get("gg").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let gb = args.get("gb").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let br = args.get("br").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let bg = args.get("bg").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let bb = args.get("bb").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    crate::visual::apply_colorchannelmixer(input, &output, rr, rg, rb, gr, gg, gb, br, bg, bb).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_colorchannelmixer_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let rr = args.get("rr").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let rg = args.get("rg").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let rb = args.get("rb").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let gr = args.get("gr").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let gg = args.get("gg").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let gb = args.get("gb").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let br = args.get("br").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let bg = args.get("bg").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let bb = args.get("bb").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    crate::visual::apply_colorchannelmixer(input, &output, rr, rg, rb, gr, gg, gb, br, bg, bb).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_atadenoise_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let window_size = args.get("window_size").and_then(|v| v.as_u64()).unwrap_or(9) as u32;
+    let threshold_a = args.get("threshold_a").and_then(|v| v.as_f64()).unwrap_or(0.02);
+    let threshold_b = args.get("threshold_b").and_then(|v| v.as_f64()).unwrap_or(0.04);
+    let planes = args.get("planes").and_then(|v| v.as_u64()).unwrap_or(7) as u32;
+    crate::visual::apply_atadenoise(input, &output, window_size, threshold_a, threshold_b, planes).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_atadenoise_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let window_size = args.get("window_size").and_then(|v| v.as_u64()).unwrap_or(9) as u32;
+    let threshold_a = args.get("threshold_a").and_then(|v| v.as_f64()).unwrap_or(0.02);
+    let threshold_b = args.get("threshold_b").and_then(|v| v.as_f64()).unwrap_or(0.04);
+    let planes = args.get("planes").and_then(|v| v.as_u64()).unwrap_or(7) as u32;
+    crate::visual::apply_atadenoise(input, &output, window_size, threshold_a, threshold_b, planes).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_vaguedenoiser_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let threshold = args.get("threshold").and_then(|v| v.as_f64()).unwrap_or(2.0);
+    let method = args.get("method").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let nsteps = args.get("nsteps").and_then(|v| v.as_u64()).unwrap_or(6) as u32;
+    let percent = args.get("percent").and_then(|v| v.as_f64()).unwrap_or(85.0);
+    let planes = args.get("planes").and_then(|v| v.as_u64()).unwrap_or(7) as u32;
+    crate::visual::apply_vaguedenoiser(input, &output, threshold, method, nsteps, percent, planes).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_vaguedenoiser_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let threshold = args.get("threshold").and_then(|v| v.as_f64()).unwrap_or(2.0);
+    let method = args.get("method").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let nsteps = args.get("nsteps").and_then(|v| v.as_u64()).unwrap_or(6) as u32;
+    let percent = args.get("percent").and_then(|v| v.as_f64()).unwrap_or(85.0);
+    let planes = args.get("planes").and_then(|v| v.as_u64()).unwrap_or(7) as u32;
+    crate::visual::apply_vaguedenoiser(input, &output, threshold, method, nsteps, percent, planes).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_fftdnoiz_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let sigma = args.get("sigma").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let amount = args.get("amount").and_then(|v| v.as_f64()).unwrap_or(0.96);
+    let block_size = args.get("block_size").and_then(|v| v.as_u64()).unwrap_or(32) as u32;
+    let overlap = args.get("overlap").and_then(|v| v.as_f64()).unwrap_or(0.5);
+    let planes = args.get("planes").and_then(|v| v.as_u64()).unwrap_or(7) as u32;
+    crate::visual::apply_fftdnoiz(input, &output, sigma, amount, block_size, overlap, planes).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_fftdnoiz_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let sigma = args.get("sigma").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let amount = args.get("amount").and_then(|v| v.as_f64()).unwrap_or(0.96);
+    let block_size = args.get("block_size").and_then(|v| v.as_u64()).unwrap_or(32) as u32;
+    let overlap = args.get("overlap").and_then(|v| v.as_f64()).unwrap_or(0.5);
+    let planes = args.get("planes").and_then(|v| v.as_u64()).unwrap_or(7) as u32;
+    crate::visual::apply_fftdnoiz(input, &output, sigma, amount, block_size, overlap, planes).unwrap_or_else(|e| e)
+}
+
+fn execute_generate_waveform_video_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let width = args.get("width").and_then(|v| v.as_u64()).unwrap_or(1280) as u32;
+    let height = args.get("height").and_then(|v| v.as_u64()).unwrap_or(240) as u32;
+    let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("line");
+    let color = args.get("color").and_then(|v| v.as_str()).unwrap_or("white");
+    crate::audio::generate_waveform_video(input, &output, width, height, mode, color).unwrap_or_else(|e| e)
+}
+
+fn execute_generate_waveform_video_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let width = args.get("width").and_then(|v| v.as_u64()).unwrap_or(1280) as u32;
+    let height = args.get("height").and_then(|v| v.as_u64()).unwrap_or(240) as u32;
+    let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("line");
+    let color = args.get("color").and_then(|v| v.as_str()).unwrap_or("white");
+    crate::audio::generate_waveform_video(input, &output, width, height, mode, color).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_lut3d_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let lut_file = args.get("lut_file").and_then(|v| v.as_str()).unwrap_or("");
+    let interp = args.get("interp").and_then(|v| v.as_str()).unwrap_or("tetrahedral");
+    crate::visual::apply_lut3d(input, &output, lut_file, interp).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_lut3d_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let lut_file = args.get("lut_file").and_then(|v| v.as_str()).unwrap_or("");
+    let interp = args.get("interp").and_then(|v| v.as_str()).unwrap_or("tetrahedral");
+    crate::visual::apply_lut3d(input, &output, lut_file, interp).unwrap_or_else(|e| e)
+}
+
+fn execute_measure_siti_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    crate::visual::measure_siti(input).unwrap_or_else(|e| e)
+}
+
+fn execute_measure_siti_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    crate::visual::measure_siti(input).unwrap_or_else(|e| e)
+}
+
+fn execute_create_test_pattern_claude(args: &Value) -> String {
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let width = args.get("width").and_then(|v| v.as_u64()).unwrap_or(1920) as u32;
+    let height = args.get("height").and_then(|v| v.as_u64()).unwrap_or(1080) as u32;
+    let duration = args.get("duration").and_then(|v| v.as_f64()).unwrap_or(10.0);
+    let pattern = args.get("pattern").and_then(|v| v.as_str()).unwrap_or("smptebars");
+    let framerate = args.get("framerate").and_then(|v| v.as_f64()).unwrap_or(25.0);
+    crate::core::create_test_pattern(&output, width, height, duration, pattern, framerate).unwrap_or_else(|e| e)
+}
+
+fn execute_create_test_pattern_gemini(args: &HashMap<String, Value>) -> String {
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let width = args.get("width").and_then(|v| v.as_u64()).unwrap_or(1920) as u32;
+    let height = args.get("height").and_then(|v| v.as_u64()).unwrap_or(1080) as u32;
+    let duration = args.get("duration").and_then(|v| v.as_f64()).unwrap_or(10.0);
+    let pattern = args.get("pattern").and_then(|v| v.as_str()).unwrap_or("smptebars");
+    let framerate = args.get("framerate").and_then(|v| v.as_f64()).unwrap_or(25.0);
+    crate::core::create_test_pattern(&output, width, height, duration, pattern, framerate).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_amplify_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let radius = args.get("radius").and_then(|v| v.as_u64()).unwrap_or(2) as u32;
+    let factor = args.get("factor").and_then(|v| v.as_f64()).unwrap_or(2.0);
+    let threshold = args.get("threshold").and_then(|v| v.as_f64()).unwrap_or(10.0);
+    let planes = args.get("planes").and_then(|v| v.as_u64()).unwrap_or(7) as u32;
+    crate::visual::apply_amplify(input, &output, radius, factor, threshold, planes).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_amplify_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let radius = args.get("radius").and_then(|v| v.as_u64()).unwrap_or(2) as u32;
+    let factor = args.get("factor").and_then(|v| v.as_f64()).unwrap_or(2.0);
+    let threshold = args.get("threshold").and_then(|v| v.as_f64()).unwrap_or(10.0);
+    let planes = args.get("planes").and_then(|v| v.as_u64()).unwrap_or(7) as u32;
+    crate::visual::apply_amplify(input, &output, radius, factor, threshold, planes).unwrap_or_else(|e| e)
+}
+
+// ============================================================
+// PHASE I BATCH 5 EXECUTORS
+// ============================================================
+
+fn execute_apply_threshold_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let planes = args.get("planes").and_then(|v| v.as_u64()).unwrap_or(15) as u32;
+    crate::visual::apply_threshold(input, &output, planes).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_threshold_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let planes = args.get("planes").and_then(|v| v.as_u64()).unwrap_or(15) as u32;
+    crate::visual::apply_threshold(input, &output, planes).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_maskedclamp_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let undershoot = args.get("undershoot").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let overshoot = args.get("overshoot").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let planes = args.get("planes").and_then(|v| v.as_u64()).unwrap_or(15) as u32;
+    crate::visual::apply_maskedclamp(input, &output, undershoot, overshoot, planes).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_maskedclamp_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let undershoot = args.get("undershoot").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let overshoot = args.get("overshoot").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let planes = args.get("planes").and_then(|v| v.as_u64()).unwrap_or(15) as u32;
+    crate::visual::apply_maskedclamp(input, &output, undershoot, overshoot, planes).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_roberts_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let planes = args.get("planes").and_then(|v| v.as_u64()).unwrap_or(15) as u32;
+    let scale = args.get("scale").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let delta = args.get("delta").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    crate::visual::apply_roberts(input, &output, planes, scale, delta).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_roberts_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let planes = args.get("planes").and_then(|v| v.as_u64()).unwrap_or(15) as u32;
+    let scale = args.get("scale").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let delta = args.get("delta").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    crate::visual::apply_roberts(input, &output, planes, scale, delta).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_sobel_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let planes = args.get("planes").and_then(|v| v.as_u64()).unwrap_or(15) as u32;
+    let scale = args.get("scale").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let delta = args.get("delta").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    crate::visual::apply_sobel(input, &output, planes, scale, delta).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_sobel_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let planes = args.get("planes").and_then(|v| v.as_u64()).unwrap_or(15) as u32;
+    let scale = args.get("scale").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let delta = args.get("delta").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    crate::visual::apply_sobel(input, &output, planes, scale, delta).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_prewitt_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let planes = args.get("planes").and_then(|v| v.as_u64()).unwrap_or(15) as u32;
+    let scale = args.get("scale").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let delta = args.get("delta").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    crate::visual::apply_prewitt(input, &output, planes, scale, delta).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_prewitt_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let planes = args.get("planes").and_then(|v| v.as_u64()).unwrap_or(15) as u32;
+    let scale = args.get("scale").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let delta = args.get("delta").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    crate::visual::apply_prewitt(input, &output, planes, scale, delta).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_kirsch_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let planes = args.get("planes").and_then(|v| v.as_u64()).unwrap_or(15) as u32;
+    let scale = args.get("scale").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let delta = args.get("delta").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    crate::visual::apply_kirsch(input, &output, planes, scale, delta).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_kirsch_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let planes = args.get("planes").and_then(|v| v.as_u64()).unwrap_or(15) as u32;
+    let scale = args.get("scale").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let delta = args.get("delta").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    crate::visual::apply_kirsch(input, &output, planes, scale, delta).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_video_limiter_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let min = args.get("min").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let max = args.get("max").and_then(|v| v.as_u64()).unwrap_or(65535) as u32;
+    let planes = args.get("planes").and_then(|v| v.as_u64()).unwrap_or(15) as u32;
+    crate::visual::apply_video_limiter(input, &output, min, max, planes).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_video_limiter_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let min = args.get("min").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let max = args.get("max").and_then(|v| v.as_u64()).unwrap_or(65535) as u32;
+    let planes = args.get("planes").and_then(|v| v.as_u64()).unwrap_or(15) as u32;
+    crate::visual::apply_video_limiter(input, &output, min, max, planes).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_bilateral_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let sigma_s = args.get("sigmaS").and_then(|v| v.as_f64()).unwrap_or(0.1);
+    let sigma_r = args.get("sigmaR").and_then(|v| v.as_f64()).unwrap_or(0.1);
+    let planes = args.get("planes").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
+    crate::visual::apply_bilateral(input, &output, sigma_s, sigma_r, planes).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_bilateral_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let sigma_s = args.get("sigmaS").and_then(|v| v.as_f64()).unwrap_or(0.1);
+    let sigma_r = args.get("sigmaR").and_then(|v| v.as_f64()).unwrap_or(0.1);
+    let planes = args.get("planes").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
+    crate::visual::apply_bilateral(input, &output, sigma_s, sigma_r, planes).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_unsharp_mask_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let lx = args.get("luma_x").and_then(|v| v.as_u64()).unwrap_or(5) as u32;
+    let ly = args.get("luma_y").and_then(|v| v.as_u64()).unwrap_or(5) as u32;
+    let la = args.get("luma_amount").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let cx = args.get("chroma_x").and_then(|v| v.as_u64()).unwrap_or(5) as u32;
+    let cy = args.get("chroma_y").and_then(|v| v.as_u64()).unwrap_or(5) as u32;
+    let ca = args.get("chroma_amount").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    crate::visual::apply_unsharp_mask(input, &output, lx, ly, la, cx, cy, ca).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_unsharp_mask_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let lx = args.get("luma_x").and_then(|v| v.as_u64()).unwrap_or(5) as u32;
+    let ly = args.get("luma_y").and_then(|v| v.as_u64()).unwrap_or(5) as u32;
+    let la = args.get("luma_amount").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let cx = args.get("chroma_x").and_then(|v| v.as_u64()).unwrap_or(5) as u32;
+    let cy = args.get("chroma_y").and_then(|v| v.as_u64()).unwrap_or(5) as u32;
+    let ca = args.get("chroma_amount").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    crate::visual::apply_unsharp_mask(input, &output, lx, ly, la, cx, cy, ca).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_lagfun_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let decay = args.get("decay").and_then(|v| v.as_f64()).unwrap_or(0.95);
+    let planes = args.get("planes").and_then(|v| v.as_u64()).unwrap_or(15) as u32;
+    crate::visual::apply_lagfun(input, &output, decay, planes).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_lagfun_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let decay = args.get("decay").and_then(|v| v.as_f64()).unwrap_or(0.95);
+    let planes = args.get("planes").and_then(|v| v.as_u64()).unwrap_or(15) as u32;
+    crate::visual::apply_lagfun(input, &output, decay, planes).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_tinterlace_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let mode = args.get("mode").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let flags = args.get("flags").and_then(|v| v.as_str()).unwrap_or("vlpf");
+    crate::visual::apply_tinterlace(input, &output, mode, flags).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_tinterlace_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let mode = args.get("mode").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let flags = args.get("flags").and_then(|v| v.as_str()).unwrap_or("vlpf");
+    crate::visual::apply_tinterlace(input, &output, mode, flags).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_datascope_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let size = args.get("size").and_then(|v| v.as_str()).unwrap_or("hd720");
+    let x = args.get("x").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let y = args.get("y").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let mode = args.get("mode").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let opacity = args.get("opacity").and_then(|v| v.as_f64()).unwrap_or(0.75);
+    let axis = args.get("axis").and_then(|v| v.as_bool()).unwrap_or(false);
+    crate::visual::apply_datascope(input, &output, size, x, y, mode, opacity, axis).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_datascope_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let size = args.get("size").and_then(|v| v.as_str()).unwrap_or("hd720");
+    let x = args.get("x").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let y = args.get("y").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let mode = args.get("mode").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let opacity = args.get("opacity").and_then(|v| v.as_f64()).unwrap_or(0.75);
+    let axis = args.get("axis").and_then(|v| v.as_bool()).unwrap_or(false);
+    crate::visual::apply_datascope(input, &output, size, x, y, mode, opacity, axis).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_fspp_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let quality = args.get("quality").and_then(|v| v.as_u64()).unwrap_or(4) as u32;
+    let strength = args.get("strength").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let use_bframe_qp = args.get("use_bframe_qp").and_then(|v| v.as_bool()).unwrap_or(false);
+    crate::visual::apply_fspp(input, &output, quality, strength, use_bframe_qp).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_fspp_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let quality = args.get("quality").and_then(|v| v.as_u64()).unwrap_or(4) as u32;
+    let strength = args.get("strength").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let use_bframe_qp = args.get("use_bframe_qp").and_then(|v| v.as_bool()).unwrap_or(false);
+    crate::visual::apply_fspp(input, &output, quality, strength, use_bframe_qp).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_haas_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let level_in = args.get("level_in").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let level_out = args.get("level_out").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let side_gain = args.get("side_gain").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let middle_source = args.get("middle_source").and_then(|v| v.as_str()).unwrap_or("mid");
+    let middle_phase = args.get("middle_phase").and_then(|v| v.as_bool()).unwrap_or(false);
+    let left_delay = args.get("left_delay").and_then(|v| v.as_f64()).unwrap_or(2.5);
+    let left_balance = args.get("left_balance").and_then(|v| v.as_f64()).unwrap_or(-1.0);
+    let right_delay = args.get("right_delay").and_then(|v| v.as_f64()).unwrap_or(2.5);
+    let right_balance = args.get("right_balance").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    crate::audio::apply_haas(input, &output, level_in, level_out, side_gain, middle_source, middle_phase, left_delay, left_balance, right_delay, right_balance).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_haas_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let level_in = args.get("level_in").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let level_out = args.get("level_out").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let side_gain = args.get("side_gain").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let middle_source = args.get("middle_source").and_then(|v| v.as_str()).unwrap_or("mid");
+    let middle_phase = args.get("middle_phase").and_then(|v| v.as_bool()).unwrap_or(false);
+    let left_delay = args.get("left_delay").and_then(|v| v.as_f64()).unwrap_or(2.5);
+    let left_balance = args.get("left_balance").and_then(|v| v.as_f64()).unwrap_or(-1.0);
+    let right_delay = args.get("right_delay").and_then(|v| v.as_f64()).unwrap_or(2.5);
+    let right_balance = args.get("right_balance").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    crate::audio::apply_haas(input, &output, level_in, level_out, side_gain, middle_source, middle_phase, left_delay, left_balance, right_delay, right_balance).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_aemphasis_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let level_in = args.get("level_in").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let level_out = args.get("level_out").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("reproduction");
+    let emph_type = args.get("emph_type").and_then(|v| v.as_str()).unwrap_or("cd");
+    crate::audio::apply_aemphasis(input, &output, level_in, level_out, mode, emph_type).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_aemphasis_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let level_in = args.get("level_in").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let level_out = args.get("level_out").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("reproduction");
+    let emph_type = args.get("emph_type").and_then(|v| v.as_str()).unwrap_or("cd");
+    crate::audio::apply_aemphasis(input, &output, level_in, level_out, mode, emph_type).unwrap_or_else(|e| e)
+}
+
+// ============================================================
+// PHASE I BATCH 6 EXECUTORS
+// ============================================================
+
+fn execute_apply_colormatrix_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let src = args.get("src").and_then(|v| v.as_str()).unwrap_or("bt601");
+    let dst = args.get("dst").and_then(|v| v.as_str()).unwrap_or("bt709");
+    crate::visual::apply_colormatrix(input, &output, src, dst).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_colormatrix_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let src = args.get("src").and_then(|v| v.as_str()).unwrap_or("bt601");
+    let dst = args.get("dst").and_then(|v| v.as_str()).unwrap_or("bt709");
+    crate::visual::apply_colormatrix(input, &output, src, dst).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_chromashift_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let cbh = args.get("cbh").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+    let cbv = args.get("cbv").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+    let crh = args.get("crh").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+    let crv = args.get("crv").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+    crate::visual::apply_chromashift(input, &output, cbh, cbv, crh, crv).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_chromashift_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let cbh = args.get("cbh").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+    let cbv = args.get("cbv").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+    let crh = args.get("crh").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+    let crv = args.get("crv").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+    crate::visual::apply_chromashift(input, &output, cbh, cbv, crh, crv).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_cas_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let strength = args.get("strength").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let planes = args.get("planes").and_then(|v| v.as_u64()).unwrap_or(7) as u32;
+    crate::visual::apply_cas(input, &output, strength, planes).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_cas_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let strength = args.get("strength").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let planes = args.get("planes").and_then(|v| v.as_u64()).unwrap_or(7) as u32;
+    crate::visual::apply_cas(input, &output, strength, planes).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_nlmeans_video_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let s = args.get("s").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let p = args.get("p").and_then(|v| v.as_u64()).unwrap_or(3) as u32;
+    let pc = args.get("pc").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let r = args.get("r").and_then(|v| v.as_u64()).unwrap_or(7) as u32;
+    let rc = args.get("rc").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    crate::visual::apply_nlmeans_video(input, &output, s, p, pc, r, rc).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_nlmeans_video_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let s = args.get("s").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let p = args.get("p").and_then(|v| v.as_u64()).unwrap_or(3) as u32;
+    let pc = args.get("pc").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let r = args.get("r").and_then(|v| v.as_u64()).unwrap_or(7) as u32;
+    let rc = args.get("rc").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    crate::visual::apply_nlmeans_video(input, &output, s, p, pc, r, rc).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_spp_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let quality = args.get("quality").and_then(|v| v.as_u64()).unwrap_or(3) as u32;
+    let qp = args.get("qp").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+    let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("hard");
+    crate::visual::apply_spp(input, &output, quality, qp, mode).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_spp_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let quality = args.get("quality").and_then(|v| v.as_u64()).unwrap_or(3) as u32;
+    let qp = args.get("qp").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+    let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("hard");
+    crate::visual::apply_spp(input, &output, quality, qp, mode).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_pp_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let subfilters = args.get("subfilters").and_then(|v| v.as_str()).unwrap_or("default");
+    crate::visual::apply_pp(input, &output, subfilters).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_pp_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let subfilters = args.get("subfilters").and_then(|v| v.as_str()).unwrap_or("default");
+    crate::visual::apply_pp(input, &output, subfilters).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_mestimate_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let method = args.get("method").and_then(|v| v.as_str()).unwrap_or("esa");
+    let mb_size = args.get("mb_size").and_then(|v| v.as_u64()).unwrap_or(16) as u32;
+    let search_param = args.get("search_param").and_then(|v| v.as_u64()).unwrap_or(7) as u32;
+    crate::visual::apply_mestimate(input, &output, method, mb_size, search_param).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_mestimate_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let method = args.get("method").and_then(|v| v.as_str()).unwrap_or("esa");
+    let mb_size = args.get("mb_size").and_then(|v| v.as_u64()).unwrap_or(16) as u32;
+    let search_param = args.get("search_param").and_then(|v| v.as_u64()).unwrap_or(7) as u32;
+    crate::visual::apply_mestimate(input, &output, method, mb_size, search_param).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_midequalizer_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let secondary = args.get("secondary_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let planes = args.get("planes").and_then(|v| v.as_u64()).unwrap_or(15) as u32;
+    crate::visual::apply_midequalizer(input, secondary, &output, planes).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_midequalizer_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let secondary = args.get("secondary_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let planes = args.get("planes").and_then(|v| v.as_u64()).unwrap_or(15) as u32;
+    crate::visual::apply_midequalizer(input, secondary, &output, planes).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_median_spatial_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let radius = args.get("radius").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
+    let radius_v = args.get("radiusV").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let percentile = args.get("percentile").and_then(|v| v.as_f64()).unwrap_or(0.5);
+    let planes = args.get("planes").and_then(|v| v.as_u64()).unwrap_or(15) as u32;
+    crate::visual::apply_median_spatial(input, &output, radius, radius_v, percentile, planes).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_median_spatial_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let radius = args.get("radius").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
+    let radius_v = args.get("radiusV").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let percentile = args.get("percentile").and_then(|v| v.as_f64()).unwrap_or(0.5);
+    let planes = args.get("planes").and_then(|v| v.as_u64()).unwrap_or(15) as u32;
+    crate::visual::apply_median_spatial(input, &output, radius, radius_v, percentile, planes).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_acrusher_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let level_in = args.get("level_in").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let level_out = args.get("level_out").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let bits = args.get("bits").and_then(|v| v.as_f64()).unwrap_or(8.0);
+    let mix = args.get("mix").and_then(|v| v.as_f64()).unwrap_or(0.5);
+    let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("log");
+    let dc = args.get("dc").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let aa = args.get("aa").and_then(|v| v.as_f64()).unwrap_or(0.5);
+    let samples = args.get("samples").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let lfo = args.get("lfo").and_then(|v| v.as_bool()).unwrap_or(false);
+    let lforange = args.get("lforange").and_then(|v| v.as_f64()).unwrap_or(20.0);
+    let lforate = args.get("lforate").and_then(|v| v.as_f64()).unwrap_or(0.3);
+    crate::audio::apply_acrusher(input, &output, level_in, level_out, bits, mix, mode, dc, aa, samples, lfo, lforange, lforate).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_acrusher_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let level_in = args.get("level_in").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let level_out = args.get("level_out").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let bits = args.get("bits").and_then(|v| v.as_f64()).unwrap_or(8.0);
+    let mix = args.get("mix").and_then(|v| v.as_f64()).unwrap_or(0.5);
+    let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("log");
+    let dc = args.get("dc").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let aa = args.get("aa").and_then(|v| v.as_f64()).unwrap_or(0.5);
+    let samples = args.get("samples").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let lfo = args.get("lfo").and_then(|v| v.as_bool()).unwrap_or(false);
+    let lforange = args.get("lforange").and_then(|v| v.as_f64()).unwrap_or(20.0);
+    let lforate = args.get("lforate").and_then(|v| v.as_f64()).unwrap_or(0.3);
+    crate::audio::apply_acrusher(input, &output, level_in, level_out, bits, mix, mode, dc, aa, samples, lfo, lforange, lforate).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_atempo_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let tempo = args.get("tempo").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    crate::audio::apply_atempo(input, &output, tempo).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_atempo_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let tempo = args.get("tempo").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    crate::audio::apply_atempo(input, &output, tempo).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_asetnsamples_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let nb_samples = args.get("nb_samples").and_then(|v| v.as_u64()).unwrap_or(1024) as u32;
+    let pad = args.get("pad").and_then(|v| v.as_bool()).unwrap_or(true);
+    crate::audio::apply_asetnsamples(input, &output, nb_samples, pad).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_asetnsamples_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let nb_samples = args.get("nb_samples").and_then(|v| v.as_u64()).unwrap_or(1024) as u32;
+    let pad = args.get("pad").and_then(|v| v.as_bool()).unwrap_or(true);
+    crate::audio::apply_asetnsamples(input, &output, nb_samples, pad).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_apad_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let packet_size = args.get("packet_size").and_then(|v| v.as_u64()).unwrap_or(4096) as u32;
+    let pad_len = args.get("pad_len").and_then(|v| v.as_i64()).unwrap_or(0);
+    let whole_len = args.get("whole_len").and_then(|v| v.as_i64()).unwrap_or(0);
+    let pad_dur = args.get("pad_dur").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let whole_dur = args.get("whole_dur").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    crate::audio::apply_apad(input, &output, packet_size, pad_len, whole_len, pad_dur, whole_dur).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_apad_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let packet_size = args.get("packet_size").and_then(|v| v.as_u64()).unwrap_or(4096) as u32;
+    let pad_len = args.get("pad_len").and_then(|v| v.as_i64()).unwrap_or(0);
+    let whole_len = args.get("whole_len").and_then(|v| v.as_i64()).unwrap_or(0);
+    let pad_dur = args.get("pad_dur").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let whole_dur = args.get("whole_dur").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    crate::audio::apply_apad(input, &output, packet_size, pad_len, whole_len, pad_dur, whole_dur).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_asubcut_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let cutoff = args.get("cutoff").and_then(|v| v.as_f64()).unwrap_or(20.0);
+    let order = args.get("order").and_then(|v| v.as_u64()).unwrap_or(10) as u32;
+    let level = args.get("level").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    crate::audio::apply_asubcut(input, &output, cutoff, order, level).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_asubcut_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let cutoff = args.get("cutoff").and_then(|v| v.as_f64()).unwrap_or(20.0);
+    let order = args.get("order").and_then(|v| v.as_u64()).unwrap_or(10) as u32;
+    let level = args.get("level").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    crate::audio::apply_asubcut(input, &output, cutoff, order, level).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_asupercut_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let cutoff = args.get("cutoff").and_then(|v| v.as_f64()).unwrap_or(20000.0);
+    let order = args.get("order").and_then(|v| v.as_u64()).unwrap_or(10) as u32;
+    let level = args.get("level").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    crate::audio::apply_asupercut(input, &output, cutoff, order, level).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_asupercut_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let cutoff = args.get("cutoff").and_then(|v| v.as_f64()).unwrap_or(20000.0);
+    let order = args.get("order").and_then(|v| v.as_u64()).unwrap_or(10) as u32;
+    let level = args.get("level").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    crate::audio::apply_asupercut(input, &output, cutoff, order, level).unwrap_or_else(|e| e)
+}
+
+// PHASE I BATCH 7 EXECUTORS
+
+fn execute_apply_xfade_transition_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let secondary = args["secondary_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let transition = args.get("transition").and_then(|v| v.as_str()).unwrap_or("fade");
+    let duration = args.get("duration").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let offset = args.get("offset").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    crate::visual::apply_xfade_transition(input, secondary, &output, transition, duration, offset).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_xfade_transition_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let secondary = args.get("secondary_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let transition = args.get("transition").and_then(|v| v.as_str()).unwrap_or("fade");
+    let duration = args.get("duration").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let offset = args.get("offset").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    crate::visual::apply_xfade_transition(input, secondary, &output, transition, duration, offset).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_color_key_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let color = args.get("color").and_then(|v| v.as_str()).unwrap_or("0x00FF00");
+    let similarity = args.get("similarity").and_then(|v| v.as_f64()).unwrap_or(0.1);
+    let blend = args.get("blend").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    crate::visual::apply_color_key(input, &output, color, similarity, blend).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_color_key_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let color = args.get("color").and_then(|v| v.as_str()).unwrap_or("0x00FF00");
+    let similarity = args.get("similarity").and_then(|v| v.as_f64()).unwrap_or(0.1);
+    let blend = args.get("blend").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    crate::visual::apply_color_key(input, &output, color, similarity, blend).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_monochrome_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let cb = args.get("cb").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let cr = args.get("cr").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let size = args.get("size").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    crate::visual::apply_monochrome(input, &output, cb, cr, size).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_monochrome_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let cb = args.get("cb").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let cr = args.get("cr").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let size = args.get("size").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    crate::visual::apply_monochrome(input, &output, cb, cr, size).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_maskedmerge_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let overlay = args["overlay_file"].as_str().unwrap_or("");
+    let mask = args["mask_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let planes = args.get("planes").and_then(|v| v.as_u64()).unwrap_or(15) as u32;
+    crate::visual::apply_maskedmerge(input, overlay, mask, &output, planes).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_maskedmerge_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let overlay = args.get("overlay_file").and_then(|v| v.as_str()).unwrap_or("");
+    let mask = args.get("mask_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let planes = args.get("planes").and_then(|v| v.as_u64()).unwrap_or(15) as u32;
+    crate::visual::apply_maskedmerge(input, overlay, mask, &output, planes).unwrap_or_else(|e| e)
+}
+
+fn execute_convert_360_video_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let input_fmt = args.get("input_fmt").and_then(|v| v.as_str()).unwrap_or("equirect");
+    let output_fmt = args.get("output_fmt").and_then(|v| v.as_str()).unwrap_or("flat");
+    let width = args.get("width").and_then(|v| v.as_u64()).unwrap_or(1920) as u32;
+    let height = args.get("height").and_then(|v| v.as_u64()).unwrap_or(1080) as u32;
+    let h_fov = args.get("h_fov").and_then(|v| v.as_f64()).unwrap_or(90.0);
+    let v_fov = args.get("v_fov").and_then(|v| v.as_f64()).unwrap_or(90.0);
+    crate::visual::convert_360_video(input, &output, input_fmt, output_fmt, width, height, h_fov, v_fov).unwrap_or_else(|e| e)
+}
+
+fn execute_convert_360_video_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let input_fmt = args.get("input_fmt").and_then(|v| v.as_str()).unwrap_or("equirect");
+    let output_fmt = args.get("output_fmt").and_then(|v| v.as_str()).unwrap_or("flat");
+    let width = args.get("width").and_then(|v| v.as_u64()).unwrap_or(1920) as u32;
+    let height = args.get("height").and_then(|v| v.as_u64()).unwrap_or(1080) as u32;
+    let h_fov = args.get("h_fov").and_then(|v| v.as_f64()).unwrap_or(90.0);
+    let v_fov = args.get("v_fov").and_then(|v| v.as_f64()).unwrap_or(90.0);
+    crate::visual::convert_360_video(input, &output, input_fmt, output_fmt, width, height, h_fov, v_fov).unwrap_or_else(|e| e)
+}
+
+fn execute_fix_banding_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let strength = args.get("strength").and_then(|v| v.as_f64()).unwrap_or(1.2);
+    let radius = args.get("radius").and_then(|v| v.as_u64()).unwrap_or(16) as u32;
+    crate::visual::fix_banding(input, &output, strength, radius).unwrap_or_else(|e| e)
+}
+
+fn execute_fix_banding_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let strength = args.get("strength").and_then(|v| v.as_f64()).unwrap_or(1.2);
+    let radius = args.get("radius").and_then(|v| v.as_u64()).unwrap_or(16) as u32;
+    crate::visual::fix_banding(input, &output, strength, radius).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_greyedge_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let difford = args.get("difford").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
+    let minknorm = args.get("minknorm").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let sigma = args.get("sigma").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    crate::visual::apply_greyedge(input, &output, difford, minknorm, sigma).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_greyedge_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let difford = args.get("difford").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
+    let minknorm = args.get("minknorm").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let sigma = args.get("sigma").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    crate::visual::apply_greyedge(input, &output, difford, minknorm, sigma).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_fade_video_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let fade_type = args.get("fade_type").and_then(|v| v.as_str()).unwrap_or("in");
+    let start_time = args.get("start_time").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let duration = args.get("duration").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let color = args.get("color").and_then(|v| v.as_str()).unwrap_or("black");
+    crate::visual::apply_fade_video(input, &output, fade_type, start_time, duration, color).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_fade_video_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let fade_type = args.get("fade_type").and_then(|v| v.as_str()).unwrap_or("in");
+    let start_time = args.get("start_time").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let duration = args.get("duration").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let color = args.get("color").and_then(|v| v.as_str()).unwrap_or("black");
+    crate::visual::apply_fade_video(input, &output, fade_type, start_time, duration, color).unwrap_or_else(|e| e)
+}
+
+fn execute_normalize_loudness_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let i = args.get("i").and_then(|v| v.as_f64()).unwrap_or(-23.0);
+    let lra = args.get("lra").and_then(|v| v.as_f64()).unwrap_or(7.0);
+    let tp = args.get("tp").and_then(|v| v.as_f64()).unwrap_or(-2.0);
+    crate::audio::normalize_loudness(input, &output, i, lra, tp).unwrap_or_else(|e| e)
+}
+
+fn execute_normalize_loudness_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let i = args.get("i").and_then(|v| v.as_f64()).unwrap_or(-23.0);
+    let lra = args.get("lra").and_then(|v| v.as_f64()).unwrap_or(7.0);
+    let tp = args.get("tp").and_then(|v| v.as_f64()).unwrap_or(-2.0);
+    crate::audio::normalize_loudness(input, &output, i, lra, tp).unwrap_or_else(|e| e)
+}
+
+fn execute_dynamic_audio_normalize_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let frame_len = args.get("frame_len").and_then(|v| v.as_u64()).unwrap_or(500) as u32;
+    let gausssize = args.get("gausssize").and_then(|v| v.as_u64()).unwrap_or(31) as u32;
+    let peak = args.get("peak").and_then(|v| v.as_f64()).unwrap_or(0.95);
+    let max_gain = args.get("max_gain").and_then(|v| v.as_f64()).unwrap_or(10.0);
+    let rms = args.get("rms").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let coupling = args.get("coupling").and_then(|v| v.as_bool()).unwrap_or(true);
+    crate::audio::dynamic_audio_normalize(input, &output, frame_len, gausssize, peak, max_gain, rms, coupling).unwrap_or_else(|e| e)
+}
+
+fn execute_dynamic_audio_normalize_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let frame_len = args.get("frame_len").and_then(|v| v.as_u64()).unwrap_or(500) as u32;
+    let gausssize = args.get("gausssize").and_then(|v| v.as_u64()).unwrap_or(31) as u32;
+    let peak = args.get("peak").and_then(|v| v.as_f64()).unwrap_or(0.95);
+    let max_gain = args.get("max_gain").and_then(|v| v.as_f64()).unwrap_or(10.0);
+    let rms = args.get("rms").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let coupling = args.get("coupling").and_then(|v| v.as_bool()).unwrap_or(true);
+    crate::audio::dynamic_audio_normalize(input, &output, frame_len, gausssize, peak, max_gain, rms, coupling).unwrap_or_else(|e| e)
+}
+
+fn execute_resample_audio_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let sample_rate = args.get("sample_rate").and_then(|v| v.as_u64()).unwrap_or(44100) as u32;
+    let resampler = args.get("resampler").and_then(|v| v.as_str()).unwrap_or("swr");
+    crate::audio::resample_audio(input, &output, sample_rate, resampler).unwrap_or_else(|e| e)
+}
+
+fn execute_resample_audio_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let sample_rate = args.get("sample_rate").and_then(|v| v.as_u64()).unwrap_or(44100) as u32;
+    let resampler = args.get("resampler").and_then(|v| v.as_str()).unwrap_or("swr");
+    crate::audio::resample_audio(input, &output, sample_rate, resampler).unwrap_or_else(|e| e)
+}
+
+fn execute_trim_audio_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let start = args.get("start").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let end = args.get("end").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let duration = args.get("duration").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    crate::audio::trim_audio(input, &output, start, end, duration).unwrap_or_else(|e| e)
+}
+
+fn execute_trim_audio_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let start = args.get("start").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let end = args.get("end").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let duration = args.get("duration").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    crate::audio::trim_audio(input, &output, start, end, duration).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_crystalizer_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let i = args.get("i").and_then(|v| v.as_f64()).unwrap_or(2.0);
+    let clip = args.get("clip").and_then(|v| v.as_bool()).unwrap_or(false);
+    crate::audio::apply_crystalizer(input, &output, i, clip).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_crystalizer_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let i = args.get("i").and_then(|v| v.as_f64()).unwrap_or(2.0);
+    let clip = args.get("clip").and_then(|v| v.as_bool()).unwrap_or(false);
+    crate::audio::apply_crystalizer(input, &output, i, clip).unwrap_or_else(|e| e)
+}
+
+fn execute_multiband_compress_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let params = args.get("params").and_then(|v| v.as_str()).unwrap_or("");
+    crate::audio::multiband_compress(input, &output, params).unwrap_or_else(|e| e)
+}
+
+fn execute_multiband_compress_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let params = args.get("params").and_then(|v| v.as_str()).unwrap_or("");
+    crate::audio::multiband_compress(input, &output, params).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_super_equalizer_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let bands = args.get("bands").and_then(|v| v.as_str()).unwrap_or("");
+    crate::audio::apply_super_equalizer(input, &output, bands).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_super_equalizer_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let bands = args.get("bands").and_then(|v| v.as_str()).unwrap_or("");
+    crate::audio::apply_super_equalizer(input, &output, bands).unwrap_or_else(|e| e)
+}
+
+// PHASE I BATCH 8 EXECUTORS
+
+fn execute_extract_alpha_channel_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    crate::visual::extract_alpha_channel(input, &output).unwrap_or_else(|e| e)
+}
+
+fn execute_extract_alpha_channel_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    crate::visual::extract_alpha_channel(input, &output).unwrap_or_else(|e| e)
+}
+
+fn execute_merge_alpha_channel_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let alpha = args["alpha_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    crate::visual::merge_alpha_channel(input, alpha, &output).unwrap_or_else(|e| e)
+}
+
+fn execute_merge_alpha_channel_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let alpha = args.get("alpha_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    crate::visual::merge_alpha_channel(input, alpha, &output).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_framestep_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let step = args.get("step").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
+    crate::visual::apply_framestep(input, &output, step).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_framestep_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let step = args.get("step").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
+    crate::visual::apply_framestep(input, &output, step).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_swaprect_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let x1 = args.get("x1").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let y1 = args.get("y1").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let x2 = args.get("x2").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let y2 = args.get("y2").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let w = args.get("w").and_then(|v| v.as_u64()).unwrap_or(100) as u32;
+    let h = args.get("h").and_then(|v| v.as_u64()).unwrap_or(100) as u32;
+    crate::visual::apply_swaprect(input, &output, x1, y1, x2, y2, w, h).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_swaprect_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let x1 = args.get("x1").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let y1 = args.get("y1").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let x2 = args.get("x2").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let y2 = args.get("y2").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let w = args.get("w").and_then(|v| v.as_u64()).unwrap_or(100) as u32;
+    let h = args.get("h").and_then(|v| v.as_u64()).unwrap_or(100) as u32;
+    crate::visual::apply_swaprect(input, &output, x1, y1, x2, y2, w, h).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_fillborders_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let left = args.get("left").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let right = args.get("right").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let top = args.get("top").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let bottom = args.get("bottom").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("smear");
+    let color = args.get("color").and_then(|v| v.as_str()).unwrap_or("black");
+    crate::visual::apply_fillborders(input, &output, left, right, top, bottom, mode, color).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_fillborders_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let left = args.get("left").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let right = args.get("right").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let top = args.get("top").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let bottom = args.get("bottom").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("smear");
+    let color = args.get("color").and_then(|v| v.as_str()).unwrap_or("black");
+    crate::visual::apply_fillborders(input, &output, left, right, top, bottom, mode, color).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_chromanr_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let thres = args.get("thres").and_then(|v| v.as_f64()).unwrap_or(30.0);
+    let sizew = args.get("sizew").and_then(|v| v.as_u64()).unwrap_or(5) as u32;
+    let sizeh = args.get("sizeh").and_then(|v| v.as_u64()).unwrap_or(5) as u32;
+    let stepw = args.get("stepw").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
+    let steph = args.get("steph").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
+    crate::visual::apply_chromanr(input, &output, thres, sizew, sizeh, stepw, steph).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_chromanr_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let thres = args.get("thres").and_then(|v| v.as_f64()).unwrap_or(30.0);
+    let sizew = args.get("sizew").and_then(|v| v.as_u64()).unwrap_or(5) as u32;
+    let sizeh = args.get("sizeh").and_then(|v| v.as_u64()).unwrap_or(5) as u32;
+    let stepw = args.get("stepw").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
+    let steph = args.get("steph").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
+    crate::visual::apply_chromanr(input, &output, thres, sizew, sizeh, stepw, steph).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_weave_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let first_field = args.get("first_field").and_then(|v| v.as_str()).unwrap_or("top");
+    crate::visual::apply_weave(input, &output, first_field).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_weave_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let first_field = args.get("first_field").and_then(|v| v.as_str()).unwrap_or("top");
+    crate::visual::apply_weave(input, &output, first_field).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_interlace_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let scan = args.get("scan").and_then(|v| v.as_str()).unwrap_or("tff");
+    let lowpass = args.get("lowpass").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
+    crate::visual::apply_interlace(input, &output, scan, lowpass).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_interlace_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let scan = args.get("scan").and_then(|v| v.as_str()).unwrap_or("tff");
+    let lowpass = args.get("lowpass").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
+    crate::visual::apply_interlace(input, &output, scan, lowpass).unwrap_or_else(|e| e)
+}
+
+fn execute_denoise_audio_fft_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let noise_floor = args.get("noise_floor").and_then(|v| v.as_f64()).unwrap_or(-25.0);
+    let noise_reduction = args.get("noise_reduction").and_then(|v| v.as_f64()).unwrap_or(12.0);
+    let track_noise = args.get("track_noise").and_then(|v| v.as_bool()).unwrap_or(false);
+    crate::audio::denoise_audio_fft(input, &output, noise_floor, noise_reduction, track_noise).unwrap_or_else(|e| e)
+}
+
+fn execute_denoise_audio_fft_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let noise_floor = args.get("noise_floor").and_then(|v| v.as_f64()).unwrap_or(-25.0);
+    let noise_reduction = args.get("noise_reduction").and_then(|v| v.as_f64()).unwrap_or(12.0);
+    let track_noise = args.get("track_noise").and_then(|v| v.as_bool()).unwrap_or(false);
+    crate::audio::denoise_audio_fft(input, &output, noise_floor, noise_reduction, track_noise).unwrap_or_else(|e| e)
+}
+
+fn execute_loop_audio_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let loop_count = args.get("loop_count").and_then(|v| v.as_i64()).unwrap_or(1) as i32;
+    let size = args.get("size").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let start = args.get("start").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    crate::audio::loop_audio(input, &output, loop_count, size, start).unwrap_or_else(|e| e)
+}
+
+fn execute_loop_audio_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let loop_count = args.get("loop_count").and_then(|v| v.as_i64()).unwrap_or(1) as i32;
+    let size = args.get("size").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let start = args.get("start").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    crate::audio::loop_audio(input, &output, loop_count, size, start).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_dc_shift_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let shift = args.get("shift").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let limitergain = args.get("limitergain").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    crate::audio::apply_dc_shift(input, &output, shift, limitergain).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_dc_shift_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let shift = args.get("shift").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let limitergain = args.get("limitergain").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    crate::audio::apply_dc_shift(input, &output, shift, limitergain).unwrap_or_else(|e| e)
+}
+
+fn execute_measure_dynamic_range_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    crate::audio::measure_dynamic_range(input).unwrap_or_else(|e| e)
+}
+
+fn execute_measure_dynamic_range_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    crate::audio::measure_dynamic_range(input).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_single_eq_band_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let frequency = args.get("frequency").and_then(|v| v.as_f64()).unwrap_or(1000.0);
+    let width = args.get("width").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let gain = args.get("gain").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let width_type = args.get("width_type").and_then(|v| v.as_str()).unwrap_or("o");
+    crate::audio::apply_single_eq_band(input, &output, frequency, width, gain, width_type).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_single_eq_band_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let frequency = args.get("frequency").and_then(|v| v.as_f64()).unwrap_or(1000.0);
+    let width = args.get("width").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let gain = args.get("gain").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let width_type = args.get("width_type").and_then(|v| v.as_str()).unwrap_or("o");
+    crate::audio::apply_single_eq_band(input, &output, frequency, width, gain, width_type).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_stereotools_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let level_in = args.get("level_in").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let level_out = args.get("level_out").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let balance_in = args.get("balance_in").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let balance_out = args.get("balance_out").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let softclip = args.get("softclip").and_then(|v| v.as_bool()).unwrap_or(false);
+    let mutel = args.get("mutel").and_then(|v| v.as_bool()).unwrap_or(false);
+    let muter = args.get("muter").and_then(|v| v.as_bool()).unwrap_or(false);
+    let phasel = args.get("phasel").and_then(|v| v.as_bool()).unwrap_or(false);
+    let phaser = args.get("phaser").and_then(|v| v.as_bool()).unwrap_or(false);
+    let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("lr>lr");
+    crate::audio::apply_stereotools(input, &output, level_in, level_out, balance_in, balance_out, softclip, mutel, muter, phasel, phaser, mode).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_stereotools_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let level_in = args.get("level_in").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let level_out = args.get("level_out").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let balance_in = args.get("balance_in").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let balance_out = args.get("balance_out").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let softclip = args.get("softclip").and_then(|v| v.as_bool()).unwrap_or(false);
+    let mutel = args.get("mutel").and_then(|v| v.as_bool()).unwrap_or(false);
+    let muter = args.get("muter").and_then(|v| v.as_bool()).unwrap_or(false);
+    let phasel = args.get("phasel").and_then(|v| v.as_bool()).unwrap_or(false);
+    let phaser = args.get("phaser").and_then(|v| v.as_bool()).unwrap_or(false);
+    let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("lr>lr");
+    crate::audio::apply_stereotools(input, &output, level_in, level_out, balance_in, balance_out, softclip, mutel, muter, phasel, phaser, mode).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_asetrate_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let sample_rate = args.get("sample_rate").and_then(|v| v.as_u64()).unwrap_or(44100) as u32;
+    crate::audio::apply_asetrate(input, &output, sample_rate).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_asetrate_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let sample_rate = args.get("sample_rate").and_then(|v| v.as_u64()).unwrap_or(44100) as u32;
+    crate::audio::apply_asetrate(input, &output, sample_rate).unwrap_or_else(|e| e)
+}
+
+// PHASE I BATCH 9 EXECUTORS
+
+fn execute_scale_to_reference_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let ref_file = args["ref_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let flags = args.get("flags").and_then(|v| v.as_str()).unwrap_or("bilinear");
+    crate::visual::scale_to_reference(input, ref_file, &output, flags).unwrap_or_else(|e| e)
+}
+
+fn execute_scale_to_reference_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let ref_file = args.get("ref_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let flags = args.get("flags").and_then(|v| v.as_str()).unwrap_or("bilinear");
+    crate::visual::scale_to_reference(input, ref_file, &output, flags).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_fieldorder_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let order = args.get("order").and_then(|v| v.as_str()).unwrap_or("tff");
+    crate::visual::apply_fieldorder(input, &output, order).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_fieldorder_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let order = args.get("order").and_then(|v| v.as_str()).unwrap_or("tff");
+    crate::visual::apply_fieldorder(input, &output, order).unwrap_or_else(|e| e)
+}
+
+fn execute_optimize_gif_palette_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let width = args.get("width").and_then(|v| v.as_u64()).unwrap_or(320) as u32;
+    let fps = args.get("fps").and_then(|v| v.as_f64()).unwrap_or(10.0);
+    let stats_mode = args.get("stats_mode").and_then(|v| v.as_str()).unwrap_or("diff");
+    crate::visual::optimize_gif_palette(input, &output, width, fps, stats_mode).unwrap_or_else(|e| e)
+}
+
+fn execute_optimize_gif_palette_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let width = args.get("width").and_then(|v| v.as_u64()).unwrap_or(320) as u32;
+    let fps = args.get("fps").and_then(|v| v.as_f64()).unwrap_or(10.0);
+    let stats_mode = args.get("stats_mode").and_then(|v| v.as_str()).unwrap_or("diff");
+    crate::visual::optimize_gif_palette(input, &output, width, fps, stats_mode).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_hsv_key_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let hue = args.get("hue").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let saturation = args.get("saturation").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let value = args.get("value").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let similarity = args.get("similarity").and_then(|v| v.as_f64()).unwrap_or(0.1);
+    let blend = args.get("blend").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    crate::visual::apply_hsv_key(input, &output, hue, saturation, value, similarity, blend).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_hsv_key_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let hue = args.get("hue").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let saturation = args.get("saturation").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let value = args.get("value").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let similarity = args.get("similarity").and_then(|v| v.as_f64()).unwrap_or(0.1);
+    let blend = args.get("blend").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    crate::visual::apply_hsv_key(input, &output, hue, saturation, value, similarity, blend).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_lut_yuv_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let y_expr = args.get("y_expr").and_then(|v| v.as_str()).unwrap_or("val");
+    let u_expr = args.get("u_expr").and_then(|v| v.as_str()).unwrap_or("val");
+    let v_expr = args.get("v_expr").and_then(|v| v.as_str()).unwrap_or("val");
+    crate::visual::apply_lut_yuv(input, &output, y_expr, u_expr, v_expr).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_lut_yuv_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let y_expr = args.get("y_expr").and_then(|v| v.as_str()).unwrap_or("val");
+    let u_expr = args.get("u_expr").and_then(|v| v.as_str()).unwrap_or("val");
+    let v_expr = args.get("v_expr").and_then(|v| v.as_str()).unwrap_or("val");
+    crate::visual::apply_lut_yuv(input, &output, y_expr, u_expr, v_expr).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_freezeframes_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let first = args.get("first").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let last = args.get("last").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let replace = args.get("replace").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    crate::visual::apply_freezeframes(input, &output, first, last, replace).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_freezeframes_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let first = args.get("first").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let last = args.get("last").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let replace = args.get("replace").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    crate::visual::apply_freezeframes(input, &output, first, last, replace).unwrap_or_else(|e| e)
+}
+
+fn execute_draw_signal_graph_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let signal = args.get("signal").and_then(|v| v.as_str()).unwrap_or("YAVG");
+    let width = args.get("width").and_then(|v| v.as_u64()).unwrap_or(1280) as u32;
+    let height = args.get("height").and_then(|v| v.as_u64()).unwrap_or(256) as u32;
+    crate::visual::draw_signal_graph(input, &output, signal, width, height).unwrap_or_else(|e| e)
+}
+
+fn execute_draw_signal_graph_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let signal = args.get("signal").and_then(|v| v.as_str()).unwrap_or("YAVG");
+    let width = args.get("width").and_then(|v| v.as_u64()).unwrap_or(1280) as u32;
+    let height = args.get("height").and_then(|v| v.as_u64()).unwrap_or(256) as u32;
+    crate::visual::draw_signal_graph(input, &output, signal, width, height).unwrap_or_else(|e| e)
+}
+
+fn execute_measure_video_entropy_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    crate::visual::measure_video_entropy(input).unwrap_or_else(|e| e)
+}
+
+fn execute_measure_video_entropy_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    crate::visual::measure_video_entropy(input).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_compensation_delay_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let mm = args.get("mm").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let cm = args.get("cm").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let m = args.get("m").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let dry = args.get("dry").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let wet = args.get("wet").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let temp = args.get("temp").and_then(|v| v.as_f64()).unwrap_or(20.0);
+    crate::audio::apply_compensation_delay(input, &output, mm, cm, m, dry, wet, temp).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_compensation_delay_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let mm = args.get("mm").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let cm = args.get("cm").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let m = args.get("m").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let dry = args.get("dry").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let wet = args.get("wet").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let temp = args.get("temp").and_then(|v| v.as_f64()).unwrap_or(20.0);
+    crate::audio::apply_compensation_delay(input, &output, mm, cm, m, dry, wet, temp).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_earwax_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    crate::audio::apply_earwax(input, &output).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_earwax_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    crate::audio::apply_earwax(input, &output).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_allpass_filter_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let frequency = args.get("frequency").and_then(|v| v.as_f64()).unwrap_or(3000.0);
+    let width = args.get("width").and_then(|v| v.as_f64()).unwrap_or(0.707);
+    let width_type = args.get("width_type").and_then(|v| v.as_str()).unwrap_or("q");
+    let mix = args.get("mix").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    crate::audio::apply_allpass_filter(input, &output, frequency, width, width_type, mix).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_allpass_filter_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let frequency = args.get("frequency").and_then(|v| v.as_f64()).unwrap_or(3000.0);
+    let width = args.get("width").and_then(|v| v.as_f64()).unwrap_or(0.707);
+    let width_type = args.get("width_type").and_then(|v| v.as_str()).unwrap_or("q");
+    let mix = args.get("mix").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    crate::audio::apply_allpass_filter(input, &output, frequency, width, width_type, mix).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_highshelf_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let frequency = args.get("frequency").and_then(|v| v.as_f64()).unwrap_or(8000.0);
+    let gain = args.get("gain").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let width = args.get("width").and_then(|v| v.as_f64()).unwrap_or(0.5);
+    let width_type = args.get("width_type").and_then(|v| v.as_str()).unwrap_or("s");
+    let poles = args.get("poles").and_then(|v| v.as_u64()).unwrap_or(2) as u32;
+    crate::audio::apply_highshelf(input, &output, frequency, gain, width, width_type, poles).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_highshelf_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let frequency = args.get("frequency").and_then(|v| v.as_f64()).unwrap_or(8000.0);
+    let gain = args.get("gain").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let width = args.get("width").and_then(|v| v.as_f64()).unwrap_or(0.5);
+    let width_type = args.get("width_type").and_then(|v| v.as_str()).unwrap_or("s");
+    let poles = args.get("poles").and_then(|v| v.as_u64()).unwrap_or(2) as u32;
+    crate::audio::apply_highshelf(input, &output, frequency, gain, width, width_type, poles).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_lowshelf_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let frequency = args.get("frequency").and_then(|v| v.as_f64()).unwrap_or(120.0);
+    let gain = args.get("gain").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let width = args.get("width").and_then(|v| v.as_f64()).unwrap_or(0.5);
+    let width_type = args.get("width_type").and_then(|v| v.as_str()).unwrap_or("s");
+    let poles = args.get("poles").and_then(|v| v.as_u64()).unwrap_or(2) as u32;
+    crate::audio::apply_lowshelf(input, &output, frequency, gain, width, width_type, poles).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_lowshelf_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let frequency = args.get("frequency").and_then(|v| v.as_f64()).unwrap_or(120.0);
+    let gain = args.get("gain").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let width = args.get("width").and_then(|v| v.as_f64()).unwrap_or(0.5);
+    let width_type = args.get("width_type").and_then(|v| v.as_str()).unwrap_or("s");
+    let poles = args.get("poles").and_then(|v| v.as_u64()).unwrap_or(2) as u32;
+    crate::audio::apply_lowshelf(input, &output, frequency, gain, width, width_type, poles).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_surround_upmix_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let chl_out = args.get("chl_out").and_then(|v| v.as_str()).unwrap_or("5.1");
+    let chl_in = args.get("chl_in").and_then(|v| v.as_str()).unwrap_or("stereo");
+    let level_in = args.get("level_in").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let level_out = args.get("level_out").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    crate::audio::apply_surround_upmix(input, &output, chl_out, chl_in, level_in, level_out).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_surround_upmix_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let chl_out = args.get("chl_out").and_then(|v| v.as_str()).unwrap_or("5.1");
+    let chl_in = args.get("chl_in").and_then(|v| v.as_str()).unwrap_or("stereo");
+    let level_in = args.get("level_in").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let level_out = args.get("level_out").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    crate::audio::apply_surround_upmix(input, &output, chl_out, chl_in, level_in, level_out).unwrap_or_else(|e| e)
+}
+
+fn execute_detect_volume_levels_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    crate::audio::detect_volume_levels(input).unwrap_or_else(|e| e)
+}
+
+fn execute_detect_volume_levels_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    crate::audio::detect_volume_levels(input).unwrap_or_else(|e| e)
+}
+
+// PHASE I BATCH 10 EXECUTORS
+
+fn execute_stabilize_video_2pass_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let shakiness = args.get("shakiness").and_then(|v| v.as_u64()).unwrap_or(5) as u32;
+    let accuracy = args.get("accuracy").and_then(|v| v.as_u64()).unwrap_or(15) as u32;
+    let smoothing = args.get("smoothing").and_then(|v| v.as_u64()).unwrap_or(10) as u32;
+    let zoom = args.get("zoom").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    crate::visual::stabilize_video_2pass(input, &output, shakiness, accuracy, smoothing, zoom).unwrap_or_else(|e| e)
+}
+
+fn execute_stabilize_video_2pass_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let shakiness = args.get("shakiness").and_then(|v| v.as_u64()).unwrap_or(5) as u32;
+    let accuracy = args.get("accuracy").and_then(|v| v.as_u64()).unwrap_or(15) as u32;
+    let smoothing = args.get("smoothing").and_then(|v| v.as_u64()).unwrap_or(10) as u32;
+    let zoom = args.get("zoom").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    crate::visual::stabilize_video_2pass(input, &output, shakiness, accuracy, smoothing, zoom).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_lut_rgb_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let r_expr = args.get("r_expr").and_then(|v| v.as_str()).unwrap_or("");
+    let g_expr = args.get("g_expr").and_then(|v| v.as_str()).unwrap_or("");
+    let b_expr = args.get("b_expr").and_then(|v| v.as_str()).unwrap_or("");
+    crate::visual::apply_lut_rgb(input, &output, r_expr, g_expr, b_expr).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_lut_rgb_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let r_expr = args.get("r_expr").and_then(|v| v.as_str()).unwrap_or("");
+    let g_expr = args.get("g_expr").and_then(|v| v.as_str()).unwrap_or("");
+    let b_expr = args.get("b_expr").and_then(|v| v.as_str()).unwrap_or("");
+    crate::visual::apply_lut_rgb(input, &output, r_expr, g_expr, b_expr).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_hsvhold_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let hue = args.get("hue").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let white = args.get("white").and_then(|v| v.as_f64()).unwrap_or(0.01);
+    let black = args.get("black").and_then(|v| v.as_f64()).unwrap_or(0.01);
+    let similarity = args.get("similarity").and_then(|v| v.as_f64()).unwrap_or(0.01);
+    let blend = args.get("blend").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    crate::visual::apply_hsvhold(input, &output, hue, white, black, similarity, blend).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_hsvhold_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let hue = args.get("hue").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let white = args.get("white").and_then(|v| v.as_f64()).unwrap_or(0.01);
+    let black = args.get("black").and_then(|v| v.as_f64()).unwrap_or(0.01);
+    let similarity = args.get("similarity").and_then(|v| v.as_f64()).unwrap_or(0.01);
+    let blend = args.get("blend").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    crate::visual::apply_hsvhold(input, &output, hue, white, black, similarity, blend).unwrap_or_else(|e| e)
+}
+
+fn execute_convert_pixel_format_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let pix_fmt = args.get("pix_fmt").and_then(|v| v.as_str()).unwrap_or("yuv420p");
+    crate::visual::convert_pixel_format(input, &output, pix_fmt).unwrap_or_else(|e| e)
+}
+
+fn execute_convert_pixel_format_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let pix_fmt = args.get("pix_fmt").and_then(|v| v.as_str()).unwrap_or("yuv420p");
+    crate::visual::convert_pixel_format(input, &output, pix_fmt).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_setsar_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let sar = args.get("sar").and_then(|v| v.as_str()).unwrap_or("1/1");
+    crate::visual::apply_setsar(input, &output, sar).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_setsar_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let sar = args.get("sar").and_then(|v| v.as_str()).unwrap_or("1/1");
+    crate::visual::apply_setsar(input, &output, sar).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_random_frames_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let frames = args.get("frames").and_then(|v| v.as_u64()).unwrap_or(30) as u32;
+    let seed = args.get("seed").and_then(|v| v.as_i64()).unwrap_or(-1);
+    crate::visual::apply_random_frames(input, &output, frames, seed).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_random_frames_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let frames = args.get("frames").and_then(|v| v.as_u64()).unwrap_or(30) as u32;
+    let seed = args.get("seed").and_then(|v| v.as_i64()).unwrap_or(-1);
+    crate::visual::apply_random_frames(input, &output, frames, seed).unwrap_or_else(|e| e)
+}
+
+fn execute_visualize_cqt_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let width = args.get("width").and_then(|v| v.as_u64()).unwrap_or(1920) as u32;
+    let height = args.get("height").and_then(|v| v.as_u64()).unwrap_or(1080) as u32;
+    let bar_h = args.get("bar_h").and_then(|v| v.as_u64()).unwrap_or(20) as u32;
+    let axis_h = args.get("axis_h").and_then(|v| v.as_u64()).unwrap_or(30) as u32;
+    crate::audio::visualize_cqt(input, &output, width, height, bar_h, axis_h).unwrap_or_else(|e| e)
+}
+
+fn execute_visualize_cqt_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let width = args.get("width").and_then(|v| v.as_u64()).unwrap_or(1920) as u32;
+    let height = args.get("height").and_then(|v| v.as_u64()).unwrap_or(1080) as u32;
+    let bar_h = args.get("bar_h").and_then(|v| v.as_u64()).unwrap_or(20) as u32;
+    let axis_h = args.get("axis_h").and_then(|v| v.as_u64()).unwrap_or(30) as u32;
+    crate::audio::visualize_cqt(input, &output, width, height, bar_h, axis_h).unwrap_or_else(|e| e)
+}
+
+fn execute_visualize_frequencies_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let width = args.get("width").and_then(|v| v.as_u64()).unwrap_or(1024) as u32;
+    let height = args.get("height").and_then(|v| v.as_u64()).unwrap_or(512) as u32;
+    let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("line");
+    let ascale = args.get("ascale").and_then(|v| v.as_str()).unwrap_or("log");
+    crate::audio::visualize_frequencies(input, &output, width, height, mode, ascale).unwrap_or_else(|e| e)
+}
+
+fn execute_visualize_frequencies_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let width = args.get("width").and_then(|v| v.as_u64()).unwrap_or(1024) as u32;
+    let height = args.get("height").and_then(|v| v.as_u64()).unwrap_or(512) as u32;
+    let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("line");
+    let ascale = args.get("ascale").and_then(|v| v.as_str()).unwrap_or("log");
+    crate::audio::visualize_frequencies(input, &output, width, height, mode, ascale).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_audio_iir_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let zeros = args.get("zeros").and_then(|v| v.as_str()).unwrap_or("");
+    let poles = args.get("poles").and_then(|v| v.as_str()).unwrap_or("");
+    let gains = args.get("gains").and_then(|v| v.as_str()).unwrap_or("");
+    crate::audio::apply_audio_iir(input, &output, zeros, poles, gains).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_audio_iir_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let zeros = args.get("zeros").and_then(|v| v.as_str()).unwrap_or("");
+    let poles = args.get("poles").and_then(|v| v.as_str()).unwrap_or("");
+    let gains = args.get("gains").and_then(|v| v.as_str()).unwrap_or("");
+    crate::audio::apply_audio_iir(input, &output, zeros, poles, gains).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_audio_expression_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let exprs = args.get("exprs").and_then(|v| v.as_str()).unwrap_or("val");
+    crate::audio::apply_audio_expression(input, &output, exprs).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_audio_expression_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let exprs = args.get("exprs").and_then(|v| v.as_str()).unwrap_or("val");
+    crate::audio::apply_audio_expression(input, &output, exprs).unwrap_or_else(|e| e)
+}
+
+fn execute_convert_audio_format_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let sample_fmts = args.get("sample_fmts").and_then(|v| v.as_str()).unwrap_or("");
+    let sample_rates = args.get("sample_rates").and_then(|v| v.as_str()).unwrap_or("");
+    let channel_layouts = args.get("channel_layouts").and_then(|v| v.as_str()).unwrap_or("");
+    crate::audio::convert_audio_format(input, &output, sample_fmts, sample_rates, channel_layouts).unwrap_or_else(|e| e)
+}
+
+fn execute_convert_audio_format_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let sample_fmts = args.get("sample_fmts").and_then(|v| v.as_str()).unwrap_or("");
+    let sample_rates = args.get("sample_rates").and_then(|v| v.as_str()).unwrap_or("");
+    let channel_layouts = args.get("channel_layouts").and_then(|v| v.as_str()).unwrap_or("");
+    crate::audio::convert_audio_format(input, &output, sample_fmts, sample_rates, channel_layouts).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_cross_correlate_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let secondary = args.get("secondary_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let size = args.get("size").and_then(|v| v.as_u64()).unwrap_or(256) as u32;
+    let algo = args.get("algo").and_then(|v| v.as_str()).unwrap_or("fast");
+    crate::audio::apply_cross_correlate(input, secondary, &output, size, algo).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_cross_correlate_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let secondary = args.get("secondary_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let size = args.get("size").and_then(|v| v.as_u64()).unwrap_or(256) as u32;
+    let algo = args.get("algo").and_then(|v| v.as_str()).unwrap_or("fast");
+    crate::audio::apply_cross_correlate(input, secondary, &output, size, algo).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_audio_multiply_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let secondary = args.get("secondary_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    crate::audio::apply_audio_multiply(input, secondary, &output).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_audio_multiply_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let secondary = args.get("secondary_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    crate::audio::apply_audio_multiply(input, secondary, &output).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_audio_contrast_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let contrast = args.get("contrast").and_then(|v| v.as_f64()).unwrap_or(33.0);
+    crate::audio::apply_audio_contrast(input, &output, contrast).unwrap_or_else(|e| e)
+}
+
+fn execute_apply_audio_contrast_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let contrast = args.get("contrast").and_then(|v| v.as_f64()).unwrap_or(33.0);
+    crate::audio::apply_audio_contrast(input, &output, contrast).unwrap_or_else(|e| e)
+}
+
+fn execute_decode_hdcd_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args["output_file"].as_str().unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let disable_autoconvert = args.get("disable_autoconvert").and_then(|v| v.as_bool()).unwrap_or(false);
+    let process_stereo = args.get("process_stereo").and_then(|v| v.as_bool()).unwrap_or(false);
+    let force_pe = args.get("force_pe").and_then(|v| v.as_bool()).unwrap_or(false);
+    crate::audio::decode_hdcd(input, &output, disable_autoconvert, process_stereo, force_pe).unwrap_or_else(|e| e)
+}
+
+fn execute_decode_hdcd_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let disable_autoconvert = args.get("disable_autoconvert").and_then(|v| v.as_bool()).unwrap_or(false);
+    let process_stereo = args.get("process_stereo").and_then(|v| v.as_bool()).unwrap_or(false);
+    let force_pe = args.get("force_pe").and_then(|v| v.as_bool()).unwrap_or(false);
+    crate::audio::decode_hdcd(input, &output, disable_autoconvert, process_stereo, force_pe).unwrap_or_else(|e| e)
 }

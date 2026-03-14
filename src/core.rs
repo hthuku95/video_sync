@@ -284,3 +284,455 @@ pub fn validate_video_file(file_path: &str) -> Result<bool, String> {
         Err(_) => Ok(false),
     }
 }
+
+// ============================================================================
+// BATCH 7 — Media Analysis Tools
+// ============================================================================
+
+pub fn detect_scene_changes(input_file: &str, threshold: f64) -> Result<String, String> {
+    let filter = format!("scdet=threshold={}", threshold);
+    let output = std::process::Command::new("ffmpeg")
+        .arg("-i").arg(input_file)
+        .arg("-vf").arg(filter)
+        .arg("-f").arg("null").arg("-")
+        .output()
+        .map_err(|e| format!("Failed to execute FFmpeg: {}", e))?;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let mut scenes = Vec::new();
+    for line in stderr.lines() {
+        if line.contains("scdet") && line.contains("pts_time") {
+            if let Some(ts_start) = line.find("pts_time:") {
+                let rest = &line[ts_start + 9..];
+                let end = rest.find(' ').or_else(|| rest.find('\n')).unwrap_or(rest.len());
+                if let Ok(ts) = rest[..end].trim().parse::<f64>() {
+                    scenes.push(ts);
+                }
+            }
+        }
+    }
+    if scenes.is_empty() {
+        Ok(format!("No scene changes detected above threshold {}", threshold))
+    } else {
+        Ok(format!("Scene changes at {} timestamps (seconds): {:?}", scenes.len(), scenes))
+    }
+}
+
+pub fn measure_loudness(input_file: &str) -> Result<String, String> {
+    let output = std::process::Command::new("ffmpeg")
+        .arg("-i").arg(input_file)
+        .arg("-af").arg("volumedetect")
+        .arg("-f").arg("null").arg("-")
+        .output()
+        .map_err(|e| format!("Failed to execute FFmpeg: {}", e))?;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let mut result = Vec::new();
+    for line in stderr.lines() {
+        if line.contains("mean_volume") || line.contains("max_volume") || line.contains("histogram") {
+            result.push(line.trim().to_string());
+        }
+    }
+    if result.is_empty() {
+        Err("Could not measure loudness — no audio stream or unsupported format".to_string())
+    } else {
+        Ok(result.join("\n"))
+    }
+}
+
+pub fn detect_silence(input_file: &str, noise_db: f64, min_duration: f64) -> Result<String, String> {
+    let filter = format!("silencedetect=noise={}dB:d={}", noise_db, min_duration);
+    let output = std::process::Command::new("ffmpeg")
+        .arg("-i").arg(input_file)
+        .arg("-af").arg(filter)
+        .arg("-f").arg("null").arg("-")
+        .output()
+        .map_err(|e| format!("Failed to execute FFmpeg: {}", e))?;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let mut result = Vec::new();
+    for line in stderr.lines() {
+        if line.contains("silence_start") || line.contains("silence_end") || line.contains("silence_duration") {
+            result.push(line.trim().to_string());
+        }
+    }
+    if result.is_empty() {
+        Ok("No silence detected".to_string())
+    } else {
+        Ok(result.join("\n"))
+    }
+}
+// ============================================================================
+// BATCH 8 — Quality Metrics
+// ============================================================================
+
+pub fn compare_ssim(reference_file: &str, distorted_file: &str) -> Result<String, String> {
+    let output = std::process::Command::new("ffmpeg")
+        .arg("-i").arg(distorted_file)
+        .arg("-i").arg(reference_file)
+        .arg("-filter_complex").arg("ssim")
+        .arg("-f").arg("null").arg("-")
+        .output()
+        .map_err(|e| format!("Failed to execute FFmpeg: {}", e))?;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let mut result = Vec::new();
+    for line in stderr.lines() {
+        if line.contains("SSIM") || line.contains("ssim") {
+            result.push(line.trim().to_string());
+        }
+    }
+    if result.is_empty() {
+        Err("Could not compute SSIM — ensure both files have the same resolution and codec support".to_string())
+    } else {
+        Ok(result.join("\n"))
+    }
+}
+
+pub fn compare_psnr(reference_file: &str, distorted_file: &str) -> Result<String, String> {
+    let output = std::process::Command::new("ffmpeg")
+        .arg("-i").arg(distorted_file)
+        .arg("-i").arg(reference_file)
+        .arg("-filter_complex").arg("psnr")
+        .arg("-f").arg("null").arg("-")
+        .output()
+        .map_err(|e| format!("Failed to execute FFmpeg: {}", e))?;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let mut result = Vec::new();
+    for line in stderr.lines() {
+        if line.contains("PSNR") || line.contains("psnr") {
+            result.push(line.trim().to_string());
+        }
+    }
+    if result.is_empty() {
+        Err("Could not compute PSNR — ensure both files have the same resolution and codec support".to_string())
+    } else {
+        Ok(result.join("\n"))
+    }
+}
+
+pub fn analyze_audio_stats(input_file: &str, reset_interval: u32) -> Result<String, String> {
+    let filter = if reset_interval > 0 {
+        format!("astats=reset={}", reset_interval)
+    } else {
+        "astats".to_string()
+    };
+    let output = std::process::Command::new("ffmpeg")
+        .arg("-i").arg(input_file)
+        .arg("-af").arg(filter)
+        .arg("-f").arg("null").arg("-")
+        .output()
+        .map_err(|e| format!("Failed to execute FFmpeg: {}", e))?;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let mut result = Vec::new();
+    for line in stderr.lines() {
+        if line.contains("RMS") || line.contains("Peak") || line.contains("Crest")
+            || line.contains("Flat") || line.contains("astats") || line.contains("DC") {
+            result.push(line.trim().to_string());
+        }
+    }
+    if result.is_empty() {
+        Err("Could not analyze audio stats — no audio stream or unsupported format".to_string())
+    } else {
+        Ok(result.join("\n"))
+    }
+}
+
+pub fn analyze_video_signal(input_file: &str) -> Result<String, String> {
+    let output = std::process::Command::new("ffmpeg")
+        .arg("-i").arg(input_file)
+        .arg("-vf").arg("signalstats")
+        .arg("-f").arg("null").arg("-")
+        .output()
+        .map_err(|e| format!("Failed to execute FFmpeg: {}", e))?;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let mut result = Vec::new();
+    for line in stderr.lines() {
+        if line.contains("YMIN") || line.contains("YMAX") || line.contains("UMIN")
+            || line.contains("VMIN") || line.contains("SATMAX") || line.contains("signalstats") {
+            result.push(line.trim().to_string());
+        }
+    }
+    if result.is_empty() {
+        let lines: Vec<&str> = stderr.lines().collect();
+        let start = if lines.len() > 10 { lines.len() - 10 } else { 0 };
+        Ok(lines[start..].join("\n"))
+    } else {
+        Ok(result.join("\n"))
+    }
+}
+
+// ================================================================
+// PHASE H — Codec / Format Depth
+// ================================================================
+
+/// VP9 encoding via libvpx-vp9. Best-quality open codec for web delivery.
+pub fn encode_vp9(input_file: &str, output_file: &str, crf: u32, bitrate: &str, speed: u32, threads: u32) -> Result<String, String> {
+    let mut command = Command::new("ffmpeg");
+    command.arg("-i").arg(input_file)
+        .arg("-c:v").arg("libvpx-vp9")
+        .arg("-crf").arg(crf.to_string())
+        .arg("-b:v").arg(if bitrate.is_empty() { "0" } else { bitrate })
+        .arg("-cpu-used").arg(speed.to_string())
+        .arg("-threads").arg(threads.to_string())
+        .arg("-c:a").arg("libopus")
+        .arg("-y").arg(output_file);
+    execute_ffmpeg_command(command)
+}
+
+/// AV1 encoding via libaom-av1 or libsvtav1. Next-gen codec with superior compression.
+pub fn encode_av1(input_file: &str, output_file: &str, crf: u32, speed: u32, threads: u32, encoder: &str) -> Result<String, String> {
+    let codec = if encoder.is_empty() { "libaom-av1" } else { encoder };
+    let mut command = Command::new("ffmpeg");
+    command.arg("-i").arg(input_file)
+        .arg("-c:v").arg(codec)
+        .arg("-crf").arg(crf.to_string())
+        .arg("-cpu-used").arg(speed.to_string())
+        .arg("-threads").arg(threads.to_string())
+        .arg("-c:a").arg("libopus")
+        .arg("-y").arg(output_file);
+    execute_ffmpeg_command(command)
+}
+
+/// H.265/HEVC encoding via libx265. Up to 50% better compression than H.264.
+pub fn encode_hevc(input_file: &str, output_file: &str, crf: u32, preset: &str, tune: &str) -> Result<String, String> {
+    let preset_val = if preset.is_empty() { "medium" } else { preset };
+    let mut command = Command::new("ffmpeg");
+    command.arg("-i").arg(input_file)
+        .arg("-c:v").arg("libx265")
+        .arg("-crf").arg(crf.to_string())
+        .arg("-preset").arg(preset_val);
+    if !tune.is_empty() {
+        command.arg("-tune").arg(tune);
+    }
+    command.arg("-c:a").arg("copy").arg("-y").arg(output_file);
+    execute_ffmpeg_command(command)
+}
+
+/// Opus audio encoding via libopus. Best-in-class lossy audio codec for streaming.
+pub fn encode_opus(input_file: &str, output_file: &str, bitrate_kbps: u32, vbr: bool, compression: u32) -> Result<String, String> {
+    let mut command = Command::new("ffmpeg");
+    command.arg("-i").arg(input_file)
+        .arg("-c:a").arg("libopus")
+        .arg("-b:a").arg(format!("{}k", bitrate_kbps))
+        .arg("-vbr").arg(if vbr { "on" } else { "off" })
+        .arg("-compression_level").arg(compression.to_string())
+        .arg("-vn")
+        .arg("-y").arg(output_file);
+    execute_ffmpeg_command(command)
+}
+
+/// HDR10 encoding via libx265 with mastering display and content light level metadata.
+pub fn encode_hdr10(input_file: &str, output_file: &str, crf: u32, preset: &str, master_display: &str, max_cll: &str) -> Result<String, String> {
+    let preset_val = if preset.is_empty() { "slow" } else { preset };
+    // default HDR10 mastering display (Rec. 2020 / D65 white point)
+    let md = if master_display.is_empty() {
+        "G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)L(10000000,1)"
+    } else {
+        master_display
+    };
+    let cll = if max_cll.is_empty() { "1000,400" } else { max_cll };
+    let x265_params = format!(
+        "hdr-opt=1:repeat-headers=1:colorprim=bt2020:transfer=smpte2084:colormatrix=bt2020nc:master-display={}:max-cll={}",
+        md, cll
+    );
+    let mut command = Command::new("ffmpeg");
+    command.arg("-i").arg(input_file)
+        .arg("-c:v").arg("libx265")
+        .arg("-crf").arg(crf.to_string())
+        .arg("-preset").arg(preset_val)
+        .arg("-x265-params").arg(x265_params)
+        .arg("-color_primaries").arg("bt2020")
+        .arg("-color_trc").arg("smpte2084")
+        .arg("-colorspace").arg("bt2020nc")
+        .arg("-c:a").arg("copy")
+        .arg("-y").arg(output_file);
+    execute_ffmpeg_command(command)
+}
+
+/// NVIDIA NVENC hardware encoding. Requires CUDA-capable GPU.
+pub fn encode_nvenc(input_file: &str, output_file: &str, codec: &str, preset: &str, bitrate: &str, cq: u32) -> Result<String, String> {
+    let nvenc_codec = match codec {
+        "hevc" | "h265" => "hevc_nvenc",
+        "av1" => "av1_nvenc",
+        _ => "h264_nvenc",
+    };
+    let preset_val = if preset.is_empty() { "p4" } else { preset };
+    let mut command = Command::new("ffmpeg");
+    command.arg("-hwaccel").arg("cuda")
+        .arg("-i").arg(input_file)
+        .arg("-c:v").arg(nvenc_codec)
+        .arg("-preset").arg(preset_val)
+        .arg("-cq").arg(cq.to_string());
+    if !bitrate.is_empty() {
+        command.arg("-b:v").arg(bitrate);
+    }
+    command.arg("-c:a").arg("copy").arg("-y").arg(output_file);
+    execute_ffmpeg_command(command)
+}
+
+/// Intel/AMD VAAPI hardware encoding. Requires VAAPI-compatible GPU.
+pub fn encode_vaapi(input_file: &str, output_file: &str, codec: &str, quality: u32, profile: &str) -> Result<String, String> {
+    let vaapi_codec = match codec {
+        "hevc" | "h265" => "hevc_vaapi",
+        "vp9" => "vp9_vaapi",
+        "av1" => "av1_vaapi",
+        _ => "h264_vaapi",
+    };
+    let profile_val = if profile.is_empty() { "high" } else { profile };
+    let mut command = Command::new("ffmpeg");
+    command.arg("-vaapi_device").arg("/dev/dri/renderD128")
+        .arg("-i").arg(input_file)
+        .arg("-vf").arg("format=nv12,hwupload")
+        .arg("-c:v").arg(vaapi_codec)
+        .arg("-qp").arg(quality.to_string())
+        .arg("-profile:v").arg(profile_val)
+        .arg("-c:a").arg("copy")
+        .arg("-y").arg(output_file);
+    execute_ffmpeg_command(command)
+}
+
+/// Intel Quick Sync Video (QSV) hardware encoding.
+pub fn encode_qsv(input_file: &str, output_file: &str, codec: &str, preset: &str, bitrate: &str) -> Result<String, String> {
+    let qsv_codec = match codec {
+        "hevc" | "h265" => "hevc_qsv",
+        "av1" => "av1_qsv",
+        "vp9" => "vp9_qsv",
+        _ => "h264_qsv",
+    };
+    let preset_val = if preset.is_empty() { "medium" } else { preset };
+    let mut command = Command::new("ffmpeg");
+    command.arg("-i").arg(input_file)
+        .arg("-c:v").arg(qsv_codec)
+        .arg("-preset").arg(preset_val);
+    if !bitrate.is_empty() {
+        command.arg("-b:v").arg(bitrate);
+    }
+    command.arg("-c:a").arg("copy").arg("-y").arg(output_file);
+    execute_ffmpeg_command(command)
+}
+
+/// Apple ProRes encoding via prores_ks. Professional intermediate codec for editing workflows.
+pub fn encode_prores(input_file: &str, output_file: &str, profile: u32, vendor: &str) -> Result<String, String> {
+    // profiles: 0=proxy, 1=LT, 2=standard, 3=HQ, 4=4444, 5=4444XQ
+    let vendor_val = if vendor.is_empty() { "apl0" } else { vendor };
+    let mut command = Command::new("ffmpeg");
+    command.arg("-i").arg(input_file)
+        .arg("-c:v").arg("prores_ks")
+        .arg("-profile:v").arg(profile.to_string())
+        .arg("-vendor").arg(vendor_val)
+        .arg("-c:a").arg("copy")
+        .arg("-y").arg(output_file);
+    execute_ffmpeg_command(command)
+}
+
+/// Avid DNxHD/DNxHR encoding. Professional intermediate codec for Avid workflows.
+pub fn encode_dnxhd(input_file: &str, output_file: &str, profile: &str) -> Result<String, String> {
+    // profile examples: dnxhd, dnxhr_lb, dnxhr_sq, dnxhr_hq, dnxhr_hqx, dnxhr_444
+    let profile_val = if profile.is_empty() { "dnxhr_sq" } else { profile };
+    let mut command = Command::new("ffmpeg");
+    command.arg("-i").arg(input_file)
+        .arg("-c:v").arg("dnxhd")
+        .arg("-vf").arg("scale=trunc(iw/2)*2:trunc(ih/2)*2")  // ensure even dimensions
+        .arg("-profile:v").arg(profile_val)
+        .arg("-c:a").arg("pcm_s16le")
+        .arg("-y").arg(output_file);
+    execute_ffmpeg_command(command)
+}
+
+/// High-quality animated GIF using FFmpeg palette optimisation (2-pass palettegen + paletteuse).
+pub fn encode_gif(input_file: &str, output_file: &str, fps: f64, scale: u32, loop_count: i32) -> Result<String, String> {
+    let palette_file = format!("{}.palette.png", output_file);
+    let fps_val = if fps <= 0.0 { 15.0 } else { fps };
+    let scale_val = if scale == 0 { 480 } else { scale };
+    let loop_val = if loop_count < 0 { 0 } else { loop_count }; // 0 = infinite
+
+    // Pass 1: generate palette
+    let vf_pass1 = format!("fps={},scale={}:-1:flags=lanczos,palettegen", fps_val, scale_val);
+    let pass1 = Command::new("ffmpeg")
+        .arg("-i").arg(input_file)
+        .arg("-vf").arg(&vf_pass1)
+        .arg("-y").arg(&palette_file)
+        .output()
+        .map_err(|e| format!("GIF palette pass failed: {}", e))?;
+    if !pass1.status.success() {
+        let _ = std::fs::remove_file(&palette_file);
+        return Err(format!("GIF palette generation failed: {}", String::from_utf8_lossy(&pass1.stderr)));
+    }
+
+    // Pass 2: encode GIF using palette
+    let vf_pass2 = format!("fps={},scale={}:-1:flags=lanczos[x];[x][1:v]paletteuse", fps_val, scale_val);
+    let mut command = Command::new("ffmpeg");
+    command.arg("-i").arg(input_file)
+        .arg("-i").arg(&palette_file)
+        .arg("-lavfi").arg(&vf_pass2)
+        .arg("-loop").arg(loop_val.to_string())
+        .arg("-y").arg(output_file);
+    let result = execute_ffmpeg_command(command);
+    let _ = std::fs::remove_file(&palette_file);
+    result
+}
+
+// ================================================================
+// PHASE I — Long-tail sweep, Batch 1
+// ================================================================
+
+/// Segment a video into fixed-duration chunks using the FFmpeg segment muxer.
+pub fn segment_video(input_file: &str, output_pattern: &str, segment_time: f64, reset_timestamps: bool) -> Result<String, String> {
+    let seg = if segment_time <= 0.0 { 60.0 } else { segment_time };
+    let reset = if reset_timestamps { "1" } else { "0" };
+    let mut command = Command::new("ffmpeg");
+    command.arg("-i").arg(input_file)
+        .arg("-c").arg("copy")
+        .arg("-f").arg("segment")
+        .arg("-segment_time").arg(seg.to_string())
+        .arg("-reset_timestamps").arg(reset)
+        .arg("-y").arg(output_pattern);
+    execute_ffmpeg_command(command)
+}
+
+/// Add black (or coloured) padding frames at the start/end of a video via FFmpeg tpad filter.
+pub fn pad_video_time(input_file: &str, output_file: &str, start_duration: f64, stop_duration: f64, color: &str) -> Result<String, String> {
+    let col = if color.is_empty() { "black" } else { color };
+    let filter = format!("tpad=start_duration={}:stop_duration={}:color={}", start_duration, stop_duration, col);
+    let mut command = Command::new("ffmpeg");
+    command.arg("-i").arg(input_file)
+        .arg("-vf").arg(filter)
+        .arg("-c:a").arg("copy")
+        .arg("-y").arg(output_file);
+    execute_ffmpeg_command(command)
+}
+
+/// WebM container encoding (VP8/VP9 video + Vorbis/Opus audio). Open web format.
+pub fn encode_webm(input_file: &str, output_file: &str, video_codec: &str, audio_codec: &str, crf: u32, bitrate: &str) -> Result<String, String> {
+    let vcodec = match video_codec {
+        "vp9" | "VP9" => "libvpx-vp9",
+        _ => "libvpx",  // VP8 default
+    };
+    let acodec = match audio_codec {
+        "opus" | "Opus" => "libopus",
+        _ => "libvorbis",  // Vorbis default
+    };
+    let mut command = Command::new("ffmpeg");
+    command.arg("-i").arg(input_file)
+        .arg("-c:v").arg(vcodec)
+        .arg("-crf").arg(crf.to_string())
+        .arg("-b:v").arg(if bitrate.is_empty() { "0" } else { bitrate })
+        .arg("-c:a").arg(acodec)
+        .arg("-y").arg(output_file);
+    execute_ffmpeg_command(command)
+}
+
+/// Generates a test pattern video using FFmpeg lavfi source (smptebars, smptehdbars, testsrc). No input file required.
+pub fn create_test_pattern(output_file: &str, width: u32, height: u32, duration: f64, pattern: &str, framerate: f64) -> Result<String, String> {
+    let w = if width == 0 { 1920 } else { width };
+    let h = if height == 0 { 1080 } else { height };
+    let d = if duration <= 0.0 { 10.0 } else { duration };
+    let fps = if framerate <= 0.0 { 25.0 } else { framerate };
+    let src = match pattern {
+        "smptehdbars" | "hd" | "hdbars" => "smptehdbars",
+        "testsrc" | "test" => "testsrc",
+        "testsrc2" => "testsrc2",
+        _ => "smptebars",
+    };
+    let lavfi = format!("{}=size={}x{}:duration={}:rate={}", src, w, h, d, fps);
+    let mut command = Command::new("ffmpeg");
+    command.arg("-f").arg("lavfi").arg("-i").arg(&lavfi).arg("-y").arg(output_file);
+    execute_ffmpeg_command(command)
+}
