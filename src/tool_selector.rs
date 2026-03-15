@@ -33,6 +33,7 @@ impl ToolCategory {
                 "convert_format",
                 "compress_video",
                 "stabilize_video",
+                "stabilize_video_2pass",
                 "deinterlace_video",
                 "reverse_video",
                 "loop_video",
@@ -513,7 +514,21 @@ impl ToolSelector {
             "sample aspect", "setsar", "anamorphic", "sar fix", "par fix",
             "random frames", "scramble frames", "glitch frame", "frame glitch",
             "cqt", "constant q transform", "showcqt", "musical spectrum",
-            "showfreqs", "frequency chart", "freq visualization", "frequency bar"
+            "showfreqs", "frequency chart", "freq visualization", "frequency bar",
+            // Natural language style requests
+            "vintage", "retro", "old film", "look old", "look vintage", "aged",
+            "make it look", "cinematic look", "film look", "movie look",
+            "horror look", "cyberpunk", "neon", "sci-fi look", "futuristic",
+            "warm look", "cool look", "teal and orange", "colour grade", "color grade",
+            // Captions and subtitles
+            "caption", "auto caption", "auto subtitle", "closed caption", ".srt", "srt file",
+            "burn subtitle", "burn caption", "hardcode sub", "hardcode caption",
+            // Vertical/short-form
+            "vertical", "portrait video", "tiktok", "reels", "shorts", "9:16",
+            "square video", "1:1",
+            // Stabilization natural language
+            "shaky cam", "shaky video", "wobbly", "hand held", "handheld",
+            "gopro", "action cam", "drone footage"
         ]) {
             selected_categories.push(ToolCategory::VisualEffects);
         }
@@ -532,7 +547,15 @@ impl ToolSelector {
             "hardware encod", "hw encod",
             "segment video", "split video chunk", "split into parts",
             "pad video", "add black frames", "add padding",
-            "test pattern", "smpte bar", "colour bar", "smptebars", "testsrc", "test card"
+            "test pattern", "smpte bar", "colour bar", "smptebars", "testsrc", "test card",
+            // Format/codec natural language
+            "convert to", "change format", "export as", "save as", "output format",
+            "mp4", "mov", "mkv", "avi", "webm", "flv", "wmv",
+            "h264", "h.264", "x264", "libx264", "aac", "mp3 to",
+            "make it smaller", "reduce file size", "smaller file",
+            // Speed / time
+            "speed up", "slow down", "time lapse", "timelapse", "hyperlapse",
+            "frame rate", "fps", "24fps", "30fps", "60fps",
         ]) {
             selected_categories.push(ToolCategory::CoreEditing);
         }
@@ -656,10 +679,13 @@ impl ToolSelector {
         // Workflow recipe keywords
         if Self::contains_any(&prompt_lower, &[
             "workflow", "recipe", "pipeline", "youtube ready", "youtube-ready",
+            "ready for youtube", "ready to upload", "ready to post",
             "podcast", "cleanup", "clean up", "cinematic", "film look",
-            "talking head", "talking-head", "create gif", "make gif", "gif",
+            "talking head", "talking-head", "webcam", "presenter", "zoom recording",
+            "create gif", "make gif", "gif",
             "all in one", "all-in-one", "one step", "one-step",
             "stabilize and", "denoise and", "grade and",
+            "quick export", "professional look", "broadcast ready",
         ]) {
             selected_categories.push(ToolCategory::WorkflowRecipes);
         }
@@ -740,14 +766,14 @@ mod tests {
     fn test_basic_editing_prompt() {
         let tools = ToolSelector::select_tools("trim my video from 0:10 to 0:30");
         assert!(tools.contains(&"trim_video".to_string()));
-        assert!(tools.len() <= 20);
+        assert!(!tools.is_empty());
     }
 
     #[test]
     fn test_audio_prompt() {
         let tools = ToolSelector::select_tools("add background music to my video");
         assert!(tools.contains(&"add_audio".to_string()));
-        assert!(tools.len() <= 20);
+        assert!(!tools.is_empty());
     }
 
     #[test]
@@ -757,21 +783,36 @@ mod tests {
         );
         assert!(tools.contains(&"add_text_overlay".to_string()));
         assert!(tools.contains(&"add_audio".to_string()));
-        assert!(tools.len() <= 20);
     }
 
     #[test]
-    fn test_tool_count_limit() {
-        let tools = ToolSelector::select_tools(
-            "I need to trim, merge, add text, add music, optimize for YouTube, \
-             apply filters, and create thumbnails"
-        );
-        assert!(tools.len() <= 20, "Tool count should not exceed 20");
+    fn test_visual_effects_triggers() {
+        let tools = ToolSelector::select_tools("make the video look cinematic with film grain");
+        assert!(tools.contains(&"add_film_grain".to_string()));
+    }
+
+    #[test]
+    fn test_workflow_recipe_trigger() {
+        let tools = ToolSelector::select_tools("make it youtube ready");
+        assert!(tools.contains(&"youtube_ready_export".to_string()));
+    }
+
+    #[test]
+    fn test_stabilize_trigger() {
+        let tools = ToolSelector::select_tools("stabilize my shaky footage");
+        assert!(tools.contains(&"stabilize_video_2pass".to_string()));
     }
 
     #[test]
     fn test_all_tools() {
         let tools = ToolSelector::all_tools();
-        assert!(tools.len() > 40); // Should have all ~52 tools
+        assert!(tools.len() > 300); // Should have all 320+ tools
+    }
+
+    #[test]
+    fn test_catch_all_on_unknown_prompt() {
+        // An unrecognised prompt should return all tools rather than a tiny set
+        let tools = ToolSelector::select_tools("do something creative with my video");
+        assert!(tools.len() > 100, "Catch-all should return all tools");
     }
 }
