@@ -300,6 +300,7 @@ pub async fn execute_tool_claude(name: &str, args: &Value) -> String {
         "generate_video_script" => execute_generate_video_script_claude(args).await,
         "create_blank_video" => execute_create_blank_video_claude(args),
         "generate_image" => execute_generate_image_claude(args).await,
+        "edit_image" => execute_edit_image_claude(args).await,
         "auto_generate_video" => execute_auto_generate_video_claude(args).await,
         "view_video" => execute_view_video_claude(args).await,
         "review_video" => execute_review_video_claude(args).await,
@@ -683,6 +684,7 @@ pub async fn execute_tool_gemini(name: &str, args: &HashMap<String, Value>) -> S
         "generate_video_script" => execute_generate_video_script_gemini(args).await,
         "create_blank_video" => execute_create_blank_video_gemini(args),
         "generate_image" => execute_generate_image_gemini(args).await,
+        "edit_image" => execute_edit_image_gemini(args).await,
         "auto_generate_video" => execute_auto_generate_video_gemini(args).await,
         "view_video" => execute_view_video_gemini(args).await,
         "review_video" => execute_review_video_gemini(args).await,
@@ -2344,12 +2346,12 @@ async fn execute_generate_image_claude(args: &Value) -> String {
     let output_file = args["output_file"].as_str().unwrap_or("");
     let aspect_ratio = args.get("aspect_ratio").and_then(|v| v.as_str());
     let image_size = args.get("image_size").and_then(|v| v.as_str());
+    let model = args.get("model").and_then(|v| v.as_str());
 
     if prompt.is_empty() || output_file.is_empty() {
         return "❌ Error: prompt and output_file are required".to_string();
     }
 
-    // Get Gemini API key from environment
     let api_key = std::env::var("GEMINI_API_KEY")
         .unwrap_or_else(|_| std::env::var("GOOGLE_API_KEY").unwrap_or_default());
 
@@ -2357,14 +2359,12 @@ async fn execute_generate_image_claude(args: &Value) -> String {
         return "❌ Error: GEMINI_API_KEY or GOOGLE_API_KEY environment variable not set".to_string();
     }
 
-    // Create Gemini client for image generation
     let client = crate::gemini_client::GeminiClient::new(api_key);
 
-    match client.generate_image(prompt, aspect_ratio, image_size).await {
+    match client.generate_image(prompt, aspect_ratio, image_size, model).await {
         Ok(image_bytes) => {
-            // Save image to file
             match tokio::fs::write(&output_file, &image_bytes).await {
-                Ok(_) => format!("✅ Successfully generated image using Nano Banana Pro and saved to: {}", output_file),
+                Ok(_) => format!("✅ Successfully generated image and saved to: {}", output_file),
                 Err(e) => format!("❌ Failed to save generated image: {}", e),
             }
         }
@@ -2379,12 +2379,12 @@ async fn execute_generate_image_gemini(args: &HashMap<String, Value>) -> String 
     let output_file = ensure_outputs_directory(output_file_raw);
     let aspect_ratio = args.get("aspect_ratio").and_then(|v| v.as_str());
     let image_size = args.get("image_size").and_then(|v| v.as_str());
+    let model = args.get("model").and_then(|v| v.as_str());
 
     if prompt.is_empty() || output_file.is_empty() {
         return "❌ Error: prompt and output_file are required".to_string();
     }
 
-    // Get Gemini API key from environment
     let api_key = std::env::var("GEMINI_API_KEY")
         .unwrap_or_else(|_| std::env::var("GOOGLE_API_KEY").unwrap_or_default());
 
@@ -2392,18 +2392,91 @@ async fn execute_generate_image_gemini(args: &HashMap<String, Value>) -> String 
         return "❌ Error: GEMINI_API_KEY or GOOGLE_API_KEY environment variable not set".to_string();
     }
 
-    // Create Gemini client for image generation
     let client = crate::gemini_client::GeminiClient::new(api_key);
 
-    match client.generate_image(prompt, aspect_ratio, image_size).await {
+    match client.generate_image(prompt, aspect_ratio, image_size, model).await {
         Ok(image_bytes) => {
-            // Save image to file
             match tokio::fs::write(&output_file, &image_bytes).await {
-                Ok(_) => format!("✅ Successfully generated image using Nano Banana Pro and saved to: {}", output_file),
+                Ok(_) => format!("✅ Successfully generated image and saved to: {}", output_file),
                 Err(e) => format!("❌ Failed to save generated image: {}", e),
             }
         }
         Err(e) => format!("❌ Failed to generate image: {}", e),
+    }
+}
+
+/// Edit an existing image using AI (Claude version)
+async fn execute_edit_image_claude(args: &Value) -> String {
+    let input_image = args["input_image"].as_str().unwrap_or("");
+    let prompt = args["prompt"].as_str().unwrap_or("");
+    let output_file = args["output_file"].as_str().unwrap_or("");
+    let aspect_ratio = args.get("aspect_ratio").and_then(|v| v.as_str());
+    let model = args.get("model").and_then(|v| v.as_str());
+
+    if input_image.is_empty() || prompt.is_empty() || output_file.is_empty() {
+        return "❌ Error: input_image, prompt, and output_file are required".to_string();
+    }
+
+    let image_bytes = match tokio::fs::read(input_image).await {
+        Ok(b) => b,
+        Err(e) => return format!("❌ Failed to read input image '{}': {}", input_image, e),
+    };
+
+    let api_key = std::env::var("GEMINI_API_KEY")
+        .unwrap_or_else(|_| std::env::var("GOOGLE_API_KEY").unwrap_or_default());
+
+    if api_key.is_empty() {
+        return "❌ Error: GEMINI_API_KEY or GOOGLE_API_KEY environment variable not set".to_string();
+    }
+
+    let client = crate::gemini_client::GeminiClient::new(api_key);
+
+    match client.edit_image(prompt, &image_bytes, aspect_ratio, model).await {
+        Ok(result_bytes) => {
+            match tokio::fs::write(&output_file, &result_bytes).await {
+                Ok(_) => format!("✅ Image edited and saved to: {}", output_file),
+                Err(e) => format!("❌ Failed to save edited image: {}", e),
+            }
+        }
+        Err(e) => format!("❌ Failed to edit image: {}", e),
+    }
+}
+
+/// Edit an existing image using AI (Gemini version)
+async fn execute_edit_image_gemini(args: &HashMap<String, Value>) -> String {
+    let input_image = args.get("input_image").and_then(|v| v.as_str()).unwrap_or("");
+    let prompt = args.get("prompt").and_then(|v| v.as_str()).unwrap_or("");
+    let output_file_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_file = ensure_outputs_directory(output_file_raw);
+    let aspect_ratio = args.get("aspect_ratio").and_then(|v| v.as_str());
+    let model = args.get("model").and_then(|v| v.as_str());
+
+    if input_image.is_empty() || prompt.is_empty() || output_file.is_empty() {
+        return "❌ Error: input_image, prompt, and output_file are required".to_string();
+    }
+
+    let image_bytes = match tokio::fs::read(input_image).await {
+        Ok(b) => b,
+        Err(e) => return format!("❌ Failed to read input image '{}': {}", input_image, e),
+    };
+
+    let api_key = std::env::var("GEMINI_API_KEY")
+        .unwrap_or_else(|_| std::env::var("GOOGLE_API_KEY").unwrap_or_default());
+
+    if api_key.is_empty() {
+        return "❌ Error: GEMINI_API_KEY or GOOGLE_API_KEY environment variable not set".to_string();
+    }
+
+    let client = crate::gemini_client::GeminiClient::new(api_key);
+
+    match client.edit_image(prompt, &image_bytes, aspect_ratio, model).await {
+        Ok(result_bytes) => {
+            match tokio::fs::write(&output_file, &result_bytes).await {
+                Ok(_) => format!("✅ Image edited and saved to: {}", output_file),
+                Err(e) => format!("❌ Failed to save edited image: {}", e),
+            }
+        }
+        Err(e) => format!("❌ Failed to edit image: {}", e),
     }
 }
 

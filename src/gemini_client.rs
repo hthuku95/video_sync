@@ -426,8 +426,16 @@ impl GeminiClient {
         }
     }
 
+    /// Resolve a user-supplied model alias to a concrete Gemini model ID.
+    fn resolve_image_model(model: Option<&str>) -> &str {
+        match model {
+            Some("fast") | Some("nano") => "gemini-2.0-flash-preview-image-generation",
+            Some("quality") | Some("pro") | None => "gemini-3-pro-image-preview",
+            Some(explicit) => explicit,
+        }
+    }
+
     /// Generate an image using Nano Banana Pro (Gemini 3 Pro Image Preview)
-    /// Generate image using Gemini 3 Pro Image (Nano Banana Pro)
     /// Supports 10 aspect ratios: 1:1, 2:3, 3:2, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, 21:9
     /// Supports 3 resolutions: 1K (1024px), 2K (2048px), 4K (4096px)
     pub async fn generate_image(
@@ -435,47 +443,47 @@ impl GeminiClient {
         prompt: &str,
         aspect_ratio: Option<&str>,
         image_size: Option<&str>,
+        model: Option<&str>,
     ) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
-        // Build the request with image configuration
+        let _permit = self.semaphore.acquire().await
+            .map_err(|e| format!("Gemini semaphore error: {}", e))?;
+
+        let model_id = Self::resolve_image_model(model);
+
         let mut config_map = serde_json::Map::new();
 
-        // Add image_config
         let mut image_config = serde_json::Map::new();
         image_config.insert(
-            "aspect_ratio".to_string(),
-            serde_json::Value::String(aspect_ratio.unwrap_or("1:1").to_string())
+            "aspectRatio".to_string(),
+            serde_json::Value::String(aspect_ratio.unwrap_or("1:1").to_string()),
         );
         image_config.insert(
-            "image_size".to_string(),
-            serde_json::Value::String(image_size.unwrap_or("2K").to_string())
+            "imageSize".to_string(),
+            serde_json::Value::String(image_size.unwrap_or("2K").to_string()),
         );
-        config_map.insert("image_config".to_string(), serde_json::Value::Object(image_config));
+        config_map.insert("imageConfig".to_string(), serde_json::Value::Object(image_config));
 
-        // Response modalities
         config_map.insert(
-            "response_modalities".to_string(),
+            "responseModalities".to_string(),
             serde_json::Value::Array(vec![
-                serde_json::Value::String("IMAGE".to_string())
-            ])
+                serde_json::Value::String("IMAGE".to_string()),
+            ]),
         );
 
         let request = serde_json::json!({
             "contents": [{
-                "parts": [{
-                    "text": prompt
-                }],
+                "parts": [{ "text": prompt }],
                 "role": "user"
             }],
             "generationConfig": config_map
         });
 
-        // Use Gemini 3 Pro Image (Nano Banana Pro) which supports aspect_ratio and image_size
         let url = format!(
-            "{}/models/gemini-3-pro-image-preview:generateContent?key={}",
-            self.base_url, self.api_key
+            "{}/models/{}:generateContent?key={}",
+            self.base_url, model_id, self.api_key
         );
 
-        tracing::debug!("Nano Banana Pro (Gemini 3 Pro Image) Request: {}", serde_json::to_string_pretty(&request)?);
+        tracing::debug!("generate_image ({}) request: {}", model_id, serde_json::to_string_pretty(&request)?);
 
         let response = self
             .client
@@ -487,11 +495,10 @@ impl GeminiClient {
 
         if response.status().is_success() {
             let response_text = response.text().await?;
-            tracing::debug!("Nano Banana Pro response: {}", response_text);
+            tracing::debug!("generate_image response: {}", response_text);
 
             let response_json: serde_json::Value = serde_json::from_str(&response_text)?;
 
-            // Extract base64 image from response
             if let Some(candidates) = response_json["candidates"].as_array() {
                 if let Some(candidate) = candidates.first() {
                     if let Some(content) = candidate.get("content") {
@@ -499,7 +506,6 @@ impl GeminiClient {
                             for part in parts {
                                 if let Some(inline_data) = part.get("inlineData") {
                                     if let Some(data) = inline_data["data"].as_str() {
-                                        // Decode base64 image
                                         let image_bytes = BASE64_STANDARD.decode(data)
                                             .map_err(|e| format!("Failed to decode base64 image: {}", e))?;
                                         return Ok(image_bytes);
@@ -514,26 +520,25 @@ impl GeminiClient {
             Err("No image data found in response".into())
         } else {
             let error_text = response.text().await?;
-            Err(format!("Nano Banana Pro API error: {}", error_text).into())
+            Err(format!("Gemini image generation API error ({}): {}", model_id, error_text).into())
         }
     }
 
     /// Edit an existing image using Gemini image generation (image-in → image-out).
     ///
     /// Passes `image_bytes` as an inline JPEG alongside a text `prompt` describing
-    /// the desired edits (e.g. "add bold white title text at the top"). Returns the
-    /// generated/edited image as raw bytes.
-    ///
-    /// Uses `gemini-3-pro-image-preview` with `responseModalities: ["TEXT", "IMAGE"]`.
-    pub async fn generate_image_from_frame(
+    /// the desired edits. Returns the edited image as raw bytes.
+    pub async fn edit_image(
         &self,
         prompt: &str,
         image_bytes: &[u8],
         aspect_ratio: Option<&str>,
+        model: Option<&str>,
     ) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
         let _permit = self.semaphore.acquire().await
             .map_err(|e| format!("Gemini semaphore error: {}", e))?;
 
+        let model_id = Self::resolve_image_model(model);
         let image_b64 = BASE64_STANDARD.encode(image_bytes);
 
         let mut config_map = serde_json::Map::new();
@@ -568,11 +573,11 @@ impl GeminiClient {
         });
 
         let url = format!(
-            "{}/models/gemini-3-pro-image-preview:generateContent?key={}",
-            self.base_url, self.api_key
+            "{}/models/{}:generateContent?key={}",
+            self.base_url, model_id, self.api_key
         );
 
-        tracing::debug!("generate_image_from_frame request prompt: {}", prompt);
+        tracing::debug!("edit_image ({}) prompt: {}", model_id, prompt);
 
         let response = self
             .client
@@ -610,8 +615,18 @@ impl GeminiClient {
             .into())
         } else {
             let error_text = response.text().await?;
-            Err(format!("Gemini image edit API error: {}", error_text).into())
+            Err(format!("Gemini image edit API error ({}): {}", model_id, error_text).into())
         }
+    }
+
+    /// Backward-compatible alias — used internally by the thumbnail pipeline.
+    pub async fn generate_image_from_frame(
+        &self,
+        prompt: &str,
+        image_bytes: &[u8],
+        aspect_ratio: Option<&str>,
+    ) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
+        self.edit_image(prompt, image_bytes, aspect_ratio, None).await
     }
 
     pub fn create_video_editing_tools() -> Vec<FunctionDeclaration> {
@@ -1899,7 +1914,7 @@ impl GeminiClient {
             },
             FunctionDeclaration {
                 name: "generate_image".to_string(),
-                description: "Generates an image using Google's Nano Banana Pro (Gemini 3 Pro Image) model based on a text prompt. Supports high-resolution (2K, 4K) image generation with advanced text rendering. Use this to create custom images, overlays, backgrounds, or any visual elements needed for video editing.".to_string(),
+                description: "Generates an image from scratch using Google's Gemini image model based on a text prompt. Use when you need to create a custom image that doesn't exist yet — e.g. branded backgrounds, custom overlay graphics, title cards, logos. For editing an existing image file, use edit_image instead.".to_string(),
                 parameters: Parameters {
                     param_type: "object".to_string(),
                     properties: {
@@ -1924,9 +1939,51 @@ impl GeminiClient {
                             description: "Resolution: '1K' (1024px), '2K' (2048px), '4K' (4096px) (default: '2K')".to_string(),
                             items: None,
                         });
+                        props.insert("model".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Model to use: 'fast'/'nano' for quick generation, 'quality'/'pro' for best results (default: 'quality'). Or pass an explicit Gemini model ID.".to_string(),
+                            items: None,
+                        });
                         props
                     },
                     required: vec!["prompt".to_string(), "output_file".to_string()],
+                },
+            },
+            FunctionDeclaration {
+                name: "edit_image".to_string(),
+                description: "Edit or transform an existing image using AI. Use when you need to: modify a downloaded Pexels photo, add text/graphics to a video frame, change the style of an image, remove or replace elements, or create a variant of an existing image. Requires a path to the source image on disk. Example: extract a frame with extract_frames, then call edit_image to add a title overlay.".to_string(),
+                parameters: Parameters {
+                    param_type: "object".to_string(),
+                    properties: {
+                        let mut props = HashMap::new();
+                        props.insert("input_image".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Path to the source image file to edit (e.g., 'outputs/frame.jpg' or 'outputs/pexels_photo.jpg')".to_string(),
+                            items: None,
+                        });
+                        props.insert("prompt".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Instructions describing what edits to make (e.g., 'add bold white title text at the top saying VIDEOSYNC', 'make it look cinematic with warm tones', 'remove the background')".to_string(),
+                            items: None,
+                        });
+                        props.insert("output_file".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Path where the edited image should be saved (e.g., 'outputs/edited_overlay.jpg')".to_string(),
+                            items: None,
+                        });
+                        props.insert("aspect_ratio".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Output aspect ratio: '1:1', '16:9', '9:16', '4:3', '3:4' (default: '16:9')".to_string(),
+                            items: None,
+                        });
+                        props.insert("model".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Model to use: 'fast'/'nano' for quick edits, 'quality'/'pro' for best results (default: 'quality')".to_string(),
+                            items: None,
+                        });
+                        props
+                    },
+                    required: vec!["input_image".to_string(), "prompt".to_string(), "output_file".to_string()],
                 },
             },
             FunctionDeclaration {

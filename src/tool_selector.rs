@@ -214,6 +214,7 @@ impl ToolCategory {
                 "apply_random_frames",
                 "visualize_cqt",
                 "visualize_frequencies",
+                "edit_image",
             ],
             ToolCategory::AudioProcessing => vec![
                 "adjust_volume",
@@ -318,6 +319,7 @@ impl ToolCategory {
                 "generate_sound_effect",
                 "generate_music",
                 "generate_image",
+                "edit_image",
                 "generate_video_script",
                 "auto_generate_video",
             ],
@@ -528,7 +530,11 @@ impl ToolSelector {
             "square video", "1:1",
             // Stabilization natural language
             "shaky cam", "shaky video", "wobbly", "hand held", "handheld",
-            "gopro", "action cam", "drone footage"
+            "gopro", "action cam", "drone footage",
+            // Image editing
+            "edit image", "modify image", "image edit", "transform image",
+            "change image", "image overlay", "frame edit", "image style",
+            "edit the image", "modify the image", "update the image"
         ]) {
             selected_categories.push(ToolCategory::VisualEffects);
         }
@@ -645,7 +651,8 @@ impl ToolSelector {
         // AI generation keywords
         if Self::contains_any(&prompt_lower, &[
             "generate", "create", "tts", "text to speech", "sound effect",
-            "background music", "script", "auto", "ai", "artificial"
+            "background music", "script", "auto", "ai", "artificial",
+            "edit image", "modify image", "image edit", "transform image", "ai image"
         ]) {
             selected_categories.push(ToolCategory::AIGeneration);
         }

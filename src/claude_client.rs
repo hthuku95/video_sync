@@ -1460,13 +1460,13 @@ impl ClaudeClient {
             },
             ClaudeTool {
                 name: "generate_image".to_string(),
-                description: "Generates an image using Google's Imagen AI model based on a text prompt. Use this to create custom images, overlays, backgrounds, or any visual elements needed for video editing.".to_string(),
+                description: "Generates an image from scratch using Google's Gemini image model based on a text prompt. Use when you need to create a custom image that doesn't exist yet — e.g. branded backgrounds, custom overlay graphics, title cards, logos. For editing an existing image file, use edit_image instead.".to_string(),
                 input_schema: InputSchema {
                     schema_type: "object".to_string(),
                     properties: HashMap::from([
                         ("prompt".to_string(), PropertyDefinition {
                             prop_type: "string".to_string(),
-                            description: "Detailed text description of the image to generate".to_string(),
+                            description: "Detailed text description of the image to generate. Be specific about style, lighting, composition, and details.".to_string(),
                             items: None,
                         }),
                         ("output_file".to_string(), PropertyDefinition {
@@ -1474,23 +1474,58 @@ impl ClaudeClient {
                             description: "Path where the generated image should be saved (e.g., 'outputs/generated_overlay.png')".to_string(),
                             items: None,
                         }),
-                        ("width".to_string(), PropertyDefinition {
-                            prop_type: "number".to_string(),
-                            description: "Image width in pixels (default: 1024)".to_string(),
-                            items: None,
-                        }),
-                        ("height".to_string(), PropertyDefinition {
-                            prop_type: "number".to_string(),
-                            description: "Image height in pixels (default: 1024)".to_string(),
-                            items: None,
-                        }),
                         ("aspect_ratio".to_string(), PropertyDefinition {
                             prop_type: "string".to_string(),
-                            description: "Aspect ratio: '1:1', '16:9', '9:16', '4:3' (optional, overrides width/height)".to_string(),
+                            description: "Aspect ratio: '1:1', '16:9', '9:16', '4:3', '3:4' (default: '1:1')".to_string(),
+                            items: None,
+                        }),
+                        ("image_size".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Resolution: '1K' (1024px), '2K' (2048px), '4K' (4096px) (default: '2K')".to_string(),
+                            items: None,
+                        }),
+                        ("model".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Model to use: 'fast'/'nano' for quick generation, 'quality'/'pro' for best results (default: 'quality'). Or pass an explicit Gemini model ID.".to_string(),
                             items: None,
                         }),
                     ]),
                     required: vec!["prompt".to_string(), "output_file".to_string()],
+                },
+            },
+            ClaudeTool {
+                name: "edit_image".to_string(),
+                description: "Edit or transform an existing image using AI. Use when you need to: modify a downloaded Pexels photo, add text/graphics to a video frame, change the style of an image, remove or replace elements, or create a variant of an existing image. Requires a path to the source image on disk. Example workflow: extract a frame with extract_frames, then call edit_image to add a title overlay before compositing it back.".to_string(),
+                input_schema: InputSchema {
+                    schema_type: "object".to_string(),
+                    properties: HashMap::from([
+                        ("input_image".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Path to the source image file to edit (e.g., 'outputs/frame.jpg' or 'outputs/pexels_photo.jpg')".to_string(),
+                            items: None,
+                        }),
+                        ("prompt".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Instructions describing what edits to make (e.g., 'add bold white title text at the top saying VIDEOSYNC', 'make it look cinematic with warm tones', 'remove the background')".to_string(),
+                            items: None,
+                        }),
+                        ("output_file".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Path where the edited image should be saved (e.g., 'outputs/edited_overlay.jpg')".to_string(),
+                            items: None,
+                        }),
+                        ("aspect_ratio".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Output aspect ratio: '1:1', '16:9', '9:16', '4:3', '3:4' (default: '16:9')".to_string(),
+                            items: None,
+                        }),
+                        ("model".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Model to use: 'fast'/'nano' for quick edits, 'quality'/'pro' for best results (default: 'quality')".to_string(),
+                            items: None,
+                        }),
+                    ]),
+                    required: vec!["input_image".to_string(), "prompt".to_string(), "output_file".to_string()],
                 },
             },
             ClaudeTool {
