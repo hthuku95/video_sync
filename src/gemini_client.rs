@@ -7,8 +7,9 @@ use rand::Rng;
 use base64::prelude::*;
 
 /// Maximum number of concurrent Gemini API calls across the entire process.
-/// Keeping this low prevents hitting per-minute quota limits when many jobs run in parallel.
-const GEMINI_MAX_CONCURRENT: usize = 3;
+/// At 600 jobs/day target (25/hr), 5 permits allows Phase A to process ~5 jobs simultaneously
+/// without exceeding paid-tier RPM limits. Raise to 8 if on a higher quota tier.
+const GEMINI_MAX_CONCURRENT: usize = 5;
 
 #[derive(Debug, Clone)]
 pub struct GeminiClient {

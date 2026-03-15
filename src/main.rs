@@ -414,7 +414,12 @@ async fn main() {
         workflow_checkpointer,
         token_manager,
         twitch_client: twitch_client_opt,
-        download_semaphore: Arc::new(Semaphore::new(2)),
+        download_semaphore: Arc::new(Semaphore::new(
+            std::env::var("DOWNLOAD_SEMAPHORE_PERMITS")
+                .ok()
+                .and_then(|v| v.parse::<usize>().ok())
+                .unwrap_or(4), // 4 concurrent downloads (was 2)
+        )),
     });
 
     // Admin-only routes
