@@ -11,3 +11,4 @@ pub mod jobs; // 🆕 Job control endpoints
 pub mod youtube; // 📺 YouTube integration
 pub mod clipping; // 📹 YouTube clipping feature
 pub mod health; // 🏥 Health check and monitoring endpoints
+pub mod tools; // 🎬 On-demand FFmpeg tool endpoints

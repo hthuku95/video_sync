@@ -35,6 +35,7 @@ mod visual;
 mod transform;
 mod advanced;
 mod export;
+mod workflows; // Named multi-step FFmpeg workflow chains
 
 // AppState now holds the database connection pool, vector database clients, Claude/Gemini client, Pexels client, job manager, and workflow checkpointer
 pub struct AppState {
@@ -435,6 +436,7 @@ async fn main() {
         .merge(handlers::youtube::youtube_routes()) // 📺 YouTube integration
         .merge(handlers::clipping::clipping_routes()) // 📹 YouTube clipping feature
         .merge(handlers::health::health_routes()) // 🏥 Health check and monitoring
+        .merge(handlers::tools::tools_routes()) // 🎬 On-demand FFmpeg tools
         .merge(admin_only_routes) // Admin-only routes like API docs
         .route("/api/status", axum::routing::get(api_status))
         // .layer(axum::middleware::from_fn(middleware::frontend_rate_limit::frontend_rate_limit_middleware))
