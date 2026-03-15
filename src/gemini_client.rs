@@ -6551,6 +6551,33 @@ impl GeminiClient {
                     required: vec!["input_file".to_string(), "output_file".to_string()],
                 },
             },
+
+            // ── Workflow Recipes ─────────────────────────────────────────
+            FunctionDeclaration {
+                name: "youtube_ready_export".to_string(),
+                description: "Multi-step YouTube export pipeline: stabilize → normalize color → loudnorm to −14 LUFS → convert to yuv420p. Use when the user wants their video ready for YouTube in one shot.".to_string(),
+                parameters: { let mut p = HashMap::new(); p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to the input video file".to_string(), items: None }); p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to save the YouTube-ready output".to_string(), items: None }); Parameters { param_type: "object".to_string(), properties: p, required: vec!["input_file".to_string(), "output_file".to_string()] } },
+            },
+            FunctionDeclaration {
+                name: "podcast_cleanup".to_string(),
+                description: "Multi-step podcast audio cleanup: denoise → de-ess sibilance → limit peaks → loudnorm to −16 LUFS. Use when the user wants professional speech audio.".to_string(),
+                parameters: { let mut p = HashMap::new(); p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to the input audio or video file".to_string(), items: None }); p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to save the cleaned audio".to_string(), items: None }); Parameters { param_type: "object".to_string(), properties: p, required: vec!["input_file".to_string(), "output_file".to_string()] } },
+            },
+            FunctionDeclaration {
+                name: "cinematic_grade".to_string(),
+                description: "Multi-step cinematic color grade: vintage curves → vibrance → vignette → film grain. Use when the user wants a cinematic look for trailers or highlight reels.".to_string(),
+                parameters: { let mut p = HashMap::new(); p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to the input video file".to_string(), items: None }); p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to save the graded video".to_string(), items: None }); Parameters { param_type: "object".to_string(), properties: p, required: vec!["input_file".to_string(), "output_file".to_string()] } },
+            },
+            FunctionDeclaration {
+                name: "create_gif_workflow".to_string(),
+                description: "Creates a high-quality optimised GIF: trim segment → scale → palette-optimised GIF. Use when the user wants a GIF from a video clip.".to_string(),
+                parameters: { let mut p = HashMap::new(); p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to the input video file".to_string(), items: None }); p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to save the GIF".to_string(), items: None }); p.insert("start_seconds".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Start time in seconds. Default 0.".to_string(), items: None }); p.insert("duration_seconds".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Duration in seconds. Default 5.".to_string(), items: None }); p.insert("width".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Output width in pixels. Default 480.".to_string(), items: None }); p.insert("fps".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Frames per second. Default 15.".to_string(), items: None }); Parameters { param_type: "object".to_string(), properties: p, required: vec!["input_file".to_string(), "output_file".to_string()] } },
+            },
+            FunctionDeclaration {
+                name: "talking_head_cleanup".to_string(),
+                description: "Multi-step talking head video cleanup: stabilize → denoise speech → de-ess sibilance → loudnorm to −16 LUFS. Use for YouTube talking head footage, interviews, or screen recordings.".to_string(),
+                parameters: { let mut p = HashMap::new(); p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to the input video file".to_string(), items: None }); p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to save the cleaned video".to_string(), items: None }); Parameters { param_type: "object".to_string(), properties: p, required: vec!["input_file".to_string(), "output_file".to_string()] } },
+            },
         ]
     }
 

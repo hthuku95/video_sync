@@ -14,6 +14,7 @@ pub enum ToolCategory {
     AnalysisReview,    // Video/image analysis, review
     YouTubeIntegration,// YouTube optimization and trends
     PlatformExport,    // Export and final answer tools
+    WorkflowRecipes,   // Multi-step named chains (youtube_ready, podcast_cleanup, etc.)
 }
 
 impl ToolCategory {
@@ -368,6 +369,13 @@ impl ToolCategory {
                 "submit_final_answer",
                 "set_chat_title",
             ],
+            ToolCategory::WorkflowRecipes => vec![
+                "youtube_ready_export",
+                "podcast_cleanup",
+                "cinematic_grade",
+                "create_gif_workflow",
+                "talking_head_cleanup",
+            ],
         }
     }
 }
@@ -645,6 +653,17 @@ impl ToolSelector {
             selected_categories.push(ToolCategory::YouTubeIntegration);
         }
 
+        // Workflow recipe keywords
+        if Self::contains_any(&prompt_lower, &[
+            "workflow", "recipe", "pipeline", "youtube ready", "youtube-ready",
+            "podcast", "cleanup", "clean up", "cinematic", "film look",
+            "talking head", "talking-head", "create gif", "make gif", "gif",
+            "all in one", "all-in-one", "one step", "one-step",
+            "stabilize and", "denoise and", "grade and",
+        ]) {
+            selected_categories.push(ToolCategory::WorkflowRecipes);
+        }
+
         // Collect all tools from selected categories
         let mut tools = HashSet::new();
         for category in &selected_categories {
@@ -697,6 +716,7 @@ impl ToolSelector {
             ToolCategory::AnalysisReview,
             ToolCategory::YouTubeIntegration,
             ToolCategory::PlatformExport,
+            ToolCategory::WorkflowRecipes,
         ];
 
         let mut tools = HashSet::new();

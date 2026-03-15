@@ -6749,6 +6749,72 @@ impl ClaudeClient {
                     required: vec!["input_file".to_string(), "output_file".to_string()],
                 },
             },
+
+            // ── Workflow Recipes ─────────────────────────────────────────
+            ClaudeTool {
+                name: "youtube_ready_export".to_string(),
+                description: "Multi-step YouTube export pipeline: stabilize → normalize color → loudnorm to −14 LUFS → convert to yuv420p. Use this when the user wants their video ready for YouTube upload in one shot.".to_string(),
+                input_schema: InputSchema {
+                    schema_type: "object".to_string(),
+                    properties: HashMap::from([
+                        ("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to the input video file".to_string(), items: None }),
+                        ("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to save the YouTube-ready output (e.g. youtube_ready.mp4)".to_string(), items: None }),
+                    ]),
+                    required: vec!["input_file".to_string(), "output_file".to_string()],
+                },
+            },
+            ClaudeTool {
+                name: "podcast_cleanup".to_string(),
+                description: "Multi-step podcast audio cleanup: denoise → de-ess sibilance → limit peaks → loudnorm to −16 LUFS. Use this when the user wants professional-sounding podcast or speech audio.".to_string(),
+                input_schema: InputSchema {
+                    schema_type: "object".to_string(),
+                    properties: HashMap::from([
+                        ("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to the input audio or video file".to_string(), items: None }),
+                        ("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to save the cleaned audio (e.g. podcast_clean.wav)".to_string(), items: None }),
+                    ]),
+                    required: vec!["input_file".to_string(), "output_file".to_string()],
+                },
+            },
+            ClaudeTool {
+                name: "cinematic_grade".to_string(),
+                description: "Multi-step cinematic color grade: vintage curves → vibrance boost → vignette → film grain. Use this when the user wants a cinematic, film-like look for trailers or highlight reels.".to_string(),
+                input_schema: InputSchema {
+                    schema_type: "object".to_string(),
+                    properties: HashMap::from([
+                        ("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to the input video file".to_string(), items: None }),
+                        ("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to save the graded video (e.g. cinematic_output.mp4)".to_string(), items: None }),
+                    ]),
+                    required: vec!["input_file".to_string(), "output_file".to_string()],
+                },
+            },
+            ClaudeTool {
+                name: "create_gif_workflow".to_string(),
+                description: "Creates a high-quality optimised GIF: trim segment → scale → palette-optimised GIF. Use when the user wants to create a GIF from a video clip.".to_string(),
+                input_schema: InputSchema {
+                    schema_type: "object".to_string(),
+                    properties: HashMap::from([
+                        ("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to the input video file".to_string(), items: None }),
+                        ("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to save the GIF (e.g. output.gif)".to_string(), items: None }),
+                        ("start_seconds".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Start time in seconds. Default 0.".to_string(), items: None }),
+                        ("duration_seconds".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Duration of the GIF in seconds. Default 5.".to_string(), items: None }),
+                        ("width".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Output width in pixels. Default 480.".to_string(), items: None }),
+                        ("fps".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Frames per second. Default 15.".to_string(), items: None }),
+                    ]),
+                    required: vec!["input_file".to_string(), "output_file".to_string()],
+                },
+            },
+            ClaudeTool {
+                name: "talking_head_cleanup".to_string(),
+                description: "Multi-step talking head video cleanup: stabilize → denoise speech → de-ess sibilance → loudnorm to −16 LUFS. Use for YouTube talking head footage, interviews, or screen recordings.".to_string(),
+                input_schema: InputSchema {
+                    schema_type: "object".to_string(),
+                    properties: HashMap::from([
+                        ("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to the input video file".to_string(), items: None }),
+                        ("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to save the cleaned video (e.g. talking_head_clean.mp4)".to_string(), items: None }),
+                    ]),
+                    required: vec!["input_file".to_string(), "output_file".to_string()],
+                },
+            },
         ]
     }
 

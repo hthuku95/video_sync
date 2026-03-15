@@ -609,6 +609,13 @@ pub async fn execute_tool_claude(name: &str, args: &Value) -> String {
         "measure_silence" => execute_measure_silence_claude(args),
         "measure_audio_spectrum" => execute_measure_audio_spectrum_claude(args),
 
+        // ── Workflow Recipes ──────────────────────────────────────────────
+        "youtube_ready_export" => execute_youtube_ready_export_claude(args),
+        "podcast_cleanup" => execute_podcast_cleanup_claude(args),
+        "cinematic_grade" => execute_cinematic_grade_claude(args),
+        "create_gif_workflow" => execute_create_gif_workflow_claude(args),
+        "talking_head_cleanup" => execute_talking_head_cleanup_claude(args),
+
         _ => format!("❌ Unknown tool: {}", name),
     }
 }
@@ -984,6 +991,13 @@ pub async fn execute_tool_gemini(name: &str, args: &HashMap<String, Value>) -> S
         "blend_audio_streams" => execute_blend_audio_streams_gemini(args),
         "measure_silence" => execute_measure_silence_gemini(args),
         "measure_audio_spectrum" => execute_measure_audio_spectrum_gemini(args),
+
+        // ── Workflow Recipes ──────────────────────────────────────────────
+        "youtube_ready_export" => execute_youtube_ready_export_gemini(args),
+        "podcast_cleanup" => execute_podcast_cleanup_gemini(args),
+        "cinematic_grade" => execute_cinematic_grade_gemini(args),
+        "create_gif_workflow" => execute_create_gif_workflow_gemini(args),
+        "talking_head_cleanup" => execute_talking_head_cleanup_gemini(args),
 
         _ => format!("❌ Unknown tool: {}", name),
     }
@@ -9494,4 +9508,87 @@ fn execute_decode_hdcd_gemini(args: &HashMap<String, Value>) -> String {
     let process_stereo = args.get("process_stereo").and_then(|v| v.as_bool()).unwrap_or(false);
     let force_pe = args.get("force_pe").and_then(|v| v.as_bool()).unwrap_or(false);
     crate::audio::decode_hdcd(input, &output, disable_autoconvert, process_stereo, force_pe).unwrap_or_else(|e| e)
+}
+
+// ============================================================================
+// WORKFLOW RECIPES — Executor Functions
+// Multi-step chains exposed as single AI-callable tools
+// ============================================================================
+
+fn execute_youtube_ready_export_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("youtube_ready_output.mp4");
+    let output = ensure_outputs_directory(output_raw);
+    crate::workflows::youtube_ready_export(input, &output).unwrap_or_else(|e| e)
+}
+
+fn execute_youtube_ready_export_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("youtube_ready_output.mp4");
+    let output = ensure_outputs_directory(output_raw);
+    crate::workflows::youtube_ready_export(input, &output).unwrap_or_else(|e| e)
+}
+
+fn execute_podcast_cleanup_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("podcast_cleaned.wav");
+    let output = ensure_outputs_directory(output_raw);
+    crate::workflows::podcast_cleanup(input, &output).unwrap_or_else(|e| e)
+}
+
+fn execute_podcast_cleanup_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("podcast_cleaned.wav");
+    let output = ensure_outputs_directory(output_raw);
+    crate::workflows::podcast_cleanup(input, &output).unwrap_or_else(|e| e)
+}
+
+fn execute_cinematic_grade_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("cinematic_output.mp4");
+    let output = ensure_outputs_directory(output_raw);
+    crate::workflows::cinematic_grade(input, &output).unwrap_or_else(|e| e)
+}
+
+fn execute_cinematic_grade_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("cinematic_output.mp4");
+    let output = ensure_outputs_directory(output_raw);
+    crate::workflows::cinematic_grade(input, &output).unwrap_or_else(|e| e)
+}
+
+fn execute_create_gif_workflow_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("output.gif");
+    let output = ensure_outputs_directory(output_raw);
+    let start = args.get("start_seconds").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let duration = args.get("duration_seconds").and_then(|v| v.as_f64()).unwrap_or(5.0);
+    let width = args.get("width").and_then(|v| v.as_u64()).unwrap_or(480) as u32;
+    let fps = args.get("fps").and_then(|v| v.as_f64()).unwrap_or(15.0);
+    crate::workflows::create_gif(input, &output, start, duration, width, fps).unwrap_or_else(|e| e)
+}
+
+fn execute_create_gif_workflow_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("output.gif");
+    let output = ensure_outputs_directory(output_raw);
+    let start = args.get("start_seconds").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let duration = args.get("duration_seconds").and_then(|v| v.as_f64()).unwrap_or(5.0);
+    let width = args.get("width").and_then(|v| v.as_u64()).unwrap_or(480) as u32;
+    let fps = args.get("fps").and_then(|v| v.as_f64()).unwrap_or(15.0);
+    crate::workflows::create_gif(input, &output, start, duration, width, fps).unwrap_or_else(|e| e)
+}
+
+fn execute_talking_head_cleanup_claude(args: &Value) -> String {
+    let input = args["input_file"].as_str().unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("talking_head_output.mp4");
+    let output = ensure_outputs_directory(output_raw);
+    crate::workflows::talking_head_cleanup(input, &output).unwrap_or_else(|e| e)
+}
+
+fn execute_talking_head_cleanup_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("talking_head_output.mp4");
+    let output = ensure_outputs_directory(output_raw);
+    crate::workflows::talking_head_cleanup(input, &output).unwrap_or_else(|e| e)
 }
