@@ -60,6 +60,7 @@ pub fn admin_routes() -> Router {
         .route("/api/admin/performance/viral-factors", get(admin_viral_factor_performance))
         .route("/api/admin/performance/channel-health", get(admin_channel_health))
         .route("/api/admin/performance/recommendations", get(admin_learning_recommendations))
+        .route("/api/admin/performance/thumbnails", get(admin_thumbnail_stats))
         .layer(axum::middleware::from_fn(admin_middleware))
         .layer(axum::middleware::from_fn(auth_middleware));
     
@@ -3776,6 +3777,8 @@ pub async fn admin_get_job_details(
             "youtube_video_id": row.get::<Option<String>, _>("youtube_video_id"),
             "upload_status": row.get::<String, _>("upload_status"),
             "published_at": row.get::<Option<chrono::DateTime<chrono::Utc>>, _>("published_at"),
+            "custom_thumbnail_path": row.get::<Option<String>, _>("custom_thumbnail_path"),
+            "thumbnail_generation_method": row.get::<Option<String>, _>("thumbnail_generation_method"),
         })
     }).collect();
 
@@ -4845,6 +4848,54 @@ pub async fn admin_learning_recommendations(
     }
 }
 
+/// Thumbnail generation statistics for the performance dashboard.
+/// Returns counts by generation method and an AI success rate.
+pub async fn admin_thumbnail_stats(
+    Extension(state): Extension<Arc<crate::AppState>>,
+) -> impl axum::response::IntoResponse {
+    let rows = sqlx::query(
+        "SELECT
+            COALESCE(thumbnail_generation_method, 'none') AS method,
+            COUNT(*) AS count
+         FROM extracted_clips
+         GROUP BY thumbnail_generation_method
+         ORDER BY count DESC"
+    )
+    .fetch_all(&state.db_pool)
+    .await;
+
+    match rows {
+        Ok(rows) => {
+            let stats: Vec<serde_json::Value> = rows.iter().map(|r| {
+                serde_json::json!({
+                    "method": r.try_get::<String, _>("method").unwrap_or_default(),
+                    "count": r.try_get::<i64, _>("count").unwrap_or(0),
+                })
+            }).collect();
+
+            let total: i64 = stats.iter()
+                .map(|s| s["count"].as_i64().unwrap_or(0))
+                .sum();
+            let ai_count: i64 = stats.iter()
+                .filter(|s| s["method"].as_str().map_or(false, |m| m.contains("ai") || m.contains("hybrid")))
+                .map(|s| s["count"].as_i64().unwrap_or(0))
+                .sum();
+            let ai_rate = if total > 0 { ai_count * 100 / total } else { 0 };
+
+            axum::Json(serde_json::json!({
+                "success": true,
+                "stats": stats,
+                "total_clips": total,
+                "ai_generated_count": ai_count,
+                "ai_success_rate_pct": ai_rate,
+            }))
+        }
+        Err(e) => {
+            axum::Json(serde_json::json!({ "success": false, "error": e.to_string() }))
+        }
+    }
+}
+
 // ── Performance Dashboard UI ────────────────────────────────────────────────
 
 pub async fn admin_performance_page() -> Html<String> {
@@ -5175,6 +5226,11 @@ pub async fn admin_performance_page() -> Html<String> {
                 <div class="card-title">Active Learning Recommendations</div>
                 <div id="recsList"><div class="loading">Loading...</div></div>
             </div>
+
+            <div class="card" style="margin-top:1.5rem;">
+                <div class="card-title">🎨 AI Thumbnail Pipeline Status</div>
+                <div id="thumbStats"><div class="loading">Loading...</div></div>
+            </div>
         </div>
     </div>
 
@@ -5375,10 +5431,70 @@ pub async fn admin_performance_page() -> Html<String> {
             window.location.href = '/admin/login';
         }
 
+        async function loadThumbnailStats() {
+            try {
+                const res = await fetch('/api/admin/performance/thumbnails', {
+                    headers: { 'Authorization': 'Bearer ' + authToken }
+                });
+                const data = await res.json();
+                if (!data.success) throw new Error(data.error || 'Failed');
+
+                const stats = data.stats || [];
+                if (stats.length === 0) {
+                    document.getElementById('thumbStats').innerHTML =
+                        '<div class="empty">No clips extracted yet.</div>';
+                    return;
+                }
+
+                const aiRate = data.ai_success_rate_pct || 0;
+                const total = data.total_clips || 0;
+                const aiCount = data.ai_generated_count || 0;
+
+                let html = '<div style="display:flex;gap:1.5rem;margin-bottom:1rem;flex-wrap:wrap;">'
+                    + '<div style="background:#e8f4fd;padding:0.75rem 1.25rem;border-radius:6px;">'
+                    + '<div style="font-size:1.5rem;font-weight:700;">' + total + '</div>'
+                    + '<div style="color:#6c757d;font-size:0.8rem;">Total Clips</div></div>'
+                    + '<div style="background:#d4edda;padding:0.75rem 1.25rem;border-radius:6px;">'
+                    + '<div style="font-size:1.5rem;font-weight:700;">' + aiCount + '</div>'
+                    + '<div style="color:#6c757d;font-size:0.8rem;">AI-Generated Thumbnails</div></div>'
+                    + '<div style="background:#fff3cd;padding:0.75rem 1.25rem;border-radius:6px;">'
+                    + '<div style="font-size:1.5rem;font-weight:700;">' + aiRate + '%</div>'
+                    + '<div style="color:#6c757d;font-size:0.8rem;">AI Success Rate</div></div>'
+                    + '</div>';
+
+                html += '<table style="width:100%;border-collapse:collapse;font-size:0.875rem;">'
+                    + '<thead><tr style="background:#f8f9fa;">'
+                    + '<th style="text-align:left;padding:0.5rem;">Generation Method</th>'
+                    + '<th style="text-align:right;padding:0.5rem;">Clips</th>'
+                    + '<th style="text-align:right;padding:0.5rem;">Share</th>'
+                    + '</tr></thead><tbody>';
+
+                stats.forEach(function(s) {
+                    const pct = total > 0 ? ((s.count / total) * 100).toFixed(1) : '0.0';
+                    const methodLabel = s.method === 'ffmpeg_timestamp' ? '📸 FFmpeg frame (fallback)'
+                        : s.method === 'ai_gemini_overlay' ? '🤖 AI Gemini overlay'
+                        : s.method === 'none' ? '— None'
+                        : escHtml(s.method);
+                    html += '<tr style="border-top:1px solid #dee2e6;">'
+                        + '<td style="padding:0.5rem;">' + methodLabel + '</td>'
+                        + '<td style="text-align:right;padding:0.5rem;">' + s.count + '</td>'
+                        + '<td style="text-align:right;padding:0.5rem;">' + pct + '%</td>'
+                        + '</tr>';
+                });
+
+                html += '</tbody></table>';
+                document.getElementById('thumbStats').innerHTML = html;
+            } catch (e) {
+                document.getElementById('thumbStats').innerHTML =
+                    '<div class="loading">Error: ' + escHtml(e.message) + '</div>';
+            }
+        }
+
         function refreshAll() {
             loadViralFactors();
             loadChannelHealth();
             loadRecommendations();
+            loadThumbnailStats();
         }
 
         refreshAll();
