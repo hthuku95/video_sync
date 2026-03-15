@@ -1,8 +1,9 @@
 // FFmpeg Tool Smoke Test Suite — Option C: Data-driven, 1 row per tool
 //
-// Covers all ~280 testable FFmpeg tools with a single test function.
+// Covers all ~280 testable FFmpeg tools + 3 Option A agent pipeline tools.
 // Skipped tools: hardware-only (nvenc/vaapi/qsv), API-key-dependent (pexels,
-//   generate_*, view_*, analyze_image), external-file-required (lut3d, dnn models),
+//   generate_*, view_*, analyze_image, analyze_pexels_thumbnail),
+//   external-file-required (lut3d, dnn models),
 //   and agent-control tools (submit_final_answer, set_chat_title).
 //
 // Run: cargo test --test ffmpeg_tool_smoke_test -- --nocapture
@@ -576,6 +577,24 @@ fn all_cases() -> Vec<Case> {
         // ── GENERATOR (no input) ──────────────────────────────────────────────
         gen("create_test_pattern", "mp4", json!({"width": 640, "height": 360, "duration": 3.0, "pattern": "smptebars", "framerate": 25.0})),
         gen("create_blank_video",  "mp4", json!({"width": 640, "height": 360, "duration": 3.0, "color": "black", "fps": 25})),
+
+        // ── OPTION A — AI AGENT PIPELINE TOOLS ───────────────────────────────
+        // analyze_pexels_thumbnail: skipped — requires live Pexels URL + Gemini API key
+        Case {
+            tool: "generate_video_queries",
+            args: json!({"topic": "smoke test topic", "style": "cinematic", "count": 3}),
+            output: None,
+        },
+        Case {
+            tool: "verify_clip_quality_tool",
+            args: json!({"input_file": V1}),
+            output: None,
+        },
+        Case {
+            tool: "run_video_qa",
+            args: json!({"input_file": V1}),
+            output: None,
+        },
     ]
 }
 
