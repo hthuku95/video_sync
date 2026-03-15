@@ -35,6 +35,7 @@ pub mod visual;
 pub mod transform;
 pub mod advanced;
 pub mod export;
+pub mod workflows;
 
 // Re-export commonly used types for convenience
 pub use types::*;
