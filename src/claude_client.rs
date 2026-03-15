@@ -1528,6 +1528,77 @@ impl ClaudeClient {
                     required: vec!["input_image".to_string(), "prompt".to_string(), "output_file".to_string()],
                 },
             },
+            // ── Option A: Agentic video generation pipeline tools ──────────────
+            ClaudeTool {
+                name: "generate_video_queries".to_string(),
+                description: "Generate diverse Pexels search queries from a high-level video topic. Use this as the FIRST step when building a video from scratch instead of auto_generate_video — it gives you the search queries you then use with pexels_search, analyze_pexels_thumbnail, pexels_download_video, verify_clip_quality_tool, and merge_videos for full agentic control over every clip selection decision.".to_string(),
+                input_schema: InputSchema {
+                    schema_type: "object".to_string(),
+                    properties: HashMap::from([
+                        ("topic".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "The video topic or concept (e.g. 'sunrise over mountain peaks', 'startup office culture')".to_string(),
+                            items: None,
+                        }),
+                        ("num_queries".to_string(), PropertyDefinition {
+                            prop_type: "number".to_string(),
+                            description: "How many search queries to generate (default: 5, matches the number of clips you want)".to_string(),
+                            items: None,
+                        }),
+                    ]),
+                    required: vec!["topic".to_string()],
+                },
+            },
+            ClaudeTool {
+                name: "analyze_pexels_thumbnail".to_string(),
+                description: "Download a Pexels video thumbnail URL and analyze it with Gemini vision to score its relevance to your video topic (1-10). Use this AFTER pexels_search, on each result's video_pictures[0].picture URL, BEFORE calling pexels_download_video — so you only download full clips that are actually relevant. Score >= 5 means proceed; score < 5 means skip and try the next result.".to_string(),
+                input_schema: InputSchema {
+                    schema_type: "object".to_string(),
+                    properties: HashMap::from([
+                        ("thumbnail_url".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "The Pexels thumbnail image URL from video_pictures[0].picture in the search results".to_string(),
+                            items: None,
+                        }),
+                        ("topic".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Your video topic — used to judge relevance (e.g. 'sunset beach')".to_string(),
+                            items: None,
+                        }),
+                    ]),
+                    required: vec!["thumbnail_url".to_string(), "topic".to_string()],
+                },
+            },
+            ClaudeTool {
+                name: "verify_clip_quality_tool".to_string(),
+                description: "Run FFmpeg quality checks on a downloaded video clip: duration > 1s, no frozen frames >= 1.5s, no black frames >= 1s. Use this AFTER pexels_download_video to confirm the clip is usable before adding it to your merge list. Returns '✅ QA passed' or '❌ QA failed: reason'.".to_string(),
+                input_schema: InputSchema {
+                    schema_type: "object".to_string(),
+                    properties: HashMap::from([
+                        ("file_path".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Path to the downloaded video clip to verify (e.g. 'outputs/clip_0_abc123.mp4')".to_string(),
+                            items: None,
+                        }),
+                    ]),
+                    required: vec!["file_path".to_string()],
+                },
+            },
+            ClaudeTool {
+                name: "run_video_qa".to_string(),
+                description: "Run a full automated QA suite on a finished video file using FFmpeg signal analysis. Returns a structured report covering: duration, resolution, FPS, format, file size, audio presence, frozen frames, black frames, and scene change count. Use this AFTER merge_videos and BEFORE presenting the output to the user. Complements view_video (AI content review) and review_video (pass/fail verdict).".to_string(),
+                input_schema: InputSchema {
+                    schema_type: "object".to_string(),
+                    properties: HashMap::from([
+                        ("file_path".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Path to the video file to QA (e.g. 'outputs/final_video.mp4')".to_string(),
+                            items: None,
+                        }),
+                    ]),
+                    required: vec!["file_path".to_string()],
+                },
+            },
             ClaudeTool {
                 name: "auto_generate_video".to_string(),
                 description: "Orchestrates automatic video generation from a topic/prompt. This high-level tool searches Pexels for stock footage, generates images, downloads clips, merges them, adds text overlays, music, and exports a complete video. Perfect for creating videos from scratch.".to_string(),

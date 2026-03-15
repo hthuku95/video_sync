@@ -302,6 +302,10 @@ pub async fn execute_tool_claude(name: &str, args: &Value) -> String {
         "generate_image" => execute_generate_image_claude(args).await,
         "edit_image" => execute_edit_image_claude(args).await,
         "auto_generate_video" => execute_auto_generate_video_claude(args).await,
+        "generate_video_queries" => execute_generate_video_queries_claude(args),
+        "analyze_pexels_thumbnail" => execute_analyze_pexels_thumbnail_claude(args).await,
+        "verify_clip_quality_tool" => execute_verify_clip_quality_tool_claude(args),
+        "run_video_qa" => execute_run_video_qa_claude(args),
         "view_video" => execute_view_video_claude(args).await,
         "review_video" => execute_review_video_claude(args).await,
         "view_image" => execute_view_image_claude(args).await,
@@ -686,6 +690,10 @@ pub async fn execute_tool_gemini(name: &str, args: &HashMap<String, Value>) -> S
         "generate_image" => execute_generate_image_gemini(args).await,
         "edit_image" => execute_edit_image_gemini(args).await,
         "auto_generate_video" => execute_auto_generate_video_gemini(args).await,
+        "generate_video_queries" => execute_generate_video_queries_gemini(args),
+        "analyze_pexels_thumbnail" => execute_analyze_pexels_thumbnail_gemini(args).await,
+        "verify_clip_quality_tool" => execute_verify_clip_quality_tool_gemini(args),
+        "run_video_qa" => execute_run_video_qa_gemini(args),
         "view_video" => execute_view_video_gemini(args).await,
         "review_video" => execute_review_video_gemini(args).await,
         "view_image" => execute_view_image_gemini(args).await,
@@ -2522,65 +2530,82 @@ async fn execute_auto_generate_video_claude(args: &Value) -> String {
 
     for (i, query) in search_queries.iter().enumerate().take(num_clips) {
         tracing::info!("🔍 auto_generate_video: Processing clip {}/{} - Searching Pexels for '{}'", i + 1, num_clips, query);
-        // Search Pexels - Get 3 results for diversity
+        // Search Pexels — fetch 5 results so thumbnail screening has more candidates
         let pexels_result = execute_pexels_search_claude(&serde_json::json!({
             "query": query,
             "media_type": "videos",
-            "per_page": 3  // Get multiple results to ensure diversity
+            "per_page": 5
         })).await;
 
-        // Parse the result to extract video URL - ENFORCE DIVERSITY
         if let Ok(search_data) = serde_json::from_str::<Value>(&pexels_result) {
             if let Some(videos) = search_data["videos"].as_array() {
-                // Try to find a video we haven't used yet
-                let mut selected_video = None;
-                for video in videos {
-                    if let Some(video_id) = video["id"].as_i64() {
-                        if !downloaded_video_ids.contains(&video_id) {
-                            selected_video = Some(video);
-                            downloaded_video_ids.push(video_id);
-                            tracing::info!("✅ Selected unique video ID: {} (avoiding duplicates)", video_id);
-                            break;
-                        }
+                // Clone unique candidates so we can await across them without borrow issues
+                let candidates: Vec<Value> = videos.iter()
+                    .filter_map(|v| v["id"].as_i64().and_then(|id| {
+                        if !downloaded_video_ids.contains(&id) { Some(v.clone()) } else { None }
+                    }))
+                    .collect();
+
+                // Option B: screen thumbnails with Gemini vision before downloading the full clip
+                let mut selected_video: Option<Value> = None;
+                for candidate in &candidates {
+                    let thumb_url = candidate["video_pictures"][0]["picture"].as_str().unwrap_or("");
+                    let score = if !thumb_url.is_empty() {
+                        screen_pexels_thumbnail(thumb_url, topic).await
+                    } else {
+                        5 // no thumbnail — proceed
+                    };
+                    tracing::info!("🖼️ Clip {}/{}: thumbnail score {}/10 for '{}'", i + 1, num_clips, score, query);
+                    if score >= 5 {
+                        result.push_str(&format!("  🖼️ Clip {}: thumbnail {}/10 — downloading\n", i + 1, score));
+                        selected_video = Some(candidate.clone());
+                        break;
+                    } else {
+                        result.push_str(&format!("  ⬜ Clip {}: thumbnail {}/10 — too low, trying next\n", i + 1, score));
                     }
                 }
 
-                // If all videos are duplicates, warn and use first one anyway
-                let video = if let Some(v) = selected_video {
-                    v
-                } else {
-                    tracing::warn!("⚠️ All Pexels results were duplicates, using first result anyway");
-                    videos.first().unwrap()
-                };
+                // Fallback: use first unique candidate if no thumbnail passed screening
+                if selected_video.is_none() {
+                    if let Some(first) = candidates.into_iter().next() {
+                        tracing::warn!("⚠️ No relevant thumbnail for '{}', using first unique video", query);
+                        result.push_str(&format!("  ⚠️ No relevant thumbnail for '{}', using best available\n", query));
+                        selected_video = Some(first);
+                    }
+                }
 
-                if let Some(files) = video["video_files"].as_array() {
-                    if let Some(file) = files.first() {
-                        if let Some(link) = file["link"].as_str() {
-                            let clip_path = format!("outputs/clip_{}_{}.mp4", i, uuid::Uuid::new_v4().to_string().split('-').next().unwrap());
-                            tracing::info!("📥 auto_generate_video: Downloading clip {}/{} from {}", i + 1, num_clips, link);
+                if let Some(video) = selected_video {
+                    if let Some(vid_id) = video["id"].as_i64() {
+                        downloaded_video_ids.push(vid_id);
+                        tracing::info!("✅ Selected video ID {} for query '{}'", vid_id, query);
+                    }
+                    if let Some(files) = video["video_files"].as_array() {
+                        if let Some(file) = files.first() {
+                            if let Some(link) = file["link"].as_str() {
+                                let clip_path = format!("outputs/clip_{}_{}.mp4", i, uuid::Uuid::new_v4().to_string().split('-').next().unwrap());
+                                tracing::info!("📥 auto_generate_video: Downloading clip {}/{} from {}", i + 1, num_clips, link);
 
-                            // Download the clip
-                            let download_result = execute_pexels_download_video_claude(&serde_json::json!({
-                                "video_url": link,
-                                "output_file": &clip_path
-                            })).await;
+                                let download_result = execute_pexels_download_video_claude(&serde_json::json!({
+                                    "video_url": link,
+                                    "output_file": &clip_path
+                                })).await;
 
-                            if download_result.contains("✅") {
-                                // Pre-verify clip quality before accepting
-                                match verify_clip_quality(&clip_path) {
-                                    Ok(()) => {
-                                        downloaded_files.push(clip_path.clone());
-                                        tracing::info!("✅ auto_generate_video: Clip {}/{} passed QA, accepted: {}", i + 1, num_clips, clip_path);
-                                        result.push_str(&format!("  ✓ Downloaded clip {}: {} (QA passed)\n", i + 1, query));
+                                if download_result.contains("✅") {
+                                    match verify_clip_quality(&clip_path) {
+                                        Ok(()) => {
+                                            downloaded_files.push(clip_path.clone());
+                                            tracing::info!("✅ Clip {}/{} passed QA: {}", i + 1, num_clips, clip_path);
+                                            result.push_str(&format!("  ✓ Downloaded clip {}: {} (QA passed)\n", i + 1, query));
+                                        }
+                                        Err(reason) => {
+                                            tracing::warn!("⚠️ Clip {}/{} REJECTED — {} — deleting {}", i + 1, num_clips, reason, clip_path);
+                                            result.push_str(&format!("  ✗ Clip {}: {} — rejected ({}), skipping\n", i + 1, query, reason));
+                                            let _ = std::fs::remove_file(&clip_path);
+                                        }
                                     }
-                                    Err(reason) => {
-                                        tracing::warn!("⚠️ auto_generate_video: Clip {}/{} REJECTED — {} — deleting {}", i + 1, num_clips, reason, clip_path);
-                                        result.push_str(&format!("  ✗ Clip {}: {} — rejected ({}), skipping\n", i + 1, query, reason));
-                                        let _ = std::fs::remove_file(&clip_path);
-                                    }
+                                } else {
+                                    tracing::warn!("⚠️ auto_generate_video: Failed to download clip {}/{} - {}", i + 1, num_clips, download_result);
                                 }
-                            } else {
-                                tracing::warn!("⚠️ auto_generate_video: Failed to download clip {}/{} - {}", i + 1, num_clips, download_result);
                             }
                         }
                     }
@@ -2772,58 +2797,77 @@ async fn execute_auto_generate_video_gemini(args: &HashMap<String, Value>) -> St
         let mut search_args = HashMap::new();
         search_args.insert("query".to_string(), Value::String(query.clone()));
         search_args.insert("media_type".to_string(), Value::String("videos".to_string()));
-        search_args.insert("per_page".to_string(), Value::Number(serde_json::Number::from(3))); // Get 3 results for diversity
+        search_args.insert("per_page".to_string(), Value::Number(serde_json::Number::from(5))); // 5 results for thumbnail screening
 
-        // Search Pexels
         let pexels_result = execute_pexels_search_gemini(&search_args).await;
 
-        // Parse the result to extract video URL - ENFORCE DIVERSITY
         if let Ok(search_data) = serde_json::from_str::<Value>(&pexels_result) {
             if let Some(videos) = search_data["videos"].as_array() {
-                // Try to find a video we haven't used yet
-                let mut selected_video = None;
-                for video in videos {
-                    if let Some(video_id) = video["id"].as_i64() {
-                        if !downloaded_video_ids.contains(&video_id) {
-                            selected_video = Some(video);
-                            downloaded_video_ids.push(video_id);
-                            break;
-                        }
+                // Clone unique candidates so we can await across them
+                let candidates: Vec<Value> = videos.iter()
+                    .filter_map(|v| v["id"].as_i64().and_then(|id| {
+                        if !downloaded_video_ids.contains(&id) { Some(v.clone()) } else { None }
+                    }))
+                    .collect();
+
+                // Option B: screen thumbnails with Gemini vision before downloading the full clip
+                let mut selected_video: Option<Value> = None;
+                for candidate in &candidates {
+                    let thumb_url = candidate["video_pictures"][0]["picture"].as_str().unwrap_or("");
+                    let score = if !thumb_url.is_empty() {
+                        screen_pexels_thumbnail(thumb_url, topic).await
+                    } else {
+                        5
+                    };
+                    tracing::info!("🖼️ Clip {}/{}: thumbnail score {}/10 for '{}'", i + 1, num_clips, score, query);
+                    if score >= 5 {
+                        result.push_str(&format!("  🖼️ Clip {}: thumbnail {}/10 — downloading\n", i + 1, score));
+                        selected_video = Some(candidate.clone());
+                        break;
+                    } else {
+                        result.push_str(&format!("  ⬜ Clip {}: thumbnail {}/10 — too low, trying next\n", i + 1, score));
                     }
                 }
 
-                // If all videos are duplicates, use first one anyway
-                let video = selected_video.or_else(|| videos.first()).unwrap();
+                if selected_video.is_none() {
+                    if let Some(first) = candidates.into_iter().next() {
+                        tracing::warn!("⚠️ No relevant thumbnail for '{}', using first unique video", query);
+                        selected_video = Some(first);
+                    }
+                }
 
-                if let Some(files) = video["video_files"].as_array() {
-                    if let Some(file) = files.first() {
-                        if let Some(link) = file["link"].as_str() {
-                            let clip_path = format!("outputs/clip_{}_{}.mp4", i, uuid::Uuid::new_v4().to_string().split('-').next().unwrap());
-                            tracing::info!("📥 auto_generate_video: Downloading clip {}/{} from {}", i + 1, num_clips, link);
+                if let Some(video) = selected_video {
+                    if let Some(vid_id) = video["id"].as_i64() {
+                        downloaded_video_ids.push(vid_id);
+                    }
+                    if let Some(files) = video["video_files"].as_array() {
+                        if let Some(file) = files.first() {
+                            if let Some(link) = file["link"].as_str() {
+                                let clip_path = format!("outputs/clip_{}_{}.mp4", i, uuid::Uuid::new_v4().to_string().split('-').next().unwrap());
+                                tracing::info!("📥 auto_generate_video: Downloading clip {}/{} from {}", i + 1, num_clips, link);
 
-                            let mut download_args = HashMap::new();
-                            download_args.insert("video_url".to_string(), Value::String(link.to_string()));
-                            download_args.insert("output_file".to_string(), Value::String(clip_path.clone()));
+                                let mut download_args = HashMap::new();
+                                download_args.insert("video_url".to_string(), Value::String(link.to_string()));
+                                download_args.insert("output_file".to_string(), Value::String(clip_path.clone()));
 
-                            // Download the clip
-                            let download_result = execute_pexels_download_video_gemini(&download_args).await;
+                                let download_result = execute_pexels_download_video_gemini(&download_args).await;
 
-                            if download_result.contains("✅") {
-                                // Pre-verify clip quality before accepting
-                                match verify_clip_quality(&clip_path) {
-                                    Ok(()) => {
-                                        downloaded_files.push(clip_path.clone());
-                                        tracing::info!("✅ auto_generate_video: Clip {}/{} passed QA, accepted: {}", i + 1, num_clips, clip_path);
-                                        result.push_str(&format!("  ✓ Downloaded clip {}: {} (QA passed)\n", i + 1, query));
+                                if download_result.contains("✅") {
+                                    match verify_clip_quality(&clip_path) {
+                                        Ok(()) => {
+                                            downloaded_files.push(clip_path.clone());
+                                            tracing::info!("✅ Clip {}/{} passed QA: {}", i + 1, num_clips, clip_path);
+                                            result.push_str(&format!("  ✓ Downloaded clip {}: {} (QA passed)\n", i + 1, query));
+                                        }
+                                        Err(reason) => {
+                                            tracing::warn!("⚠️ Clip {}/{} REJECTED — {} — deleting {}", i + 1, num_clips, reason, clip_path);
+                                            result.push_str(&format!("  ✗ Clip {}: {} — rejected ({}), skipping\n", i + 1, query, reason));
+                                            let _ = std::fs::remove_file(&clip_path);
+                                        }
                                     }
-                                    Err(reason) => {
-                                        tracing::warn!("⚠️ auto_generate_video: Clip {}/{} REJECTED — {} — deleting {}", i + 1, num_clips, reason, clip_path);
-                                        result.push_str(&format!("  ✗ Clip {}: {} — rejected ({}), skipping\n", i + 1, query, reason));
-                                        let _ = std::fs::remove_file(&clip_path);
-                                    }
+                                } else {
+                                    tracing::warn!("⚠️ auto_generate_video: Failed to download clip {}/{} - {}", i + 1, num_clips, download_result);
                                 }
-                            } else {
-                                tracing::warn!("⚠️ auto_generate_video: Failed to download clip {}/{} - {}", i + 1, num_clips, download_result);
                             }
                         }
                     }
@@ -2968,6 +3012,195 @@ async fn execute_auto_generate_video_gemini(args: &HashMap<String, Value>) -> St
     result.push_str("4. If the QA report shows warnings OR the review FAILS, call auto_generate_video again with different search queries\n\n");
 
     result
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Option A pipeline tools — agentic video generation workflow
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Generate diverse Pexels search queries from a high-level video topic (Claude).
+fn execute_generate_video_queries_claude(args: &Value) -> String {
+    let topic = args["topic"].as_str().unwrap_or("");
+    if topic.is_empty() {
+        return "❌ Error: topic is required".to_string();
+    }
+    let num = args.get("num_queries").and_then(|v| v.as_u64()).unwrap_or(5) as usize;
+    let queries = generate_search_queries_for_topic(topic, num);
+    match serde_json::to_string_pretty(&queries) {
+        Ok(json) => format!("🔍 Generated {} search queries for topic '{}':\n{}", queries.len(), topic, json),
+        Err(e) => format!("❌ Failed to serialize queries: {}", e),
+    }
+}
+
+/// Generate diverse Pexels search queries from a high-level video topic (Gemini).
+fn execute_generate_video_queries_gemini(args: &HashMap<String, Value>) -> String {
+    let topic = args.get("topic").and_then(|v| v.as_str()).unwrap_or("");
+    if topic.is_empty() {
+        return "❌ Error: topic is required".to_string();
+    }
+    let num = args.get("num_queries").and_then(|v| v.as_u64()).unwrap_or(5) as usize;
+    let queries = generate_search_queries_for_topic(topic, num);
+    match serde_json::to_string_pretty(&queries) {
+        Ok(json) => format!("🔍 Generated {} search queries for topic '{}':\n{}", queries.len(), topic, json),
+        Err(e) => format!("❌ Failed to serialize queries: {}", e),
+    }
+}
+
+/// Download a Pexels thumbnail URL and analyze it with Gemini vision for topic relevance (Claude).
+async fn execute_analyze_pexels_thumbnail_claude(args: &Value) -> String {
+    let thumbnail_url = args["thumbnail_url"].as_str().unwrap_or("");
+    let topic = args.get("topic").and_then(|v| v.as_str()).unwrap_or("video content");
+    if thumbnail_url.is_empty() {
+        return "❌ Error: thumbnail_url is required".to_string();
+    }
+
+    let api_key = std::env::var("GEMINI_API_KEY")
+        .unwrap_or_else(|_| std::env::var("GOOGLE_API_KEY").unwrap_or_default());
+    if api_key.is_empty() {
+        return "❌ Error: GEMINI_API_KEY not set".to_string();
+    }
+
+    // Download thumbnail bytes
+    let image_bytes = match reqwest::get(thumbnail_url).await {
+        Ok(resp) => match resp.bytes().await {
+            Ok(b) => b.to_vec(),
+            Err(e) => return format!("❌ Failed to read thumbnail bytes: {}", e),
+        },
+        Err(e) => return format!("❌ Failed to fetch thumbnail: {}", e),
+    };
+
+    let client = crate::gemini_client::GeminiClient::new(api_key);
+    let prompt = format!(
+        "I am building a video about: \"{topic}\". \
+        Look at this thumbnail image and answer: \
+        1) What does it show? (1-2 sentences) \
+        2) Relevance score 1-10 for the topic (10 = perfect match). \
+        Format: DESCRIPTION: <text> | SCORE: <number>"
+    );
+
+    match client.analyze_image_bytes(&image_bytes, &prompt).await {
+        Ok(analysis) => format!("🖼️ Thumbnail analysis for topic '{topic}':\n{analysis}"),
+        Err(e) => format!("❌ Thumbnail analysis failed: {}", e),
+    }
+}
+
+/// Download a Pexels thumbnail URL and analyze it with Gemini vision for topic relevance (Gemini).
+async fn execute_analyze_pexels_thumbnail_gemini(args: &HashMap<String, Value>) -> String {
+    let thumbnail_url = args.get("thumbnail_url").and_then(|v| v.as_str()).unwrap_or("");
+    let topic = args.get("topic").and_then(|v| v.as_str()).unwrap_or("video content");
+    if thumbnail_url.is_empty() {
+        return "❌ Error: thumbnail_url is required".to_string();
+    }
+
+    let api_key = std::env::var("GEMINI_API_KEY")
+        .unwrap_or_else(|_| std::env::var("GOOGLE_API_KEY").unwrap_or_default());
+    if api_key.is_empty() {
+        return "❌ Error: GEMINI_API_KEY not set".to_string();
+    }
+
+    let image_bytes = match reqwest::get(thumbnail_url).await {
+        Ok(resp) => match resp.bytes().await {
+            Ok(b) => b.to_vec(),
+            Err(e) => return format!("❌ Failed to read thumbnail bytes: {}", e),
+        },
+        Err(e) => return format!("❌ Failed to fetch thumbnail: {}", e),
+    };
+
+    let client = crate::gemini_client::GeminiClient::new(api_key);
+    let prompt = format!(
+        "I am building a video about: \"{topic}\". \
+        Look at this thumbnail image and answer: \
+        1) What does it show? (1-2 sentences) \
+        2) Relevance score 1-10 for the topic (10 = perfect match). \
+        Format: DESCRIPTION: <text> | SCORE: <number>"
+    );
+
+    match client.analyze_image_bytes(&image_bytes, &prompt).await {
+        Ok(analysis) => format!("🖼️ Thumbnail analysis for topic '{topic}':\n{analysis}"),
+        Err(e) => format!("❌ Thumbnail analysis failed: {}", e),
+    }
+}
+
+/// Expose verify_clip_quality as an agent-callable tool (Claude).
+fn execute_verify_clip_quality_tool_claude(args: &Value) -> String {
+    let file_path = args["file_path"].as_str().unwrap_or("");
+    if file_path.is_empty() {
+        return "❌ Error: file_path is required".to_string();
+    }
+    match verify_clip_quality(file_path) {
+        Ok(()) => format!("✅ QA passed: '{}' is a valid, usable clip", file_path),
+        Err(reason) => format!("❌ QA failed: {} — reason: {}", file_path, reason),
+    }
+}
+
+/// Expose verify_clip_quality as an agent-callable tool (Gemini).
+fn execute_verify_clip_quality_tool_gemini(args: &HashMap<String, Value>) -> String {
+    let file_path = args.get("file_path").and_then(|v| v.as_str()).unwrap_or("");
+    if file_path.is_empty() {
+        return "❌ Error: file_path is required".to_string();
+    }
+    match verify_clip_quality(file_path) {
+        Ok(()) => format!("✅ QA passed: '{}' is a valid, usable clip", file_path),
+        Err(reason) => format!("❌ QA failed: {} — reason: {}", file_path, reason),
+    }
+}
+
+/// Run the full automated QA suite on a video file and return the report (Claude).
+fn execute_run_video_qa_claude(args: &Value) -> String {
+    let file_path = args["file_path"].as_str().unwrap_or("");
+    if file_path.is_empty() {
+        return "❌ Error: file_path is required".to_string();
+    }
+    if !std::path::Path::new(file_path).exists() {
+        return format!("❌ File not found: {}", file_path);
+    }
+    run_final_qa(file_path)
+}
+
+/// Run the full automated QA suite on a video file and return the report (Gemini).
+fn execute_run_video_qa_gemini(args: &HashMap<String, Value>) -> String {
+    let file_path = args.get("file_path").and_then(|v| v.as_str()).unwrap_or("");
+    if file_path.is_empty() {
+        return "❌ Error: file_path is required".to_string();
+    }
+    if !std::path::Path::new(file_path).exists() {
+        return format!("❌ File not found: {}", file_path);
+    }
+    run_final_qa(file_path)
+}
+
+/// Option B: Download a Pexels video thumbnail and ask Gemini to score its relevance 1-10.
+/// Returns the score, or 5 (neutral / proceed) if Gemini is unavailable or the call fails.
+async fn screen_pexels_thumbnail(thumbnail_url: &str, topic: &str) -> i32 {
+    let api_key = std::env::var("GEMINI_API_KEY")
+        .unwrap_or_else(|_| std::env::var("GOOGLE_API_KEY").unwrap_or_default());
+    if api_key.is_empty() {
+        return 5; // no key → don't block downloads
+    }
+
+    let image_bytes = match reqwest::get(thumbnail_url).await {
+        Ok(r) => match r.bytes().await {
+            Ok(b) => b.to_vec(),
+            Err(_) => return 5,
+        },
+        Err(_) => return 5,
+    };
+
+    let client = crate::gemini_client::GeminiClient::new(api_key);
+    let prompt = format!(
+        "Video topic: \"{topic}\". \
+        Rate how relevant this thumbnail is for that topic, from 1 (completely unrelated) \
+        to 10 (perfect match). Reply with ONLY a single integer, nothing else."
+    );
+
+    match client.analyze_image_bytes(&image_bytes, &prompt).await {
+        Ok(response) => {
+            // Extract the first 1-2 digit number from the response
+            let digits: String = response.chars().filter(|c| c.is_ascii_digit()).take(2).collect();
+            digits.parse::<i32>().unwrap_or(5).min(10).max(1)
+        }
+        Err(_) => 5, // fail open
+    }
 }
 
 /// Lightweight FFmpeg-based quality check for a freshly downloaded Pexels clip.

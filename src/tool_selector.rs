@@ -322,6 +322,8 @@ impl ToolCategory {
                 "edit_image",
                 "generate_video_script",
                 "auto_generate_video",
+                "generate_video_queries",
+                "analyze_pexels_thumbnail",
             ],
             ToolCategory::StockMedia => vec![
                 "pexels_search",
@@ -330,6 +332,8 @@ impl ToolCategory {
                 "pexels_get_trending",
                 "pexels_get_curated",
                 "create_blank_video",
+                "generate_video_queries",
+                "analyze_pexels_thumbnail",
             ],
             ToolCategory::AnalysisReview => vec![
                 "analyze_video",
@@ -358,6 +362,8 @@ impl ToolCategory {
                 "measure_dynamic_range",
                 "measure_video_entropy",
                 "detect_volume_levels",
+                "verify_clip_quality_tool",
+                "run_video_qa",
             ],
             ToolCategory::YouTubeIntegration => vec![
                 "optimize_youtube_metadata",

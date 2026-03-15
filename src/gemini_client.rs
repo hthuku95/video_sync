@@ -1986,6 +1986,85 @@ impl GeminiClient {
                     required: vec!["input_image".to_string(), "prompt".to_string(), "output_file".to_string()],
                 },
             },
+            // ── Option A: Agentic video generation pipeline tools ──────────────
+            FunctionDeclaration {
+                name: "generate_video_queries".to_string(),
+                description: "Generate diverse Pexels search queries from a high-level video topic. Use as the FIRST step when building a video from scratch via the agentic pipeline: generate_video_queries → pexels_search → analyze_pexels_thumbnail → pexels_download_video → verify_clip_quality_tool → merge_videos → run_video_qa.".to_string(),
+                parameters: Parameters {
+                    param_type: "object".to_string(),
+                    properties: {
+                        let mut props = HashMap::new();
+                        props.insert("topic".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "The video topic or concept (e.g. 'sunrise over mountain peaks')".to_string(),
+                            items: None,
+                        });
+                        props.insert("num_queries".to_string(), PropertyDefinition {
+                            prop_type: "number".to_string(),
+                            description: "How many search queries to generate (default: 5)".to_string(),
+                            items: None,
+                        });
+                        props
+                    },
+                    required: vec!["topic".to_string()],
+                },
+            },
+            FunctionDeclaration {
+                name: "analyze_pexels_thumbnail".to_string(),
+                description: "Download a Pexels thumbnail URL and score its relevance to the video topic using Gemini vision (1-10). Use AFTER pexels_search, on each result's video_pictures[0].picture URL, BEFORE pexels_download_video. Score >= 5 → proceed; score < 5 → skip.".to_string(),
+                parameters: Parameters {
+                    param_type: "object".to_string(),
+                    properties: {
+                        let mut props = HashMap::new();
+                        props.insert("thumbnail_url".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "The Pexels thumbnail image URL from video_pictures[0].picture".to_string(),
+                            items: None,
+                        });
+                        props.insert("topic".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Your video topic — used to judge relevance".to_string(),
+                            items: None,
+                        });
+                        props
+                    },
+                    required: vec!["thumbnail_url".to_string(), "topic".to_string()],
+                },
+            },
+            FunctionDeclaration {
+                name: "verify_clip_quality_tool".to_string(),
+                description: "Run FFmpeg quality checks on a downloaded video clip: duration > 1s, no frozen frames, no black frames. Use AFTER pexels_download_video before adding clip to merge list.".to_string(),
+                parameters: Parameters {
+                    param_type: "object".to_string(),
+                    properties: {
+                        let mut props = HashMap::new();
+                        props.insert("file_path".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Path to the downloaded clip to verify".to_string(),
+                            items: None,
+                        });
+                        props
+                    },
+                    required: vec!["file_path".to_string()],
+                },
+            },
+            FunctionDeclaration {
+                name: "run_video_qa".to_string(),
+                description: "Run a full automated QA suite on a finished video using FFmpeg signal analysis. Returns duration, resolution, FPS, audio presence, frozen frames, black frames, and scene change count. Use AFTER merge_videos and BEFORE presenting to the user.".to_string(),
+                parameters: Parameters {
+                    param_type: "object".to_string(),
+                    properties: {
+                        let mut props = HashMap::new();
+                        props.insert("file_path".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Path to the finished video file to QA".to_string(),
+                            items: None,
+                        });
+                        props
+                    },
+                    required: vec!["file_path".to_string()],
+                },
+            },
             FunctionDeclaration {
                 name: "auto_generate_video".to_string(),
                 description: "Orchestrates automatic video generation from a topic/prompt. This high-level tool searches Pexels for stock footage, generates custom images with Nano Banana Pro, downloads clips, merges them, adds text overlays, music, and exports a complete video. Perfect for creating videos from scratch.".to_string(),
