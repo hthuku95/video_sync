@@ -2566,9 +2566,19 @@ async fn execute_auto_generate_video_claude(args: &Value) -> String {
                             })).await;
 
                             if download_result.contains("✅") {
-                                downloaded_files.push(clip_path.clone());
-                                tracing::info!("✅ auto_generate_video: Successfully downloaded clip {}/{} to {}", i + 1, num_clips, clip_path);
-                                result.push_str(&format!("  ✓ Downloaded clip {}: {}\n", i + 1, query));
+                                // Pre-verify clip quality before accepting
+                                match verify_clip_quality(&clip_path) {
+                                    Ok(()) => {
+                                        downloaded_files.push(clip_path.clone());
+                                        tracing::info!("✅ auto_generate_video: Clip {}/{} passed QA, accepted: {}", i + 1, num_clips, clip_path);
+                                        result.push_str(&format!("  ✓ Downloaded clip {}: {} (QA passed)\n", i + 1, query));
+                                    }
+                                    Err(reason) => {
+                                        tracing::warn!("⚠️ auto_generate_video: Clip {}/{} REJECTED — {} — deleting {}", i + 1, num_clips, reason, clip_path);
+                                        result.push_str(&format!("  ✗ Clip {}: {} — rejected ({}), skipping\n", i + 1, query, reason));
+                                        let _ = std::fs::remove_file(&clip_path);
+                                    }
+                                }
                             } else {
                                 tracing::warn!("⚠️ auto_generate_video: Failed to download clip {}/{} - {}", i + 1, num_clips, download_result);
                             }
@@ -2697,16 +2707,22 @@ async fn execute_auto_generate_video_claude(args: &Value) -> String {
     }
 
     tracing::info!("🎉 auto_generate_video: Video generation COMPLETE - Output: {}", output_file);
-    result.push_str(&format!("🎉 **Video generation complete!**\n\n"));
+    result.push_str("🎉 **Video generation complete!**\n\n");
     result.push_str(&format!("📥 Output: {}\n\n", output_file));
 
-    // CRITICAL QUALITY RECOMMENDATION
-    result.push_str("⚠️ **IMPORTANT - Quality Review Required:**\n");
-    result.push_str("Before presenting to the user, you MUST:\n");
-    result.push_str("1. Wait 5-7 seconds for vectorization to complete\n");
-    result.push_str("2. Call view_video() to verify clip content is relevant\n");
-    result.push_str("3. Call review_video() to check if it matches the user's request\n");
-    result.push_str("4. If review FAILS, generate a new video with different search queries\n\n");
+    // Run hardwired automated QA on the final merged video
+    tracing::info!("🔬 auto_generate_video: Running automated QA on {}", output_file);
+    let qa_report = run_final_qa(&output_file);
+    result.push_str(&qa_report);
+    result.push_str("\n");
+
+    // Instruct agent on remaining AI review steps
+    result.push_str("🔍 **AI Content Review Required:**\n");
+    result.push_str("The automated QA above covers technical signal quality. You must ALSO:\n");
+    result.push_str("1. Call `view_video(path)` to visually confirm content is relevant to the topic\n");
+    result.push_str("2. Call `review_video(path, original_request, expected_features)` for pass/fail verdict\n");
+    result.push_str("3. Optionally: `measure_loudness(path)` to verify audio levels, `analyze_video_signal(path)` for color/luma analysis\n");
+    result.push_str("4. If the QA report shows warnings OR the review FAILS, call auto_generate_video again with different search queries\n\n");
 
     result
 }
@@ -2793,9 +2809,19 @@ async fn execute_auto_generate_video_gemini(args: &HashMap<String, Value>) -> St
                             let download_result = execute_pexels_download_video_gemini(&download_args).await;
 
                             if download_result.contains("✅") {
-                                downloaded_files.push(clip_path.clone());
-                                tracing::info!("✅ auto_generate_video: Successfully downloaded clip {}/{} to {}", i + 1, num_clips, clip_path);
-                                result.push_str(&format!("  ✓ Downloaded clip {}: {}\n", i + 1, query));
+                                // Pre-verify clip quality before accepting
+                                match verify_clip_quality(&clip_path) {
+                                    Ok(()) => {
+                                        downloaded_files.push(clip_path.clone());
+                                        tracing::info!("✅ auto_generate_video: Clip {}/{} passed QA, accepted: {}", i + 1, num_clips, clip_path);
+                                        result.push_str(&format!("  ✓ Downloaded clip {}: {} (QA passed)\n", i + 1, query));
+                                    }
+                                    Err(reason) => {
+                                        tracing::warn!("⚠️ auto_generate_video: Clip {}/{} REJECTED — {} — deleting {}", i + 1, num_clips, reason, clip_path);
+                                        result.push_str(&format!("  ✗ Clip {}: {} — rejected ({}), skipping\n", i + 1, query, reason));
+                                        let _ = std::fs::remove_file(&clip_path);
+                                    }
+                                }
                             } else {
                                 tracing::warn!("⚠️ auto_generate_video: Failed to download clip {}/{} - {}", i + 1, num_clips, download_result);
                             }
@@ -2924,18 +2950,114 @@ async fn execute_auto_generate_video_gemini(args: &HashMap<String, Value>) -> St
     }
 
     tracing::info!("🎉 auto_generate_video: Video generation COMPLETE - Output: {}", output_file);
-    result.push_str(&format!("🎉 **Video generation complete!**\n\n"));
+    result.push_str("🎉 **Video generation complete!**\n\n");
     result.push_str(&format!("📥 Output: {}\n\n", output_file));
 
-    // CRITICAL QUALITY RECOMMENDATION
-    result.push_str("⚠️ **IMPORTANT - Quality Review Required:**\n");
-    result.push_str("Before presenting to the user, you MUST:\n");
-    result.push_str("1. Wait 5-7 seconds for vectorization to complete\n");
-    result.push_str("2. Call view_video() to verify clip content is relevant\n");
-    result.push_str("3. Call review_video() to check if it matches the user's request\n");
-    result.push_str("4. If review FAILS, generate a new video with different search queries\n\n");
+    // Run hardwired automated QA on the final merged video
+    tracing::info!("🔬 auto_generate_video: Running automated QA on {}", output_file);
+    let qa_report = run_final_qa(&output_file);
+    result.push_str(&qa_report);
+    result.push_str("\n");
+
+    // Instruct agent on remaining AI review steps
+    result.push_str("🔍 **AI Content Review Required:**\n");
+    result.push_str("The automated QA above covers technical signal quality. You must ALSO:\n");
+    result.push_str("1. Call `view_video(path)` to visually confirm content is relevant to the topic\n");
+    result.push_str("2. Call `review_video(path, original_request, expected_features)` for pass/fail verdict\n");
+    result.push_str("3. Optionally: `measure_loudness(path)` to verify audio levels, `analyze_video_signal(path)` for color/luma analysis\n");
+    result.push_str("4. If the QA report shows warnings OR the review FAILS, call auto_generate_video again with different search queries\n\n");
 
     result
+}
+
+/// Lightweight FFmpeg-based quality check for a freshly downloaded Pexels clip.
+/// Returns Ok(()) if the clip passes all checks, Err(reason) if it should be discarded.
+/// Checks: (1) duration > 1.0s, (2) no significant frozen frames, (3) no significant black frames.
+fn verify_clip_quality(clip_path: &str) -> Result<(), String> {
+    // Check 1: Duration > 1 second (catches zero-length / corrupt downloads)
+    match crate::core::analyze_video(clip_path) {
+        Ok(meta) => {
+            if meta.duration_seconds <= 1.0 {
+                return Err(format!("clip too short ({:.2}s)", meta.duration_seconds));
+            }
+        }
+        Err(e) => return Err(format!("could not read clip metadata: {}", e)),
+    }
+
+    // Check 2: Frozen frames — 1.5s window to avoid false positives on brief static shots
+    match crate::visual::detect_frozen_frames(clip_path, -60.0, 1.5) {
+        Ok(report) if !report.to_lowercase().contains("no frozen") && report.contains("freeze") => {
+            return Err(format!("frozen frames detected: {}", &report[..report.len().min(120)]));
+        }
+        Err(e) => tracing::warn!("verify_clip_quality: frozen frame check skipped (non-fatal): {}", e),
+        _ => {}
+    }
+
+    // Check 3: Black frames — 1.0s window
+    match crate::visual::detect_black_frames(clip_path, 1.0, 0.98, 0.10) {
+        Ok(report) if !report.to_lowercase().contains("no black") && report.contains("black_start") => {
+            return Err(format!("black frames detected: {}", &report[..report.len().min(120)]));
+        }
+        Err(e) => tracing::warn!("verify_clip_quality: black frame check skipped (non-fatal): {}", e),
+        _ => {}
+    }
+
+    Ok(())
+}
+
+/// Run a structured QA suite on the final merged video using FFmpeg analysis tools.
+/// Returns a formatted multi-line report string to embed in the agent's response.
+fn run_final_qa(output_file: &str) -> String {
+    let mut qa = String::from("📊 **Automated QA Report:**\n");
+
+    // QA 1: Video metadata (duration, resolution, fps, format, size)
+    match crate::core::analyze_video(output_file) {
+        Ok(meta) => {
+            qa.push_str(&format!(
+                "  • Duration: {:.1}s | Resolution: {}x{} | FPS: {:.1} | Format: {} | Size: {:.1}MB | Audio: {}\n",
+                meta.duration_seconds,
+                meta.width,
+                meta.height,
+                meta.fps,
+                meta.format,
+                meta.file_size_mb,
+                if meta.has_audio { "✓" } else { "✗ (silent)" },
+            ));
+            if meta.duration_seconds < 2.0 {
+                qa.push_str("  ⚠️ WARNING: Final video is very short (<2s) — merge may have failed silently\n");
+            }
+            if meta.width == 0 || meta.height == 0 {
+                qa.push_str("  ⚠️ WARNING: Could not detect video resolution\n");
+            }
+        }
+        Err(e) => qa.push_str(&format!("  ⚠️ Metadata check failed: {}\n", e)),
+    }
+
+    // QA 2: Frozen frames in final output (2.0s window — more lenient after merge transitions)
+    match crate::visual::detect_frozen_frames(output_file, -60.0, 2.0) {
+        Ok(report) if !report.to_lowercase().contains("no frozen") && report.contains("freeze") => {
+            qa.push_str(&format!("  ⚠️ Frozen frames detected: {}\n", &report[..report.len().min(200)]));
+        }
+        Ok(_) => qa.push_str("  ✓ No frozen frames\n"),
+        Err(e) => qa.push_str(&format!("  ⚠️ Frozen frame check error: {}\n", e)),
+    }
+
+    // QA 3: Black frames in final output
+    match crate::visual::detect_black_frames(output_file, 2.0, 0.98, 0.10) {
+        Ok(report) if !report.to_lowercase().contains("no black") && report.contains("black_start") => {
+            qa.push_str(&format!("  ⚠️ Black frames detected: {}\n", &report[..report.len().min(200)]));
+        }
+        Ok(_) => qa.push_str("  ✓ No black frames\n"),
+        Err(e) => qa.push_str(&format!("  ⚠️ Black frame check error: {}\n", e)),
+    }
+
+    // QA 4: Scene change count (verifies editing continuity)
+    match crate::core::detect_scene_changes(output_file, 40.0) {
+        Ok(report) => qa.push_str(&format!("  • Scene analysis: {}\n", &report[..report.len().min(300)])),
+        Err(e) => qa.push_str(&format!("  ⚠️ Scene analysis error: {}\n", e)),
+    }
+
+    qa
 }
 
 /// Helper function to generate search queries based on topic with intelligent keyword extraction
