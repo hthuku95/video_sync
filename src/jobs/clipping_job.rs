@@ -409,6 +409,7 @@ pub async fn load_clips_from_db(
         let ai_confidence_score: Option<f64> = row.try_get("ai_confidence_score").ok().flatten();
         let viral_factors: Option<Vec<String>> = row.try_get("viral_factors").ok().flatten();
         let custom_thumbnail_path: Option<String> = row.try_get("custom_thumbnail_path").ok().flatten();
+        let thumbnail_generation_method: Option<String> = row.try_get("thumbnail_generation_method").ok().flatten();
 
         clips.push(ExtractedClipData {
             clip_number: row.get("clip_number"),
@@ -422,6 +423,7 @@ pub async fn load_clips_from_db(
             ai_confidence_score: ai_confidence_score.unwrap_or(0.0),
             viral_factors: viral_factors.unwrap_or_default(),
             custom_thumbnail_path,
+            thumbnail_generation_method,
         });
         ids.push(id);
     }
@@ -611,7 +613,7 @@ pub async fn save_clips_to_database(
         .bind(&clip.viral_factors)
         .bind(linkage.destination_channel_id)
         .bind(&clip.custom_thumbnail_path)
-        .bind(clip.custom_thumbnail_path.as_ref().map(|_| "ffmpeg_timestamp"))
+        .bind(&clip.thumbnail_generation_method)
         .fetch_one(pool)
         .await
         .map_err(|e| format!("Failed to save clip: {}", e))?;

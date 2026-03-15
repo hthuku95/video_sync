@@ -104,6 +104,7 @@ impl AiClipper {
                             ai_thumb
                         );
                         clip.custom_thumbnail_path = Some(ai_thumb);
+                        clip.thumbnail_generation_method = Some("ai_gemini".to_string());
                     }
                     Err(e) => {
                         tracing::warn!(
@@ -180,6 +181,7 @@ fn extract_single_clip(
         result
     };
 
+    let has_thumb = custom_thumbnail.is_some();
     Ok(ExtractedClipData {
         clip_number,
         local_clip_path: clip_path.to_string(),
@@ -192,6 +194,7 @@ fn extract_single_clip(
         ai_confidence_score: moment.quality_score,
         viral_factors: moment.viral_factors.clone(),
         custom_thumbnail_path: custom_thumbnail,
+        thumbnail_generation_method: if has_thumb { Some("ffmpeg_timestamp".to_string()) } else { None },
     })
 }
 
@@ -209,4 +212,6 @@ pub struct ExtractedClipData {
     pub ai_confidence_score: f64,
     pub viral_factors: Vec<String>,
     pub custom_thumbnail_path: Option<String>,
+    /// How the thumbnail was generated: "ai_gemini", "ffmpeg_timestamp", or None
+    pub thumbnail_generation_method: Option<String>,
 }

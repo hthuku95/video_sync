@@ -1367,7 +1367,8 @@ async fn approve_clip(
         ai_tags: tags,
         ai_confidence_score: 1.0,
         viral_factors: vec![],
-        custom_thumbnail_path,
+        custom_thumbnail_path: custom_thumbnail_path.clone(),
+        thumbnail_generation_method: custom_thumbnail_path.as_ref().map(|_| "manual".to_string()),
     };
 
     // Upload — requires_human_approval=false so it goes through immediately
