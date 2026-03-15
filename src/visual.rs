@@ -200,15 +200,15 @@ pub fn add_animated_text(
 ) -> Result<String, String> {
     let filter = match animation_type {
         "fade_in" => format!(
-            "drawtext=text='{}':fontfile=/path/to/font.ttf:fontsize=24:fontcolor=white:x=(w-text_w)/2:y=(h-text_h)/2:alpha='if(lt(t,{}),0,if(lt(t,{}),(t-{})/{},1))'",
+            "drawtext=text='{}':fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:fontsize=24:fontcolor=white:x=(w-text_w)/2:y=(h-text_h)/2:alpha='if(lt(t,{}),0,if(lt(t,{}),(t-{})/{},1))'",
             text, start_time, start_time + duration, start_time, duration
         ),
         "slide_in" => format!(
-            "drawtext=text='{}':fontfile=/path/to/font.ttf:fontsize=24:fontcolor=white:x='if(lt(t,{}),-w+(t-{})*w/{},w/2-text_w/2)':y=(h-text_h)/2",
+            "drawtext=text='{}':fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:fontsize=24:fontcolor=white:x='if(lt(t,{}),-w+(t-{})*w/{},w/2-text_w/2)':y=(h-text_h)/2",
             text, start_time, start_time, duration
         ),
         "typewriter" => format!(
-            "drawtext=text='{}':fontfile=/path/to/font.ttf:fontsize=24:fontcolor=white:x=(w-text_w)/2:y=(h-text_h)/2:text_shaping=1:alpha='if(lt(t,{}),0,1)':text='{}'",
+            "drawtext=text='{}':fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:fontsize=24:fontcolor=white:x=(w-text_w)/2:y=(h-text_h)/2:text_shaping=1:alpha='if(lt(t,{}),0,1)':text='{}'",
             text, start_time, text
         ),
         _ => return Err(format!("Unsupported animation type: {}", animation_type)),
@@ -610,12 +610,14 @@ pub fn luma_key(input_file: &str, output_file: &str, threshold: f64, tolerance: 
 // ============================================================================
 
 pub fn displace_video(input_file: &str, xmap_file: &str, ymap_file: &str, output_file: &str, edge: &str) -> Result<String, String> {
-    let filter = format!("[0:v][1:v][2:v]displace=edge={}", edge);
+    let filter = format!("[0:v][1:v][2:v]displace=edge={}[vout]", edge);
     let mut command = Command::new("ffmpeg");
     command.arg("-i").arg(input_file)
            .arg("-i").arg(xmap_file)
            .arg("-i").arg(ymap_file)
            .arg("-filter_complex").arg(filter)
+           .arg("-map").arg("[vout]")
+           .arg("-map").arg("0:a?")
            .arg("-c:a").arg("copy")
            .arg("-y").arg(output_file);
     execute_ffmpeg_command(command)
@@ -871,19 +873,26 @@ pub fn select_frames(input_file: &str, output_file: &str, expr: &str, fps: f64) 
     execute_ffmpeg_command(command)
 }
 
-/// Posterizes video to N colour levels using FFmpeg posterize filter. Creates a graphic-novel look.
+/// Posterizes video to N colour levels using geq. FFmpeg has no native posterize filter.
 pub fn posterize_video(input_file: &str, output_file: &str, levels: u32) -> Result<String, String> {
-    let l = if levels == 0 { 5 } else { levels.min(64) };
-    let filter = format!("posterize=levels={}", l);
+    let l = if levels == 0 { 5 } else { levels.min(64).max(2) } as f64;
+    let step = 255.0 / (l - 1.0);
+    let filter = format!(
+        "geq=r='round(r(X,Y)/{s})*{s}':g='round(g(X,Y)/{s})*{s}':b='round(b(X,Y)/{s})*{s}'",
+        s = step
+    );
     let mut command = Command::new("ffmpeg");
     command.arg("-i").arg(input_file).arg("-vf").arg(filter).arg("-c:a").arg("copy").arg("-y").arg(output_file);
     execute_ffmpeg_command(command)
 }
 
-/// Solarize effect: inverts pixels above threshold using FFmpeg solarize filter.
+/// Solarize effect: inverts pixels above threshold using geq. FFmpeg has no native solarize filter.
 pub fn solarize_video(input_file: &str, output_file: &str, threshold: u32) -> Result<String, String> {
     let t = if threshold == 0 { 128 } else { threshold.min(255) };
-    let filter = format!("solarize=threshold={}", t);
+    let filter = format!(
+        "geq=r='if(gt(r(X,Y),{t}),255-r(X,Y),r(X,Y))':g='if(gt(g(X,Y),{t}),255-g(X,Y),g(X,Y))':b='if(gt(b(X,Y),{t}),255-b(X,Y),b(X,Y))'",
+        t = t
+    );
     let mut command = Command::new("ffmpeg");
     command.arg("-i").arg(input_file).arg("-vf").arg(filter).arg("-c:a").arg("copy").arg("-y").arg(output_file);
     execute_ffmpeg_command(command)
@@ -931,11 +940,12 @@ pub fn apply_histogram_eq(input_file: &str, output_file: &str, strength: f64, in
 }
 
 /// CLAHE (Contrast-Limited Adaptive Histogram Equalisation) via FFmpeg clahe. Better local contrast than global histeq.
-pub fn apply_clahe(input_file: &str, output_file: &str, clip_limit: f64, nb_tiles_x: u32, nb_tiles_y: u32) -> Result<String, String> {
-    let cl = if clip_limit <= 0.0 { 25.0 } else { clip_limit };
-    let tx = if nb_tiles_x == 0 { 8 } else { nb_tiles_x };
-    let ty = if nb_tiles_y == 0 { 8 } else { nb_tiles_y };
-    let filter = format!("clahe=clip_limit={}:nb_tiles_x={}:nb_tiles_y={}", cl, tx, ty);
+/// Contrast Limited Adaptive Histogram Equalization (CLAHE approximation via histeq).
+/// FFmpeg doesn't have a native clahe filter; histeq is the closest equivalent.
+pub fn apply_clahe(input_file: &str, output_file: &str, clip_limit: f64, _nb_tiles_x: u32, _nb_tiles_y: u32) -> Result<String, String> {
+    // Map clip_limit (typically 1-40) to histeq strength (0-1)
+    let strength = (clip_limit / 40.0).clamp(0.01, 1.0);
+    let filter = format!("histeq=strength={}", strength);
     let mut command = Command::new("ffmpeg");
     command.arg("-i").arg(input_file).arg("-vf").arg(filter).arg("-c:a").arg("copy").arg("-y").arg(output_file);
     execute_ffmpeg_command(command)
@@ -943,9 +953,10 @@ pub fn apply_clahe(input_file: &str, output_file: &str, clip_limit: f64, nb_tile
 
 /// Removes block/DCT artefacts from compressed video via FFmpeg deblock filter.
 pub fn apply_deblock(input_file: &str, output_file: &str, filter_type: u32, block_size: u32, strength: f64, planes: u32) -> Result<String, String> {
-    let ft = if filter_type == 0 { 4 } else { filter_type.min(4) };
+    // filter: 0=weak, 1=strong; alpha/beta/gamma/delta: 0..1
+    let ft = if filter_type == 0 { 1 } else { filter_type.min(1) };
     let bs = if block_size == 0 { 8 } else { block_size };
-    let s = if strength <= 0.0 { 0.5 } else { strength.min(1.0) };
+    let s = if strength <= 0.0 { 0.098 } else { strength.clamp(0.0, 1.0) };
     let p = if planes == 0 { 15 } else { planes };
     let filter = format!("deblock=filter={}:block={}:alpha={}:beta={}:gamma={}:delta={}:planes={}", ft, bs, s, s, s, s, p);
     let mut command = Command::new("ffmpeg");
@@ -955,7 +966,11 @@ pub fn apply_deblock(input_file: &str, output_file: &str, filter_type: u32, bloc
 
 /// Precise hue + saturation control via FFmpeg huesaturation filter (added FFmpeg 5.1).
 pub fn adjust_hue_saturation(input_file: &str, output_file: &str, hue: f64, saturation: f64, intensity: f64, lightness: f64) -> Result<String, String> {
-    let filter = format!("huesaturation=hue={}:saturation={}:intensity={}:lightness={}", hue, saturation, intensity, lightness);
+    // hue: -180..180, saturation: -1..1, intensity: -1..1, lightness: boolean (preserve)
+    let sat = saturation.clamp(-1.0, 1.0);
+    let ints = intensity.clamp(-1.0, 1.0);
+    let luma = if lightness != 0.0 { "true" } else { "false" };
+    let filter = format!("huesaturation=hue={}:saturation={}:intensity={}:lightness={}", hue, sat, ints, luma);
     let mut command = Command::new("ffmpeg");
     command.arg("-i").arg(input_file).arg("-vf").arg(filter).arg("-c:a").arg("copy").arg("-y").arg(output_file);
     execute_ffmpeg_command(command)
@@ -1295,20 +1310,37 @@ pub fn select_thumbnail_frame(input_file: &str, output_file: &str, n: u32) -> Re
 }
 
 /// Applies a pixel-value threshold — pixels below low become 0, above high become max.
+/// threshold filter requires 4 inputs: default, threshold, min, max.
+/// When called with a single file, uses the same file for all 4 streams.
 pub fn apply_threshold(input_file: &str, output_file: &str, planes: u32) -> Result<String, String> {
     let p = if planes == 0 { 15 } else { planes };
-    let filter = format!("threshold=planes={}", p);
+    let filter = format!("[0:v][1:v][2:v][3:v]threshold=planes={}[vout]", p);
     let mut command = Command::new("ffmpeg");
-    command.arg("-i").arg(input_file).arg("-vf").arg(filter).arg("-c:a").arg("copy").arg("-y").arg(output_file);
+    command.arg("-i").arg(input_file)
+        .arg("-i").arg(input_file)
+        .arg("-i").arg(input_file)
+        .arg("-i").arg(input_file)
+        .arg("-filter_complex").arg(&filter)
+        .arg("-map").arg("[vout]")
+        .arg("-map").arg("0:a?")
+        .arg("-y").arg(output_file);
     execute_ffmpeg_command(command)
 }
 
 /// Clamps pixel values between dark and bright reference streams using maskedclamp.
+/// maskedclamp requires 3 inputs: base, dark, bright. When called with a single file,
+/// uses the same file for all 3 streams (no-op clamp with default margins).
 pub fn apply_maskedclamp(input_file: &str, output_file: &str, undershoot: u32, overshoot: u32, planes: u32) -> Result<String, String> {
     let p = if planes == 0 { 15 } else { planes };
-    let filter = format!("maskedclamp=undershoot={}:overshoot={}:planes={}", undershoot, overshoot, p);
+    let filter = format!("[0:v][1:v][2:v]maskedclamp=undershoot={}:overshoot={}:planes={}[vout]", undershoot, overshoot, p);
     let mut command = Command::new("ffmpeg");
-    command.arg("-i").arg(input_file).arg("-vf").arg(filter).arg("-c:a").arg("copy").arg("-y").arg(output_file);
+    command.arg("-i").arg(input_file)
+        .arg("-i").arg(input_file)
+        .arg("-i").arg(input_file)
+        .arg("-filter_complex").arg(&filter)
+        .arg("-map").arg("[vout]")
+        .arg("-map").arg("0:a?")
+        .arg("-y").arg(output_file);
     execute_ffmpeg_command(command)
 }
 
@@ -1569,8 +1601,9 @@ pub fn convert_360_video(input_file: &str, output_file: &str, input_fmt: &str, o
 }
 
 pub fn fix_banding(input_file: &str, output_file: &str, strength: f64, radius: u32) -> Result<String, String> {
-    let s = if strength <= 0.0 { 1.2 } else { strength };
-    let r = if radius == 0 { 16 } else { radius };
+    // gradfun strength range: 0.51..64; default 1.2
+    let s = if strength < 0.51 { 1.2 } else { strength };
+    let r = if radius < 4 { 16 } else { radius.min(32) };
     let filter = format!("gradfun=strength={}:radius={}", s, r);
     let mut command = Command::new("ffmpeg");
     command.arg("-i").arg(input_file).arg("-vf").arg(filter).arg("-c:a").arg("copy").arg("-y").arg(output_file);
@@ -1722,10 +1755,17 @@ pub fn apply_lut_yuv(input_file: &str, output_file: &str, y_expr: &str, u_expr: 
     execute_ffmpeg_command(command)
 }
 
+/// freezeframes requires 2 inputs: source and replace stream.
+/// Uses the same file as both inputs (freeze frames from itself).
 pub fn apply_freezeframes(input_file: &str, output_file: &str, first: u32, last: u32, replace: u32) -> Result<String, String> {
-    let filter = format!("freezeframes=first={}:last={}:replace={}", first, last, replace);
+    let filter = format!("[0:v][1:v]freezeframes=first={}:last={}:replace={}[vout]", first, last, replace);
     let mut command = Command::new("ffmpeg");
-    command.arg("-i").arg(input_file).arg("-vf").arg(filter).arg("-c:a").arg("copy").arg("-y").arg(output_file);
+    command.arg("-i").arg(input_file)
+        .arg("-i").arg(input_file)
+        .arg("-filter_complex").arg(&filter)
+        .arg("-map").arg("[vout]")
+        .arg("-map").arg("0:a?")
+        .arg("-y").arg(output_file);
     execute_ffmpeg_command(command)
 }
 
@@ -1798,7 +1838,12 @@ pub fn apply_lut_rgb(input_file: &str, output_file: &str, r_expr: &str, g_expr: 
 }
 
 pub fn apply_hsvhold(input_file: &str, output_file: &str, hue: f64, white: f64, black: f64, similarity: f64, blend: f64) -> Result<String, String> {
-    let filter = format!("hsvhold=hue={}:white={}:black={}:similarity={}:blend={}", hue, white, black, similarity, blend);
+    // hsvhold params: hue (-360..360), sat (-1..1), val (-1..1), similarity (1e-5..1), blend (0..1)
+    // white maps to sat, black maps to val
+    let sat = white.clamp(-1.0, 1.0);
+    let val = black.clamp(-1.0, 1.0);
+    let sim = similarity.clamp(1e-5, 1.0);
+    let filter = format!("hsvhold=hue={}:sat={}:val={}:similarity={}:blend={}", hue, sat, val, sim, blend);
     let mut command = Command::new("ffmpeg");
     command.arg("-i").arg(input_file).arg("-vf").arg(filter).arg("-c:a").arg("copy").arg("-y").arg(output_file);
     execute_ffmpeg_command(command)
@@ -1835,9 +1880,12 @@ pub fn apply_convolution(input_file: &str, output_file: &str, matrix: &str, rdiv
     let m = if matrix.is_empty() { "0 -1 0 -1 5 -1 0 -1 0" } else { matrix };
     let rd = if rdiv <= 0.0 { 1.0 } else { rdiv };
     let p = if planes == 0 { 15 } else { planes };
+    // FFmpeg convolution params use numeric prefix: 0m, 1m, 0rdiv, 0bias, etc.
+    // No 'planes' option on convolution filter — control which planes via per-plane matrices.
+    let _ = p; // planes arg kept for API compat but not used
     let filter = format!(
-        "convolution=0m='{}':1m='{}':2m='{}':3m='{}':rdiv0={rd}:rdiv1={rd}:rdiv2={rd}:rdiv3={rd}:bias0={bias}:bias1={bias}:bias2={bias}:bias3={bias}:planes={p}",
-        m, m, m, m, rd=rd, bias=bias, p=p
+        "convolution=0m='{}':1m='{}':2m='{}':3m='{}':0rdiv={rd}:1rdiv={rd}:2rdiv={rd}:3rdiv={rd}:0bias={bias}:1bias={bias}:2bias={bias}:3bias={bias}",
+        m, m, m, m, rd=rd, bias=bias
     );
     let mut command = Command::new("ffmpeg");
     command.arg("-i").arg(input_file).arg("-vf").arg(filter).arg("-c:a").arg("copy").arg("-y").arg(output_file);

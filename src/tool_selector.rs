@@ -653,42 +653,23 @@ impl ToolSelector {
             }
         }
 
-        // Convert to Vec and limit to 20 tools (Google's recommendation)
+        // No arbitrary cap — pass all matched tools to the AI.
+        // Claude and Gemini comfortably handle 200+ tool schemas; the old
+        // 20-tool limit was written when we had ~35 tools and would silently
+        // hide 280+ tools from the model with the current 320-tool suite.
         let mut tool_list: Vec<String> = tools.into_iter().collect();
         tool_list.sort(); // Sort for consistency
 
-        // If we exceed 20 tools, prioritize core editing
-        if tool_list.len() > 20 {
-            tracing::warn!(
-                "Tool selection exceeded 20 tools ({}), applying prioritization",
-                tool_list.len()
+        // Catch-all: if nothing matched beyond the always-included categories,
+        // return ALL tools so the AI is never left with a blind spot.
+        if tool_list.len() <= ToolCategory::CoreEditing.tools().len()
+            + ToolCategory::PlatformExport.tools().len()
+        {
+            tracing::info!(
+                "No specific category matched — returning all {} tools as catch-all",
+                Self::all_tools().len()
             );
-
-            // Keep core editing and platform export, trim others
-            let mut prioritized = Vec::new();
-
-            // Add core editing tools first (highest priority)
-            for tool in ToolCategory::CoreEditing.tools() {
-                if tool_list.contains(&tool.to_string()) {
-                    prioritized.push(tool.to_string());
-                }
-            }
-
-            // Add platform export tools (essential)
-            for tool in ToolCategory::PlatformExport.tools() {
-                if tool_list.contains(&tool.to_string()) {
-                    prioritized.push(tool.to_string());
-                }
-            }
-
-            // Add remaining tools up to 20 total
-            for tool in tool_list {
-                if !prioritized.contains(&tool) && prioritized.len() < 20 {
-                    prioritized.push(tool);
-                }
-            }
-
-            tool_list = prioritized;
+            return Self::all_tools();
         }
 
         tracing::info!(

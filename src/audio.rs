@@ -146,7 +146,11 @@ pub fn normalize_audio(input_file: &str, output_file: &str, target_lufs: f64, lo
 }
 
 pub fn equalize_audio(input_file: &str, output_file: &str, frequency: f64, gain: f64, bandwidth: f64, eq_type: &str) -> Result<String, String> {
-    let filter = format!("equalizer=f={}:g={}:w={}:t={}", frequency, gain, bandwidth, eq_type);
+    // Valid eq_type/t values: h (Hz), q (Q-Factor), o (octave), s (slope), k (kHz)
+    let t = match eq_type { "h" | "q" | "o" | "s" | "k" => eq_type, _ => "q" };
+    let f = if frequency <= 0.0 { 1000.0 } else { frequency };
+    let w = if bandwidth <= 0.0 { 1.0 } else { bandwidth };
+    let filter = format!("equalizer=f={}:g={}:w={}:t={}", f, gain, w, t);
     let mut command = Command::new("ffmpeg");
     command.arg("-i").arg(input_file).arg("-af").arg(filter).arg("-c:v").arg("copy").arg("-y").arg(output_file);
     execute_ffmpeg_command(command)
@@ -312,14 +316,20 @@ pub fn parametric_eq(input_file: &str, output_file: &str, params: &str) -> Resul
 }
 
 pub fn audio_limiter(input_file: &str, output_file: &str, limit: f64, attack: f64, release: f64, asc: bool) -> Result<String, String> {
-    let filter = format!("alimiter=limit={}:attack={}:release={}:asc={}", limit, attack, release, if asc { 1 } else { 0 });
+    // Convert dB to linear amplitude (alimiter expects 0.0625–1.0 linear, not dB)
+    let limit_linear = (10.0_f64.powf(limit / 20.0)).clamp(0.0625, 1.0);
+    let filter = format!("alimiter=level_in=1:level_out=1:limit={}:attack={}:release={}:asc={}", limit_linear, attack, release, if asc { 1 } else { 0 });
     let mut command = Command::new("ffmpeg");
     command.arg("-i").arg(input_file).arg("-af").arg(filter).arg("-c:v").arg("copy").arg("-y").arg(output_file);
     execute_ffmpeg_command(command)
 }
 
 pub fn reduce_sibilance(input_file: &str, output_file: &str, split: f64, threshold: f64, omode: &str) -> Result<String, String> {
-    let filter = format!("deesser=split={}:threshold={}:mode={}", split, threshold, omode);
+    // deesser params: f (0-1 normalized frequency), i (intensity 0-1), m (max deessing 0-1), s (output mode: i/o/e)
+    let f_normalized = (split / 22050.0).clamp(0.0, 1.0);
+    let m = threshold.clamp(0.0, 1.0);
+    let s = match omode { "e" | "ess" => "e", "i" | "input" => "i", _ => "o" };
+    let filter = format!("deesser=i=0.5:f={}:m={}:s={}", f_normalized, m, s);
     let mut command = Command::new("ffmpeg");
     command.arg("-i").arg(input_file).arg("-af").arg(filter).arg("-c:v").arg("copy").arg("-y").arg(output_file);
     execute_ffmpeg_command(command)
@@ -482,7 +492,12 @@ pub fn filter_bandreject(input_file: &str, output_file: &str, frequency: f64, wi
 }
 
 pub fn boost_sub_bass(input_file: &str, output_file: &str, dry: f64, wet: f64, freq: f64, decay: f64) -> Result<String, String> {
-    let filter = format!("asubboost=dry={}:wet={}:freq={}:decay={}", dry, wet, freq, decay);
+    // asubboost uses cutoff (50-900 Hz), not freq; dry/wet are 0-1
+    let cutoff = freq.clamp(50.0, 900.0);
+    let d = dry.clamp(0.0, 1.0);
+    let w = wet.clamp(0.0, 1.0);
+    let dc = decay.clamp(0.0, 1.0);
+    let filter = format!("asubboost=dry={}:wet={}:cutoff={}:decay={}", d, w, cutoff, dc);
     let mut command = Command::new("ffmpeg");
     command.arg("-i").arg(input_file).arg("-af").arg(filter).arg("-c:v").arg("copy").arg("-y").arg(output_file);
     execute_ffmpeg_command(command)
@@ -556,10 +571,11 @@ pub fn widen_stereo(input_file: &str, output_file: &str, delay: f64, feedback: f
 }
 
 /// Speech volume normalisation using FFmpeg speechnorm filter.
-pub fn normalize_speech(input_file: &str, output_file: &str, peak: f64, strength: f64) -> Result<String, String> {
-    let p = if peak <= 0.0 { 0.95 } else { peak };
-    let s = if strength <= 0.0 { 0.8 } else { strength };
-    let filter = format!("speechnorm=p={}:e={}:r=0.00001:l=1", p, s);
+pub fn normalize_speech(input_file: &str, output_file: &str, peak: f64, _strength: f64) -> Result<String, String> {
+    // speechnorm: peak (0-1), expansion (e, min 1), raise rate (r).
+    // strength was misnamed — speechnorm doesn't have that param.
+    let p = if peak <= 0.0 || peak > 1.0 { 0.95 } else { peak };
+    let filter = format!("speechnorm=p={}", p);
     let mut command = Command::new("ffmpeg");
     command.arg("-i").arg(input_file).arg("-af").arg(filter).arg("-c:v").arg("copy").arg("-y").arg(output_file);
     execute_ffmpeg_command(command)
@@ -1016,8 +1032,10 @@ pub fn apply_audio_iir(input_file: &str, output_file: &str, zeros: &str, poles: 
 }
 
 pub fn apply_audio_expression(input_file: &str, output_file: &str, exprs: &str) -> Result<String, String> {
-    let e = if exprs.is_empty() { "val" } else { exprs };
-    let filter = format!("aeval=exprs='{}'", e);
+    // aeval expressions use val(ch) syntax, not bare "val". Default: pass-through.
+    let e = if exprs.is_empty() || exprs == "val" { "val(ch)" } else { exprs };
+    // No surrounding quotes — process::Command passes the string directly to FFmpeg
+    let filter = format!("aeval=exprs={}", e);
     let mut command = Command::new("ffmpeg");
     command.arg("-i").arg(input_file).arg("-af").arg(filter).arg("-c:v").arg("copy").arg("-y").arg(output_file);
     execute_ffmpeg_command(command)

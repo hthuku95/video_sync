@@ -9,12 +9,20 @@ pub fn convert_format(
     output_file: &str,
     format: &str,
 ) -> Result<String, String> {
+    // Map common extensions to FFmpeg muxer names
+    let ffmpeg_format = match format {
+        "mkv" => "matroska",
+        "ts" => "mpegts",
+        "m4v" => "mp4",
+        "m4a" => "ipod",
+        other => other,
+    };
     let mut command = Command::new("ffmpeg");
     command
         .arg("-i")
         .arg(input_file)
         .arg("-f")
-        .arg(format)
+        .arg(ffmpeg_format)
         .arg("-c:v")
         .arg("libx264")
         .arg("-c:a")
