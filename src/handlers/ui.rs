@@ -18,6 +18,7 @@ pub fn ui_routes() -> Router {
         .route("/chat", get(chat_interface))
         .route("/chat/:session_id", get(chat_interface_with_session))
         .route("/app", get(chat_interface)) // Alternative route
+        .route("/video-tools", get(video_tools_page))
 }
 
 pub async fn landing_page() -> Html<String> {
@@ -662,63 +663,69 @@ pub async fn landing_page() -> Html<String> {
     <!-- Tools Section -->
     <section class="tools" id="tools">
         <div class="container">
-            <h2>Comprehensive Video Editing Toolkit</h2>
+            <h2>320-Tool FFmpeg Toolkit — Fully AI-Accessible</h2>
+            <p style="text-align:center;color:#666;margin-bottom:2rem;">Every tool is available via natural language. Just describe what you want.</p>
             <div class="tools-grid">
                 <div class="tool-category">
                     <h3>🎬 Core Editing</h3>
                     <ul class="tool-list">
-                        <li>Trim & Cut Videos</li>
-                        <li>Merge Multiple Videos</li>
-                        <li>Split Videos</li>
-                        <li>Video Analysis</li>
+                        <li>Trim, Cut, Merge, Split</li>
+                        <li>Deshake / Stabilize (vid.stab)</li>
+                        <li>Reverse, Loop, Concatenate</li>
+                        <li>Scene Detection & Analysis</li>
+                        <li>Segment & Chapter Split</li>
                     </ul>
                 </div>
                 <div class="tool-category">
-                    <h3>🔧 Transform</h3>
+                    <h3>🎨 Visual Effects (100+)</h3>
                     <ul class="tool-list">
-                        <li>Resize & Scale</li>
-                        <li>Crop Videos</li>
-                        <li>Rotate & Flip</li>
-                        <li>Speed Adjustment</li>
-                        <li>Video Stabilization</li>
+                        <li>Color Grading & LUT3D</li>
+                        <li>Cinematic Film Grain & Vignette</li>
+                        <li>Chroma Key / Green Screen</li>
+                        <li>Motion Blur, Glow, Bloom</li>
+                        <li>Edge Detect, Posterize, Solarize</li>
+                        <li>Vintage Curves, Vibrance, HSV</li>
                     </ul>
                 </div>
                 <div class="tool-category">
-                    <h3>🎨 Visual Effects</h3>
+                    <h3>🔊 Audio Processing (80+)</h3>
                     <ul class="tool-list">
-                        <li>Text Overlays</li>
-                        <li>Image Overlays</li>
-                        <li>Color Adjustment</li>
-                        <li>Filters & Effects</li>
-                        <li>Subtitles</li>
+                        <li>Loudnorm (EBU R128 / LUFS)</li>
+                        <li>RNN Denoise & De-esser</li>
+                        <li>Equalizer, Compressor, Limiter</li>
+                        <li>CQT & Spectrum Visualization</li>
+                        <li>Stereo Widener, Surround Mix</li>
+                        <li>Pitch Shift, Time Stretch</li>
                     </ul>
                 </div>
                 <div class="tool-category">
-                    <h3>🔊 Audio</h3>
+                    <h3>📊 Analysis & Review (40+)</h3>
                     <ul class="tool-list">
-                        <li>Extract Audio</li>
-                        <li>Add Background Music</li>
-                        <li>Volume Control</li>
-                        <li>Audio Fade Effects</li>
+                        <li>VMAF / SSIM / PSNR Quality</li>
+                        <li>Loudness & Silence Detection</li>
+                        <li>Scene Change Detection</li>
+                        <li>Black Frame & Freeze Detect</li>
+                        <li>Bitrate & Metadata Extraction</li>
                     </ul>
                 </div>
                 <div class="tool-category">
-                    <h3>📤 Export</h3>
+                    <h3>📤 Platform Export</h3>
                     <ul class="tool-list">
-                        <li>Format Conversion</li>
-                        <li>Platform Optimization</li>
-                        <li>Compression</li>
-                        <li>Thumbnail Creation</li>
-                        <li>Frame Extraction</li>
+                        <li>YouTube / TikTok / Instagram</li>
+                        <li>Format Conversion (20+ formats)</li>
+                        <li>H.264 / H.265 / VP9 / AV1</li>
+                        <li>GIF with Palette Optimization</li>
+                        <li>HDR to SDR Tone Mapping</li>
                     </ul>
                 </div>
                 <div class="tool-category">
-                    <h3>🚀 Advanced</h3>
+                    <h3>⚡ Workflow Recipes</h3>
                     <ul class="tool-list">
-                        <li>Picture-in-Picture</li>
-                        <li>Green Screen (Chroma Key)</li>
-                        <li>Split Screen</li>
-                        <li>Advanced Transitions</li>
+                        <li>YouTube-Ready Export</li>
+                        <li>Podcast Audio Cleanup</li>
+                        <li>Cinematic Grade</li>
+                        <li>Talking Head Cleanup</li>
+                        <li>GIF Creator</li>
                     </ul>
                 </div>
             </div>
@@ -2218,6 +2225,10 @@ pub async fn dashboard_page() -> Html<String> {
                 <a href="/clipping/manage" class="action-card" id="clipping-action-card" style="display: none;">
                     <h3>✂️ YouTube Clipping</h3>
                     <p>Auto-generate viral clips from popular channels and post to your channel</p>
+                </a>
+                <a href="/video-tools" class="action-card">
+                    <h3>🛠️ Video Tools</h3>
+                    <p>Stabilize, convert formats, visualize audio, and run workflow recipes directly</p>
                 </a>
                 <a href="/help" class="action-card">
                     <h3>📖 Help & Guide</h3>
@@ -4312,7 +4323,9 @@ pub async fn help_guide_page() -> Html<String> {
             <h3>📑 Quick Links</h3>
             <a href="#start">Getting Started</a>
             <a href="#chat">AI Chat Commands</a>
-            <a href="#edit">Video Editing</a>
+            <a href="#edit">Video Editing (320 Tools)</a>
+            <a href="#workflows">Workflow Recipes</a>
+            <a href="#video-tools">Video Tools Page</a>
             <a href="#youtube">YouTube Integration</a>
             <a href="#ai">AI Tools</a>
             <a href="#trouble">Troubleshooting</a>
@@ -4344,23 +4357,76 @@ pub async fn help_guide_page() -> Html<String> {
         </div>
 
         <div class="section" id="edit">
-            <h2>3. Editing Features</h2>
-            <h3>Core</h3>
+            <h2>3. Video Editing — 320 Tools</h2>
+            <h3>Core Editing</h3>
             <ul>
-                <li>Trim, Merge, Split, Resize, Crop, Rotate</li>
+                <li>Trim, Merge, Split, Resize, Crop, Rotate, Reverse, Loop</li>
+                <li>2-pass video stabilization (vid.stab)</li>
+                <li>Scene detection, black frame & silence detection</li>
             </ul>
-            <h3>Effects</h3>
+            <h3>Visual Effects (100+ tools)</h3>
             <ul>
-                <li>Filters, Text, Colors, Subtitles</li>
+                <li>Color grading: LUT3D, curves, vibrance, HSV, hue/saturation</li>
+                <li>Cinematic: film grain, vignette, vintage curves, telecine</li>
+                <li>Keying: chroma key, luma key, color hold</li>
+                <li>Spatial: motion blur, glow, bloom, sharpen, denoise</li>
+                <li>Artistic: posterize (geq), solarize, CLAHE (histeq), banding fix</li>
             </ul>
-            <h3>Audio</h3>
+            <h3>Audio Processing (80+ tools)</h3>
             <ul>
-                <li>Extract, Mix, Volume, AI Voiceover (17+ voices), AI Music</li>
+                <li>Loudness: EBU R128 / LUFS normalization, limiter (alimiter)</li>
+                <li>Cleanup: RNN denoiser, de-esser (deesser), speech normalizer</li>
+                <li>EQ: graphiceq, parametric eq, high/low shelf, bandpass</li>
+                <li>Dynamics: compressor, expander, gate, sidechaining</li>
+                <li>Visualize: CQT, spectrum analyzer, waveform video</li>
             </ul>
+            <h3>Analysis (40+ tools)</h3>
+            <ul>
+                <li>Quality: VMAF, SSIM, PSNR</li>
+                <li>Inspection: bitrate, metadata, scene change, freeze frames</li>
+            </ul>
+            <div class="example-box">
+"Stabilize this shaky footage"<br>
+"Apply film grain and a vignette for a cinematic look"<br>
+"Normalize audio to -14 LUFS for YouTube"<br>
+"Remove background noise and de-ess the sibilance"<br>
+"Generate a CQT audio visualization"<br>
+"Convert to MKV"
+            </div>
+        </div>
+
+        <div class="section" id="workflows">
+            <h2>4. Workflow Recipes</h2>
+            <p>Named multi-step chains that apply several tools in sequence with a single command:</p>
+            <ul>
+                <li><strong>YouTube Ready Export</strong> — stabilize → normalize color → loudnorm −14 LUFS → yuv420p</li>
+                <li><strong>Podcast Cleanup</strong> — denoise → de-ess sibilance → limit peaks → loudnorm −16 LUFS</li>
+                <li><strong>Cinematic Grade</strong> — vintage curves → vibrance → vignette → film grain</li>
+                <li><strong>Talking Head Cleanup</strong> — stabilize → denoise speech → de-ess → loudnorm −16 LUFS</li>
+                <li><strong>GIF Creator</strong> — trim segment → scale → optimize palette</li>
+            </ul>
+            <div class="example-box">
+"Run the YouTube ready export workflow on my video"<br>
+"Apply podcast cleanup to this recording"<br>
+"Give it a cinematic grade"<br>
+"Create a GIF from seconds 10 to 15"
+            </div>
+        </div>
+
+        <div class="section" id="video-tools">
+            <h2>5. Video Tools Page</h2>
+            <p>For direct tool access without the AI chat, visit <a href="/video-tools" style="color:#3b82f6;">/video-tools</a>. It provides four interactive panels:</p>
+            <ul>
+                <li><strong>Stabilize</strong> — shakiness/smoothing/zoom sliders, runs 2-pass vid.stab</li>
+                <li><strong>Convert Format</strong> — dropdown of 11 output formats (mp4, mkv, webm, mov, wav, …)</li>
+                <li><strong>Audio Visualizer</strong> — waveform / spectrum / CQT video output</li>
+                <li><strong>Workflows</strong> — pick a recipe, enter file path, get a download link</li>
+            </ul>
+            <p>Enter the file path relative to <code>uploads/</code> (the filename shown after upload). A download link appears when processing completes.</p>
         </div>
 
         <div class="section" id="youtube">
-            <h2>4. YouTube Integration</h2>
+            <h2>6. YouTube Integration</h2>
             <h3>Connect Channel</h3>
             <ol>
                 <li>Go to <strong>Connect YouTube Channels</strong></li>
@@ -4382,7 +4448,7 @@ AI YouTube Tools:<br>
         </div>
 
         <div class="section" id="ai">
-            <h2>5. AI Tools</h2>
+            <h2>7. AI Tools</h2>
             <ul>
                 <li><strong>Stock Media:</strong> Free videos/photos from Pexels</li>
                 <li><strong>TTS:</strong> 17+ natural voices (75ms latency)</li>
@@ -4392,7 +4458,7 @@ AI YouTube Tools:<br>
         </div>
 
         <div class="section" id="trouble">
-            <h2>6. Troubleshooting</h2>
+            <h2>8. Troubleshooting</h2>
             <div class="warning-box">
                 <strong>Stuck "Connecting":</strong> Hard refresh (Ctrl+Shift+R)
             </div>
@@ -5576,6 +5642,369 @@ pub async fn clipping_management_page() -> Html<String> {
 </body>
 </html>
     "###;
+    Html(html.to_string())
+}
+
+// ============================================================================
+// Video Tools Page — SSR interactive tool UI (stabilize, convert, visualize, workflows)
+// ============================================================================
+
+pub async fn video_tools_page() -> Html<String> {
+    let html = r###"<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Video Tools — VideoSync</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f1419 100%);
+            background-attachment: fixed;
+            min-height: 100vh;
+            color: #e8e8e8;
+            padding: 20px;
+        }
+        .topbar {
+            max-width: 900px; margin: 0 auto 20px;
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .topbar a { color: #3b82f6; text-decoration: none; font-weight: 600; }
+        h1 { color: #fff; font-size: 2rem; }
+        .subtitle { color: #9ca3af; margin-bottom: 24px; }
+        .container { max-width: 900px; margin: 0 auto; }
+        .tabs { display: flex; gap: 8px; margin-bottom: 24px; flex-wrap: wrap; }
+        .tab-btn {
+            padding: 8px 20px; border-radius: 20px; border: 1px solid rgba(59,130,246,0.4);
+            background: rgba(59,130,246,0.1); color: #93c5fd; cursor: pointer;
+            font-size: 0.875rem; transition: all 0.2s;
+        }
+        .tab-btn.active, .tab-btn:hover {
+            background: rgba(59,130,246,0.3); border-color: #3b82f6; color: #fff;
+        }
+        .panel { display: none; }
+        .panel.active { display: block; }
+        .card {
+            background: rgba(26,26,46,0.95); border-radius: 12px;
+            border: 1px solid rgba(59,130,246,0.2); padding: 28px;
+        }
+        .card p { color: #9ca3af; margin-bottom: 20px; font-size: 0.9rem; line-height: 1.6; }
+        .form-group { margin-bottom: 18px; }
+        label { display: block; margin-bottom: 6px; font-size: 0.875rem; color: #d1d5db; }
+        input[type=text], input[type=number], select {
+            width: 100%; padding: 10px 14px; background: rgba(255,255,255,0.05);
+            border: 1px solid rgba(255,255,255,0.15); border-radius: 8px;
+            color: #e8e8e8; font-size: 0.9rem; outline: none;
+        }
+        input:focus, select:focus { border-color: #3b82f6; }
+        select option { background: #1e293b; }
+        .slider-row { display: flex; align-items: center; gap: 12px; }
+        .slider-row input[type=range] { flex: 1; }
+        .slider-val { min-width: 30px; text-align: right; color: #3b82f6; font-weight: 600; }
+        .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+        .btn {
+            padding: 12px 28px; background: #3b82f6; color: #fff;
+            border: none; border-radius: 8px; cursor: pointer; font-size: 0.9rem;
+            font-weight: 600; transition: background 0.2s; width: 100%;
+        }
+        .btn:hover { background: #2563eb; }
+        .btn:disabled { background: #374151; color: #6b7280; cursor: not-allowed; }
+        .result { margin-top: 18px; padding: 14px; border-radius: 8px; font-size: 0.875rem; }
+        .result.ok { background: rgba(34,197,94,0.1); border: 1px solid rgba(34,197,94,0.3); color: #86efac; }
+        .result.err { background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.3); color: #fca5a5; }
+        .download-link { display: inline-block; margin-top: 10px; color: #3b82f6; font-weight: 600; }
+        .workflow-info { background: rgba(59,130,246,0.08); border: 1px solid rgba(59,130,246,0.2);
+            border-radius: 6px; padding: 10px 14px; margin: 10px 0; font-size: 0.8rem; color: #93c5fd; }
+        .gif-opts { margin-top: 14px; padding-top: 14px; border-top: 1px solid rgba(255,255,255,0.1); }
+        code { font-size: 0.85em; background: rgba(255,255,255,0.08); padding: 2px 5px; border-radius: 3px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="topbar">
+            <a href="/dashboard">← Dashboard</a>
+            <a href="/chat">💬 AI Chat</a>
+        </div>
+        <h1>🛠️ Video Tools</h1>
+        <p class="subtitle">
+            Direct FFmpeg tool access. Enter a file path relative to <code>uploads/</code>
+            (e.g. <code>abc123_file.mp4</code>) — the name shown after upload in the chat.
+        </p>
+
+        <div class="tabs">
+            <button class="tab-btn active" onclick="showTab('stabilize',this)">🎥 Stabilize</button>
+            <button class="tab-btn" onclick="showTab('convert',this)">🔄 Convert Format</button>
+            <button class="tab-btn" onclick="showTab('visualize',this)">🎵 Audio Visualizer</button>
+            <button class="tab-btn" onclick="showTab('workflow',this)">⚡ Workflows</button>
+        </div>
+
+        <!-- ── Stabilize ───────────────────────────────────────────────── -->
+        <div id="panel-stabilize" class="panel active">
+            <div class="card">
+                <p>Remove camera shake using 2-pass vid.stab analysis. Higher shakiness detects more motion; higher smoothing = more stable but more border crop.</p>
+                <div class="form-group">
+                    <label>Input file path</label>
+                    <input type="text" id="stab-input" placeholder="uploads/my_video.mp4">
+                </div>
+                <div class="form-group">
+                    <label>Shakiness: <span id="stab-shake-val">5</span></label>
+                    <div class="slider-row">
+                        <input type="range" id="stab-shake" min="1" max="10" value="5"
+                            oninput="document.getElementById('stab-shake-val').textContent=this.value">
+                        <span class="slider-val">1–10</span>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Smoothing: <span id="stab-smooth-val">10</span></label>
+                    <div class="slider-row">
+                        <input type="range" id="stab-smooth" min="1" max="50" value="10"
+                            oninput="document.getElementById('stab-smooth-val').textContent=this.value">
+                        <span class="slider-val">1–50</span>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Zoom: <span id="stab-zoom-val">0</span>%</label>
+                    <div class="slider-row">
+                        <input type="range" id="stab-zoom" min="0" max="20" value="0"
+                            oninput="document.getElementById('stab-zoom-val').textContent=this.value">
+                        <span class="slider-val">0–20%</span>
+                    </div>
+                </div>
+                <button class="btn" id="stab-btn" onclick="runStabilize()">Stabilize Video</button>
+                <div id="stab-result"></div>
+            </div>
+        </div>
+
+        <!-- ── Convert Format ─────────────────────────────────────────── -->
+        <div id="panel-convert" class="panel">
+            <div class="card">
+                <p>Convert to a different container format. Audio-only formats (mp3, wav, flac) extract the audio track.</p>
+                <div class="form-group">
+                    <label>Input file path</label>
+                    <input type="text" id="conv-input" placeholder="uploads/my_video.mp4">
+                </div>
+                <div class="form-group">
+                    <label>Target format</label>
+                    <select id="conv-format">
+                        <option value="mp4">MP4 (H.264)</option>
+                        <option value="mkv">MKV (Matroska)</option>
+                        <option value="webm">WebM (VP8/Vorbis)</option>
+                        <option value="mov">MOV (QuickTime)</option>
+                        <option value="avi">AVI</option>
+                        <option value="ts">MPEG-TS</option>
+                        <option value="mp3">MP3 (audio only)</option>
+                        <option value="aac">AAC (audio only)</option>
+                        <option value="flac">FLAC (lossless audio)</option>
+                        <option value="wav">WAV (uncompressed)</option>
+                        <option value="m4a">M4A (AAC in MP4)</option>
+                    </select>
+                </div>
+                <button class="btn" id="conv-btn" onclick="runConvert()">Convert Format</button>
+                <div id="conv-result"></div>
+            </div>
+        </div>
+
+        <!-- ── Audio Visualizer ───────────────────────────────────────── -->
+        <div id="panel-visualize" class="panel">
+            <div class="card">
+                <p>Generate an audio visualization video from any audio or video file. Result is an MP4 you can download.</p>
+                <div class="form-group">
+                    <label>Input file path</label>
+                    <input type="text" id="viz-input" placeholder="uploads/my_audio.wav">
+                </div>
+                <div class="form-group">
+                    <label>Visualization mode</label>
+                    <select id="viz-mode">
+                        <option value="waveform">Waveform (amplitude over time)</option>
+                        <option value="spectrum">Spectrum (frequency intensity)</option>
+                        <option value="cqt">CQT (musical frequency bands)</option>
+                    </select>
+                </div>
+                <div class="two-col">
+                    <div class="form-group">
+                        <label>Width (px)</label>
+                        <input type="number" id="viz-width" value="1280" min="320" max="3840" step="160">
+                    </div>
+                    <div class="form-group">
+                        <label>Height (px)</label>
+                        <input type="number" id="viz-height" value="400" min="100" max="1080" step="100">
+                    </div>
+                </div>
+                <button class="btn" id="viz-btn" onclick="runVisualize()">Generate Visualization</button>
+                <div id="viz-result"></div>
+            </div>
+        </div>
+
+        <!-- ── Workflows ──────────────────────────────────────────────── -->
+        <div id="panel-workflow" class="panel">
+            <div class="card">
+                <p>Named multi-step workflow chains that apply several FFmpeg tools in sequence.</p>
+                <div class="form-group">
+                    <label>Input file path</label>
+                    <input type="text" id="wf-input" placeholder="uploads/my_video.mp4">
+                </div>
+                <div class="form-group">
+                    <label>Workflow</label>
+                    <select id="wf-select" onchange="updateWorkflowInfo()">
+                        <option value="youtube_ready">YouTube Ready Export</option>
+                        <option value="podcast_cleanup">Podcast Cleanup</option>
+                        <option value="cinematic_grade">Cinematic Grade</option>
+                        <option value="talking_head_cleanup">Talking Head Cleanup</option>
+                        <option value="create_gif">Create GIF</option>
+                    </select>
+                </div>
+                <div class="workflow-info" id="wf-info">
+                    Stabilize → normalize color → loudnorm −14 LUFS → yuv420p
+                </div>
+                <div class="gif-opts" id="gif-opts" style="display:none;">
+                    <div class="two-col">
+                        <div class="form-group">
+                            <label>Start (s)</label>
+                            <input type="number" id="gif-start" value="0" min="0" step="1">
+                        </div>
+                        <div class="form-group">
+                            <label>Duration (s)</label>
+                            <input type="number" id="gif-dur" value="5" min="1" max="60" step="1">
+                        </div>
+                    </div>
+                    <div class="two-col">
+                        <div class="form-group">
+                            <label>Width (px)</label>
+                            <input type="number" id="gif-w" value="480" min="120" max="960" step="40">
+                        </div>
+                        <div class="form-group">
+                            <label>FPS</label>
+                            <input type="number" id="gif-fps" value="15" min="5" max="30" step="1">
+                        </div>
+                    </div>
+                </div>
+                <button class="btn" id="wf-btn" onclick="runWorkflow()">Run Workflow</button>
+                <div id="wf-result"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const WORKFLOW_INFO = {
+            youtube_ready: 'Stabilize → normalize color → loudnorm −14 LUFS → yuv420p',
+            podcast_cleanup: 'Denoise → de-ess sibilance → limit peaks → loudnorm −16 LUFS',
+            cinematic_grade: 'Vintage curves → vibrance → vignette → film grain',
+            talking_head_cleanup: 'Stabilize → denoise speech → de-ess → loudnorm −16 LUFS',
+            create_gif: 'Trim segment → scale → optimize palette (GIF output)',
+        };
+
+        function showTab(name, btn) {
+            document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+            document.getElementById('panel-' + name).classList.add('active');
+            btn.classList.add('active');
+        }
+
+        function updateWorkflowInfo() {
+            const wf = document.getElementById('wf-select').value;
+            document.getElementById('wf-info').textContent = WORKFLOW_INFO[wf] || '';
+            document.getElementById('gif-opts').style.display = wf === 'create_gif' ? 'block' : 'none';
+        }
+
+        function getAuthHeader() {
+            const token = localStorage.getItem('authToken');
+            return token ? { 'Authorization': 'Bearer ' + token } : {};
+        }
+
+        function showResult(id, result) {
+            const el = document.getElementById(id);
+            if (result.success) {
+                el.className = 'result ok';
+                el.innerHTML = escHtml(result.message)
+                    + (result.download_url
+                        ? '<br><a class="download-link" href="' + escHtml(result.download_url) + '" target="_blank">⬇ Download result</a>'
+                        : '');
+            } else {
+                el.className = 'result err';
+                el.textContent = result.message;
+            }
+        }
+
+        function escHtml(s) {
+            return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+        }
+
+        async function postTool(endpoint, body, btnId, resultId) {
+            const btn = document.getElementById(btnId);
+            btn.disabled = true;
+            btn.textContent = 'Processing…';
+            document.getElementById(resultId).className = '';
+            document.getElementById(resultId).textContent = '';
+            try {
+                const res = await fetch(endpoint, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
+                    body: JSON.stringify(body),
+                });
+                const data = await res.json();
+                showResult(resultId, data);
+            } catch (e) {
+                showResult(resultId, { success: false, message: 'Request failed: ' + e.message });
+            } finally {
+                btn.disabled = false;
+                btn.textContent = btn.getAttribute('data-label') || 'Run';
+            }
+        }
+
+        // Set default labels
+        document.getElementById('stab-btn').setAttribute('data-label', 'Stabilize Video');
+        document.getElementById('conv-btn').setAttribute('data-label', 'Convert Format');
+        document.getElementById('viz-btn').setAttribute('data-label', 'Generate Visualization');
+        document.getElementById('wf-btn').setAttribute('data-label', 'Run Workflow');
+
+        function runStabilize() {
+            const input = document.getElementById('stab-input').value.trim();
+            if (!input) return alert('Enter an input file path');
+            postTool('/api/tools/stabilize', {
+                input_file: input,
+                shakiness: +document.getElementById('stab-shake').value,
+                smoothing: +document.getElementById('stab-smooth').value,
+                zoom: +document.getElementById('stab-zoom').value,
+            }, 'stab-btn', 'stab-result');
+        }
+
+        function runConvert() {
+            const input = document.getElementById('conv-input').value.trim();
+            if (!input) return alert('Enter an input file path');
+            postTool('/api/tools/convert', {
+                input_file: input,
+                format: document.getElementById('conv-format').value,
+            }, 'conv-btn', 'conv-result');
+        }
+
+        function runVisualize() {
+            const input = document.getElementById('viz-input').value.trim();
+            if (!input) return alert('Enter an input file path');
+            postTool('/api/tools/visualize-audio', {
+                input_file: input,
+                mode: document.getElementById('viz-mode').value,
+                width: +document.getElementById('viz-width').value,
+                height: +document.getElementById('viz-height').value,
+            }, 'viz-btn', 'viz-result');
+        }
+
+        function runWorkflow() {
+            const input = document.getElementById('wf-input').value.trim();
+            if (!input) return alert('Enter an input file path');
+            const wf = document.getElementById('wf-select').value;
+            const body = { input_file: input, workflow: wf };
+            if (wf === 'create_gif') {
+                body.start_seconds = +document.getElementById('gif-start').value;
+                body.duration_seconds = +document.getElementById('gif-dur').value;
+                body.gif_width = +document.getElementById('gif-w').value;
+                body.gif_fps = +document.getElementById('gif-fps').value;
+            }
+            postTool('/api/tools/workflow', body, 'wf-btn', 'wf-result');
+        }
+    </script>
+</body>
+</html>"###;
     Html(html.to_string())
 }
 
