@@ -10,6 +10,7 @@
 //   Phase D: thumbnail extraction at Gemini-specified timestamp
 //   (Vectorization is handled separately in video_vectorization.rs)
 
+use crate::clipping::clip_enhancer::ClipEnhancer;
 use crate::clipping::gemini_video_analyzer::ViralMoment;
 use crate::clipping::models::ClippingConfig;
 use crate::clipping::thumbnail_generator::ThumbnailGenerator;
@@ -92,7 +93,19 @@ impl AiClipper {
             job_id
         );
 
-        // Phase C+: AI thumbnail selection — replace ffmpeg frame with Gemini-selected best frame.
+        // Phase C+: Gemini-driven per-clip enhancement.
+        // Gemini inspects 3 frames per clip and selects specific FFmpeg tools to apply
+        // (stabilize, vibrance, sharpen, denoise, etc.) based on actual clip quality.
+        // Best-effort — if enhancement fails the original clip is preserved unchanged.
+        if self.app_state.gemini_client.is_some() {
+            tracing::info!("🎬 Phase C+: running AI clip enhancement for job {}", job_id);
+            let enhancer = ClipEnhancer::new(self.app_state.clone());
+            enhancer
+                .enhance_clips_with_ai(&mut extracted_clips, content_type)
+                .await;
+        }
+
+        // Phase C++: AI thumbnail selection — replace ffmpeg frame with Gemini-selected best frame.
         // Falls back to ffmpeg thumbnail if Gemini is unavailable or rate-limited.
         if self.app_state.gemini_client.is_some() {
             let thumbnail_gen = ThumbnailGenerator::new(self.app_state.clone());

@@ -14,6 +14,7 @@ pub mod ai_clipper;
 pub mod uploader;
 pub mod performance_tracker;
 pub mod thumbnail_generator;
+pub mod clip_enhancer;
 
 // Re-export commonly used types
 pub use models::*;

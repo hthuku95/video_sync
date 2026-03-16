@@ -277,33 +277,55 @@ impl GeminiClippingAgent {
             self.send_progress(job_id, &state, "download_video", "running").await;
             match self.tool_download_video(&mut state, job_id).await {
                 Ok(ref result) if result["twitch_fallback"].as_bool() == Some(true) => {
-                    // Twitch fallback: re-run Phase A on Twitch URL, then re-download
-                    tracing::info!("Job {}: Twitch fallback triggered — re-analyzing Twitch VOD", job_id);
-                    match self.tool_analyze_video(&mut state, job_id).await {
-                        Ok(reresult) => {
-                            let quality = reresult["overall_quality"].as_f64().unwrap_or(0.0);
-                            if quality < 0.6 {
-                                let mut args = HashMap::new();
-                                args.insert("reason".to_string(), json!("Twitch VOD quality below threshold"));
-                                self.tool_mark_failed(&args, &mut state, job_id).await.ok();
-                                self.checkpointer.delete_all(job_id).await.ok();
-                                return Ok(format!("Job {} terminated: twitch_vod_quality_too_low", job_id));
+                    // Twitch fallback triggered.
+                    // Gemini cannot fetch Twitch URLs via fileData.fileUri (HTTP 400).
+                    // Correct order: download the VOD first, THEN analyze the local file via frames.
+                    tracing::info!(
+                        "Job {}: Twitch fallback — downloading VOD before analysis",
+                        job_id
+                    );
+
+                    // Phase B (Twitch): download the VOD
+                    match self.tool_download_video(&mut state, job_id).await {
+                        Ok(_) => {
+                            // Phase A (Twitch): analyze downloaded local file via extracted frames
+                            match self.tool_analyze_twitch_vod(&mut state, job_id).await {
+                                Ok(reresult) => {
+                                    let quality =
+                                        reresult["overall_quality"].as_f64().unwrap_or(0.0);
+                                    if quality < 0.6 {
+                                        let mut args = HashMap::new();
+                                        args.insert(
+                                            "reason".to_string(),
+                                            json!("Twitch VOD quality below threshold"),
+                                        );
+                                        self.tool_mark_failed(&args, &mut state, job_id)
+                                            .await
+                                            .ok();
+                                        self.checkpointer.delete_all(job_id).await.ok();
+                                        return Ok(format!(
+                                            "Job {} terminated: twitch_vod_quality_too_low",
+                                            job_id
+                                        ));
+                                    }
+                                    // Both download (B) and analysis (A) complete
+                                    self.advance_checkpoint(&mut state).await;
+                                }
+                                Err(e) => {
+                                    let mut args = HashMap::new();
+                                    args.insert(
+                                        "reason".to_string(),
+                                        json!(format!("Twitch VOD analysis failed: {}", e)),
+                                    );
+                                    self.tool_mark_failed(&args, &mut state, job_id).await.ok();
+                                    self.checkpointer.delete_all(job_id).await.ok();
+                                    return Err(format!(
+                                        "Phase A (Twitch fallback) failed: {}",
+                                        e
+                                    ));
+                                }
                             }
                         }
-                        Err(e) => {
-                            let mut args = HashMap::new();
-                            args.insert(
-                                "reason".to_string(),
-                                json!(format!("Twitch re-analysis failed: {}", e)),
-                            );
-                            self.tool_mark_failed(&args, &mut state, job_id).await.ok();
-                            self.checkpointer.delete_all(job_id).await.ok();
-                            return Err(format!("Phase A (Twitch fallback) failed: {}", e));
-                        }
-                    }
-                    // Download the Twitch VOD
-                    match self.tool_download_video(&mut state, job_id).await {
-                        Ok(_) => { self.advance_checkpoint(&mut state).await; }
                         Err(e) => {
                             let mut args = HashMap::new();
                             args.insert("reason".to_string(), json!(e));
@@ -739,6 +761,90 @@ impl GeminiClippingAgent {
                 }
             }
         }
+    }
+
+    /// Analyze a Twitch VOD that has already been downloaded to `state.local_video_path`.
+    ///
+    /// Gemini cannot fetch Twitch URLs directly, so after a Twitch fallback download we use
+    /// `analyze_video_from_local_file` which extracts frames and sends them as images.
+    /// Produces the same `VideoAnalysis` schema and persists the result to DB identically to
+    /// `tool_analyze_video`.
+    async fn tool_analyze_twitch_vod(
+        &self,
+        state: &mut ClippingAgentState,
+        job_id: i32,
+    ) -> Result<Value, String> {
+        let video_path = state
+            .local_video_path
+            .clone()
+            .ok_or("local_video_path not set — Twitch VOD must be downloaded before analysis")?;
+
+        let job = fetch_job_details(job_id, &self.app_state.db_pool).await?;
+        let linkage = fetch_linkage(job.linkage_id, &self.app_state.db_pool).await?;
+
+        update_job_status(job_id, "analyzing", 10, None, &self.app_state.db_pool).await?;
+
+        let gemini = self
+            .app_state
+            .gemini_client
+            .as_ref()
+            .ok_or("Gemini client not configured")?;
+
+        // Fetch learned high-performing viral factors to bias analysis
+        let learned_factors: Vec<String> = sqlx::query_scalar(
+            "SELECT viral_factor FROM viral_factor_performance \
+             WHERE total_clips >= 3 ORDER BY performance_score DESC LIMIT 5",
+        )
+        .fetch_all(&self.app_state.db_pool)
+        .await
+        .unwrap_or_default();
+
+        tracing::info!(
+            "🎬 Phase A (Twitch): analyzing local file via frames — {}",
+            video_path
+        );
+
+        let analysis = tokio::time::timeout(
+            tokio::time::Duration::from_secs(300), // 5 min — frame analysis can take longer
+            gemini.analyze_video_from_local_file(
+                &video_path,
+                linkage.clips_per_video as usize,
+                linkage.min_clip_duration_seconds as f64,
+                linkage.max_clip_duration_seconds as f64,
+                &learned_factors,
+            ),
+        )
+        .await
+        .map_err(|_| "Gemini local-file analysis timed out after 300s".to_string())?
+        .map_err(|e| format!("Gemini analysis failed: {}", e))?;
+
+        let overall_quality = analysis.overall_quality;
+        let moments_count = analysis.viral_moments.len();
+        let qualified_count = analysis.qualified_moments(0.6).len();
+
+        // Persist analysis to DB (same as tool_analyze_video)
+        sqlx::query(
+            "UPDATE clipping_jobs SET viral_moments_json = $1, analysis_quality = $2 WHERE id = $3",
+        )
+        .bind(serde_json::to_value(&analysis).unwrap_or(Value::Null))
+        .bind(overall_quality)
+        .bind(job_id)
+        .execute(&self.app_state.db_pool)
+        .await
+        .ok();
+
+        update_job_status(job_id, "analyzed", 20, None, &self.app_state.db_pool).await?;
+
+        state.phase_a_complete = true;
+        state.overall_quality = Some(overall_quality);
+
+        Ok(json!({
+            "success": true,
+            "overall_quality": overall_quality,
+            "moments_count": moments_count,
+            "qualified_moments": qualified_count,
+            "source": "local_frames",
+        }))
     }
 
     /// Call Apify (the existing download path) for any URL.

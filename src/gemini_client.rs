@@ -7810,6 +7810,262 @@ Provide ONLY the JSON object, no markdown, no code blocks, no other text."#,
         Err(last_error)
     }
 
+    /// Analyze a locally downloaded video file by extracting JPEG frames and sending them
+    /// to Gemini as a multi-image request.
+    ///
+    /// Used for Twitch VODs (and any non-YouTube source) where Gemini's fileData URI path
+    /// only supports YouTube URLs. Produces the same `VideoAnalysis` schema as
+    /// `analyze_video_from_url`.
+    ///
+    /// Frame count: 1 frame per 2 minutes of footage, clamped 8–20.
+    /// Each frame is labeled with its timestamp so Gemini can report accurate `start_sec`/`end_sec`.
+    pub async fn analyze_video_from_local_file(
+        &self,
+        video_path: &str,
+        clips_per_video: usize,
+        min_duration_secs: f64,
+        max_duration_secs: f64,
+        high_performing_factors: &[String],
+    ) -> Result<crate::clipping::gemini_video_analyzer::VideoAnalysis, Box<dyn std::error::Error + Send + Sync>> {
+        let _permit = self
+            .semaphore
+            .acquire()
+            .await
+            .map_err(|e| format!("Gemini semaphore error: {}", e))?;
+
+        tracing::info!(
+            "🎬 Analyzing local video via extracted frames: {}",
+            video_path
+        );
+
+        // Get total duration via ffprobe
+        let total_dur = crate::core::get_video_duration(video_path)
+            .map_err(|e| format!("Failed to get video duration for '{}': {}", video_path, e))?;
+
+        // 1 frame per 2 minutes, clamped 8–20
+        let num_frames = ((total_dur / 120.0).round() as usize).clamp(8, 20);
+
+        // Extract frames at evenly spaced timestamps
+        let mut frame_paths: Vec<String> = Vec::new();
+        let mut frame_timestamps: Vec<f64> = Vec::new();
+        for i in 0..num_frames {
+            let ts = if num_frames == 1 {
+                total_dur * 0.5
+            } else {
+                total_dur * (i as f64 / (num_frames - 1) as f64)
+            };
+            let ts = ts.clamp(0.1, total_dur - 0.1);
+            let path = crate::utils::ffmpeg_utils::create_temp_file(
+                &format!("local_analysis_frame_{}", i),
+                "jpg",
+            );
+            match crate::utils::ffmpeg_utils::extract_frame_at_timestamp(video_path, ts, &path) {
+                Ok(p) => {
+                    frame_paths.push(p);
+                    frame_timestamps.push(ts);
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Frame {}/{} extraction at {:.1}s failed (skipping): {}",
+                        i + 1,
+                        num_frames,
+                        ts,
+                        e
+                    );
+                }
+            }
+        }
+
+        if frame_paths.is_empty() {
+            return Err(format!(
+                "Failed to extract any frames from '{}' ({:.0}s)",
+                video_path, total_dur
+            )
+            .into());
+        }
+
+        // Read frame bytes then immediately clean up temp files
+        let mut frame_data: Vec<(f64, Vec<u8>)> = Vec::new();
+        for (path, ts) in frame_paths.iter().zip(frame_timestamps.iter()) {
+            match tokio::fs::read(path).await {
+                Ok(bytes) => frame_data.push((*ts, bytes)),
+                Err(e) => tracing::warn!("Failed to read frame {}: {}", path, e),
+            }
+        }
+        crate::utils::ffmpeg_utils::cleanup_temp_files(&frame_paths);
+
+        if frame_data.is_empty() {
+            return Err("Failed to read any frame data from extracted frames".into());
+        }
+
+        tracing::info!(
+            "📸 Extracted {}/{} frames for Gemini analysis (video: {:.0}s)",
+            frame_data.len(),
+            num_frames,
+            total_dur
+        );
+
+        let learned_factors_hint = if !high_performing_factors.is_empty() {
+            format!(
+                "\nLEARNED HIGH-PERFORMING FACTORS (prioritize moments containing these): {}\n",
+                high_performing_factors.join(", ")
+            )
+        } else {
+            String::new()
+        };
+
+        let prompt = format!(
+            r#"You are analyzing a video via {n} sampled frames. Total duration: {total_dur:.0}s ({total_min:.1} minutes).
+
+Each frame is labeled with its exact timestamp [t=Xs]. Use these timestamps to estimate accurate start/end times for viral clips.
+
+Identify exactly {clips_per_video} viral clip opportunities for YouTube Shorts.
+
+REQUIREMENTS:
+- Each clip must be between {min_dur:.0}s and {max_dur:.0}s (HARD LIMIT — never exceed {max_dur:.0}s)
+- Clips will be published as YouTube Shorts (vertical 9:16 portrait format, center-cropped from landscape)
+- Prioritize moments where the subject is centered in frame
+- Focus on: dramatic hooks, surprising moments, emotional peaks, action sequences, plot twists
+- Clips should work as standalone content without needing context{learned_hint}
+
+Return ONLY a valid JSON object matching this exact schema:
+{{
+  "video_summary": "<comprehensive plain-text summary of the entire video>",
+  "content_type": "<one of: entertainment, tutorial, news, gaming, sports, music, vlog, other>",
+  "overall_quality": <float 0.0-1.0>,
+  "viral_moments": [
+    {{
+      "start_sec": <float seconds>,
+      "end_sec": <float seconds>,
+      "title": "<engaging YouTube Short title, max 60 chars>",
+      "hook": "<first sentence that grabs attention>",
+      "quality_score": <float 0.0-1.0>,
+      "viral_factors": ["<factor1>", "<factor2>"],
+      "thumbnail_sec": <float seconds — best frame for thumbnail within the clip>,
+      "reason": "<why this moment is viral/engaging>"
+    }}
+  ]
+}}
+
+Provide ONLY the JSON object, no markdown, no code blocks, no other text."#,
+            n = frame_data.len(),
+            total_dur = total_dur,
+            total_min = total_dur / 60.0,
+            clips_per_video = clips_per_video,
+            min_dur = min_duration_secs,
+            max_dur = max_duration_secs,
+            learned_hint = learned_factors_hint,
+        );
+
+        // Build parts array: timestamp context, then interleaved [label, image] pairs, then prompt
+        let mut parts: Vec<serde_json::Value> = Vec::new();
+
+        let frame_label_list: Vec<String> = frame_data
+            .iter()
+            .map(|(ts, _)| format!("[t={:.1}s]", ts))
+            .collect();
+        parts.push(serde_json::json!({
+            "text": format!("Frame timestamps in order: {}", frame_label_list.join(", "))
+        }));
+
+        for (ts, bytes) in &frame_data {
+            parts.push(serde_json::json!({ "text": format!("[t={:.1}s]", ts) }));
+            parts.push(serde_json::json!({
+                "inlineData": {
+                    "mimeType": "image/jpeg",
+                    "data": BASE64_STANDARD.encode(bytes)
+                }
+            }));
+        }
+
+        parts.push(serde_json::json!({ "text": prompt }));
+
+        let request_body = serde_json::json!({
+            "contents": [{"role": "user", "parts": parts}],
+            "generationConfig": {
+                "temperature": 0.3,
+                "maxOutputTokens": 8192,
+                "responseMimeType": "application/json",
+                "thinkingConfig": {"thinkingBudget": 0}
+            }
+        });
+
+        let url = format!(
+            "{}/models/gemini-2.5-flash:generateContent?key={}",
+            self.base_url, self.api_key
+        );
+
+        let max_attempts = 3u32;
+        let mut last_error: Box<dyn std::error::Error + Send + Sync> = "No attempts made".into();
+
+        for attempt in 0..max_attempts {
+            let response = self
+                .client
+                .post(&url)
+                .header("Content-Type", "application/json")
+                .json(&request_body)
+                .send()
+                .await?;
+
+            let status = response.status();
+
+            if status.is_success() {
+                let response_text = response.text().await?;
+                let response_json: serde_json::Value = serde_json::from_str(&response_text)
+                    .map_err(|e| format!("Failed to parse Gemini response: {}", e))?;
+
+                let text = response_json["candidates"][0]["content"]["parts"][0]["text"]
+                    .as_str()
+                    .ok_or("Gemini response missing text content")?;
+
+                let analysis: crate::clipping::gemini_video_analyzer::VideoAnalysis =
+                    serde_json::from_str(text).map_err(|e| {
+                        format!(
+                            "Failed to parse VideoAnalysis JSON from local-file analysis: {} — text: {}",
+                            e,
+                            &text[..text.len().min(500)]
+                        )
+                    })?;
+
+                tracing::info!(
+                    "✅ Local-file analysis complete: {} viral moments (quality: {:.2})",
+                    analysis.viral_moments.len(),
+                    analysis.overall_quality
+                );
+
+                return Ok(analysis);
+            }
+
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+
+            if status.as_u16() == 429 && attempt < max_attempts - 1 {
+                let wait_secs = (parse_gemini_retry_delay(&error_text, 30.0) + 5.0) as u64;
+                tracing::warn!(
+                    "⏳ Gemini rate limited (local-file analysis, attempt {}/{}). Waiting {}s…",
+                    attempt + 1, max_attempts, wait_secs
+                );
+                tokio::time::sleep(tokio::time::Duration::from_secs(wait_secs)).await;
+                last_error = format!("Rate limited: {}", error_text).into();
+                continue;
+            }
+
+            last_error = format!("Gemini API error (HTTP {}): {}", status, error_text).into();
+
+            if attempt < max_attempts - 1 {
+                tracing::warn!(
+                    "Local-file analysis attempt {}/{} failed, retrying: {}",
+                    attempt + 1, max_attempts, last_error
+                );
+                tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+            }
+        }
+
+        Err(last_error)
+    }
+
     /// Simple text generation — used by Twitch mapper and other plain-text callers.
     /// Uses raw JSON with thinkingBudget:0 to avoid burning thinking-token quota.
     /// Retries up to 3 times on 429 RESOURCE_EXHAUSTED with back-off.
