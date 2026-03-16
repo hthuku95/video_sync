@@ -142,6 +142,50 @@ pub fn trim_video(
     execute_ffmpeg_command_with_sync_timeout(command, Some(600))
 }
 
+/// Trim a video segment and convert it to YouTube Shorts format in one FFmpeg pass.
+///
+/// Applied transformations:
+///  1. Trim `start_seconds`–`end_seconds` from the source
+///  2. Center-crop to 9:16 aspect ratio (landscape → portrait)
+///  3. Scale to 1080×1920 (standard Full-HD Shorts resolution)
+///  4. Normalize audio loudness to −14 LUFS (YouTube Shorts recommendation)
+///  5. Encode as H.264 yuv420p + AAC 128k with faststart for web delivery
+///
+/// Designed for landscape (16:9) source videos. If the source is already portrait,
+/// the crop is a no-op (cropping to the same ratio) and scale still applies.
+pub fn trim_and_convert_to_shorts(
+    input_file: &str,
+    output_file: &str,
+    start_seconds: f64,
+    end_seconds: f64,
+) -> Result<String, String> {
+    let duration = end_seconds - start_seconds;
+
+    // Video filter: center-crop to 9:16, scale to 1080×1920, force yuv420p
+    // crop=w:h:x:y — keep full input height, crop width to 9/16 of height, centered
+    let vf = "crop=ih*9/16:ih:(iw-ih*9/16)/2:0,scale=1080:1920:flags=lanczos,format=yuv420p";
+    // Audio filter: single-pass loudnorm to −14 LUFS (EBU R128 target for Shorts)
+    let af = "loudnorm=I=-14:LRA=11:TP=-1";
+
+    let mut command = Command::new("ffmpeg");
+    command
+        .arg("-ss").arg(start_seconds.to_string())
+        .arg("-i").arg(input_file)
+        .arg("-t").arg(duration.to_string())
+        .arg("-vf").arg(vf)
+        .arg("-af").arg(af)
+        .arg("-c:v").arg("libx264")
+        .arg("-preset").arg("fast")
+        .arg("-crf").arg("23")
+        .arg("-c:a").arg("aac")
+        .arg("-b:a").arg("128k")
+        .arg("-movflags").arg("faststart")
+        .arg("-y")
+        .arg(output_file);
+
+    execute_ffmpeg_command_with_sync_timeout(command, Some(600))
+}
+
 pub fn extract_video_segment(
     input_file: &str,
     output_file: &str,

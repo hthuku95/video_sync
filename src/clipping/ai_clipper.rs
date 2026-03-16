@@ -138,13 +138,13 @@ fn extract_single_clip(
         clip_path
     );
 
-    // Trim the clip
-    crate::core::trim_video(
+    // Trim + convert to YouTube Shorts format (9:16 portrait, 1080×1920, loudnorm, yuv420p)
+    crate::core::trim_and_convert_to_shorts(
         video_path,
         clip_path,
         moment.start_sec,
         moment.end_sec,
-    ).map_err(|e| format!("Clip {} trim failed: {}", clip_number, e))?;
+    ).map_err(|e| format!("Clip {} trim/shorts-convert failed: {}", clip_number, e))?;
 
     // Extract thumbnail at the Gemini-specified timestamp.
     // Retry up to 3 times with a brief sleep — the trimmed file may not be

@@ -112,9 +112,23 @@ pub async fn execute_clipping_job(
             return Ok(format!("No qualifying clips found (overall_quality={:.2})", analysis.overall_quality));
         }
 
+        // Hard-cap clip duration to config max (never exceed for Shorts compatibility).
+        // Gemini sometimes returns moments slightly over the requested max.
+        let shorts_max = config.max_clip_duration_seconds as f64;
         let moments: Vec<_> = analysis.top_moments(config.clips_per_video as usize)
             .into_iter()
             .cloned()
+            .map(|mut m| {
+                let dur = m.end_sec - m.start_sec;
+                if dur > shorts_max {
+                    tracing::warn!(
+                        "Moment '{title}' is {dur:.1}s — truncating end to {max}s cap",
+                        title = m.title, dur = dur, max = shorts_max
+                    );
+                    m.end_sec = m.start_sec + shorts_max;
+                }
+                m
+            })
             .collect();
 
         tracing::info!(
@@ -149,9 +163,16 @@ pub async fn execute_clipping_job(
         let analysis: VideoAnalysis = serde_json::from_value(analysis_value)
             .map_err(|e| format!("Failed to deserialize VideoAnalysis from DB: {}", e))?;
 
+        let shorts_max = config.max_clip_duration_seconds as f64;
         let moments: Vec<_> = analysis.top_moments(config.clips_per_video as usize)
             .into_iter()
             .cloned()
+            .map(|mut m| {
+                if m.end_sec - m.start_sec > shorts_max {
+                    m.end_sec = m.start_sec + shorts_max;
+                }
+                m
+            })
             .collect();
 
         tracing::info!("✅ Loaded {} moments from DB (overall_quality={:.2})", moments.len(), analysis.overall_quality);

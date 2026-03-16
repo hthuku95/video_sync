@@ -7679,9 +7679,12 @@ Generate a well-structured script appropriate for this type of video.",
             r#"Analyze this YouTube video and identify exactly {clips_per_video} viral clip opportunities for YouTube Shorts.
 
 REQUIREMENTS:
-- Each clip must be between {min_dur:.0} and {max_dur:.0} seconds
+- Each clip must be between {min_dur:.0} and {max_dur:.0} seconds (HARD LIMIT — never exceed {max_dur:.0}s)
+- Clips will be published as YouTube Shorts (vertical 9:16 portrait format, center-cropped from landscape)
+- Prioritize moments where the subject is centered in frame (survives a center-crop to portrait)
 - Focus on: dramatic hooks, surprising moments, emotional peaks, action sequences, plot twists
-- Clips should work as standalone content without needing context{learned_hint}
+- Clips should work as standalone content without needing context
+- Prefer moments with clear speech or impactful audio (loudness is normalized in post){learned_hint}
 
 Return ONLY a valid JSON object matching this exact schema:
 {{

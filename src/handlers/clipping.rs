@@ -448,9 +448,9 @@ async fn create_linkage(
     .bind(user_id)
     .bind(payload.source_channel_id)
     .bind(payload.destination_channel_id)
-    .bind(payload.clips_per_video.unwrap_or(2))
-    .bind(payload.min_clip_duration_seconds.unwrap_or(60))
-    .bind(payload.max_clip_duration_seconds.unwrap_or(120))
+    .bind(payload.clips_per_video.unwrap_or(3))
+    .bind(payload.min_clip_duration_seconds.unwrap_or(15))
+    .bind(payload.max_clip_duration_seconds.unwrap_or(60))
     .fetch_one(&state.db_pool)
     .await
     .map_err(|e| {
