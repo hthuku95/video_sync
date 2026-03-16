@@ -142,38 +142,105 @@ pub fn trim_video(
     execute_ffmpeg_command_with_sync_timeout(command, Some(600))
 }
 
-/// Trim a video segment and convert it to YouTube Shorts format in one FFmpeg pass.
+/// Trim a video segment, convert to YouTube Shorts format, and apply content-aware
+/// video editing enhancements — all in a single FFmpeg pass.
 ///
-/// Applied transformations:
+/// Applied transformations (always):
 ///  1. Trim `start_seconds`–`end_seconds` from the source
-///  2. Center-crop to 9:16 aspect ratio (landscape → portrait)
-///  3. Scale to 1080×1920 (standard Full-HD Shorts resolution)
-///  4. Normalize audio loudness to −14 LUFS (YouTube Shorts recommendation)
-///  5. Encode as H.264 yuv420p + AAC 128k with faststart for web delivery
+///  2. Light stabilisation via `deshake` (removes camera shake)
+///  3. Center-crop to 9:16 aspect ratio (landscape → portrait)
+///  4. Scale to 1080×1920 (Full-HD Shorts resolution)
+///  5. Subtle colour grading: saturation +12%, contrast +4%, gamma +3%
+///  6. Light sharpening via `unsharp` (crispens compressed source)
+///  7. Title text overlay burned at bottom of frame (if `title` is non-empty)
+///  8. yuv420p pixel format for YouTube compatibility
+///  9. Normalize audio loudness to −14 LUFS (EBU R128 Shorts target)
 ///
-/// Designed for landscape (16:9) source videos. If the source is already portrait,
-/// the crop is a no-op (cropping to the same ratio) and scale still applies.
+/// Content-type aware additions:
+///  - gaming / sports / action → extra `deshake` strength (shake_x/y = 24)
+///  - tutorial / vlog / educational / news → FFT audio denoising (`afftdn`)
+///    prepended before loudnorm for cleaner voice
 pub fn trim_and_convert_to_shorts(
     input_file: &str,
     output_file: &str,
     start_seconds: f64,
     end_seconds: f64,
+    title: &str,
+    content_type: &str,
 ) -> Result<String, String> {
     let duration = end_seconds - start_seconds;
+    let ct = content_type.to_lowercase();
 
-    // Video filter: center-crop to 9:16, scale to 1080×1920, force yuv420p
-    // crop=w:h:x:y — keep full input height, crop width to 9/16 of height, centered
-    let vf = "crop=ih*9/16:ih:(iw-ih*9/16)/2:0,scale=1080:1920:flags=lanczos,format=yuv420p";
-    // Audio filter: single-pass loudnorm to −14 LUFS (EBU R128 target for Shorts)
-    let af = "loudnorm=I=-14:LRA=11:TP=-1";
+    // ── Video filter chain ────────────────────────────────────────────────────
 
+    // 1. Stabilise — stronger for action/sports, lighter for everything else
+    let deshake = if ct == "gaming" || ct == "sports" {
+        "deshake=x=-1:y=-1:w=-1:h=-1:rx=24:ry=24:edge=mirror"
+    } else {
+        "deshake=x=-1:y=-1:w=-1:h=-1:rx=16:ry=16:edge=mirror"
+    };
+
+    // 2. Portrait crop + scale
+    let crop_scale = "crop=ih*9/16:ih:(iw-ih*9/16)/2:0,scale=1080:1920:flags=lanczos";
+
+    // 3. Colour grading — subtle enhancement (saturation, contrast, gamma lift)
+    let color = "eq=saturation=1.12:contrast=1.04:gamma=1.03";
+
+    // 4. Light sharpening
+    let sharpen = "unsharp=3:3:0.4:3:3:0.0";
+
+    // 5. Title overlay — escape FFmpeg drawtext special chars, truncate to 52 chars
+    let title_filter = if !title.is_empty() {
+        let safe: String = title
+            .chars()
+            .take(52)
+            .collect::<String>()
+            .replace('\\', "\\\\")
+            .replace('\'', "\u{2019}")   // replace straight apostrophe with curly
+            .replace(':', "\\:")
+            .replace('%', "\\%");
+        format!(
+            "drawtext=text='{safe}'\
+             :fontsize=46\
+             :fontcolor=white\
+             :x=(w-text_w)/2\
+             :y=h-180\
+             :box=1\
+             :boxcolor=black@0.55\
+             :boxborderw=14"
+        )
+    } else {
+        String::new()
+    };
+
+    // 6. Pixel format
+    let pix_fmt = "format=yuv420p";
+
+    // Assemble vf chain
+    let mut vf_parts: Vec<&str> = vec![deshake, crop_scale, color, sharpen];
+    if !title_filter.is_empty() {
+        vf_parts.push(&title_filter);
+    }
+    vf_parts.push(pix_fmt);
+    let vf = vf_parts.join(",");
+
+    // ── Audio filter chain ────────────────────────────────────────────────────
+    // Tutorial / vlog / educational / news → denoise speech first
+    let is_speech = matches!(ct.as_str(), "tutorial" | "vlog" | "educational" | "news");
+    let af = if is_speech {
+        "afftdn=nf=-25,loudnorm=I=-14:LRA=11:TP=-1".to_string()
+    } else {
+        "loudnorm=I=-14:LRA=11:TP=-1".to_string()
+    };
+
+    // ── Build FFmpeg command ──────────────────────────────────────────────────
     let mut command = Command::new("ffmpeg");
     command
         .arg("-ss").arg(start_seconds.to_string())
         .arg("-i").arg(input_file)
         .arg("-t").arg(duration.to_string())
-        .arg("-vf").arg(vf)
-        .arg("-af").arg(af)
+        .arg("-vf").arg(&vf)
+        .arg("-af").arg(&af)
         .arg("-c:v").arg("libx264")
         .arg("-preset").arg("fast")
         .arg("-crf").arg("23")

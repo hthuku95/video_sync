@@ -36,11 +36,13 @@ impl AiClipper {
         job_id: i32,
         video_path: &str,
         moments: &[ViralMoment],
+        content_type: &str,
     ) -> Result<Vec<ExtractedClipData>, String> {
         tracing::info!(
-            "🎬 Extracting {} clips from job {} in parallel",
+            "🎬 Extracting {} clips from job {} in parallel (content_type={})",
             moments.len(),
-            job_id
+            job_id,
+            content_type,
         );
 
         // Launch all clip extractions in parallel
@@ -53,6 +55,7 @@ impl AiClipper {
             let video_path = video_path.to_string();
             let moment = moment.clone();
             let clip_number = (index + 1) as i32;
+            let content_type = content_type.to_string();
 
             let handle = tokio::task::spawn_blocking(move || {
                 extract_single_clip(
@@ -61,6 +64,7 @@ impl AiClipper {
                     &clip_path,
                     &thumbnail_path,
                     &moment,
+                    &content_type,
                 )
             });
 
@@ -128,6 +132,7 @@ fn extract_single_clip(
     clip_path: &str,
     thumbnail_path: &str,
     moment: &ViralMoment,
+    content_type: &str,
 ) -> Result<ExtractedClipData, String> {
     tracing::info!(
         "✂️  Clip {}: trimming {:.1}s–{:.1}s ({:.1}s) → {}",
@@ -138,13 +143,17 @@ fn extract_single_clip(
         clip_path
     );
 
-    // Trim + convert to YouTube Shorts format (9:16 portrait, 1080×1920, loudnorm, yuv420p)
+    // Trim + Shorts conversion + content-aware enhancements (single FFmpeg pass):
+    //   deshake → 9:16 crop → scale 1080×1920 → colour grade → sharpen
+    //   → title overlay → yuv420p | audio: [denoise →] loudnorm −14 LUFS
     crate::core::trim_and_convert_to_shorts(
         video_path,
         clip_path,
         moment.start_sec,
         moment.end_sec,
-    ).map_err(|e| format!("Clip {} trim/shorts-convert failed: {}", clip_number, e))?;
+        &moment.title,
+        content_type,
+    ).map_err(|e| format!("Clip {} shorts-enhance failed: {}", clip_number, e))?;
 
     // Extract thumbnail at the Gemini-specified timestamp.
     // Retry up to 3 times with a brief sleep — the trimmed file may not be

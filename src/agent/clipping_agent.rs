@@ -918,7 +918,7 @@ impl GeminiClippingAgent {
 
         let clipper = AiClipper::new(self.app_state.clone());
         let clips = clipper
-            .extract_clips_from_moments(job_id, &video_path, &moments)
+            .extract_clips_from_moments(job_id, &video_path, &moments, &analysis.content_type)
             .await?;
 
         if clips.is_empty() {
