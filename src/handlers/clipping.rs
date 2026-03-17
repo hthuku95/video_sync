@@ -11,7 +11,7 @@ use axum::{
 use crate::agent::content_management_agent::ContentManagementAgent;
 use crate::clipping::models::*;
 use crate::clipping::uploader::ClipUploader;
-use crate::middleware::{auth::auth_middleware, clipping_access::clipping_access_middleware};
+use crate::middleware::{auth::auth_middleware, clipping_access::clipping_access_middleware, rate_limit::strict_rate_limit_middleware};
 use crate::models::auth::Claims;
 use crate::AppState;
 use serde::{Deserialize, Serialize};
@@ -23,9 +23,15 @@ use chrono::{DateTime, Utc};
 use futures::{sink::SinkExt, stream::StreamExt};
 
 pub fn clipping_routes() -> Router {
-    // Public WebSocket route — no auth middleware (progress is read-only, job_id is opaque)
-    let ws_routes = Router::new()
-        .route("/ws/clipping-jobs/:job_id", get(ws_clipping_job_progress));
+    // Mutation routes — strict rate limiting (10/min per IP)
+    let mutation_routes = Router::new()
+        .route("/api/clipping/jobs/:id/cancel", post(cancel_job))
+        .route("/api/clipping/jobs/:id/retry", post(retry_job))
+        .route("/api/clipping/jobs/:id/reset", post(reset_job))
+        .route("/api/clipping/clips/:id/repost", post(repost_clip))
+        .layer(axum::middleware::from_fn(strict_rate_limit_middleware))
+        .layer(axum::middleware::from_fn(clipping_access_middleware))
+        .layer(axum::middleware::from_fn(auth_middleware));
 
     // Protected API routes
     let api_routes = Router::new()
@@ -54,13 +60,9 @@ pub fn clipping_routes() -> Router {
         // Clipping job monitoring
         .route("/api/clipping/jobs", get(list_jobs))
         .route("/api/clipping/jobs/:id", get(get_job_status))
-        .route("/api/clipping/jobs/:id/cancel", post(cancel_job))
-        .route("/api/clipping/jobs/:id/retry", post(retry_job))
-        .route("/api/clipping/jobs/:id/reset", post(reset_job))
         // Extracted clips
         .route("/api/clipping/clips", get(list_clips))
         .route("/api/clipping/clips/:id", get(get_clip_details))
-        .route("/api/clipping/clips/:id/repost", post(repost_clip))
         // Clip review system
         .route("/api/clipping/clips/pending-review", get(list_pending_review_clips))
         .route("/api/clipping/clips/:id/approve", axum::routing::put(approve_clip))
@@ -94,11 +96,13 @@ pub fn clipping_routes() -> Router {
             "/api/clipping/twitch/mappings/:id",
             delete(delete_twitch_mapping),
         )
+        // WebSocket route — protected by auth + clipping access
+        .route("/ws/clipping-jobs/:job_id", get(ws_clipping_job_progress))
         // All API routes protected
         .layer(axum::middleware::from_fn(clipping_access_middleware))
         .layer(axum::middleware::from_fn(auth_middleware));
 
-    ws_routes.merge(api_routes)
+    mutation_routes.merge(api_routes)
 }
 
 /// WebSocket handler — subscribe to real-time progress for a specific clipping job.
@@ -107,13 +111,34 @@ pub fn clipping_routes() -> Router {
 /// The agent sends ProgressUpdate messages via job_manager.send_progress(job_id.to_string(), …).
 /// This handler registers a receiver and forwards updates to the connected client as JSON.
 ///
-/// Usage: `ws://host/ws/clipping-jobs/123`
+/// Usage: `wss://host/ws/clipping-jobs/123?token=<jwt>`
 async fn ws_clipping_job_progress(
     ws: WebSocketUpgrade,
     Path(job_id): Path<i32>,
     Extension(state): Extension<Arc<AppState>>,
-) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| clipping_job_ws(socket, state, job_id))
+    Extension(claims): Extension<Claims>,
+) -> Result<impl IntoResponse, StatusCode> {
+    let user_id: i32 = claims.sub.parse().map_err(|_| StatusCode::UNAUTHORIZED)?;
+
+    // Verify the job belongs to this user
+    let owns_job: bool = sqlx::query_scalar(
+        "SELECT EXISTS(
+            SELECT 1 FROM clipping_jobs cj
+            JOIN youtube_channel_linkages l ON l.id = cj.linkage_id
+            WHERE cj.id = $1 AND l.user_id = $2
+        )"
+    )
+    .bind(job_id)
+    .bind(user_id)
+    .fetch_one(&state.db_pool)
+    .await
+    .unwrap_or(false);
+
+    if !owns_job {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    Ok(ws.on_upgrade(move |socket| clipping_job_ws(socket, state, job_id)))
 }
 
 async fn clipping_job_ws(stream: WebSocket, state: Arc<AppState>, job_id: i32) {

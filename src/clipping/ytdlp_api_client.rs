@@ -332,6 +332,15 @@ impl YtdlpApiClient {
                 let file_data = download_response.file_data
                     .ok_or("file_data missing in base64 mode")?;
 
+                // Guard against absurdly large payloads: 6 GB video ≈ 8 GB base64
+                const MAX_BASE64_CHARS: usize = 8_500_000_000;
+                if file_data.len() > MAX_BASE64_CHARS {
+                    return Err(format!(
+                        "base64 payload too large ({} chars, max {})",
+                        file_data.len(), MAX_BASE64_CHARS
+                    ));
+                }
+
                 info!("📦 Decoding base64 data ({} chars)", file_data.len());
 
                 use base64::prelude::*;

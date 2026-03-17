@@ -390,10 +390,43 @@ pub fn get_video_duration(file_path: &str) -> Result<f64, String> {
 }
 
 pub fn validate_video_file(file_path: &str) -> Result<bool, String> {
-    match analyze_video(file_path) {
-        Ok(_) => Ok(true),
-        Err(_) => Ok(false),
+    // 1. File size check (catches empty/partial downloads before ffprobe)
+    let size_bytes = std::fs::metadata(file_path)
+        .map_err(|e| format!("File not found: {}", e))?
+        .len();
+    if size_bytes < 100_000 {
+        tracing::warn!("validate_video_file: file too small ({} bytes): {}", size_bytes, file_path);
+        return Ok(false);
     }
+
+    // 2. ffprobe structural analysis
+    let meta = match analyze_video(file_path) {
+        Ok(m) => m,
+        Err(e) => {
+            tracing::warn!("validate_video_file: ffprobe failed: {}", e);
+            return Ok(false);
+        }
+    };
+
+    // 3. Duration — must be at least 1 second
+    if meta.duration_seconds < 1.0 {
+        tracing::warn!("validate_video_file: suspicious duration {:.2}s: {}", meta.duration_seconds, file_path);
+        return Ok(false);
+    }
+
+    // 4. Video stream must exist
+    if !meta.has_video {
+        tracing::warn!("validate_video_file: no video stream found: {}", file_path);
+        return Ok(false);
+    }
+
+    // 5. Non-zero resolution
+    if meta.width == 0 || meta.height == 0 {
+        tracing::warn!("validate_video_file: zero resolution {}x{}: {}", meta.width, meta.height, file_path);
+        return Ok(false);
+    }
+
+    Ok(true)
 }
 
 // ============================================================================

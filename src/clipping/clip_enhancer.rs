@@ -112,20 +112,32 @@ impl ClipEnhancer {
         // Step 2: extract 3 inspection frames
         let frame_paths = extract_inspection_frames(&clip.local_clip_path, clip.clip_number)?;
 
-        // Step 3: ask Gemini for an enhancement plan
-        let plan = ask_gemini_for_plan(
+        // Step 3: ask Gemini for an enhancement plan (45s timeout)
+        let plan_future = ask_gemini_for_plan(
             gemini_client,
             &clip.ai_title,
             content_type,
             &metadata,
             &frame_paths,
-        )
-        .await;
+        );
+        let plan_result = tokio::time::timeout(
+            tokio::time::Duration::from_secs(45),
+            plan_future,
+        ).await;
 
-        // Always clean up frame files regardless of success/failure
+        // Always clean up frame files regardless of success/failure/timeout
         cleanup_temp_files(&frame_paths);
 
-        let plan = plan?;
+        let plan = match plan_result {
+            Err(_elapsed) => {
+                tracing::warn!(
+                    "Clip {}: Gemini enhancement timed out after 45s, keeping original",
+                    clip.clip_number
+                );
+                return Ok((0, Vec::new(), String::new()));
+            }
+            Ok(result) => result?,
+        };
 
         if !plan.needs_enhancement || plan.tools.is_empty() {
             return Ok((0, Vec::new(), String::new()));
@@ -288,12 +300,20 @@ Respond with valid JSON only — no markdown, no code fences:
         .ok_or("Gemini returned empty response for enhancement plan")?;
 
     let json_str = strip_json_fences(&response_text);
-    serde_json::from_str::<ClipEnhancementPlan>(json_str).map_err(|e| {
-        format!(
-            "Failed to parse Gemini enhancement plan: {} — raw: {}",
-            e, json_str
-        )
-    })
+    match serde_json::from_str::<ClipEnhancementPlan>(json_str) {
+        Ok(plan) => Ok(plan),
+        Err(e) => {
+            tracing::warn!(
+                "Could not parse Gemini enhancement plan ({}), skipping enhancement. Raw: {}",
+                e, json_str
+            );
+            Ok(ClipEnhancementPlan {
+                needs_enhancement: false,
+                tools: vec![],
+                reasoning: "parse_error".to_string(),
+            })
+        }
+    }
 }
 
 /// Strip ```json ... ``` or ``` ... ``` wrappers from a Gemini response.
