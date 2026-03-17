@@ -350,7 +350,7 @@ impl GeminiClippingAgent {
 
                     if !twitch_downloaded {
                         let mut args = HashMap::new();
-                        args.insert("reason".to_string(), json!(twitch_last_err.clone()));
+                        args.insert("reason".to_string(), json!(twitch_last_err));
                         self.tool_mark_failed(&args, &mut state, job_id).await.ok();
                         self.checkpointer.delete_all(job_id).await.ok();
                         return Err(format!("Phase B (Twitch download) failed: {}", twitch_last_err));

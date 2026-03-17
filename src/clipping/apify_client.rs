@@ -8,6 +8,11 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+/// Twitch GQL persisted query hash for `PlaybackAccessToken`.
+/// Pinned to the version used by the Twitch web player embed.
+const TWITCH_GQL_PLAYBACK_TOKEN_HASH: &str =
+    "0828119ded1c13477966434e15800ff57ddacf13ba1911c129dc2200705b0712";
+
 // Import all downloader clients for 5-tier fallback system
 use crate::clipping::rusty_ytdl_client::RustyYtdlClient;
 use crate::clipping::rustube_client::RustubeClient;
@@ -718,7 +723,7 @@ async fn download_twitch_hls(video_url: &str, output_path: &str) -> Result<Video
         "extensions": {
             "persistedQuery": {
                 "version": 1,
-                "sha256Hash": "0828119ded1c13477966434e15800ff57ddacf13ba1911c129dc2200705b0712"
+                "sha256Hash": TWITCH_GQL_PLAYBACK_TOKEN_HASH
             }
         }
     }]);
@@ -789,17 +794,14 @@ async fn download_twitch_hls(video_url: &str, output_path: &str) -> Result<Video
         ));
     }
 
-    // Step 4: Validate and read metadata
-    let meta = crate::core::analyze_video(output_path)
-        .map_err(|e| format!("Downloaded but ffprobe failed: {}", e))?;
-
     tracing::info!("✅ Twitch S2 (GQL + FFmpeg HLS) succeeded for VOD {}", vod_id);
 
+    // Metadata is populated by the caller's validate_video_file → analyze_video; skip double ffprobe.
     Ok(VideoDownloadResult {
         file_path: output_path.to_string(),
         title: format!("Twitch VOD {}", vod_id),
-        duration_seconds: Some(meta.duration_seconds),
-        width: Some(meta.width as i32),
-        height: Some(meta.height as i32),
+        duration_seconds: None,
+        width: None,
+        height: None,
     })
 }
