@@ -132,6 +132,14 @@ impl ClippingWorker {
 
                     let new_status = match classify(&e) {
                         ErrorClass::Permanent => "cancelled",
+                        ErrorClass::OAuthExpired => {
+                            tracing::warn!(
+                                "🔑 Job {} failed: OAuth token expired — will retry automatically \
+                                 once channel owner reconnects their YouTube account",
+                                job_id
+                            );
+                            "failed"
+                        }
                         _ => "failed",
                     };
 
@@ -316,6 +324,10 @@ async fn execute_claimed_job(app_state: Arc<AppState>, job_id: i32) -> Result<i3
                 ErrorClass::Permanent => {
                     tracing::warn!("🚫 Job {} permanently failed ({}), setting status=cancelled", job_id, e);
                     "cancelled"
+                }
+                ErrorClass::OAuthExpired => {
+                    tracing::warn!("🔑 Job {} failed: OAuth token expired — will retry automatically once channel owner reconnects their YouTube account", job_id);
+                    "failed"
                 }
                 _ => "failed",
             };
@@ -601,23 +613,38 @@ async fn auto_retry_failed_jobs(app_state: &Arc<AppState>) -> Result<(), String>
     // Fetch failed jobs eligible for retry.
     // Exponential backoff: cooldown = 2^retry_count minutes (capped at 256 min = ~4h).
     // Quota errors always get an extra 30-minute floor via OR clause.
+    //
+    // OAuth-aware gate: jobs that failed due to an expired YouTube token are only
+    // re-queued once the destination channel has been reconnected (requires_reauth=false).
+    // Without this gate, a disconnected channel burns through all 10 retries in hours,
+    // gets discarded, and can never be retried automatically even after reconnection.
     let retry_jobs: Vec<(i32, Option<String>)> = sqlx::query_as(
-        "SELECT id, current_step FROM clipping_jobs \
-         WHERE status = 'failed' \
-         AND completed_at > NOW() - INTERVAL '7 days' \
-         AND COALESCE(retry_count, 0) < 10 \
-         AND ( \
-             (error_message NOT LIKE '%RESOURCE_EXHAUSTED%' \
-              AND error_message NOT LIKE '%429%' \
-              AND error_message NOT LIKE '%Too Many Requests%' \
-              AND completed_at < NOW() - (INTERVAL '1 minute' * POWER(2, LEAST(COALESCE(retry_count, 0), 8)))) \
-             OR \
-             ((error_message LIKE '%RESOURCE_EXHAUSTED%' \
-               OR error_message LIKE '%429%' \
-               OR error_message LIKE '%Too Many Requests%') \
-              AND completed_at < NOW() - INTERVAL '30 minutes') \
+        "SELECT cj.id, cj.current_step \
+         FROM clipping_jobs cj \
+         LEFT JOIN youtube_channel_linkages ycl ON ycl.id = cj.linkage_id \
+         LEFT JOIN connected_youtube_channels cyc ON cyc.id = ycl.destination_channel_id \
+         WHERE cj.status = 'failed' \
+         AND cj.completed_at > NOW() - INTERVAL '7 days' \
+         AND COALESCE(cj.retry_count, 0) < 10 \
+         AND NOT ( \
+             (cj.error_message LIKE '%authorization expired%' \
+              OR cj.error_message LIKE '%Token refresh failed%' \
+              OR cj.error_message LIKE '%needs reconnection%' \
+              OR cj.error_message LIKE '%invalid_grant%') \
+             AND cyc.requires_reauth = true \
          ) \
-         ORDER BY completed_at ASC \
+         AND ( \
+             (cj.error_message NOT LIKE '%RESOURCE_EXHAUSTED%' \
+              AND cj.error_message NOT LIKE '%429%' \
+              AND cj.error_message NOT LIKE '%Too Many Requests%' \
+              AND cj.completed_at < NOW() - (INTERVAL '1 minute' * POWER(2, LEAST(COALESCE(cj.retry_count, 0), 8)))) \
+             OR \
+             ((cj.error_message LIKE '%RESOURCE_EXHAUSTED%' \
+               OR cj.error_message LIKE '%429%' \
+               OR cj.error_message LIKE '%Too Many Requests%') \
+              AND cj.completed_at < NOW() - INTERVAL '30 minutes') \
+         ) \
+         ORDER BY cj.completed_at ASC \
          LIMIT 10"
     )
     .fetch_all(&app_state.db_pool)
