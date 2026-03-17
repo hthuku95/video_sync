@@ -14,6 +14,7 @@ use crate::clipping::rustube_client::RustubeClient;
 use crate::clipping::ytdlp_api_client::YtdlpApiClient;
 use crate::clipping::ytdlp_client::YtDlpClient;
 use crate::clipping::rust_yt_downloader_client::RustYtDownloaderClient;
+use tokio::process::Command as TokioCommand;
 
 #[derive(Debug)]
 pub struct VideoDownloadResult {
@@ -299,11 +300,20 @@ impl ApifyClient {
     /// Download video using 5-tier fallback system
     /// Strategy order: FastAPI yt-dlp → Apify → rustube → rust-yt-downloader → rusty_ytdl
     /// YTDLPAPI (yt-dlp android) is tried first as it proved most reliable in Feb 2026 testing.
+    ///
+    /// Twitch VOD URLs are routed to a dedicated Twitch path (yt-dlp → GQL+HLS),
+    /// skipping the YouTube-only strategies that would always fail on twitch.tv URLs.
     pub async fn download_video(
         &self,
         video_url: &str,
         output_path: &str,
     ) -> Result<VideoDownloadResult, String> {
+        // Twitch VODs need a dedicated download path — strategies 2-5 are YouTube-only
+        // and rusty_ytdl returns misleading "The video not found" for any non-YouTube URL.
+        if video_url.contains("twitch.tv/videos") {
+            return download_twitch_vod(video_url, output_path).await;
+        }
+
         // Ensure parent directory exists
         if let Some(parent) = Path::new(output_path).parent() {
             fs::create_dir_all(parent)
@@ -625,4 +635,171 @@ impl ApifyClient {
         // Use rusty_ytdl for metadata (faster than running full Apify job, pure Rust)
         RustyYtdlClient::get_video_info(video_url).await
     }
+}
+
+// ── Twitch VOD download ───────────────────────────────────────────────────────
+
+/// Entry point for Twitch VOD downloads.
+///
+/// Two-strategy approach (Twitch-specific):
+///   1. FastAPI yt-dlp service — yt-dlp has a maintained Twitch extractor
+///   2. Twitch GQL access token + FFmpeg HLS — direct CDN download, no dependencies
+///
+/// YouTube-only strategies (Apify, rustube, rust-yt-downloader, rusty_ytdl) are
+/// intentionally skipped; they all fail silently on twitch.tv URLs and rusty_ytdl
+/// returns a misleading "The video not found" error for any non-YouTube URL.
+async fn download_twitch_vod(video_url: &str, output_path: &str) -> Result<VideoDownloadResult, String> {
+    tracing::info!("🎮 Twitch VOD detected — using Twitch-specific download strategies");
+
+    // Ensure parent directory exists
+    if let Some(parent) = std::path::Path::new(output_path).parent() {
+        fs::create_dir_all(parent)
+            .await
+            .map_err(|e| format!("Failed to create output directory: {}", e))?;
+    }
+
+    // Strategy 1: FastAPI yt-dlp (has a maintained Twitch extractor)
+    tracing::info!("🔄 Twitch S1: FastAPI yt-dlp microservice...");
+    match YtdlpApiClient::download_video(video_url, output_path).await {
+        Ok(result) => {
+            tracing::info!("✅ Twitch S1 (FastAPI yt-dlp) succeeded");
+            return Ok(VideoDownloadResult {
+                file_path: result.file_path,
+                title: result.title,
+                duration_seconds: Some(result.duration_seconds),
+                width: result.width.map(|w| w as i32),
+                height: result.height.map(|h| h as i32),
+            });
+        }
+        Err(e) => {
+            tracing::warn!("⚠️ Twitch S1 (FastAPI yt-dlp) failed: {}", e);
+        }
+    }
+
+    // Strategy 2: Twitch GQL playback token + FFmpeg HLS
+    tracing::info!("🔄 Twitch S2: GQL access token + FFmpeg HLS...");
+    download_twitch_hls(video_url, output_path).await
+}
+
+/// Download a Twitch VOD using the Twitch GQL API for a signed playback token,
+/// then stream the HLS playlist directly via FFmpeg.
+///
+/// Uses TWITCH_TV_CLIENT_ID from env (the registered Twitch app credential).
+/// The GQL `PlaybackAccessToken` operation is the same approach used by yt-dlp
+/// and TwitchDownloaderCLI internally.
+async fn download_twitch_hls(video_url: &str, output_path: &str) -> Result<VideoDownloadResult, String> {
+    // Extract numeric VOD ID from URL: https://www.twitch.tv/videos/2025985859
+    let vod_id = video_url
+        .trim_end_matches('/')
+        .split('/')
+        .last()
+        .and_then(|s| s.split('?').next())
+        .filter(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit()))
+        .ok_or_else(|| format!("Cannot extract numeric VOD ID from Twitch URL: {}", video_url))?;
+
+    let client_id = std::env::var("TWITCH_TV_CLIENT_ID")
+        .map_err(|_| "TWITCH_TV_CLIENT_ID not configured".to_string())?;
+
+    // Step 1: Get a signed playback access token from Twitch GQL
+    let http = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| format!("HTTP client error: {}", e))?;
+
+    let gql_body = json!([{
+        "operationName": "PlaybackAccessToken",
+        "variables": {
+            "isLive": false,
+            "login": "",
+            "isVod": true,
+            "vodID": vod_id,
+            "playerType": "embed"
+        },
+        "extensions": {
+            "persistedQuery": {
+                "version": 1,
+                "sha256Hash": "0828119ded1c13477966434e15800ff57ddacf13ba1911c129dc2200705b0712"
+            }
+        }
+    }]);
+
+    let gql_resp = http
+        .post("https://gql.twitch.tv/gql")
+        .header("Client-Id", &client_id)
+        .header("Content-Type", "application/json")
+        .json(&gql_body)
+        .send()
+        .await
+        .map_err(|e| format!("Twitch GQL request failed: {}", e))?;
+
+    if !gql_resp.status().is_success() {
+        return Err(format!("Twitch GQL returned HTTP {}", gql_resp.status()));
+    }
+
+    let gql_json: serde_json::Value = gql_resp
+        .json()
+        .await
+        .map_err(|e| format!("GQL JSON parse error: {}", e))?;
+
+    let token_obj = gql_json
+        .get(0)
+        .and_then(|r| r.get("data"))
+        .and_then(|d| d.get("videoPlaybackAccessToken"))
+        .ok_or("videoPlaybackAccessToken missing — VOD may be deleted or subscriber-only")?;
+
+    let token = token_obj
+        .get("value")
+        .and_then(|v| v.as_str())
+        .ok_or("GQL token value missing")?;
+
+    let sig = token_obj
+        .get("signature")
+        .and_then(|s| s.as_str())
+        .ok_or("GQL token signature missing")?;
+
+    // Step 2: Build the Twitch CDN M3U8 URL with the signed token
+    let p: u32 = rand::random::<u32>() % 9_999_999;
+    let m3u8_url = format!(
+        "https://usher.ttvnw.net/vod/{}?sig={}&token={}&allow_source=true&allow_spectre=true&p={}",
+        vod_id,
+        urlencoding::encode(sig),
+        urlencoding::encode(token),
+        p,
+    );
+
+    // Step 3: Download the HLS stream via FFmpeg (handles HLS/TS segmented streams natively)
+    tracing::info!("🎞  Downloading Twitch HLS for VOD {} via FFmpeg", vod_id);
+    let status = TokioCommand::new("ffmpeg")
+        .args([
+            "-y",
+            "-i", &m3u8_url,
+            "-c", "copy",
+            "-bsf:a", "aac_adtstoasc",
+            output_path,
+        ])
+        .status()
+        .await
+        .map_err(|e| format!("FFmpeg HLS spawn failed: {}", e))?;
+
+    if !status.success() {
+        return Err(format!(
+            "FFmpeg HLS download failed (exit {}): Twitch VOD {} may be deleted or restricted",
+            status.code().unwrap_or(-1),
+            vod_id
+        ));
+    }
+
+    // Step 4: Validate and read metadata
+    let meta = crate::core::analyze_video(output_path)
+        .map_err(|e| format!("Downloaded but ffprobe failed: {}", e))?;
+
+    tracing::info!("✅ Twitch S2 (GQL + FFmpeg HLS) succeeded for VOD {}", vod_id);
+
+    Ok(VideoDownloadResult {
+        file_path: output_path.to_string(),
+        title: format!("Twitch VOD {}", vod_id),
+        duration_seconds: Some(meta.duration_seconds),
+        width: Some(meta.width as i32),
+        height: Some(meta.height as i32),
+    })
 }

@@ -277,61 +277,117 @@ impl GeminiClippingAgent {
             self.send_progress(job_id, &state, "download_video", "running").await;
             match self.tool_download_video(&mut state, job_id).await {
                 Ok(ref result) if result["twitch_fallback"].as_bool() == Some(true) => {
-                    // Twitch fallback triggered.
-                    // Gemini cannot fetch Twitch URLs via fileData.fileUri (HTTP 400).
-                    // Correct order: download the VOD first, THEN analyze the local file via frames.
+                    // Twitch fallback triggered — YouTube download failed.
+                    // Gemini cannot fetch Twitch URLs directly (HTTP 400), so we download
+                    // the VOD first, then analyze the local file via extracted frames.
+                    //
+                    // VODs can be deleted/expired between Twitch API listing and actual download.
+                    // Retry up to 3 different VODs: blacklist each failed VOD so pick_twitch_vod
+                    // skips it next time, then pick the next available one.
                     tracing::info!(
                         "Job {}: Twitch fallback — downloading VOD before analysis",
                         job_id
                     );
 
-                    // Phase B (Twitch): download the VOD
-                    match self.tool_download_video(&mut state, job_id).await {
-                        Ok(_) => {
-                            // Phase A (Twitch): analyze downloaded local file via extracted frames
-                            match self.tool_analyze_twitch_vod(&mut state, job_id).await {
-                                Ok(reresult) => {
-                                    let quality =
-                                        reresult["overall_quality"].as_f64().unwrap_or(0.0);
-                                    if quality < 0.6 {
-                                        let mut args = HashMap::new();
-                                        args.insert(
-                                            "reason".to_string(),
-                                            json!("Twitch VOD quality below threshold"),
-                                        );
-                                        self.tool_mark_failed(&args, &mut state, job_id)
-                                            .await
-                                            .ok();
-                                        self.checkpointer.delete_all(job_id).await.ok();
-                                        return Ok(format!(
-                                            "Job {} terminated: twitch_vod_quality_too_low",
-                                            job_id
-                                        ));
+                    let mut twitch_downloaded = false;
+                    let mut twitch_last_err = String::new();
+
+                    for attempt in 0..3u32 {
+                        match self.tool_download_video(&mut state, job_id).await {
+                            Ok(_) => {
+                                twitch_downloaded = true;
+                                break;
+                            }
+                            Err(ref e) => {
+                                twitch_last_err = e.clone();
+                                tracing::warn!(
+                                    "Job {}: Twitch VOD download attempt {} failed: {}",
+                                    job_id, attempt + 1, e
+                                );
+
+                                // Blacklist the failed VOD so pick_twitch_vod skips it
+                                if let Ok(jd) = fetch_job_details(job_id, &self.app_state.db_pool).await {
+                                    if let Some(ref vid_id) = jd.twitch_video_id {
+                                        self.record_clipped_twitch_video(job_id, vid_id, &jd.source_video_title).await;
                                     }
-                                    // Both download (B) and analysis (A) complete
-                                    self.advance_checkpoint(&mut state).await;
                                 }
-                                Err(e) => {
-                                    let mut args = HashMap::new();
-                                    args.insert(
-                                        "reason".to_string(),
-                                        json!(format!("Twitch VOD analysis failed: {}", e)),
-                                    );
-                                    self.tool_mark_failed(&args, &mut state, job_id).await.ok();
-                                    self.checkpointer.delete_all(job_id).await.ok();
-                                    return Err(format!(
-                                        "Phase A (Twitch fallback) failed: {}",
-                                        e
-                                    ));
+
+                                if attempt >= 2 {
+                                    break; // 3 attempts exhausted
+                                }
+
+                                // Try to pick the next available VOD from the channel
+                                match self.pick_twitch_vod(job_id).await {
+                                    Some(next_vod) => {
+                                        tracing::info!(
+                                            "Job {}: switching to next Twitch VOD {} (attempt {})",
+                                            job_id, next_vod.id, attempt + 2
+                                        );
+                                        sqlx::query(
+                                            "UPDATE clipping_jobs \
+                                             SET twitch_video_id = $1, active_video_url = $2 \
+                                             WHERE id = $3",
+                                        )
+                                        .bind(&next_vod.id)
+                                        .bind(&next_vod.url)
+                                        .bind(job_id)
+                                        .execute(&self.app_state.db_pool)
+                                        .await
+                                        .ok();
+                                        state.active_video_url = Some(next_vod.url.clone());
+                                    }
+                                    None => {
+                                        twitch_last_err = format!(
+                                            "{} — no more Twitch VODs available",
+                                            e
+                                        );
+                                        break;
+                                    }
                                 }
                             }
                         }
+                    }
+
+                    if !twitch_downloaded {
+                        let mut args = HashMap::new();
+                        args.insert("reason".to_string(), json!(twitch_last_err.clone()));
+                        self.tool_mark_failed(&args, &mut state, job_id).await.ok();
+                        self.checkpointer.delete_all(job_id).await.ok();
+                        return Err(format!("Phase B (Twitch download) failed: {}", twitch_last_err));
+                    }
+
+                    // VOD downloaded — analyze via local frames (Gemini cannot fetch Twitch URLs)
+                    match self.tool_analyze_twitch_vod(&mut state, job_id).await {
+                        Ok(reresult) => {
+                            let quality =
+                                reresult["overall_quality"].as_f64().unwrap_or(0.0);
+                            if quality < 0.6 {
+                                let mut args = HashMap::new();
+                                args.insert(
+                                    "reason".to_string(),
+                                    json!("Twitch VOD quality below threshold"),
+                                );
+                                self.tool_mark_failed(&args, &mut state, job_id)
+                                    .await
+                                    .ok();
+                                self.checkpointer.delete_all(job_id).await.ok();
+                                return Ok(format!(
+                                    "Job {} terminated: twitch_vod_quality_too_low",
+                                    job_id
+                                ));
+                            }
+                            // Both download (B) and analysis (A) complete
+                            self.advance_checkpoint(&mut state).await;
+                        }
                         Err(e) => {
                             let mut args = HashMap::new();
-                            args.insert("reason".to_string(), json!(e));
+                            args.insert(
+                                "reason".to_string(),
+                                json!(format!("Twitch VOD analysis failed: {}", e)),
+                            );
                             self.tool_mark_failed(&args, &mut state, job_id).await.ok();
                             self.checkpointer.delete_all(job_id).await.ok();
-                            return Err(format!("Phase B (Twitch download) failed: {}", e));
+                            return Err(format!("Phase A (Twitch fallback) failed: {}", e));
                         }
                     }
                 }

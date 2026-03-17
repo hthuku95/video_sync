@@ -32,9 +32,12 @@ pub fn classify(err: &str) -> ErrorClass {
         "No Twitch mapping exists",
         "Cannot fetch content from the provided URL",
         "Request contains an invalid argument",
-        // Twitch VOD deleted/expired — rusty_ytdl returns this for missing content
-        "The video not found",
-        "video not found",
+        // Twitch VOD genuinely deleted/expired — yt-dlp returns this after GQL lookup fails
+        // NOTE: "The video not found" from rusty_ytdl on a Twitch URL is NOT included here;
+        // Twitch URLs are now routed to Twitch-specific download strategies (apify_client.rs)
+        // so rusty_ytdl never touches Twitch URLs anymore. This pattern only fires when
+        // yt-dlp itself confirms the VOD is gone after a real Twitch API lookup.
+        "Video not found",
     ];
     for p in permanent_patterns {
         if err.contains(p) {
