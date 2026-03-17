@@ -68,16 +68,19 @@ impl ClipEnhancer {
         );
 
         match self.run_enhancement(clip, content_type).await {
-            Ok(0) => {
+            Ok((0, _, _)) => {
                 tracing::info!("✅ Clip {}: no enhancements needed", clip.clip_number);
             }
-            Ok(applied) => {
+            Ok((applied, tools, reasoning)) => {
                 tracing::info!(
                     "✨ Clip {}: {} enhancement(s) applied",
                     clip.clip_number,
                     applied
                 );
                 clip.ai_tags.push(format!("ai_enhanced_{}tools", applied));
+                clip.enhancement_applied = true;
+                clip.enhancement_tools = tools;
+                clip.enhancement_reasoning = Some(reasoning);
             }
             Err(e) => {
                 tracing::warn!(
@@ -95,7 +98,7 @@ impl ClipEnhancer {
         &self,
         clip: &ExtractedClipData,
         content_type: &str,
-    ) -> Result<usize, String> {
+    ) -> Result<(usize, Vec<String>, String), String> {
         // Need Gemini client — skip if not configured
         let gemini_client = self
             .app_state
@@ -125,7 +128,7 @@ impl ClipEnhancer {
         let plan = plan?;
 
         if !plan.needs_enhancement || plan.tools.is_empty() {
-            return Ok(0);
+            return Ok((0, Vec::new(), String::new()));
         }
 
         tracing::info!(
@@ -138,12 +141,14 @@ impl ClipEnhancer {
 
         // Step 4: apply enhancement tools (sync FFmpeg chain via spawn_blocking)
         let tool_count = plan.tools.len();
+        let applied_tools = plan.tools.clone();
+        let reasoning = plan.reasoning.clone();
         let clip_path = clip.local_clip_path.clone();
         tokio::task::spawn_blocking(move || apply_enhancement_plan(&clip_path, &plan))
             .await
             .map_err(|e| format!("Enhancement task panicked: {}", e))??;
 
-        Ok(tool_count)
+        Ok((tool_count, applied_tools, reasoning))
     }
 }
 

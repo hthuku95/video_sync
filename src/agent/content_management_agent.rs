@@ -820,6 +820,9 @@ impl ContentManagementAgent {
             viral_factors: vec![],
             custom_thumbnail_path: custom_thumbnail_path.clone(),
             thumbnail_generation_method: custom_thumbnail_path.as_ref().map(|_| "manual".to_string()),
+            enhancement_applied: false,
+            enhancement_tools: Vec::new(),
+            enhancement_reasoning: None,
         };
 
         match uploader

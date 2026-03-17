@@ -217,6 +217,9 @@ fn extract_single_clip(
         viral_factors: moment.viral_factors.clone(),
         custom_thumbnail_path: custom_thumbnail,
         thumbnail_generation_method: if has_thumb { Some("ffmpeg_timestamp".to_string()) } else { None },
+        enhancement_applied: false,
+        enhancement_tools: Vec::new(),
+        enhancement_reasoning: None,
     })
 }
 
@@ -236,4 +239,10 @@ pub struct ExtractedClipData {
     pub custom_thumbnail_path: Option<String>,
     /// How the thumbnail was generated: "ai_gemini", "ffmpeg_timestamp", or None
     pub thumbnail_generation_method: Option<String>,
+    /// Set to true after Phase C+ applies at least one FFmpeg enhancement tool
+    pub enhancement_applied: bool,
+    /// Which FFmpeg tools were applied during Phase C+
+    pub enhancement_tools: Vec<String>,
+    /// Gemini's reasoning for the chosen tools
+    pub enhancement_reasoning: Option<String>,
 }

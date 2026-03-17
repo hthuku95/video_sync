@@ -157,6 +157,12 @@ pub struct ExtractedClip {
     pub reviewed_by: Option<i32>,
     pub reviewed_at: Option<DateTime<Utc>>,
     pub review_notes: Option<String>,
+    // Phase C+ enhancement tracking (added by migration 20260318000000)
+    #[serde(default)]
+    pub enhancement_applied: bool,
+    #[serde(default)]
+    pub enhancement_tools: Vec<String>,
+    pub enhancement_reasoning: Option<String>,
 }
 
 /// Polling schedule for source channels

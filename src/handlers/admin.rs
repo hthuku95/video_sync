@@ -57,6 +57,7 @@ pub fn admin_routes() -> Router {
         .route("/api/admin/clipping/jobs/:id/retry", post(admin_retry_job))
         .route("/api/admin/clipping/jobs/:id/cancel", post(admin_cancel_job))
         .route("/api/admin/clipping/jobs/:id/clips", get(admin_get_job_clips))
+        .route("/api/admin/clipping/throughput", get(admin_clipping_throughput))
         .route("/api/admin/performance/viral-factors", get(admin_viral_factor_performance))
         .route("/api/admin/performance/channel-health", get(admin_channel_health))
         .route("/api/admin/performance/recommendations", get(admin_learning_recommendations))
@@ -3339,6 +3340,7 @@ pub async fn admin_clipping_activity_page() -> Html<String> {
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>Clipping Activity - Admin Dashboard</title>
+        <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
         <style>
             * { margin: 0; padding: 0; box-sizing: border-box; }
             body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f8f9fa; }
@@ -3419,6 +3421,13 @@ pub async fn admin_clipping_activity_page() -> Html<String> {
             </div>
 
             <div class="recent-section">
+                <h2>Jobs Per Hour — Last 24h</h2>
+                <div style="position:relative;height:280px;">
+                    <canvas id="throughputChart"></canvas>
+                </div>
+            </div>
+
+            <div class="recent-section">
                 <h2>User Activity Breakdown</h2>
                 <p style="color: #6c757d; margin-bottom: 1rem;">Click on a user to see detailed linkages and recent jobs</p>
                 <table id="userTable">
@@ -3468,6 +3477,64 @@ pub async fn admin_clipping_activity_page() -> Html<String> {
             }
 
             loadClippingStats();
+            loadThroughputChart();
+
+            async function loadThroughputChart() {
+                try {
+                    const response = await fetch('/api/admin/clipping/throughput', {
+                        headers: { 'Authorization': `Bearer ${token}` }
+                    });
+                    const json = await response.json();
+                    const rows = json.data || [];
+
+                    const labels = rows.map(r => {
+                        const d = new Date(r.hour);
+                        return d.getHours().toString().padStart(2, '0') + ':00';
+                    });
+                    const completed = rows.map(r => r.completed);
+                    const failed = rows.map(r => r.failed);
+
+                    if (window.throughputChartInstance) {
+                        window.throughputChartInstance.destroy();
+                    }
+
+                    const ctx = document.getElementById('throughputChart').getContext('2d');
+                    window.throughputChartInstance = new Chart(ctx, {
+                        type: 'line',
+                        data: {
+                            labels,
+                            datasets: [
+                                {
+                                    label: 'Completed',
+                                    data: completed,
+                                    borderColor: '#28a745',
+                                    backgroundColor: 'rgba(40,167,69,0.1)',
+                                    tension: 0.3,
+                                    fill: false,
+                                },
+                                {
+                                    label: 'Failed',
+                                    data: failed,
+                                    borderColor: '#dc3545',
+                                    backgroundColor: 'rgba(220,53,69,0.1)',
+                                    tension: 0.3,
+                                    fill: false,
+                                },
+                            ],
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            plugins: { legend: { position: 'top' } },
+                            scales: {
+                                y: { beginAtZero: true, ticks: { stepSize: 1 } },
+                            },
+                        },
+                    });
+                } catch (error) {
+                    console.error('Failed to load throughput chart:', error);
+                }
+            }
 
             async function loadClippingStats() {
                 try {
@@ -3583,7 +3650,7 @@ pub async fn admin_clipping_activity_page() -> Html<String> {
             }
 
             // Auto-refresh every 30 seconds
-            setInterval(loadClippingStats, 30000);
+            setInterval(() => { loadClippingStats(); loadThroughputChart(); }, 30000);
         </script>
     </body>
     </html>
@@ -4006,6 +4073,63 @@ pub async fn admin_get_job_clips(
         "clips": clips,
         "total": clips.len()
     })))
+}
+
+/// GET /api/admin/clipping/throughput
+/// Returns completed/failed job counts per hour for the last 24 hours.
+pub async fn admin_clipping_throughput(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    #[derive(sqlx::FromRow)]
+    struct ThroughputRow {
+        hour_bucket: chrono::DateTime<chrono::Utc>,
+        completed: i64,
+        failed: i64,
+    }
+
+    let rows = sqlx::query_as::<_, ThroughputRow>(
+        r#"
+        WITH hours AS (
+            SELECT generate_series(
+                date_trunc('hour', NOW() - INTERVAL '23 hours'),
+                date_trunc('hour', NOW()),
+                '1 hour'::interval
+            ) AS hour_bucket
+        ),
+        job_counts AS (
+            SELECT
+                date_trunc('hour', completed_at) AS hour_bucket,
+                COUNT(*) FILTER (WHERE status = 'completed') AS completed,
+                COUNT(*) FILTER (WHERE status = 'failed')    AS failed
+            FROM clipping_jobs
+            WHERE completed_at >= NOW() - INTERVAL '24 hours'
+            GROUP BY 1
+        )
+        SELECT
+            h.hour_bucket,
+            COALESCE(jc.completed, 0) AS completed,
+            COALESCE(jc.failed, 0)    AS failed
+        FROM hours h
+        LEFT JOIN job_counts jc ON jc.hour_bucket = h.hour_bucket
+        ORDER BY h.hour_bucket ASC
+        "#
+    )
+    .fetch_all(&state.db_pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("Failed to fetch throughput data: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let data: Vec<serde_json::Value> = rows.iter().map(|r| {
+        json!({
+            "hour": r.hour_bucket,
+            "completed": r.completed,
+            "failed": r.failed,
+        })
+    }).collect();
+
+    Ok(Json(json!({ "success": true, "data": data })))
 }
 
 /// Admin Clipping Jobs Management Page - HTML Dashboard

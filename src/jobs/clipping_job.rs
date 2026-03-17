@@ -431,6 +431,9 @@ pub async fn load_clips_from_db(
         let viral_factors: Option<Vec<String>> = row.try_get("viral_factors").ok().flatten();
         let custom_thumbnail_path: Option<String> = row.try_get("custom_thumbnail_path").ok().flatten();
         let thumbnail_generation_method: Option<String> = row.try_get("thumbnail_generation_method").ok().flatten();
+        let enhancement_applied: bool = row.try_get("enhancement_applied").ok().unwrap_or(false);
+        let enhancement_tools: Vec<String> = row.try_get("enhancement_tools").ok().unwrap_or_default();
+        let enhancement_reasoning: Option<String> = row.try_get("enhancement_reasoning").ok().flatten();
 
         clips.push(ExtractedClipData {
             clip_number: row.get("clip_number"),
@@ -445,6 +448,9 @@ pub async fn load_clips_from_db(
             viral_factors: viral_factors.unwrap_or_default(),
             custom_thumbnail_path,
             thumbnail_generation_method,
+            enhancement_applied,
+            enhancement_tools,
+            enhancement_reasoning,
         });
         ids.push(id);
     }
@@ -617,8 +623,9 @@ pub async fn save_clips_to_database(
              (clipping_job_id, clip_number, local_clip_path,
               start_time_seconds, end_time_seconds, duration_seconds,
               ai_title, ai_description, ai_tags, ai_confidence_score, viral_factors,
-              destination_channel_id, custom_thumbnail_path, thumbnail_generation_method)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+              destination_channel_id, custom_thumbnail_path, thumbnail_generation_method,
+              enhancement_applied, enhancement_tools, enhancement_reasoning)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
              RETURNING id",
         )
         .bind(job_id)
@@ -635,6 +642,9 @@ pub async fn save_clips_to_database(
         .bind(linkage.destination_channel_id)
         .bind(&clip.custom_thumbnail_path)
         .bind(&clip.thumbnail_generation_method)
+        .bind(clip.enhancement_applied)
+        .bind(&clip.enhancement_tools)
+        .bind(&clip.enhancement_reasoning)
         .fetch_one(pool)
         .await
         .map_err(|e| format!("Failed to save clip: {}", e))?;
