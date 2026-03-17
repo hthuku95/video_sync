@@ -32,6 +32,9 @@ pub fn classify(err: &str) -> ErrorClass {
         "No Twitch mapping exists",
         "Cannot fetch content from the provided URL",
         "Request contains an invalid argument",
+        // Twitch VOD deleted/expired — rusty_ytdl returns this for missing content
+        "The video not found",
+        "video not found",
     ];
     for p in permanent_patterns {
         if err.contains(p) {
