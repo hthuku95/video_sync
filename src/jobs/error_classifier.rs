@@ -45,6 +45,24 @@ pub fn classify(err: &str) -> ErrorClass {
         }
     }
 
+    // These permanent patterns must be checked BEFORE the "403 Forbidden" OAuthExpired
+    // match below, because Gemini PERMISSION_DENIED errors contain "403 Forbidden" in
+    // their message — they are API misconfiguration issues, not YouTube OAuth failures.
+    let permanent_patterns_2 = [
+        // Gemini API permanent permission errors — API key misconfiguration, not OAuth
+        "PERMISSION_DENIED",
+        "Gemini API error (HTTP 403",
+        // Twitch subscriber-only or deleted VOD (GQL returns 200 but token is absent)
+        "videoPlaybackAccessToken missing",
+        // Twitch GQL bad request — outdated client config, not a transient network error
+        "Twitch GQL returned HTTP 400",
+    ];
+    for p in permanent_patterns_2 {
+        if err.contains(p) {
+            return ErrorClass::Permanent;
+        }
+    }
+
     // OAuth expired — channel needs reconnection before this job can succeed.
     // Do NOT cancel: job should be retried once the user reconnects.
     if err.contains("authorization expired")

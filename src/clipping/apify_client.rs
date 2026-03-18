@@ -8,10 +8,6 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-/// Twitch GQL persisted query hash for `PlaybackAccessToken`.
-/// Pinned to the version used by the Twitch web player embed.
-const TWITCH_GQL_PLAYBACK_TOKEN_HASH: &str =
-    "0828119ded1c13477966434e15800ff57ddacf13ba1911c129dc2200705b0712";
 
 // Import all downloader clients for 5-tier fallback system
 use crate::clipping::rusty_ytdl_client::RustyYtdlClient;
@@ -711,34 +707,36 @@ async fn download_twitch_hls(video_url: &str, output_path: &str) -> Result<Video
         .build()
         .map_err(|e| format!("HTTP client error: {}", e))?;
 
+    // Use a full inline query instead of a persisted query (sha256 hash).
+    // Twitch rotates persisted query hashes when they update the web player;
+    // an outdated hash causes HTTP 400 "Unknown persisted query". The inline
+    // query approach is hash-independent and more resilient to Twitch updates.
+    let query_str = format!(
+        "{{ videoPlaybackAccessToken(id: \"{}\", params: {{ platform: \"web\", playerBackend: \"mediaplayer\", playerType: \"embed\" }}) {{ value signature __typename }} }}",
+        vod_id
+    );
     let gql_body = json!([{
         "operationName": "PlaybackAccessToken",
-        "variables": {
-            "isLive": false,
-            "login": "",
-            "isVod": true,
-            "vodID": vod_id,
-            "playerType": "embed"
-        },
-        "extensions": {
-            "persistedQuery": {
-                "version": 1,
-                "sha256Hash": TWITCH_GQL_PLAYBACK_TOKEN_HASH
-            }
-        }
+        "query": query_str,
+        "variables": {}
     }]);
 
     let gql_resp = http
         .post("https://gql.twitch.tv/gql")
         .header("Client-Id", &client_id)
         .header("Content-Type", "application/json")
+        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+        .header("Referer", "https://player.twitch.tv")
+        .header("Origin", "https://player.twitch.tv")
         .json(&gql_body)
         .send()
         .await
         .map_err(|e| format!("Twitch GQL request failed: {}", e))?;
 
     if !gql_resp.status().is_success() {
-        return Err(format!("Twitch GQL returned HTTP {}", gql_resp.status()));
+        let status = gql_resp.status();
+        let body = gql_resp.text().await.unwrap_or_default();
+        return Err(format!("Twitch GQL returned HTTP {} Bad Request — {}", status, body));
     }
 
     let gql_json: serde_json::Value = gql_resp

@@ -515,6 +515,41 @@ async fn detect_stuck_jobs(app_state: &Arc<AppState>) -> Result<(), String> {
         }
     }
 
+    // Detect jobs in active states with NULL started_at — these were claimed but never
+    // properly started (e.g., worker crashed after claim but before starting the job).
+    // A job cannot be 'downloading' or 'analyzing' without a started_at timestamp,
+    // so this is a definitive stuck signal after a 5-minute grace period.
+    let null_start_result = sqlx::query_scalar::<_, i32>(
+        "UPDATE clipping_jobs \
+         SET status = 'failed', \
+             error_message = 'Job stuck: claimed but never started (started_at IS NULL). Auto-reset by stuck detector.', \
+             completed_at = NOW(), \
+             updated_at = NOW(), \
+             claimed_by = NULL, \
+             worker_heartbeat_at = NULL, \
+             stuck_detection_count = COALESCE(stuck_detection_count, 0) + 1 \
+         WHERE status IN ('downloading', 'analyzing', 'extracting_clips', 'posting', 'processing') \
+           AND started_at IS NULL \
+           AND updated_at < NOW() - INTERVAL '5 minutes' \
+         RETURNING id"
+    )
+    .fetch_all(&app_state.db_pool)
+    .await;
+
+    match null_start_result {
+        Ok(ids) if !ids.is_empty() => {
+            tracing::warn!(
+                "🔄 Reset {} stuck jobs with started_at IS NULL: {:?}",
+                ids.len(),
+                ids
+            );
+        }
+        Ok(_) => {}
+        Err(e) => {
+            tracing::warn!("Failed to reset NULL started_at stuck jobs (non-fatal): {}", e);
+        }
+    }
+
     Ok(())
 }
 
@@ -582,7 +617,7 @@ async fn auto_retry_failed_jobs(app_state: &Arc<AppState>) -> Result<(), String>
     let _ = sqlx::query(
         "UPDATE clipping_jobs \
          SET status = 'discarded', \
-             error_message = 'Exhausted all 10 retries. Use admin API to retry manually.', \
+             error_message = COALESCE(error_message || ' ', '') || '[Discarded after 10 retries — use admin API to retry]', \
              updated_at = NOW() \
          WHERE status = 'failed' \
            AND COALESCE(retry_count, 0) >= 10 \
