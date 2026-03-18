@@ -2099,12 +2099,17 @@ impl GeminiClient {
                         });
                         props.insert("include_music".to_string(), PropertyDefinition {
                             prop_type: "boolean".to_string(),
-                            description: "Whether to add background music (default: false)".to_string(),
+                            description: "Whether to generate and add background music via ElevenLabs (default: true)".to_string(),
                             items: None,
                         });
                         props.insert("num_clips".to_string(), PropertyDefinition {
                             prop_type: "number".to_string(),
-                            description: "Number of video clips to use from Pexels (default: 3-5 based on duration)".to_string(),
+                            description: "Max number of video clips to use from Pexels (default: 3-5 based on duration)".to_string(),
+                            items: None,
+                        });
+                        props.insert("aspect_ratio".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Output aspect ratio: '16:9' (landscape, default), '9:16' (portrait/Shorts), '1:1' (square), '4:3'".to_string(),
                             items: None,
                         });
                         props

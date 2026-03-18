@@ -360,6 +360,98 @@ pub fn merge_videos(input_files: &[String], output_file: &str) -> Result<String,
     Ok(result)
 }
 
+/// Merge video clips with crossfade transitions between them.
+/// Falls back gracefully to `merge_videos` (hard-cut) if xfade fails.
+pub fn merge_videos_with_transitions(
+    input_files: &[String],
+    output_file: &str,
+    transition_duration: f64,
+) -> Result<String, String> {
+    if input_files.len() < 2 {
+        return merge_videos(input_files, output_file);
+    }
+
+    // Get durations for computing xfade time offsets
+    let mut durations: Vec<f64> = Vec::new();
+    for f in input_files {
+        let d = analyze_video(f).map(|m| m.duration_seconds).unwrap_or(10.0);
+        durations.push(d.max(transition_duration * 2.0 + 0.1)); // guard: clip must be longer than 2×transition
+    }
+
+    let n = input_files.len();
+    let mut filter_parts: Vec<String> = Vec::new();
+
+    // Normalise each video to 1920×1080 @ 30fps with consistent timebase
+    for i in 0..n {
+        filter_parts.push(format!(
+            "[{}:v]scale=1920:1080:force_original_aspect_ratio=decrease,\
+             pad=1920:1080:(ow-iw)/2:(oh-ih)/2:color=black,\
+             settb=AVTB,fps=30[v{}]",
+            i, i
+        ));
+    }
+
+    // Chain xfade filters for video
+    let mut current = "v0".to_string();
+    let mut offset = durations[0] - transition_duration;
+    for i in 1..n {
+        let out = if i == n - 1 { "outv".to_string() } else { format!("xf{}", i) };
+        filter_parts.push(format!(
+            "[{}][v{}]xfade=transition=fade:duration={:.3}:offset={:.3}[{}]",
+            current, i, transition_duration, offset.max(0.1), out
+        ));
+        offset += durations[i] - transition_duration;
+        current = out;
+    }
+
+    // Audio: normalise sample rate and concat
+    for i in 0..n {
+        filter_parts.push(format!("[{}:a]aresample=44100[a{}]", i, i));
+    }
+    let audio_inputs: String = (0..n).map(|i| format!("[a{}]", i)).collect::<Vec<_>>().join("");
+    filter_parts.push(format!("{}concat=n={}:v=0:a=1[outa]", audio_inputs, n));
+
+    let filter_complex = filter_parts.join(";");
+
+    let mut command = Command::new("ffmpeg");
+    for file in input_files {
+        command.arg("-i").arg(file);
+    }
+    command
+        .arg("-filter_complex").arg(&filter_complex)
+        .arg("-map").arg("[outv]")
+        .arg("-map").arg("[outa]")
+        .arg("-c:v").arg("libx264")
+        .arg("-preset").arg("medium")
+        .arg("-crf").arg("23")
+        .arg("-pix_fmt").arg("yuv420p")
+        .arg("-c:a").arg("aac")
+        .arg("-b:a").arg("192k")
+        .arg("-movflags").arg("faststart")
+        .arg("-y")
+        .arg(output_file);
+
+    tracing::info!("⏳ Merging {} clips with {:.2}s crossfade transitions...", n, transition_duration);
+
+    match execute_ffmpeg_command_with_sync_timeout(command, Some(600)) {
+        Ok(result) => {
+            if std::path::Path::new(output_file).exists()
+                && std::fs::metadata(output_file).map(|m| m.len()).unwrap_or(0) > 1024
+            {
+                tracing::info!("✅ Transition merge successful: {}", output_file);
+                Ok(result)
+            } else {
+                tracing::warn!("⚠️ Transition merge produced empty/missing file, falling back to hard-cut");
+                merge_videos(input_files, output_file)
+            }
+        }
+        Err(e) => {
+            tracing::warn!("⚠️ Transition merge failed ({}), falling back to hard-cut merge", e);
+            merge_videos(input_files, output_file)
+        }
+    }
+}
+
 pub fn split_video(
     input_file: &str,
     output_prefix: &str,

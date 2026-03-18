@@ -10,6 +10,7 @@ use crate::AppState;
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
 use std::time::Duration;
+use std::process::Command as StdCommand;
 
 /// Retry function with exponential backoff for handling vectorization delays
 async fn retry_with_exponential_backoff<F, Fut, T, E>(
@@ -2499,6 +2500,7 @@ async fn execute_auto_generate_video_claude(args: &Value) -> String {
     let include_text = args.get("include_text_overlays").and_then(|v| v.as_bool()).unwrap_or(true);
     let include_music = args.get("include_music").and_then(|v| v.as_bool()).unwrap_or(true); // ✅ Default TRUE - videos MUST have audio!
     let num_clips = args.get("num_clips").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+    let aspect_ratio = args.get("aspect_ratio").and_then(|v| v.as_str()).unwrap_or("16:9").to_string();
 
     if topic.is_empty() || output_file.is_empty() {
         return "❌ Error: topic and output_file are required".to_string();
@@ -2516,21 +2518,33 @@ async fn execute_auto_generate_video_claude(args: &Value) -> String {
     let mut result = format!("🎬 **Auto-generating video about '{}'**\n\n", topic);
     result.push_str(&format!("Duration: {}s | Style: {} | Clips: {}\n\n", duration, style, num_clips));
 
-    // Step 1: Generate search queries for Pexels
-    result.push_str("📝 Step 1: Analyzing topic and generating search queries...\n");
-    tracing::info!("🎬 auto_generate_video: Generating {} search queries for topic '{}'", num_clips, topic);
-    let search_queries = generate_search_queries_for_topic(topic, num_clips);
+    // Step 1: Generate search queries via AI (with heuristic fallback)
+    result.push_str("📝 Step 1: Generating AI-powered search queries...\n");
+    let search_queries = generate_search_queries_ai(topic, num_clips).await;
     tracing::info!("✅ Generated {} search queries: {:?}", search_queries.len(), search_queries.iter().take(3).collect::<Vec<_>>());
+    result.push_str(&format!("  Queries: {}\n\n", search_queries.iter().take(3).map(|s| s.as_str()).collect::<Vec<_>>().join(", ")));
 
-    // Step 2: Search and download clips from Pexels with DIVERSITY enforcement
+    // Load session-level used clip IDs to prevent cross-session duplicates (Fix 7)
+    let session_ids_file = "outputs/.used_clip_ids.json";
+    let mut used_ids: std::collections::HashSet<i64> = tokio::fs::read_to_string(session_ids_file)
+        .await
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+
+    // Step 2: Search and download clips — parallel thumbnail screening + duration accumulation
     result.push_str("🔍 Step 2: Searching Pexels for relevant clips...\n");
-    tracing::info!("📥 auto_generate_video: Starting download of {} clips from Pexels", num_clips);
-    let mut downloaded_files = Vec::new();
-    let mut downloaded_video_ids = Vec::new(); // Track to prevent duplicates
+    let mut downloaded_files: Vec<String> = Vec::new();
+    let mut downloaded_video_ids: Vec<i64> = Vec::new();
+    let mut total_duration_secs = 0.0f64;
+    let max_clips = num_clips.min(12);
 
-    for (i, query) in search_queries.iter().enumerate().take(num_clips) {
-        tracing::info!("🔍 auto_generate_video: Processing clip {}/{} - Searching Pexels for '{}'", i + 1, num_clips, query);
-        // Search Pexels — fetch 5 results so thumbnail screening has more candidates
+    'query_loop_claude: for (i, query) in search_queries.iter().enumerate().take(max_clips) {
+        if total_duration_secs >= duration * 0.9 {
+            tracing::info!("Collected {:.1}s of footage (target: {:.1}s), stopping", total_duration_secs, duration);
+            break;
+        }
+
         let pexels_result = execute_pexels_search_claude(&serde_json::json!({
             "query": query,
             "media_type": "videos",
@@ -2539,51 +2553,54 @@ async fn execute_auto_generate_video_claude(args: &Value) -> String {
 
         if let Ok(search_data) = serde_json::from_str::<Value>(&pexels_result) {
             if let Some(videos) = search_data["videos"].as_array() {
-                // Clone unique candidates so we can await across them without borrow issues
+                // Filter session-level + within-call duplicates
                 let candidates: Vec<Value> = videos.iter()
                     .filter_map(|v| v["id"].as_i64().and_then(|id| {
-                        if !downloaded_video_ids.contains(&id) { Some(v.clone()) } else { None }
+                        if !used_ids.contains(&id) && !downloaded_video_ids.contains(&id) {
+                            Some(v.clone())
+                        } else {
+                            None
+                        }
                     }))
                     .collect();
 
-                // Option B: screen thumbnails with Gemini vision before downloading the full clip
-                let mut selected_video: Option<Value> = None;
-                for candidate in &candidates {
-                    let thumb_url = candidate["video_pictures"][0]["picture"].as_str().unwrap_or("");
-                    let score = if !thumb_url.is_empty() {
-                        screen_pexels_thumbnail(thumb_url, topic).await
-                    } else {
-                        5 // no thumbnail — proceed
-                    };
-                    tracing::info!("🖼️ Clip {}/{}: thumbnail score {}/10 for '{}'", i + 1, num_clips, score, query);
-                    if score >= 5 {
-                        result.push_str(&format!("  🖼️ Clip {}: thumbnail {}/10 — downloading\n", i + 1, score));
-                        selected_video = Some(candidate.clone());
-                        break;
-                    } else {
-                        result.push_str(&format!("  ⬜ Clip {}: thumbnail {}/10 — too low, trying next\n", i + 1, score));
-                    }
+                if candidates.is_empty() {
+                    result.push_str(&format!("  ⬜ Clip {}: all candidates already used\n", i + 1));
+                    continue 'query_loop_claude;
                 }
 
-                // Fallback: use first unique candidate if no thumbnail passed screening
-                if selected_video.is_none() {
-                    if let Some(first) = candidates.into_iter().next() {
-                        tracing::warn!("⚠️ No relevant thumbnail for '{}', using first unique video", query);
-                        result.push_str(&format!("  ⚠️ No relevant thumbnail for '{}', using best available\n", query));
-                        selected_video = Some(first);
+                // Screen all thumbnails in parallel (Fix 5)
+                let score_futures: Vec<_> = candidates.iter().map(|c| {
+                    let thumb = c["video_pictures"][0]["picture"].as_str().unwrap_or("").to_string();
+                    let t = topic.to_string();
+                    async move {
+                        if thumb.is_empty() { 5i32 } else { screen_pexels_thumbnail(&thumb, &t).await }
                     }
-                }
+                }).collect();
+                let scores: Vec<i32> = futures::future::join_all(score_futures).await;
+
+                let selected_video = candidates.iter().zip(scores.iter())
+                    .find(|(_, &score)| score >= 5)
+                    .map(|(v, score)| {
+                        result.push_str(&format!("  🖼️ Clip {}: thumbnail {}/10 — downloading\n", i + 1, score));
+                        v.clone()
+                    })
+                    .or_else(|| {
+                        candidates.first().map(|v| {
+                            result.push_str(&format!("  ⚠️ Clip {}: no high-score thumbnail for '{}', using best available\n", i + 1, query));
+                            v.clone()
+                        })
+                    });
 
                 if let Some(video) = selected_video {
                     if let Some(vid_id) = video["id"].as_i64() {
                         downloaded_video_ids.push(vid_id);
-                        tracing::info!("✅ Selected video ID {} for query '{}'", vid_id, query);
+                        used_ids.insert(vid_id);
                     }
                     if let Some(files) = video["video_files"].as_array() {
                         if let Some(file) = files.first() {
                             if let Some(link) = file["link"].as_str() {
                                 let clip_path = format!("outputs/clip_{}_{}.mp4", i, uuid::Uuid::new_v4().to_string().split('-').next().unwrap());
-                                tracing::info!("📥 auto_generate_video: Downloading clip {}/{} from {}", i + 1, num_clips, link);
 
                                 let download_result = execute_pexels_download_video_claude(&serde_json::json!({
                                     "video_url": link,
@@ -2593,18 +2610,17 @@ async fn execute_auto_generate_video_claude(args: &Value) -> String {
                                 if download_result.contains("✅") {
                                     match verify_clip_quality(&clip_path) {
                                         Ok(()) => {
+                                            if let Ok(meta) = crate::core::analyze_video(&clip_path) {
+                                                total_duration_secs += meta.duration_seconds;
+                                            }
                                             downloaded_files.push(clip_path.clone());
-                                            tracing::info!("✅ Clip {}/{} passed QA: {}", i + 1, num_clips, clip_path);
-                                            result.push_str(&format!("  ✓ Downloaded clip {}: {} (QA passed)\n", i + 1, query));
+                                            result.push_str(&format!("  ✓ Clip {}: {} (QA passed, {:.1}s total)\n", i + 1, query, total_duration_secs));
                                         }
                                         Err(reason) => {
-                                            tracing::warn!("⚠️ Clip {}/{} REJECTED — {} — deleting {}", i + 1, num_clips, reason, clip_path);
-                                            result.push_str(&format!("  ✗ Clip {}: {} — rejected ({}), skipping\n", i + 1, query, reason));
+                                            result.push_str(&format!("  ✗ Clip {}: rejected ({}), skipping\n", i + 1, reason));
                                             let _ = std::fs::remove_file(&clip_path);
                                         }
                                     }
-                                } else {
-                                    tracing::warn!("⚠️ auto_generate_video: Failed to download clip {}/{} - {}", i + 1, num_clips, download_result);
                                 }
                             }
                         }
@@ -2612,6 +2628,7 @@ async fn execute_auto_generate_video_claude(args: &Value) -> String {
                 }
             }
         }
+        let _ = tokio::fs::write(session_ids_file, serde_json::to_string(&used_ids).unwrap_or_default()).await;
     }
 
     if downloaded_files.is_empty() {
@@ -2622,113 +2639,111 @@ async fn execute_auto_generate_video_claude(args: &Value) -> String {
     tracing::info!("✅ auto_generate_video: Successfully downloaded {} clips", downloaded_files.len());
     result.push_str(&format!("\n✅ Downloaded {} clips\n\n", downloaded_files.len()));
 
-    // Step 3: Merge clips with retry logic
-    result.push_str("🎞️  Step 3: Merging clips...\n");
-    tracing::info!("🎞️ auto_generate_video: Merging {} clips into {}", downloaded_files.len(), output_file);
+    // Step 3: Merge clips with crossfade transitions (Fix 6)
+    result.push_str("🎞️  Step 3: Merging clips with transitions...\n");
 
-    let max_merge_attempts = 2;
-    let mut merge_success = false;
-    let mut last_error = String::new();
-
-    for attempt in 1..=max_merge_attempts {
-        if attempt > 1 {
-            tracing::warn!("⚠️ Retry attempt {} of {}", attempt, max_merge_attempts);
-            result.push_str(&format!("⚠️ Retrying merge (attempt {})\n", attempt));
-        }
-
-        match crate::core::merge_videos(&downloaded_files, &output_file) {
-            Ok(_) => {
-                // Validate the merged file exists and is readable
-                if !std::path::Path::new(&output_file).exists() {
-                    last_error = format!("Merged file was not created: {}", output_file);
-                    tracing::error!("❌ auto_generate_video: {}", last_error);
-                    continue;
-                }
-
-                // Additional validation: check file size is reasonable (> 1KB)
-                match std::fs::metadata(&output_file) {
-                    Ok(metadata) => {
-                        if metadata.len() < 1024 {
-                            last_error = format!("Merged file is suspiciously small ({} bytes)", metadata.len());
-                            tracing::error!("❌ auto_generate_video: {}", last_error);
-                            continue;
-                        }
-                    }
-                    Err(e) => {
-                        last_error = format!("Cannot read merged file metadata: {}", e);
-                        tracing::error!("❌ auto_generate_video: {}", last_error);
-                        continue;
-                    }
-                }
-
-                merge_success = true;
-                tracing::info!("✅ auto_generate_video: Clips merged successfully");
-                result.push_str("✅ Clips merged successfully\n\n");
-                break;
+    match crate::core::merge_videos_with_transitions(&downloaded_files, &output_file, 0.5) {
+        Ok(_) => {
+            if !std::path::Path::new(&output_file).exists()
+                || std::fs::metadata(&output_file).map(|m| m.len()).unwrap_or(0) < 1024
+            {
+                return format!("{}❌ Merged file missing or too small", result);
             }
-            Err(e) => {
-                last_error = e;
-                tracing::error!("❌ auto_generate_video: Merge attempt {} failed - {}", attempt, last_error);
+            result.push_str("✅ Clips merged with crossfade transitions\n\n");
+        }
+        Err(e) => return format!("{}❌ Failed to merge clips: {}", result, e),
+    }
 
-                // If this was the last attempt, fail
-                if attempt == max_merge_attempts {
-                    break;
-                }
-
-                // Wait a bit before retrying
-                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+    // Aspect ratio crop (Fix 8)
+    if aspect_ratio != "16:9" {
+        let crop_filter = match aspect_ratio.as_str() {
+            "9:16" => "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920",
+            "1:1"  => "scale=1080:1080:force_original_aspect_ratio=increase,crop=1080:1080",
+            "4:3"  => "scale=1440:1080:force_original_aspect_ratio=increase,crop=1440:1080",
+            _      => "",
+        };
+        if !crop_filter.is_empty() {
+            result.push_str(&format!("📐 Applying {} aspect ratio...\n", aspect_ratio));
+            let cropped = format!("{}_crop.mp4", output_file.trim_end_matches(".mp4"));
+            let mut cmd = StdCommand::new("ffmpeg");
+            cmd.args(["-i", &output_file, "-vf", crop_filter, "-c:a", "copy", "-y", &cropped]);
+            if crate::utils::execute_ffmpeg_command_with_sync_timeout(cmd, Some(300)).is_ok()
+                && std::path::Path::new(&cropped).exists()
+            {
+                let _ = std::fs::rename(&cropped, &output_file);
+                result.push_str(&format!("✅ Resized to {}\n\n", aspect_ratio));
             }
         }
     }
 
-    if !merge_success {
-        return format!("{}❌ Failed to merge clips after {} attempts: {}", result, max_merge_attempts, last_error);
-    }
-
-    // Step 4: Add text overlays if requested
+    // Step 4: Add text overlay — centered, background box, fade in/out (Fix 4)
     if include_text {
-        result.push_str("📝 Step 4: Adding text overlays...\n");
-        tracing::info!("📝 auto_generate_video: Adding text overlay '{}'", topic);
+        result.push_str("📝 Step 4: Adding text overlay...\n");
         let temp_output = format!("{}_with_text.mp4", output_file.trim_end_matches(".mp4"));
-
-        let overlay_result = crate::visual::add_text_overlay(
-            &output_file,
-            &temp_output,
-            &format!("{}", topic),
-            "960",
-            "100",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-            64,
-            "white",
-            1.0,
-            5.0
-        ).unwrap_or_else(|e| e);
-
-        if !overlay_result.contains("❌") {
-            // Replace original with text version
-            let _ = tokio::fs::rename(&temp_output, &output_file).await;
-            tracing::info!("✅ auto_generate_video: Text overlay added successfully");
-            result.push_str("✅ Text overlays added\n\n");
-        } else {
-            tracing::warn!("⚠️ auto_generate_video: Text overlay failed - {}", overlay_result);
+        let safe_topic = topic.replace('\'', "\\'").replace(':', "\\:").replace(',', "\\,");
+        let drawtext_filter = format!(
+            "drawtext=text='{}':fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:\
+            fontsize=48:fontcolor=white:x=(w-text_w)/2:y=h*0.08:\
+            box=1:boxcolor=black@0.5:boxborderw=10:\
+            enable='between(t,0.5,4.5)':\
+            alpha='if(lt(t,1.0),(t-0.5)/0.5,if(gt(t,4.0),1-(t-4.0)/0.5,1))'",
+            safe_topic
+        );
+        let mut cmd = StdCommand::new("ffmpeg");
+        cmd.args(["-i", &output_file, "-vf", &drawtext_filter, "-c:a", "copy", "-y", &temp_output]);
+        match crate::utils::execute_ffmpeg_command_with_sync_timeout(cmd, Some(300)) {
+            Ok(_) if std::path::Path::new(&temp_output).exists() => {
+                let _ = tokio::fs::rename(&temp_output, &output_file).await;
+                result.push_str("✅ Text overlay added (centered, fade in/out)\n\n");
+            }
+            Err(e) => result.push_str(&format!("⚠️ Text overlay failed: {} — continuing\n\n", e)),
+            _ => {}
         }
     }
 
-    // Step 5: Add background music if requested (CRITICAL FOR PROFESSIONAL VIDEOS)
-    // NOTE: auto_generate_video does NOT have access to ElevenLabs client context
-    // The agent MUST call generate_music + add_audio separately for professional results
+    // Step 5: Generate and mix background music via ElevenLabs (Fix 2)
     if include_music {
-        result.push_str("🎵 Step 5: Audio Required!\n");
-        tracing::info!("🎵 auto_generate_video: Flagging that audio generation is needed");
-        result.push_str("⚠️ IMPORTANT: This video has NO AUDIO yet (Pexels videos are silent).\n");
-        result.push_str("💡 NEXT STEPS: Use generate_music to add background music, or generate_text_to_speech for voiceover.\n");
-        result.push_str(&format!("📝 Example: generate_music(prompt='upbeat energetic music', duration={}, output_file='music.mp3') then add_audio\n\n", duration as i32));
+        result.push_str("🎵 Step 5: Generating background music...\n");
+        let el_key = std::env::var("ELEVEN_LABS_API_KEY").unwrap_or_default();
+        if !el_key.is_empty() {
+            let el_client = crate::elevenlabs_client::ElevenLabsClient::new(el_key);
+            let music_prompt = format!("{} {} background music, instrumental", style, topic);
+            let music_path = format!("outputs/bgm_{}.mp3", uuid::Uuid::new_v4().to_string().split('-').next().unwrap_or("tmp"));
+            let duration_ms = (duration * 1000.0) as u32;
+            match el_client.generate_music_task(&music_prompt, duration_ms).await {
+                Ok(task_id) => {
+                    if let Some(audio_url) = poll_music_task(&el_client, &task_id, 45).await {
+                        match el_client.download_music(&audio_url).await {
+                            Ok(bytes) => {
+                                if tokio::fs::write(&music_path, &bytes).await.is_ok() {
+                                    let mixed_path = format!("{}_audio.mp4", output_file.trim_end_matches(".mp4"));
+                                    if crate::audio::add_audio(&output_file, &music_path, &mixed_path).is_ok()
+                                        && std::path::Path::new(&mixed_path).exists()
+                                    {
+                                        let _ = tokio::fs::rename(&mixed_path, &output_file).await;
+                                        result.push_str("✅ Background music added\n\n");
+                                    } else {
+                                        result.push_str("⚠️ Music mix failed — video saved without music\n\n");
+                                    }
+                                    let _ = tokio::fs::remove_file(&music_path).await;
+                                }
+                            }
+                            Err(e) => result.push_str(&format!("⚠️ Music download failed: {} — video saved without music\n\n", e)),
+                        }
+                    } else {
+                        result.push_str("⚠️ Music generation timed out — video saved without music\n\n");
+                    }
+                }
+                Err(e) => result.push_str(&format!("⚠️ Music generation failed: {} — video saved without music\n\n", e)),
+            }
+        } else {
+            result.push_str("⚠️ ELEVEN_LABS_API_KEY not set — video saved without music\n\n");
+        }
     }
 
-    // Cleanup temporary files
-    tracing::info!("🧹 auto_generate_video: Cleaning up {} temporary files", downloaded_files.len());
-    for file in downloaded_files {
-        let _ = tokio::fs::remove_file(&file).await;
+    // Cleanup temporary clip files
+    for file in &downloaded_files {
+        let _ = tokio::fs::remove_file(file).await;
     }
 
     tracing::info!("🎉 auto_generate_video: Video generation COMPLETE - Output: {}", output_file);
@@ -2763,6 +2778,7 @@ async fn execute_auto_generate_video_gemini(args: &HashMap<String, Value>) -> St
     let include_text = args.get("include_text_overlays").and_then(|v| v.as_bool()).unwrap_or(true);
     let include_music = args.get("include_music").and_then(|v| v.as_bool()).unwrap_or(true); // ✅ Default TRUE - videos MUST have audio!
     let num_clips = args.get("num_clips").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+    let aspect_ratio = args.get("aspect_ratio").and_then(|v| v.as_str()).unwrap_or("16:9").to_string();
 
     if topic.is_empty() || output_file.is_empty() {
         return "❌ Error: topic and output_file are required".to_string();
@@ -2780,93 +2796,109 @@ async fn execute_auto_generate_video_gemini(args: &HashMap<String, Value>) -> St
     let mut result = format!("🎬 **Auto-generating video about '{}'**\n\n", topic);
     result.push_str(&format!("Duration: {}s | Style: {} | Clips: {}\n\n", duration, style, num_clips));
 
-    // Step 1: Generate search queries for Pexels
-    result.push_str("📝 Step 1: Analyzing topic and generating search queries...\n");
-    tracing::info!("🎬 auto_generate_video: Generating {} search queries for topic '{}'", num_clips, topic);
-    let search_queries = generate_search_queries_for_topic(topic, num_clips);
+    // Step 1: Generate search queries via AI (with heuristic fallback)
+    result.push_str("📝 Step 1: Generating AI-powered search queries...\n");
+    let search_queries = generate_search_queries_ai(topic, num_clips).await;
     tracing::info!("✅ Generated {} search queries: {:?}", search_queries.len(), search_queries.iter().take(3).collect::<Vec<_>>());
+    result.push_str(&format!("  Queries: {}\n\n", search_queries.iter().take(3).map(|s| s.as_str()).collect::<Vec<_>>().join(", ")));
 
-    // Step 2: Search and download clips from Pexels with DIVERSITY enforcement
+    // Load session-level used clip IDs to prevent cross-session duplicates (Fix 7)
+    let session_ids_file = "outputs/.used_clip_ids.json";
+    let mut used_ids: std::collections::HashSet<i64> = tokio::fs::read_to_string(session_ids_file)
+        .await
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+
+    // Step 2: Search and download clips — parallel screening + duration accumulation
     result.push_str("🔍 Step 2: Searching Pexels for relevant clips...\n");
-    tracing::info!("📥 auto_generate_video: Starting download of {} clips from Pexels", num_clips);
-    let mut downloaded_files = Vec::new();
-    let mut downloaded_video_ids = Vec::new(); // Track to prevent duplicates
+    let mut downloaded_files: Vec<String> = Vec::new();
+    let mut downloaded_video_ids: Vec<i64> = Vec::new();
+    let mut total_duration_secs = 0.0f64;
+    let max_clips = num_clips.min(12);
 
-    for (i, query) in search_queries.iter().enumerate().take(num_clips) {
-        tracing::info!("🔍 auto_generate_video: Processing clip {}/{} - Searching Pexels for '{}'", i + 1, num_clips, query);
+    'query_loop_gemini: for (i, query) in search_queries.iter().enumerate().take(max_clips) {
+        if total_duration_secs >= duration * 0.9 {
+            tracing::info!("Collected {:.1}s of footage (target: {:.1}s), stopping", total_duration_secs, duration);
+            break;
+        }
+
         let mut search_args = HashMap::new();
         search_args.insert("query".to_string(), Value::String(query.clone()));
         search_args.insert("media_type".to_string(), Value::String("videos".to_string()));
-        search_args.insert("per_page".to_string(), Value::Number(serde_json::Number::from(5))); // 5 results for thumbnail screening
-
+        search_args.insert("per_page".to_string(), Value::Number(serde_json::Number::from(5)));
         let pexels_result = execute_pexels_search_gemini(&search_args).await;
 
         if let Ok(search_data) = serde_json::from_str::<Value>(&pexels_result) {
             if let Some(videos) = search_data["videos"].as_array() {
-                // Clone unique candidates so we can await across them
+                // Filter session-level + within-call duplicates
                 let candidates: Vec<Value> = videos.iter()
                     .filter_map(|v| v["id"].as_i64().and_then(|id| {
-                        if !downloaded_video_ids.contains(&id) { Some(v.clone()) } else { None }
+                        if !used_ids.contains(&id) && !downloaded_video_ids.contains(&id) {
+                            Some(v.clone())
+                        } else {
+                            None
+                        }
                     }))
                     .collect();
 
-                // Option B: screen thumbnails with Gemini vision before downloading the full clip
-                let mut selected_video: Option<Value> = None;
-                for candidate in &candidates {
-                    let thumb_url = candidate["video_pictures"][0]["picture"].as_str().unwrap_or("");
-                    let score = if !thumb_url.is_empty() {
-                        screen_pexels_thumbnail(thumb_url, topic).await
-                    } else {
-                        5
-                    };
-                    tracing::info!("🖼️ Clip {}/{}: thumbnail score {}/10 for '{}'", i + 1, num_clips, score, query);
-                    if score >= 5 {
-                        result.push_str(&format!("  🖼️ Clip {}: thumbnail {}/10 — downloading\n", i + 1, score));
-                        selected_video = Some(candidate.clone());
-                        break;
-                    } else {
-                        result.push_str(&format!("  ⬜ Clip {}: thumbnail {}/10 — too low, trying next\n", i + 1, score));
-                    }
+                if candidates.is_empty() {
+                    result.push_str(&format!("  ⬜ Clip {}: all candidates already used\n", i + 1));
+                    continue 'query_loop_gemini;
                 }
 
-                if selected_video.is_none() {
-                    if let Some(first) = candidates.into_iter().next() {
-                        tracing::warn!("⚠️ No relevant thumbnail for '{}', using first unique video", query);
-                        selected_video = Some(first);
+                // Screen all thumbnails in parallel (Fix 5)
+                let score_futures: Vec<_> = candidates.iter().map(|c| {
+                    let thumb = c["video_pictures"][0]["picture"].as_str().unwrap_or("").to_string();
+                    let t = topic.to_string();
+                    async move {
+                        if thumb.is_empty() { 5i32 } else { screen_pexels_thumbnail(&thumb, &t).await }
                     }
-                }
+                }).collect();
+                let scores: Vec<i32> = futures::future::join_all(score_futures).await;
+
+                let selected_video = candidates.iter().zip(scores.iter())
+                    .find(|(_, &score)| score >= 5)
+                    .map(|(v, score)| {
+                        result.push_str(&format!("  🖼️ Clip {}: thumbnail {}/10 — downloading\n", i + 1, score));
+                        v.clone()
+                    })
+                    .or_else(|| {
+                        candidates.first().map(|v| {
+                            result.push_str(&format!("  ⚠️ Clip {}: no high-score thumbnail for '{}', using best available\n", i + 1, query));
+                            v.clone()
+                        })
+                    });
 
                 if let Some(video) = selected_video {
                     if let Some(vid_id) = video["id"].as_i64() {
                         downloaded_video_ids.push(vid_id);
+                        used_ids.insert(vid_id);
                     }
                     if let Some(files) = video["video_files"].as_array() {
                         if let Some(file) = files.first() {
                             if let Some(link) = file["link"].as_str() {
                                 let clip_path = format!("outputs/clip_{}_{}.mp4", i, uuid::Uuid::new_v4().to_string().split('-').next().unwrap());
-                                tracing::info!("📥 auto_generate_video: Downloading clip {}/{} from {}", i + 1, num_clips, link);
 
                                 let mut download_args = HashMap::new();
                                 download_args.insert("video_url".to_string(), Value::String(link.to_string()));
                                 download_args.insert("output_file".to_string(), Value::String(clip_path.clone()));
-
                                 let download_result = execute_pexels_download_video_gemini(&download_args).await;
 
                                 if download_result.contains("✅") {
                                     match verify_clip_quality(&clip_path) {
                                         Ok(()) => {
+                                            if let Ok(meta) = crate::core::analyze_video(&clip_path) {
+                                                total_duration_secs += meta.duration_seconds;
+                                            }
                                             downloaded_files.push(clip_path.clone());
-                                            tracing::info!("✅ Clip {}/{} passed QA: {}", i + 1, num_clips, clip_path);
-                                            result.push_str(&format!("  ✓ Downloaded clip {}: {} (QA passed)\n", i + 1, query));
+                                            result.push_str(&format!("  ✓ Clip {}: {} (QA passed, {:.1}s total)\n", i + 1, query, total_duration_secs));
                                         }
                                         Err(reason) => {
-                                            tracing::warn!("⚠️ Clip {}/{} REJECTED — {} — deleting {}", i + 1, num_clips, reason, clip_path);
-                                            result.push_str(&format!("  ✗ Clip {}: {} — rejected ({}), skipping\n", i + 1, query, reason));
+                                            result.push_str(&format!("  ✗ Clip {}: rejected ({}), skipping\n", i + 1, reason));
                                             let _ = std::fs::remove_file(&clip_path);
                                         }
                                     }
-                                } else {
-                                    tracing::warn!("⚠️ auto_generate_video: Failed to download clip {}/{} - {}", i + 1, num_clips, download_result);
                                 }
                             }
                         }
@@ -2874,6 +2906,7 @@ async fn execute_auto_generate_video_gemini(args: &HashMap<String, Value>) -> St
                 }
             }
         }
+        let _ = tokio::fs::write(session_ids_file, serde_json::to_string(&used_ids).unwrap_or_default()).await;
     }
 
     if downloaded_files.is_empty() {
@@ -2884,113 +2917,111 @@ async fn execute_auto_generate_video_gemini(args: &HashMap<String, Value>) -> St
     tracing::info!("✅ auto_generate_video: Successfully downloaded {} clips", downloaded_files.len());
     result.push_str(&format!("\n✅ Downloaded {} clips\n\n", downloaded_files.len()));
 
-    // Step 3: Merge clips with retry logic
-    result.push_str("🎞️  Step 3: Merging clips...\n");
-    tracing::info!("🎞️ auto_generate_video: Merging {} clips into {}", downloaded_files.len(), output_file);
+    // Step 3: Merge clips with crossfade transitions (Fix 6)
+    result.push_str("🎞️  Step 3: Merging clips with transitions...\n");
 
-    let max_merge_attempts = 2;
-    let mut merge_success = false;
-    let mut last_error = String::new();
-
-    for attempt in 1..=max_merge_attempts {
-        if attempt > 1 {
-            tracing::warn!("⚠️ Retry attempt {} of {}", attempt, max_merge_attempts);
-            result.push_str(&format!("⚠️ Retrying merge (attempt {})\n", attempt));
-        }
-
-        match crate::core::merge_videos(&downloaded_files, &output_file) {
-            Ok(_) => {
-                // Validate the merged file exists and is readable
-                if !std::path::Path::new(&output_file).exists() {
-                    last_error = format!("Merged file was not created: {}", output_file);
-                    tracing::error!("❌ auto_generate_video: {}", last_error);
-                    continue;
-                }
-
-                // Additional validation: check file size is reasonable (> 1KB)
-                match std::fs::metadata(&output_file) {
-                    Ok(metadata) => {
-                        if metadata.len() < 1024 {
-                            last_error = format!("Merged file is suspiciously small ({} bytes)", metadata.len());
-                            tracing::error!("❌ auto_generate_video: {}", last_error);
-                            continue;
-                        }
-                    }
-                    Err(e) => {
-                        last_error = format!("Cannot read merged file metadata: {}", e);
-                        tracing::error!("❌ auto_generate_video: {}", last_error);
-                        continue;
-                    }
-                }
-
-                merge_success = true;
-                tracing::info!("✅ auto_generate_video: Clips merged successfully");
-                result.push_str("✅ Clips merged successfully\n\n");
-                break;
+    match crate::core::merge_videos_with_transitions(&downloaded_files, &output_file, 0.5) {
+        Ok(_) => {
+            if !std::path::Path::new(&output_file).exists()
+                || std::fs::metadata(&output_file).map(|m| m.len()).unwrap_or(0) < 1024
+            {
+                return format!("{}❌ Merged file missing or too small", result);
             }
-            Err(e) => {
-                last_error = e;
-                tracing::error!("❌ auto_generate_video: Merge attempt {} failed - {}", attempt, last_error);
+            result.push_str("✅ Clips merged with crossfade transitions\n\n");
+        }
+        Err(e) => return format!("{}❌ Failed to merge clips: {}", result, e),
+    }
 
-                // If this was the last attempt, fail
-                if attempt == max_merge_attempts {
-                    break;
-                }
-
-                // Wait a bit before retrying
-                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+    // Aspect ratio crop (Fix 8)
+    if aspect_ratio != "16:9" {
+        let crop_filter = match aspect_ratio.as_str() {
+            "9:16" => "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920",
+            "1:1"  => "scale=1080:1080:force_original_aspect_ratio=increase,crop=1080:1080",
+            "4:3"  => "scale=1440:1080:force_original_aspect_ratio=increase,crop=1440:1080",
+            _      => "",
+        };
+        if !crop_filter.is_empty() {
+            result.push_str(&format!("📐 Applying {} aspect ratio...\n", aspect_ratio));
+            let cropped = format!("{}_crop.mp4", output_file.trim_end_matches(".mp4"));
+            let mut cmd = StdCommand::new("ffmpeg");
+            cmd.args(["-i", &output_file, "-vf", crop_filter, "-c:a", "copy", "-y", &cropped]);
+            if crate::utils::execute_ffmpeg_command_with_sync_timeout(cmd, Some(300)).is_ok()
+                && std::path::Path::new(&cropped).exists()
+            {
+                let _ = std::fs::rename(&cropped, &output_file);
+                result.push_str(&format!("✅ Resized to {}\n\n", aspect_ratio));
             }
         }
     }
 
-    if !merge_success {
-        return format!("{}❌ Failed to merge clips after {} attempts: {}", result, max_merge_attempts, last_error);
-    }
-
-    // Step 4: Add text overlays if requested
+    // Step 4: Add text overlay — centered, background box, fade in/out (Fix 4)
     if include_text {
-        result.push_str("📝 Step 4: Adding text overlays...\n");
-        tracing::info!("📝 auto_generate_video: Adding text overlay '{}'", topic);
+        result.push_str("📝 Step 4: Adding text overlay...\n");
         let temp_output = format!("{}_with_text.mp4", output_file.trim_end_matches(".mp4"));
-
-        let overlay_result = crate::visual::add_text_overlay(
-            &output_file,
-            &temp_output,
-            &format!("{}", topic),
-            "960",
-            "100",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-            64,
-            "white",
-            1.0,
-            5.0
-        ).unwrap_or_else(|e| e);
-
-        if !overlay_result.contains("❌") {
-            // Replace original with text version
-            let _ = tokio::fs::rename(&temp_output, &output_file).await;
-            tracing::info!("✅ auto_generate_video: Text overlay added successfully");
-            result.push_str("✅ Text overlays added\n\n");
-        } else {
-            tracing::warn!("⚠️ auto_generate_video: Text overlay failed - {}", overlay_result);
+        let safe_topic = topic.replace('\'', "\\'").replace(':', "\\:").replace(',', "\\,");
+        let drawtext_filter = format!(
+            "drawtext=text='{}':fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:\
+            fontsize=48:fontcolor=white:x=(w-text_w)/2:y=h*0.08:\
+            box=1:boxcolor=black@0.5:boxborderw=10:\
+            enable='between(t,0.5,4.5)':\
+            alpha='if(lt(t,1.0),(t-0.5)/0.5,if(gt(t,4.0),1-(t-4.0)/0.5,1))'",
+            safe_topic
+        );
+        let mut cmd = StdCommand::new("ffmpeg");
+        cmd.args(["-i", &output_file, "-vf", &drawtext_filter, "-c:a", "copy", "-y", &temp_output]);
+        match crate::utils::execute_ffmpeg_command_with_sync_timeout(cmd, Some(300)) {
+            Ok(_) if std::path::Path::new(&temp_output).exists() => {
+                let _ = tokio::fs::rename(&temp_output, &output_file).await;
+                result.push_str("✅ Text overlay added (centered, fade in/out)\n\n");
+            }
+            Err(e) => result.push_str(&format!("⚠️ Text overlay failed: {} — continuing\n\n", e)),
+            _ => {}
         }
     }
 
-    // Step 5: Add background music if requested (CRITICAL FOR PROFESSIONAL VIDEOS)
-    // NOTE: auto_generate_video does NOT have access to ElevenLabs client context
-    // The agent MUST call generate_music + add_audio separately for professional results
+    // Step 5: Generate and mix background music via ElevenLabs (Fix 2)
     if include_music {
-        result.push_str("🎵 Step 5: Audio Required!\n");
-        tracing::info!("🎵 auto_generate_video: Flagging that audio generation is needed");
-        result.push_str("⚠️ IMPORTANT: This video has NO AUDIO yet (Pexels videos are silent).\n");
-        result.push_str("💡 NEXT STEPS: Use generate_music to add background music, or generate_text_to_speech for voiceover.\n");
-        result.push_str(&format!("📝 Example: generate_music(prompt='upbeat energetic music', duration={}, output_file='music.mp3') then add_audio\n\n", duration as i32));
+        result.push_str("🎵 Step 5: Generating background music...\n");
+        let el_key = std::env::var("ELEVEN_LABS_API_KEY").unwrap_or_default();
+        if !el_key.is_empty() {
+            let el_client = crate::elevenlabs_client::ElevenLabsClient::new(el_key);
+            let music_prompt = format!("{} {} background music, instrumental", style, topic);
+            let music_path = format!("outputs/bgm_{}.mp3", uuid::Uuid::new_v4().to_string().split('-').next().unwrap_or("tmp"));
+            let duration_ms = (duration * 1000.0) as u32;
+            match el_client.generate_music_task(&music_prompt, duration_ms).await {
+                Ok(task_id) => {
+                    if let Some(audio_url) = poll_music_task(&el_client, &task_id, 45).await {
+                        match el_client.download_music(&audio_url).await {
+                            Ok(bytes) => {
+                                if tokio::fs::write(&music_path, &bytes).await.is_ok() {
+                                    let mixed_path = format!("{}_audio.mp4", output_file.trim_end_matches(".mp4"));
+                                    if crate::audio::add_audio(&output_file, &music_path, &mixed_path).is_ok()
+                                        && std::path::Path::new(&mixed_path).exists()
+                                    {
+                                        let _ = tokio::fs::rename(&mixed_path, &output_file).await;
+                                        result.push_str("✅ Background music added\n\n");
+                                    } else {
+                                        result.push_str("⚠️ Music mix failed — video saved without music\n\n");
+                                    }
+                                    let _ = tokio::fs::remove_file(&music_path).await;
+                                }
+                            }
+                            Err(e) => result.push_str(&format!("⚠️ Music download failed: {} — video saved without music\n\n", e)),
+                        }
+                    } else {
+                        result.push_str("⚠️ Music generation timed out — video saved without music\n\n");
+                    }
+                }
+                Err(e) => result.push_str(&format!("⚠️ Music generation failed: {} — video saved without music\n\n", e)),
+            }
+        } else {
+            result.push_str("⚠️ ELEVEN_LABS_API_KEY not set — video saved without music\n\n");
+        }
     }
 
-    // Cleanup temporary files
-    tracing::info!("🧹 auto_generate_video: Cleaning up {} temporary files", downloaded_files.len());
-    for file in downloaded_files {
-        let _ = tokio::fs::remove_file(&file).await;
+    // Cleanup temporary clip files
+    for file in &downloaded_files {
+        let _ = tokio::fs::remove_file(file).await;
     }
 
     tracing::info!("🎉 auto_generate_video: Video generation COMPLETE - Output: {}", output_file);
@@ -3025,7 +3056,7 @@ fn execute_generate_video_queries_claude(args: &Value) -> String {
         return "❌ Error: topic is required".to_string();
     }
     let num = args.get("num_queries").and_then(|v| v.as_u64()).unwrap_or(5) as usize;
-    let queries = generate_search_queries_for_topic(topic, num);
+    let queries = generate_search_queries_fallback(topic, num);
     match serde_json::to_string_pretty(&queries) {
         Ok(json) => format!("🔍 Generated {} search queries for topic '{}':\n{}", queries.len(), topic, json),
         Err(e) => format!("❌ Failed to serialize queries: {}", e),
@@ -3039,7 +3070,7 @@ fn execute_generate_video_queries_gemini(args: &HashMap<String, Value>) -> Strin
         return "❌ Error: topic is required".to_string();
     }
     let num = args.get("num_queries").and_then(|v| v.as_u64()).unwrap_or(5) as usize;
-    let queries = generate_search_queries_for_topic(topic, num);
+    let queries = generate_search_queries_fallback(topic, num);
     match serde_json::to_string_pretty(&queries) {
         Ok(json) => format!("🔍 Generated {} search queries for topic '{}':\n{}", queries.len(), topic, json),
         Err(e) => format!("❌ Failed to serialize queries: {}", e),
@@ -3293,8 +3324,73 @@ fn run_final_qa(output_file: &str) -> String {
     qa
 }
 
-/// Helper function to generate search queries based on topic with intelligent keyword extraction
-fn generate_search_queries_for_topic(topic: &str, num_queries: usize) -> Vec<String> {
+/// AI-powered search query generation using Gemini for visual diversity
+async fn generate_search_queries_ai(topic: &str, num_queries: usize) -> Vec<String> {
+    let api_key = std::env::var("GEMINI_API_KEY")
+        .or_else(|_| std::env::var("GOOGLE_API_KEY"))
+        .unwrap_or_default();
+    if api_key.is_empty() {
+        return generate_search_queries_fallback(topic, num_queries);
+    }
+    let client = crate::gemini_client::GeminiClient::new(api_key);
+    let prompt = format!(
+        "Generate exactly {num_queries} diverse Pexels stock video search queries for this topic: \"{topic}\".\n\
+        Rules:\n\
+        - Each query is 2-4 words, specific and visual (something a camera would capture)\n\
+        - Cover different visual aspects of the topic across queries for variety\n\
+        - Avoid abstract concepts; focus on concrete visual scenes\n\
+        - Output ONLY the queries, one per line, no numbering, no extra text."
+    );
+    match client.generate_text(&prompt).await {
+        Ok(response) => {
+            let queries: Vec<String> = response
+                .lines()
+                .map(|l| l.trim().to_string())
+                .filter(|l| !l.is_empty() && l.len() > 3)
+                .take(num_queries)
+                .collect();
+            if queries.len() >= num_queries.min(2) {
+                tracing::info!("✅ AI generated {} search queries: {:?}", queries.len(), queries.iter().take(3).collect::<Vec<_>>());
+                queries
+            } else {
+                tracing::warn!("⚠️ AI query generation returned too few results, using fallback");
+                generate_search_queries_fallback(topic, num_queries)
+            }
+        }
+        Err(e) => {
+            tracing::warn!("⚠️ AI query generation failed ({}), using fallback", e);
+            generate_search_queries_fallback(topic, num_queries)
+        }
+    }
+}
+
+/// Poll an ElevenLabs music generation task until completed or timeout
+async fn poll_music_task(
+    client: &crate::elevenlabs_client::ElevenLabsClient,
+    task_id: &str,
+    max_attempts: u32,
+) -> Option<String> {
+    for attempt in 0..max_attempts {
+        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+        match client.get_music_status(task_id).await {
+            Ok(status) => match status.status.as_str() {
+                "completed" => return status.audio_url,
+                "failed" => {
+                    tracing::warn!("🎵 Music generation failed at attempt {}", attempt);
+                    return None;
+                }
+                _ => {
+                    tracing::debug!("🎵 Music generation in progress... ({}/{})", attempt + 1, max_attempts);
+                }
+            },
+            Err(e) => tracing::warn!("🎵 Music status poll error: {}", e),
+        }
+    }
+    None
+}
+
+/// Helper function to generate search queries based on topic with intelligent keyword extraction (fallback)
+fn generate_search_queries_fallback(topic: &str, num_queries: usize) -> Vec<String> {
     // INTELLIGENT APPROACH: Extract core concepts and generate DIVERSE queries
     // For "marketplace for social media accounts" → Extract: marketplace, business, digital, technology
 
