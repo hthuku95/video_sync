@@ -310,6 +310,10 @@ video_thumbnails/
 ffmpeg_*.log
 ffmpeg_temp_*
 
+# VID.STAB stabilization data files (FFmpeg vidstabdetect output)
+*.trf
+outputs/
+
 # Database migrations backups
 migrations/backup/
 
