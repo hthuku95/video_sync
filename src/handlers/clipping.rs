@@ -1397,6 +1397,9 @@ async fn approve_clip(
         enhancement_applied: false,
         enhancement_tools: Vec::new(),
         enhancement_reasoning: None,
+        r2_clip_key: None,
+        r2_thumb_key: None,
+        r2_clip_url: None,
     };
 
     // Upload — requires_human_approval=false so it goes through immediately

@@ -823,6 +823,9 @@ impl ContentManagementAgent {
             enhancement_applied: false,
             enhancement_tools: Vec::new(),
             enhancement_reasoning: None,
+            r2_clip_key: None,
+            r2_thumb_key: None,
+            r2_clip_url: None,
         };
 
         match uploader

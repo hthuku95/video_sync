@@ -11,6 +11,7 @@ mod claude_client;
 mod voyage_embeddings;
 mod elevenlabs_client; // 🎙️ Eleven Labs TTS, Sound Effects, Music
 mod blender_mcp_client; // 🎨 BlenderMCPServer — 3D rendering + Manim
+mod r2_client;          // ☁️ Cloudflare R2 object storage
 mod youtube_client; // 📺 YouTube Data API v3 for video uploads
 mod youtube_analytics_client; // 📊 YouTube Analytics API for metrics and insights
 mod twitch_client; // 📺 Twitch Helix API client
@@ -49,6 +50,7 @@ pub struct AppState {
     pub pexels_client: Option<pexels_client::PexelsClient>,
     pub elevenlabs_client: Option<elevenlabs_client::ElevenLabsClient>, // 🎙️ Audio generation
     pub blender_mcp_client: Option<blender_mcp_client::BlenderMCPClient>, // 🎨 3D rendering + Manim
+    pub r2_client: Option<Arc<r2_client::R2Client>>,                      // ☁️ Cloudflare R2 storage
     pub youtube_client: Option<youtube_client::YouTubeClient>, // 📺 YouTube integration
     pub youtube_analytics_client: Option<youtube_analytics_client::YouTubeAnalyticsClient>, // 📊 YouTube Analytics
     pub google_oauth_client_id: Option<String>, // Google OAuth client ID
@@ -414,6 +416,39 @@ async fn main() {
         None
     };
 
+    // Initialize Cloudflare R2 client
+    let r2_client = match (
+        std::env::var("R2_ACCOUNT_ID").ok(),
+        std::env::var("R2_ACCESS_KEY_ID").ok(),
+        std::env::var("R2_SECRET_ACCESS_KEY").ok(),
+        std::env::var("R2_BUCKET").ok(),
+    ) {
+        (Some(account_id), Some(access_key), Some(secret_key), Some(bucket))
+            if !account_id.is_empty() && !access_key.is_empty() && !secret_key.is_empty() =>
+        {
+            tracing::info!("☁️ Initializing Cloudflare R2 storage client (bucket: {bucket})...");
+            match r2_client::R2Client::new(&account_id, &access_key, &secret_key, &bucket).await {
+                Ok(client) => {
+                    if client.health_check().await {
+                        tracing::info!("✅ R2 storage connected — bucket: {bucket}");
+                        Some(Arc::new(client))
+                    } else {
+                        tracing::warn!("R2 health check failed — file storage will use local disk");
+                        None
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to init R2 client: {e} — file storage will use local disk");
+                    None
+                }
+            }
+        }
+        _ => {
+            tracing::info!("R2 not configured (set R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET)");
+            None
+        }
+    };
+
     // Create the shared state
     let shared_state = Arc::new(AppState {
         db_pool,
@@ -425,6 +460,7 @@ async fn main() {
         pexels_client,
         elevenlabs_client,
         blender_mcp_client,
+        r2_client,
         youtube_client,
         youtube_analytics_client,
         google_oauth_client_id,

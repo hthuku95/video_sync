@@ -40,4 +40,7 @@ rustube = "0.6.0"                    # Pure Rust YouTube downloader (fallback #1
 # yt-dlp is used via CLI in ytdlp_client.rs (no crate needed)
 rust-yt-downloader = "0.1"           # Feature-rich yt-dlp wrapper (fallback #3)
 hostname = "0.4"                     # Worker ID generation for parallel processing
+aws-sdk-s3 = "1"                     # Cloudflare R2 storage (S3-compatible)
+aws-config = "1"
+aws-credential-types = "1"
 

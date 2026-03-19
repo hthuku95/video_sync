@@ -220,6 +220,9 @@ fn extract_single_clip(
         enhancement_applied: false,
         enhancement_tools: Vec::new(),
         enhancement_reasoning: None,
+        r2_clip_key: None,
+        r2_thumb_key: None,
+        r2_clip_url: None,
     })
 }
 
@@ -245,4 +248,8 @@ pub struct ExtractedClipData {
     pub enhancement_tools: Vec<String>,
     /// Gemini's reasoning for the chosen tools
     pub enhancement_reasoning: Option<String>,
+    // R2 storage fields — set after upload in Phase C
+    pub r2_clip_key: Option<String>,
+    pub r2_thumb_key: Option<String>,
+    pub r2_clip_url: Option<String>,
 }

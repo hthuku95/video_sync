@@ -214,6 +214,29 @@ pub async fn execute_clipping_job(
 
         update_job_status(job_id, "downloaded", 40, None, &app_state.db_pool).await?;
         update_job_video_path(job_id, &path, &app_state.db_pool).await?;
+
+        // Upload raw download to R2 for persistence across restarts (best-effort)
+        if let Some(r2) = app_state.r2_client.as_ref() {
+            let ext = if job.used_twitch_fallback { "mp4" } else { "mp4" };
+            let raw_key = crate::r2_client::R2Client::key_raw_download(
+                linkage.user_id, &job.source_video_id, ext,
+            );
+            match r2.upload(&path, &raw_key).await {
+                Ok(()) => {
+                    tracing::info!("R2: uploaded raw download → {}", raw_key);
+                    sqlx::query(
+                        "UPDATE clipping_jobs SET r2_raw_key = $1 WHERE id = $2",
+                    )
+                    .bind(&raw_key)
+                    .bind(job_id)
+                    .execute(&app_state.db_pool)
+                    .await
+                    .ok();
+                }
+                Err(e) => tracing::warn!("R2 raw upload failed (non-fatal): {}", e),
+            }
+        }
+
         path
     } else {
         // Resume from Phase C or E: use the path stored in DB at download time
@@ -246,6 +269,41 @@ pub async fn execute_clipping_job(
 
         tracing::info!("✅ Phase C complete: {}/{} clips extracted", clips.len(), moments.len());
         update_job_status(job_id, "clips_extracted", 60, None, &app_state.db_pool).await?;
+
+        // Phase C→D: Upload clips + thumbnails to R2 (best-effort, non-fatal)
+        let clips = if let Some(r2) = app_state.r2_client.as_ref() {
+            let mut clips_with_r2 = clips;
+            for (i, clip) in clips_with_r2.iter_mut().enumerate() {
+                let clip_n = (i + 1) as usize;
+                let clip_key = crate::r2_client::R2Client::key_clip(job_id, clip_n);
+                match r2.upload(&clip.local_clip_path, &clip_key).await {
+                    Ok(()) => {
+                        match r2.presign_get(&clip_key, 86400).await {
+                            Ok(url) => {
+                                clip.r2_clip_key = Some(clip_key.clone());
+                                clip.r2_clip_url = Some(url);
+                                tracing::info!("R2: uploaded clip {} → {}", clip_n, clip_key);
+                            }
+                            Err(e) => tracing::warn!("R2 presign failed for clip {}: {}", clip_n, e),
+                        }
+                    }
+                    Err(e) => tracing::warn!("R2 upload failed for clip {}: {}", clip_n, e),
+                }
+                if let Some(thumb_path) = &clip.custom_thumbnail_path {
+                    let thumb_key = crate::r2_client::R2Client::key_thumbnail(job_id, clip_n);
+                    match r2.upload(thumb_path, &thumb_key).await {
+                        Ok(()) => {
+                            clip.r2_thumb_key = Some(thumb_key.clone());
+                            tracing::info!("R2: uploaded thumbnail {} → {}", clip_n, thumb_key);
+                        }
+                        Err(e) => tracing::warn!("R2 upload failed for thumbnail {}: {}", clip_n, e),
+                    }
+                }
+            }
+            clips_with_r2
+        } else {
+            clips
+        };
 
         // Phase D: Lightweight vectorization (1 embedding into video_content)
         update_job_status(job_id, "vectorizing", 65, None, &app_state.db_pool).await?;
@@ -451,6 +509,9 @@ pub async fn load_clips_from_db(
             enhancement_applied,
             enhancement_tools,
             enhancement_reasoning,
+            r2_clip_key: row.try_get("r2_clip_key").ok().flatten(),
+            r2_thumb_key: row.try_get("r2_thumb_key").ok().flatten(),
+            r2_clip_url: row.try_get("r2_clip_url").ok().flatten(),
         });
         ids.push(id);
     }
@@ -624,8 +685,9 @@ pub async fn save_clips_to_database(
               start_time_seconds, end_time_seconds, duration_seconds,
               ai_title, ai_description, ai_tags, ai_confidence_score, viral_factors,
               destination_channel_id, custom_thumbnail_path, thumbnail_generation_method,
-              enhancement_applied, enhancement_tools, enhancement_reasoning)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+              enhancement_applied, enhancement_tools, enhancement_reasoning,
+              r2_clip_key, r2_thumb_key, r2_clip_url)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
              RETURNING id",
         )
         .bind(job_id)
@@ -645,6 +707,9 @@ pub async fn save_clips_to_database(
         .bind(clip.enhancement_applied)
         .bind(&clip.enhancement_tools)
         .bind(&clip.enhancement_reasoning)
+        .bind(&clip.r2_clip_key)
+        .bind(&clip.r2_thumb_key)
+        .bind(&clip.r2_clip_url)
         .fetch_one(pool)
         .await
         .map_err(|e| format!("Failed to save clip: {}", e))?;
