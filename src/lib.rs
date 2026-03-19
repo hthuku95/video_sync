@@ -10,6 +10,7 @@ pub mod gemini_client;
 pub mod claude_client;
 pub mod voyage_embeddings;
 pub mod elevenlabs_client;
+pub mod blender_mcp_client;
 pub mod youtube_client;
 pub mod youtube_analytics_client;
 pub mod twitch_client;
@@ -56,6 +57,7 @@ pub struct AppState {
     pub voyage_embeddings: Option<voyage_embeddings::VoyageEmbeddings>,
     pub pexels_client: Option<pexels_client::PexelsClient>,
     pub elevenlabs_client: Option<elevenlabs_client::ElevenLabsClient>,
+    pub blender_mcp_client: Option<blender_mcp_client::BlenderMCPClient>,
     pub youtube_client: Option<youtube_client::YouTubeClient>,
     pub youtube_analytics_client: Option<youtube_analytics_client::YouTubeAnalyticsClient>,
     pub google_oauth_client_id: Option<String>,

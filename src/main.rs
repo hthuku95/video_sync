@@ -10,6 +10,7 @@ mod gemini_client;
 mod claude_client;
 mod voyage_embeddings;
 mod elevenlabs_client; // 🎙️ Eleven Labs TTS, Sound Effects, Music
+mod blender_mcp_client; // 🎨 BlenderMCPServer — 3D rendering + Manim
 mod youtube_client; // 📺 YouTube Data API v3 for video uploads
 mod youtube_analytics_client; // 📊 YouTube Analytics API for metrics and insights
 mod twitch_client; // 📺 Twitch Helix API client
@@ -47,6 +48,7 @@ pub struct AppState {
     pub voyage_embeddings: Option<voyage_embeddings::VoyageEmbeddings>,
     pub pexels_client: Option<pexels_client::PexelsClient>,
     pub elevenlabs_client: Option<elevenlabs_client::ElevenLabsClient>, // 🎙️ Audio generation
+    pub blender_mcp_client: Option<blender_mcp_client::BlenderMCPClient>, // 🎨 3D rendering + Manim
     pub youtube_client: Option<youtube_client::YouTubeClient>, // 📺 YouTube integration
     pub youtube_analytics_client: Option<youtube_analytics_client::YouTubeAnalyticsClient>, // 📊 YouTube Analytics
     pub google_oauth_client_id: Option<String>, // Google OAuth client ID
@@ -298,6 +300,22 @@ async fn main() {
         }
     };
 
+    // Initialize BlenderMCPClient if URL is configured
+    let blender_mcp_client = match (
+        std::env::var("BLENDER_MCP_URL").ok(),
+        std::env::var("BLENDER_MCP_API_KEY").ok(),
+    ) {
+        (Some(url), _) if !url.is_empty() => {
+            tracing::info!("🎨 Initializing BlenderMCPClient (3D rendering + Manim)...");
+            let api_key = std::env::var("BLENDER_MCP_API_KEY").unwrap_or_default();
+            Some(blender_mcp_client::BlenderMCPClient::new(url, api_key))
+        }
+        _ => {
+            tracing::info!("BlenderMCPServer not configured (set BLENDER_MCP_URL to enable 3D rendering)");
+            None
+        }
+    };
+
     // Initialize Eleven Labs client if API key is provided
     let elevenlabs_client = match std::env::var("ELEVEN_LABS_API_KEY").ok() {
         Some(api_key) if !api_key.is_empty() => {
@@ -406,6 +424,7 @@ async fn main() {
         voyage_embeddings,
         pexels_client,
         elevenlabs_client,
+        blender_mcp_client,
         youtube_client,
         youtube_analytics_client,
         google_oauth_client_id,

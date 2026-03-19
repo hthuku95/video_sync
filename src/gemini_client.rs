@@ -2117,6 +2117,198 @@ impl GeminiClient {
                     required: vec!["topic".to_string(), "output_file".to_string()],
                 },
             },
+            // =====================================================================
+            // BLENDER MCP TOOLS — 3D rendering, Manim, thumbnails, data viz
+            // =====================================================================
+
+            FunctionDeclaration {
+                name: "blender_generate_scene".to_string(),
+                description: "Generate a procedural 3D Blender scene as an MP4 clip from a natural language description. Use this to create custom cinematic B-roll footage, abstract backgrounds, or any visual scene that stock footage cannot provide. Returns a local video file path.".to_string(),
+                parameters: Parameters {
+                    param_type: "object".to_string(),
+                    properties: {
+                        let mut props = HashMap::new();
+                        props.insert("prompt".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Natural language description of the scene (e.g. 'cinematic ocean at sunset, calm mood, 10 seconds')".to_string(),
+                            items: None,
+                        });
+                        props.insert("duration".to_string(), PropertyDefinition {
+                            prop_type: "number".to_string(),
+                            description: "Target clip duration in seconds (default: 10)".to_string(),
+                            items: None,
+                        });
+                        props.insert("style".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Visual style: 'cinematic' (default), 'minimal', 'energetic', or 'calm'".to_string(),
+                            items: None,
+                        });
+                        props.insert("reference_image_url".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Optional URL of a reference/inspiration image to guide the scene aesthetics".to_string(),
+                            items: None,
+                        });
+                        props
+                    },
+                    required: vec!["prompt".to_string()],
+                },
+            },
+            FunctionDeclaration {
+                name: "blender_generate_thumbnail".to_string(),
+                description: "Generate a 3D rendered YouTube thumbnail image (1280x720 PNG) using Blender. Creates professional-grade thumbnails with 3D elements, dramatic lighting, and optional text overlays.".to_string(),
+                parameters: Parameters {
+                    param_type: "object".to_string(),
+                    properties: {
+                        let mut props = HashMap::new();
+                        props.insert("prompt".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Scene description for the thumbnail (e.g. 'tech startup success, dark background, neon blue accents')".to_string(),
+                            items: None,
+                        });
+                        props.insert("title_text".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Optional text to overlay on the thumbnail".to_string(),
+                            items: None,
+                        });
+                        props.insert("style".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Thumbnail style: 'youtube' (default), 'cinematic', or 'minimal'".to_string(),
+                            items: None,
+                        });
+                        props
+                    },
+                    required: vec!["prompt".to_string()],
+                },
+            },
+            FunctionDeclaration {
+                name: "blender_generate_title_card".to_string(),
+                description: "Generate an animated 3D title card as an MP4 clip (typically 3-8 seconds). Perfect for branded intros, section dividers, or professional chapter headings.".to_string(),
+                parameters: Parameters {
+                    param_type: "object".to_string(),
+                    properties: {
+                        let mut props = HashMap::new();
+                        props.insert("title".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Main title text to animate".to_string(),
+                            items: None,
+                        });
+                        props.insert("subtitle".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Secondary/tagline text (optional)".to_string(),
+                            items: None,
+                        });
+                        props.insert("duration".to_string(), PropertyDefinition {
+                            prop_type: "number".to_string(),
+                            description: "Clip length in seconds, 3-8 recommended (default: 5)".to_string(),
+                            items: None,
+                        });
+                        props.insert("style".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Visual style description (e.g. 'minimalist dark', 'corporate blue', 'energetic neon')".to_string(),
+                            items: None,
+                        });
+                        props
+                    },
+                    required: vec!["title".to_string()],
+                },
+            },
+            FunctionDeclaration {
+                name: "blender_generate_data_viz".to_string(),
+                description: "Generate an animated 3D data visualisation clip from JSON data. Creates animated bar charts, line graphs, pie charts, or globe visualisations for educational and business videos.".to_string(),
+                parameters: Parameters {
+                    param_type: "object".to_string(),
+                    properties: {
+                        let mut props = HashMap::new();
+                        props.insert("data_json".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: r#"JSON array of data points, e.g. '[{"label":"Q1","value":42},{"label":"Q2","value":78}]'"#.to_string(),
+                            items: None,
+                        });
+                        props.insert("chart_type".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Chart type: 'bar' (default), 'line', 'pie', or 'globe'".to_string(),
+                            items: None,
+                        });
+                        props.insert("title".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Chart title overlay text".to_string(),
+                            items: None,
+                        });
+                        props.insert("duration".to_string(), PropertyDefinition {
+                            prop_type: "number".to_string(),
+                            description: "Animation length in seconds (default: 10)".to_string(),
+                            items: None,
+                        });
+                        props
+                    },
+                    required: vec!["data_json".to_string()],
+                },
+            },
+            FunctionDeclaration {
+                name: "blender_generate_lower_third".to_string(),
+                description: "Generate an animated lower-third text overlay clip. Creates professional broadcast-style name plates and subtitle overlays, ideal for interview videos, documentaries, or tutorial content.".to_string(),
+                parameters: Parameters {
+                    param_type: "object".to_string(),
+                    properties: {
+                        let mut props = HashMap::new();
+                        props.insert("name_text".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Primary lower-third text (e.g. person name or topic heading)".to_string(),
+                            items: None,
+                        });
+                        props.insert("subtitle_text".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Secondary text below the main line (e.g. job title or context)".to_string(),
+                            items: None,
+                        });
+                        props.insert("style".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Animation and colour style (e.g. 'modern', 'news', 'minimal', 'neon')".to_string(),
+                            items: None,
+                        });
+                        props.insert("duration".to_string(), PropertyDefinition {
+                            prop_type: "number".to_string(),
+                            description: "Display duration in seconds (default: 5)".to_string(),
+                            items: None,
+                        });
+                        props
+                    },
+                    required: vec!["name_text".to_string()],
+                },
+            },
+            FunctionDeclaration {
+                name: "blender_generate_latex".to_string(),
+                description: "Generate a LaTeX/Manim mathematical equation animation clip. Creates animated mathematical expressions, derivations, and equations — ideal for educational math/science videos.".to_string(),
+                parameters: Parameters {
+                    param_type: "object".to_string(),
+                    properties: {
+                        let mut props = HashMap::new();
+                        props.insert("latex_expression".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: r#"LaTeX math expression, e.g. r"\frac{d}{dt}\int_a^b f(x,t)dx" or r"E = mc^2""#.to_string(),
+                            items: None,
+                        });
+                        props.insert("animation_type".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Animation style: 'appear' (default), 'morph', or 'step_by_step'".to_string(),
+                            items: None,
+                        });
+                        props.insert("duration".to_string(), PropertyDefinition {
+                            prop_type: "number".to_string(),
+                            description: "Clip length in seconds (default: 8)".to_string(),
+                            items: None,
+                        });
+                        props.insert("background_style".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Background: 'dark' (default), 'light', or 'transparent'".to_string(),
+                            items: None,
+                        });
+                        props
+                    },
+                    required: vec!["latex_expression".to_string()],
+                },
+            },
+
             FunctionDeclaration {
                 name: "set_chat_title".to_string(),
                 description: "Sets a descriptive title for the current chat session. Use this to give the conversation a meaningful title based on the user's request or the work being done.".to_string(),

@@ -170,6 +170,26 @@ pub async fn execute_tool_gemini_with_context(
         return execute_set_chat_title_with_state_gemini(args, ctx).await;
     }
 
+    // Blender MCP tools — 3D rendering, Manim, thumbnails, data viz
+    if name == "blender_generate_scene" {
+        return execute_blender_generate_scene_gemini(args, ctx).await;
+    }
+    if name == "blender_generate_thumbnail" {
+        return execute_blender_generate_thumbnail_gemini(args, ctx).await;
+    }
+    if name == "blender_generate_title_card" {
+        return execute_blender_generate_title_card_gemini(args, ctx).await;
+    }
+    if name == "blender_generate_data_viz" {
+        return execute_blender_generate_data_viz_gemini(args, ctx).await;
+    }
+    if name == "blender_generate_lower_third" {
+        return execute_blender_generate_lower_third_gemini(args, ctx).await;
+    }
+    if name == "blender_generate_latex" {
+        return execute_blender_generate_latex_gemini(args, ctx).await;
+    }
+
     // YouTube integration tools (READ-ONLY research tools)
     if name == "optimize_youtube_metadata" {
         return execute_optimize_youtube_metadata_with_state_gemini(args, ctx).await;
@@ -10115,4 +10135,128 @@ fn execute_talking_head_cleanup_gemini(args: &HashMap<String, Value>) -> String 
     let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("talking_head_output.mp4");
     let output = ensure_outputs_directory(output_raw);
     crate::workflows::talking_head_cleanup(input, &output).unwrap_or_else(|e| e)
+}
+
+// =============================================================================
+// BLENDER MCP EXECUTORS — Gemini dispatch
+// =============================================================================
+
+fn blender_client_or_err(ctx: &ToolExecutionContext) -> Result<&crate::blender_mcp_client::BlenderMCPClient, String> {
+    ctx.app_state
+        .blender_mcp_client
+        .as_ref()
+        .ok_or_else(|| "❌ BlenderMCPServer not configured. Set BLENDER_MCP_URL in .env to enable 3D rendering.".to_string())
+}
+
+async fn execute_blender_generate_scene_gemini(
+    args: &HashMap<String, Value>,
+    ctx: &ToolExecutionContext,
+) -> String {
+    let client = match blender_client_or_err(ctx) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    let prompt = args.get("prompt").and_then(|v| v.as_str()).unwrap_or("");
+    let duration = args.get("duration").and_then(|v| v.as_f64()).unwrap_or(10.0);
+    let style = args.get("style").and_then(|v| v.as_str()).unwrap_or("cinematic");
+    let ref_img = args.get("reference_image_url").and_then(|v| v.as_str());
+
+    match client.generate_scene(prompt, duration, style, ref_img).await {
+        Ok(path) => format!("✅ Blender scene rendered: {path}"),
+        Err(e) => format!("❌ blender_generate_scene failed: {e}"),
+    }
+}
+
+async fn execute_blender_generate_thumbnail_gemini(
+    args: &HashMap<String, Value>,
+    ctx: &ToolExecutionContext,
+) -> String {
+    let client = match blender_client_or_err(ctx) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    let prompt = args.get("prompt").and_then(|v| v.as_str()).unwrap_or("");
+    let title_text = args.get("title_text").and_then(|v| v.as_str()).unwrap_or("");
+    let style = args.get("style").and_then(|v| v.as_str()).unwrap_or("youtube");
+
+    match client.generate_thumbnail(prompt, title_text, style).await {
+        Ok(path) => format!("✅ Blender thumbnail rendered: {path}"),
+        Err(e) => format!("❌ blender_generate_thumbnail failed: {e}"),
+    }
+}
+
+async fn execute_blender_generate_title_card_gemini(
+    args: &HashMap<String, Value>,
+    ctx: &ToolExecutionContext,
+) -> String {
+    let client = match blender_client_or_err(ctx) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    let title = args.get("title").and_then(|v| v.as_str()).unwrap_or("");
+    let subtitle = args.get("subtitle").and_then(|v| v.as_str()).unwrap_or("");
+    let duration = args.get("duration").and_then(|v| v.as_f64()).unwrap_or(5.0);
+    let style = args.get("style").and_then(|v| v.as_str()).unwrap_or("cinematic");
+
+    match client.generate_title_card(title, subtitle, duration, style).await {
+        Ok(path) => format!("✅ Blender title card rendered: {path}"),
+        Err(e) => format!("❌ blender_generate_title_card failed: {e}"),
+    }
+}
+
+async fn execute_blender_generate_data_viz_gemini(
+    args: &HashMap<String, Value>,
+    ctx: &ToolExecutionContext,
+) -> String {
+    let client = match blender_client_or_err(ctx) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    let data_json = args.get("data_json").and_then(|v| v.as_str()).unwrap_or("[]");
+    let chart_type = args.get("chart_type").and_then(|v| v.as_str()).unwrap_or("bar");
+    let title = args.get("title").and_then(|v| v.as_str()).unwrap_or("");
+    let duration = args.get("duration").and_then(|v| v.as_f64()).unwrap_or(10.0);
+
+    match client.generate_data_viz(data_json, chart_type, title, duration).await {
+        Ok(path) => format!("✅ Blender data viz rendered: {path}"),
+        Err(e) => format!("❌ blender_generate_data_viz failed: {e}"),
+    }
+}
+
+async fn execute_blender_generate_lower_third_gemini(
+    args: &HashMap<String, Value>,
+    ctx: &ToolExecutionContext,
+) -> String {
+    let client = match blender_client_or_err(ctx) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    let name_text = args.get("name_text").and_then(|v| v.as_str()).unwrap_or("");
+    let subtitle_text = args.get("subtitle_text").and_then(|v| v.as_str()).unwrap_or("");
+    let style = args.get("style").and_then(|v| v.as_str()).unwrap_or("modern");
+    let duration = args.get("duration").and_then(|v| v.as_f64()).unwrap_or(5.0);
+
+    match client.generate_lower_third(name_text, subtitle_text, style, duration).await {
+        Ok(path) => format!("✅ Blender lower third rendered: {path}"),
+        Err(e) => format!("❌ blender_generate_lower_third failed: {e}"),
+    }
+}
+
+async fn execute_blender_generate_latex_gemini(
+    args: &HashMap<String, Value>,
+    ctx: &ToolExecutionContext,
+) -> String {
+    let client = match blender_client_or_err(ctx) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    let latex_expression = args.get("latex_expression").and_then(|v| v.as_str()).unwrap_or("");
+    let animation_type = args.get("animation_type").and_then(|v| v.as_str()).unwrap_or("appear");
+    let duration = args.get("duration").and_then(|v| v.as_f64()).unwrap_or(8.0);
+    let background_style = args.get("background_style").and_then(|v| v.as_str()).unwrap_or("dark");
+
+    match client.generate_latex(latex_expression, animation_type, duration, background_style).await {
+        Ok(path) => format!("✅ Blender LaTeX animation rendered: {path}"),
+        Err(e) => format!("❌ blender_generate_latex failed: {e}"),
+    }
 }
