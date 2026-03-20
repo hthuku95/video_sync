@@ -114,6 +114,11 @@ pub async fn execute_tool_claude_with_context(
         return execute_search_youtube_channels_with_state_claude(args, ctx).await;
     }
 
+    // auto_generate_video needs ctx for BlenderMCPClient (video_source param)
+    if name == "auto_generate_video" {
+        return execute_auto_generate_video_with_state_claude(args, ctx).await;
+    }
+
     // Execute the tool first
     let result = execute_tool_claude(name, args).await;
 
@@ -188,6 +193,11 @@ pub async fn execute_tool_gemini_with_context(
     }
     if name == "blender_generate_latex" {
         return execute_blender_generate_latex_gemini(args, ctx).await;
+    }
+
+    // auto_generate_video needs ctx for BlenderMCPClient (video_source param)
+    if name == "auto_generate_video" {
+        return execute_auto_generate_video_with_state_gemini(args, ctx).await;
     }
 
     // YouTube integration tools (READ-ONLY research tools)
@@ -2507,6 +2517,390 @@ async fn execute_edit_image_gemini(args: &HashMap<String, Value>) -> String {
         }
         Err(e) => format!("❌ Failed to edit image: {}", e),
     }
+}
+
+// =============================================================================
+// AUTO_GENERATE_VIDEO — video_source dispatch (Gemini + Claude)
+// =============================================================================
+
+/// Dispatcher: routes to pexels / blender / hybrid based on video_source param.
+async fn execute_auto_generate_video_with_state_gemini(
+    args: &HashMap<String, Value>,
+    ctx: &ToolExecutionContext,
+) -> String {
+    let video_source = args.get("video_source").and_then(|v| v.as_str()).unwrap_or("pexels");
+    let style = args.get("style").and_then(|v| v.as_str()).unwrap_or("cinematic");
+
+    // Auto-route educational math to Blender LaTeX pipeline
+    let effective_source = if style == "educational_math" && video_source == "pexels" {
+        "blender"
+    } else {
+        video_source
+    };
+
+    match effective_source {
+        "blender" => execute_auto_generate_video_blender_gemini(args, ctx).await,
+        "hybrid"  => execute_auto_generate_video_hybrid_gemini(args, ctx).await,
+        _         => execute_auto_generate_video_gemini(args).await,
+    }
+}
+
+/// Dispatcher: Claude version.
+async fn execute_auto_generate_video_with_state_claude(
+    args: &Value,
+    ctx: &ToolExecutionContext,
+) -> String {
+    let video_source = args.get("video_source").and_then(|v| v.as_str()).unwrap_or("pexels");
+    let style = args.get("style").and_then(|v| v.as_str()).unwrap_or("cinematic");
+
+    let effective_source = if style == "educational_math" && video_source == "pexels" {
+        "blender"
+    } else {
+        video_source
+    };
+
+    match effective_source {
+        "blender" => execute_auto_generate_video_blender_claude(args, ctx).await,
+        "hybrid"  => execute_auto_generate_video_hybrid_claude(args, ctx).await,
+        _         => execute_auto_generate_video_claude(args).await,
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Blender-only clip acquisition (replaces Pexels search/download steps 1-2)
+// Steps 3-6 (merge, text, music, QA) are identical to the Pexels path.
+// -----------------------------------------------------------------------------
+
+async fn execute_auto_generate_video_blender_gemini(
+    args: &HashMap<String, Value>,
+    ctx: &ToolExecutionContext,
+) -> String {
+    let blender = match ctx.app_state.blender_mcp_client.as_ref() {
+        Some(c) => c,
+        None => return "❌ BlenderMCPServer not configured (set BLENDER_MCP_URL). Cannot use video_source='blender'.".to_string(),
+    };
+
+    let topic        = args.get("topic").and_then(|v| v.as_str()).unwrap_or("");
+    let output_filename = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_file  = ensure_outputs_directory(output_filename);
+    let duration     = args.get("duration").and_then(|v| v.as_f64()).unwrap_or(30.0);
+    let style        = args.get("style").and_then(|v| v.as_str()).unwrap_or("cinematic");
+    let include_text = args.get("include_text_overlays").and_then(|v| v.as_bool()).unwrap_or(true);
+    let include_music = args.get("include_music").and_then(|v| v.as_bool()).unwrap_or(true);
+    let num_clips    = args.get("num_clips").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+    let aspect_ratio = args.get("aspect_ratio").and_then(|v| v.as_str()).unwrap_or("16:9").to_string();
+
+    if topic.is_empty() || output_file.is_empty() {
+        return "❌ Error: topic and output_file are required".to_string();
+    }
+
+    let num_clips = if num_clips == 0 { ((duration / 10.0).ceil() as usize).max(3).min(6) } else { num_clips };
+    let clip_duration = (duration / num_clips as f64).max(5.0);
+
+    let mut result = format!("🎨 **Auto-generating video (Blender 3D) about '{}'**\n\n", topic);
+    result.push_str(&format!("Duration: {}s | Style: {} | Clips: {} | Source: Blender\n\n", duration, style, num_clips));
+    result.push_str("🎬 Step 1-2: Rendering custom 3D clips via BlenderMCPServer...\n");
+
+    let mut downloaded_files: Vec<String> = Vec::new();
+
+    for i in 0..num_clips {
+        let clip_path = format!("outputs/blender_clip_{}_{}.mp4", i, uuid::Uuid::new_v4().to_string().split('-').next().unwrap_or("x"));
+
+        // Route educational_math style to LaTeX animation; everything else to scene
+        let render_result = if style == "educational_math" {
+            blender.generate_latex(topic, "step_by_step", clip_duration, "dark").await
+        } else {
+            blender.generate_scene(topic, clip_duration, style, None).await
+        };
+
+        match render_result {
+            Ok(blender_path) => {
+                // blender_mcp_client already downloads to outputs/; rename to our clip_path
+                if blender_path != clip_path {
+                    if let Err(e) = tokio::fs::rename(&blender_path, &clip_path).await {
+                        // rename failed (cross-device) — try copy+delete
+                        if tokio::fs::copy(&blender_path, &clip_path).await.is_ok() {
+                            let _ = tokio::fs::remove_file(&blender_path).await;
+                        } else {
+                            result.push_str(&format!("  ⚠️ Clip {}: rename failed ({}), using original path\n", i + 1, e));
+                            downloaded_files.push(blender_path);
+                            continue;
+                        }
+                    }
+                }
+                result.push_str(&format!("  ✓ Clip {}: rendered ({:.1}s)\n", i + 1, clip_duration));
+                downloaded_files.push(clip_path);
+            }
+            Err(e) => {
+                result.push_str(&format!("  ✗ Clip {}: render failed — {}\n", i + 1, e));
+            }
+        }
+    }
+
+    if downloaded_files.is_empty() {
+        return format!("{}❌ All Blender renders failed — check BlenderMCPServer logs", result);
+    }
+
+    result.push_str(&format!("\n✅ Rendered {} clips\n\n", downloaded_files.len()));
+    finish_auto_generate_video(&downloaded_files, &output_file, topic, style, &aspect_ratio, include_text, include_music, duration, &mut result).await;
+    result
+}
+
+async fn execute_auto_generate_video_blender_claude(
+    args: &Value,
+    ctx: &ToolExecutionContext,
+) -> String {
+    // Convert Value args to HashMap so we can reuse the Gemini blender path
+    let map: HashMap<String, Value> = match args.as_object() {
+        Some(obj) => obj.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+        None => return "❌ Internal error: args is not an object".to_string(),
+    };
+    execute_auto_generate_video_blender_gemini(&map, ctx).await
+}
+
+// -----------------------------------------------------------------------------
+// Hybrid: Pexels primary, Blender fallback when thumbnail score < threshold
+// -----------------------------------------------------------------------------
+
+async fn execute_auto_generate_video_hybrid_gemini(
+    args: &HashMap<String, Value>,
+    ctx: &ToolExecutionContext,
+) -> String {
+    let topic    = args.get("topic").and_then(|v| v.as_str()).unwrap_or("");
+    let duration = args.get("duration").and_then(|v| v.as_f64()).unwrap_or(30.0);
+    let style    = args.get("style").and_then(|v| v.as_str()).unwrap_or("cinematic");
+    let output_filename = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output_file = ensure_outputs_directory(output_filename);
+    let include_text = args.get("include_text_overlays").and_then(|v| v.as_bool()).unwrap_or(true);
+    let include_music = args.get("include_music").and_then(|v| v.as_bool()).unwrap_or(true);
+    let num_clips = args.get("num_clips").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+    let aspect_ratio = args.get("aspect_ratio").and_then(|v| v.as_str()).unwrap_or("16:9").to_string();
+
+    let num_clips = if num_clips == 0 { ((duration / 10.0).ceil() as usize).max(3).min(8) } else { num_clips };
+    let clip_duration = (duration / num_clips as f64).max(5.0);
+
+    let mut result = format!("🔀 **Auto-generating video (Hybrid: Pexels + Blender) about '{}'**\n\n", topic);
+    result.push_str(&format!("Duration: {}s | Style: {} | Clips: {}\n\n", duration, style, num_clips));
+
+    let mut downloaded_files: Vec<String> = Vec::new();
+    let mut used_ids: std::collections::HashSet<i64> = std::collections::HashSet::new();
+    let search_queries = generate_search_queries_ai(topic, num_clips).await;
+
+    for (i, query) in search_queries.iter().enumerate().take(num_clips) {
+        result.push_str(&format!("  Clip {}: trying Pexels for '{}'\n", i + 1, query));
+
+        // Try Pexels first
+        let mut pexels_args = HashMap::new();
+        pexels_args.insert("query".to_string(), Value::String(query.clone()));
+        pexels_args.insert("media_type".to_string(), Value::String("videos".to_string()));
+        pexels_args.insert("per_page".to_string(), Value::Number(serde_json::Number::from(5u64)));
+        let pexels_result = execute_pexels_search_gemini(&pexels_args).await;
+
+        let mut pexels_ok = false;
+        if let Ok(search_data) = serde_json::from_str::<Value>(&pexels_result) {
+            if let Some(videos) = search_data["videos"].as_array() {
+                let candidates: Vec<Value> = videos.iter()
+                    .filter_map(|v| v["id"].as_i64().filter(|id| !used_ids.contains(id)).map(|_| v.clone()))
+                    .collect();
+
+                let score_futures: Vec<_> = candidates.iter().map(|c| {
+                    let thumb = c["video_pictures"][0]["picture"].as_str().unwrap_or("").to_string();
+                    let t = topic.to_string();
+                    async move { if thumb.is_empty() { 5i32 } else { screen_pexels_thumbnail(&thumb, &t).await } }
+                }).collect();
+                let scores: Vec<i32> = futures::future::join_all(score_futures).await;
+
+                // Only accept Pexels clips that score >= 6 in hybrid mode (stricter than pure Pexels)
+                if let Some((video, score)) = candidates.iter().zip(scores.iter()).find(|(_, &s)| s >= 6) {
+                    if let Some(vid_id) = video["id"].as_i64() { used_ids.insert(vid_id); }
+                    if let Some(link) = video["video_files"].as_array()
+                        .and_then(|f| f.first())
+                        .and_then(|f| f["link"].as_str())
+                    {
+                        let clip_path = format!("outputs/clip_{}_{}.mp4", i, uuid::Uuid::new_v4().to_string().split('-').next().unwrap());
+                        let mut dl_args = HashMap::new();
+                        dl_args.insert("video_url".to_string(), Value::String(link.to_string()));
+                        dl_args.insert("output_file".to_string(), Value::String(clip_path.clone()));
+                        let dl = execute_pexels_download_video_gemini(&dl_args).await;
+                        if dl.contains("✅") {
+                            if verify_clip_quality(&clip_path).is_ok() {
+                                result.push_str(&format!("    ✓ Pexels clip (score {}/10)\n", score));
+                                downloaded_files.push(clip_path);
+                                pexels_ok = true;
+                            } else {
+                                let _ = std::fs::remove_file(&clip_path);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Fallback to Blender if Pexels failed or scored too low
+        if !pexels_ok {
+            result.push_str(&format!("    ↳ Pexels miss — falling back to Blender render\n"));
+            if let Some(blender) = ctx.app_state.blender_mcp_client.as_ref() {
+                let clip_path = format!("outputs/blender_fallback_{}_{}.mp4", i, uuid::Uuid::new_v4().to_string().split('-').next().unwrap_or("x"));
+                match blender.generate_scene(topic, clip_duration, style, None).await {
+                    Ok(blender_path) => {
+                        let _ = tokio::fs::rename(&blender_path, &clip_path).await;
+                        result.push_str(&format!("    ✓ Blender fallback clip rendered\n"));
+                        downloaded_files.push(clip_path);
+                    }
+                    Err(e) => result.push_str(&format!("    ✗ Blender fallback also failed: {}\n", e)),
+                }
+            } else {
+                result.push_str("    ✗ BlenderMCPServer not configured — skipping clip\n");
+            }
+        }
+    }
+
+    if downloaded_files.is_empty() {
+        return format!("{}❌ No clips acquired (Pexels and Blender both failed)", result);
+    }
+
+    result.push_str(&format!("\n✅ Acquired {} clips\n\n", downloaded_files.len()));
+    finish_auto_generate_video(&downloaded_files, &output_file, topic, style, &aspect_ratio, include_text, include_music, duration, &mut result).await;
+    result
+}
+
+async fn execute_auto_generate_video_hybrid_claude(
+    args: &Value,
+    ctx: &ToolExecutionContext,
+) -> String {
+    let map: HashMap<String, Value> = match args.as_object() {
+        Some(obj) => obj.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+        None => return "❌ Internal error: args is not an object".to_string(),
+    };
+    execute_auto_generate_video_hybrid_gemini(&map, ctx).await
+}
+
+// -----------------------------------------------------------------------------
+// Shared post-acquisition pipeline: merge → text → music → QA
+// Both Blender and hybrid paths call this instead of duplicating Steps 3-6.
+// -----------------------------------------------------------------------------
+
+async fn finish_auto_generate_video(
+    downloaded_files: &[String],
+    output_file: &str,
+    topic: &str,
+    style: &str,
+    aspect_ratio: &str,
+    include_text: bool,
+    include_music: bool,
+    duration: f64,
+    result: &mut String,
+) {
+    // Step 3: Merge with crossfade
+    result.push_str("🎞️  Step 3: Merging clips with transitions...\n");
+    match crate::core::merge_videos_with_transitions(downloaded_files, output_file, 0.5) {
+        Ok(_) => {
+            if !std::path::Path::new(output_file).exists()
+                || std::fs::metadata(output_file).map(|m| m.len()).unwrap_or(0) < 1024
+            {
+                result.push_str("❌ Merged file missing or too small\n");
+                return;
+            }
+            result.push_str("✅ Clips merged with crossfade transitions\n\n");
+        }
+        Err(e) => { result.push_str(&format!("❌ Failed to merge clips: {}\n", e)); return; }
+    }
+
+    // Aspect ratio crop
+    if aspect_ratio != "16:9" {
+        let crop_filter = match aspect_ratio {
+            "9:16" => "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920",
+            "1:1"  => "scale=1080:1080:force_original_aspect_ratio=increase,crop=1080:1080",
+            "4:3"  => "scale=1440:1080:force_original_aspect_ratio=increase,crop=1440:1080",
+            _      => "",
+        };
+        if !crop_filter.is_empty() {
+            result.push_str(&format!("📐 Applying {} aspect ratio...\n", aspect_ratio));
+            let cropped = format!("{}_crop.mp4", output_file.trim_end_matches(".mp4"));
+            let mut cmd = StdCommand::new("ffmpeg");
+            cmd.args(["-i", output_file, "-vf", crop_filter, "-c:a", "copy", "-y", &cropped]);
+            if crate::utils::execute_ffmpeg_command_with_sync_timeout(cmd, Some(300)).is_ok()
+                && std::path::Path::new(&cropped).exists()
+            {
+                let _ = std::fs::rename(&cropped, output_file);
+                result.push_str(&format!("✅ Resized to {}\n\n", aspect_ratio));
+            }
+        }
+    }
+
+    // Step 4: Text overlay
+    if include_text {
+        result.push_str("📝 Step 4: Adding text overlay...\n");
+        let temp_output = format!("{}_with_text.mp4", output_file.trim_end_matches(".mp4"));
+        let safe_topic = topic.replace('\'', "\\'").replace(':', "\\:").replace(',', "\\,");
+        let drawtext_filter = format!(
+            "drawtext=text='{}':fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:\
+            fontsize=48:fontcolor=white:x=(w-text_w)/2:y=h*0.08:\
+            box=1:boxcolor=black@0.5:boxborderw=10:\
+            enable='between(t,0.5,4.5)':\
+            alpha='if(lt(t,1.0),(t-0.5)/0.5,if(gt(t,4.0),1-(t-4.0)/0.5,1))'",
+            safe_topic
+        );
+        let mut cmd = StdCommand::new("ffmpeg");
+        cmd.args(["-i", output_file, "-vf", &drawtext_filter, "-c:a", "copy", "-y", &temp_output]);
+        match crate::utils::execute_ffmpeg_command_with_sync_timeout(cmd, Some(300)) {
+            Ok(_) if std::path::Path::new(&temp_output).exists() => {
+                let _ = std::fs::rename(&temp_output, output_file);
+                result.push_str("✅ Text overlay added\n\n");
+            }
+            Err(e) => result.push_str(&format!("⚠️ Text overlay failed: {} — continuing\n\n", e)),
+            _ => {}
+        }
+    }
+
+    // Step 5: Background music
+    if include_music {
+        result.push_str("🎵 Step 5: Generating background music...\n");
+        let el_key = std::env::var("ELEVEN_LABS_API_KEY").unwrap_or_default();
+        if !el_key.is_empty() {
+            let el_client = crate::elevenlabs_client::ElevenLabsClient::new(el_key);
+            let music_prompt = format!("{} {} background music, instrumental", style, topic);
+            let music_path = format!("outputs/bgm_{}.mp3", uuid::Uuid::new_v4().to_string().split('-').next().unwrap_or("tmp"));
+            let duration_ms = (duration * 1000.0) as u32;
+            match el_client.generate_music_task(&music_prompt, duration_ms).await {
+                Ok(task_id) => {
+                    if let Some(audio_url) = poll_music_task(&el_client, &task_id, 45).await {
+                        if let Ok(bytes) = el_client.download_music(&audio_url).await {
+                            if tokio::fs::write(&music_path, &bytes).await.is_ok() {
+                                let mixed_path = format!("{}_audio.mp4", output_file.trim_end_matches(".mp4"));
+                                if crate::audio::add_audio(output_file, &music_path, &mixed_path).is_ok()
+                                    && std::path::Path::new(&mixed_path).exists()
+                                {
+                                    let _ = std::fs::rename(&mixed_path, output_file);
+                                    result.push_str("✅ Background music added\n\n");
+                                }
+                                let _ = tokio::fs::remove_file(&music_path).await;
+                            }
+                        }
+                    } else {
+                        result.push_str("⚠️ Music generation timed out\n\n");
+                    }
+                }
+                Err(e) => result.push_str(&format!("⚠️ Music generation failed: {} — continuing\n\n", e)),
+            }
+        } else {
+            result.push_str("⚠️ ELEVEN_LABS_API_KEY not set — video saved without music\n\n");
+        }
+    }
+
+    // Cleanup
+    for file in downloaded_files {
+        let _ = tokio::fs::remove_file(file).await;
+    }
+
+    result.push_str("🎉 **Video generation complete!**\n\n");
+    result.push_str(&format!("📥 Output: {}\n\n", output_file));
+
+    let qa_report = run_final_qa(output_file);
+    result.push_str(&qa_report);
+    result.push_str("\n🔍 **AI Content Review Required:**\n");
+    result.push_str("1. Call `view_video(path)` to visually confirm content\n");
+    result.push_str("2. Call `review_video(path, original_request, expected_features)` for pass/fail verdict\n");
 }
 
 /// Auto-generate video orchestration tool (Claude version)

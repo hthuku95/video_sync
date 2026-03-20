@@ -2112,6 +2112,11 @@ impl GeminiClient {
                             description: "Output aspect ratio: '16:9' (landscape, default), '9:16' (portrait/Shorts), '1:1' (square), '4:3'".to_string(),
                             items: None,
                         });
+                        props.insert("video_source".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Clip source: 'pexels' (default — stock footage), 'blender' (custom 3D renders via BlenderMCPServer), 'hybrid' (Pexels first, Blender fallback). Use 'blender' for fully custom visuals or when style='educational_math' (auto-routes to LaTeX animations).".to_string(),
+                            items: None,
+                        });
                         props
                     },
                     required: vec!["topic".to_string(), "output_file".to_string()],
