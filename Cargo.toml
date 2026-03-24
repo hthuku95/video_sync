@@ -25,6 +25,11 @@ bcrypt = "0.15"
 jsonwebtoken = "9.2"
 tower-http = { version = "0.6", features = ["cors"] }
 qdrant-client = "1.12.1"
+# Statically vendor OpenSSL so the binary doesn't depend on the host's libssl.so.3.
+# qdrant-client → reqwest → native-tls → openssl-sys dynamically links system OpenSSL
+# which differs between Render's build image (Ubuntu 22.04, libssl.so.3) and runtime
+# image (Ubuntu 20.04, libssl.so.1.1), causing exit code 101 on startup.
+openssl = { version = "0.10", features = ["vendored"] }
 tonic = "0.12"
 rand = "0.8"
 hex = "0.4"
