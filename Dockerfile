@@ -1,6 +1,13 @@
 # Stage 1: Build Rust application
-FROM rust:1.75 as builder
+# rust:1.82 is Debian Bookworm (OpenSSL 3) — matches runtime image
+FROM rust:1.82 as builder
 WORKDIR /app
+
+# Install OpenSSL dev libraries (needed by openssl-sys, qdrant-client, reqwest)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    pkg-config \
+    libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
 
 # Copy dependency manifests
 COPY Cargo.toml Cargo.lock ./
@@ -9,18 +16,19 @@ COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 COPY migrations ./migrations
 
-# Build release binary
+# Build release binary (links against Bookworm's libssl.so.3)
 RUN cargo build --release
 
-# Stage 2: Runtime image with system dependencies
+# Stage 2: Runtime image — Debian Bookworm (same OpenSSL 3 as builder)
 FROM debian:bookworm-slim
 
 # Install system dependencies including Python and yt-dlp
 # yt-dlp is most reliable for bypassing YouTube bot detection
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     ca-certificates \
     libpq5 \
+    libssl3 \
     curl \
     python3 \
     python3-pip \

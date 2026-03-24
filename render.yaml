@@ -1,13 +1,16 @@
 services:
   - type: web
-    name: video-editor-backend
-    runtime: docker
-    dockerfilePath: ./Dockerfile
+    name: video_sync
+    runtime: rust
     region: oregon
-    plan: starter
+    plan: standard
+    buildCommand: cargo build --release
+    startCommand: ./target/release/video_editor
+    healthCheckPath: /
+    autoDeploy: true
     envVars:
       - key: PORT
-        value: 3000
+        sync: false
       - key: DATABASE_URL
         sync: false
       - key: GOOGLE_OAUTH_CLIENT_ID
@@ -28,5 +31,3 @@ services:
         value: info
       - key: FRONTEND_URL
         value: https://cmachine.devthuku.io
-    healthCheckPath: /
-    autoDeploy: true
