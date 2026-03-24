@@ -654,10 +654,14 @@ async fn main() {
         tracing::info!("✅ Analytics sync job started");
     }
 
+    // Render (and other PaaS) inject $PORT; fall back to 3000 for local dev.
+    let port = std::env::var("PORT").unwrap_or_else(|_| "3000".to_string());
+    let bind_addr = format!("0.0.0.0:{}", port);
+
     // Run the server with ConnectInfo to provide socket addresses for rate limiting
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
+    let listener = tokio::net::TcpListener::bind(&bind_addr)
         .await
-        .unwrap();
+        .expect(&format!("Failed to bind to {bind_addr}"));
     tracing::info!("listening on {}", listener.local_addr().unwrap());
     axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
         .await
