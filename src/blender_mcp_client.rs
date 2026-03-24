@@ -304,4 +304,101 @@ impl BlenderMCPClient {
         );
         self.download_to_outputs(video_url, &filename).await
     }
+
+    /// Generate a device UI mockup (iPhone/MacBook/browser/iPad) with optional animation.
+    /// Returns a local file path inside `outputs/`.
+    pub async fn generate_ui_mockup(
+        &self,
+        device: &str,
+        animation: &str,
+        duration: f64,
+        screenshot_url: &str,
+        screenshot_spec: Option<&serde_json::Value>,
+        background_color: Option<&[f64; 3]>,
+        accent_color: Option<&[f64; 3]>,
+    ) -> Result<String, String> {
+        let mut args = json!({
+            "device": device,
+            "animation": animation,
+            "duration": duration,
+            "screenshot_url": screenshot_url,
+        });
+        if let Some(spec) = screenshot_spec {
+            args["screenshot_spec"] = serde_json::Value::String(spec.to_string());
+        }
+        if let Some(bg) = background_color {
+            args["background_color"] = json!(bg);
+        }
+        if let Some(acc) = accent_color {
+            args["accent_color"] = json!(acc);
+        }
+
+        let result = self.call_tool("blender_generate_ui_mockup", args).await?;
+
+        // Static renders return image_url; animated return video_url
+        let (url, ext) = if animation == "static" {
+            (
+                result
+                    .get("image_url")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| "blender_generate_ui_mockup response missing image_url".to_string())?,
+                "png",
+            )
+        } else {
+            (
+                result
+                    .get("video_url")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| "blender_generate_ui_mockup response missing video_url".to_string())?,
+                "mp4",
+            )
+        };
+
+        let filename = format!(
+            "blender_mockup_{device}_{animation}_{}.{ext}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs()
+        );
+        self.download_to_outputs(url, &filename).await
+    }
+
+    /// Submit a long-running job to the Phase 5 async queue.
+    /// Returns the job_id to poll via `poll_job`.
+    pub async fn submit_job(&self, tool: &str, args: serde_json::Value) -> Result<String, String> {
+        let body = json!({"tool": tool, "args": args});
+        let url = format!("{}/api/jobs", self.base_url);
+        let resp = self
+            .client
+            .post(&url)
+            .bearer_auth(&self.api_key)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| format!("BlenderMCP submit_job HTTP error: {e}"))?;
+        let json: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| format!("BlenderMCP submit_job parse error: {e}"))?;
+        json.get("job_id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .ok_or_else(|| format!("BlenderMCP submit_job: no job_id in response: {json}"))
+    }
+
+    /// Poll job status.  Returns the full JSON status object.
+    pub async fn poll_job(&self, job_id: &str) -> Result<serde_json::Value, String> {
+        let url = format!("{}/api/jobs/{}", self.base_url, job_id);
+        let resp = self
+            .client
+            .get(&url)
+            .bearer_auth(&self.api_key)
+            .send()
+            .await
+            .map_err(|e| format!("BlenderMCP poll_job HTTP error: {e}"))?;
+        resp.json::<serde_json::Value>()
+            .await
+            .map_err(|e| format!("BlenderMCP poll_job parse error: {e}"))
+    }
 }
