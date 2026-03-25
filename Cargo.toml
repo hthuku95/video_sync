@@ -17,7 +17,7 @@ tracing-subscriber = { version = "0.3.18", features = ["env-filter", "json", "re
 uuid = { version = "1.0", features = ["v4", "v5", "serde"] }
 tokio-util = { version = "0.7", features = ["io"] }
 chrono = { version = "0.4", features = ["serde"] }
-reqwest = { version = "0.12", features = ["json", "rustls-tls", "multipart", "stream"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "multipart", "stream"] }
 backoff = { version = "0.4", features = ["tokio"] }
 base64 = "0.22"
 sha2 = "0.10"
@@ -25,6 +25,11 @@ bcrypt = "0.15"
 jsonwebtoken = "9.2"
 tower-http = { version = "0.6", features = ["cors"] }
 qdrant-client = "1.12.1"
+# Statically compile OpenSSL to remove the dynamic libssl.so.3 dependency.
+# qdrant-client → reqwest → native-tls → openssl-sys dynamically links libssl.so.3.
+# Render's build and runtime images may have different OpenSSL versions causing
+# nonZeroExit:101 on startup. Vendored = compile OpenSSL from source statically.
+openssl = { version = "0.10", features = ["vendored"] }
 tonic = "0.12"
 rand = "0.8"
 hex = "0.4"
@@ -40,7 +45,11 @@ rustube = "0.6.0"                    # Pure Rust YouTube downloader (fallback #1
 # yt-dlp is used via CLI in ytdlp_client.rs (no crate needed)
 rust-yt-downloader = "0.1"           # Feature-rich yt-dlp wrapper (fallback #3)
 hostname = "0.4"                     # Worker ID generation for parallel processing
-aws-sdk-s3 = "1"                     # Cloudflare R2 storage (S3-compatible)
+# Use ring (pure Rust crypto) instead of aws-lc-sys (C/C++ AWS-LC) to prevent
+# OpenSSL symbol conflicts: aws-lc-sys exports OpenSSL-compatible C symbols which
+# clash with openssl-sys's dynamic libssl.so.3 (pulled in by qdrant-client →
+# native-tls) causing a nonZeroExit:101 Rust panic on startup in production.
+aws-sdk-s3 = "1"
 aws-config = "1"
 aws-credential-types = "1"
 
