@@ -1,0 +1,33 @@
+services:
+  - type: web
+    name: video_sync
+    runtime: rust
+    region: oregon
+    plan: standard
+    buildCommand: cargo build --release
+    startCommand: ./target/release/video_editor
+    healthCheckPath: /
+    autoDeploy: true
+    envVars:
+      - key: PORT
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: GOOGLE_OAUTH_CLIENT_ID
+        sync: false
+      - key: GOOGLE_OAUTH_CLIENT_SECRET
+        sync: false
+      - key: YOUTUBE_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: ELEVENLABS_API_KEY
+        sync: false
+      - key: VOYAGEAI_API_KEY
+        sync: false
+      - key: RUST_LOG
+        value: info
+      - key: FRONTEND_URL
+        value: https://cmachine.devthuku.io
