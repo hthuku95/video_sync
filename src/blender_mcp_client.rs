@@ -165,7 +165,7 @@ impl BlenderMCPClient {
             .and_then(|v| v.as_str())
             .ok_or_else(|| "blender_generate_thumbnail response missing image_url".to_string())?;
         if image_url.is_empty() {
-            return Err("blender_generate_thumbnail: Phase 2 not yet deployed".to_string());
+            return Err("blender_generate_thumbnail: server returned empty image_url".to_string());
         }
         let filename = format!(
             "blender_thumb_{}.png",
@@ -197,7 +197,7 @@ impl BlenderMCPClient {
             .and_then(|v| v.as_str())
             .ok_or_else(|| "blender_generate_title_card response missing video_url".to_string())?;
         if video_url.is_empty() {
-            return Err("blender_generate_title_card: Phase 2 not yet deployed".to_string());
+            return Err("blender_generate_title_card: server returned empty video_url".to_string());
         }
         let filename = format!(
             "blender_title_{}.mp4",
@@ -229,7 +229,7 @@ impl BlenderMCPClient {
             .and_then(|v| v.as_str())
             .ok_or_else(|| "blender_generate_data_viz response missing video_url".to_string())?;
         if video_url.is_empty() {
-            return Err("blender_generate_data_viz: Phase 2 not yet deployed".to_string());
+            return Err("blender_generate_data_viz: server returned empty video_url".to_string());
         }
         let filename = format!(
             "blender_viz_{}.mp4",
@@ -261,7 +261,7 @@ impl BlenderMCPClient {
             .and_then(|v| v.as_str())
             .ok_or_else(|| "blender_generate_lower_third response missing video_url".to_string())?;
         if video_url.is_empty() {
-            return Err("blender_generate_lower_third: Phase 2 not yet deployed".to_string());
+            return Err("blender_generate_lower_third: server returned empty video_url".to_string());
         }
         let filename = format!(
             "blender_lower_{}.mp4",
@@ -293,7 +293,7 @@ impl BlenderMCPClient {
             .and_then(|v| v.as_str())
             .ok_or_else(|| "blender_generate_latex response missing video_url".to_string())?;
         if video_url.is_empty() {
-            return Err("blender_generate_latex: Phase 3 (Manim) not yet deployed".to_string());
+            return Err("blender_generate_latex: server returned empty video_url".to_string());
         }
         let filename = format!(
             "blender_latex_{}.mp4",
