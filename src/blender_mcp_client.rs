@@ -17,8 +17,14 @@ pub struct BlenderMCPClient {
 
 impl BlenderMCPClient {
     pub fn new(base_url: String, api_key: String) -> Self {
+        // Blender renders take 90-150s on CPU-only Render instances.
+        // Set a 3-minute timeout so sync calls don't time out mid-render.
+        let client = Client::builder()
+            .timeout(std::time::Duration::from_secs(180))
+            .build()
+            .unwrap_or_default();
         Self {
-            client: Client::new(),
+            client,
             base_url: base_url.trim_end_matches('/').to_string(),
             api_key,
         }
