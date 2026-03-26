@@ -3,7 +3,7 @@ use qdrant_client::qdrant::{
     SearchPointsBuilder, UpsertPointsBuilder, VectorParamsBuilder, FieldType,
     VectorsConfig, VectorParamsMap, Vectors, ScrollPointsBuilder, Filter, Condition,
 };
-use qdrant_client::{Qdrant, Payload};
+use qdrant_client::Qdrant;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
@@ -297,7 +297,7 @@ impl QdrantClient {
         named_vectors.insert(EmbeddingProvider::Voyage.vector_name().to_string(), embedding);
 
         // Add provider metadata to payload
-        let mut payload_value: serde_json::Value = json!({
+        let payload_value: serde_json::Value = json!({
             "session_id": document.session_id,
             "user_id": document.user_id,
             "feature": feature.unwrap_or("general"),
@@ -365,7 +365,7 @@ impl QdrantClient {
         named_vectors.insert(EmbeddingProvider::Gemini.vector_name().to_string(), embedding);
 
         // Add provider metadata to payload
-        let mut payload_value: serde_json::Value = json!({
+        let payload_value: serde_json::Value = json!({
             "session_id": document.session_id,
             "user_id": document.user_id,
             "feature": feature.unwrap_or("general"),

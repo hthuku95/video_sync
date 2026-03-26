@@ -12,7 +12,6 @@
 
 use crate::clipping::clip_enhancer::ClipEnhancer;
 use crate::clipping::gemini_video_analyzer::ViralMoment;
-use crate::clipping::models::ClippingConfig;
 use crate::clipping::thumbnail_generator::ThumbnailGenerator;
 use crate::AppState;
 use std::sync::Arc;

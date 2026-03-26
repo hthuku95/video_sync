@@ -8,12 +8,12 @@ use crate::AppState;
 use axum::{
     extract::{Extension, Path, Query},
     http::StatusCode,
-    response::{Html, Json, Redirect},
+    response::{Html, Json},
     routing::{get, post, delete, patch, put},
     Router,
 };
 use base64::Engine;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::json;
 use std::sync::Arc;
 
@@ -1180,7 +1180,7 @@ pub async fn delete_video_from_youtube(
     .bind(user_id)
     .fetch_optional(&state.db_pool)
     .await
-    .map_err(|e| {
+    .map_err(|_e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({"success": false, "message": "Database error"})),
@@ -3354,7 +3354,7 @@ pub async fn schedule_video_publish(
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let user_id = claims.sub.parse::<i32>().unwrap_or(0);
 
-    let youtube = state.youtube_client.as_ref().ok_or_else(|| {
+    let _youtube = state.youtube_client.as_ref().ok_or_else(|| {
         (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(json!({"success": false, "message": "YouTube client not initialized"})),

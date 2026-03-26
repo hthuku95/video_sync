@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports)]
 // WorkflowState - Persistent state with reducers (LangGraph-inspired)
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

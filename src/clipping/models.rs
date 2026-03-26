@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports)]
 // Database models for YouTube Clipping feature
 
 use chrono::{DateTime, Utc};

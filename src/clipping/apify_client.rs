@@ -1,11 +1,12 @@
+#![allow(dead_code, unused_imports)]
 // Apify YouTube downloader with rusty_ytdl fallback (pure Rust, no Python)
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use tokio::fs;
-use tokio::time::{sleep, Duration, timeout, Instant};
+use tokio::time::{sleep, Duration, Instant};
 use tokio::io::AsyncWriteExt;
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::json;
 
 
@@ -13,7 +14,6 @@ use serde_json::json;
 use crate::clipping::rusty_ytdl_client::RustyYtdlClient;
 use crate::clipping::rustube_client::RustubeClient;
 use crate::clipping::ytdlp_api_client::YtdlpApiClient;
-use crate::clipping::ytdlp_client::YtDlpClient;
 use crate::clipping::rust_yt_downloader_client::RustYtDownloaderClient;
 use tokio::process::Command as TokioCommand;
 

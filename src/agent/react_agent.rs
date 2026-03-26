@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports)]
 // ReAct Agent Implementation - Thought → Action → Observation → Reflection
 // Supports user interruption and real-time reasoning updates
 

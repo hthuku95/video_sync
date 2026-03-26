@@ -219,7 +219,7 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>, session_uuid: Option
             }
 
             // Check if we have context (before moving it)
-            let has_context = context.is_some() || !file_context.is_empty();
+            let _has_context = context.is_some() || !file_context.is_empty();
 
             // Create enhanced query with file context and conversation context
             let enhanced_query = {

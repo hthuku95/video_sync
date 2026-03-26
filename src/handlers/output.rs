@@ -2,14 +2,14 @@
 use axum::{
     extract::{Path, Extension},
     http::{header, StatusCode},
-    response::{IntoResponse, Response},
+    response::Response,
     routing::get,
     Router,
 };
 use std::{path::PathBuf, sync::Arc};
 use tokio_util::io::ReaderStream;
 use crate::AppState;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 #[derive(Serialize)]
 pub struct VideoOutputResponse {
@@ -39,7 +39,7 @@ pub fn output_routes() -> Router {
 /// List all video outputs for a session
 async fn list_session_outputs(
     Path(session_id): Path<String>,
-    Extension(state): Extension<Arc<AppState>>,
+    Extension(_state): Extension<Arc<AppState>>,
 ) -> Result<axum::Json<VideoOutputListResponse>, StatusCode> {
     // Get output directory for this session
     let session_output_dir = PathBuf::from("outputs").join(&session_id);

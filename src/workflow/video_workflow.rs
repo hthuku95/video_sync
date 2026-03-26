@@ -1,9 +1,9 @@
+#![allow(dead_code, unused_imports)]
 // Video editing workflow - Simplified example using existing agent system
 // This demonstrates how to use LangGraph-style workflow orchestration
 
 use super::state::{WorkflowState, StateUpdate, WorkflowStatus};
 use super::graph::{StateGraph, NodeType, NodeFunction, StateGraphBuilder};
-use super::router::agent_decision_router;
 use super::executor::{WorkflowExecutor, ExecutorBuilder, ExecutorConfig};
 use super::checkpoint::WorkflowCheckpointer;
 use crate::claude_client::ClaudeClient;

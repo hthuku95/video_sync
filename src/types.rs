@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports)]
 // types.rs - Common data structures for all modules
 use serde::{Deserialize, Serialize};
 

@@ -3,7 +3,7 @@
 // This system learns from clip performance data to optimize future clip selection
 
 use crate::youtube_analytics_client::{YouTubeAnalyticsClient, ClipPerformanceMetrics, ShortsTrafficSources};
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use std::collections::HashMap;

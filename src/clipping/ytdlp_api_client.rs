@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports)]
 /*!
  * HTTP client for FastAPI yt-dlp microservice
  *
@@ -5,7 +6,7 @@
  * to the standalone FastAPI microservice.
  */
 
-use reqwest::{Client, StatusCode};
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::path::Path;

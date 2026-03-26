@@ -1390,6 +1390,7 @@ pub fn apply_video_limiter(input_file: &str, output_file: &str, min: u32, max: u
 }
 
 /// Applies bilateral filter — edge-preserving noise reduction.
+#[allow(non_snake_case)]
 pub fn apply_bilateral(input_file: &str, output_file: &str, sigmaS: f64, sigmaR: f64, planes: u32) -> Result<String, String> {
     let ss = if sigmaS <= 0.0 { 0.1 } else { sigmaS };
     let sr = if sigmaR <= 0.0 { 0.1 } else { sigmaR };
@@ -1537,6 +1538,7 @@ pub fn apply_midequalizer(input_file: &str, secondary_file: &str, output_file: &
 }
 
 /// Applies a spatio-temporal median filter across multiple frames to remove outliers/noise.
+#[allow(non_snake_case)]
 pub fn apply_median_spatial(input_file: &str, output_file: &str, radius: u32, radiusV: u32, percentile: f64, planes: u32) -> Result<String, String> {
     let r = if radius == 0 { 1 } else { radius };
     let rv = if radiusV == 0 { r } else { radiusV };

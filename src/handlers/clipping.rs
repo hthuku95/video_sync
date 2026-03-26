@@ -5,7 +5,7 @@ use axum::{
     extract::ws::{Message, WebSocket, WebSocketUpgrade},
     http::StatusCode,
     response::{IntoResponse, Json},
-    routing::{delete, get, patch, post},
+    routing::{delete, get, post},
     Router,
 };
 use crate::agent::content_management_agent::ContentManagementAgent;
@@ -14,9 +14,9 @@ use crate::clipping::uploader::ClipUploader;
 use crate::middleware::{auth::auth_middleware, clipping_access::clipping_access_middleware, rate_limit::strict_rate_limit_middleware};
 use crate::models::auth::Claims;
 use crate::AppState;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::{json, Value};
-use sqlx::{PgPool, Row};
+use sqlx::Row;
 use std::sync::Arc;
 use url::Url;
 use chrono::{DateTime, Utc};
@@ -995,7 +995,7 @@ async fn add_twitch_source_channel(
     // Actually we need to look up by broadcaster ID. The TwitchClient only has get_user_by_login.
     // We'll search channels instead to resolve the metadata.
     let channel = match twitch.search_channels(&body.broadcaster_id, 1).await {
-        Ok(mut results) if !results.is_empty() => {
+        Ok(results) if !results.is_empty() => {
             // Match exact broadcaster_id
             results
                 .into_iter()

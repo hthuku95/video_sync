@@ -1,6 +1,5 @@
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 
 /// YouTube Analytics API client for fetching video and channel analytics data
 ///

@@ -62,7 +62,7 @@ impl RustYtDownloaderClient {
             move || client.download(&url, &output, None) // None means best quality
         });
 
-        let result = timeout(Duration::from_secs(3600), download_future)
+        let _result = timeout(Duration::from_secs(3600), download_future)
             .await
             .map_err(|_| "Download timed out after 1 hour".to_string())?
             .map_err(|e| format!("Task join error: {}", e))?

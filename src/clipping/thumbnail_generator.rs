@@ -1,7 +1,6 @@
 // AI-Powered Thumbnail Generator for YouTube Shorts
 // Implements Hybrid Approach: Best frame selection + AI text overlay
 
-use crate::gemini_client::GeminiClient;
 use crate::AppState;
 use base64::Engine;  // For base64 encoding/decoding
 use std::sync::Arc;

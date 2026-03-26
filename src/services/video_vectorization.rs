@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports)]
 // src/services/video_vectorization.rs
 use crate::gemini_client::GeminiClient;
 use crate::AppState;
@@ -262,7 +263,7 @@ impl VideoVectorizationService {
     ) -> Result<VideoFrameMetadata, Box<dyn std::error::Error + Send + Sync>> {
         // Read frame data as base64
         let frame_data = fs::read(frame_path).await?;
-        let frame_base64 = base64::prelude::BASE64_STANDARD.encode(&frame_data);
+        let _frame_base64 = base64::prelude::BASE64_STANDARD.encode(&frame_data);
         
         let analysis_prompt = format!(
             "Analyze this video frame (frame #{}) and provide a detailed description. 

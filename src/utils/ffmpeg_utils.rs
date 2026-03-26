@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports)]
 // utils.rs - Pure FFmpeg utility functions (ZERO GStreamer!)
 use std::process::Command;
 use tokio::process::Command as TokioCommand;

@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports)]
 // Token usage tracking and cost recording service
 // Records API token usage and costs to database for billing and analytics
 

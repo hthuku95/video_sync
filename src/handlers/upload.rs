@@ -1,6 +1,5 @@
 use crate::models::file::{FileUploadResponse, MultipleFileUploadResponse};
 use crate::middleware::auth::auth_middleware;
-use crate::services::VideoVectorizationService;
 use crate::AppState;
 use sqlx::Row;
 use axum::{

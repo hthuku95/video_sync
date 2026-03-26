@@ -5,6 +5,5 @@ pub mod token_pricing;
 pub mod token_usage;
 pub mod twitch_mapper;
 
-pub use output_video::OutputVideoService;
 pub use video_vectorization::VideoVectorizationService;
 pub use token_usage::TokenUsageService;

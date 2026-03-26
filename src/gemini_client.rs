@@ -255,6 +255,7 @@ pub struct Embedding {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct ImageGenerationRequest {
     pub prompt: String,
     pub model: String,
@@ -262,11 +263,13 @@ pub struct ImageGenerationRequest {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct ImageGenerationResponse {
     pub candidates: Vec<ImageCandidate>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct ImageCandidate {
     pub output: String, // Base64 encoded image
     #[serde(rename = "mimeType")]
@@ -7025,6 +7028,7 @@ impl GeminiClient {
     }
 
 
+    #[allow(dead_code)]
     async fn generate_image_with_gemini(
         &self,
         prompt: &str,
@@ -7489,7 +7493,7 @@ impl GeminiClient {
     pub async fn analyze_video_frames(
         &self,
         video_file_path: &str,
-        frame_interval_seconds: Option<f64>,
+        _frame_interval_seconds: Option<f64>,
     ) -> Result<Vec<String>, Box<dyn std::error::Error + Send + Sync>> {
         // For now, we'll analyze the whole video as a single unit
         // In the future, this could be enhanced to extract individual frames using FFmpeg

@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{mpsc, Mutex, RwLock};
+use tokio::sync::{mpsc, RwLock};
 use uuid::Uuid;
 use serde::{Serialize, Deserialize};
 use chrono::{DateTime, Utc};
@@ -19,10 +19,7 @@ pub mod job_claimer;
 pub mod twitch_mapper_job;
 pub mod error_classifier;
 
-pub use clipping_worker::{ClippingWorker, process_clipping_jobs_once, run_clipping_worker_loop};
 pub use analytics_sync_job::AnalyticsSyncJob;
-pub use worker_config::WorkerConfig;
-pub use job_claimer::JobClaimer;
 
 /// Unique identifier for a background job
 pub type JobId = String;

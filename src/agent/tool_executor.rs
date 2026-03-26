@@ -3955,7 +3955,7 @@ async fn execute_view_video_with_state_claude(args: &Value, ctx: &ToolExecutionC
 }
 
 /// View video placeholder - calls context version
-async fn execute_view_video_claude(args: &Value) -> String {
+async fn execute_view_video_claude(_args: &Value) -> String {
     format!("❌ Internal error: view_video must be called with context")
 }
 
@@ -4013,7 +4013,7 @@ async fn execute_view_video_with_state_gemini(args: &HashMap<String, Value>, ctx
 }
 
 /// View video placeholder - calls context version
-async fn execute_view_video_gemini(args: &HashMap<String, Value>) -> String {
+async fn execute_view_video_gemini(_args: &HashMap<String, Value>) -> String {
     format!("❌ Internal error: view_video must be called with context")
 }
 
@@ -4141,7 +4141,7 @@ async fn execute_review_video_with_state_claude(args: &Value, ctx: &ToolExecutio
 }
 
 /// Review video placeholder - calls context version
-async fn execute_review_video_claude(args: &Value) -> String {
+async fn execute_review_video_claude(_args: &Value) -> String {
     format!("❌ Internal error: review_video must be called with context")
 }
 
@@ -4269,7 +4269,7 @@ async fn execute_review_video_with_state_gemini(args: &HashMap<String, Value>, c
 }
 
 /// Review video placeholder - calls context version
-async fn execute_review_video_gemini(args: &HashMap<String, Value>) -> String {
+async fn execute_review_video_gemini(_args: &HashMap<String, Value>) -> String {
     format!("❌ Internal error: review_video must be called with context")
 }
 
@@ -4278,12 +4278,12 @@ async fn execute_review_video_gemini(args: &HashMap<String, Value>) -> String {
 // ============================================================================
 
 /// View image placeholder - calls context version
-async fn execute_view_image_claude(args: &Value) -> String {
+async fn execute_view_image_claude(_args: &Value) -> String {
     format!("❌ Internal error: view_image must be called with context")
 }
 
 /// View image placeholder - calls context version
-async fn execute_view_image_gemini(args: &HashMap<String, Value>) -> String {
+async fn execute_view_image_gemini(_args: &HashMap<String, Value>) -> String {
     format!("❌ Internal error: view_image must be called with context")
 }
 

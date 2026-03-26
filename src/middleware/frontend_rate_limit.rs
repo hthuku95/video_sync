@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports)]
 use axum::{
     extract::{ConnectInfo, Request},
     http::{StatusCode, Uri},

@@ -17,7 +17,6 @@ pub mod thumbnail_generator;
 pub mod clip_enhancer;
 
 // Re-export commonly used types
-pub use models::*;
 #[allow(unused_imports)] // Exported for external use
 pub use rusty_ytdl_client::RustyYtdlClient;
 #[allow(unused_imports)] // Exported for external use

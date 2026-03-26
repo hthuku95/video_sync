@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports)]
 // ReAct Agent State Management (LangGraph-inspired)
 // Implements Thought → Action → Observation → Reflection cycle
 

@@ -5,8 +5,6 @@
 use super::{Job, JobControl, JobId, JobManager, JobStatus, ProgressUpdate};
 use crate::agent::simple_claude_agent::SimpleClaudeAgent;
 use crate::agent::simple_gemini_agent::SimpleGeminiAgent;
-use crate::agent::react_agent::{ReActClaudeAgent, ReActGeminiAgent};
-use crate::agent::react_state::{AgentState, UserCommand};
 use crate::agent::conversation_manager::{ConversationManager, ConversationMessage};
 use crate::AppState;
 use std::sync::Arc;
@@ -428,7 +426,7 @@ impl VideoEditingJob {
         Fut: std::future::Future<Output = Result<String, String>> + Send + 'static,
     {
         let job_id = self.job.id.clone();
-        let session_id = self.job.session_id.clone();
+        let _session_id = self.job.session_id.clone();
 
         // Spawn the actual execution
         let mut execution_handle = tokio::spawn(executor());
