@@ -52,4 +52,8 @@ hostname = "0.4"                     # Worker ID generation for parallel process
 aws-sdk-s3 = "1"
 aws-config = "1"
 aws-credential-types = "1"
+# rustls 0.23 (pulled in by qdrant-client 1.15+) requires an explicit CryptoProvider
+# when both ring and aws-lc-rs features are active. We declare rustls directly so
+# we can call install_default() at startup before any TLS connection is made.
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
 

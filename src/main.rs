@@ -134,6 +134,11 @@ async fn reset_orphaned_jobs(db_pool: &sqlx::PgPool) {
 
 #[tokio::main]
 async fn main() {
+    // Install rustls CryptoProvider before any TLS connection is made.
+    // qdrant-client 1.15+ uses rustls 0.23 which panics at runtime if both
+    // ring and aws-lc-rs features are present and no provider is installed.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     // Load environment variables from .env file
     dotenvy::dotenv().ok();
 
