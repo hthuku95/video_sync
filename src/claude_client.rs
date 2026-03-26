@@ -6921,6 +6921,105 @@ impl ClaudeClient {
                     required: vec!["input_file".to_string(), "output_file".to_string()],
                 },
             },
+
+            // ── BlenderMCPServer tools ────────────────────────────────────────────
+            ClaudeTool {
+                name: "blender_generate_scene".to_string(),
+                description: "Generate a procedural 3D Blender scene as an MP4 clip. Use instead of Pexels for custom, on-brand, or abstract backgrounds.".to_string(),
+                input_schema: InputSchema {
+                    schema_type: "object".to_string(),
+                    properties: HashMap::from([
+                        ("prompt".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Natural language description of the scene".to_string(), items: None }),
+                        ("duration".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Clip length in seconds (default: 10)".to_string(), items: None }),
+                        ("style".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Visual style: 'cinematic' | 'minimal' | 'energetic' | 'calm'".to_string(), items: None }),
+                        ("reference_image_url".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Optional URL of a reference image for style guidance".to_string(), items: None }),
+                    ]),
+                    required: vec!["prompt".to_string()],
+                },
+            },
+            ClaudeTool {
+                name: "blender_generate_thumbnail".to_string(),
+                description: "Generate a 3D rendered YouTube thumbnail image (1280x720 PNG) with text overlay.".to_string(),
+                input_schema: InputSchema {
+                    schema_type: "object".to_string(),
+                    properties: HashMap::from([
+                        ("prompt".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Description of the thumbnail visual style and content".to_string(), items: None }),
+                        ("title_text".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Text to overlay on the thumbnail".to_string(), items: None }),
+                        ("style".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Style: 'youtube' | 'cinematic' | 'minimal'".to_string(), items: None }),
+                    ]),
+                    required: vec!["prompt".to_string()],
+                },
+            },
+            ClaudeTool {
+                name: "blender_generate_title_card".to_string(),
+                description: "Generate an animated 3D title card as an MP4 clip. Use for video intros, section headers, and branded openers.".to_string(),
+                input_schema: InputSchema {
+                    schema_type: "object".to_string(),
+                    properties: HashMap::from([
+                        ("title".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Main title text".to_string(), items: None }),
+                        ("subtitle".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Secondary/subtitle text".to_string(), items: None }),
+                        ("duration".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Clip length in seconds (default: 5)".to_string(), items: None }),
+                        ("style".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Visual style description".to_string(), items: None }),
+                    ]),
+                    required: vec!["title".to_string()],
+                },
+            },
+            ClaudeTool {
+                name: "blender_generate_data_viz".to_string(),
+                description: "Generate an animated 3D data visualisation clip (bar chart) from JSON data.".to_string(),
+                input_schema: InputSchema {
+                    schema_type: "object".to_string(),
+                    properties: HashMap::from([
+                        ("data_json".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "JSON array of data points, e.g. [{\"label\":\"Q1\",\"value\":42}]".to_string(), items: None }),
+                        ("chart_type".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Chart type: 'bar' (default)".to_string(), items: None }),
+                        ("title".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Chart title text".to_string(), items: None }),
+                        ("duration".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Clip length in seconds (default: 10)".to_string(), items: None }),
+                    ]),
+                    required: vec!["data_json".to_string()],
+                },
+            },
+            ClaudeTool {
+                name: "blender_generate_lower_third".to_string(),
+                description: "Generate an animated lower-third text overlay clip (green-screen) for name plates and captions.".to_string(),
+                input_schema: InputSchema {
+                    schema_type: "object".to_string(),
+                    properties: HashMap::from([
+                        ("name_text".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Primary lower-third text (name or title)".to_string(), items: None }),
+                        ("subtitle_text".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Secondary text (role or organisation)".to_string(), items: None }),
+                        ("style".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Colour/animation style description".to_string(), items: None }),
+                        ("duration".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Display duration in seconds (default: 5)".to_string(), items: None }),
+                    ]),
+                    required: vec!["name_text".to_string()],
+                },
+            },
+            ClaudeTool {
+                name: "blender_generate_latex".to_string(),
+                description: "Generate a LaTeX/Manim mathematical equation animation clip. Ideal for educational math and science videos.".to_string(),
+                input_schema: InputSchema {
+                    schema_type: "object".to_string(),
+                    properties: HashMap::from([
+                        ("latex_expression".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: r#"LaTeX math expression, e.g. r"\frac{d}{dt}\int_a^b f(x,t)dx""#.to_string(), items: None }),
+                        ("animation_type".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Animation style: 'appear' | 'morph' | 'step_by_step'".to_string(), items: None }),
+                        ("duration".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Clip length in seconds (default: 8)".to_string(), items: None }),
+                        ("background_style".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Background: 'dark' | 'light' | 'transparent'".to_string(), items: None }),
+                    ]),
+                    required: vec!["latex_expression".to_string()],
+                },
+            },
+            ClaudeTool {
+                name: "blender_generate_ui_mockup".to_string(),
+                description: "Generate a 3D device UI mockup animation (iPhone, MacBook, browser, iPad) for app demos and SaaS product videos.".to_string(),
+                input_schema: InputSchema {
+                    schema_type: "object".to_string(),
+                    properties: HashMap::from([
+                        ("device".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Device frame: 'iPhone' | 'MacBook' | 'browser' | 'iPad'".to_string(), items: None }),
+                        ("animation".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Animation: 'static' (PNG) | 'reveal' | 'scroll' | 'tilt'".to_string(), items: None }),
+                        ("duration".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Clip length in seconds (default: 5)".to_string(), items: None }),
+                        ("screenshot_url".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "URL of screenshot to show on device screen".to_string(), items: None }),
+                    ]),
+                    required: vec!["device".to_string()],
+                },
+            },
         ]
     }
 

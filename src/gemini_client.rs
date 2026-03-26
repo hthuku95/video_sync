@@ -2315,6 +2315,39 @@ impl GeminiClient {
             },
 
             FunctionDeclaration {
+                name: "blender_generate_ui_mockup".to_string(),
+                description: "Generate a 3D device UI mockup animation (iPhone, MacBook, browser, iPad) showing a screenshot on the device screen. Ideal for app demos, product showcases, and SaaS videos.".to_string(),
+                parameters: Parameters {
+                    param_type: "object".to_string(),
+                    properties: {
+                        let mut props = HashMap::new();
+                        props.insert("device".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Device frame type: 'iPhone' | 'MacBook' | 'browser' | 'iPad'".to_string(),
+                            items: None,
+                        });
+                        props.insert("animation".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Animation style: 'static' (PNG), 'reveal' (default), 'scroll', or 'tilt'".to_string(),
+                            items: None,
+                        });
+                        props.insert("duration".to_string(), PropertyDefinition {
+                            prop_type: "number".to_string(),
+                            description: "Clip length in seconds (default: 5)".to_string(),
+                            items: None,
+                        });
+                        props.insert("screenshot_url".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "URL of the screenshot/image to display on the device screen".to_string(),
+                            items: None,
+                        });
+                        props
+                    },
+                    required: vec!["device".to_string()],
+                },
+            },
+
+            FunctionDeclaration {
                 name: "set_chat_title".to_string(),
                 description: "Sets a descriptive title for the current chat session. Use this to give the conversation a meaningful title based on the user's request or the work being done.".to_string(),
                 parameters: Parameters {

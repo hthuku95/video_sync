@@ -119,6 +119,29 @@ pub async fn execute_tool_claude_with_context(
         return execute_auto_generate_video_with_state_claude(args, ctx).await;
     }
 
+    // BlenderMCPServer tools (all need AppState for the client)
+    if name == "blender_generate_scene" {
+        return execute_blender_generate_scene_claude(args, ctx).await;
+    }
+    if name == "blender_generate_thumbnail" {
+        return execute_blender_generate_thumbnail_claude(args, ctx).await;
+    }
+    if name == "blender_generate_title_card" {
+        return execute_blender_generate_title_card_claude(args, ctx).await;
+    }
+    if name == "blender_generate_data_viz" {
+        return execute_blender_generate_data_viz_claude(args, ctx).await;
+    }
+    if name == "blender_generate_lower_third" {
+        return execute_blender_generate_lower_third_claude(args, ctx).await;
+    }
+    if name == "blender_generate_latex" {
+        return execute_blender_generate_latex_claude(args, ctx).await;
+    }
+    if name == "blender_generate_ui_mockup" {
+        return execute_blender_generate_ui_mockup_claude(args, ctx).await;
+    }
+
     // Execute the tool first
     let result = execute_tool_claude(name, args).await;
 
@@ -193,6 +216,9 @@ pub async fn execute_tool_gemini_with_context(
     }
     if name == "blender_generate_latex" {
         return execute_blender_generate_latex_gemini(args, ctx).await;
+    }
+    if name == "blender_generate_ui_mockup" {
+        return execute_blender_generate_ui_mockup_gemini(args, ctx).await;
     }
 
     // auto_generate_video needs ctx for BlenderMCPClient (video_source param)
@@ -10652,5 +10678,109 @@ async fn execute_blender_generate_latex_gemini(
     match client.generate_latex(latex_expression, animation_type, duration, background_style).await {
         Ok(path) => format!("✅ Blender LaTeX animation rendered: {path}"),
         Err(e) => format!("❌ blender_generate_latex failed: {e}"),
+    }
+}
+
+async fn execute_blender_generate_ui_mockup_gemini(
+    args: &HashMap<String, Value>,
+    ctx: &ToolExecutionContext,
+) -> String {
+    let client = match blender_client_or_err(ctx) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    let device = args.get("device").and_then(|v| v.as_str()).unwrap_or("iPhone");
+    let animation = args.get("animation").and_then(|v| v.as_str()).unwrap_or("reveal");
+    let duration = args.get("duration").and_then(|v| v.as_f64()).unwrap_or(5.0);
+    let screenshot_url = args.get("screenshot_url").and_then(|v| v.as_str()).unwrap_or("");
+
+    match client.generate_ui_mockup(device, animation, duration, screenshot_url, None, None, None).await {
+        Ok(path) => format!("✅ Blender UI mockup rendered: {path}"),
+        Err(e) => format!("❌ blender_generate_ui_mockup failed: {e}"),
+    }
+}
+
+// ── Claude blender tool executors ──────────────────────────────────────────────
+
+async fn execute_blender_generate_scene_claude(args: &Value, ctx: &ToolExecutionContext) -> String {
+    let client = match blender_client_or_err(ctx) { Ok(c) => c, Err(e) => return e };
+    let prompt = args["prompt"].as_str().unwrap_or("");
+    let duration = args["duration"].as_f64().unwrap_or(10.0);
+    let style = args["style"].as_str().unwrap_or("cinematic");
+    let ref_url = args["reference_image_url"].as_str();
+    match client.generate_scene(prompt, duration, style, ref_url).await {
+        Ok(p) => format!("✅ Blender scene rendered: {p}"),
+        Err(e) => format!("❌ blender_generate_scene failed: {e}"),
+    }
+}
+
+async fn execute_blender_generate_thumbnail_claude(args: &Value, ctx: &ToolExecutionContext) -> String {
+    let client = match blender_client_or_err(ctx) { Ok(c) => c, Err(e) => return e };
+    let prompt = args["prompt"].as_str().unwrap_or("");
+    let title_text = args["title_text"].as_str().unwrap_or("");
+    let style = args["style"].as_str().unwrap_or("youtube");
+    match client.generate_thumbnail(prompt, title_text, style).await {
+        Ok(p) => format!("✅ Blender thumbnail rendered: {p}"),
+        Err(e) => format!("❌ blender_generate_thumbnail failed: {e}"),
+    }
+}
+
+async fn execute_blender_generate_title_card_claude(args: &Value, ctx: &ToolExecutionContext) -> String {
+    let client = match blender_client_or_err(ctx) { Ok(c) => c, Err(e) => return e };
+    let title = args["title"].as_str().unwrap_or("");
+    let subtitle = args["subtitle"].as_str().unwrap_or("");
+    let duration = args["duration"].as_f64().unwrap_or(5.0);
+    let style = args["style"].as_str().unwrap_or("cinematic");
+    match client.generate_title_card(title, subtitle, duration, style).await {
+        Ok(p) => format!("✅ Blender title card rendered: {p}"),
+        Err(e) => format!("❌ blender_generate_title_card failed: {e}"),
+    }
+}
+
+async fn execute_blender_generate_data_viz_claude(args: &Value, ctx: &ToolExecutionContext) -> String {
+    let client = match blender_client_or_err(ctx) { Ok(c) => c, Err(e) => return e };
+    let data_json = args["data_json"].as_str().unwrap_or("[]");
+    let chart_type = args["chart_type"].as_str().unwrap_or("bar");
+    let title = args["title"].as_str().unwrap_or("Data");
+    let duration = args["duration"].as_f64().unwrap_or(10.0);
+    match client.generate_data_viz(data_json, chart_type, title, duration).await {
+        Ok(p) => format!("✅ Blender data viz rendered: {p}"),
+        Err(e) => format!("❌ blender_generate_data_viz failed: {e}"),
+    }
+}
+
+async fn execute_blender_generate_lower_third_claude(args: &Value, ctx: &ToolExecutionContext) -> String {
+    let client = match blender_client_or_err(ctx) { Ok(c) => c, Err(e) => return e };
+    let name_text = args["name_text"].as_str().unwrap_or("");
+    let subtitle_text = args["subtitle_text"].as_str().unwrap_or("");
+    let style = args["style"].as_str().unwrap_or("modern");
+    let duration = args["duration"].as_f64().unwrap_or(5.0);
+    match client.generate_lower_third(name_text, subtitle_text, style, duration).await {
+        Ok(p) => format!("✅ Blender lower third rendered: {p}"),
+        Err(e) => format!("❌ blender_generate_lower_third failed: {e}"),
+    }
+}
+
+async fn execute_blender_generate_latex_claude(args: &Value, ctx: &ToolExecutionContext) -> String {
+    let client = match blender_client_or_err(ctx) { Ok(c) => c, Err(e) => return e };
+    let latex_expression = args["latex_expression"].as_str().unwrap_or("");
+    let animation_type = args["animation_type"].as_str().unwrap_or("appear");
+    let duration = args["duration"].as_f64().unwrap_or(8.0);
+    let background_style = args["background_style"].as_str().unwrap_or("dark");
+    match client.generate_latex(latex_expression, animation_type, duration, background_style).await {
+        Ok(p) => format!("✅ Blender LaTeX animation rendered: {p}"),
+        Err(e) => format!("❌ blender_generate_latex failed: {e}"),
+    }
+}
+
+async fn execute_blender_generate_ui_mockup_claude(args: &Value, ctx: &ToolExecutionContext) -> String {
+    let client = match blender_client_or_err(ctx) { Ok(c) => c, Err(e) => return e };
+    let device = args["device"].as_str().unwrap_or("iPhone");
+    let animation = args["animation"].as_str().unwrap_or("reveal");
+    let duration = args["duration"].as_f64().unwrap_or(5.0);
+    let screenshot_url = args["screenshot_url"].as_str().unwrap_or("");
+    match client.generate_ui_mockup(device, animation, duration, screenshot_url, None, None, None).await {
+        Ok(p) => format!("✅ Blender UI mockup rendered: {p}"),
+        Err(e) => format!("❌ blender_generate_ui_mockup failed: {e}"),
     }
 }
