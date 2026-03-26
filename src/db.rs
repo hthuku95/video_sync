@@ -58,9 +58,10 @@ fn calculate_recommended_pool_size() -> u32 {
 
 pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     tracing::info!("Running database migrations...");
-    
-    // Use SQLx's built-in migrator for better reliability
-    // This handles migration tracking and ensures proper execution order
+
+    // sqlx::migrate!() is a proc macro — Cargo only re-runs it when THIS file
+    // changes. Touching this file forces the macro to re-scan ./migrations and
+    // embed all current migration files (including 20260319000000_add_r2_storage).
     sqlx::migrate!("./migrations").run(pool).await?;
     
     tracing::info!("Database migrations completed successfully");
