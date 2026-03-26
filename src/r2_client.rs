@@ -22,7 +22,6 @@ use std::path::Path;
 use std::time::Duration;
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
-use uuid::Uuid;
 
 const MULTIPART_THRESHOLD: u64 = 50 * 1024 * 1024; // 50 MB — use multipart above this
 const PART_SIZE: usize = 50 * 1024 * 1024;          // 50 MB parts
