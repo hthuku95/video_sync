@@ -3343,10 +3343,90 @@ pub async fn admin_user_clipping_details(
         })
     }).collect();
 
+    // Query 3: Extracted clips with analytics for those jobs
+    let job_ids: Vec<i32> = {
+        use sqlx::Row;
+        job_rows.iter().map(|r| r.get::<i32, _>("id")).collect()
+    };
+
+    let clip_rows = if job_ids.is_empty() {
+        vec![]
+    } else {
+        sqlx::query(
+            r#"
+            SELECT
+                ec.id,
+                ec.clipping_job_id,
+                ec.clip_number,
+                ec.ai_title,
+                ec.ai_description,
+                ec.ai_confidence_score,
+                ec.viral_factors,
+                ec.youtube_video_id,
+                ec.youtube_url,
+                ec.upload_status,
+                ec.published_at,
+                ec.views_24h,
+                ec.likes_24h,
+                ec.comments_24h,
+                ec.start_time_seconds,
+                ec.end_time_seconds,
+                ec.duration_seconds,
+                COALESCE(yva.views, ec.views_24h, 0) AS total_views,
+                COALESCE(yva.likes, ec.likes_24h, 0) AS total_likes,
+                COALESCE(yva.comments, ec.comments_24h, 0) AS total_comments
+            FROM extracted_clips ec
+            LEFT JOIN LATERAL (
+                SELECT views, likes, comments
+                FROM youtube_video_analytics
+                WHERE youtube_video_id = ec.youtube_video_id
+                ORDER BY metric_date DESC
+                LIMIT 1
+            ) yva ON ec.youtube_video_id IS NOT NULL
+            WHERE ec.clipping_job_id = ANY($1)
+            ORDER BY ec.clipping_job_id, ec.clip_number
+            "#
+        )
+        .bind(&job_ids)
+        .fetch_all(&state.db_pool)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to fetch clips: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?
+    };
+
+    let clips: Vec<serde_json::Value> = clip_rows.iter().map(|row| {
+        use sqlx::Row;
+        json!({
+            "id": row.get::<i32, _>("id"),
+            "clipping_job_id": row.get::<i32, _>("clipping_job_id"),
+            "clip_number": row.get::<i32, _>("clip_number"),
+            "ai_title": row.get::<Option<String>, _>("ai_title"),
+            "ai_description": row.get::<Option<String>, _>("ai_description"),
+            "ai_confidence_score": row.get::<Option<f64>, _>("ai_confidence_score"),
+            "viral_factors": row.get::<Option<Vec<String>>, _>("viral_factors"),
+            "youtube_video_id": row.get::<Option<String>, _>("youtube_video_id"),
+            "youtube_url": row.get::<Option<String>, _>("youtube_url"),
+            "upload_status": row.get::<String, _>("upload_status"),
+            "published_at": row.get::<Option<chrono::DateTime<chrono::Utc>>, _>("published_at"),
+            "views_24h": row.get::<i32, _>("views_24h"),
+            "likes_24h": row.get::<i32, _>("likes_24h"),
+            "comments_24h": row.get::<i32, _>("comments_24h"),
+            "start_time_seconds": row.get::<f64, _>("start_time_seconds"),
+            "end_time_seconds": row.get::<f64, _>("end_time_seconds"),
+            "duration_seconds": row.get::<f64, _>("duration_seconds"),
+            "total_views": row.get::<i64, _>("total_views"),
+            "total_likes": row.get::<i64, _>("total_likes"),
+            "total_comments": row.get::<i64, _>("total_comments"),
+        })
+    }).collect();
+
     Ok(Json(json!({
         "success": true,
         "linkages": linkages,
-        "recent_jobs": recent_jobs
+        "recent_jobs": recent_jobs,
+        "clips": clips
     })))
 }
 
@@ -3470,22 +3550,18 @@ pub async fn admin_clipping_activity_page() -> Html<String> {
             </div>
 
             <div id="userDetails" style="display: none; background: white; padding: 2rem; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
-                <h2>User Details: <span id="detailUsername"></span></h2>
-                <h3 style="margin-top: 1.5rem;">Recent Jobs (Last 10)</h3>
-                <table id="jobsTable">
-                    <thead>
-                        <tr>
-                            <th>Job ID</th>
-                            <th>Video</th>
-                            <th>Status</th>
-                            <th>Progress</th>
-                            <th>Retries</th>
-                            <th>Created</th>
-                            <th>Error</th>
-                        </tr>
-                    </thead>
-                    <tbody id="jobsTableBody"></tbody>
-                </table>
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1.5rem;">
+                    <h2>Details: <span id="detailUsername"></span></h2>
+                    <button onclick="document.getElementById('userDetails').style.display='none'" style="background:none;border:1px solid #dee2e6;padding:0.4rem 0.8rem;border-radius:5px;cursor:pointer;">✕ Close</button>
+                </div>
+
+                <!-- Linkages -->
+                <h3 style="margin-bottom:1rem;">📡 Channel Linkages</h3>
+                <div id="linkagesGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:1rem;margin-bottom:2rem;"></div>
+
+                <!-- Jobs & Clips -->
+                <h3 style="margin-bottom:1rem;">🎬 Recent Jobs &amp; Extracted Clips</h3>
+                <div id="jobsContainer"></div>
             </div>
         </div>
 
@@ -3603,42 +3679,148 @@ pub async fn admin_clipping_activity_page() -> Html<String> {
                     const response = await fetch(`/api/admin/clipping/user/${userId}/details`, {
                         headers: { 'Authorization': `Bearer ${token}` }
                     });
+                    if (response.status === 401) { window.location.href = '/admin/login'; return; }
                     const data = await response.json();
 
                     document.getElementById('userDetails').style.display = 'block';
                     document.getElementById('detailUsername').textContent = username;
 
-                    const jobsBody = document.getElementById('jobsTableBody');
-                    jobsBody.innerHTML = '';
-
-                    if (data.recent_jobs.length === 0) {
-                        jobsBody.innerHTML = '<tr><td colspan="7" style="text-align: center; padding: 2rem; color: #6c757d;">No jobs found</td></tr>';
-                        return;
+                    // --- Linkages ---
+                    const linkagesGrid = document.getElementById('linkagesGrid');
+                    if (!data.linkages || data.linkages.length === 0) {
+                        linkagesGrid.innerHTML = '<p style="color:#6c757d;">No channel linkages set up.</p>';
+                    } else {
+                        linkagesGrid.innerHTML = data.linkages.map(l => `
+                            <div style="border:1px solid #dee2e6;border-radius:8px;padding:1rem;background:#f8f9fa;">
+                                <div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.75rem;">
+                                    ${l.source_thumbnail ? `<img src="${l.source_thumbnail}" style="width:32px;height:32px;border-radius:50%;object-fit:cover;" onerror="this.style.display='none'">` : ''}
+                                    <div>
+                                        <strong style="font-size:0.9rem;">${l.source_channel_name}</strong>
+                                        <div style="font-size:0.75rem;color:#6c757d;">Source</div>
+                                    </div>
+                                    <span style="margin:0 0.5rem;color:#6c757d;">→</span>
+                                    ${l.dest_thumbnail ? `<img src="${l.dest_thumbnail}" style="width:32px;height:32px;border-radius:50%;object-fit:cover;" onerror="this.style.display='none'">` : ''}
+                                    <div>
+                                        <strong style="font-size:0.9rem;">${l.dest_channel_name}</strong>
+                                        <div style="font-size:0.75rem;color:#6c757d;">Destination</div>
+                                    </div>
+                                    <span class="badge ${l.is_active ? 'badge-success' : 'badge-danger'}" style="margin-left:auto;">${l.is_active ? 'Active' : 'Paused'}</span>
+                                </div>
+                                <div style="display:flex;gap:1.5rem;font-size:0.85rem;color:#495057;">
+                                    <span>📊 Generated: <strong>${l.total_clips_generated}</strong></span>
+                                    <span>📤 Posted: <strong>${l.total_clips_posted}</strong></span>
+                                    <span>🎯 Per Video: <strong>${l.clips_per_video || 'auto'}</strong></span>
+                                </div>
+                            </div>
+                        `).join('');
                     }
 
-                    data.recent_jobs.forEach(job => {
-                        const row = document.createElement('tr');
-                        row.innerHTML = `
-                            <td>#${job.id}</td>
-                            <td><a href="https://youtube.com/watch?v=${job.source_video_id}" target="_blank" style="color: #dc3545; text-decoration: none;">
-                                ${job.source_video_title || job.source_video_id}
-                            </a></td>
-                            <td><span class="badge badge-${getStatusColor(job.status)}">${job.status}</span></td>
-                            <td>${job.progress_percent}%</td>
-                            <td>${job.retry_count > 0 ? '🔄 ' + job.retry_count : '-'}</td>
-                            <td>${formatDate(job.created_at)}</td>
-                            <td style="max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${job.error_message || ''}">
-                                ${job.error_message ? '⚠️ ' + job.error_message.substring(0, 50) + (job.error_message.length > 50 ? '...' : '') : '-'}
-                            </td>
-                        `;
-                        jobsBody.appendChild(row);
+                    // --- Build clips lookup by job_id ---
+                    const clipsByJob = {};
+                    (data.clips || []).forEach(c => {
+                        if (!clipsByJob[c.clipping_job_id]) clipsByJob[c.clipping_job_id] = [];
+                        clipsByJob[c.clipping_job_id].push(c);
                     });
+
+                    // --- Jobs ---
+                    const jobsContainer = document.getElementById('jobsContainer');
+                    if (!data.recent_jobs || data.recent_jobs.length === 0) {
+                        jobsContainer.innerHTML = '<p style="color:#6c757d;padding:1rem;">No jobs found for this user.</p>';
+                    } else {
+                        jobsContainer.innerHTML = data.recent_jobs.map(job => {
+                            const jobClips = clipsByJob[job.id] || [];
+                            const clipsHtml = jobClips.length === 0 ? '' : `
+                                <tr id="clips-${job.id}" style="display:none;">
+                                    <td colspan="6" style="background:#f8f9fa;padding:0;">
+                                        <table style="width:100%;margin:0;border-radius:0;">
+                                            <thead>
+                                                <tr style="background:#e9ecef;">
+                                                    <th style="padding:0.5rem 1rem;font-size:0.8rem;">#</th>
+                                                    <th style="padding:0.5rem 1rem;font-size:0.8rem;">AI Title</th>
+                                                    <th style="padding:0.5rem 1rem;font-size:0.8rem;">Upload Status</th>
+                                                    <th style="padding:0.5rem 1rem;font-size:0.8rem;">👁 Views</th>
+                                                    <th style="padding:0.5rem 1rem;font-size:0.8rem;">👍 Likes</th>
+                                                    <th style="padding:0.5rem 1rem;font-size:0.8rem;">💬 Comments</th>
+                                                    <th style="padding:0.5rem 1rem;font-size:0.8rem;">Duration</th>
+                                                    <th style="padding:0.5rem 1rem;font-size:0.8rem;">YouTube</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                ${jobClips.map(c => `
+                                                    <tr style="border-bottom:1px solid #dee2e6;">
+                                                        <td style="padding:0.5rem 1rem;font-size:0.85rem;">${c.clip_number}</td>
+                                                        <td style="padding:0.5rem 1rem;font-size:0.85rem;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${c.ai_title || ''}">${c.ai_title || '<em style="color:#6c757d">No title</em>'}</td>
+                                                        <td style="padding:0.5rem 1rem;"><span class="badge badge-${c.upload_status === 'published' ? 'success' : c.upload_status === 'failed' ? 'danger' : 'warning'}">${c.upload_status}</span></td>
+                                                        <td style="padding:0.5rem 1rem;font-size:0.85rem;font-weight:bold;">${c.total_views > 0 ? c.total_views.toLocaleString() : '<span style="color:#6c757d">—</span>'}</td>
+                                                        <td style="padding:0.5rem 1rem;font-size:0.85rem;">${c.total_likes > 0 ? c.total_likes.toLocaleString() : '<span style="color:#6c757d">—</span>'}</td>
+                                                        <td style="padding:0.5rem 1rem;font-size:0.85rem;">${c.total_comments > 0 ? c.total_comments.toLocaleString() : '<span style="color:#6c757d">—</span>'}</td>
+                                                        <td style="padding:0.5rem 1rem;font-size:0.85rem;">${Math.round(c.duration_seconds)}s</td>
+                                                        <td style="padding:0.5rem 1rem;">
+                                                            ${c.youtube_url ? `<a href="${c.youtube_url}" target="_blank" style="color:#dc3545;font-size:0.8rem;text-decoration:none;border:1px solid #dc3545;padding:2px 6px;border-radius:3px;">▶ Watch</a>` : '<span style="color:#6c757d;font-size:0.8rem;">Not uploaded</span>'}
+                                                        </td>
+                                                    </tr>
+                                                `).join('')}
+                                            </tbody>
+                                        </table>
+                                    </td>
+                                </tr>
+                            `;
+
+                            const hasClips = jobClips.length > 0;
+                            const toggleBtn = hasClips
+                                ? `<button onclick="toggleClips(${job.id})" style="background:none;border:1px solid #dee2e6;padding:2px 8px;border-radius:3px;cursor:pointer;font-size:0.8rem;" id="toggle-${job.id}">▼ ${jobClips.length} clip${jobClips.length !== 1 ? 's' : ''}</button>`
+                                : `<span style="color:#6c757d;font-size:0.8rem;">no clips</span>`;
+
+                            return `
+                                <tr onclick="${hasClips ? `toggleClips(${job.id})` : ''}" style="cursor:${hasClips ? 'pointer' : 'default'};">
+                                    <td style="padding:0.75rem 1rem;font-size:0.85rem;">#${job.id}</td>
+                                    <td style="padding:0.75rem 1rem;font-size:0.85rem;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+                                        <a href="https://youtube.com/watch?v=${job.source_video_id}" target="_blank" onclick="event.stopPropagation()" style="color:#dc3545;text-decoration:none;">${job.source_video_title || job.source_video_id}</a>
+                                    </td>
+                                    <td style="padding:0.75rem 1rem;"><span class="badge badge-${getStatusColor(job.status)}">${job.status}</span></td>
+                                    <td style="padding:0.75rem 1rem;font-size:0.85rem;">${job.source_channel}</td>
+                                    <td style="padding:0.75rem 1rem;font-size:0.85rem;">${formatDate(job.created_at)}</td>
+                                    <td style="padding:0.75rem 1rem;">${toggleBtn}</td>
+                                </tr>
+                                ${clipsHtml}
+                                ${job.error_message ? `<tr><td colspan="6" style="padding:0.25rem 1rem 0.75rem;font-size:0.8rem;color:#dc3545;">⚠️ ${job.error_message.substring(0, 120)}</td></tr>` : ''}
+                            `;
+                        }).join('');
+
+                        // Wrap in table
+                        jobsContainer.innerHTML = `
+                            <table style="width:100%;border-collapse:collapse;">
+                                <thead>
+                                    <tr style="background:#f8f9fa;">
+                                        <th style="padding:0.75rem 1rem;font-size:0.85rem;">Job</th>
+                                        <th style="padding:0.75rem 1rem;font-size:0.85rem;">Source Video</th>
+                                        <th style="padding:0.75rem 1rem;font-size:0.85rem;">Status</th>
+                                        <th style="padding:0.75rem 1rem;font-size:0.85rem;">Channel</th>
+                                        <th style="padding:0.75rem 1rem;font-size:0.85rem;">Created</th>
+                                        <th style="padding:0.75rem 1rem;font-size:0.85rem;">Clips</th>
+                                    </tr>
+                                </thead>
+                                <tbody style="border:1px solid #dee2e6;">
+                                    ${jobsContainer.innerHTML}
+                                </tbody>
+                            </table>
+                        `;
+                    }
 
                     document.getElementById('userDetails').scrollIntoView({ behavior: 'smooth' });
                 } catch (error) {
                     console.error('Failed to load user details:', error);
-                    alert('Failed to load user details');
+                    document.getElementById('jobsContainer').innerHTML = '<p style="color:#dc3545;">Failed to load details — check console.</p>';
                 }
+            }
+
+            function toggleClips(jobId) {
+                const row = document.getElementById('clips-' + jobId);
+                const btn = document.getElementById('toggle-' + jobId);
+                if (!row) return;
+                const visible = row.style.display !== 'none';
+                row.style.display = visible ? 'none' : 'table-row';
+                if (btn) btn.textContent = btn.textContent.replace(visible ? '▲' : '▼', visible ? '▼' : '▲');
             }
 
             function getStatusColor(status) {
