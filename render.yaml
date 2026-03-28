@@ -2,7 +2,7 @@ services:
   - type: web
     name: video_sync
     runtime: rust
-    buildCommand: cargo build --release
+    buildCommand: pip3 install --upgrade yt-dlp && cargo build --release
     startCommand: ./target/release/video_editor
     region: oregon
     plan: standard
@@ -92,11 +92,11 @@ services:
       - key: DATABASE_MAX_CONNECTIONS
         value: 20
       - key: CLIPPING_WORKER_CONCURRENCY
-        value: 5
+        value: 3
       - key: CLIPPING_WORKER_POLL_INTERVAL
         value: 30
       - key: DOWNLOAD_SEMAPHORE_PERMITS
-        value: 4
+        value: 2
       - key: VECTORIZATION_TIMEOUT_SECONDS
         value: 3600
       - key: FRAME_ANALYSIS_TIMEOUT_SECONDS

@@ -297,70 +297,70 @@ impl YtdlpApiClient {
 
         info!("📦 Download method: {}", download_response.method);
 
-        // Handle different response methods
-        let file_bytes = match download_response.method.as_str() {
+        // Handle different response methods — stream to disk, never buffer entire video in RAM
+        let mut file = File::create(output_path).await
+            .map_err(|e| format!("Failed to create output file: {}", e))?;
+
+        match download_response.method.as_str() {
             "url" => {
-                // Pattern A/B: download_url provided
+                // Pattern A/B: stream directly from download_url → disk (no full-file buffer)
                 let download_url = download_response.download_url
                     .ok_or("download_url missing in URL mode")?;
 
-                // Make download_url absolute if relative
                 let full_url = if download_url.starts_with("http") {
                     download_url
                 } else {
                     format!("{}{}", self.base_url, download_url)
                 };
 
-                info!("📥 Downloading from: {}", full_url);
+                info!("📥 Streaming download from: {}", full_url);
 
-                // Download file
                 let file_response = self.http_client
                     .get(&full_url)
                     .send()
                     .await
-                    .map_err(|e| format!("Failed to download file from URL: {}", e))?;
+                    .map_err(|e| format!("Failed to start file download: {}", e))?;
 
                 if !file_response.status().is_success() {
                     return Err(format!("File download failed with status: {}", file_response.status()));
                 }
 
-                file_response.bytes().await
-                    .map_err(|e| format!("Failed to read file bytes: {}", e))?
-                    .to_vec()
+                use futures::StreamExt;
+                let mut stream = file_response.bytes_stream();
+                let mut bytes_written: u64 = 0;
+                while let Some(chunk) = stream.next().await {
+                    let chunk = chunk.map_err(|e| format!("Stream read error: {}", e))?;
+                    file.write_all(&chunk).await
+                        .map_err(|e| format!("Failed to write chunk: {}", e))?;
+                    bytes_written += chunk.len() as u64;
+                }
+                info!("💾 Streamed {} bytes to {}", bytes_written, output_path);
             }
             "base64" => {
-                // Pattern C: file_data as base64
+                // Pattern C: base64 payload — cap at 600 MB decoded to protect RAM
                 let file_data = download_response.file_data
                     .ok_or("file_data missing in base64 mode")?;
 
-                // Guard against absurdly large payloads: 6 GB video ≈ 8 GB base64
-                const MAX_BASE64_CHARS: usize = 8_500_000_000;
+                const MAX_BASE64_CHARS: usize = 800_000_000; // ~600 MB decoded
                 if file_data.len() > MAX_BASE64_CHARS {
                     return Err(format!(
-                        "base64 payload too large ({} chars, max {})",
+                        "base64 payload too large ({} chars, max {}). Use URL mode.",
                         file_data.len(), MAX_BASE64_CHARS
                     ));
                 }
 
                 info!("📦 Decoding base64 data ({} chars)", file_data.len());
-
                 use base64::prelude::*;
-                BASE64_STANDARD.decode(&file_data)
-                    .map_err(|e| format!("Failed to decode base64: {}", e))?
+                let decoded = BASE64_STANDARD.decode(&file_data)
+                    .map_err(|e| format!("Failed to decode base64: {}", e))?;
+                info!("💾 Writing {} bytes to {}", decoded.len(), output_path);
+                file.write_all(&decoded).await
+                    .map_err(|e| format!("Failed to write base64 data: {}", e))?;
             }
             method => {
                 return Err(format!("Unknown download method: {}", method));
             }
-        };
-
-        // Write to output file
-        info!("💾 Writing {} bytes to {}", file_bytes.len(), output_path);
-
-        let mut file = File::create(output_path).await
-            .map_err(|e| format!("Failed to create output file: {}", e))?;
-
-        file.write_all(&file_bytes).await
-            .map_err(|e| format!("Failed to write file: {}", e))?;
+        }
 
         file.flush().await
             .map_err(|e| format!("Failed to flush file: {}", e))?;

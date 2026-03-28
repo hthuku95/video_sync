@@ -950,46 +950,44 @@ pub async fn admin_users_api(
     let limit = params.limit.unwrap_or(20);
     let offset = (page - 1) * limit;
     
-    let mut query = "SELECT id, email, username, is_active, is_superuser, is_staff, created_at, updated_at FROM users".to_string();
+    let mut query = "SELECT id, email, username, is_active, is_superuser, is_staff, created_at FROM users".to_string();
     let mut count_query = "SELECT COUNT(*) FROM users".to_string();
-    
+
     if let Some(_search) = &params.search {
         let search_condition = " WHERE username ILIKE $1 OR email ILIKE $1";
         query.push_str(search_condition);
         count_query.push_str(search_condition);
     }
-    
+
     query.push_str(&format!(" ORDER BY created_at DESC LIMIT {} OFFSET {}", limit, offset));
-    
-    let users: Vec<User> = if let Some(search) = &params.search {
+
+    let user_responses: Vec<UserResponse> = if let Some(search) = &params.search {
         let search_term = format!("%{}%", search);
         sqlx::query_as(&query)
             .bind(&search_term)
             .fetch_all(&state.db_pool)
             .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .map_err(|e| { tracing::error!("admin_users_api search query failed: {}", e); StatusCode::INTERNAL_SERVER_ERROR })?
     } else {
         sqlx::query_as(&query)
             .fetch_all(&state.db_pool)
             .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .map_err(|e| { tracing::error!("admin_users_api query failed: {}", e); StatusCode::INTERNAL_SERVER_ERROR })?
     };
-    
+
     let total_count: i64 = if let Some(search) = &params.search {
         let search_term = format!("%{}%", search);
         sqlx::query_scalar(&count_query)
             .bind(&search_term)
             .fetch_one(&state.db_pool)
             .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .map_err(|e| { tracing::error!("admin_users_api count query failed: {}", e); StatusCode::INTERNAL_SERVER_ERROR })?
     } else {
         sqlx::query_scalar(&count_query)
             .fetch_one(&state.db_pool)
             .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .map_err(|e| { tracing::error!("admin_users_api count query failed: {}", e); StatusCode::INTERNAL_SERVER_ERROR })?
     };
-    
-    let user_responses: Vec<UserResponse> = users.into_iter().map(UserResponse::from).collect();
     
     Ok(Json(json!({
         "success": true,
