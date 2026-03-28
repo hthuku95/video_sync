@@ -1283,15 +1283,25 @@ pub async fn admin_users_list() -> Html<String> {
                     headers: { 'Authorization': 'Bearer ' + authToken }
                 });
 
+                if (response.status === 401 || response.status === 403) {
+                    window.location.href = '/admin/login';
+                    return;
+                }
+
                 const data = await response.json();
 
                 if (data.success) {
                     renderUsers(data.users);
                     totalPages = data.pagination.total_pages;
                     updatePagination();
+                } else {
+                    document.getElementById('usersTable').innerHTML =
+                        `<tr><td colspan="7" style="text-align:center;color:#dc3545;">Error: ${data.message || 'Failed to load users'}</td></tr>`;
                 }
             } catch (error) {
                 console.error('Error loading users:', error);
+                document.getElementById('usersTable').innerHTML =
+                    `<tr><td colspan="7" style="text-align:center;color:#dc3545;">Network error — check console</td></tr>`;
             }
         }
 

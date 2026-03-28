@@ -1105,7 +1105,7 @@ async fn api_status(Extension(state): Extension<Arc<AppState>>) -> axum::respons
             "astra_vector_db": astra_status
         },
         "features": {
-            "video_editing_tools": 45,
+            "video_editing_tools": 327,
             "audio_generation_tools": 4,
             "elevenlabs_integration": true,
             "authentication": true,
