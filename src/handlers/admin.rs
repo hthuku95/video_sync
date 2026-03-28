@@ -277,6 +277,7 @@ pub async fn admin_dashboard() -> Html<String> {
             <li><a href="/admin/users">👥 Users</a></li>
             <li><a href="/admin/clipping-activity">🎬 Clipping Activity</a></li>
             <li><a href="/admin/performance">📈 Performance</a></li>
+            <li><a href="/admin/test-runs">🧪 Portfolio Tests</a></li>
             <li><a href="#" onclick="showWhitelist()">🛡️ Whitelist</a></li>
             <li><a href="#" onclick="showYoutube()">🎥 YouTube Features</a></li>
             <li><a href="#" onclick="showPricing()">💰 Model Pricing</a></li>
@@ -1170,6 +1171,7 @@ pub async fn admin_users_list() -> Html<String> {
             <li><a href="/admin/users" class="active">👥 Users</a></li>
             <li><a href="/admin/clipping-activity">🎬 Clipping Activity</a></li>
             <li><a href="/admin/performance">📈 Performance</a></li>
+            <li><a href="/admin/test-runs">🧪 Portfolio Tests</a></li>
             <li><a href="/api/docs">📚 API Docs</a></li>
             <li><a href="/api/status">⚙️ System Status</a></li>
         </ul>
@@ -1459,6 +1461,7 @@ pub async fn admin_user_detail(Path(id): Path<i32>) -> Html<String> {
             <li><a href="/admin/users" class="active">👥 Users</a></li>
             <li><a href="/admin/clipping-activity">🎬 Clipping Activity</a></li>
             <li><a href="/admin/performance">📈 Performance</a></li>
+            <li><a href="/admin/test-runs">🧪 Portfolio Tests</a></li>
             <li><a href="/api/docs">📚 API Docs</a></li>
             <li><a href="/api/status">⚙️ System Status</a></li>
         </ul>
@@ -3389,6 +3392,7 @@ pub async fn admin_clipping_activity_page() -> Html<String> {
                 <li><a href="/admin/users">👥 Users</a></li>
                 <li><a href="/admin/clipping-activity" class="active">🎬 Clipping Activity</a></li>
                 <li><a href="/admin/performance">📈 Performance</a></li>
+                <li><a href="/admin/test-runs">🧪 Portfolio Tests</a></li>
                 <li><a href="/api/docs">📚 API Docs</a></li>
                 <li><a href="/api/status">⚙️ System Status</a></li>
             </ul>
@@ -4444,6 +4448,7 @@ pub async fn admin_clipping_jobs_page() -> Html<String> {
             <li><a href="/admin/clipping-jobs" class="active">Clipping Jobs</a></li>
             <li><a href="/admin/clipping-activity">Activity</a></li>
             <li><a href="/admin/performance">Performance</a></li>
+            <li><a href="/admin/test-runs">🧪 Portfolio Tests</a></li>
             <li><a href="#" onclick="logout()">Logout</a></li>
         </ul>
     </div>
@@ -5305,6 +5310,7 @@ pub async fn admin_performance_page() -> Html<String> {
             <li><a href="/admin/clipping-jobs">Clipping Jobs</a></li>
             <li><a href="/admin/clipping-activity">Activity</a></li>
             <li><a href="/admin/performance" class="active">Performance</a></li>
+            <li><a href="/admin/test-runs">🧪 Portfolio Tests</a></li>
             <li><a href="#" onclick="logout()">Logout</a></li>
         </ul>
     </div>
