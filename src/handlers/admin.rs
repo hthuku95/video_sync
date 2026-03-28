@@ -28,7 +28,8 @@ pub fn admin_routes() -> Router {
         .route("/admin/clipping-jobs", get(admin_clipping_jobs_page))
         .route("/admin/performance", get(admin_performance_page))
         .route("/admin/test-runs", get(admin_test_runs_page))
-        .route("/admin/test-runs/:id", get(admin_test_run_detail_page));
+        .route("/admin/test-runs/:id", get(admin_test_run_detail_page))
+        .route("/delivery/:id", get(delivery_page));
     
     // API endpoints - protected routes with JWT authentication  
     let protected_admin = Router::new()
@@ -6203,5 +6204,157 @@ load();
 </script>
 </body>
 </html>"###, id = id);
+    Html(html)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Public delivery page — shareable link for Fiverr / client handoff
+// GET /delivery/:id
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub async fn delivery_page(
+    Path(id): Path<String>,
+    Extension(state): Extension<Arc<AppState>>,
+) -> Html<String> {
+    // Try to parse as UUID (test result)
+    let result = if let Ok(uuid) = uuid::Uuid::parse_str(&id) {
+        sqlx::query(
+            "SELECT test_name, gig_type, status, output_r2_url, output_filename, \
+             llm_review_score, llm_review_feedback \
+             FROM test_results WHERE id = $1",
+        )
+        .bind(uuid)
+        .fetch_optional(&state.db_pool)
+        .await
+        .ok()
+        .flatten()
+    } else {
+        None
+    };
+
+    let html = match result {
+        None => format!(r#"<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8">
+<title>Delivery Not Found — VideoSync</title>
+<style>
+  body {{ font-family: -apple-system, sans-serif; background: #0f0f13; color: #e0e0e0;
+          display: flex; align-items: center; justify-content: center; min-height: 100vh; }}
+  .box {{ text-align: center; }}
+  h1 {{ font-size: 48px; color: #6366f1; margin-bottom: 12px; }}
+  p {{ color: #9999bb; }}
+</style></head>
+<body><div class="box"><h1>404</h1><p>Delivery not found. The link may have expired.</p></div></body>
+</html>"#),
+        Some(row) => {
+            let name: String = row.get::<String, _>("test_name");
+            let gig_type: String = row.get::<String, _>("gig_type");
+            let status: String = row.get::<String, _>("status");
+            let r2_url: Option<String> = row.try_get::<String, _>("output_r2_url").ok();
+            let filename: Option<String> = row.try_get::<String, _>("output_filename").ok();
+            let score: Option<i32> = row.try_get::<i32, _>("llm_review_score").ok();
+            let feedback: Option<String> = row.try_get::<String, _>("llm_review_feedback").ok();
+
+            let is_image = filename.as_deref()
+                .map(|f| f.ends_with(".png") || f.ends_with(".jpg"))
+                .unwrap_or(false);
+
+            let media_html = match &r2_url {
+                None => r#"<div class="no-media">⏳ Render in progress — check back shortly</div>"#.to_string(),
+                Some(url) => {
+                    if is_image {
+                        format!(r#"<img src="{url}" alt="Delivered image" style="max-width:100%;border-radius:12px;">"#)
+                    } else {
+                        format!(r#"<video controls style="width:100%;border-radius:12px;background:#000;">
+  <source src="{url}" type="video/mp4">
+  Your browser does not support the video tag.
+</video>"#)
+                    }
+                }
+            };
+
+            let download_btn = match &r2_url {
+                None => String::new(),
+                Some(url) => {
+                    let fname = filename.as_deref().unwrap_or("output");
+                    format!(r#"<a href="{url}" download="{fname}" class="btn-download">⬇ Download {fname}</a>"#)
+                }
+            };
+
+            let score_html = match score {
+                Some(s) if s > 0 => {
+                    let stars: String = "★".repeat(s as usize / 2) + &"☆".repeat(5 - s as usize / 2);
+                    let fb = feedback.as_deref().unwrap_or("");
+                    format!(r#"<div class="review-box">
+  <div class="score">AI Quality Score: <strong>{s}/10</strong> <span class="stars">{stars}</span></div>
+  <p class="feedback">{fb}</p>
+</div>"#)
+                }
+                _ => String::new(),
+            };
+
+            let status_color = match status.as_str() {
+                "passed" => "#4ade80",
+                "failed" => "#f87171",
+                "running" => "#60a5fa",
+                _ => "#9ca3af",
+            };
+
+            format!(r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{name} — VideoSync Delivery</title>
+<style>
+  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+  body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+          background: #0f0f13; color: #e0e0e0; min-height: 100vh;
+          display: flex; flex-direction: column; align-items: center; padding: 40px 20px; }}
+  .card {{ background: #1a1a24; border: 1px solid #2a2a36; border-radius: 16px;
+           padding: 32px; max-width: 860px; width: 100%; }}
+  .brand {{ font-size: 13px; font-weight: 700; letter-spacing: 0.1em; color: #6366f1;
+             text-transform: uppercase; margin-bottom: 20px; }}
+  h1 {{ font-size: 22px; font-weight: 700; color: #fff; margin-bottom: 6px; }}
+  .meta {{ font-size: 13px; color: #9999bb; margin-bottom: 24px; }}
+  .status-dot {{ display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+                  background: {status_color}; margin-right: 6px; vertical-align: middle; }}
+  .media-wrap {{ margin-bottom: 24px; border-radius: 12px; overflow: hidden;
+                  background: #12121a; padding: 4px; }}
+  .no-media {{ padding: 60px; text-align: center; color: #666680; font-size: 15px; }}
+  .btn-download {{ display: inline-block; background: #6366f1; color: #fff;
+                   padding: 12px 28px; border-radius: 8px; text-decoration: none;
+                   font-weight: 600; font-size: 15px; margin-bottom: 24px;
+                   transition: background 0.15s; }}
+  .btn-download:hover {{ background: #4f46e5; }}
+  .review-box {{ background: #12121a; border: 1px solid #2a2a36; border-radius: 10px;
+                  padding: 16px 20px; margin-top: 8px; }}
+  .score {{ font-size: 14px; color: #9999bb; margin-bottom: 6px; }}
+  .score strong {{ color: #fff; font-size: 16px; }}
+  .stars {{ color: #facc15; font-size: 16px; margin-left: 6px; }}
+  .feedback {{ font-size: 13px; color: #9999bb; line-height: 1.6; }}
+  .footer {{ margin-top: 32px; font-size: 12px; color: #666680; text-align: center; }}
+  .footer a {{ color: #6366f1; text-decoration: none; }}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="brand">VideoSync — AI Video Generation</div>
+  <h1>{name}</h1>
+  <div class="meta">
+    <span class="status-dot"></span>
+    Gig type: <strong>{gig_type}</strong> &nbsp;·&nbsp; Status: <strong>{status}</strong>
+  </div>
+  <div class="media-wrap">{media_html}</div>
+  {download_btn}
+  {score_html}
+</div>
+<div class="footer">
+  Delivered by <a href="https://videosync.video">VideoSync</a> — AI-Powered Video Generation
+</div>
+</body>
+</html>"#)
+        }
+    };
+
     Html(html)
 }
