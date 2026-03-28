@@ -1,7 +1,7 @@
 // Comprehensive tool executor for all 35+ video editing tools
 // Maps tool names to actual video processing function calls
 
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::collections::HashMap;
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
@@ -10568,219 +10568,202 @@ fn blender_client_or_err(ctx: &ToolExecutionContext) -> Result<&crate::blender_m
         .ok_or_else(|| "❌ BlenderMCPServer not configured. Set BLENDER_MCP_URL in .env to enable 3D rendering.".to_string())
 }
 
+// ── Shared async render helper ─────────────────────────────────────────────────
+// All blender executors use render_async (submit_job + poll loop + download)
+// instead of the sync call_tool path.  This is safe for any clip duration
+// because it never holds an HTTP connection open during the actual render.
+
+async fn blender_render(
+    client: &crate::blender_mcp_client::BlenderMCPClient,
+    tool: &str,
+    args: Value,
+    url_key: &str,
+    ext: &str,
+    label: &str,
+) -> String {
+    match client.render_async(tool, args, url_key, ext).await {
+        Ok(path) => format!("✅ {label}: {path}"),
+        Err(e)   => format!("❌ {tool} failed: {e}"),
+    }
+}
+
+// ── Gemini blender tool executors ─────────────────────────────────────────────
+
 async fn execute_blender_generate_scene_gemini(
     args: &HashMap<String, Value>,
     ctx: &ToolExecutionContext,
 ) -> String {
-    let client = match blender_client_or_err(ctx) {
-        Ok(c) => c,
-        Err(e) => return e,
-    };
-    let prompt = args.get("prompt").and_then(|v| v.as_str()).unwrap_or("");
-    let duration = args.get("duration").and_then(|v| v.as_f64()).unwrap_or(10.0);
-    let style = args.get("style").and_then(|v| v.as_str()).unwrap_or("cinematic");
-    let ref_img = args.get("reference_image_url").and_then(|v| v.as_str());
-
-    match client.generate_scene(prompt, duration, style, ref_img).await {
-        Ok(path) => format!("✅ Blender scene rendered: {path}"),
-        Err(e) => format!("❌ blender_generate_scene failed: {e}"),
+    let client = match blender_client_or_err(ctx) { Ok(c) => c, Err(e) => return e };
+    let mut tool_args = json!({
+        "prompt":   args.get("prompt").and_then(|v| v.as_str()).unwrap_or(""),
+        "duration": args.get("duration").and_then(|v| v.as_f64()).unwrap_or(10.0),
+        "style":    args.get("style").and_then(|v| v.as_str()).unwrap_or("cinematic"),
+    });
+    if let Some(u) = args.get("reference_image_url").and_then(|v| v.as_str()) {
+        tool_args["reference_image_url"] = Value::String(u.to_string());
     }
+    blender_render(&client, "blender_generate_scene", tool_args, "video_url", "mp4", "Blender scene rendered").await
 }
 
 async fn execute_blender_generate_thumbnail_gemini(
     args: &HashMap<String, Value>,
     ctx: &ToolExecutionContext,
 ) -> String {
-    let client = match blender_client_or_err(ctx) {
-        Ok(c) => c,
-        Err(e) => return e,
-    };
-    let prompt = args.get("prompt").and_then(|v| v.as_str()).unwrap_or("");
-    let title_text = args.get("title_text").and_then(|v| v.as_str()).unwrap_or("");
-    let style = args.get("style").and_then(|v| v.as_str()).unwrap_or("youtube");
-
-    match client.generate_thumbnail(prompt, title_text, style).await {
-        Ok(path) => format!("✅ Blender thumbnail rendered: {path}"),
-        Err(e) => format!("❌ blender_generate_thumbnail failed: {e}"),
-    }
+    let client = match blender_client_or_err(ctx) { Ok(c) => c, Err(e) => return e };
+    let tool_args = json!({
+        "prompt":     args.get("prompt").and_then(|v| v.as_str()).unwrap_or(""),
+        "title_text": args.get("title_text").and_then(|v| v.as_str()).unwrap_or(""),
+        "style":      args.get("style").and_then(|v| v.as_str()).unwrap_or("youtube"),
+    });
+    blender_render(&client, "blender_generate_thumbnail", tool_args, "image_url", "png", "Blender thumbnail rendered").await
 }
 
 async fn execute_blender_generate_title_card_gemini(
     args: &HashMap<String, Value>,
     ctx: &ToolExecutionContext,
 ) -> String {
-    let client = match blender_client_or_err(ctx) {
-        Ok(c) => c,
-        Err(e) => return e,
-    };
-    let title = args.get("title").and_then(|v| v.as_str()).unwrap_or("");
-    let subtitle = args.get("subtitle").and_then(|v| v.as_str()).unwrap_or("");
-    let duration = args.get("duration").and_then(|v| v.as_f64()).unwrap_or(5.0);
-    let style = args.get("style").and_then(|v| v.as_str()).unwrap_or("cinematic");
-
-    match client.generate_title_card(title, subtitle, duration, style).await {
-        Ok(path) => format!("✅ Blender title card rendered: {path}"),
-        Err(e) => format!("❌ blender_generate_title_card failed: {e}"),
-    }
+    let client = match blender_client_or_err(ctx) { Ok(c) => c, Err(e) => return e };
+    let tool_args = json!({
+        "title":    args.get("title").and_then(|v| v.as_str()).unwrap_or(""),
+        "subtitle": args.get("subtitle").and_then(|v| v.as_str()).unwrap_or(""),
+        "duration": args.get("duration").and_then(|v| v.as_f64()).unwrap_or(5.0),
+        "style":    args.get("style").and_then(|v| v.as_str()).unwrap_or("cinematic"),
+    });
+    blender_render(&client, "blender_generate_title_card", tool_args, "video_url", "mp4", "Blender title card rendered").await
 }
 
 async fn execute_blender_generate_data_viz_gemini(
     args: &HashMap<String, Value>,
     ctx: &ToolExecutionContext,
 ) -> String {
-    let client = match blender_client_or_err(ctx) {
-        Ok(c) => c,
-        Err(e) => return e,
-    };
-    let data_json = args.get("data_json").and_then(|v| v.as_str()).unwrap_or("[]");
-    let chart_type = args.get("chart_type").and_then(|v| v.as_str()).unwrap_or("bar");
-    let title = args.get("title").and_then(|v| v.as_str()).unwrap_or("");
-    let duration = args.get("duration").and_then(|v| v.as_f64()).unwrap_or(10.0);
-
-    match client.generate_data_viz(data_json, chart_type, title, duration).await {
-        Ok(path) => format!("✅ Blender data viz rendered: {path}"),
-        Err(e) => format!("❌ blender_generate_data_viz failed: {e}"),
-    }
+    let client = match blender_client_or_err(ctx) { Ok(c) => c, Err(e) => return e };
+    let tool_args = json!({
+        "data_json":  args.get("data_json").and_then(|v| v.as_str()).unwrap_or("[]"),
+        "chart_type": args.get("chart_type").and_then(|v| v.as_str()).unwrap_or("bar"),
+        "title":      args.get("title").and_then(|v| v.as_str()).unwrap_or(""),
+        "duration":   args.get("duration").and_then(|v| v.as_f64()).unwrap_or(10.0),
+    });
+    blender_render(&client, "blender_generate_data_viz", tool_args, "video_url", "mp4", "Blender data viz rendered").await
 }
 
 async fn execute_blender_generate_lower_third_gemini(
     args: &HashMap<String, Value>,
     ctx: &ToolExecutionContext,
 ) -> String {
-    let client = match blender_client_or_err(ctx) {
-        Ok(c) => c,
-        Err(e) => return e,
-    };
-    let name_text = args.get("name_text").and_then(|v| v.as_str()).unwrap_or("");
-    let subtitle_text = args.get("subtitle_text").and_then(|v| v.as_str()).unwrap_or("");
-    let style = args.get("style").and_then(|v| v.as_str()).unwrap_or("modern");
-    let duration = args.get("duration").and_then(|v| v.as_f64()).unwrap_or(5.0);
-
-    match client.generate_lower_third(name_text, subtitle_text, style, duration).await {
-        Ok(path) => format!("✅ Blender lower third rendered: {path}"),
-        Err(e) => format!("❌ blender_generate_lower_third failed: {e}"),
-    }
+    let client = match blender_client_or_err(ctx) { Ok(c) => c, Err(e) => return e };
+    let tool_args = json!({
+        "name_text":     args.get("name_text").and_then(|v| v.as_str()).unwrap_or(""),
+        "subtitle_text": args.get("subtitle_text").and_then(|v| v.as_str()).unwrap_or(""),
+        "style":         args.get("style").and_then(|v| v.as_str()).unwrap_or("modern"),
+        "duration":      args.get("duration").and_then(|v| v.as_f64()).unwrap_or(5.0),
+    });
+    blender_render(&client, "blender_generate_lower_third", tool_args, "video_url", "mp4", "Blender lower third rendered").await
 }
 
 async fn execute_blender_generate_latex_gemini(
     args: &HashMap<String, Value>,
     ctx: &ToolExecutionContext,
 ) -> String {
-    let client = match blender_client_or_err(ctx) {
-        Ok(c) => c,
-        Err(e) => return e,
-    };
-    let latex_expression = args.get("latex_expression").and_then(|v| v.as_str()).unwrap_or("");
-    let animation_type = args.get("animation_type").and_then(|v| v.as_str()).unwrap_or("appear");
-    let duration = args.get("duration").and_then(|v| v.as_f64()).unwrap_or(8.0);
-    let background_style = args.get("background_style").and_then(|v| v.as_str()).unwrap_or("dark");
-
-    match client.generate_latex(latex_expression, animation_type, duration, background_style).await {
-        Ok(path) => format!("✅ Blender LaTeX animation rendered: {path}"),
-        Err(e) => format!("❌ blender_generate_latex failed: {e}"),
-    }
+    let client = match blender_client_or_err(ctx) { Ok(c) => c, Err(e) => return e };
+    let tool_args = json!({
+        "latex_expression": args.get("latex_expression").and_then(|v| v.as_str()).unwrap_or(""),
+        "animation_type":   args.get("animation_type").and_then(|v| v.as_str()).unwrap_or("appear"),
+        "duration":         args.get("duration").and_then(|v| v.as_f64()).unwrap_or(8.0),
+        "background_style": args.get("background_style").and_then(|v| v.as_str()).unwrap_or("dark"),
+    });
+    blender_render(&client, "blender_generate_latex", tool_args, "video_url", "mp4", "Blender LaTeX animation rendered").await
 }
 
 async fn execute_blender_generate_ui_mockup_gemini(
     args: &HashMap<String, Value>,
     ctx: &ToolExecutionContext,
 ) -> String {
-    let client = match blender_client_or_err(ctx) {
-        Ok(c) => c,
-        Err(e) => return e,
-    };
-    let device = args.get("device").and_then(|v| v.as_str()).unwrap_or("iPhone");
-    let animation = args.get("animation").and_then(|v| v.as_str()).unwrap_or("reveal");
-    let duration = args.get("duration").and_then(|v| v.as_f64()).unwrap_or(5.0);
-    let screenshot_url = args.get("screenshot_url").and_then(|v| v.as_str()).unwrap_or("");
-
-    match client.generate_ui_mockup(device, animation, duration, screenshot_url, None, None, None).await {
-        Ok(path) => format!("✅ Blender UI mockup rendered: {path}"),
-        Err(e) => format!("❌ blender_generate_ui_mockup failed: {e}"),
-    }
+    let client = match blender_client_or_err(ctx) { Ok(c) => c, Err(e) => return e };
+    let tool_args = json!({
+        "device":         args.get("device").and_then(|v| v.as_str()).unwrap_or("iPhone"),
+        "animation":      args.get("animation").and_then(|v| v.as_str()).unwrap_or("reveal"),
+        "duration":       args.get("duration").and_then(|v| v.as_f64()).unwrap_or(5.0),
+        "screenshot_url": args.get("screenshot_url").and_then(|v| v.as_str()).unwrap_or(""),
+    });
+    blender_render(&client, "blender_generate_ui_mockup", tool_args, "video_url", "mp4", "Blender UI mockup rendered").await
 }
 
 // ── Claude blender tool executors ──────────────────────────────────────────────
 
 async fn execute_blender_generate_scene_claude(args: &Value, ctx: &ToolExecutionContext) -> String {
     let client = match blender_client_or_err(ctx) { Ok(c) => c, Err(e) => return e };
-    let prompt = args["prompt"].as_str().unwrap_or("");
-    let duration = args["duration"].as_f64().unwrap_or(10.0);
-    let style = args["style"].as_str().unwrap_or("cinematic");
-    let ref_url = args["reference_image_url"].as_str();
-    match client.generate_scene(prompt, duration, style, ref_url).await {
-        Ok(p) => format!("✅ Blender scene rendered: {p}"),
-        Err(e) => format!("❌ blender_generate_scene failed: {e}"),
+    let mut tool_args = json!({
+        "prompt":   args["prompt"].as_str().unwrap_or(""),
+        "duration": args["duration"].as_f64().unwrap_or(10.0),
+        "style":    args["style"].as_str().unwrap_or("cinematic"),
+    });
+    if let Some(u) = args["reference_image_url"].as_str() {
+        tool_args["reference_image_url"] = Value::String(u.to_string());
     }
+    blender_render(&client, "blender_generate_scene", tool_args, "video_url", "mp4", "Blender scene rendered").await
 }
 
 async fn execute_blender_generate_thumbnail_claude(args: &Value, ctx: &ToolExecutionContext) -> String {
     let client = match blender_client_or_err(ctx) { Ok(c) => c, Err(e) => return e };
-    let prompt = args["prompt"].as_str().unwrap_or("");
-    let title_text = args["title_text"].as_str().unwrap_or("");
-    let style = args["style"].as_str().unwrap_or("youtube");
-    match client.generate_thumbnail(prompt, title_text, style).await {
-        Ok(p) => format!("✅ Blender thumbnail rendered: {p}"),
-        Err(e) => format!("❌ blender_generate_thumbnail failed: {e}"),
-    }
+    let tool_args = json!({
+        "prompt":     args["prompt"].as_str().unwrap_or(""),
+        "title_text": args["title_text"].as_str().unwrap_or(""),
+        "style":      args["style"].as_str().unwrap_or("youtube"),
+    });
+    blender_render(&client, "blender_generate_thumbnail", tool_args, "image_url", "png", "Blender thumbnail rendered").await
 }
 
 async fn execute_blender_generate_title_card_claude(args: &Value, ctx: &ToolExecutionContext) -> String {
     let client = match blender_client_or_err(ctx) { Ok(c) => c, Err(e) => return e };
-    let title = args["title"].as_str().unwrap_or("");
-    let subtitle = args["subtitle"].as_str().unwrap_or("");
-    let duration = args["duration"].as_f64().unwrap_or(5.0);
-    let style = args["style"].as_str().unwrap_or("cinematic");
-    match client.generate_title_card(title, subtitle, duration, style).await {
-        Ok(p) => format!("✅ Blender title card rendered: {p}"),
-        Err(e) => format!("❌ blender_generate_title_card failed: {e}"),
-    }
+    let tool_args = json!({
+        "title":    args["title"].as_str().unwrap_or(""),
+        "subtitle": args["subtitle"].as_str().unwrap_or(""),
+        "duration": args["duration"].as_f64().unwrap_or(5.0),
+        "style":    args["style"].as_str().unwrap_or("cinematic"),
+    });
+    blender_render(&client, "blender_generate_title_card", tool_args, "video_url", "mp4", "Blender title card rendered").await
 }
 
 async fn execute_blender_generate_data_viz_claude(args: &Value, ctx: &ToolExecutionContext) -> String {
     let client = match blender_client_or_err(ctx) { Ok(c) => c, Err(e) => return e };
-    let data_json = args["data_json"].as_str().unwrap_or("[]");
-    let chart_type = args["chart_type"].as_str().unwrap_or("bar");
-    let title = args["title"].as_str().unwrap_or("Data");
-    let duration = args["duration"].as_f64().unwrap_or(10.0);
-    match client.generate_data_viz(data_json, chart_type, title, duration).await {
-        Ok(p) => format!("✅ Blender data viz rendered: {p}"),
-        Err(e) => format!("❌ blender_generate_data_viz failed: {e}"),
-    }
+    let tool_args = json!({
+        "data_json":  args["data_json"].as_str().unwrap_or("[]"),
+        "chart_type": args["chart_type"].as_str().unwrap_or("bar"),
+        "title":      args["title"].as_str().unwrap_or("Data"),
+        "duration":   args["duration"].as_f64().unwrap_or(10.0),
+    });
+    blender_render(&client, "blender_generate_data_viz", tool_args, "video_url", "mp4", "Blender data viz rendered").await
 }
 
 async fn execute_blender_generate_lower_third_claude(args: &Value, ctx: &ToolExecutionContext) -> String {
     let client = match blender_client_or_err(ctx) { Ok(c) => c, Err(e) => return e };
-    let name_text = args["name_text"].as_str().unwrap_or("");
-    let subtitle_text = args["subtitle_text"].as_str().unwrap_or("");
-    let style = args["style"].as_str().unwrap_or("modern");
-    let duration = args["duration"].as_f64().unwrap_or(5.0);
-    match client.generate_lower_third(name_text, subtitle_text, style, duration).await {
-        Ok(p) => format!("✅ Blender lower third rendered: {p}"),
-        Err(e) => format!("❌ blender_generate_lower_third failed: {e}"),
-    }
+    let tool_args = json!({
+        "name_text":     args["name_text"].as_str().unwrap_or(""),
+        "subtitle_text": args["subtitle_text"].as_str().unwrap_or(""),
+        "style":         args["style"].as_str().unwrap_or("modern"),
+        "duration":      args["duration"].as_f64().unwrap_or(5.0),
+    });
+    blender_render(&client, "blender_generate_lower_third", tool_args, "video_url", "mp4", "Blender lower third rendered").await
 }
 
 async fn execute_blender_generate_latex_claude(args: &Value, ctx: &ToolExecutionContext) -> String {
     let client = match blender_client_or_err(ctx) { Ok(c) => c, Err(e) => return e };
-    let latex_expression = args["latex_expression"].as_str().unwrap_or("");
-    let animation_type = args["animation_type"].as_str().unwrap_or("appear");
-    let duration = args["duration"].as_f64().unwrap_or(8.0);
-    let background_style = args["background_style"].as_str().unwrap_or("dark");
-    match client.generate_latex(latex_expression, animation_type, duration, background_style).await {
-        Ok(p) => format!("✅ Blender LaTeX animation rendered: {p}"),
-        Err(e) => format!("❌ blender_generate_latex failed: {e}"),
-    }
+    let tool_args = json!({
+        "latex_expression": args["latex_expression"].as_str().unwrap_or(""),
+        "animation_type":   args["animation_type"].as_str().unwrap_or("appear"),
+        "duration":         args["duration"].as_f64().unwrap_or(8.0),
+        "background_style": args["background_style"].as_str().unwrap_or("dark"),
+    });
+    blender_render(&client, "blender_generate_latex", tool_args, "video_url", "mp4", "Blender LaTeX animation rendered").await
 }
 
 async fn execute_blender_generate_ui_mockup_claude(args: &Value, ctx: &ToolExecutionContext) -> String {
     let client = match blender_client_or_err(ctx) { Ok(c) => c, Err(e) => return e };
-    let device = args["device"].as_str().unwrap_or("iPhone");
-    let animation = args["animation"].as_str().unwrap_or("reveal");
-    let duration = args["duration"].as_f64().unwrap_or(5.0);
-    let screenshot_url = args["screenshot_url"].as_str().unwrap_or("");
-    match client.generate_ui_mockup(device, animation, duration, screenshot_url, None, None, None).await {
-        Ok(p) => format!("✅ Blender UI mockup rendered: {p}"),
-        Err(e) => format!("❌ blender_generate_ui_mockup failed: {e}"),
-    }
+    let tool_args = json!({
+        "device":         args["device"].as_str().unwrap_or("iPhone"),
+        "animation":      args["animation"].as_str().unwrap_or("reveal"),
+        "duration":       args["duration"].as_f64().unwrap_or(5.0),
+        "screenshot_url": args["screenshot_url"].as_str().unwrap_or(""),
+    });
+    blender_render(&client, "blender_generate_ui_mockup", tool_args, "video_url", "mp4", "Blender UI mockup rendered").await
 }

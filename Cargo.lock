@@ -5992,6 +5992,7 @@ dependencies = [
  "rpassword",
  "rust-yt-downloader",
  "rust_decimal",
+ "rustls 0.23.30",
  "rustube",
  "rusty_ytdl",
  "serde",

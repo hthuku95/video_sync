@@ -369,6 +369,57 @@ impl BlenderMCPClient {
         self.download_to_outputs(url, &filename).await
     }
 
+    /// Submit a render job and poll until completion, then download the result.
+    /// Use this for all renders — it is safe for any duration because it never
+    /// holds an HTTP connection open during the actual render.
+    ///
+    /// * `tool`    — e.g. "blender_generate_scene"
+    /// * `args`    — tool-specific args JSON
+    /// * `url_key` — field in the result object that holds the file URL
+    ///               ("video_url" for MP4 tools, "image_url" for thumbnail)
+    /// * `ext`     — file extension for the local copy ("mp4" or "png")
+    pub async fn render_async(
+        &self,
+        tool: &str,
+        args: serde_json::Value,
+        url_key: &str,
+        ext: &str,
+    ) -> Result<String, String> {
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let prefix = tool.replace("blender_generate_", "blender_");
+        let filename = format!("{prefix}_{ts}.{ext}");
+
+        let job_id = self.submit_job(tool, args).await?;
+
+        // Poll every 5 seconds for up to 5 minutes (60 polls)
+        for _ in 0..60 {
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            let status = self.poll_job(&job_id).await?;
+            match status.get("state").and_then(|s| s.as_str()) {
+                Some("completed") => {
+                    let url = status
+                        .get("result")
+                        .and_then(|r| r.get(url_key))
+                        .and_then(|v| v.as_str())
+                        .ok_or_else(|| format!("Job result missing '{url_key}'"))?;
+                    return self.download_to_outputs(url, &filename).await;
+                }
+                Some("error") | Some("failed") => {
+                    let msg = status
+                        .get("error")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown error");
+                    return Err(msg.to_string());
+                }
+                _ => {} // pending / running — keep polling
+            }
+        }
+        Err(format!("Blender job {job_id} timed out after 300s"))
+    }
+
     /// Submit a long-running job to the Phase 5 async queue.
     /// Returns the job_id to poll via `poll_job`.
     pub async fn submit_job(&self, tool: &str, args: serde_json::Value) -> Result<String, String> {
