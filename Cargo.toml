@@ -10,7 +10,7 @@ axum = { version = "0.7.5", features = ["ws", "multipart"] }
 tokio = { version = "1.37.0", features = ["full"] }
 futures = "0.3"
 async-trait = "0.1.73"
-sqlx = { version = "0.7.4", features = ["runtime-tokio-rustls", "postgres", "chrono", "migrate", "rust_decimal", "json"] }
+sqlx = { version = "0.7.4", features = ["runtime-tokio-rustls", "postgres", "chrono", "migrate", "rust_decimal", "json", "uuid"] }
 dotenvy = "0.15.7"
 tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter", "json", "registry"] }

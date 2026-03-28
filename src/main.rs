@@ -38,6 +38,7 @@ mod transform;
 mod advanced;
 mod export;
 mod workflows; // Named multi-step FFmpeg workflow chains
+mod portfolio_tests;
 
 // AppState now holds the database connection pool, vector database clients, Claude/Gemini client, Pexels client, job manager, and workflow checkpointer
 pub struct AppState {

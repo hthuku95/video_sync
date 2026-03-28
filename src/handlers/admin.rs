@@ -14,6 +14,7 @@ use serde::Deserialize;
 use serde_json::json;
 use sqlx::{FromRow, Row};
 use std::sync::Arc;
+use uuid::Uuid;
 
 pub fn admin_routes() -> Router {
     // HTML pages - public routes with JavaScript authentication
@@ -25,7 +26,9 @@ pub fn admin_routes() -> Router {
         .route("/admin/users/:id", get(admin_user_detail))
         .route("/admin/clipping-activity", get(admin_clipping_activity_page))
         .route("/admin/clipping-jobs", get(admin_clipping_jobs_page))
-        .route("/admin/performance", get(admin_performance_page));
+        .route("/admin/performance", get(admin_performance_page))
+        .route("/admin/test-runs", get(admin_test_runs_page))
+        .route("/admin/test-runs/:id", get(admin_test_run_detail_page));
     
     // API endpoints - protected routes with JWT authentication  
     let protected_admin = Router::new()
@@ -62,6 +65,8 @@ pub fn admin_routes() -> Router {
         .route("/api/admin/performance/channel-health", get(admin_channel_health))
         .route("/api/admin/performance/recommendations", get(admin_learning_recommendations))
         .route("/api/admin/performance/thumbnails", get(admin_thumbnail_stats))
+        .route("/api/admin/test-runs", get(api_list_test_runs).post(api_trigger_test_run))
+        .route("/api/admin/test-runs/:id", get(api_get_test_run))
         .layer(axum::middleware::from_fn(admin_middleware))
         .layer(axum::middleware::from_fn(auth_middleware));
     
@@ -5629,4 +5634,574 @@ pub async fn admin_performance_page() -> Html<String> {
     "###;
 
     Html(html.to_string())
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Portfolio Test Runs — API handlers
+// ═══════════════════════════════════════════════════════════════════════════════
+
+#[derive(serde::Deserialize)]
+pub struct TriggerTestRunRequest {
+    pub name: Option<String>,
+}
+
+pub async fn api_trigger_test_run(
+    Extension(state): Extension<Arc<AppState>>,
+    axum::Json(body): axum::Json<TriggerTestRunRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let name = body.name.unwrap_or_else(|| {
+        format!(
+            "Portfolio run {}",
+            chrono::Utc::now().format("%Y-%m-%d %H:%M")
+        )
+    });
+
+    match crate::portfolio_tests::PortfolioTestRunner::create_and_spawn(state, name).await {
+        Ok(run_id) => Ok(Json(json!({ "run_id": run_id, "status": "running" }))),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e })),
+        )),
+    }
+}
+
+pub async fn api_list_test_runs(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let rows = sqlx::query(
+        "SELECT id, name, status, started_at, completed_at, \
+                total_tests, passed_tests, failed_tests \
+         FROM test_runs ORDER BY started_at DESC LIMIT 50",
+    )
+    .fetch_all(&state.db_pool)
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() }))))?;
+
+    let runs: Vec<serde_json::Value> = rows
+        .into_iter()
+        .map(|r| {
+            let id: Uuid = r.get("id");
+            let started_at: chrono::DateTime<chrono::Utc> = r.get("started_at");
+            let completed_at: Option<chrono::DateTime<chrono::Utc>> = r.get("completed_at");
+            json!({
+                "id": id,
+                "name": r.get::<String, _>("name"),
+                "status": r.get::<String, _>("status"),
+                "started_at": started_at,
+                "completed_at": completed_at,
+                "total_tests": r.get::<i32, _>("total_tests"),
+                "passed_tests": r.get::<i32, _>("passed_tests"),
+                "failed_tests": r.get::<i32, _>("failed_tests"),
+            })
+        })
+        .collect();
+
+    Ok(Json(json!({ "runs": runs })))
+}
+
+pub async fn api_get_test_run(
+    Path(id): Path<uuid::Uuid>,
+    Extension(state): Extension<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let run = sqlx::query(
+        "SELECT id, name, status, started_at, completed_at, \
+                total_tests, passed_tests, failed_tests \
+         FROM test_runs WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(&state.db_pool)
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() }))))?
+    .ok_or_else(|| (StatusCode::NOT_FOUND, Json(json!({ "error": "Test run not found" }))))?;
+
+    let results = sqlx::query(
+        "SELECT id, test_name, gig_type, prompt, status, \
+                output_r2_key, output_r2_url, output_filename, \
+                error_message, llm_review_score, llm_review_feedback, \
+                llm_reviewer, started_at, completed_at \
+         FROM test_results WHERE run_id = $1 ORDER BY started_at ASC",
+    )
+    .bind(id)
+    .fetch_all(&state.db_pool)
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() }))))?;
+
+    let results_json: Vec<serde_json::Value> = results
+        .into_iter()
+        .map(|r| {
+            let rid: Uuid = r.get("id");
+            let started_at: chrono::DateTime<chrono::Utc> = r.get("started_at");
+            let completed_at: Option<chrono::DateTime<chrono::Utc>> = r.get("completed_at");
+            json!({
+                "id": rid,
+                "test_name": r.get::<String, _>("test_name"),
+                "gig_type": r.get::<String, _>("gig_type"),
+                "prompt": r.get::<String, _>("prompt"),
+                "status": r.get::<String, _>("status"),
+                "output_r2_key": r.get::<Option<String>, _>("output_r2_key"),
+                "output_r2_url": r.get::<Option<String>, _>("output_r2_url"),
+                "output_filename": r.get::<Option<String>, _>("output_filename"),
+                "error_message": r.get::<Option<String>, _>("error_message"),
+                "llm_review_score": r.get::<Option<i32>, _>("llm_review_score"),
+                "llm_review_feedback": r.get::<Option<String>, _>("llm_review_feedback"),
+                "llm_reviewer": r.get::<Option<String>, _>("llm_reviewer"),
+                "started_at": started_at,
+                "completed_at": completed_at,
+            })
+        })
+        .collect();
+
+    let run_id: Uuid = run.get("id");
+    let run_started: chrono::DateTime<chrono::Utc> = run.get("started_at");
+    let run_completed: Option<chrono::DateTime<chrono::Utc>> = run.get("completed_at");
+
+    Ok(Json(json!({
+        "run": {
+            "id": run_id,
+            "name": run.get::<String, _>("name"),
+            "status": run.get::<String, _>("status"),
+            "started_at": run_started,
+            "completed_at": run_completed,
+            "total_tests": run.get::<i32, _>("total_tests"),
+            "passed_tests": run.get::<i32, _>("passed_tests"),
+            "failed_tests": run.get::<i32, _>("failed_tests"),
+        },
+        "results": results_json,
+    })))
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Portfolio Test Runs — SSR Pages
+// ═══════════════════════════════════════════════════════════════════════════════
+
+pub async fn admin_test_runs_page() -> Html<String> {
+    let html = r###"<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Portfolio Test Runs — VideoSync Admin</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         background: #0f0f13; color: #e0e0e0; display: flex; min-height: 100vh; }
+  .sidebar { width: 220px; background: #1a1a24; padding: 24px 0; flex-shrink: 0; }
+  .sidebar h2 { color: #fff; font-size: 14px; font-weight: 700; padding: 0 20px 20px;
+                border-bottom: 1px solid #2a2a36; letter-spacing: 0.05em; }
+  .sidebar a { display: block; padding: 10px 20px; color: #9999bb; text-decoration: none;
+               font-size: 13px; transition: all 0.15s; }
+  .sidebar a:hover, .sidebar a.active { background: #23233a; color: #fff; }
+  .main { flex: 1; padding: 32px; overflow-y: auto; }
+  .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 28px; }
+  .header h1 { font-size: 22px; font-weight: 600; color: #fff; }
+  .btn { padding: 10px 20px; border: none; border-radius: 8px; cursor: pointer;
+         font-size: 13px; font-weight: 600; transition: all 0.2s; }
+  .btn-primary { background: #6c5ce7; color: #fff; }
+  .btn-primary:hover { background: #5a4bd1; }
+  .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+  .runs-grid { display: flex; flex-direction: column; gap: 12px; }
+  .run-card { background: #1a1a24; border-radius: 10px; padding: 20px 24px;
+              border: 1px solid #2a2a36; cursor: pointer; transition: border-color 0.15s;
+              text-decoration: none; color: inherit; display: block; }
+  .run-card:hover { border-color: #6c5ce7; }
+  .run-card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+  .run-name { font-size: 15px; font-weight: 600; color: #fff; }
+  .badge { padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 600;
+           letter-spacing: 0.04em; }
+  .badge-running { background: #2563eb22; color: #60a5fa; }
+  .badge-completed { background: #16a34a22; color: #4ade80; }
+  .badge-completed_with_failures { background: #d9770622; color: #fb923c; }
+  .badge-failed { background: #dc262622; color: #f87171; }
+  .run-meta { font-size: 12px; color: #666680; display: flex; gap: 20px; flex-wrap: wrap; }
+  .run-scores { display: flex; gap: 16px; margin-top: 12px; }
+  .score-item { text-align: center; }
+  .score-num { font-size: 20px; font-weight: 700; color: #fff; }
+  .score-label { font-size: 11px; color: #666680; }
+  .score-passed .score-num { color: #4ade80; }
+  .score-failed .score-num { color: #f87171; }
+  .empty { text-align: center; padding: 60px; color: #666680; }
+  .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.7);
+                   z-index: 1000; align-items: center; justify-content: center; }
+  .modal-overlay.show { display: flex; }
+  .modal { background: #1a1a24; border-radius: 12px; padding: 28px; width: 440px;
+           border: 1px solid #2a2a36; }
+  .modal h3 { font-size: 17px; font-weight: 600; color: #fff; margin-bottom: 16px; }
+  .modal label { display: block; font-size: 12px; color: #9999bb; margin-bottom: 6px; }
+  .modal input { width: 100%; background: #0f0f13; border: 1px solid #2a2a36; border-radius: 7px;
+                 padding: 10px 14px; color: #fff; font-size: 14px; margin-bottom: 20px; }
+  .modal-actions { display: flex; gap: 12px; justify-content: flex-end; }
+  .btn-ghost { background: transparent; border: 1px solid #2a2a36; color: #9999bb; }
+  .btn-ghost:hover { border-color: #6c5ce7; color: #fff; }
+  .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid rgba(255,255,255,0.3);
+             border-top-color: #fff; border-radius: 50%; animation: spin 0.7s linear infinite;
+             margin-right: 8px; vertical-align: middle; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .info-banner { background: #2563eb15; border: 1px solid #2563eb40; border-radius: 8px;
+                 padding: 14px 18px; margin-bottom: 24px; font-size: 13px; color: #93c5fd; }
+</style>
+</head>
+<body>
+<div class="sidebar">
+  <h2>VIDEOSYNC ADMIN</h2>
+  <a href="/admin/dashboard">Dashboard</a>
+  <a href="/admin/users">Users</a>
+  <a href="/admin/clipping-jobs">Clipping Jobs</a>
+  <a href="/admin/clipping-activity">Activity</a>
+  <a href="/admin/performance">Performance</a>
+  <a href="/admin/test-runs" class="active">Portfolio Tests</a>
+</div>
+<div class="main">
+  <div class="header">
+    <h1>Portfolio Test Runs</h1>
+    <button class="btn btn-primary" onclick="openModal()">+ New Test Run</button>
+  </div>
+  <div class="info-banner">
+    Each run executes 12 Fiverr gig scenarios (7 Blender tools × 2 variants + thumbnails),
+    uploads outputs to R2, and gets a Gemini quality review. Each run takes ~30–40 minutes.
+  </div>
+  <div id="runs-container" class="runs-grid">
+    <div class="empty">Loading...</div>
+  </div>
+</div>
+
+<!-- New Run Modal -->
+<div class="modal-overlay" id="modal">
+  <div class="modal">
+    <h3>Start New Test Run</h3>
+    <label>Run Name</label>
+    <input type="text" id="run-name" placeholder="e.g. Portfolio v1 — March 2026">
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" id="start-btn" onclick="startRun()">Start Run</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const token = localStorage.getItem('authToken');
+function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+function statusBadge(s) {
+  return `<span class="badge badge-${s}">${s.replace(/_/g,' ')}</span>`;
+}
+
+function scoreColor(n) {
+  if (n >= 8) return '#4ade80';
+  if (n >= 5) return '#fbbf24';
+  return '#f87171';
+}
+
+async function loadRuns() {
+  try {
+    const r = await fetch('/api/admin/test-runs', {
+      headers: { 'Authorization': 'Bearer ' + token }
+    });
+    const data = await r.json();
+    const c = document.getElementById('runs-container');
+    if (!data.runs || data.runs.length === 0) {
+      c.innerHTML = '<div class="empty">No test runs yet. Click "New Test Run" to start.</div>';
+      return;
+    }
+    c.innerHTML = data.runs.map(run => {
+      const started = new Date(run.started_at).toLocaleString();
+      const duration = run.completed_at
+        ? Math.round((new Date(run.completed_at) - new Date(run.started_at)) / 60000) + ' min'
+        : 'in progress...';
+      return `<a class="run-card" href="/admin/test-runs/${run.id}">
+        <div class="run-card-header">
+          <span class="run-name">${esc(run.name)}</span>
+          ${statusBadge(run.status)}
+        </div>
+        <div class="run-meta">
+          <span>Started: ${esc(started)}</span>
+          <span>Duration: ${esc(duration)}</span>
+        </div>
+        <div class="run-scores">
+          <div class="score-item score-passed">
+            <div class="score-num">${run.passed_tests}</div>
+            <div class="score-label">Passed</div>
+          </div>
+          <div class="score-item score-failed">
+            <div class="score-num">${run.failed_tests}</div>
+            <div class="score-label">Failed</div>
+          </div>
+          <div class="score-item">
+            <div class="score-num">${run.total_tests}</div>
+            <div class="score-label">Total</div>
+          </div>
+        </div>
+      </a>`;
+    }).join('');
+  } catch(e) {
+    document.getElementById('runs-container').innerHTML =
+      '<div class="empty">Error loading runs: ' + esc(e.message) + '</div>';
+  }
+}
+
+function openModal() {
+  document.getElementById('run-name').value =
+    'Portfolio Run — ' + new Date().toLocaleDateString('en-GB', {day:'2-digit',month:'short',year:'numeric'});
+  document.getElementById('modal').classList.add('show');
+}
+function closeModal() { document.getElementById('modal').classList.remove('show'); }
+
+async function startRun() {
+  const name = document.getElementById('run-name').value.trim() || 'Portfolio Run';
+  const btn = document.getElementById('start-btn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>Starting...';
+  try {
+    const r = await fetch('/api/admin/test-runs', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name })
+    });
+    const data = await r.json();
+    if (data.run_id) {
+      closeModal();
+      window.location.href = '/admin/test-runs/' + data.run_id;
+    } else {
+      alert('Error: ' + (data.error || 'Unknown error'));
+    }
+  } catch(e) {
+    alert('Error: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = 'Start Run';
+  }
+}
+
+loadRuns();
+setInterval(loadRuns, 15000);
+</script>
+</body>
+</html>"###;
+    Html(html.to_string())
+}
+
+pub async fn admin_test_run_detail_page(Path(id): Path<String>) -> Html<String> {
+    let html = format!(r###"<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Test Run Detail — VideoSync Admin</title>
+<style>
+  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+  body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+          background: #0f0f13; color: #e0e0e0; display: flex; min-height: 100vh; }}
+  .sidebar {{ width: 220px; background: #1a1a24; padding: 24px 0; flex-shrink: 0; }}
+  .sidebar h2 {{ color: #fff; font-size: 14px; font-weight: 700; padding: 0 20px 20px;
+                 border-bottom: 1px solid #2a2a36; letter-spacing: 0.05em; }}
+  .sidebar a {{ display: block; padding: 10px 20px; color: #9999bb; text-decoration: none;
+                font-size: 13px; transition: all 0.15s; }}
+  .sidebar a:hover, .sidebar a.active {{ background: #23233a; color: #fff; }}
+  .main {{ flex: 1; padding: 32px; overflow-y: auto; max-width: calc(100vw - 220px); }}
+  .breadcrumb {{ font-size: 12px; color: #666680; margin-bottom: 20px; }}
+  .breadcrumb a {{ color: #9999bb; text-decoration: none; }}
+  .run-header {{ display: flex; justify-content: space-between; align-items: flex-start;
+                 margin-bottom: 24px; }}
+  .run-header h1 {{ font-size: 20px; font-weight: 600; color: #fff; }}
+  .badge {{ padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; }}
+  .badge-running {{ background: #2563eb22; color: #60a5fa; }}
+  .badge-completed {{ background: #16a34a22; color: #4ade80; }}
+  .badge-completed_with_failures {{ background: #d9770622; color: #fb923c; }}
+  .badge-failed {{ background: #dc262622; color: #f87171; }}
+  .stats-row {{ display: flex; gap: 16px; margin-bottom: 28px; flex-wrap: wrap; }}
+  .stat-box {{ background: #1a1a24; border: 1px solid #2a2a36; border-radius: 10px;
+               padding: 16px 22px; min-width: 120px; }}
+  .stat-val {{ font-size: 24px; font-weight: 700; color: #fff; }}
+  .stat-label {{ font-size: 11px; color: #666680; margin-top: 4px; }}
+  .stat-passed .stat-val {{ color: #4ade80; }}
+  .stat-failed .stat-val {{ color: #f87171; }}
+  .results-grid {{ display: flex; flex-direction: column; gap: 14px; }}
+  .result-card {{ background: #1a1a24; border: 1px solid #2a2a36; border-radius: 10px;
+                  padding: 20px 24px; }}
+  .result-card.passed {{ border-left: 3px solid #4ade80; }}
+  .result-card.failed {{ border-left: 3px solid #f87171; }}
+  .result-card.running {{ border-left: 3px solid #60a5fa; }}
+  .result-header {{ display: flex; justify-content: space-between; align-items: center;
+                    margin-bottom: 10px; }}
+  .result-name {{ font-size: 14px; font-weight: 600; color: #fff; }}
+  .gig-tag {{ background: #23233a; border-radius: 5px; padding: 2px 8px; font-size: 11px;
+              color: #9999bb; }}
+  .result-prompt {{ font-size: 12px; color: #666680; margin-bottom: 12px; line-height: 1.5; }}
+  .result-body {{ display: flex; gap: 20px; align-items: flex-start; flex-wrap: wrap; }}
+  .media-preview {{ flex-shrink: 0; }}
+  .media-preview video, .media-preview img {{
+    max-width: 280px; max-height: 180px; border-radius: 8px;
+    background: #0a0a10; border: 1px solid #2a2a36; }}
+  .result-info {{ flex: 1; min-width: 200px; }}
+  .review-box {{ background: #0f0f1a; border-radius: 8px; padding: 14px; margin-top: 8px; }}
+  .review-score {{ display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }}
+  .score-circle {{ width: 40px; height: 40px; border-radius: 50%; display: flex;
+                   align-items: center; justify-content: center; font-size: 16px;
+                   font-weight: 700; border: 2px solid; }}
+  .review-label {{ font-size: 11px; color: #666680; }}
+  .review-feedback {{ font-size: 13px; color: #b0b0c8; line-height: 1.5; }}
+  .download-btn {{ display: inline-block; margin-top: 12px; padding: 8px 16px;
+                   background: #6c5ce7; color: #fff; border-radius: 7px;
+                   text-decoration: none; font-size: 12px; font-weight: 600; }}
+  .download-btn:hover {{ background: #5a4bd1; }}
+  .error-msg {{ background: #dc262610; border: 1px solid #dc262630; border-radius: 8px;
+                padding: 12px; font-size: 12px; color: #f87171; font-family: monospace;
+                line-height: 1.5; word-break: break-all; }}
+  .spinner {{ display: inline-block; width: 14px; height: 14px; border: 2px solid rgba(255,255,255,0.3);
+              border-top-color: #fff; border-radius: 50%; animation: spin 0.7s linear infinite; }}
+  @keyframes spin {{ to {{ transform: rotate(360deg); }} }}
+  .refresh-note {{ font-size: 12px; color: #666680; text-align: right; margin-bottom: 12px; }}
+</style>
+</head>
+<body>
+<div class="sidebar">
+  <h2>VIDEOSYNC ADMIN</h2>
+  <a href="/admin/dashboard">Dashboard</a>
+  <a href="/admin/users">Users</a>
+  <a href="/admin/clipping-jobs">Clipping Jobs</a>
+  <a href="/admin/clipping-activity">Activity</a>
+  <a href="/admin/performance">Performance</a>
+  <a href="/admin/test-runs" class="active">Portfolio Tests</a>
+</div>
+<div class="main">
+  <div class="breadcrumb">
+    <a href="/admin/test-runs">Portfolio Tests</a> &rsaquo; Run Detail
+  </div>
+  <div id="run-header" class="run-header">
+    <h1>Loading...</h1>
+  </div>
+  <div id="stats-row" class="stats-row"></div>
+  <div id="refresh-note" class="refresh-note" style="display:none">
+    <span class="spinner"></span> Run in progress — auto-refreshing every 20s
+  </div>
+  <div id="results-container" class="results-grid">
+    <div style="color:#666680;text-align:center;padding:40px">Loading results...</div>
+  </div>
+</div>
+
+<script>
+const RUN_ID = "{id}";
+const token = localStorage.getItem('authToken');
+let autoRefresh = null;
+
+function esc(s) {{ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }}
+
+function scoreStyle(n) {{
+  if (!n) return {{ color: '#666680', border: '#333350' }};
+  if (n >= 8) return {{ color: '#4ade80', border: '#4ade80' }};
+  if (n >= 5) return {{ color: '#fbbf24', border: '#fbbf24' }};
+  return {{ color: '#f87171', border: '#f87171' }};
+}}
+
+function renderMedia(r) {{
+  if (!r.output_r2_url) return '';
+  const ext = (r.output_filename || '').split('.').pop().toLowerCase();
+  const url = esc(r.output_r2_url);
+  const filename = esc(r.output_filename || 'output');
+  let preview = '';
+  if (ext === 'mp4' || ext === 'webm') {{
+    preview = `<video controls muted loop preload="metadata">
+      <source src="${{url}}" type="video/${{ext}}">
+    </video>`;
+  }} else if (ext === 'png' || ext === 'jpg' || ext === 'jpeg') {{
+    preview = `<img src="${{url}}" alt="${{filename}}" loading="lazy">`;
+  }}
+  return `<div class="media-preview">
+    ${{preview}}
+    <br>
+    <a class="download-btn" href="${{url}}" download="${{filename}}" target="_blank">
+      ↓ Download ${{filename}}
+    </a>
+  </div>`;
+}}
+
+function renderReview(r) {{
+  if (r.status === 'failed') {{
+    return `<div class="error-msg">${{esc(r.error_message || 'Unknown error')}}</div>`;
+  }}
+  if (!r.llm_review_score) return '<div style="color:#666680;font-size:12px">Review pending...</div>';
+  const st = scoreStyle(r.llm_review_score);
+  return `<div class="review-box">
+    <div class="review-score">
+      <div class="score-circle" style="color:${{st.color}};border-color:${{st.border}}">
+        ${{r.llm_review_score}}
+      </div>
+      <div>
+        <div style="font-size:13px;font-weight:600;color:#fff">Gemini Review Score</div>
+        <div class="review-label">out of 10 — reviewed by ${{esc(r.llm_reviewer||'gemini')}}</div>
+      </div>
+    </div>
+    <div class="review-feedback">${{esc(r.llm_review_feedback||'')}}</div>
+  </div>`;
+}}
+
+async function load() {{
+  try {{
+    const resp = await fetch(`/api/admin/test-runs/${{RUN_ID}}`, {{
+      headers: {{ 'Authorization': 'Bearer ' + token }}
+    }});
+    const data = await resp.json();
+    if (!resp.ok) {{ throw new Error(data.error || 'Server error'); }}
+
+    const run = data.run;
+    // Header
+    document.getElementById('run-header').innerHTML = `
+      <h1>${{esc(run.name)}}</h1>
+      <span class="badge badge-${{run.status}}">${{run.status.replace(/_/g,' ')}}</span>`;
+
+    // Stats
+    const started = new Date(run.started_at).toLocaleString();
+    const duration = run.completed_at
+      ? Math.round((new Date(run.completed_at) - new Date(run.started_at)) / 60000) + ' min'
+      : 'In progress';
+    document.getElementById('stats-row').innerHTML = `
+      <div class="stat-box stat-passed"><div class="stat-val">${{run.passed_tests}}</div><div class="stat-label">Passed</div></div>
+      <div class="stat-box stat-failed"><div class="stat-val">${{run.failed_tests}}</div><div class="stat-label">Failed</div></div>
+      <div class="stat-box"><div class="stat-val">${{run.total_tests}}</div><div class="stat-label">Total</div></div>
+      <div class="stat-box"><div class="stat-val" style="font-size:14px">${{esc(started)}}</div><div class="stat-label">Started</div></div>
+      <div class="stat-box"><div class="stat-val" style="font-size:14px">${{esc(duration)}}</div><div class="stat-label">Duration</div></div>`;
+
+    // Auto-refresh note
+    const note = document.getElementById('refresh-note');
+    if (run.status === 'running') {{
+      note.style.display = 'block';
+      if (!autoRefresh) autoRefresh = setInterval(load, 20000);
+    }} else {{
+      note.style.display = 'none';
+      if (autoRefresh) {{ clearInterval(autoRefresh); autoRefresh = null; }}
+    }}
+
+    // Results
+    const container = document.getElementById('results-container');
+    if (!data.results || data.results.length === 0) {{
+      container.innerHTML = '<div style="color:#666680;text-align:center;padding:40px">No results yet...</div>';
+      return;
+    }}
+    container.innerHTML = data.results.map(r => `
+      <div class="result-card ${{r.status}}">
+        <div class="result-header">
+          <div>
+            <span class="result-name">${{esc(r.test_name)}}</span>
+            &nbsp;<span class="gig-tag">${{esc(r.gig_type)}}</span>
+          </div>
+          <span class="badge badge-${{r.status}}">${{r.status}}</span>
+        </div>
+        <div class="result-prompt">${{esc(r.prompt)}}</div>
+        <div class="result-body">
+          ${{renderMedia(r)}}
+          <div class="result-info">
+            ${{renderReview(r)}}
+          </div>
+        </div>
+      </div>`).join('');
+  }} catch(e) {{
+    document.getElementById('results-container').innerHTML =
+      `<div style="color:#f87171;text-align:center;padding:40px">Error: ${{esc(e.message)}}</div>`;
+  }}
+}}
+
+load();
+</script>
+</body>
+</html>"###, id = id);
+    Html(html)
 }
