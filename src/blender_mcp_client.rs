@@ -369,6 +369,46 @@ impl BlenderMCPClient {
         self.download_to_outputs(url, &filename).await
     }
 
+    /// Generate a Manim animation from a natural language description.
+    /// Returns a local file path inside `outputs/`.
+    pub async fn generate_animation(
+        &self,
+        description: &str,
+        duration: f64,
+        background: &str,
+        quality: &str,
+    ) -> Result<String, String> {
+        let args = json!({
+            "description": description,
+            "duration":    duration,
+            "background":  background,
+            "quality":     quality,
+        });
+        self.render_async("blender_generate_animation", args, "video_url", "mp4").await
+    }
+
+    /// Generate an animated data visualisation (bar/line/pie/counter/scatter).
+    /// Returns a local file path inside `outputs/`.
+    pub async fn generate_chart(
+        &self,
+        chart_type: &str,
+        title: &str,
+        data: serde_json::Value,
+        labels: serde_json::Value,
+        duration: f64,
+        colors: serde_json::Value,
+    ) -> Result<String, String> {
+        let args = json!({
+            "chart_type": chart_type,
+            "title":      title,
+            "data":       data,
+            "labels":     labels,
+            "duration":   duration,
+            "colors":     colors,
+        });
+        self.render_async("blender_generate_chart", args, "video_url", "mp4").await
+    }
+
     /// Submit a render job and poll until completion, then download the result.
     /// Use this for all renders — it is safe for any duration because it never
     /// holds an HTTP connection open during the actual render.

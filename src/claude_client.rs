@@ -7020,6 +7020,36 @@ impl ClaudeClient {
                     required: vec!["device".to_string()],
                 },
             },
+            ClaudeTool {
+                name: "blender_generate_animation".to_string(),
+                description: "Generate ANY Manim animation from a natural language description using LLM code generation. Use this for kinetic typography, abstract motion graphics, step-by-step explanations, or any creative animation that doesn't fit the specific latex/chart/scene categories.".to_string(),
+                input_schema: InputSchema {
+                    schema_type: "object".to_string(),
+                    properties: HashMap::from([
+                        ("description".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Natural language description of the animation to generate".to_string(), items: None }),
+                        ("duration".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Clip length in seconds (default: 10)".to_string(), items: None }),
+                        ("background".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Background: 'dark' (default) | 'light' | 'transparent'".to_string(), items: None }),
+                        ("quality".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Render quality: 'l' (480p fast) | 'm' (720p, default) | 'h' (1080p slow)".to_string(), items: None }),
+                    ]),
+                    required: vec!["description".to_string()],
+                },
+            },
+            ClaudeTool {
+                name: "blender_generate_chart".to_string(),
+                description: "Generate an animated data visualisation clip (bar chart, line chart, pie chart, animated counter, or scatter plot) using Manim. Returns a video URL.".to_string(),
+                input_schema: InputSchema {
+                    schema_type: "object".to_string(),
+                    properties: HashMap::from([
+                        ("chart_type".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Chart type: 'bar_chart' | 'line_chart' | 'pie_chart' | 'counter' | 'scatter'".to_string(), items: None }),
+                        ("title".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Chart title text".to_string(), items: None }),
+                        ("data".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "JSON array of data values, e.g. '[42,78,55,90]'".to_string(), items: None }),
+                        ("labels".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "JSON array of labels, e.g. '[\"Q1\",\"Q2\",\"Q3\",\"Q4\"]'".to_string(), items: None }),
+                        ("duration".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Clip length in seconds (default: 10)".to_string(), items: None }),
+                        ("colors".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "JSON array of Manim colour names, e.g. '[\"BLUE\",\"GREEN\"]'".to_string(), items: None }),
+                    ]),
+                    required: vec!["chart_type".to_string(), "title".to_string(), "data".to_string()],
+                },
+            },
         ]
     }
 

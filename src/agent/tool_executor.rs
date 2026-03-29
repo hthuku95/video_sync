@@ -141,6 +141,12 @@ pub async fn execute_tool_claude_with_context(
     if name == "blender_generate_ui_mockup" {
         return execute_blender_generate_ui_mockup_claude(args, ctx).await;
     }
+    if name == "blender_generate_animation" {
+        return execute_blender_generate_animation_claude(args, ctx).await;
+    }
+    if name == "blender_generate_chart" {
+        return execute_blender_generate_chart_claude(args, ctx).await;
+    }
 
     // Execute the tool first
     let result = execute_tool_claude(name, args).await;
@@ -219,6 +225,12 @@ pub async fn execute_tool_gemini_with_context(
     }
     if name == "blender_generate_ui_mockup" {
         return execute_blender_generate_ui_mockup_gemini(args, ctx).await;
+    }
+    if name == "blender_generate_animation" {
+        return execute_blender_generate_animation_gemini(args, ctx).await;
+    }
+    if name == "blender_generate_chart" {
+        return execute_blender_generate_chart_gemini(args, ctx).await;
     }
 
     // auto_generate_video needs ctx for BlenderMCPClient (video_source param)
@@ -10688,6 +10700,48 @@ async fn execute_blender_generate_ui_mockup_gemini(
     blender_render(&client, "blender_generate_ui_mockup", tool_args, "video_url", "mp4", "Blender UI mockup rendered").await
 }
 
+async fn execute_blender_generate_animation_gemini(
+    args: &HashMap<String, Value>,
+    ctx: &ToolExecutionContext,
+) -> String {
+    let client = match blender_client_or_err(ctx) { Ok(c) => c, Err(e) => return e };
+    let tool_args = json!({
+        "description": args.get("description").and_then(|v| v.as_str()).unwrap_or(""),
+        "duration":    args.get("duration").and_then(|v| v.as_f64()).unwrap_or(10.0),
+        "background":  args.get("background").and_then(|v| v.as_str()).unwrap_or("dark"),
+        "quality":     args.get("quality").and_then(|v| v.as_str()).unwrap_or("m"),
+    });
+    blender_render(&client, "blender_generate_animation", tool_args, "video_url", "mp4", "Manim animation rendered").await
+}
+
+async fn execute_blender_generate_chart_gemini(
+    args: &HashMap<String, Value>,
+    ctx: &ToolExecutionContext,
+) -> String {
+    let client = match blender_client_or_err(ctx) { Ok(c) => c, Err(e) => return e };
+    let data: Value = args.get("data")
+        .and_then(|v| v.as_str())
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or(json!([]));
+    let labels: Value = args.get("labels")
+        .and_then(|v| v.as_str())
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or(json!([]));
+    let colors: Value = args.get("colors")
+        .and_then(|v| v.as_str())
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or(json!([]));
+    let tool_args = json!({
+        "chart_type": args.get("chart_type").and_then(|v| v.as_str()).unwrap_or("bar_chart"),
+        "title":      args.get("title").and_then(|v| v.as_str()).unwrap_or(""),
+        "data":       data,
+        "labels":     labels,
+        "duration":   args.get("duration").and_then(|v| v.as_f64()).unwrap_or(10.0),
+        "colors":     colors,
+    });
+    blender_render(&client, "blender_generate_chart", tool_args, "video_url", "mp4", "Manim chart rendered").await
+}
+
 // ── Claude blender tool executors ──────────────────────────────────────────────
 
 async fn execute_blender_generate_scene_claude(args: &Value, ctx: &ToolExecutionContext) -> String {
@@ -10766,4 +10820,37 @@ async fn execute_blender_generate_ui_mockup_claude(args: &Value, ctx: &ToolExecu
         "screenshot_url": args["screenshot_url"].as_str().unwrap_or(""),
     });
     blender_render(&client, "blender_generate_ui_mockup", tool_args, "video_url", "mp4", "Blender UI mockup rendered").await
+}
+
+async fn execute_blender_generate_animation_claude(args: &Value, ctx: &ToolExecutionContext) -> String {
+    let client = match blender_client_or_err(ctx) { Ok(c) => c, Err(e) => return e };
+    let tool_args = json!({
+        "description": args["description"].as_str().unwrap_or(""),
+        "duration":    args["duration"].as_f64().unwrap_or(10.0),
+        "background":  args["background"].as_str().unwrap_or("dark"),
+        "quality":     args["quality"].as_str().unwrap_or("m"),
+    });
+    blender_render(&client, "blender_generate_animation", tool_args, "video_url", "mp4", "Manim animation rendered").await
+}
+
+async fn execute_blender_generate_chart_claude(args: &Value, ctx: &ToolExecutionContext) -> String {
+    let client = match blender_client_or_err(ctx) { Ok(c) => c, Err(e) => return e };
+    let data: Value = args["data"].as_str()
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or(json!([]));
+    let labels: Value = args["labels"].as_str()
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or(json!([]));
+    let colors: Value = args["colors"].as_str()
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or(json!([]));
+    let tool_args = json!({
+        "chart_type": args["chart_type"].as_str().unwrap_or("bar_chart"),
+        "title":      args["title"].as_str().unwrap_or(""),
+        "data":       data,
+        "labels":     labels,
+        "duration":   args["duration"].as_f64().unwrap_or(10.0),
+        "colors":     colors,
+    });
+    blender_render(&client, "blender_generate_chart", tool_args, "video_url", "mp4", "Manim chart rendered").await
 }

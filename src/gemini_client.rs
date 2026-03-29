@@ -2351,6 +2351,82 @@ impl GeminiClient {
             },
 
             FunctionDeclaration {
+                name: "blender_generate_animation".to_string(),
+                description: "Generate ANY Manim animation from a natural language description using LLM code generation. Use this for kinetic typography, abstract motion graphics, step-by-step explanations, or any creative animation that doesn't fit the specific latex/chart/scene categories.".to_string(),
+                parameters: Parameters {
+                    param_type: "object".to_string(),
+                    properties: {
+                        let mut props = HashMap::new();
+                        props.insert("description".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Natural language description of what to animate, e.g. 'Show the word SALE growing from small to large with a rainbow colour sweep, then explode into confetti particles'".to_string(),
+                            items: None,
+                        });
+                        props.insert("duration".to_string(), PropertyDefinition {
+                            prop_type: "number".to_string(),
+                            description: "Clip length in seconds (default: 10)".to_string(),
+                            items: None,
+                        });
+                        props.insert("background".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Background style: 'dark' (default), 'light', or 'transparent'".to_string(),
+                            items: None,
+                        });
+                        props.insert("quality".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Render quality: 'l' (480p fast), 'm' (720p, default), 'h' (1080p slow)".to_string(),
+                            items: None,
+                        });
+                        props
+                    },
+                    required: vec!["description".to_string()],
+                },
+            },
+
+            FunctionDeclaration {
+                name: "blender_generate_chart".to_string(),
+                description: "Generate an animated data visualisation clip (bar chart, line chart, pie chart, animated counter, or scatter plot) using Manim. Returns a video URL.".to_string(),
+                parameters: Parameters {
+                    param_type: "object".to_string(),
+                    properties: {
+                        let mut props = HashMap::new();
+                        props.insert("chart_type".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Chart type: 'bar_chart' | 'line_chart' | 'pie_chart' | 'counter' | 'scatter'".to_string(),
+                            items: None,
+                        });
+                        props.insert("title".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Chart title text".to_string(),
+                            items: None,
+                        });
+                        props.insert("data".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "JSON array of data values, e.g. '[42, 78, 55, 90]' or for pie chart '[{\"label\":\"A\",\"value\":30}]'".to_string(),
+                            items: None,
+                        });
+                        props.insert("labels".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "JSON array of labels, e.g. '[\"Q1\",\"Q2\",\"Q3\",\"Q4\"]'".to_string(),
+                            items: None,
+                        });
+                        props.insert("duration".to_string(), PropertyDefinition {
+                            prop_type: "number".to_string(),
+                            description: "Clip length in seconds (default: 10)".to_string(),
+                            items: None,
+                        });
+                        props.insert("colors".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "JSON array of Manim colour names, e.g. '[\"BLUE\",\"GREEN\",\"RED\"]'".to_string(),
+                            items: None,
+                        });
+                        props
+                    },
+                    required: vec!["chart_type".to_string(), "title".to_string(), "data".to_string()],
+                },
+            },
+
+            FunctionDeclaration {
                 name: "set_chat_title".to_string(),
                 description: "Sets a descriptive title for the current chat session. Use this to give the conversation a meaningful title based on the user's request or the work being done.".to_string(),
                 parameters: Parameters {
