@@ -191,6 +191,123 @@ fn scenarios() -> Vec<Scenario> {
             url_key: "video_url",
             ext: "mp4",
         },
+        Scenario {
+            name: "Particle Confetti — Celebration Intro",
+            gig_type: "celebration_animation",
+            description: "Colourful confetti burst animation for YouTube celebrations, event promos, and milestones.",
+            tool: "blender_generate_particle_confetti",
+            args: || json!({
+                "style": "confetti",
+                "count": 400,
+                "duration": 5.0,
+                "primary_color": [1.0, 0.25, 0.1, 1.0],
+                "secondary_color": [0.1, 0.4, 1.0, 1.0]
+            }),
+            url_key: "video_url",
+            ext: "mp4",
+        },
+        Scenario {
+            name: "Rigid Body Drop — Logo Reveal",
+            gig_type: "logo_animation",
+            description: "3D physics-based logo letter drop — premium Fiverr motion graphics gig.",
+            tool: "blender_generate_rigid_body_drop",
+            args: || json!({
+                "text": "BRAND",
+                "object_type": "text",
+                "style": "dark",
+                "duration": 4.0
+            }),
+            url_key: "video_url",
+            ext: "mp4",
+        },
+        Scenario {
+            name: "Camera Orbit — Abstract Product",
+            gig_type: "cinematic_animation",
+            description: "Smooth 360° camera orbit around abstract 3D scene — cinematic B-roll or product showcase.",
+            tool: "blender_generate_camera_path",
+            args: || json!({
+                "path_type": "orbit",
+                "subject": "abstract",
+                "duration": 8.0,
+                "style": "cinematic"
+            }),
+            url_key: "video_url",
+            ext: "mp4",
+        },
+        Scenario {
+            name: "Toon Scene — Cartoon Robots",
+            gig_type: "cartoon_animation",
+            description: "NPR toon-shaded cartoon scene with robots — for kids content, explainers, and stylised brand videos.",
+            tool: "blender_generate_toon_scene",
+            args: || json!({
+                "subject": "robots",
+                "title": "Hello World",
+                "flat_shading": true,
+                "duration": 5.0
+            }),
+            url_key: "video_url",
+            ext: "mp4",
+        },
+        Scenario {
+            name: "Whiteboard Reveal — Brand Name",
+            gig_type: "whiteboard_animation",
+            description: "Whiteboard draw-on animation of brand text — hugely popular on Fiverr for explainer videos.",
+            tool: "blender_generate_grease_pencil_reveal",
+            args: || json!({
+                "text": "DEVTHUKU",
+                "style": "whiteboard",
+                "duration": 6.0,
+                "stroke_width": 50
+            }),
+            url_key: "video_url",
+            ext: "mp4",
+        },
+        Scenario {
+            name: "Geometry Scatter — Sphere Field",
+            gig_type: "abstract_background",
+            description: "Procedural animated sphere scatter across torus surface with wave displacement — abstract motion background.",
+            tool: "blender_generate_geometry_scatter",
+            args: || json!({
+                "instance_type": "spheres",
+                "surface": "torus",
+                "count": 150,
+                "animated": true,
+                "duration": 7.0
+            }),
+            url_key: "video_url",
+            ext: "mp4",
+        },
+        Scenario {
+            name: "Geometry Proof — Pythagorean",
+            gig_type: "math_animation",
+            description: "Animated Pythagorean theorem proof using Manim — popular for educational YouTube channels.",
+            tool: "blender_generate_geometry_proof",
+            args: || json!({
+                "proof_type": "pythagorean",
+                "title": "Pythagorean Theorem",
+                "color_a": "BLUE",
+                "color_b": "RED",
+                "show_labels": true,
+                "duration": 12.0
+            }),
+            url_key: "video_url",
+            ext: "mp4",
+        },
+        Scenario {
+            name: "Text Animation — Kinetic Title",
+            gig_type: "kinetic_typography",
+            description: "Manim wave kinetic typography animation — high-demand for social media reels and intros.",
+            tool: "blender_generate_text_animation",
+            args: || json!({
+                "text": "YOUR BRAND",
+                "mode": "wave",
+                "color": "GOLD",
+                "duration": 6.0,
+                "font_size": 72
+            }),
+            url_key: "video_url",
+            ext: "mp4",
+        },
     ]
 }
 
