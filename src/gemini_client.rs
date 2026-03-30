@@ -2427,6 +2427,154 @@ impl GeminiClient {
             },
 
             FunctionDeclaration {
+                name: "blender_generate_flowchart".to_string(),
+                description: "Generate an animated Manim flowchart with process boxes, decision diamonds, and arrows. Use for process diagrams, system architecture flows, and explainer videos.".to_string(),
+                parameters: Parameters {
+                    param_type: "object".to_string(),
+                    properties: {
+                        let mut props = HashMap::new();
+                        props.insert("nodes".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "JSON array of nodes: [{\"id\":\"start\",\"label\":\"Start\",\"type\":\"start\"},{\"id\":\"step1\",\"label\":\"Process Data\",\"type\":\"process\"},{\"id\":\"decide\",\"label\":\"Valid?\",\"type\":\"decision\"},...] type: start|process|decision|end".to_string(), items: None });
+                        props.insert("edges".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "JSON array of connections: [{\"from\":\"start\",\"to\":\"step1\"},{\"from\":\"decide\",\"to\":\"step2\",\"label\":\"Yes\"},...]".to_string(), items: None });
+                        props.insert("title".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Chart heading text".to_string(), items: None });
+                        props.insert("duration".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Clip length in seconds (default: 12)".to_string(), items: None });
+                        props.insert("style".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Visual style: 'dark' (default) | 'light' | 'blue'".to_string(), items: None });
+                        props
+                    },
+                    required: vec!["nodes".to_string(), "edges".to_string()],
+                },
+            },
+
+            FunctionDeclaration {
+                name: "blender_generate_3d_math".to_string(),
+                description: "Generate a 3D mathematics animation using Manim's ThreeDScene — ideal for academic content, math tutorials, and STEM explainer videos.".to_string(),
+                parameters: Parameters {
+                    param_type: "object".to_string(),
+                    properties: {
+                        let mut props = HashMap::new();
+                        props.insert("scene_type".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "'surface' (3D function surface) | 'curve' (parametric helix) | 'vector_field' (2D arrow field) | 'torus' (spinning torus)".to_string(), items: None });
+                        props.insert("title".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Title text displayed on screen".to_string(), items: None });
+                        props.insert("function".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "For scene_type=surface: 'wave' | 'sin' | 'cos' | 'saddle' | 'paraboloid' | 'ripple'".to_string(), items: None });
+                        props.insert("duration".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Clip length in seconds (default: 12)".to_string(), items: None });
+                        props.insert("color".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Surface color: 'BLUE' | 'RED' | 'GREEN' | 'GOLD' | 'PURPLE' | 'TEAL'".to_string(), items: None });
+                        props
+                    },
+                    required: vec![],
+                },
+            },
+
+            FunctionDeclaration {
+                name: "blender_generate_code_animation".to_string(),
+                description: "Generate an animated code syntax-highlighting clip — ideal for tech tutorials, YouTube programming content, and developer explainer videos.".to_string(),
+                parameters: Parameters {
+                    param_type: "object".to_string(),
+                    properties: {
+                        let mut props = HashMap::new();
+                        props.insert("code".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Source code string to display and animate".to_string(), items: None });
+                        props.insert("language".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Syntax language: 'python' | 'javascript' | 'rust' | 'cpp' | 'java' | 'bash' | 'sql' | 'typescript' | 'go'".to_string(), items: None });
+                        props.insert("title".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Heading shown above the code block".to_string(), items: None });
+                        props.insert("highlight_lines".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "JSON array of 1-indexed line numbers to highlight, e.g. '[3,7,11]'".to_string(), items: None });
+                        props.insert("reveal_mode".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "'line_by_line' (default) | 'all_at_once' | 'block'".to_string(), items: None });
+                        props.insert("duration".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Clip length in seconds (default: 12)".to_string(), items: None });
+                        props.insert("style".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Syntax theme: 'monokai' | 'dracula' | 'solarized-dark'".to_string(), items: None });
+                        props
+                    },
+                    required: vec!["code".to_string()],
+                },
+            },
+
+            FunctionDeclaration {
+                name: "blender_generate_timeline".to_string(),
+                description: "Generate an animated timeline, project roadmap, or Gantt-style clip — great for business explainers, project demos, and history videos.".to_string(),
+                parameters: Parameters {
+                    param_type: "object".to_string(),
+                    properties: {
+                        let mut props = HashMap::new();
+                        props.insert("events".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "JSON array: [{\"date\":\"Jan\",\"label\":\"Project Kickoff\",\"color\":\"BLUE\"},{\"date\":\"Mar\",\"label\":\"MVP Launch\",\"color\":\"GREEN\"},...]".to_string(), items: None });
+                        props.insert("title".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Heading text".to_string(), items: None });
+                        props.insert("duration".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Clip length in seconds (default: 12)".to_string(), items: None });
+                        props.insert("style".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "'dark' (default) | 'light' | 'gradient'".to_string(), items: None });
+                        props.insert("orientation".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "'horizontal' (default) | 'vertical'".to_string(), items: None });
+                        props
+                    },
+                    required: vec!["events".to_string()],
+                },
+            },
+
+            FunctionDeclaration {
+                name: "blender_generate_network_graph".to_string(),
+                description: "Generate an animated network or knowledge graph — great for visualizing relationships, org charts, concept maps, and AI/ML topic maps.".to_string(),
+                parameters: Parameters {
+                    param_type: "object".to_string(),
+                    properties: {
+                        let mut props = HashMap::new();
+                        props.insert("nodes".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "JSON array: [{\"id\":\"A\",\"label\":\"Machine Learning\",\"color\":\"BLUE\"},{\"id\":\"B\",\"label\":\"Deep Learning\",\"color\":\"GREEN\"},...]".to_string(), items: None });
+                        props.insert("edges".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "JSON array: [{\"from\":\"A\",\"to\":\"B\"},{\"from\":\"A\",\"to\":\"C\",\"label\":\"includes\",\"directed\":true},...]".to_string(), items: None });
+                        props.insert("title".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Heading text".to_string(), items: None });
+                        props.insert("layout".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "'radial' (hub-and-spoke, default) | 'circular' | 'spring'".to_string(), items: None });
+                        props.insert("duration".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Clip length in seconds (default: 12)".to_string(), items: None });
+                        props.insert("style".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "'dark' | 'neon'".to_string(), items: None });
+                        props
+                    },
+                    required: vec!["nodes".to_string(), "edges".to_string()],
+                },
+            },
+
+            FunctionDeclaration {
+                name: "blender_generate_logo_reveal".to_string(),
+                description: "Generate a 3D extruded text / logo reveal animation in Blender — the most popular Fiverr motion graphics request.".to_string(),
+                parameters: Parameters {
+                    param_type: "object".to_string(),
+                    properties: {
+                        let mut props = HashMap::new();
+                        props.insert("text".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Brand name or main text to extrude and animate".to_string(), items: None });
+                        props.insert("tagline".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Optional secondary line (slogan / subtitle)".to_string(), items: None });
+                        props.insert("style".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "'extrude_reveal' (default, Z-scale grow-in) | 'zoom_in' | 'split' | 'typewriter'".to_string(), items: None });
+                        props.insert("color".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "JSON RGBA float array for text material, e.g. '[0.1, 0.5, 1.0, 1.0]'".to_string(), items: None });
+                        props.insert("bg_color".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "JSON RGBA float array for background, e.g. '[0.02, 0.02, 0.05, 1.0]'".to_string(), items: None });
+                        props.insert("duration".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Clip length in seconds (default: 6)".to_string(), items: None });
+                        props
+                    },
+                    required: vec!["text".to_string()],
+                },
+            },
+
+            FunctionDeclaration {
+                name: "blender_generate_abstract_bg".to_string(),
+                description: "Generate an animated abstract background loop in Blender — useful as a video backdrop, intro overlay, or stock footage asset.".to_string(),
+                parameters: Parameters {
+                    param_type: "object".to_string(),
+                    properties: {
+                        let mut props = HashMap::new();
+                        props.insert("style".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "'geometric' (orbiting shapes, default) | 'waves' | 'particles' | 'grid' (retro neon wireframe) | 'gradient'".to_string(), items: None });
+                        props.insert("primary_color".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "JSON RGBA float array, e.g. '[0.05, 0.2, 0.8, 1.0]'".to_string(), items: None });
+                        props.insert("secondary_color".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "JSON RGBA float array, e.g. '[0.8, 0.1, 0.5, 1.0]'".to_string(), items: None });
+                        props.insert("duration".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Clip length in seconds (default: 8)".to_string(), items: None });
+                        props
+                    },
+                    required: vec![],
+                },
+            },
+
+            FunctionDeclaration {
+                name: "blender_generate_countdown".to_string(),
+                description: "Generate a 3D animated countdown timer in Blender — useful for YouTube intros, live-stream countdowns, and event teasers.".to_string(),
+                parameters: Parameters {
+                    param_type: "object".to_string(),
+                    properties: {
+                        let mut props = HashMap::new();
+                        props.insert("start_number".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Count from this number (e.g. 10, 5, 3)".to_string(), items: None });
+                        props.insert("end_number".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Count to this number (e.g. 1 or 0)".to_string(), items: None });
+                        props.insert("style".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "'bold' (default) | 'neon' | 'minimal' | 'cinematic'".to_string(), items: None });
+                        props.insert("color".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "JSON RGBA float array for number material".to_string(), items: None });
+                        props.insert("show_ring".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "'true' or 'false' — animated ring around number".to_string(), items: None });
+                        props.insert("duration".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Total clip duration in seconds (0 = 1s per count)".to_string(), items: None });
+                        props
+                    },
+                    required: vec![],
+                },
+            },
+
+            FunctionDeclaration {
                 name: "set_chat_title".to_string(),
                 description: "Sets a descriptive title for the current chat session. Use this to give the conversation a meaningful title based on the user's request or the work being done.".to_string(),
                 parameters: Parameters {

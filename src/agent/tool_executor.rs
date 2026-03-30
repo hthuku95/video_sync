@@ -147,6 +147,30 @@ pub async fn execute_tool_claude_with_context(
     if name == "blender_generate_chart" {
         return execute_blender_generate_chart_claude(args, ctx).await;
     }
+    if name == "blender_generate_flowchart" {
+        return execute_blender_simple_manim_claude("blender_generate_flowchart", args, ctx).await;
+    }
+    if name == "blender_generate_3d_math" {
+        return execute_blender_simple_manim_claude("blender_generate_3d_math", args, ctx).await;
+    }
+    if name == "blender_generate_code_animation" {
+        return execute_blender_simple_manim_claude("blender_generate_code_animation", args, ctx).await;
+    }
+    if name == "blender_generate_timeline" {
+        return execute_blender_simple_manim_claude("blender_generate_timeline", args, ctx).await;
+    }
+    if name == "blender_generate_network_graph" {
+        return execute_blender_simple_manim_claude("blender_generate_network_graph", args, ctx).await;
+    }
+    if name == "blender_generate_logo_reveal" {
+        return execute_blender_simple_manim_claude("blender_generate_logo_reveal", args, ctx).await;
+    }
+    if name == "blender_generate_abstract_bg" {
+        return execute_blender_simple_manim_claude("blender_generate_abstract_bg", args, ctx).await;
+    }
+    if name == "blender_generate_countdown" {
+        return execute_blender_simple_manim_claude("blender_generate_countdown", args, ctx).await;
+    }
 
     // Execute the tool first
     let result = execute_tool_claude(name, args).await;
@@ -231,6 +255,20 @@ pub async fn execute_tool_gemini_with_context(
     }
     if name == "blender_generate_chart" {
         return execute_blender_generate_chart_gemini(args, ctx).await;
+    }
+    for tool_name in &[
+        "blender_generate_flowchart",
+        "blender_generate_3d_math",
+        "blender_generate_code_animation",
+        "blender_generate_timeline",
+        "blender_generate_network_graph",
+        "blender_generate_logo_reveal",
+        "blender_generate_abstract_bg",
+        "blender_generate_countdown",
+    ] {
+        if name == *tool_name {
+            return execute_blender_passthrough_gemini(name, args, ctx).await;
+        }
     }
 
     // auto_generate_video needs ctx for BlenderMCPClient (video_source param)
@@ -10853,4 +10891,31 @@ async fn execute_blender_generate_chart_claude(args: &Value, ctx: &ToolExecution
         "colors":     colors,
     });
     blender_render(&client, "blender_generate_chart", tool_args, "video_url", "mp4", "Manim chart rendered").await
+}
+
+/// Generic passthrough for new tools — forwards all args to BlenderMCPServer as-is.
+async fn execute_blender_passthrough_gemini(
+    tool_name: &str,
+    args: &HashMap<String, Value>,
+    ctx: &ToolExecutionContext,
+) -> String {
+    let client = match blender_client_or_err(ctx) { Ok(c) => c, Err(e) => return e };
+    let tool_args: Value = args.iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect::<serde_json::Map<String, Value>>()
+        .into();
+    blender_render(&client, tool_name, tool_args, "video_url", "mp4", &format!("{} rendered", tool_name)).await
+}
+
+/// Generic Claude passthrough for new blender/manim tools.
+async fn execute_blender_simple_manim_claude(
+    tool_name: &str,
+    args: &Value,
+    ctx: &ToolExecutionContext,
+) -> String {
+    let client = match blender_client_or_err(ctx) { Ok(c) => c, Err(e) => return e };
+    let tool_args = args.as_object()
+        .map(|m| serde_json::Value::Object(m.clone()))
+        .unwrap_or(json!({}));
+    blender_render(&client, tool_name, tool_args, "video_url", "mp4", &format!("{} rendered", tool_name)).await
 }

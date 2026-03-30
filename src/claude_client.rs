@@ -7021,6 +7021,130 @@ impl ClaudeClient {
                 },
             },
             ClaudeTool {
+                name: "blender_generate_flowchart".to_string(),
+                description: "Generate an animated Manim flowchart with process boxes, decision diamonds, and arrows. Use for process diagrams, system architecture flows, and explainer videos.".to_string(),
+                input_schema: InputSchema {
+                    schema_type: "object".to_string(),
+                    properties: HashMap::from([
+                        ("nodes".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "JSON array of nodes: [{\"id\":\"start\",\"label\":\"Start\",\"type\":\"start\"},{\"id\":\"step1\",\"label\":\"Process Data\",\"type\":\"process\"},...]".to_string(), items: None }),
+                        ("edges".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "JSON array of connections: [{\"from\":\"start\",\"to\":\"step1\"},{\"from\":\"decide\",\"to\":\"step2\",\"label\":\"Yes\"},...]".to_string(), items: None }),
+                        ("title".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Chart heading text".to_string(), items: None }),
+                        ("duration".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Clip length in seconds (default: 12)".to_string(), items: None }),
+                        ("style".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "'dark' | 'light' | 'blue'".to_string(), items: None }),
+                    ]),
+                    required: vec!["nodes".to_string(), "edges".to_string()],
+                },
+            },
+            ClaudeTool {
+                name: "blender_generate_3d_math".to_string(),
+                description: "Generate a 3D mathematics animation using Manim's ThreeDScene — ideal for academic content, math tutorials, and STEM explainer videos.".to_string(),
+                input_schema: InputSchema {
+                    schema_type: "object".to_string(),
+                    properties: HashMap::from([
+                        ("scene_type".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "'surface' | 'curve' | 'vector_field' | 'torus'".to_string(), items: None }),
+                        ("title".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Title text".to_string(), items: None }),
+                        ("function".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "'wave' | 'sin' | 'cos' | 'saddle' | 'paraboloid' | 'ripple'".to_string(), items: None }),
+                        ("duration".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Clip length in seconds (default: 12)".to_string(), items: None }),
+                        ("color".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "'BLUE' | 'RED' | 'GREEN' | 'GOLD' | 'PURPLE' | 'TEAL'".to_string(), items: None }),
+                    ]),
+                    required: vec![],
+                },
+            },
+            ClaudeTool {
+                name: "blender_generate_code_animation".to_string(),
+                description: "Generate an animated code syntax-highlighting clip — ideal for tech tutorials, YouTube programming content, and developer explainer videos.".to_string(),
+                input_schema: InputSchema {
+                    schema_type: "object".to_string(),
+                    properties: HashMap::from([
+                        ("code".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Source code to display and animate".to_string(), items: None }),
+                        ("language".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "'python' | 'javascript' | 'rust' | 'cpp' | 'java' | 'bash' | 'sql' | 'typescript' | 'go'".to_string(), items: None }),
+                        ("title".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Heading above code block".to_string(), items: None }),
+                        ("highlight_lines".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "JSON array of 1-indexed line numbers e.g. '[3,7,11]'".to_string(), items: None }),
+                        ("reveal_mode".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "'line_by_line' | 'all_at_once' | 'block'".to_string(), items: None }),
+                        ("duration".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Clip length in seconds (default: 12)".to_string(), items: None }),
+                        ("style".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "'monokai' | 'dracula' | 'solarized-dark'".to_string(), items: None }),
+                    ]),
+                    required: vec!["code".to_string()],
+                },
+            },
+            ClaudeTool {
+                name: "blender_generate_timeline".to_string(),
+                description: "Generate an animated timeline, project roadmap, or Gantt-style clip — great for business explainers, project demos, and history videos.".to_string(),
+                input_schema: InputSchema {
+                    schema_type: "object".to_string(),
+                    properties: HashMap::from([
+                        ("events".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "JSON array: [{\"date\":\"Jan\",\"label\":\"Kickoff\",\"color\":\"BLUE\"},{\"date\":\"Mar\",\"label\":\"Launch\",\"color\":\"GREEN\"},...]".to_string(), items: None }),
+                        ("title".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Heading text".to_string(), items: None }),
+                        ("duration".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Clip length in seconds (default: 12)".to_string(), items: None }),
+                        ("style".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "'dark' | 'light' | 'gradient'".to_string(), items: None }),
+                        ("orientation".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "'horizontal' | 'vertical'".to_string(), items: None }),
+                    ]),
+                    required: vec!["events".to_string()],
+                },
+            },
+            ClaudeTool {
+                name: "blender_generate_network_graph".to_string(),
+                description: "Generate an animated network or knowledge graph — great for org charts, concept maps, AI/ML topic maps, and relationship visualizations.".to_string(),
+                input_schema: InputSchema {
+                    schema_type: "object".to_string(),
+                    properties: HashMap::from([
+                        ("nodes".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "JSON array: [{\"id\":\"A\",\"label\":\"AI\",\"color\":\"BLUE\"},{\"id\":\"B\",\"label\":\"ML\",\"color\":\"GREEN\"},...]".to_string(), items: None }),
+                        ("edges".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "JSON array: [{\"from\":\"A\",\"to\":\"B\"},{\"from\":\"A\",\"to\":\"C\",\"directed\":true},...]".to_string(), items: None }),
+                        ("title".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Heading text".to_string(), items: None }),
+                        ("layout".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "'radial' | 'circular' | 'spring'".to_string(), items: None }),
+                        ("duration".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Clip length in seconds (default: 12)".to_string(), items: None }),
+                        ("style".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "'dark' | 'neon'".to_string(), items: None }),
+                    ]),
+                    required: vec!["nodes".to_string(), "edges".to_string()],
+                },
+            },
+            ClaudeTool {
+                name: "blender_generate_logo_reveal".to_string(),
+                description: "Generate a 3D extruded text / logo reveal animation in Blender — the most popular Fiverr motion graphics request.".to_string(),
+                input_schema: InputSchema {
+                    schema_type: "object".to_string(),
+                    properties: HashMap::from([
+                        ("text".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Brand name or main text to extrude and animate".to_string(), items: None }),
+                        ("tagline".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Optional secondary line (slogan / subtitle)".to_string(), items: None }),
+                        ("style".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "'extrude_reveal' | 'zoom_in' | 'split' | 'typewriter'".to_string(), items: None }),
+                        ("color".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "JSON RGBA float array e.g. '[0.1, 0.5, 1.0, 1.0]'".to_string(), items: None }),
+                        ("bg_color".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "JSON RGBA float array for background".to_string(), items: None }),
+                        ("duration".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Clip length in seconds (default: 6)".to_string(), items: None }),
+                    ]),
+                    required: vec!["text".to_string()],
+                },
+            },
+            ClaudeTool {
+                name: "blender_generate_abstract_bg".to_string(),
+                description: "Generate an animated abstract background loop in Blender — useful as a video backdrop, intro overlay, or stock footage asset.".to_string(),
+                input_schema: InputSchema {
+                    schema_type: "object".to_string(),
+                    properties: HashMap::from([
+                        ("style".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "'geometric' | 'waves' | 'particles' | 'grid' | 'gradient'".to_string(), items: None }),
+                        ("primary_color".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "JSON RGBA float array e.g. '[0.05, 0.2, 0.8, 1.0]'".to_string(), items: None }),
+                        ("secondary_color".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "JSON RGBA float array e.g. '[0.8, 0.1, 0.5, 1.0]'".to_string(), items: None }),
+                        ("duration".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Clip length in seconds (default: 8)".to_string(), items: None }),
+                    ]),
+                    required: vec![],
+                },
+            },
+            ClaudeTool {
+                name: "blender_generate_countdown".to_string(),
+                description: "Generate a 3D animated countdown timer in Blender — useful for YouTube intros, live-stream countdowns, and event teasers.".to_string(),
+                input_schema: InputSchema {
+                    schema_type: "object".to_string(),
+                    properties: HashMap::from([
+                        ("start_number".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Count from (e.g. 10, 5, 3)".to_string(), items: None }),
+                        ("end_number".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Count to (e.g. 1 or 0)".to_string(), items: None }),
+                        ("style".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "'bold' | 'neon' | 'minimal' | 'cinematic'".to_string(), items: None }),
+                        ("color".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "JSON RGBA float array for number material".to_string(), items: None }),
+                        ("show_ring".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "'true' or 'false'".to_string(), items: None }),
+                        ("duration".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Total clip duration (0 = 1s per count)".to_string(), items: None }),
+                    ]),
+                    required: vec![],
+                },
+            },
+            ClaudeTool {
                 name: "blender_generate_animation".to_string(),
                 description: "Generate ANY Manim animation from a natural language description using LLM code generation. Use this for kinetic typography, abstract motion graphics, step-by-step explanations, or any creative animation that doesn't fit the specific latex/chart/scene categories.".to_string(),
                 input_schema: InputSchema {
