@@ -454,7 +454,17 @@ impl BlenderMCPClient {
                         .unwrap_or("unknown error");
                     return Err(msg.to_string());
                 }
-                _ => {} // pending / running — keep polling
+                _ => {
+                    // If the job is not found (404 after a server redeploy), fail fast
+                    if status.get("error").is_some() && status.get("state").is_none() {
+                        let msg = status
+                            .get("error")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("job not found");
+                        return Err(format!("Blender job {job_id}: {msg}"));
+                    }
+                    // pending / running — keep polling
+                }
             }
         }
         Err(format!("Blender job {job_id} timed out after 900s"))
