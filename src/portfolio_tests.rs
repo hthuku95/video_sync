@@ -391,6 +391,8 @@ impl PortfolioTestRunner {
 
         for scenario in &all {
             self.run_one(run_id, scenario).await;
+            // Brief pause between scenarios to avoid Gemini reviewer 429 rate limiting
+            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
         }
 
         let _ = sqlx::query(
