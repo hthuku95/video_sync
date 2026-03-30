@@ -2575,6 +2575,127 @@ impl GeminiClient {
             },
 
             FunctionDeclaration {
+                name: "blender_generate_particle_confetti".to_string(),
+                description: "Generate an animated particle burst in Blender — confetti, snow, stars, rain, or bubbles. Great for celebration intros, event teasers, and festive video overlays.".to_string(),
+                parameters: Parameters {
+                    param_type: "object".to_string(),
+                    properties: {
+                        let mut props = HashMap::new();
+                        props.insert("style".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "'confetti' | 'snow' | 'stars' | 'rain' | 'bubbles'".to_string(), items: None });
+                        props.insert("count".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Number of particles (default: 400)".to_string(), items: None });
+                        props.insert("duration".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Clip length in seconds (default: 6)".to_string(), items: None });
+                        props.insert("primary_color".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "JSON RGBA float array e.g. '[1,0.3,0.1,1]'".to_string(), items: None });
+                        props.insert("secondary_color".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "JSON RGBA float array for second color".to_string(), items: None });
+                        props.insert("bg_color".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "JSON RGBA float array for background".to_string(), items: None });
+                        props
+                    },
+                    required: vec![],
+                },
+            },
+
+            FunctionDeclaration {
+                name: "blender_generate_rigid_body_drop".to_string(),
+                description: "Generate a physics rigid-body drop animation in Blender — 3D extruded letters or geometric objects fall and collide with realistic physics. Extremely popular for logo reveals and kinetic title cards.".to_string(),
+                parameters: Parameters {
+                    param_type: "object".to_string(),
+                    properties: {
+                        let mut props = HashMap::new();
+                        props.insert("text".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Text to extrude as falling 3D letters (when object_type='text')".to_string(), items: None });
+                        props.insert("object_type".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "'text' | 'spheres' | 'cubes' | 'mixed'".to_string(), items: None });
+                        props.insert("count".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Number of objects if not text (default: 12)".to_string(), items: None });
+                        props.insert("color".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "JSON RGBA float array".to_string(), items: None });
+                        props.insert("bg_color".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "JSON RGBA float array for background".to_string(), items: None });
+                        props.insert("style".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "'dark' | 'bright' | 'neon'".to_string(), items: None });
+                        props.insert("duration".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Clip length in seconds (default: 5)".to_string(), items: None });
+                        props
+                    },
+                    required: vec![],
+                },
+            },
+
+            FunctionDeclaration {
+                name: "blender_generate_camera_path".to_string(),
+                description: "Generate a smooth camera fly-through or orbit animation in Blender — orbit, helix, arc, dolly zoom, or linear flythrough. Perfect for product showcases, real estate walkthroughs, and cinematic scene reveals.".to_string(),
+                parameters: Parameters {
+                    param_type: "object".to_string(),
+                    properties: {
+                        let mut props = HashMap::new();
+                        props.insert("path_type".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "'orbit' | 'helix' | 'arc' | 'dolly_zoom' | 'flythrough'".to_string(), items: None });
+                        props.insert("subject".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "'spheres' | 'cubes' | 'text' | 'abstract' | 'landscape'".to_string(), items: None });
+                        props.insert("title".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Optional 3D text placed in scene".to_string(), items: None });
+                        props.insert("color".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "JSON RGBA float array for objects".to_string(), items: None });
+                        props.insert("bg_color".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "JSON RGBA float array for background".to_string(), items: None });
+                        props.insert("style".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "'cinematic' | 'minimal' | 'neon'".to_string(), items: None });
+                        props.insert("duration".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Clip length in seconds (default: 8)".to_string(), items: None });
+                        props
+                    },
+                    required: vec![],
+                },
+            },
+
+            FunctionDeclaration {
+                name: "blender_generate_toon_scene".to_string(),
+                description: "Generate an NPR cartoon / toon-shaded Blender scene with bold outlines and flat colours — great for animated explainers, children's content, stylised brand videos, and cartoon-style intros.".to_string(),
+                parameters: Parameters {
+                    param_type: "object".to_string(),
+                    properties: {
+                        let mut props = HashMap::new();
+                        props.insert("subject".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "'characters' | 'robots' | 'landscape' | 'abstract' | 'logo'".to_string(), items: None });
+                        props.insert("title".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Optional text label in scene".to_string(), items: None });
+                        props.insert("outline_color".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "JSON RGBA float array for outlines".to_string(), items: None });
+                        props.insert("primary_color".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "JSON RGBA float array for main objects".to_string(), items: None });
+                        props.insert("bg_color".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "JSON RGBA float array for background".to_string(), items: None });
+                        props.insert("outline_width".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Outline thickness 0.5-5.0 (default: 1.5)".to_string(), items: None });
+                        props.insert("flat_shading".to_string(), PropertyDefinition { prop_type: "boolean".to_string(), description: "true for pure cartoon flat look".to_string(), items: None });
+                        props.insert("duration".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Clip length in seconds (default: 6)".to_string(), items: None });
+                        props
+                    },
+                    required: vec![],
+                },
+            },
+
+            FunctionDeclaration {
+                name: "blender_generate_grease_pencil_reveal".to_string(),
+                description: "Generate a whiteboard / sketch draw-on text reveal using Blender Grease Pencil — letters appear stroke-by-stroke with BUILD modifier. Perfect for explainer videos, educational content, and whiteboard-style animations.".to_string(),
+                parameters: Parameters {
+                    param_type: "object".to_string(),
+                    properties: {
+                        let mut props = HashMap::new();
+                        props.insert("text".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Text to draw (max 12 characters)".to_string(), items: None });
+                        props.insert("style".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "'whiteboard' | 'neon' | 'sketch' | 'chalkboard'".to_string(), items: None });
+                        props.insert("color".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "JSON RGBA float array for strokes".to_string(), items: None });
+                        props.insert("bg_color".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "JSON RGBA float array for background".to_string(), items: None });
+                        props.insert("stroke_width".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Line thickness 10-200 (default: 50)".to_string(), items: None });
+                        props.insert("duration".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Clip length in seconds (default: 6)".to_string(), items: None });
+                        props
+                    },
+                    required: vec!["text".to_string()],
+                },
+            },
+
+            FunctionDeclaration {
+                name: "blender_generate_geometry_scatter".to_string(),
+                description: "Generate a procedural instance-scatter animation in Blender — objects distributed across a plane, sphere, torus, or grid with animated wave displacement. Great for particle field backgrounds, product showcases, and abstract motion graphics.".to_string(),
+                parameters: Parameters {
+                    param_type: "object".to_string(),
+                    properties: {
+                        let mut props = HashMap::new();
+                        props.insert("instance_type".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "'cubes' | 'spheres' | 'stars' | 'arrows' | 'crystals'".to_string(), items: None });
+                        props.insert("surface".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "'plane' | 'sphere' | 'torus' | 'grid'".to_string(), items: None });
+                        props.insert("count".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Number of instances (default: 200)".to_string(), items: None });
+                        props.insert("primary_color".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "JSON RGBA float array".to_string(), items: None });
+                        props.insert("secondary_color".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "JSON RGBA float array for second color variant".to_string(), items: None });
+                        props.insert("bg_color".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "JSON RGBA float array for background".to_string(), items: None });
+                        props.insert("animated".to_string(), PropertyDefinition { prop_type: "boolean".to_string(), description: "true for wave displacement animation".to_string(), items: None });
+                        props.insert("scale".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Instance scale multiplier (default: 1.0)".to_string(), items: None });
+                        props.insert("duration".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Clip length in seconds (default: 8)".to_string(), items: None });
+                        props
+                    },
+                    required: vec![],
+                },
+            },
+
+            FunctionDeclaration {
                 name: "blender_generate_text_animation".to_string(),
                 description: "Generate kinetic typography / text animation using Manim. Great for YouTube intros, social media reels, brand reveals, and title sequences.".to_string(),
                 parameters: Parameters {

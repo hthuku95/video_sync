@@ -186,6 +186,24 @@ pub async fn execute_tool_claude_with_context(
     if name == "blender_generate_geometry_proof" {
         return execute_blender_simple_manim_claude("blender_generate_geometry_proof", args, ctx).await;
     }
+    if name == "blender_generate_particle_confetti" {
+        return execute_blender_simple_manim_claude("blender_generate_particle_confetti", args, ctx).await;
+    }
+    if name == "blender_generate_rigid_body_drop" {
+        return execute_blender_simple_manim_claude("blender_generate_rigid_body_drop", args, ctx).await;
+    }
+    if name == "blender_generate_camera_path" {
+        return execute_blender_simple_manim_claude("blender_generate_camera_path", args, ctx).await;
+    }
+    if name == "blender_generate_toon_scene" {
+        return execute_blender_simple_manim_claude("blender_generate_toon_scene", args, ctx).await;
+    }
+    if name == "blender_generate_grease_pencil_reveal" {
+        return execute_blender_simple_manim_claude("blender_generate_grease_pencil_reveal", args, ctx).await;
+    }
+    if name == "blender_generate_geometry_scatter" {
+        return execute_blender_simple_manim_claude("blender_generate_geometry_scatter", args, ctx).await;
+    }
 
     // Execute the tool first
     let result = execute_tool_claude(name, args).await;
@@ -285,6 +303,12 @@ pub async fn execute_tool_gemini_with_context(
         "blender_generate_matrix_transform",
         "blender_generate_polar_graph",
         "blender_generate_geometry_proof",
+        "blender_generate_particle_confetti",
+        "blender_generate_rigid_body_drop",
+        "blender_generate_camera_path",
+        "blender_generate_toon_scene",
+        "blender_generate_grease_pencil_reveal",
+        "blender_generate_geometry_scatter",
     ] {
         if name == *tool_name {
             return execute_blender_passthrough_gemini(name, args, ctx).await;
