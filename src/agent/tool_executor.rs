@@ -171,6 +171,21 @@ pub async fn execute_tool_claude_with_context(
     if name == "blender_generate_countdown" {
         return execute_blender_simple_manim_claude("blender_generate_countdown", args, ctx).await;
     }
+    if name == "blender_generate_text_animation" {
+        return execute_blender_simple_manim_claude("blender_generate_text_animation", args, ctx).await;
+    }
+    if name == "blender_generate_vector_field" {
+        return execute_blender_simple_manim_claude("blender_generate_vector_field", args, ctx).await;
+    }
+    if name == "blender_generate_matrix_transform" {
+        return execute_blender_simple_manim_claude("blender_generate_matrix_transform", args, ctx).await;
+    }
+    if name == "blender_generate_polar_graph" {
+        return execute_blender_simple_manim_claude("blender_generate_polar_graph", args, ctx).await;
+    }
+    if name == "blender_generate_geometry_proof" {
+        return execute_blender_simple_manim_claude("blender_generate_geometry_proof", args, ctx).await;
+    }
 
     // Execute the tool first
     let result = execute_tool_claude(name, args).await;
@@ -265,6 +280,11 @@ pub async fn execute_tool_gemini_with_context(
         "blender_generate_logo_reveal",
         "blender_generate_abstract_bg",
         "blender_generate_countdown",
+        "blender_generate_text_animation",
+        "blender_generate_vector_field",
+        "blender_generate_matrix_transform",
+        "blender_generate_polar_graph",
+        "blender_generate_geometry_proof",
     ] {
         if name == *tool_name {
             return execute_blender_passthrough_gemini(name, args, ctx).await;

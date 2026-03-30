@@ -2575,6 +2575,102 @@ impl GeminiClient {
             },
 
             FunctionDeclaration {
+                name: "blender_generate_text_animation".to_string(),
+                description: "Generate kinetic typography / text animation using Manim. Great for YouTube intros, social media reels, brand reveals, and title sequences.".to_string(),
+                parameters: Parameters {
+                    param_type: "object".to_string(),
+                    properties: {
+                        let mut props = HashMap::new();
+                        props.insert("text".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Main text to animate".to_string(), items: None });
+                        props.insert("subtitle".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Optional smaller second line".to_string(), items: None });
+                        props.insert("mode".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "'letter_by_letter' | 'word_by_word' | 'typewriter' | 'wave' | 'zoom_burst' | 'spin_in' | 'color_cycle' | 'highlight_words'".to_string(), items: None });
+                        props.insert("color".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Text colour name: 'WHITE' | 'BLUE' | 'RED' | 'GREEN' | 'GOLD' | 'YELLOW' | 'ORANGE'".to_string(), items: None });
+                        props.insert("bg_color".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "'dark' | 'light'".to_string(), items: None });
+                        props.insert("duration".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Clip length in seconds (default: 8)".to_string(), items: None });
+                        props.insert("font_size".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Font size in points (default: 72)".to_string(), items: None });
+                        props.insert("words_to_highlight".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "JSON array of words to highlight, e.g. '[\"SALE\",\"NOW\"]' (for highlight_words mode)".to_string(), items: None });
+                        props
+                    },
+                    required: vec!["text".to_string()],
+                },
+            },
+
+            FunctionDeclaration {
+                name: "blender_generate_vector_field".to_string(),
+                description: "Generate an animated vector field / flow visualization using Manim — ideal for physics, fluid dynamics, and math education content.".to_string(),
+                parameters: Parameters {
+                    param_type: "object".to_string(),
+                    properties: {
+                        let mut props = HashMap::new();
+                        props.insert("field_type".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "'rotation' | 'radial' | 'sink' | 'saddle' | 'curl' | 'gravity'".to_string(), items: None });
+                        props.insert("title".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Heading text".to_string(), items: None });
+                        props.insert("duration".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Clip length in seconds (default: 12)".to_string(), items: None });
+                        props.insert("show_streams".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "'true' (default) — render StreamLines on top of arrows".to_string(), items: None });
+                        props.insert("color".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "'BLUE' | 'RED' | 'GREEN' | 'TEAL' | 'ORANGE'".to_string(), items: None });
+                        props.insert("style".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "'dark' | 'grid'".to_string(), items: None });
+                        props
+                    },
+                    required: vec![],
+                },
+            },
+
+            FunctionDeclaration {
+                name: "blender_generate_matrix_transform".to_string(),
+                description: "Generate a linear algebra matrix transformation animation using Manim's LinearTransformationScene — ideal for math/STEM education content.".to_string(),
+                parameters: Parameters {
+                    param_type: "object".to_string(),
+                    properties: {
+                        let mut props = HashMap::new();
+                        props.insert("matrix".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "JSON 2×2 matrix e.g. '[[0,-1],[1,0]]' (rotation), '[[2,0],[0,2]]' (scaling), '[[1,1],[0,1]]' (shear)".to_string(), items: None });
+                        props.insert("title".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Heading text".to_string(), items: None });
+                        props.insert("duration".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Clip length in seconds (default: 12)".to_string(), items: None });
+                        props.insert("show_vectors".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "'true' (default) — show sample vectors being transformed".to_string(), items: None });
+                        props.insert("show_det".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "'true' (default) — show determinant annotation".to_string(), items: None });
+                        props
+                    },
+                    required: vec![],
+                },
+            },
+
+            FunctionDeclaration {
+                name: "blender_generate_polar_graph".to_string(),
+                description: "Generate a polar coordinate / complex plane / function graph animation using Manim — great for advanced math and STEM content.".to_string(),
+                parameters: Parameters {
+                    param_type: "object".to_string(),
+                    properties: {
+                        let mut props = HashMap::new();
+                        props.insert("plane_type".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "'polar' | 'complex' | 'number_plane'".to_string(), items: None });
+                        props.insert("title".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Heading text".to_string(), items: None });
+                        props.insert("function".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "For polar: 'rose' | 'lemniscate' | 'spiral' | 'cardioid' | 'circle'. For number_plane: 'sin' | 'parabola'".to_string(), items: None });
+                        props.insert("k_value".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Number of petals for rose function (default: 4)".to_string(), items: None });
+                        props.insert("duration".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Clip length in seconds (default: 12)".to_string(), items: None });
+                        props.insert("color".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "'BLUE' | 'RED' | 'GREEN' | 'PURPLE' | 'GOLD'".to_string(), items: None });
+                        props
+                    },
+                    required: vec![],
+                },
+            },
+
+            FunctionDeclaration {
+                name: "blender_generate_geometry_proof".to_string(),
+                description: "Generate an animated geometry proof using Manim — ideal for math tutors, STEM channels, and educational content.".to_string(),
+                parameters: Parameters {
+                    param_type: "object".to_string(),
+                    properties: {
+                        let mut props = HashMap::new();
+                        props.insert("proof_type".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "'pythagorean' | 'circle_area' | 'triangle_sum' | 'boolean_ops'".to_string(), items: None });
+                        props.insert("title".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Heading text".to_string(), items: None });
+                        props.insert("duration".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Clip length in seconds (default: 14)".to_string(), items: None });
+                        props.insert("color_a".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Primary shape colour: 'BLUE' | 'RED' | 'GREEN' | 'GOLD'".to_string(), items: None });
+                        props.insert("color_b".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Secondary shape colour".to_string(), items: None });
+                        props.insert("show_labels".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "'true' (default) — show formula/angle labels".to_string(), items: None });
+                        props
+                    },
+                    required: vec![],
+                },
+            },
+
+            FunctionDeclaration {
                 name: "set_chat_title".to_string(),
                 description: "Sets a descriptive title for the current chat session. Use this to give the conversation a meaningful title based on the user's request or the work being done.".to_string(),
                 parameters: Parameters {

@@ -7145,6 +7145,83 @@ impl ClaudeClient {
                 },
             },
             ClaudeTool {
+                name: "blender_generate_text_animation".to_string(),
+                description: "Generate a kinetic typography / text animation clip using Manim. Supports 8 modes: letter_by_letter, word_by_word, typewriter, wave, zoom_burst, spin_in, color_cycle, highlight_words.".to_string(),
+                input_schema: InputSchema {
+                    schema_type: "object".to_string(),
+                    properties: HashMap::from([
+                        ("text".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "The text to animate".to_string(), items: None }),
+                        ("mode".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "'letter_by_letter' | 'word_by_word' | 'typewriter' | 'wave' | 'zoom_burst' | 'spin_in' | 'color_cycle' | 'highlight_words'".to_string(), items: None }),
+                        ("color".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Manim colour name e.g. 'BLUE', 'RED', 'YELLOW'".to_string(), items: None }),
+                        ("font_size".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Font size (default: 48)".to_string(), items: None }),
+                        ("duration".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Clip length in seconds (default: 8)".to_string(), items: None }),
+                    ]),
+                    required: vec!["text".to_string()],
+                },
+            },
+            ClaudeTool {
+                name: "blender_generate_vector_field".to_string(),
+                description: "Generate an animated vector field / flow field visualisation using Manim ArrowVectorField and StreamLines. Great for physics, fluid dynamics, and EM field illustrations.".to_string(),
+                input_schema: InputSchema {
+                    schema_type: "object".to_string(),
+                    properties: HashMap::from([
+                        ("field_type".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "'circular' | 'sink' | 'source' | 'saddle' | 'linear' | 'complex'".to_string(), items: None }),
+                        ("title".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Optional title label".to_string(), items: None }),
+                        ("show_stream_lines".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "'true' to add animated StreamLines overlay".to_string(), items: None }),
+                        ("color".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Manim colour name for arrows".to_string(), items: None }),
+                        ("duration".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Clip length in seconds (default: 10)".to_string(), items: None }),
+                    ]),
+                    required: vec![],
+                },
+            },
+            ClaudeTool {
+                name: "blender_generate_matrix_transform".to_string(),
+                description: "Generate a linear algebra matrix transformation animation using Manim LinearTransformationScene — shows how a 2×2 matrix transforms the plane with basis vectors and optional determinant annotation.".to_string(),
+                input_schema: InputSchema {
+                    schema_type: "object".to_string(),
+                    properties: HashMap::from([
+                        ("matrix".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "JSON 2×2 matrix e.g. '[[0,-1],[1,0]]' (default: 90° rotation)".to_string(), items: None }),
+                        ("title".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Scene title".to_string(), items: None }),
+                        ("show_vectors".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "'true' to show sample vectors being transformed".to_string(), items: None }),
+                        ("show_det".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "'true' to annotate the determinant".to_string(), items: None }),
+                        ("duration".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Clip length in seconds (default: 12)".to_string(), items: None }),
+                    ]),
+                    required: vec![],
+                },
+            },
+            ClaudeTool {
+                name: "blender_generate_polar_graph".to_string(),
+                description: "Generate an animated polar / complex plane graph using Manim PolarPlane, ComplexPlane, or NumberPlane. Supports rose curves, lemniscates, spirals, cardioids, and standard function plots.".to_string(),
+                input_schema: InputSchema {
+                    schema_type: "object".to_string(),
+                    properties: HashMap::from([
+                        ("plane_type".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "'polar' | 'complex' | 'number_plane'".to_string(), items: None }),
+                        ("function".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "'rose' | 'lemniscate' | 'spiral' | 'cardioid' | 'circle' | 'sin' | 'parabola'".to_string(), items: None }),
+                        ("title".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Scene title".to_string(), items: None }),
+                        ("color".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Manim colour name for the curve".to_string(), items: None }),
+                        ("k_value".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "k for rose curve (number of petals, default: 4)".to_string(), items: None }),
+                        ("duration".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Clip length in seconds (default: 12)".to_string(), items: None }),
+                    ]),
+                    required: vec![],
+                },
+            },
+            ClaudeTool {
+                name: "blender_generate_geometry_proof".to_string(),
+                description: "Generate an animated geometry proof using Manim — supports Pythagorean theorem, circle area (inscribed polygon limit), triangle angle sum, and boolean shape operations.".to_string(),
+                input_schema: InputSchema {
+                    schema_type: "object".to_string(),
+                    properties: HashMap::from([
+                        ("proof_type".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "'pythagorean' | 'circle_area' | 'triangle_sum' | 'boolean_ops'".to_string(), items: None }),
+                        ("title".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Scene title".to_string(), items: None }),
+                        ("color_a".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Manim colour for shape A".to_string(), items: None }),
+                        ("color_b".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Manim colour for shape B".to_string(), items: None }),
+                        ("show_labels".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "'true' to show formula labels".to_string(), items: None }),
+                        ("duration".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Clip length in seconds (default: 14)".to_string(), items: None }),
+                    ]),
+                    required: vec![],
+                },
+            },
+            ClaudeTool {
                 name: "blender_generate_animation".to_string(),
                 description: "Generate ANY Manim animation from a natural language description using LLM code generation. Use this for kinetic typography, abstract motion graphics, step-by-step explanations, or any creative animation that doesn't fit the specific latex/chart/scene categories.".to_string(),
                 input_schema: InputSchema {
