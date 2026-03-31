@@ -472,39 +472,63 @@ impl BlenderMCPClient {
 
     /// Submit a long-running job to the Phase 5 async queue.
     /// Returns the job_id to poll via `poll_job`.
+    /// Retries up to 3 times on transient parse/connection errors (handles
+    /// server cold-start or brief Render proxy glitches).
     pub async fn submit_job(&self, tool: &str, args: serde_json::Value) -> Result<String, String> {
         let body = json!({"tool": tool, "args": args});
         let url = format!("{}/api/jobs", self.base_url);
-        let resp = self
-            .client
-            .post(&url)
-            .bearer_auth(&self.api_key)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| format!("BlenderMCP submit_job HTTP error: {e}"))?;
-        let json: serde_json::Value = resp
-            .json()
-            .await
-            .map_err(|e| format!("BlenderMCP submit_job parse error: {e}"))?;
-        json.get("job_id")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-            .ok_or_else(|| format!("BlenderMCP submit_job: no job_id in response: {json}"))
+        let mut last_err = String::new();
+        for attempt in 0..3u8 {
+            if attempt > 0 {
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            }
+            let resp = match self
+                .client
+                .post(&url)
+                .bearer_auth(&self.api_key)
+                .json(&body)
+                .send()
+                .await
+            {
+                Ok(r) => r,
+                Err(e) => { last_err = format!("BlenderMCP submit_job HTTP error: {e}"); continue; }
+            };
+            let json: serde_json::Value = match resp.json().await {
+                Ok(j) => j,
+                Err(e) => { last_err = format!("BlenderMCP submit_job parse error: {e}"); continue; }
+            };
+            match json.get("job_id").and_then(|v| v.as_str()).map(|s| s.to_string()) {
+                Some(id) => return Ok(id),
+                None => { last_err = format!("BlenderMCP submit_job: no job_id in response: {json}"); }
+            }
+        }
+        Err(last_err)
     }
 
     /// Poll job status.  Returns the full JSON status object.
+    /// Retries up to 3 times on transient parse errors.
     pub async fn poll_job(&self, job_id: &str) -> Result<serde_json::Value, String> {
         let url = format!("{}/api/jobs/{}", self.base_url, job_id);
-        let resp = self
-            .client
-            .get(&url)
-            .bearer_auth(&self.api_key)
-            .send()
-            .await
-            .map_err(|e| format!("BlenderMCP poll_job HTTP error: {e}"))?;
-        resp.json::<serde_json::Value>()
-            .await
-            .map_err(|e| format!("BlenderMCP poll_job parse error: {e}"))
+        let mut last_err = String::new();
+        for attempt in 0..3u8 {
+            if attempt > 0 {
+                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+            }
+            let resp = match self
+                .client
+                .get(&url)
+                .bearer_auth(&self.api_key)
+                .send()
+                .await
+            {
+                Ok(r) => r,
+                Err(e) => { last_err = format!("BlenderMCP poll_job HTTP error: {e}"); continue; }
+            };
+            match resp.json::<serde_json::Value>().await {
+                Ok(j) => return Ok(j),
+                Err(e) => { last_err = format!("BlenderMCP poll_job parse error: {e}"); }
+            }
+        }
+        Err(last_err)
     }
 }
