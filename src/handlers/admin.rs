@@ -6669,7 +6669,8 @@ pub async fn api_list_deliveries(
             "title":        r.get::<String, _>("title"),
             "gig_type":     r.get::<String, _>("gig_type"),
             "status":       r.get::<String, _>("status"),
-            "has_output":   r.try_get::<String, _>("output_r2_url").ok().is_some(),
+            "output_r2_url":  r.try_get::<String, _>("output_r2_url").ok(),
+            "output_filename": r.try_get::<String, _>("output_filename").ok(),
             "created_at":   r.get::<chrono::DateTime<chrono::Utc>, _>("created_at").to_rfc3339(),
             "completed_at": r.try_get::<chrono::DateTime<chrono::Utc>, _>("completed_at").ok().map(|d| d.to_rfc3339()),
             "error":        r.try_get::<String, _>("error_message").ok(),
@@ -7176,8 +7177,9 @@ async function createDelivery() {
     if (data.error) throw new Error(data.error);
     const url = `${location.origin}/delivery/${data.delivery_id}`;
     successBanner.innerHTML = `✅ Delivery created! Render is in progress (5–15 min).<br><br>
-      <strong>Client link:</strong> <a href="${url}" target="_blank" style="color:#a99ef7">${url}</a><br>
-      <button class="btn btn-copy btn-sm" onclick="navigator.clipboard.writeText('${url}');this.textContent='✓ Copied'">Copy Link</button>`;
+      <strong>Client link:</strong> <a href="${url}" target="_blank" style="color:#a99ef7">${url}</a><br><br>
+      <button class="btn btn-copy btn-sm" onclick="navigator.clipboard.writeText('${url}');this.textContent='✓ Copied'">Copy Link</button>
+      <span style="font-size:12px;color:#666680;margin-left:8px">Download button will appear in the table below once rendering completes.</span>`;
     successBanner.style.display = 'block';
     loadDeliveries();
   } catch(e) {
@@ -7213,10 +7215,13 @@ async function loadDeliveries() {
 
     document.getElementById('deliveries-tbody').innerHTML = deliveries.map(d => {
       const deliveryUrl = `${location.origin}/delivery/${d.id}`;
+      const r2Url = d.output_r2_url || '';
+      const fname = d.output_filename || `delivery_${d.id.substring(0,8)}`;
       const linkCell = d.status === 'completed'
         ? `<div class="link-cell">
              <button class="btn btn-copy btn-sm" onclick="navigator.clipboard.writeText('${deliveryUrl}');this.textContent='✓ Copied';setTimeout(()=>this.textContent='Copy Link',2000)">Copy Link</button>
              <a href="${deliveryUrl}" target="_blank" style="font-size:11px;color:#6c5ce7">Open ↗</a>
+             ${r2Url ? `<a href="${r2Url}" download="${fname}" class="btn btn-sm" style="background:#1a2a3a;border:1px solid #2a4a6a;color:#60a5fa;text-decoration:none;">⬇ Download</a>` : ''}
            </div>`
         : d.status === 'failed'
           ? `<span style="font-size:11px;color:#f87171">${(d.error||'').substring(0,60)}</span>`
