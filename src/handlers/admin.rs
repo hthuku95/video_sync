@@ -29,6 +29,7 @@ pub fn admin_routes() -> Router {
         .route("/admin/performance", get(admin_performance_page))
         .route("/admin/test-runs", get(admin_test_runs_page))
         .route("/admin/test-runs/:id", get(admin_test_run_detail_page))
+        .route("/admin/deliveries", get(admin_deliveries_page))
         .route("/delivery/:id", get(delivery_page));
     
     // API endpoints - protected routes with JWT authentication  
@@ -68,6 +69,7 @@ pub fn admin_routes() -> Router {
         .route("/api/admin/performance/thumbnails", get(admin_thumbnail_stats))
         .route("/api/admin/test-runs", get(api_list_test_runs).post(api_trigger_test_run))
         .route("/api/admin/test-runs/:id", get(api_get_test_run))
+        .route("/api/admin/deliveries", get(api_list_deliveries).post(api_create_delivery))
         .layer(axum::middleware::from_fn(admin_middleware))
         .layer(axum::middleware::from_fn(auth_middleware));
     
@@ -6046,6 +6048,7 @@ pub async fn admin_test_runs_page() -> Html<String> {
   <a href="/admin/clipping-activity">Activity</a>
   <a href="/admin/performance">Performance</a>
   <a href="/admin/test-runs" class="active">Portfolio Tests</a>
+  <a href="/admin/deliveries">Deliveries</a>
 </div>
 <div class="main">
   <div class="header">
@@ -6412,21 +6415,57 @@ pub async fn delivery_page(
     Path(id): Path<String>,
     Extension(state): Extension<Arc<AppState>>,
 ) -> Html<String> {
-    // Try to parse as UUID (test result)
-    let result = if let Ok(uuid) = uuid::Uuid::parse_str(&id) {
-        sqlx::query(
-            "SELECT test_name, gig_type, status, output_r2_url, output_filename, \
-             llm_review_score, llm_review_feedback \
-             FROM test_results WHERE id = $1",
-        )
-        .bind(uuid)
-        .fetch_optional(&state.db_pool)
-        .await
-        .ok()
-        .flatten()
-    } else {
-        None
-    };
+    // Try test_results first, then custom deliveries table
+    let (name, gig_type, status, r2_url, filename, score, feedback) =
+        if let Ok(uuid) = uuid::Uuid::parse_str(&id) {
+            // 1. Portfolio test result
+            let tr = sqlx::query(
+                "SELECT test_name, gig_type, status, output_r2_url, output_filename, \
+                 llm_review_score, llm_review_feedback FROM test_results WHERE id = $1",
+            )
+            .bind(uuid)
+            .fetch_optional(&state.db_pool)
+            .await
+            .ok()
+            .flatten();
+
+            if let Some(row) = tr {
+                let n: String = row.get("test_name");
+                let g: String = row.get("gig_type");
+                let s: String = row.get("status");
+                let u: Option<String> = row.try_get("output_r2_url").ok();
+                let f: Option<String> = row.try_get("output_filename").ok();
+                let sc: Option<i32> = row.try_get("llm_review_score").ok();
+                let fb: Option<String> = row.try_get("llm_review_feedback").ok();
+                (Some(n), Some(g), Some(s), u, f, sc, fb)
+            } else {
+                // 2. Custom delivery
+                let dr = sqlx::query(
+                    "SELECT title, gig_type, status, output_r2_url, output_filename \
+                     FROM deliveries WHERE id = $1",
+                )
+                .bind(uuid)
+                .fetch_optional(&state.db_pool)
+                .await
+                .ok()
+                .flatten();
+
+                if let Some(row) = dr {
+                    let n: String = row.get("title");
+                    let g: String = row.get("gig_type");
+                    let s: String = row.get("status");
+                    let u: Option<String> = row.try_get("output_r2_url").ok();
+                    let f: Option<String> = row.try_get("output_filename").ok();
+                    (Some(n), Some(g), Some(s), u, f, None, None)
+                } else {
+                    (None, None, None, None, None, None, None)
+                }
+            }
+        } else {
+            (None, None, None, None, None, None, None)
+        };
+
+    let result: Option<()> = name.as_ref().map(|_| ());
 
     let html = match result {
         None => format!(r#"<!DOCTYPE html>
@@ -6441,14 +6480,14 @@ pub async fn delivery_page(
 </style></head>
 <body><div class="box"><h1>404</h1><p>Delivery not found. The link may have expired.</p></div></body>
 </html>"#),
-        Some(row) => {
-            let name: String = row.get::<String, _>("test_name");
-            let gig_type: String = row.get::<String, _>("gig_type");
-            let status: String = row.get::<String, _>("status");
-            let r2_url: Option<String> = row.try_get::<String, _>("output_r2_url").ok();
-            let filename: Option<String> = row.try_get::<String, _>("output_filename").ok();
-            let score: Option<i32> = row.try_get::<i32, _>("llm_review_score").ok();
-            let feedback: Option<String> = row.try_get::<String, _>("llm_review_feedback").ok();
+        Some(()) => {
+            let name = name.unwrap_or_default();
+            let gig_type = gig_type.unwrap_or_default();
+            let status = status.unwrap_or_default();
+            let r2_url = r2_url;
+            let filename = filename;
+            let score = score;
+            let feedback = feedback;
 
             let is_image = filename.as_deref()
                 .map(|f| f.ends_with(".png") || f.ends_with(".jpg"))
@@ -6553,4 +6592,657 @@ pub async fn delivery_page(
     };
 
     Html(html)
+}
+
+// =============================================================================
+// CUSTOM DELIVERIES — Freelance order delivery system
+// Freelancer creates a delivery job → BlenderMCPServer renders → shareable link
+// =============================================================================
+
+#[derive(serde::Deserialize)]
+pub struct CreateDeliveryRequest {
+    pub client_ref:  Option<String>,
+    pub title:       String,
+    pub gig_type:    String,
+    pub prompt:      String,
+    pub style:       Option<String>,
+    pub duration:    Option<f64>,
+    pub extra:       Option<serde_json::Value>,
+}
+
+pub async fn api_create_delivery(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(req): Json<CreateDeliveryRequest>,
+) -> Json<serde_json::Value> {
+    let style    = req.style.unwrap_or_else(|| "cinematic".to_string());
+    let duration = req.duration.unwrap_or(10.0);
+    let extra    = req.extra.unwrap_or(serde_json::Value::Null);
+
+    let row = sqlx::query(
+        "INSERT INTO deliveries (client_ref, title, gig_type, prompt, style, duration, extra_args, status) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending') RETURNING id",
+    )
+    .bind(&req.client_ref)
+    .bind(&req.title)
+    .bind(&req.gig_type)
+    .bind(&req.prompt)
+    .bind(&style)
+    .bind(duration)
+    .bind(&extra)
+    .fetch_one(&state.db_pool)
+    .await;
+
+    let delivery_id: Uuid = match row {
+        Ok(r) => r.get("id"),
+        Err(e) => return Json(json!({"error": format!("DB insert failed: {e}")})),
+    };
+
+    // Spawn background render task
+    let state_clone = state.clone();
+    tokio::spawn(async move {
+        run_delivery_job(delivery_id, state_clone).await;
+    });
+
+    Json(json!({"delivery_id": delivery_id.to_string()}))
+}
+
+pub async fn api_list_deliveries(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    let rows = sqlx::query(
+        "SELECT id, client_ref, title, gig_type, status, output_r2_url, \
+         created_at, completed_at, error_message \
+         FROM deliveries ORDER BY created_at DESC LIMIT 100",
+    )
+    .fetch_all(&state.db_pool)
+    .await;
+
+    let rows = match rows {
+        Ok(r) => r,
+        Err(e) => return Json(json!({"error": format!("DB query failed: {e}")})),
+    };
+
+    let deliveries: Vec<serde_json::Value> = rows.iter().map(|r| {
+        json!({
+            "id":           r.get::<Uuid, _>("id").to_string(),
+            "client_ref":   r.try_get::<String, _>("client_ref").ok(),
+            "title":        r.get::<String, _>("title"),
+            "gig_type":     r.get::<String, _>("gig_type"),
+            "status":       r.get::<String, _>("status"),
+            "has_output":   r.try_get::<String, _>("output_r2_url").ok().is_some(),
+            "created_at":   r.get::<chrono::DateTime<chrono::Utc>, _>("created_at").to_rfc3339(),
+            "completed_at": r.try_get::<chrono::DateTime<chrono::Utc>, _>("completed_at").ok().map(|d| d.to_rfc3339()),
+            "error":        r.try_get::<String, _>("error_message").ok(),
+        })
+    }).collect();
+
+    Json(json!({"deliveries": deliveries}))
+}
+
+/// Background task: renders one custom delivery job and updates the DB.
+async fn run_delivery_job(delivery_id: Uuid, state: Arc<AppState>) {
+    // Fetch job details
+    let row = sqlx::query(
+        "SELECT gig_type, prompt, style, duration, extra_args FROM deliveries WHERE id = $1",
+    )
+    .bind(delivery_id)
+    .fetch_one(&state.db_pool)
+    .await;
+
+    let row = match row {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("Delivery {delivery_id}: DB fetch failed: {e}");
+            return;
+        }
+    };
+
+    let gig_type: String        = row.get("gig_type");
+    let prompt:   String        = row.get("prompt");
+    let style:    String        = row.get("style");
+    let duration: f64           = row.get("duration");
+    let extra: serde_json::Value = row.try_get::<serde_json::Value, _>("extra_args")
+        .unwrap_or(serde_json::Value::Null);
+
+    // Check BlenderMCPClient
+    let blender = match state.blender_mcp_client.as_ref() {
+        Some(c) => c.clone(),
+        None => {
+            let _ = sqlx::query(
+                "UPDATE deliveries SET status='failed', error_message=$1, completed_at=NOW() WHERE id=$2",
+            )
+            .bind("BlenderMCPServer not configured (BLENDER_MCP_URL not set)")
+            .bind(delivery_id)
+            .execute(&state.db_pool)
+            .await;
+            return;
+        }
+    };
+
+    // Mark running
+    let _ = sqlx::query("UPDATE deliveries SET status='running' WHERE id=$1")
+        .bind(delivery_id)
+        .execute(&state.db_pool)
+        .await;
+
+    // Build tool + args
+    let (tool, args, url_key, ext) = build_delivery_tool_args(&gig_type, &prompt, &style, duration, &extra);
+
+    // Submit to BlenderMCPServer async job queue
+    let job_id = match blender.submit_job(&tool, args).await {
+        Ok(id) => id,
+        Err(e) => {
+            let _ = sqlx::query(
+                "UPDATE deliveries SET status='failed', error_message=$1, completed_at=NOW() WHERE id=$2",
+            )
+            .bind(&e).bind(delivery_id).execute(&state.db_pool).await;
+            return;
+        }
+    };
+
+    // Poll until completed / failed (up to 15 min, 5s interval)
+    let mut final_url: Option<String> = None;
+    for _ in 0..180u16 {
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        let status = match blender.poll_job(&job_id).await {
+            Ok(s) => s,
+            Err(e) => {
+                let _ = sqlx::query(
+                    "UPDATE deliveries SET status='failed', error_message=$1, completed_at=NOW() WHERE id=$2",
+                )
+                .bind(&e).bind(delivery_id).execute(&state.db_pool).await;
+                return;
+            }
+        };
+
+        match status.get("state").and_then(|s| s.as_str()) {
+            Some("completed") => {
+                if let Some(url) = status.get("result")
+                    .and_then(|r| r.get(url_key))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                {
+                    final_url = Some(url);
+                }
+                break;
+            }
+            Some("failed") | Some("error") => {
+                let msg = status.get("error").and_then(|v| v.as_str())
+                    .unwrap_or("render failed").to_string();
+                let _ = sqlx::query(
+                    "UPDATE deliveries SET status='failed', error_message=$1, completed_at=NOW() WHERE id=$2",
+                )
+                .bind(&msg).bind(delivery_id).execute(&state.db_pool).await;
+                return;
+            }
+            _ => {} // pending/running — keep polling
+        }
+    }
+
+    match final_url {
+        Some(url) => {
+            let filename = format!("delivery_{delivery_id}.{ext}");
+            let _ = sqlx::query(
+                "UPDATE deliveries SET status='completed', output_r2_url=$1, output_filename=$2, \
+                 completed_at=NOW() WHERE id=$3",
+            )
+            .bind(&url).bind(&filename).bind(delivery_id)
+            .execute(&state.db_pool).await;
+        }
+        None => {
+            let _ = sqlx::query(
+                "UPDATE deliveries SET status='failed', error_message='Timed out after 900s', \
+                 completed_at=NOW() WHERE id=$1",
+            )
+            .bind(delivery_id).execute(&state.db_pool).await;
+        }
+    }
+}
+
+/// Map gig_type → (tool_name, args, url_key, file_extension)
+fn build_delivery_tool_args(
+    gig_type: &str,
+    prompt: &str,
+    style: &str,
+    duration: f64,
+    extra: &serde_json::Value,
+) -> (String, serde_json::Value, &'static str, &'static str) {
+    let get = |key: &str| extra.get(key).and_then(|v| v.as_str()).unwrap_or("");
+    match gig_type {
+        "thumbnail" => (
+            "blender_generate_thumbnail".to_string(),
+            json!({"prompt": prompt, "title_text": get("title_text"), "style": style}),
+            "image_url", "png",
+        ),
+        "title_card" => (
+            "blender_generate_title_card".to_string(),
+            json!({"title": prompt, "subtitle": get("subtitle"), "duration": duration, "style": style}),
+            "video_url", "mp4",
+        ),
+        "data_viz" => (
+            "blender_generate_data_viz".to_string(),
+            json!({"data_json": get("data_json"), "chart_type": get("chart_type"), "title": prompt, "duration": duration}),
+            "video_url", "mp4",
+        ),
+        "lower_third" => (
+            "blender_generate_lower_third".to_string(),
+            json!({"name_text": prompt, "subtitle_text": get("subtitle"), "style": style, "duration": duration}),
+            "video_url", "mp4",
+        ),
+        "latex" => (
+            "blender_generate_latex".to_string(),
+            json!({"latex_expression": prompt, "animation_type": get("animation_type"), "duration": duration, "background_style": get("background_style")}),
+            "video_url", "mp4",
+        ),
+        "ui_mockup" => {
+            let animation = get("animation");
+            let url_key = if animation == "static" { "image_url" } else { "video_url" };
+            let ext     = if animation == "static" { "png" }       else { "mp4" };
+            (
+                "blender_generate_ui_mockup".to_string(),
+                json!({"device": get("device"), "animation": animation, "duration": duration, "screenshot_url": get("screenshot_url")}),
+                url_key, ext,
+            )
+        }
+        _ => ( // "scene" + default
+            "blender_generate_scene".to_string(),
+            json!({"prompt": prompt, "duration": duration, "style": style}),
+            "video_url", "mp4",
+        ),
+    }
+}
+
+pub async fn admin_deliveries_page() -> Html<String> {
+    let html = r###"<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Custom Deliveries — VideoSync Admin</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         background: #0f0f13; color: #e0e0e0; display: flex; min-height: 100vh; }
+  .sidebar { width: 220px; background: #1a1a24; padding: 24px 0; flex-shrink: 0; }
+  .sidebar h2 { color: #fff; font-size: 14px; font-weight: 700; padding: 0 20px 20px;
+                border-bottom: 1px solid #2a2a36; letter-spacing: 0.05em; }
+  .sidebar a { display: block; padding: 10px 20px; color: #9999bb; text-decoration: none;
+               font-size: 13px; transition: all 0.15s; }
+  .sidebar a:hover, .sidebar a.active { background: #23233a; color: #fff; }
+  .main { flex: 1; padding: 32px; overflow-y: auto; }
+  .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 28px; }
+  .header h1 { font-size: 22px; font-weight: 600; color: #fff; }
+  .btn { padding: 10px 20px; border: none; border-radius: 8px; cursor: pointer;
+         font-size: 13px; font-weight: 600; transition: all 0.2s; }
+  .btn-primary { background: #6c5ce7; color: #fff; }
+  .btn-primary:hover { background: #5a4bd1; }
+  .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn-ghost { background: transparent; border: 1px solid #2a2a36; color: #9999bb; }
+  .btn-ghost:hover { border-color: #6c5ce7; color: #fff; }
+  .btn-sm { padding: 6px 14px; font-size: 12px; }
+  .btn-copy { background: #1a3a2a; border: 1px solid #2a5a3a; color: #4ade80; }
+  .btn-copy:hover { background: #1f4a33; }
+  .form-panel { background: #1a1a24; border: 1px solid #2a2a36; border-radius: 12px;
+                padding: 28px; margin-bottom: 32px; }
+  .form-panel h2 { font-size: 16px; font-weight: 600; color: #fff; margin-bottom: 20px; }
+  .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .form-full { grid-column: 1 / -1; }
+  .form-group { display: flex; flex-direction: column; gap: 6px; }
+  .form-group label { font-size: 12px; color: #9999bb; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
+  .form-group input, .form-group select, .form-group textarea {
+    background: #0f0f13; border: 1px solid #2a2a36; border-radius: 7px;
+    padding: 10px 14px; color: #fff; font-size: 14px; width: 100%;
+    font-family: inherit; }
+  .form-group textarea { min-height: 80px; resize: vertical; }
+  .form-group input:focus, .form-group select:focus, .form-group textarea:focus {
+    outline: none; border-color: #6c5ce7; }
+  .form-group select option { background: #1a1a24; }
+  .hidden { display: none !important; }
+  .form-actions { margin-top: 20px; display: flex; gap: 12px; align-items: center; }
+  .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid rgba(255,255,255,0.3);
+             border-top-color: #fff; border-radius: 50%; animation: spin 0.7s linear infinite;
+             margin-right: 8px; vertical-align: middle; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .success-banner { background: #16a34a22; border: 1px solid #4ade8040; border-radius: 8px;
+                    padding: 14px 18px; font-size: 13px; color: #4ade80; display: none; margin-top: 16px; }
+  .error-banner  { background: #dc262622; border: 1px solid #f8717140; border-radius: 8px;
+                    padding: 14px 18px; font-size: 13px; color: #f87171; display: none; margin-top: 16px; }
+  .table-wrap { background: #1a1a24; border: 1px solid #2a2a36; border-radius: 12px; overflow: hidden; }
+  .table-header { padding: 16px 20px; border-bottom: 1px solid #2a2a36; display: flex;
+                  justify-content: space-between; align-items: center; }
+  .table-header h2 { font-size: 15px; font-weight: 600; color: #fff; }
+  table { width: 100%; border-collapse: collapse; }
+  th { padding: 12px 16px; text-align: left; font-size: 11px; color: #666680;
+       font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em;
+       border-bottom: 1px solid #2a2a36; }
+  td { padding: 14px 16px; font-size: 13px; border-bottom: 1px solid #1f1f2e; vertical-align: middle; }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: #1f1f2a; }
+  .badge { padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 600; }
+  .badge-pending  { background: #2a2a3a; color: #9999bb; }
+  .badge-running  { background: #2563eb22; color: #60a5fa; }
+  .badge-completed { background: #16a34a22; color: #4ade80; }
+  .badge-failed   { background: #dc262622; color: #f87171; }
+  .gig-tag { display: inline-block; background: #6c5ce722; color: #a99ef7;
+             padding: 2px 8px; border-radius: 4px; font-size: 11px; }
+  .client-ref { font-size: 12px; color: #666680; }
+  .empty { text-align: center; padding: 60px; color: #666680; }
+  .link-cell { display: flex; gap: 8px; align-items: center; }
+  .link-text { font-size: 11px; color: #666680; font-family: monospace; }
+  .separator { height: 1px; background: #2a2a36; margin: 28px 0; }
+  .hint { font-size: 12px; color: #666680; margin-top: 4px; }
+</style>
+</head>
+<body>
+<div class="sidebar">
+  <h2>VIDEOSYNC ADMIN</h2>
+  <a href="/admin/dashboard">Dashboard</a>
+  <a href="/admin/users">Users</a>
+  <a href="/admin/clipping-jobs">Clipping Jobs</a>
+  <a href="/admin/clipping-activity">Activity</a>
+  <a href="/admin/performance">Performance</a>
+  <a href="/admin/test-runs">Portfolio Tests</a>
+  <a href="/admin/deliveries" class="active">Deliveries</a>
+</div>
+<div class="main">
+  <div class="header">
+    <h1>Custom Deliveries</h1>
+    <button class="btn btn-ghost" onclick="loadDeliveries()">↻ Refresh</button>
+  </div>
+
+  <!-- Creation Form -->
+  <div class="form-panel">
+    <h2>Create New Delivery</h2>
+    <div class="form-grid">
+      <div class="form-group">
+        <label>Client Reference (optional)</label>
+        <input id="client_ref" type="text" placeholder="e.g. Fiverr #12345 / @username">
+      </div>
+      <div class="form-group">
+        <label>Delivery Title *</label>
+        <input id="title" type="text" placeholder="e.g. Title Card for TechBro Channel">
+        <span class="hint">Shown on the client's delivery page</span>
+      </div>
+      <div class="form-group">
+        <label>Gig Type *</label>
+        <select id="gig_type" onchange="onGigTypeChange()">
+          <option value="scene">3D Scene / B-Roll Clip</option>
+          <option value="thumbnail">YouTube Thumbnail</option>
+          <option value="title_card">Animated Title Card</option>
+          <option value="data_viz">Data Visualisation</option>
+          <option value="lower_third">Lower Third Overlay</option>
+          <option value="latex">LaTeX / Math Animation</option>
+          <option value="ui_mockup">UI Mockup (Phone/Screen)</option>
+        </select>
+      </div>
+      <div class="form-group" id="grp-style">
+        <label>Style</label>
+        <select id="style">
+          <option value="cinematic">Cinematic</option>
+          <option value="corporate">Corporate</option>
+          <option value="minimal">Minimal</option>
+          <option value="energetic">Energetic</option>
+          <option value="calm">Calm</option>
+          <option value="dark">Dark</option>
+          <option value="professional">Professional</option>
+        </select>
+      </div>
+      <div class="form-group form-full">
+        <label id="prompt-label">Scene Description *</label>
+        <textarea id="prompt" placeholder="Describe what you want rendered..."></textarea>
+      </div>
+      <!-- Thumbnail: overlay title text -->
+      <div class="form-group hidden" id="grp-title-text">
+        <label>Overlay Title Text</label>
+        <input id="title_text" type="text" placeholder="e.g. 10 AI Tools That Will Change Your Life">
+      </div>
+      <!-- Title Card / Lower Third: subtitle -->
+      <div class="form-group hidden" id="grp-subtitle">
+        <label id="subtitle-label">Subtitle</label>
+        <input id="subtitle" type="text" placeholder="Secondary line of text">
+      </div>
+      <!-- Duration -->
+      <div class="form-group" id="grp-duration">
+        <label>Duration (seconds)</label>
+        <input id="duration" type="number" value="10" min="3" max="60" step="1">
+      </div>
+      <!-- Data Viz: chart type + data JSON -->
+      <div class="form-group hidden" id="grp-chart-type">
+        <label>Chart Type</label>
+        <select id="chart_type">
+          <option value="bar">Bar Chart</option>
+          <option value="line">Line Chart</option>
+          <option value="pie">Pie Chart</option>
+          <option value="counter">Animated Counter</option>
+          <option value="scatter">Scatter Plot</option>
+        </select>
+      </div>
+      <div class="form-group form-full hidden" id="grp-data-json">
+        <label>Data JSON</label>
+        <textarea id="data_json" placeholder='[{"label":"Q1","value":120},{"label":"Q2","value":185}]' style="min-height:60px;font-family:monospace;font-size:12px;"></textarea>
+      </div>
+      <!-- LaTeX: animation type + background -->
+      <div class="form-group hidden" id="grp-anim-type">
+        <label>Animation Type</label>
+        <select id="animation_type">
+          <option value="step_by_step">Step by Step</option>
+          <option value="appear">Appear</option>
+          <option value="morph">Morph / Transform</option>
+        </select>
+      </div>
+      <div class="form-group hidden" id="grp-bg-style">
+        <label>Background Style</label>
+        <select id="background_style">
+          <option value="dark">Dark</option>
+          <option value="light">Light</option>
+          <option value="transparent">Transparent</option>
+        </select>
+      </div>
+      <!-- UI Mockup: device + animation -->
+      <div class="form-group hidden" id="grp-device">
+        <label>Device</label>
+        <select id="device">
+          <option value="iPhone">iPhone</option>
+          <option value="MacBook">MacBook</option>
+          <option value="browser">Browser Window</option>
+          <option value="iPad">iPad</option>
+        </select>
+      </div>
+      <div class="form-group hidden" id="grp-mockup-anim">
+        <label>Mockup Animation</label>
+        <select id="mockup_animation">
+          <option value="reveal">Reveal</option>
+          <option value="scroll">Scroll</option>
+          <option value="tilt">Tilt / 3D Rotate</option>
+          <option value="static">Static (image)</option>
+        </select>
+      </div>
+      <div class="form-group hidden" id="grp-screenshot-url">
+        <label>Screenshot URL (optional)</label>
+        <input id="screenshot_url" type="url" placeholder="https://...">
+        <span class="hint">Direct image URL to show in the mockup frame</span>
+      </div>
+    </div>
+    <div class="form-actions">
+      <button class="btn btn-primary" id="create-btn" onclick="createDelivery()">🚀 Create Delivery</button>
+      <span id="create-status" style="font-size:13px;color:#9999bb;"></span>
+    </div>
+    <div class="success-banner" id="success-banner"></div>
+    <div class="error-banner"   id="error-banner"></div>
+  </div>
+
+  <!-- Deliveries Table -->
+  <div class="table-wrap">
+    <div class="table-header">
+      <h2>All Deliveries</h2>
+      <span id="delivery-count" style="font-size:12px;color:#666680;"></span>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>Title</th>
+          <th>Gig</th>
+          <th>Client Ref</th>
+          <th>Status</th>
+          <th>Created</th>
+          <th>Delivery Link</th>
+        </tr>
+      </thead>
+      <tbody id="deliveries-tbody">
+        <tr><td colspan="6" class="empty">Loading…</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+const GIG_CONFIG = {
+  scene:       { promptLabel:'Scene Description', style:true,  subtitle:false, titleText:false, duration:true,  chartType:false, dataJson:false, animType:false, bgStyle:false, device:false, mockupAnim:false, screenshotUrl:false, defaultDuration:15 },
+  thumbnail:   { promptLabel:'Thumbnail Description', style:true,  subtitle:false, titleText:true,  duration:false, chartType:false, dataJson:false, animType:false, bgStyle:false, device:false, mockupAnim:false, screenshotUrl:false, defaultDuration:0  },
+  title_card:  { promptLabel:'Main Title Text', style:true,  subtitle:true,  titleText:false, duration:true,  chartType:false, dataJson:false, animType:false, bgStyle:false, device:false, mockupAnim:false, screenshotUrl:false, defaultDuration:5  },
+  data_viz:    { promptLabel:'Chart Title',     style:false, subtitle:false, titleText:false, duration:true,  chartType:true,  dataJson:true,  animType:false, bgStyle:false, device:false, mockupAnim:false, screenshotUrl:false, defaultDuration:15 },
+  lower_third: { promptLabel:'Name / Main Text', style:true,  subtitle:true,  titleText:false, duration:true,  chartType:false, dataJson:false, animType:false, bgStyle:false, device:false, mockupAnim:false, screenshotUrl:false, defaultDuration:5  },
+  latex:       { promptLabel:'LaTeX Expression (e.g. \\\\frac{d}{dx})', style:false, subtitle:false, titleText:false, duration:true,  chartType:false, dataJson:false, animType:true,  bgStyle:true,  device:false, mockupAnim:false, screenshotUrl:false, defaultDuration:10 },
+  ui_mockup:   { promptLabel:'App / Product Description', style:false, subtitle:false, titleText:false, duration:true,  chartType:false, dataJson:false, animType:false, bgStyle:false, device:true,  mockupAnim:true,  screenshotUrl:true,  defaultDuration:8  },
+};
+
+function show(id, v) { document.getElementById(id).classList.toggle('hidden', !v); }
+
+function onGigTypeChange() {
+  const cfg = GIG_CONFIG[document.getElementById('gig_type').value] || GIG_CONFIG.scene;
+  document.getElementById('prompt-label').textContent = cfg.promptLabel;
+  show('grp-style',         cfg.style);
+  show('grp-subtitle',      cfg.subtitle);
+  show('grp-title-text',    cfg.titleText);
+  show('grp-duration',      cfg.duration);
+  show('grp-chart-type',    cfg.chartType);
+  show('grp-data-json',     cfg.dataJson);
+  show('grp-anim-type',     cfg.animType);
+  show('grp-bg-style',      cfg.bgStyle);
+  show('grp-device',        cfg.device);
+  show('grp-mockup-anim',   cfg.mockupAnim);
+  show('grp-screenshot-url',cfg.screenshotUrl);
+  if (cfg.defaultDuration) document.getElementById('duration').value = cfg.defaultDuration;
+  // Update subtitle label
+  const gt = document.getElementById('gig_type').value;
+  document.getElementById('subtitle-label').textContent = (gt === 'lower_third') ? 'Subtitle / Role' : 'Subtitle';
+}
+
+async function createDelivery() {
+  const btn = document.getElementById('create-btn');
+  const status = document.getElementById('create-status');
+  const successBanner = document.getElementById('success-banner');
+  const errorBanner = document.getElementById('error-banner');
+  successBanner.style.display = 'none';
+  errorBanner.style.display = 'none';
+
+  const gig = document.getElementById('gig_type').value;
+  const cfg = GIG_CONFIG[gig];
+
+  const title = document.getElementById('title').value.trim();
+  const prompt = document.getElementById('prompt').value.trim();
+  if (!title || !prompt) { errorBanner.textContent = 'Title and prompt are required.'; errorBanner.style.display='block'; return; }
+
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>Creating…';
+
+  const extra = {};
+  if (cfg.titleText)     extra.title_text      = document.getElementById('title_text').value;
+  if (cfg.subtitle)      extra.subtitle         = document.getElementById('subtitle').value;
+  if (cfg.chartType)     extra.chart_type       = document.getElementById('chart_type').value;
+  if (cfg.dataJson)      extra.data_json        = document.getElementById('data_json').value;
+  if (cfg.animType)      extra.animation_type   = document.getElementById('animation_type').value;
+  if (cfg.bgStyle)       extra.background_style = document.getElementById('background_style').value;
+  if (cfg.device)        extra.device           = document.getElementById('device').value;
+  if (cfg.mockupAnim)    extra.animation        = document.getElementById('mockup_animation').value;
+  if (cfg.screenshotUrl) extra.screenshot_url   = document.getElementById('screenshot_url').value;
+
+  const token = localStorage.getItem('admin_token');
+  const body = {
+    client_ref: document.getElementById('client_ref').value.trim() || null,
+    title, gig_type: gig, prompt,
+    style:    cfg.style    ? document.getElementById('style').value    : 'cinematic',
+    duration: cfg.duration ? parseFloat(document.getElementById('duration').value) : 10,
+    extra: Object.keys(extra).length ? extra : null,
+  };
+
+  try {
+    const resp = await fetch('/api/admin/deliveries', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify(body),
+    });
+    const data = await resp.json();
+    if (data.error) throw new Error(data.error);
+    const url = `${location.origin}/delivery/${data.delivery_id}`;
+    successBanner.innerHTML = `✅ Delivery created! Render is in progress (5–15 min).<br><br>
+      <strong>Client link:</strong> <a href="${url}" target="_blank" style="color:#a99ef7">${url}</a><br>
+      <button class="btn btn-copy btn-sm" onclick="navigator.clipboard.writeText('${url}');this.textContent='✓ Copied'">Copy Link</button>`;
+    successBanner.style.display = 'block';
+    loadDeliveries();
+  } catch(e) {
+    errorBanner.textContent = `Error: ${e.message}`;
+    errorBanner.style.display = 'block';
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '🚀 Create Delivery';
+    status.textContent = '';
+  }
+}
+
+function fmtDate(iso) {
+  const d = new Date(iso);
+  return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+}
+
+async function loadDeliveries() {
+  const token = localStorage.getItem('admin_token');
+  try {
+    const resp = await fetch('/api/admin/deliveries', {
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
+    const data = await resp.json();
+    const deliveries = data.deliveries || [];
+    document.getElementById('delivery-count').textContent = `${deliveries.length} total`;
+
+    if (!deliveries.length) {
+      document.getElementById('deliveries-tbody').innerHTML =
+        '<tr><td colspan="6" class="empty">No deliveries yet. Create one above.</td></tr>';
+      return;
+    }
+
+    document.getElementById('deliveries-tbody').innerHTML = deliveries.map(d => {
+      const deliveryUrl = `${location.origin}/delivery/${d.id}`;
+      const linkCell = d.status === 'completed'
+        ? `<div class="link-cell">
+             <button class="btn btn-copy btn-sm" onclick="navigator.clipboard.writeText('${deliveryUrl}');this.textContent='✓ Copied';setTimeout(()=>this.textContent='Copy Link',2000)">Copy Link</button>
+             <a href="${deliveryUrl}" target="_blank" style="font-size:11px;color:#6c5ce7">Open ↗</a>
+           </div>`
+        : d.status === 'failed'
+          ? `<span style="font-size:11px;color:#f87171">${(d.error||'').substring(0,60)}</span>`
+          : `<span class="link-text">rendering…</span>`;
+      return `<tr>
+        <td><strong>${d.title}</strong></td>
+        <td><span class="gig-tag">${d.gig_type}</span></td>
+        <td><span class="client-ref">${d.client_ref || '—'}</span></td>
+        <td><span class="badge badge-${d.status}">${d.status}</span></td>
+        <td style="font-size:12px;color:#666680">${fmtDate(d.created_at)}</td>
+        <td>${linkCell}</td>
+      </tr>`;
+    }).join('');
+  } catch(e) {
+    document.getElementById('deliveries-tbody').innerHTML =
+      `<tr><td colspan="6" class="empty">Error loading deliveries: ${e.message}</td></tr>`;
+  }
+}
+
+// Init
+onGigTypeChange();
+loadDeliveries();
+// Auto-refresh every 30s to pick up completed renders
+setInterval(loadDeliveries, 30000);
+</script>
+</body>
+</html>"###;
+    Html(html.to_string())
 }
