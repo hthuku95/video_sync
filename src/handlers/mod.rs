@@ -13,3 +13,5 @@ pub mod clipping; // 📹 YouTube clipping feature
 pub mod health; // 🏥 Health check and monitoring endpoints
 pub mod tools; // 🎬 On-demand FFmpeg tool endpoints
 pub mod gig_templates; // 💼 Fiverr/PPH gig templates + sample generation
+pub mod manual_clipping; // ✂️ Manual clipping — paste URL, get download links
+pub mod prospects; // 🎯 Admin prospect finder

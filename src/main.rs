@@ -504,6 +504,9 @@ async fn main() {
         .merge(handlers::health::health_routes()) // 🏥 Health check and monitoring
         .merge(handlers::tools::tools_routes()) // 🎬 On-demand FFmpeg tools
         .merge(handlers::gig_templates::gig_template_routes()) // 💼 Gig templates
+        .merge(handlers::manual_clipping::manual_clipping_routes()) // ✂️ Manual clipping
+        .merge(handlers::prospects::prospect_routes()) // 🎯 Prospect finder
+        .merge(handlers::auth::clipper_invite_routes()) // 🎫 Clipper invites
         .merge(admin_only_routes) // Admin-only routes like API docs
         .route("/api/status", axum::routing::get(api_status))
         // .layer(axum::middleware::from_fn(middleware::frontend_rate_limit::frontend_rate_limit_middleware))

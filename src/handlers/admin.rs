@@ -1090,10 +1090,11 @@ pub async fn create_superuser_api(
         id: user_row.get("id"),
         email: user_row.get("email"),
         username: user_row.get("username"),
-        password_hash: "".to_string(), // Don't include password hash in response
+        password_hash: "".to_string(),
         is_active: user_row.get("is_active"),
         is_superuser: user_row.get("is_superuser"),
         is_staff: user_row.get("is_staff"),
+        is_clipper: false,
         created_at: user_row.get("created_at"),
         updated_at: user_row.get("updated_at"),
     };

@@ -74,7 +74,19 @@ pub fn auth_routes() -> Router {
         .route("/api/auth/verify", get(verify_token))
         .route("/api/auth/google", get(initiate_google_oauth))
         .route("/api/auth/google/callback", get(google_oauth_callback))
+        .route("/api/auth/register/clipper", post(register_clipper))
         .layer(axum::middleware::from_fn(strict_rate_limit_middleware))
+}
+
+pub fn clipper_invite_routes() -> Router {
+    use crate::middleware::auth::auth_middleware;
+    use crate::middleware::admin::admin_middleware;
+    Router::new()
+        .route("/api/admin/clipper-invites", post(create_clipper_invite))
+        .route("/api/admin/clipper-invites", get(list_clipper_invites))
+        .route("/api/admin/clipper-invites/:token", axum::routing::delete(revoke_clipper_invite))
+        .layer(axum::middleware::from_fn(admin_middleware))
+        .layer(axum::middleware::from_fn(auth_middleware))
 }
 
 async fn register(
@@ -163,11 +175,11 @@ async fn register(
         }
     };
 
-    // Insert new user (normal users are not staff or superuser by default)
+    // Insert new user (normal users are not staff, superuser, or clipper by default)
     let user_row = sqlx::query(
-        "INSERT INTO users (email, username, password_hash, is_active, is_superuser, is_staff, created_at, updated_at) 
-         VALUES ($1, $2, $3, true, false, false, NOW(), NOW()) 
-         RETURNING id, email, username, password_hash, is_active, is_superuser, is_staff, created_at, updated_at"
+        "INSERT INTO users (email, username, password_hash, is_active, is_superuser, is_staff, is_clipper, created_at, updated_at)
+         VALUES ($1, $2, $3, true, false, false, false, NOW(), NOW())
+         RETURNING id, email, username, password_hash, is_active, is_superuser, is_staff, is_clipper, created_at, updated_at"
     )
     .bind(&payload.email)
     .bind(&payload.username)
@@ -235,7 +247,7 @@ async fn login(
 
     // Find user by email
     let user_row = sqlx::query(
-        "SELECT id, email, username, password_hash, is_active, is_superuser, is_staff, created_at, updated_at 
+        "SELECT id, email, username, password_hash, is_active, is_superuser, is_staff, is_clipper, created_at, updated_at
          FROM users WHERE email = $1 AND is_active = true"
     )
     .bind(&payload.email)
@@ -326,6 +338,7 @@ fn generate_jwt_token(user: &User) -> Result<String, (StatusCode, Json<ErrorResp
         email: user.email.clone(),
         is_superuser: user.is_superuser,
         is_staff: user.is_staff,
+        is_clipper: user.is_clipper,
         exp: expiration as usize,
         iat: Utc::now().timestamp() as usize,
     };
@@ -411,7 +424,7 @@ async fn verify_token(
 
     // Get user from database
     let user_row = sqlx::query(
-        "SELECT id, email, username, is_active, is_superuser, is_staff, created_at, updated_at 
+        "SELECT id, email, username, password_hash, is_active, is_superuser, is_staff, is_clipper, created_at, updated_at
          FROM users WHERE id = $1 AND is_active = true"
     )
     .bind(claims.sub.parse::<i32>().unwrap_or(0))
@@ -805,7 +818,7 @@ pub async fn google_oauth_callback(
                     created_at, updated_at
                 )
                 VALUES ($1, $2, $3, true, $4, $5, $6, $7, $8, $9, NOW(), NOW())
-                RETURNING id, email, username, password_hash, is_active, is_superuser, is_staff, created_at, updated_at"
+                RETURNING id, email, username, password_hash, is_active, is_superuser, is_staff, is_clipper, created_at, updated_at"
             )
             .bind(&user_info.email)
             .bind(username)
@@ -831,6 +844,7 @@ pub async fn google_oauth_callback(
                 is_active: user_row.get("is_active"),
                 is_superuser: user_row.get("is_superuser"),
                 is_staff: user_row.get("is_staff"),
+                is_clipper: user_row.get("is_clipper"),
                 created_at: user_row.get("created_at"),
                 updated_at: user_row.get("updated_at"),
             };
@@ -849,6 +863,7 @@ pub async fn google_oauth_callback(
         username: user.username.clone(),
         is_superuser: user.is_superuser,
         is_staff: user.is_staff,
+        is_clipper: user.is_clipper,
         exp: (Utc::now() + Duration::days(30)).timestamp() as usize,
         iat: Utc::now().timestamp() as usize,
     };
@@ -869,7 +884,8 @@ pub async fn google_oauth_callback(
         "email": user.email,
         "username": user.username,
         "is_staff": user.is_staff,
-        "is_superuser": user.is_superuser
+        "is_superuser": user.is_superuser,
+        "is_clipper": user.is_clipper
     }).to_string();
 
     // URL encode the token and user data for the hash fragment
@@ -892,4 +908,219 @@ pub async fn google_oauth_callback(
         </body></html>"#,
         final_redirect
     )))
+}
+
+// ============================================================================
+// Clipper Invite System
+// ============================================================================
+
+#[derive(Debug, Deserialize)]
+struct CreateInviteRequest {
+    label: Option<String>,
+    expires_days: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ClipperRegisterRequest {
+    pub token: String,
+    pub email: String,
+    pub username: String,
+    pub password: String,
+    pub confirm_password: String,
+}
+
+async fn create_clipper_invite(
+    Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
+    Json(payload): Json<CreateInviteRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    use rand::Rng;
+    let token: String = rand::thread_rng()
+        .sample_iter(&rand::distributions::Alphanumeric)
+        .take(48)
+        .map(char::from)
+        .collect();
+
+    let expires_days = payload.expires_days.unwrap_or(30);
+    let admin_id: i32 = claims.sub.parse().unwrap_or(0);
+
+    sqlx::query(
+        "INSERT INTO clipper_invite_tokens (token, label, created_by_admin_id, expires_at)
+         VALUES ($1, $2, $3, NOW() + $4 * INTERVAL '1 day')"
+    )
+    .bind(&token)
+    .bind(&payload.label)
+    .bind(admin_id)
+    .bind(expires_days)
+    .execute(&state.db_pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("Failed to create invite token: {}", e);
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { success: false, message: "Failed to create token".to_string() }))
+    })?;
+
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "token": token,
+        "signup_url": format!("/signup/clipper?token={}", token),
+        "expires_days": expires_days
+    })))
+}
+
+async fn list_clipper_invites(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    let rows = sqlx::query(
+        "SELECT t.id, t.token, t.label, t.expires_at, t.used_at, t.created_at,
+                u.email AS used_by_email
+         FROM clipper_invite_tokens t
+         LEFT JOIN users u ON u.id = t.used_by_user_id
+         ORDER BY t.created_at DESC"
+    )
+    .fetch_all(&state.db_pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("Failed to list invites: {}", e);
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { success: false, message: "Failed to fetch tokens".to_string() }))
+    })?;
+
+    let invites: Vec<serde_json::Value> = rows.iter().map(|r| {
+        let used_at: Option<chrono::DateTime<chrono::Utc>> = r.get("used_at");
+        serde_json::json!({
+            "id": r.get::<uuid::Uuid, _>("id").to_string(),
+            "token": r.get::<String, _>("token"),
+            "label": r.get::<Option<String>, _>("label"),
+            "expires_at": r.get::<chrono::DateTime<chrono::Utc>, _>("expires_at"),
+            "used": used_at.is_some(),
+            "used_at": used_at,
+            "used_by_email": r.get::<Option<String>, _>("used_by_email"),
+            "created_at": r.get::<chrono::DateTime<chrono::Utc>, _>("created_at"),
+        })
+    }).collect();
+
+    Ok(Json(serde_json::json!({ "success": true, "invites": invites })))
+}
+
+async fn revoke_clipper_invite(
+    Extension(state): Extension<Arc<AppState>>,
+    axum::extract::Path(token): axum::extract::Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    let result = sqlx::query("DELETE FROM clipper_invite_tokens WHERE token = $1 AND used_at IS NULL")
+        .bind(&token)
+        .execute(&state.db_pool)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to revoke invite: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { success: false, message: "Failed to revoke token".to_string() }))
+        })?;
+
+    if result.rows_affected() == 0 {
+        return Err((StatusCode::NOT_FOUND, Json(ErrorResponse { success: false, message: "Token not found or already used".to_string() })));
+    }
+
+    Ok(Json(serde_json::json!({ "success": true, "message": "Token revoked" })))
+}
+
+async fn register_clipper(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(payload): Json<ClipperRegisterRequest>,
+) -> Result<Json<AuthResponse>, (StatusCode, Json<ErrorResponse>)> {
+    // Validate inputs
+    if payload.email.is_empty() || payload.username.is_empty() || payload.password.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, Json(ErrorResponse { success: false, message: "Email, username, and password are required".to_string() })));
+    }
+    if payload.password.len() < 6 {
+        return Err((StatusCode::BAD_REQUEST, Json(ErrorResponse { success: false, message: "Password must be at least 6 characters".to_string() })));
+    }
+    if payload.password != payload.confirm_password {
+        return Err((StatusCode::BAD_REQUEST, Json(ErrorResponse { success: false, message: "Passwords do not match".to_string() })));
+    }
+
+    // Validate invite token
+    let token_row = sqlx::query(
+        "SELECT id, expires_at, used_at FROM clipper_invite_tokens WHERE token = $1"
+    )
+    .bind(&payload.token)
+    .fetch_optional(&state.db_pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("DB error checking invite token: {}", e);
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { success: false, message: "Internal server error".to_string() }))
+    })?;
+
+    let token_row = token_row.ok_or_else(|| {
+        (StatusCode::BAD_REQUEST, Json(ErrorResponse { success: false, message: "Invalid invite token".to_string() }))
+    })?;
+
+    let used_at: Option<chrono::DateTime<chrono::Utc>> = token_row.get("used_at");
+    if used_at.is_some() {
+        return Err((StatusCode::BAD_REQUEST, Json(ErrorResponse { success: false, message: "Invite token has already been used".to_string() })));
+    }
+    let expires_at: chrono::DateTime<chrono::Utc> = token_row.get("expires_at");
+    if expires_at < chrono::Utc::now() {
+        return Err((StatusCode::BAD_REQUEST, Json(ErrorResponse { success: false, message: "Invite token has expired".to_string() })));
+    }
+    let token_id: uuid::Uuid = token_row.get("id");
+
+    // Check if user already exists
+    let existing = sqlx::query("SELECT id FROM users WHERE email = $1 OR username = $2")
+        .bind(&payload.email)
+        .bind(&payload.username)
+        .fetch_optional(&state.db_pool)
+        .await
+        .map_err(|e| {
+            tracing::error!("DB error: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { success: false, message: "Internal server error".to_string() }))
+        })?;
+
+    if existing.is_some() {
+        return Err((StatusCode::CONFLICT, Json(ErrorResponse { success: false, message: "Email or username already taken".to_string() })));
+    }
+
+    let password_hash = hash(&payload.password, DEFAULT_COST).map_err(|e| {
+        tracing::error!("Hash error: {}", e);
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { success: false, message: "Internal server error".to_string() }))
+    })?;
+
+    // Create clipper user
+    let user_row = sqlx::query(
+        "INSERT INTO users (email, username, password_hash, is_active, is_superuser, is_staff, is_clipper, created_at, updated_at)
+         VALUES ($1, $2, $3, true, false, false, true, NOW(), NOW())
+         RETURNING id, email, username, password_hash, is_active, is_superuser, is_staff, is_clipper, created_at, updated_at"
+    )
+    .bind(&payload.email)
+    .bind(&payload.username)
+    .bind(&password_hash)
+    .fetch_one(&state.db_pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("Failed to create clipper user: {}", e);
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { success: false, message: "Failed to create user".to_string() }))
+    })?;
+
+    let mut user = User::from_row(&user_row).map_err(|e| {
+        tracing::error!("Row conversion error: {}", e);
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { success: false, message: "Internal server error".to_string() }))
+    })?;
+    user.password_hash = String::new();
+
+    let user_id = user.id;
+
+    // Mark token as used
+    sqlx::query("UPDATE clipper_invite_tokens SET used_by_user_id = $1, used_at = NOW() WHERE id = $2")
+        .bind(user_id)
+        .bind(token_id)
+        .execute(&state.db_pool)
+        .await
+        .ok();
+
+    let token = generate_jwt_token(&user)?;
+    tracing::info!("✅ Clipper registered: {}", user.email);
+
+    Ok(Json(AuthResponse {
+        success: true,
+        message: "Clipper account created successfully".to_string(),
+        user: UserResponse::from(user),
+        token,
+    }))
 }

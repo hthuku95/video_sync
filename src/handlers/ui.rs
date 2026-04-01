@@ -19,6 +19,8 @@ pub fn ui_routes() -> Router {
         .route("/chat/:session_id", get(chat_interface_with_session))
         .route("/app", get(chat_interface)) // Alternative route
         .route("/video-tools", get(video_tools_page))
+        .route("/manual-clipping", get(manual_clipping_page))
+        .route("/signup/clipper", get(clipper_signup_page))
 }
 
 pub async fn landing_page() -> Html<String> {
@@ -1277,13 +1279,15 @@ pub async fn login_page() -> Html<String> {
                 if (data.success) {
                     localStorage.setItem('authToken', data.token);
                     localStorage.setItem('user', JSON.stringify(data.user));
-                    
+
                     document.getElementById('successMessage').textContent = 'Login successful! Redirecting...';
                     document.getElementById('successMessage').style.display = 'block';
                     document.getElementById('errorMessage').style.display = 'none';
-                    
+
                     setTimeout(() => {
-                        window.location.href = '/dashboard';
+                        // Clippers land on manual clipping, everyone else on dashboard
+                        const dest = data.user && data.user.is_clipper ? '/manual-clipping' : '/dashboard';
+                        window.location.href = dest;
                     }, 1000);
                 } else {
                     document.getElementById('errorMessage').textContent = data.message;
@@ -1753,9 +1757,10 @@ pub async fn signup_page() -> Html<String> {
                     document.getElementById('successMessage').textContent = 'Account created successfully! Redirecting...';
                     document.getElementById('successMessage').style.display = 'block';
                     document.getElementById('errorMessage').style.display = 'none';
-                    
+
                     setTimeout(() => {
-                        window.location.href = '/dashboard';
+                        const dest = data.user && data.user.is_clipper ? '/manual-clipping' : '/dashboard';
+                        window.location.href = dest;
                     }, 1000);
                 } else {
                     document.getElementById('errorMessage').textContent = data.message;
@@ -2234,6 +2239,10 @@ pub async fn dashboard_page() -> Html<String> {
                     <h3>💼 Gig Templates</h3>
                     <p>Fiverr & PPH gig info with pricing tiers, copy-paste descriptions, and AI sample video generation</p>
                 </a>
+                <a href="/manual-clipping" class="action-card">
+                    <h3>✂️ Manual Clipping</h3>
+                    <p>Paste any YouTube or Twitch URL to extract viral clips with download links — no destination channel needed</p>
+                </a>
                 <a href="/help" class="action-card">
                     <h3>📖 Help & Guide</h3>
                     <p>Learn how to use the AI video editor and YouTube features</p>
@@ -2277,8 +2286,13 @@ pub async fn dashboard_page() -> Html<String> {
             window.location.href = '/login';
         }
 
-        // Set user welcome message
+        // Clippers should use manual clipping dashboard, not this page
         const user = JSON.parse(localStorage.getItem('user') || '{}');
+        if (user.is_clipper) {
+            window.location.href = '/manual-clipping';
+        }
+
+        // Set user welcome message
         if (user.username) {
             document.getElementById('userWelcome').textContent = `Welcome back, ${user.username}!`;
         }
@@ -6436,3 +6450,174 @@ pub async fn terms_of_service_page() -> Html<String> {
     "###;
     Html(html.to_string())
 }
+
+
+// ============================================================================
+// Manual Clipping Dashboard
+// ============================================================================
+
+pub async fn manual_clipping_page() -> Html<String> {
+    Html(MANUAL_CLIPPING_HTML.to_string())
+}
+
+const MANUAL_CLIPPING_HTML: &str = r#####"<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Manual Clipping — VideoSync</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Inter',system-ui,sans-serif;background:#1a1a2e;color:#e0e0e0;min-height:100vh}
+.header{background:#16213e;border-bottom:1px solid #0f3460;padding:14px 24px;display:flex;align-items:center;justify-content:space-between}
+.header h1{font-size:1.1rem;color:#dbd8e3}
+.back{color:#5c5470;text-decoration:none;font-size:0.9rem}.back:hover{color:#dbd8e3}
+.container{max-width:900px;margin:0 auto;padding:24px}
+.card{background:#16213e;border:1px solid #0f3460;border-radius:12px;padding:24px;margin-bottom:20px}
+.card h2{font-size:1rem;color:#dbd8e3;margin-bottom:16px}
+.url-row{display:flex;gap:12px;margin-bottom:12px}
+.url-input{flex:1;padding:10px 14px;background:#0f3460;border:1px solid #1e3a5f;border-radius:8px;color:#e0e0e0;font-size:0.95rem}
+.url-input:focus{outline:none;border-color:#5c5470}
+.cfg-row{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:14px}
+label{font-size:0.8rem;color:#9ca3af;display:block;margin-bottom:4px}
+input[type=number]{width:100%;padding:8px 12px;background:#0f3460;border:1px solid #1e3a5f;border-radius:6px;color:#e0e0e0;font-size:0.9rem}
+.btn{padding:10px 22px;border:none;border-radius:8px;cursor:pointer;font-size:0.9rem;font-weight:600}
+.btn-primary{background:#5c5470;color:#fff}.btn-primary:hover{background:#7a6e8a}
+.btn-sm{padding:5px 12px;font-size:0.8rem;border-radius:5px}
+.btn-download{background:#065f46;color:#6ee7b7}.btn-download:hover{background:#047857}
+.btn-cancel{background:#7f1d1d;color:#fca5a5}
+.job-row{display:flex;align-items:flex-start;gap:12px;padding:14px;border-bottom:1px solid #0f3460}
+.job-row:last-child{border-bottom:none}
+.job-meta{flex:1}
+.job-url{color:#dbd8e3;font-size:0.9rem;margin-bottom:4px;word-break:break-all}
+.job-status{font-size:0.8rem;color:#9ca3af}
+.status-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px}
+.status-pending,.status-analyzing,.status-downloading,.status-extracting,.status-uploading{background:#f59e0b}
+.status-completed{background:#10b981}
+.status-failed,.status-cancelled{background:#ef4444}
+.clips-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:12px;margin-top:12px}
+.clip-card{background:#0f3460;border:1px solid #1e3a5f;border-radius:8px;overflow:hidden}
+.clip-thumb{width:100%;aspect-ratio:16/9;object-fit:cover}
+.clip-thumb-ph{width:100%;aspect-ratio:16/9;background:#1a1a2e;display:flex;align-items:center;justify-content:center;color:#5c5470;font-size:1.5rem}
+.clip-info{padding:8px 10px}
+.clip-title{font-size:0.82rem;color:#dbd8e3;margin-bottom:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.clip-meta{font-size:0.75rem;color:#9ca3af;margin-bottom:8px}
+.progress-bar{height:4px;background:#0f3460;border-radius:2px;overflow:hidden;margin-top:6px}
+.progress-fill{height:100%;background:#5c5470;transition:width 0.3s}
+.msg{padding:10px 16px;border-radius:8px;margin-bottom:12px;font-size:0.9rem}
+.msg-success{background:#065f46;color:#6ee7b7}
+.msg-error{background:#7f1d1d;color:#fca5a5}
+.empty{text-align:center;padding:40px;color:#5c5470}
+.platform-badge{font-size:0.72rem;padding:2px 7px;border-radius:4px;font-weight:600;margin-left:8px}
+.yt-badge{background:#7f1d1d;color:#fca5a5}
+.tw-badge{background:#2d1b69;color:#c4b5fd}
+</style>
+</head>
+<body>
+<div class="header">
+  <div style="display:flex;align-items:center;gap:16px">
+    <a href="/dashboard" id="back-link" class="back">Back</a>
+    <h1>Manual Clipping</h1>
+  </div>
+  <span id="user-name" style="color:#9ca3af;font-size:0.85rem"></span>
+</div>
+<div class="container">
+  <div id="msg"></div>
+  <div class="card">
+    <h2>Clip a Video</h2>
+    <div class="url-row">
+      <input class="url-input" id="video_url" placeholder="Paste YouTube or Twitch URL here" oninput="detectPlatform()">
+      <button class="btn btn-primary" onclick="submitJob()">Clip It</button>
+    </div>
+    <div id="platform-hint" style="font-size:0.82rem;color:#9ca3af;margin-bottom:12px"></div>
+    <div class="cfg-row">
+      <div><label>Clips (1-5)</label><input type="number" id="clips_count" value="3" min="1" max="5"></div>
+      <div><label>Min length (s)</label><input type="number" id="min_duration" value="30" min="10" max="300"></div>
+      <div><label>Max length (s)</label><input type="number" id="max_duration" value="120" min="30" max="600"></div>
+    </div>
+    <p style="font-size:0.78rem;color:#5c5470">AI finds the best moments and generates download-ready clips. No YouTube channel required.</p>
+  </div>
+  <div class="card">
+    <h2>Your Jobs</h2>
+    <div id="jobs-area"><div class="empty">Loading...</div></div>
+  </div>
+</div>
+<script>
+const token = localStorage.getItem('authToken') || localStorage.getItem('admin_token');
+if (!token) window.location.href = '/login';
+function parseJwt(t){try{return JSON.parse(atob(t.split('.')[1]));}catch(e){return{};}}
+const claims = parseJwt(token);
+if(claims.username) document.getElementById('user-name').textContent = claims.username;
+if(!claims.is_clipper) document.getElementById('back-link').href='/dashboard';
+function showMsg(text,ok=true){const el=document.getElementById('msg');el.innerHTML=`<div class="msg ${ok?'msg-success':'msg-error'}">${text}</div>`;setTimeout(()=>el.innerHTML='',4000);}
+function detectPlatform(){const url=document.getElementById('video_url').value;const hint=document.getElementById('platform-hint');if(!url){hint.textContent='';return;}if(url.includes('twitch.tv'))hint.textContent='Twitch VOD detected';else if(url.includes('youtube.com')||url.includes('youtu.be'))hint.textContent='YouTube video detected';else hint.textContent='';}
+async function submitJob(){const video_url=document.getElementById('video_url').value.trim();if(!video_url){showMsg('Please paste a URL',false);return;}const payload={video_url,clips_count:parseInt(document.getElementById('clips_count').value)||3,min_duration:parseInt(document.getElementById('min_duration').value)||30,max_duration:parseInt(document.getElementById('max_duration').value)||120};const res=await fetch('/api/manual-clipping/jobs',{method:'POST',headers:{'Authorization':'Bearer '+token,'Content-Type':'application/json'},body:JSON.stringify(payload)});const data=await res.json();if(data.success){showMsg('Job created! AI is analyzing...');document.getElementById('video_url').value='';loadJobs();}else showMsg(data.message||'Failed',false);}
+let activeRefresh=null;
+async function loadJobs(){const res=await fetch('/api/manual-clipping/jobs',{headers:{'Authorization':'Bearer '+token}});const data=await res.json();if(!data.success){document.getElementById('jobs-area').innerHTML='<div class="empty">Failed to load</div>';return;}const jobs=data.jobs||[];if(!jobs.length){document.getElementById('jobs-area').innerHTML='<div class="empty">No jobs yet. Paste a URL above to get started.</div>';return;}let html='';let hasActive=false;for(const j of jobs){const active=['pending','analyzing','downloading','extracting','uploading'].includes(j.status);if(active)hasActive=true;const platBadge=j.video_platform==='twitch'?'<span class="platform-badge tw-badge">TWITCH</span>':'<span class="platform-badge yt-badge">YOUTUBE</span>';html+=`<div class="job-row" id="job-${j.id}"><div class="job-meta"><div class="job-url">${j.video_title||j.video_url}${platBadge}</div><div class="job-status"><span class="status-dot status-${j.status}"></span>${j.status.toUpperCase()}${active?` - ${j.progress_percent}%`:''}${j.error_message?` <span style="color:#ef4444">${j.error_message}</span>`:''}</div>${active?`<div class="progress-bar"><div class="progress-fill" style="width:${j.progress_percent}%"></div></div>`:''} ${j.status==='completed'?`<div id="clips-${j.id}" style="margin-top:12px"></div>`:''}</div>${j.status==='completed'?`<button class="btn btn-sm btn-download" onclick="loadClips('${j.id}')">Load Clips</button>`:''}${active?`<button class="btn btn-sm btn-cancel" onclick="cancelJob('${j.id}')">Cancel</button>`:''}</div>`;}
+document.getElementById('jobs-area').innerHTML=html;if(activeRefresh)clearTimeout(activeRefresh);if(hasActive)activeRefresh=setTimeout(loadJobs,5000);}
+async function loadClips(jobId){const res=await fetch(`/api/manual-clipping/jobs/${jobId}`,{headers:{'Authorization':'Bearer '+token}});const data=await res.json();if(!data.success)return;const clips=data.clips||[];if(!clips.length)return;let html='<div class="clips-grid">';for(const c of clips){const dur=c.duration_seconds?Math.round(c.duration_seconds)+'s':'';html+=`<div class="clip-card">${c.thumbnail_url?`<img class="clip-thumb" src="${c.thumbnail_url}" loading="lazy">`:'<div class="clip-thumb-ph">🎬</div>'}<div class="clip-info"><div class="clip-title">${c.title||'Clip '+c.clip_number}</div><div class="clip-meta">${dur}</div>${c.download_url?`<a href="${c.download_url}" download class="btn btn-download" style="display:block;text-align:center;text-decoration:none;font-size:0.82rem;padding:7px">Download</a>`:'<span style="color:#9ca3af;font-size:0.8rem">Link expired</span>'}</div></div>`;}html+='</div>';const el=document.getElementById(`clips-${jobId}`);if(el)el.innerHTML=html;}
+async function cancelJob(id){const res=await fetch(`/api/manual-clipping/jobs/${id}`,{method:'DELETE',headers:{'Authorization':'Bearer '+token}});const data=await res.json();if(data.success)loadJobs();else showMsg('Could not cancel',false);}
+loadJobs();
+</script>
+</body>
+</html>"#####;
+
+// ============================================================================
+// Clipper Invite Signup Page
+// ============================================================================
+
+pub async fn clipper_signup_page() -> Html<String> {
+    Html(CLIPPER_SIGNUP_HTML.to_string())
+}
+
+const CLIPPER_SIGNUP_HTML: &str = r#####"<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Join as Clipper — VideoSync</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Inter',system-ui,sans-serif;background:#1a1a2e;color:#e0e0e0;min-height:100vh;display:flex;align-items:center;justify-content:center}
+.card{background:#16213e;border:1px solid #0f3460;border-radius:16px;padding:40px;width:100%;max-width:420px;margin:20px}
+.logo{font-size:1.4rem;font-weight:700;color:#dbd8e3;margin-bottom:6px}
+.subtitle{color:#9ca3af;font-size:0.9rem;margin-bottom:24px}
+label{font-size:0.82rem;color:#9ca3af;display:block;margin-bottom:4px}
+input{width:100%;padding:10px 14px;background:#0f3460;border:1px solid #1e3a5f;border-radius:8px;color:#e0e0e0;font-size:0.9rem;margin-bottom:14px}
+input:focus{outline:none;border-color:#5c5470}
+.btn{width:100%;padding:12px;background:#5c5470;color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:0.95rem;font-weight:600;margin-top:4px}
+.btn:hover{background:#7a6e8a}
+.msg{padding:10px 14px;border-radius:8px;margin-bottom:14px;font-size:0.85rem}
+.msg-success{background:#065f46;color:#6ee7b7}
+.msg-error{background:#7f1d1d;color:#fca5a5}
+.note{font-size:0.78rem;color:#5c5470;margin-top:12px;text-align:center}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">VideoSync</div>
+  <div class="subtitle">Create your Clipper account</div>
+  <div id="msg"></div>
+  <form onsubmit="register(event)">
+    <label>Invite Token</label>
+    <input id="token" placeholder="Your invite token" required>
+    <label>Email</label>
+    <input type="email" id="email" placeholder="you@example.com" required>
+    <label>Username</label>
+    <input id="username" placeholder="clipper_name" required>
+    <label>Password</label>
+    <input type="password" id="password" placeholder="Min 6 characters" required>
+    <label>Confirm Password</label>
+    <input type="password" id="confirm_password" required>
+    <button type="submit" class="btn">Create Account</button>
+  </form>
+  <p class="note">Already have an account? <a href="/login" style="color:#dbd8e3">Sign in</a></p>
+</div>
+<script>
+const params=new URLSearchParams(window.location.search);
+if(params.get('token'))document.getElementById('token').value=params.get('token');
+function showMsg(text,ok=true){document.getElementById('msg').innerHTML=`<div class="msg ${ok?'msg-success':'msg-error'}">${text}</div>`;}
+async function register(e){e.preventDefault();const payload={token:document.getElementById('token').value.trim(),email:document.getElementById('email').value.trim(),username:document.getElementById('username').value.trim(),password:document.getElementById('password').value,confirm_password:document.getElementById('confirm_password').value};const res=await fetch('/api/auth/register/clipper',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});const data=await res.json();if(data.success){localStorage.setItem('authToken',data.token);localStorage.setItem('user',JSON.stringify(data.user));showMsg('Account created! Redirecting...');setTimeout(()=>window.location.href='/manual-clipping',1200);}else showMsg(data.message||'Registration failed',false);}
+</script>
+</body>
+</html>"#####;

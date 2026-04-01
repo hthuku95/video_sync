@@ -64,6 +64,11 @@ pub async fn run_clipping_worker_loop(app_state: Arc<AppState>) {
                 tracing::error!("❌ Clipping worker error: {}", e);
             }
         }
+
+        // Also process any pending manual clipping jobs
+        if let Err(e) = process_manual_jobs(&app_state).await {
+            tracing::error!("❌ Manual clipping worker error: {}", e);
+        }
     }
 }
 
@@ -742,6 +747,42 @@ async fn auto_retry_failed_jobs(app_state: &Arc<AppState>) -> Result<(), String>
                 tracing::error!("Failed to reset job {} for retry: {}", job_id, e);
             }
         }
+    }
+
+    Ok(())
+}
+
+// ============================================================================
+// Manual clipping job processor
+// ============================================================================
+
+/// Poll for one pending manual clipping job and execute it.
+async fn process_manual_jobs(app_state: &Arc<AppState>) -> Result<(), String> {
+    let job_id: Option<uuid::Uuid> = sqlx::query_scalar(
+        "SELECT id FROM manual_clipping_jobs WHERE status = 'pending' ORDER BY created_at ASC LIMIT 1"
+    )
+    .fetch_optional(&app_state.db_pool)
+    .await
+    .map_err(|e| format!("Failed to poll manual jobs: {}", e))?;
+
+    if let Some(id) = job_id {
+        tracing::info!("▶️  Executing manual clipping job {}", id);
+        let state = Arc::clone(app_state);
+        tokio::spawn(async move {
+            match crate::jobs::manual_clipping_job::execute_manual_clipping_job(id, state.clone()).await {
+                Ok(msg) => tracing::info!("✅ Manual job {} completed: {}", id, msg),
+                Err(e) => {
+                    tracing::error!("❌ Manual job {} failed: {}", id, e);
+                    let _ = sqlx::query(
+                        "UPDATE manual_clipping_jobs SET status = 'failed', error_message = $1, updated_at = NOW() WHERE id = $2"
+                    )
+                    .bind(&e)
+                    .bind(id)
+                    .execute(&state.db_pool)
+                    .await;
+                }
+            }
+        });
     }
 
     Ok(())

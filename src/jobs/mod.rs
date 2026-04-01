@@ -12,6 +12,7 @@ use chrono::{DateTime, Utc};
 pub mod video_job;
 pub mod clipping_job;
 pub mod clipping_worker;
+pub mod manual_clipping_job;
 pub mod analytics_sync_job;
 pub mod token_refresh;
 pub mod worker_config;

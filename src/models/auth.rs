@@ -10,6 +10,7 @@ pub struct User {
     pub is_active: bool,
     pub is_superuser: bool,
     pub is_staff: bool,
+    pub is_clipper: bool,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -22,6 +23,7 @@ pub struct UserResponse {
     pub is_active: bool,
     pub is_superuser: bool,
     pub is_staff: bool,
+    pub is_clipper: bool,
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
@@ -60,6 +62,7 @@ pub struct Claims {
     pub email: String,
     pub is_superuser: bool,
     pub is_staff: bool,
+    pub is_clipper: bool,
     pub exp: usize,   // Expiration time
     pub iat: usize,   // Issued at
 }
@@ -73,6 +76,7 @@ impl From<User> for UserResponse {
             is_active: user.is_active,
             is_superuser: user.is_superuser,
             is_staff: user.is_staff,
+            is_clipper: user.is_clipper,
             created_at: user.created_at,
         }
     }
