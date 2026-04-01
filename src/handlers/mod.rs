@@ -12,3 +12,4 @@ pub mod youtube; // 📺 YouTube integration
 pub mod clipping; // 📹 YouTube clipping feature
 pub mod health; // 🏥 Health check and monitoring endpoints
 pub mod tools; // 🎬 On-demand FFmpeg tool endpoints
+pub mod gig_templates; // 💼 Fiverr/PPH gig templates + sample generation
