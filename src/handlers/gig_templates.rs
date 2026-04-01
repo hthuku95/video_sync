@@ -427,7 +427,7 @@ const GIG_TEMPLATES_HTML: &str = r###"<!DOCTYPE html>
 <div id="root"><div class="loading">Loading gig templates…</div></div>
 
 <script>
-const token = localStorage.getItem('auth_token') || localStorage.getItem('admin_token');
+const token = localStorage.getItem('authToken') || localStorage.getItem('admin_token');
 if (!token) { window.location.href = '/admin'; }
 
 let templates = [];

@@ -2230,6 +2230,10 @@ pub async fn dashboard_page() -> Html<String> {
                     <h3>🛠️ Video Tools</h3>
                     <p>Stabilize, convert formats, visualize audio, and run workflow recipes directly</p>
                 </a>
+                <a href="/gig-templates" class="action-card">
+                    <h3>💼 Gig Templates</h3>
+                    <p>Fiverr & PPH gig info with pricing tiers, copy-paste descriptions, and AI sample video generation</p>
+                </a>
                 <a href="/help" class="action-card">
                     <h3>📖 Help & Guide</h3>
                     <p>Learn how to use the AI video editor and YouTube features</p>
