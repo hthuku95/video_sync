@@ -213,6 +213,66 @@ pub async fn execute_manual_clipping_job(
         .map_err(|e| format!("Clip extraction failed: {}", e))?;
 
     // =========================================================================
+    // Phase D: AI Agent enhancement — runs the full 320-tool Gemini agent on
+    // each clip so it can intelligently apply stabilization, color correction,
+    // audio normalization, etc. before the clips are uploaded.
+    // Best-effort: failures are logged but do not abort the job.
+    // =========================================================================
+    if let Some(gemini) = app_state.gemini_client.as_ref() {
+        update_status(job_id, "enhancing", 65, None, &app_state.db_pool).await?;
+        tracing::info!("🤖 Phase D: AI agent enhancing {} clips with 320 tools", clips.len());
+
+        let agent = crate::agent::simple_gemini_agent::SimpleGeminiAgent::new(
+            std::sync::Arc::new(gemini.clone()),
+        );
+
+        for (i, clip) in clips.iter().enumerate() {
+            let clip_path = &clip.local_clip_path;
+            if !std::path::Path::new(clip_path).exists() {
+                continue;
+            }
+
+            let prompt = format!(
+                "You are a professional video editor working on a clip for a Fiverr/PPH client.\n\
+                 Clip file: {path}\n\
+                 Title: {title}\n\
+                 Duration: {dur:.0}s | Content type: {ct}\n\
+                 Niche: {niche}\n\n\
+                 Intelligently enhance this clip for social media / YouTube Shorts delivery:\n\
+                 1. Analyze the clip quality (resolution, stability, audio levels, colour)\n\
+                 2. Apply appropriate FFmpeg tools: stabilize if shaky, normalize audio, \
+                    adjust brightness/contrast if needed, sharpen if soft\n\
+                 3. Output the enhanced file back to the SAME path: {path}\n\
+                 4. Keep under 90 seconds total. Do not re-encode unnecessarily.\n\
+                 Use only tools that will genuinely improve this specific clip.",
+                path = clip_path,
+                title = clip.ai_title,
+                dur = clip.duration_seconds,
+                ct = analysis.content_type,
+                niche = &video_url,
+            );
+
+            let session_id = format!("manual_clip_{}_{}", job_id, i + 1);
+            match tokio::time::timeout(
+                tokio::time::Duration::from_secs(120),
+                agent.execute(&prompt, &session_id, Some(user_id), app_state.clone(), None),
+            )
+            .await
+            {
+                Ok(Ok(result)) => tracing::info!(
+                    "✅ Clip {} enhanced: {}",
+                    i + 1,
+                    result.chars().take(100).collect::<String>()
+                ),
+                Ok(Err(e)) => tracing::warn!("⚠️  Clip {} enhancement failed (non-fatal): {}", i + 1, e),
+                Err(_) => tracing::warn!("⚠️  Clip {} enhancement timed out (non-fatal)", i + 1),
+            }
+        }
+    } else {
+        tracing::info!("ℹ️  Phase D skipped — Gemini not configured");
+    }
+
+    // =========================================================================
     // Phase R2: Upload clips + generate presigned download URLs
     // =========================================================================
     update_status(job_id, "uploading", 80, None, &app_state.db_pool).await?;

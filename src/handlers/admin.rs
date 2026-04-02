@@ -69,6 +69,7 @@ pub fn admin_routes() -> Router {
         .route("/api/admin/performance/thumbnails", get(admin_thumbnail_stats))
         .route("/api/admin/test-runs", get(api_list_test_runs).post(api_trigger_test_run))
         .route("/api/admin/test-runs/:id", get(api_get_test_run))
+        .route("/api/admin/manual-clipping-tests/trigger", post(api_trigger_manual_clipping_test))
         .route("/api/admin/deliveries", get(api_list_deliveries).post(api_create_delivery))
         .layer(axum::middleware::from_fn(admin_middleware))
         .layer(axum::middleware::from_fn(auth_middleware));
@@ -5857,6 +5858,28 @@ pub async fn api_trigger_test_run(
     });
 
     match crate::portfolio_tests::PortfolioTestRunner::create_and_spawn(state, name).await {
+        Ok(run_id) => Ok(Json(json!({ "run_id": run_id, "status": "running" }))),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e })),
+        )),
+    }
+}
+
+pub async fn api_trigger_manual_clipping_test(
+    Extension(state): Extension<Arc<AppState>>,
+    axum::Json(body): axum::Json<TriggerTestRunRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let name = body.name.unwrap_or_else(|| {
+        format!(
+            "Manual Clipping test {}",
+            chrono::Utc::now().format("%Y-%m-%d %H:%M")
+        )
+    });
+
+    match crate::manual_clipping_tests::ManualClippingTestRunner::create_and_spawn(state, name)
+        .await
+    {
         Ok(run_id) => Ok(Json(json!({ "run_id": run_id, "status": "running" }))),
         Err(e) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,

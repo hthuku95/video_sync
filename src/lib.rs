@@ -39,6 +39,7 @@ pub mod advanced;
 pub mod export;
 pub mod workflows;
 pub mod portfolio_tests;
+pub mod manual_clipping_tests;
 
 // Re-export commonly used types for convenience
 pub use types::*;

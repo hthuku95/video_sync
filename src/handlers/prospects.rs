@@ -200,8 +200,8 @@ async fn search_twitch_prospects(
     payload: &SearchRequest,
     limit: usize,
 ) -> Result<usize, (StatusCode, Json<ErrorResponse>)> {
-    let client_id = std::env::var("TWITCH_CLIENT_ID").unwrap_or_default();
-    let client_secret = std::env::var("TWITCH_CLIENT_SECRET").unwrap_or_default();
+    let client_id = std::env::var("TWITCH_TV_CLIENT_ID").unwrap_or_default();
+    let client_secret = std::env::var("TWITCH_TV_CLIENT_SECRET").unwrap_or_default();
     if client_id.is_empty() {
         return Err((StatusCode::SERVICE_UNAVAILABLE, Json(ErrorResponse { success: false, message: "TWITCH_CLIENT_ID not configured".to_string() })));
     }
