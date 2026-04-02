@@ -106,16 +106,15 @@ pub async fn execute_manual_clipping_job(
             .await
             .map_err(|e| format!("Failed to create downloads dir: {}", e))?;
 
-        let apify_token = std::env::var("APIFY_TOKEN")
-            .map_err(|_| "APIFY_TOKEN not configured")?;
-        let apify_actor = std::env::var("APIFY_YOUTUBE_CLIENT_ACTOR")
-            .map_err(|_| "APIFY_YOUTUBE_CLIENT_ACTOR not configured")?;
+        // Use empty strings as fallback so Strategies 1/3/4/5 still run without Apify creds
+        let apify_token = std::env::var("APIFY_TOKEN").unwrap_or_default();
+        let apify_actor = std::env::var("APIFY_YOUTUBE_CLIENT_ACTOR").unwrap_or_default();
         let client = ApifyClient::new(apify_token, apify_actor);
 
         client
             .download_video(&video_url, &dl_path)
             .await
-            .map_err(|e| format!("Twitch download failed: {}", e))?;
+            .map_err(|e| format!("All download strategies failed (Twitch VOD): {}", e))?;
 
         tokio::time::timeout(
             tokio::time::Duration::from_secs(300),
@@ -169,16 +168,15 @@ pub async fn execute_manual_clipping_job(
             .await
             .map_err(|e| format!("Failed to create downloads dir: {}", e))?;
 
-        let apify_token = std::env::var("APIFY_TOKEN")
-            .map_err(|_| "APIFY_TOKEN not configured")?;
-        let apify_actor = std::env::var("APIFY_YOUTUBE_CLIENT_ACTOR")
-            .map_err(|_| "APIFY_YOUTUBE_CLIENT_ACTOR not configured")?;
+        // Use empty strings as fallback so Strategies 1/3/4/5 still run without Apify creds
+        let apify_token = std::env::var("APIFY_TOKEN").unwrap_or_default();
+        let apify_actor = std::env::var("APIFY_YOUTUBE_CLIENT_ACTOR").unwrap_or_default();
         let client = ApifyClient::new(apify_token, apify_actor);
 
         client
             .download_video(&video_url, &dl_path)
             .await
-            .map_err(|e| format!("Download failed: {}", e))?;
+            .map_err(|e| format!("All download strategies failed (YouTube): {}", e))?;
 
         if !std::path::Path::new(&dl_path).exists() {
             return Err(format!("Downloaded file not found: {}", dl_path));
