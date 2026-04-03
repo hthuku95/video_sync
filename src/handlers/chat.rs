@@ -150,7 +150,7 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>, session_uuid: Option
                             None
                         }
                     }
-                } else if let Some(ref gemini_client) = state.gemini_client {
+                } else if let Some(ref gemini_client) = state.video_gemini_client.as_ref().or(state.gemini_client.as_ref()) {
                     match qdrant_client.build_context_for_query_with_gemini(&text, &session_id, gemini_client).await {
                         Ok(ctx) => {
                             if !ctx.is_empty() {
@@ -266,7 +266,7 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>, session_uuid: Option
                     "Claude client not configured".to_string()
                 }
             } else {
-                if let Some(ref gemini_client) = state.gemini_client {
+                if let Some(gemini_client) = state.video_gemini_client.as_ref().or(state.gemini_client.as_ref()) {
                     let agent = StatefulGeminiAgent::new(Arc::new(gemini_client.clone()));
 
                     match agent.chat(
@@ -368,7 +368,7 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>, session_uuid: Option
                                 ).await {
                                     tracing::warn!("Failed to store in Qdrant (Voyage): {}", e);
                                 }
-                            } else if let Some(ref gemini_client) = state.gemini_client {
+                            } else if let Some(ref gemini_client) = state.video_gemini_client.as_ref().or(state.gemini_client.as_ref()) {
                                 if let Err(e) = qdrant_client.store_chat_memory_with_gemini(
                                     &session_id,
                                     None,

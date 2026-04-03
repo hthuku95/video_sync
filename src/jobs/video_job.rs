@@ -214,7 +214,7 @@ impl VideoEditingJob {
                         ).await {
                             tracing::warn!("Failed to store conversation in Qdrant (Voyage): {}", e);
                         }
-                    } else if let Some(ref gemini_client) = self.app_state.gemini_client {
+                    } else if let Some(ref gemini_client) = self.app_state.video_gemini_client.as_ref().or(self.app_state.gemini_client.as_ref()) {
                         if let Err(e) = qdrant_client.store_chat_memory_with_gemini(
                             &session_id,
                             None,
@@ -380,7 +380,8 @@ impl VideoEditingJob {
         control_rx: &mut mpsc::UnboundedReceiver<JobControl>,
     ) -> Result<String, String> {
         // Use SimpleGeminiAgent with all 38 tools
-        let gemini_client_ref = self.app_state.gemini_client.as_ref()
+        let gemini_client_ref = self.app_state.video_gemini_client.as_ref()
+            .or(self.app_state.gemini_client.as_ref())
             .ok_or("Gemini client not configured")?;
         let gemini_client = Arc::new(gemini_client_ref.clone());
 

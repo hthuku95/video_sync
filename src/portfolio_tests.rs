@@ -533,7 +533,7 @@ impl PortfolioTestRunner {
     }
 
     async fn review(&self, r2_url: &str, local_path: &str, scenario: &Scenario) -> LLMReview {
-        let gemini = match &self.app_state.gemini_client {
+        let gemini = match self.app_state.video_gemini_client.as_ref().or(self.app_state.gemini_client.as_ref()) {
             Some(g) => g,
             None => {
                 return LLMReview {

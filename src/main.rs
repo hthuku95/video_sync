@@ -46,8 +46,9 @@ pub struct AppState {
     pub db_pool: sqlx::PgPool,
     pub vector_db: Option<vector_db::AstraDBClient>, // Keep for backward compatibility
     pub qdrant_client: Option<qdrant_client::QdrantClient>,
-    pub gemini_client: Option<gemini_client::GeminiClient>, // Keep for fallback
-    pub manual_clipping_gemini_client: Option<gemini_client::GeminiClient>, // Dedicated key for manual clipping
+    pub gemini_client: Option<gemini_client::GeminiClient>, // Auto clipping pipeline only
+    pub manual_clipping_gemini_client: Option<gemini_client::GeminiClient>, // Manual clipping only
+    pub video_gemini_client: Option<gemini_client::GeminiClient>, // Video editing, generation, agents, Blender MCP
     pub claude_client: Option<claude_client::ClaudeClient>,
     pub voyage_embeddings: Option<voyage_embeddings::VoyageEmbeddings>,
     pub pexels_client: Option<pexels_client::PexelsClient>,
@@ -264,7 +265,7 @@ async fn main() {
     };
 
     // Dedicated Gemini client for manual clipping — uses a separate API key so
-    // manual clipping jobs don't exhaust the quota shared with the main pipeline.
+    // manual clipping jobs don't exhaust the quota shared with the auto-clipping pipeline.
     // Falls back to the primary key if MANUAL_CLIPPING_GEMINI_API_KEY is not set.
     let manual_clipping_gemini_client = match std::env::var("MANUAL_CLIPPING_GEMINI_API_KEY").ok() {
         Some(api_key) => {
@@ -273,6 +274,20 @@ async fn main() {
         }
         None => {
             tracing::warn!("MANUAL_CLIPPING_GEMINI_API_KEY not set — manual clipping will share the primary Gemini quota.");
+            None
+        }
+    };
+
+    // Dedicated Gemini client for video editing, generation, agents, and Blender MCP.
+    // Isolated so video workloads don't exhaust the auto-clipping quota.
+    // Falls back to the primary key if VIDEO_GEMINI_API_KEY is not set.
+    let video_gemini_client = match std::env::var("VIDEO_GEMINI_API_KEY").ok() {
+        Some(api_key) => {
+            tracing::info!("Initializing dedicated Gemini client for video editing/generation...");
+            Some(gemini_client::GeminiClient::new(api_key))
+        }
+        None => {
+            tracing::warn!("VIDEO_GEMINI_API_KEY not set — video editing/generation will share the primary Gemini quota.");
             None
         }
     };
@@ -478,6 +493,7 @@ async fn main() {
         qdrant_client,
         gemini_client,
         manual_clipping_gemini_client,
+        video_gemini_client,
         claude_client,
         voyage_embeddings,
         pexels_client,

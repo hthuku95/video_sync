@@ -1663,7 +1663,7 @@ async fn execute_analyze_image_claude(args: &Value) -> String {
     }
 
     // Get Gemini API key from environment
-    let api_key = match std::env::var("GEMINI_API_KEY").or_else(|_| std::env::var("GOOGLE_API_KEY")) {
+    let api_key = match std::env::var("VIDEO_GEMINI_API_KEY").or_else(|_| std::env::var("GEMINI_API_KEY")).or_else(|_| std::env::var("GOOGLE_API_KEY")) {
         Ok(key) if !key.is_empty() => key,
         _ => return "❌ Error: GEMINI_API_KEY or GOOGLE_API_KEY environment variable not set".to_string(),
     };
@@ -1697,7 +1697,7 @@ async fn execute_generate_text_to_speech_claude(args: &Value) -> String {
     }
 
     // Get Gemini API key
-    let api_key = match std::env::var("GEMINI_API_KEY").or_else(|_| std::env::var("GOOGLE_API_KEY")) {
+    let api_key = match std::env::var("VIDEO_GEMINI_API_KEY").or_else(|_| std::env::var("GEMINI_API_KEY")).or_else(|_| std::env::var("GOOGLE_API_KEY")) {
         Ok(key) if !key.is_empty() => key,
         _ => return "❌ Error: GEMINI_API_KEY or GOOGLE_API_KEY environment variable not set".to_string(),
     };
@@ -1794,7 +1794,7 @@ async fn execute_generate_video_script_claude(args: &Value) -> String {
     }
 
     // Get Gemini API key
-    let api_key = match std::env::var("GEMINI_API_KEY").or_else(|_| std::env::var("GOOGLE_API_KEY")) {
+    let api_key = match std::env::var("VIDEO_GEMINI_API_KEY").or_else(|_| std::env::var("GEMINI_API_KEY")).or_else(|_| std::env::var("GOOGLE_API_KEY")) {
         Ok(key) if !key.is_empty() => key,
         _ => return "❌ Error: GEMINI_API_KEY or GOOGLE_API_KEY environment variable not set".to_string(),
     };
@@ -2302,7 +2302,7 @@ async fn execute_analyze_image_gemini(args: &HashMap<String, Value>) -> String {
     }
 
     // Get Gemini API key from environment
-    let api_key = match std::env::var("GEMINI_API_KEY").or_else(|_| std::env::var("GOOGLE_API_KEY")) {
+    let api_key = match std::env::var("VIDEO_GEMINI_API_KEY").or_else(|_| std::env::var("GEMINI_API_KEY")).or_else(|_| std::env::var("GOOGLE_API_KEY")) {
         Ok(key) if !key.is_empty() => key,
         _ => return "❌ Error: GEMINI_API_KEY or GOOGLE_API_KEY environment variable not set".to_string(),
     };
@@ -2337,7 +2337,7 @@ async fn execute_generate_text_to_speech_gemini(args: &HashMap<String, Value>) -
     }
 
     // Get Gemini API key
-    let api_key = match std::env::var("GEMINI_API_KEY").or_else(|_| std::env::var("GOOGLE_API_KEY")) {
+    let api_key = match std::env::var("VIDEO_GEMINI_API_KEY").or_else(|_| std::env::var("GEMINI_API_KEY")).or_else(|_| std::env::var("GOOGLE_API_KEY")) {
         Ok(key) if !key.is_empty() => key,
         _ => return "❌ Error: GEMINI_API_KEY or GOOGLE_API_KEY environment variable not set".to_string(),
     };
@@ -2434,7 +2434,7 @@ async fn execute_generate_video_script_gemini(args: &HashMap<String, Value>) -> 
     }
 
     // Get Gemini API key
-    let api_key = match std::env::var("GEMINI_API_KEY").or_else(|_| std::env::var("GOOGLE_API_KEY")) {
+    let api_key = match std::env::var("VIDEO_GEMINI_API_KEY").or_else(|_| std::env::var("GEMINI_API_KEY")).or_else(|_| std::env::var("GOOGLE_API_KEY")) {
         Ok(key) if !key.is_empty() => key,
         _ => return "❌ Error: GEMINI_API_KEY or GOOGLE_API_KEY environment variable not set".to_string(),
     };
@@ -2511,8 +2511,8 @@ async fn execute_generate_image_claude(args: &Value) -> String {
         return "❌ Error: prompt and output_file are required".to_string();
     }
 
-    let api_key = std::env::var("GEMINI_API_KEY")
-        .unwrap_or_else(|_| std::env::var("GOOGLE_API_KEY").unwrap_or_default());
+    let api_key = std::env::var("VIDEO_GEMINI_API_KEY")
+        .unwrap_or_else(|_| std::env::var("GEMINI_API_KEY").unwrap_or_else(|_| std::env::var("GOOGLE_API_KEY").unwrap_or_default()));
 
     if api_key.is_empty() {
         return "❌ Error: GEMINI_API_KEY or GOOGLE_API_KEY environment variable not set".to_string();
@@ -2544,8 +2544,8 @@ async fn execute_generate_image_gemini(args: &HashMap<String, Value>) -> String 
         return "❌ Error: prompt and output_file are required".to_string();
     }
 
-    let api_key = std::env::var("GEMINI_API_KEY")
-        .unwrap_or_else(|_| std::env::var("GOOGLE_API_KEY").unwrap_or_default());
+    let api_key = std::env::var("VIDEO_GEMINI_API_KEY")
+        .unwrap_or_else(|_| std::env::var("GEMINI_API_KEY").unwrap_or_else(|_| std::env::var("GOOGLE_API_KEY").unwrap_or_default()));
 
     if api_key.is_empty() {
         return "❌ Error: GEMINI_API_KEY or GOOGLE_API_KEY environment variable not set".to_string();
@@ -2581,8 +2581,8 @@ async fn execute_edit_image_claude(args: &Value) -> String {
         Err(e) => return format!("❌ Failed to read input image '{}': {}", input_image, e),
     };
 
-    let api_key = std::env::var("GEMINI_API_KEY")
-        .unwrap_or_else(|_| std::env::var("GOOGLE_API_KEY").unwrap_or_default());
+    let api_key = std::env::var("VIDEO_GEMINI_API_KEY")
+        .unwrap_or_else(|_| std::env::var("GEMINI_API_KEY").unwrap_or_else(|_| std::env::var("GOOGLE_API_KEY").unwrap_or_default()));
 
     if api_key.is_empty() {
         return "❌ Error: GEMINI_API_KEY or GOOGLE_API_KEY environment variable not set".to_string();
@@ -2619,8 +2619,8 @@ async fn execute_edit_image_gemini(args: &HashMap<String, Value>) -> String {
         Err(e) => return format!("❌ Failed to read input image '{}': {}", input_image, e),
     };
 
-    let api_key = std::env::var("GEMINI_API_KEY")
-        .unwrap_or_else(|_| std::env::var("GOOGLE_API_KEY").unwrap_or_default());
+    let api_key = std::env::var("VIDEO_GEMINI_API_KEY")
+        .unwrap_or_else(|_| std::env::var("GEMINI_API_KEY").unwrap_or_else(|_| std::env::var("GOOGLE_API_KEY").unwrap_or_default()));
 
     if api_key.is_empty() {
         return "❌ Error: GEMINI_API_KEY or GOOGLE_API_KEY environment variable not set".to_string();
@@ -3619,8 +3619,8 @@ async fn execute_analyze_pexels_thumbnail_claude(args: &Value) -> String {
         return "❌ Error: thumbnail_url is required".to_string();
     }
 
-    let api_key = std::env::var("GEMINI_API_KEY")
-        .unwrap_or_else(|_| std::env::var("GOOGLE_API_KEY").unwrap_or_default());
+    let api_key = std::env::var("VIDEO_GEMINI_API_KEY")
+        .unwrap_or_else(|_| std::env::var("GEMINI_API_KEY").unwrap_or_else(|_| std::env::var("GOOGLE_API_KEY").unwrap_or_default()));
     if api_key.is_empty() {
         return "❌ Error: GEMINI_API_KEY not set".to_string();
     }
@@ -3657,8 +3657,8 @@ async fn execute_analyze_pexels_thumbnail_gemini(args: &HashMap<String, Value>) 
         return "❌ Error: thumbnail_url is required".to_string();
     }
 
-    let api_key = std::env::var("GEMINI_API_KEY")
-        .unwrap_or_else(|_| std::env::var("GOOGLE_API_KEY").unwrap_or_default());
+    let api_key = std::env::var("VIDEO_GEMINI_API_KEY")
+        .unwrap_or_else(|_| std::env::var("GEMINI_API_KEY").unwrap_or_else(|_| std::env::var("GOOGLE_API_KEY").unwrap_or_default()));
     if api_key.is_empty() {
         return "❌ Error: GEMINI_API_KEY not set".to_string();
     }
@@ -3737,8 +3737,8 @@ fn execute_run_video_qa_gemini(args: &HashMap<String, Value>) -> String {
 /// Option B: Download a Pexels video thumbnail and ask Gemini to score its relevance 1-10.
 /// Returns the score, or 5 (neutral / proceed) if Gemini is unavailable or the call fails.
 async fn screen_pexels_thumbnail(thumbnail_url: &str, topic: &str) -> i32 {
-    let api_key = std::env::var("GEMINI_API_KEY")
-        .unwrap_or_else(|_| std::env::var("GOOGLE_API_KEY").unwrap_or_default());
+    let api_key = std::env::var("VIDEO_GEMINI_API_KEY")
+        .unwrap_or_else(|_| std::env::var("GEMINI_API_KEY").unwrap_or_else(|_| std::env::var("GOOGLE_API_KEY").unwrap_or_default()));
     if api_key.is_empty() {
         return 5; // no key → don't block downloads
     }
@@ -3860,7 +3860,8 @@ fn run_final_qa(output_file: &str) -> String {
 
 /// AI-powered search query generation using Gemini for visual diversity
 async fn generate_search_queries_ai(topic: &str, num_queries: usize) -> Vec<String> {
-    let api_key = std::env::var("GEMINI_API_KEY")
+    let api_key = std::env::var("VIDEO_GEMINI_API_KEY")
+        .or_else(|_| std::env::var("GEMINI_API_KEY"))
         .or_else(|_| std::env::var("GOOGLE_API_KEY"))
         .unwrap_or_default();
     if api_key.is_empty() {

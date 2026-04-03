@@ -16,7 +16,7 @@ pub fn background_routes() -> Router {
 }
 
 async fn background_image_handler(Extension(state): Extension<Arc<AppState>>) -> axum::response::Response {
-    match &state.gemini_client {
+    match state.video_gemini_client.as_ref().or(state.gemini_client.as_ref()) {
         Some(gemini_client) => {
             get_background_image(Arc::new(gemini_client.clone())).await
         }

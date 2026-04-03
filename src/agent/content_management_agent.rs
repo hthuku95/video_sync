@@ -84,8 +84,9 @@ impl ContentManagementAgent {
     ) -> Result<String, String> {
         let gemini = self
             .app_state
-            .gemini_client
+            .video_gemini_client
             .as_ref()
+            .or(self.app_state.gemini_client.as_ref())
             .ok_or("Gemini client not configured")?;
 
         let tools = vec![Tool {

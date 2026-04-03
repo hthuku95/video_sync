@@ -301,7 +301,7 @@ Trust your understanding of natural language to determine user intent:
                                         }
                                         Err(e) => format!("Error searching memory: {}", e)
                                     }
-                                } else if let Some(ref gemini_client) = app_state.gemini_client {
+                                } else if let Some(ref gemini_client) = app_state.video_gemini_client.as_ref().or(app_state.gemini_client.as_ref()) {
                                     match qdrant_client.build_context_for_query_with_gemini(query, session_id, gemini_client).await {
                                         Ok(context) => {
                                             if context.is_empty() {
