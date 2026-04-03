@@ -362,18 +362,31 @@ async fn list_prospects(
     Extension(state): Extension<Arc<AppState>>,
     Query(q): Query<ListQuery>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    // Build query with parameterized binds — collect active filters first so
+    // we know which $N placeholders to emit.
+    let mut conditions: Vec<&str> = vec![];
+    if q.prospect_type.is_some() { conditions.push("prospect_type"); }
+    if q.contact_status.is_some() { conditions.push("contact_status"); }
+    if q.platform.is_some()       { conditions.push("platform"); }
+
     let mut sql = "SELECT id, platform, channel_id, display_name, platform_url, \
                    subscriber_count, avg_viewer_count, content_category, prospect_type, \
                    ai_score, ai_reasoning, dm_script_creator, dm_script_clipper, \
                    contact_status, notes, created_at \
                    FROM prospects WHERE 1=1".to_string();
 
-    if let Some(ref pt) = q.prospect_type { sql.push_str(&format!(" AND prospect_type = '{}'", pt.replace('\'', "''"))); }
-    if let Some(ref cs) = q.contact_status { sql.push_str(&format!(" AND contact_status = '{}'", cs.replace('\'', "''"))); }
-    if let Some(ref pl) = q.platform       { sql.push_str(&format!(" AND platform = '{}'", pl.replace('\'', "''"))); }
+    for (i, col) in conditions.iter().enumerate() {
+        sql.push_str(&format!(" AND {} = ${}", col, i + 1));
+    }
     sql.push_str(" ORDER BY ai_score DESC NULLS LAST, created_at DESC LIMIT 200");
 
-    let rows = sqlx::query(&sql)
+    // Bind only the filter values that are present, in the same order.
+    let mut query = sqlx::query(&sql);
+    if let Some(ref pt) = q.prospect_type { query = query.bind(pt); }
+    if let Some(ref cs) = q.contact_status { query = query.bind(cs); }
+    if let Some(ref pl) = q.platform       { query = query.bind(pl); }
+
+    let rows = query
         .fetch_all(&state.db_pool)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { success: false, message: e.to_string() })))?;
@@ -400,12 +413,20 @@ async fn list_prospects(
     Ok(Json(json!({ "success": true, "prospects": prospects })))
 }
 
+const VALID_CONTACT_STATUSES: &[&str] = &["new", "contacted", "interested", "deal", "rejected"];
+
 async fn update_prospect(
     Extension(state): Extension<Arc<AppState>>,
     Path(id): Path<Uuid>,
     Json(payload): Json<UpdateProspectRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
     if let Some(ref status) = payload.contact_status {
+        if !VALID_CONTACT_STATUSES.contains(&status.as_str()) {
+            return Err((StatusCode::BAD_REQUEST, Json(ErrorResponse {
+                success: false,
+                message: format!("Invalid contact_status '{}'. Must be one of: {}", status, VALID_CONTACT_STATUSES.join(", ")),
+            })));
+        }
         sqlx::query("UPDATE prospects SET contact_status=$1, updated_at=NOW() WHERE id=$2")
             .bind(status).bind(id).execute(&state.db_pool).await.ok();
     }

@@ -166,10 +166,14 @@ impl ManualClippingTestRunner {
         );
 
         // Phase 2+3 — clip each discovered video and record results
-        for scenario in &scenarios {
+        // Space tests 3 minutes apart so Gemini per-minute quota can partially recover
+        // between sequential video-analysis calls that each consume a Gemini permit.
+        for (i, scenario) in scenarios.iter().enumerate() {
+            if i > 0 {
+                tracing::info!("⏳ Waiting 3 min before next test to relieve Gemini quota…");
+                tokio::time::sleep(std::time::Duration::from_secs(180)).await;
+            }
             self.run_one(run_id, scenario).await;
-            // brief pause between scenarios to avoid rate-limiting Gemini reviewer
-            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
         }
 
         let _ = sqlx::query(
