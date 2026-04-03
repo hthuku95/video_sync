@@ -26,6 +26,7 @@ pub fn prospect_routes() -> Router {
         .route("/api/admin/prospects", get(list_prospects))
         .route("/api/admin/prospects/:id", patch(update_prospect))
         .route("/api/admin/prospects/:id/dm-script", post(regenerate_dm_script))
+        .route("/api/admin/prospects/:id/generate-outreach", post(generate_outreach_message))
         .route("/api/admin/prospects/:id", delete(delete_prospect))
         .layer(axum::middleware::from_fn(admin_middleware))
         .layer(axum::middleware::from_fn(auth_middleware))
@@ -33,12 +34,17 @@ pub fn prospect_routes() -> Router {
 
 #[derive(Debug, Deserialize)]
 struct SearchRequest {
-    platform: String,           // "youtube" | "twitch"
-    prospect_type: String,      // "content_creator" | "clipper"
+    platform: String,      // "youtube" | "twitch"
+    prospect_type: String, // "content_creator" | "clipper" | "podcaster" | "educator" | "business_owner"
     category: Option<String>,
     min_viewers: Option<i64>,
     max_viewers: Option<i64>,
     limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GenerateOutreachRequest {
+    delivery_url: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -97,10 +103,13 @@ async fn search_youtube_prospects(
         return Err((StatusCode::SERVICE_UNAVAILABLE, Json(ErrorResponse { success: false, message: "YOUTUBE_API_KEY not configured".to_string() })));
     }
 
-    let search_query = if payload.prospect_type == "clipper" {
-        "video editor clips shorts creator".to_string()
-    } else {
-        payload.category.clone().unwrap_or_else(|| "gaming streamer".to_string())
+    let base_category = payload.category.clone().unwrap_or_else(|| "general".to_string());
+    let search_query = match payload.prospect_type.as_str() {
+        "clipper"        => "video editor clips shorts creator".to_string(),
+        "podcaster"      => format!("{} podcast episode", base_category),
+        "educator"       => format!("{} tutorial explained course", base_category),
+        "business_owner" => format!("{} company brand products", base_category),
+        _                => base_category.clone(), // content_creator default
     };
 
     let client = reqwest::Client::new();
@@ -158,19 +167,23 @@ async fn search_youtube_prospects(
         let platform_url = format!("https://youtube.com/channel/{}", channel_id);
         let category = payload.category.clone().unwrap_or_else(|| "general".to_string());
 
+        // Extract Twitter/X handle from description
+        let twitter_handle = extract_twitter_handle(&description);
+
         let (score, reasoning, dm_creator, dm_clipper) =
             score_prospect_with_ai(state, &display_name, sub_count, &description, &category, &payload.prospect_type).await;
 
         sqlx::query(
             "INSERT INTO prospects (platform, channel_id, display_name, platform_url,
              subscriber_count, content_category, channel_description, prospect_type,
-             ai_score, ai_reasoning, dm_script_creator, dm_script_clipper)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+             ai_score, ai_reasoning, dm_script_creator, dm_script_clipper, twitter_handle)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
              ON CONFLICT (platform, channel_id) DO UPDATE SET
                ai_score = EXCLUDED.ai_score,
                ai_reasoning = EXCLUDED.ai_reasoning,
                dm_script_creator = EXCLUDED.dm_script_creator,
                dm_script_clipper = EXCLUDED.dm_script_clipper,
+               twitter_handle = COALESCE(EXCLUDED.twitter_handle, prospects.twitter_handle),
                updated_at = NOW()"
         )
         .bind("youtube")
@@ -185,6 +198,7 @@ async fn search_youtube_prospects(
         .bind(&reasoning)
         .bind(&dm_creator)
         .bind(&dm_clipper)
+        .bind(twitter_handle.as_deref())
         .execute(&state.db_pool)
         .await
         .ok();
@@ -293,6 +307,25 @@ async fn search_twitch_prospects(
     Ok(count)
 }
 
+/// Extract a Twitter/X handle from a channel description using simple pattern matching.
+fn extract_twitter_handle(description: &str) -> Option<String> {
+    // Look for twitter.com/handle or x.com/handle patterns
+    for pattern in &["twitter.com/", "x.com/"] {
+        if let Some(pos) = description.to_lowercase().find(pattern) {
+            let after = &description[pos + pattern.len()..];
+            let handle: String = after.chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            if !handle.is_empty() && handle.len() <= 50 {
+                return Some(format!("@{}", handle));
+            }
+        }
+    }
+    // Look for standalone @handle pattern (only if it looks like a Twitter mention)
+    // We skip this to avoid false positives — url-based extraction is sufficient
+    None
+}
+
 /// Use Gemini to score a prospect and generate DM scripts.
 /// Returns (score, reasoning, dm_creator, dm_clipper).
 async fn score_prospect_with_ai(
@@ -372,7 +405,7 @@ async fn list_prospects(
     let mut sql = "SELECT id, platform, channel_id, display_name, platform_url, \
                    subscriber_count, avg_viewer_count, content_category, prospect_type, \
                    ai_score, ai_reasoning, dm_script_creator, dm_script_clipper, \
-                   contact_status, notes, created_at \
+                   contact_status, notes, twitter_handle, created_at \
                    FROM prospects WHERE 1=1".to_string();
 
     for (i, col) in conditions.iter().enumerate() {
@@ -407,6 +440,7 @@ async fn list_prospects(
         "dm_script_clipper": r.get::<Option<String>, _>("dm_script_clipper"),
         "contact_status": r.get::<String, _>("contact_status"),
         "notes": r.get::<Option<String>, _>("notes"),
+        "twitter_handle": r.get::<Option<String>, _>("twitter_handle"),
         "created_at": r.get::<chrono::DateTime<chrono::Utc>, _>("created_at"),
     })).collect();
 
@@ -479,6 +513,76 @@ async fn delete_prospect(
         .bind(id).execute(&state.db_pool).await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { success: false, message: e.to_string() })))?;
     Ok(Json(json!({ "success": true })))
+}
+
+/// Generate a personalized cold outreach DM using Gemini, given a delivery URL.
+async fn generate_outreach_message(
+    Extension(state): Extension<Arc<AppState>>,
+    Path(id): Path<Uuid>,
+    Json(payload): Json<GenerateOutreachRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    let row = sqlx::query(
+        "SELECT display_name, subscriber_count, avg_viewer_count, content_category,
+                prospect_type, dm_script_creator
+         FROM prospects WHERE id=$1"
+    )
+    .bind(id)
+    .fetch_optional(&state.db_pool)
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { success: false, message: e.to_string() })))?
+    .ok_or_else(|| (StatusCode::NOT_FOUND, Json(ErrorResponse { success: false, message: "Prospect not found".to_string() })))?;
+
+    let name: String = row.get("display_name");
+    let subs: Option<i64> = row.get("subscriber_count");
+    let viewers: Option<i64> = row.get("avg_viewer_count");
+    let category: String = row.get::<Option<String>, _>("content_category").unwrap_or_else(|| "content".to_string());
+    let pt: String = row.get("prospect_type");
+    let existing_dm: String = row.get::<Option<String>, _>("dm_script_creator").unwrap_or_default();
+    let audience = subs.or(viewers).unwrap_or(0);
+
+    let gemini = state.video_gemini_client.as_ref()
+        .or(state.gemini_client.as_ref())
+        .ok_or_else(|| (StatusCode::SERVICE_UNAVAILABLE, Json(ErrorResponse { success: false, message: "Gemini not configured".to_string() })))?;
+
+    let audience_label = if audience >= 1_000_000 {
+        format!("{:.1}M", audience as f64 / 1_000_000.0)
+    } else if audience >= 1_000 {
+        format!("{:.0}K", audience as f64 / 1_000.0)
+    } else {
+        audience.to_string()
+    };
+
+    let pitch_focus = match pt.as_str() {
+        "podcaster"      => "turning podcast episodes into viral short clips for social media",
+        "educator"       => "turning educational videos into animated highlight clips and Shorts",
+        "business_owner" => "creating a professional product demo video or explainer for their brand",
+        _                => "turning their long-form content into 30-50 viral Shorts per month",
+    };
+
+    let prompt = format!(
+        r#"Write a SHORT cold outreach DM (under 90 words) from a video AI agency to {name}, a {category} {pt} with {audience} audience.
+
+Purpose: {pitch_focus}
+Include this delivery link naturally: {delivery_url}
+Mention you already created a free sample for them.
+Be conversational, specific to their niche, and end with a soft call-to-action.
+DO NOT use emojis excessively. Return only the message text, no preamble.
+Tone reference: {existing_dm}"#,
+        name = name,
+        category = category,
+        pt = pt.replace('_', " "),
+        audience = audience_label,
+        pitch_focus = pitch_focus,
+        delivery_url = payload.delivery_url,
+        existing_dm = if existing_dm.is_empty() { "professional and friendly".to_string() } else { existing_dm.chars().take(200).collect() },
+    );
+
+    let message = match gemini.generate_text(&prompt).await {
+        Ok(text) => text.trim().to_string(),
+        Err(e) => return Err((StatusCode::BAD_GATEWAY, Json(ErrorResponse { success: false, message: format!("Gemini error: {}", e) }))),
+    };
+
+    Ok(Json(json!({ "success": true, "outreach_message": message })))
 }
 
 // ============================================================================
@@ -557,6 +661,9 @@ tr:hover td{background:#0a0a1a}
         <label>Prospect Type</label>
         <select id="prospect_type">
           <option value="content_creator">Content Creator</option>
+          <option value="podcaster">Podcaster</option>
+          <option value="educator">Educator / STEM</option>
+          <option value="business_owner">Business / Brand</option>
           <option value="clipper">Clipper / Editor</option>
         </select>
       </div>
@@ -581,18 +688,87 @@ tr:hover td{background:#0a0a1a}
     <span id="search-status" style="margin-left:12px;color:#9ca3af;font-size:0.85rem"></span>
   </div>
 
-  <!-- Filter Tabs -->
-  <div class="tabs">
-    <div class="tab active" onclick="setFilter('all',this)">All</div>
-    <div class="tab" onclick="setFilter('new',this)">New</div>
-    <div class="tab" onclick="setFilter('contacted',this)">Contacted</div>
-    <div class="tab" onclick="setFilter('replied',this)">Replied</div>
-    <div class="tab" onclick="setFilter('converted',this)">Converted</div>
+  <!-- View Switcher -->
+  <div style="display:flex;gap:8px;margin-bottom:16px">
+    <button class="btn btn-primary" id="btn-prospects" onclick="showView('prospects')">📋 Prospects</button>
+    <button class="btn" id="btn-clipgen" style="background:#0f3460;color:#9ca3af;border:1px solid #1e3a5f" onclick="showView('clipgen')">🎬 Clip Generator</button>
   </div>
 
-  <!-- Results Table -->
-  <div style="background:#16213e;border:1px solid #0f3460;border-radius:12px;overflow:hidden">
-    <div id="table-area"><div class="loading">Loading prospects…</div></div>
+  <!-- PROSPECTS VIEW -->
+  <div id="view-prospects">
+    <!-- Filter Tabs -->
+    <div class="tabs">
+      <div class="tab active" onclick="setFilter('all',this)">All</div>
+      <div class="tab" onclick="setFilter('new',this)">New</div>
+      <div class="tab" onclick="setFilter('contacted',this)">Contacted</div>
+      <div class="tab" onclick="setFilter('replied',this)">Replied</div>
+      <div class="tab" onclick="setFilter('converted',this)">Converted</div>
+    </div>
+    <div style="background:#16213e;border:1px solid #0f3460;border-radius:12px;overflow:hidden">
+      <div id="table-area"><div class="loading">Loading prospects…</div></div>
+    </div>
+  </div>
+
+  <!-- CLIP GENERATOR VIEW -->
+  <div id="view-clipgen" style="display:none">
+    <div class="search-card">
+      <h2>🎬 Generate Demo Clips for a Prospect</h2>
+      <div class="form-grid" style="margin-bottom:12px">
+        <div style="grid-column:1/-1">
+          <label>Select Prospect</label>
+          <select id="cg-prospect" onchange="onProspectSelect(this)">
+            <option value="">— select a prospect —</option>
+          </select>
+        </div>
+        <div style="grid-column:1/-1">
+          <label>Video URL (auto-filled from prospect)</label>
+          <input id="cg-url" placeholder="https://youtube.com/watch?v=...">
+        </div>
+        <div>
+          <label>Number of Clips</label>
+          <input id="cg-clips" type="number" value="3" min="1" max="10">
+        </div>
+        <div>
+          <label>Min Duration (seconds)</label>
+          <input id="cg-min-dur" type="number" value="30" min="15" max="120">
+        </div>
+        <div>
+          <label>Max Duration (seconds)</label>
+          <input id="cg-max-dur" type="number" value="90" min="30" max="180">
+        </div>
+      </div>
+      <button class="btn btn-primary" onclick="startClipJob()">🎬 Generate Demo Clips</button>
+      <span id="cg-status" style="margin-left:12px;color:#9ca3af;font-size:0.85rem"></span>
+    </div>
+
+    <!-- Progress -->
+    <div id="cg-progress" style="display:none;background:#16213e;border:1px solid #0f3460;border-radius:12px;padding:20px;margin-bottom:16px">
+      <div style="color:#dbd8e3;margin-bottom:8px" id="cg-progress-label">Analyzing…</div>
+      <div style="background:#0f3460;border-radius:4px;height:8px;overflow:hidden">
+        <div id="cg-progress-bar" style="background:#5c5470;height:100%;width:0%;transition:width 0.5s"></div>
+      </div>
+    </div>
+
+    <!-- Results -->
+    <div id="cg-results" style="display:none;background:#16213e;border:1px solid #0f3460;border-radius:12px;padding:20px;margin-bottom:16px">
+      <h3 style="color:#dbd8e3;margin-bottom:12px">Generated Clips</h3>
+      <div id="cg-clips-list"></div>
+      <button class="btn btn-primary" style="margin-top:16px" onclick="createDelivery()">📦 Create Delivery Package</button>
+    </div>
+
+    <!-- Delivery + Outreach -->
+    <div id="cg-delivery" style="display:none;background:#16213e;border:1px solid #0f3460;border-radius:12px;padding:20px">
+      <h3 style="color:#dbd8e3;margin-bottom:8px">Delivery Link</h3>
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:16px">
+        <input id="cg-delivery-url" readonly style="flex:1;background:#0f3460;border:1px solid #1e3a5f;border-radius:6px;padding:8px 12px;color:#dbd8e3;font-size:0.9rem">
+        <button class="btn btn-sm btn-copy" onclick="copyEl('cg-delivery-url')">📋 Copy</button>
+      </div>
+      <button class="btn btn-primary" onclick="generateOutreach()">🤖 Generate AI Outreach Message</button>
+      <div id="cg-outreach" style="display:none;margin-top:16px">
+        <div class="dm-text" id="cg-outreach-text" style="max-height:none;margin-bottom:8px"></div>
+        <button class="btn btn-sm btn-copy" onclick="copyEl('cg-outreach-text')">📋 Copy Message</button>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -642,12 +818,13 @@ async function loadProspects(){
   let html = `<table>
     <thead><tr>
       <th>Channel</th><th>Platform</th><th>Audience</th><th>Category</th>
-      <th>AI Score</th><th>DM Scripts</th><th>Status</th><th>Actions</th>
+      <th>Twitter</th><th>AI Score</th><th>DM Scripts</th><th>Status</th><th>Actions</th>
     </tr></thead><tbody>`;
 
   for(const p of prospects){
     const dm = p.dm_script_creator||'';
     const dmClip = p.dm_script_clipper||'';
+    const tw = p.twitter_handle||'';
     html += `<tr id="row-${p.id}">
       <td><a href="${p.platform_url}" target="_blank" style="color:#dbd8e3;font-weight:500">${p.display_name}</a>
         ${p.ai_reasoning?`<div style="font-size:0.75rem;color:#9ca3af;margin-top:2px">${p.ai_reasoning}</div>`:''}
@@ -655,6 +832,7 @@ async function loadProspects(){
       <td>${platformIcon(p.platform)}</td>
       <td>${formatNum(p.subscriber_count||p.avg_viewer_count)}</td>
       <td style="color:#9ca3af">${p.content_category||'—'}</td>
+      <td style="color:#1d9bf0;white-space:nowrap">${tw?`<a href="https://twitter.com/${tw.replace('@','')}" target="_blank" style="color:#1d9bf0">${tw}</a><button class="btn btn-sm btn-copy" style="margin-left:4px" onclick="copyText('${encodeURIComponent(tw)}')">📋</button>`:'—'}</td>
       <td>${scoreBadge(p.ai_score)}</td>
       <td style="min-width:220px">
         <div class="dm-text">${dm||'—'}</div>
@@ -741,6 +919,151 @@ async function deleteProspect(id){
 }
 
 loadProspects();
+
+// ── View switcher ──────────────────────────────────────────────
+function showView(v) {
+  document.getElementById('view-prospects').style.display = v==='prospects'?'':'none';
+  document.getElementById('view-clipgen').style.display = v==='clipgen'?'':'none';
+  document.getElementById('btn-prospects').style.background = v==='prospects'?'#5c5470':'#0f3460';
+  document.getElementById('btn-prospects').style.color = v==='prospects'?'#fff':'#9ca3af';
+  document.getElementById('btn-clipgen').style.background = v==='clipgen'?'#5c5470':'#0f3460';
+  document.getElementById('btn-clipgen').style.color = v==='clipgen'?'#fff':'#9ca3af';
+  if(v==='clipgen') loadProspectsDropdown();
+}
+
+// ── Clip Generator ─────────────────────────────────────────────
+let cgProspects = [];
+let cgJobId = null;
+let cgPollInterval = null;
+let cgSelectedProspectId = null;
+
+async function loadProspectsDropdown() {
+  const res = await fetch('/api/admin/prospects?limit=200', {headers:{'Authorization':'Bearer '+token}});
+  const data = await res.json();
+  cgProspects = data.prospects||[];
+  const sel = document.getElementById('cg-prospect');
+  sel.innerHTML = '<option value="">— select a prospect —</option>' +
+    cgProspects.map(p=>`<option value="${p.id}" data-url="${p.platform_url}">${p.display_name} (${p.content_category||p.platform})</option>`).join('');
+}
+
+function onProspectSelect(sel) {
+  const opt = sel.options[sel.selectedIndex];
+  if(opt.value) {
+    cgSelectedProspectId = opt.value;
+    document.getElementById('cg-url').value = opt.dataset.url||'';
+  }
+}
+
+async function startClipJob() {
+  const url = document.getElementById('cg-url').value.trim();
+  if(!url) { showMsg('Enter a video URL', false); return; }
+  document.getElementById('cg-status').textContent = 'Starting…';
+  document.getElementById('cg-results').style.display='none';
+  document.getElementById('cg-delivery').style.display='none';
+  document.getElementById('cg-outreach').style.display='none';
+
+  const res = await fetch('/api/manual-clipping/jobs', {
+    method:'POST',
+    headers:{'Authorization':'Bearer '+token,'Content-Type':'application/json'},
+    body: JSON.stringify({
+      video_url: url,
+      clips_requested: parseInt(document.getElementById('cg-clips').value)||3,
+      min_clip_duration_seconds: parseInt(document.getElementById('cg-min-dur').value)||30,
+      max_clip_duration_seconds: parseInt(document.getElementById('cg-max-dur').value)||90,
+    })
+  });
+  const data = await res.json();
+  if(!data.success||!data.job_id) { showMsg(data.message||'Failed to start job', false); document.getElementById('cg-status').textContent=''; return; }
+
+  cgJobId = data.job_id;
+  document.getElementById('cg-status').textContent = '';
+  document.getElementById('cg-progress').style.display='';
+  startPolling();
+}
+
+function startPolling() {
+  if(cgPollInterval) clearInterval(cgPollInterval);
+  cgPollInterval = setInterval(pollJob, 4000);
+  pollJob();
+}
+
+async function pollJob() {
+  if(!cgJobId) return;
+  const res = await fetch(`/api/manual-clipping/jobs/${cgJobId}`, {headers:{'Authorization':'Bearer '+token}});
+  const data = await res.json();
+  if(!data.job) return;
+  const job = data.job;
+  document.getElementById('cg-progress-label').textContent = job.status + (job.progress_percent?` — ${job.progress_percent}%`:'');
+  document.getElementById('cg-progress-bar').style.width = (job.progress_percent||0)+'%';
+
+  if(job.status==='completed') {
+    clearInterval(cgPollInterval);
+    document.getElementById('cg-progress').style.display='none';
+    showClipResults(data.clips||[]);
+  } else if(job.status==='failed') {
+    clearInterval(cgPollInterval);
+    document.getElementById('cg-progress').style.display='none';
+    showMsg('Job failed: '+(job.error_message||'unknown'), false);
+  }
+}
+
+function showClipResults(clips) {
+  const list = document.getElementById('cg-clips-list');
+  if(!clips.length) { list.innerHTML='<div style="color:#9ca3af">No clips generated</div>'; }
+  else {
+    list.innerHTML = clips.map((c,i)=>`
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;padding:8px;background:#0f3460;border-radius:6px">
+        <span style="color:#dbd8e3;flex:1">Clip ${i+1}: ${c.title||'Clip '+(i+1)} (${Math.round(c.duration_seconds||0)}s)</span>
+        ${c.r2_clip_url?`<a href="${c.r2_clip_url}" target="_blank" class="btn btn-sm btn-copy">⬇ Download</a>`:''}
+        ${c.r2_clip_url?`<button class="btn btn-sm btn-copy" onclick="copyText('${encodeURIComponent(c.r2_clip_url)}')">🔗 Copy</button>`:''}
+      </div>`).join('');
+  }
+  document.getElementById('cg-results').style.display='';
+}
+
+async function createDelivery() {
+  const prospect = cgProspects.find(p=>p.id===cgSelectedProspectId);
+  const title = prospect ? `Demo clips for ${prospect.display_name}` : 'Demo clip delivery';
+  const res = await fetch('/api/admin/deliveries', {
+    method:'POST',
+    headers:{'Authorization':'Bearer '+token,'Content-Type':'application/json'},
+    body: JSON.stringify({
+      client_ref: prospect?.display_name||'prospect',
+      title,
+      gig_type: 'clips',
+      prompt: `Demo clips from manual clipping job ${cgJobId}`,
+      style: 'viral',
+      duration: 60,
+      extra_args: {job_id: cgJobId},
+    })
+  });
+  const data = await res.json();
+  if(!data.id&&!data.delivery_id) { showMsg('Failed to create delivery', false); return; }
+  const id = data.id||data.delivery_id;
+  const deliveryUrl = `${window.location.origin}/delivery/${id}`;
+  document.getElementById('cg-delivery-url').value = deliveryUrl;
+  document.getElementById('cg-delivery').style.display='';
+  showMsg('Delivery package created!');
+}
+
+async function generateOutreach() {
+  const deliveryUrl = document.getElementById('cg-delivery-url').value;
+  if(!cgSelectedProspectId||!deliveryUrl) { showMsg('Select a prospect and create delivery first', false); return; }
+  const res = await fetch(`/api/admin/prospects/${cgSelectedProspectId}/generate-outreach`, {
+    method:'POST',
+    headers:{'Authorization':'Bearer '+token,'Content-Type':'application/json'},
+    body: JSON.stringify({delivery_url: deliveryUrl})
+  });
+  const data = await res.json();
+  if(!data.success) { showMsg(data.message||'Failed to generate message', false); return; }
+  document.getElementById('cg-outreach-text').textContent = data.outreach_message;
+  document.getElementById('cg-outreach').style.display='';
+}
+
+function copyEl(id) {
+  const el = document.getElementById(id);
+  navigator.clipboard.writeText(el.value||el.textContent).then(()=>showMsg('Copied!'));
+}
 </script>
 </body>
 </html>

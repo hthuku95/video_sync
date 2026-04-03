@@ -30,6 +30,7 @@ pub fn admin_routes() -> Router {
         .route("/admin/test-runs", get(admin_test_runs_page))
         .route("/admin/test-runs/:id", get(admin_test_run_detail_page))
         .route("/admin/deliveries", get(admin_deliveries_page))
+        .route("/admin/monetization-guide", get(admin_monetization_guide_page))
         .route("/delivery/:id", get(delivery_page));
     
     // API endpoints - protected routes with JWT authentication  
@@ -281,9 +282,11 @@ pub async fn admin_dashboard() -> Html<String> {
             <li><a href="/admin/clipping-activity">🎬 Clipping Activity</a></li>
             <li><a href="/admin/performance">📈 Performance</a></li>
             <li><a href="/admin/test-runs">🧪 Portfolio Tests</a></li>
+            <li><a href="/admin/prospect-finder">🎯 Prospect Finder</a></li>
+            <li><a href="/admin/monetization-guide">💰 Monetization Guide</a></li>
             <li><a href="#" onclick="showWhitelist()">🛡️ Whitelist</a></li>
             <li><a href="#" onclick="showYoutube()">🎥 YouTube Features</a></li>
-            <li><a href="#" onclick="showPricing()">💰 Model Pricing</a></li>
+            <li><a href="#" onclick="showPricing()">💲 Model Pricing</a></li>
             <li><a href="/api/docs">📚 API Docs</a></li>
             <li><a href="/api/status">⚙️ System Status</a></li>
             <li><a href="/" target="_blank">🌐 View Site</a></li>
@@ -7275,3 +7278,263 @@ setInterval(loadDeliveries, 30000);
 </html>"###;
     Html(html.to_string())
 }
+
+pub async fn admin_monetization_guide_page() -> Html<&'static str> {
+    Html(MONETIZATION_GUIDE_HTML)
+}
+
+static MONETIZATION_GUIDE_HTML: &str = r###"<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Monetization Guide — VideoSync Admin</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Inter',system-ui,sans-serif;background:#1a1a2e;color:#e0e0e0;min-height:100vh}
+.header{background:#16213e;border-bottom:1px solid #0f3460;padding:14px 24px;display:flex;align-items:center;gap:16px}
+.header h1{font-size:1.2rem;color:#dbd8e3}
+.back{color:#5c5470;text-decoration:none;font-size:0.9rem}
+.back:hover{color:#dbd8e3}
+.container{max-width:960px;margin:0 auto;padding:24px}
+.card{background:#16213e;border:1px solid #0f3460;border-radius:12px;padding:24px;margin-bottom:24px}
+h2{font-size:1.05rem;color:#dbd8e3;margin-bottom:16px;display:flex;align-items:center;gap:8px}
+h3{font-size:0.95rem;color:#a78bfa;margin:14px 0 8px}
+p,li{font-size:0.88rem;color:#c4b5fd;line-height:1.6}
+ul,ol{padding-left:20px;margin-bottom:10px}
+li{margin-bottom:4px}
+a{color:#818cf8;text-decoration:none}
+a:hover{text-decoration:underline}
+table{width:100%;border-collapse:collapse;font-size:0.85rem;margin-bottom:12px}
+th{text-align:left;padding:8px 12px;color:#9ca3af;border-bottom:1px solid #1e3a5f;font-weight:500}
+td{padding:8px 12px;border-bottom:1px solid #0f3460;color:#e0e0e0}
+.highlight{color:#6ee7b7;font-weight:600}
+.warning{color:#fcd34d}
+.dm-box{background:#0f3460;border:1px solid #1e3a5f;border-radius:8px;padding:12px;font-size:0.82rem;color:#ccc;white-space:pre-wrap;margin-bottom:8px;font-family:monospace}
+.btn-copy{padding:4px 10px;background:#5c5470;color:#fff;border:none;border-radius:5px;cursor:pointer;font-size:0.78rem}
+.day-badge{display:inline-block;padding:2px 10px;border-radius:10px;font-size:0.78rem;font-weight:600;margin-bottom:8px}
+.day1{background:#065f46;color:#6ee7b7}
+.day2{background:#1e3a5f;color:#93c5fd}
+.day3{background:#4c1d95;color:#c4b5fd}
+.platform-badge{display:inline-block;padding:2px 8px;border-radius:6px;font-size:0.78rem;font-weight:500;margin:2px}
+.pb-up{background:#1e3a5f;color:#93c5fd}
+.pb-dc{background:#312e81;color:#c4b5fd}
+.total-box{background:#0f3460;border:2px solid #5c5470;border-radius:12px;padding:16px;text-align:center;margin-top:16px}
+.total-box .amount{font-size:1.8rem;font-weight:700;color:#6ee7b7}
+</style>
+</head>
+<body>
+<div class="header">
+  <a href="/admin/dashboard" class="back">← Dashboard</a>
+  <h1>Monetization Guide</h1>
+  <a href="/admin/prospect-finder" style="margin-left:auto;padding:6px 14px;background:#5c5470;color:#fff;border-radius:6px;font-size:0.85rem;text-decoration:none">Open Prospect Finder</a>
+</div>
+<div class="container">
+
+  <div class="card">
+    <h2>72-Hour Revenue Target</h2>
+    <div class="total-box">
+      <div class="amount">$3,000</div>
+      <div style="color:#9ca3af;font-size:0.85rem;margin-top:4px">Target: April 3-5, 2026</div>
+    </div>
+    <p style="margin-top:16px">The platform's unique advantage: <span class="highlight">any YouTube or Twitch URL to download-ready clips in ~10 minutes.</span> No manual clipper can match this. Send free demos before the first DM — that is the entire pitch.</p>
+  </div>
+
+  <div class="card">
+    <h2>Pricing Tiers</h2>
+    <table>
+      <thead><tr><th>Tier</th><th>Clips/Month</th><th>Price</th><th>Pitch</th></tr></thead>
+      <tbody>
+        <tr><td>Demo Pack</td><td>10 clips</td><td class="highlight">$97 one-time</td><td>Conversion tool — gets relationship started</td></tr>
+        <tr><td>Starter</td><td>30 clips</td><td class="highlight">$297/month</td><td>"30 viral moments, done for you"</td></tr>
+        <tr><td>Growth</td><td>50 clips</td><td class="highlight">$497/month</td><td>"Post daily Shorts without lifting a finger"</td></tr>
+        <tr><td>Agency</td><td>100 clips + thumbnails</td><td class="highlight">$997/month</td><td>"Full content team, AI-powered"</td></tr>
+        <tr><td>Podcast per-episode</td><td>5-10 clips/episode</td><td class="highlight">$150-$350/episode</td><td>Auto-clip every new episode within 24hr</td></tr>
+        <tr><td>Course Visual Kit</td><td>5 Manim + 3 titles + 5 thumbs</td><td class="highlight">$497/kit</td><td>AI-generated course visuals, 24hr turnaround</td></tr>
+        <tr><td>Product Demo Video</td><td>60-90s SaaS/e-com demo</td><td class="highlight">$497-$997</td><td>Manim + Blender pipeline, 48hr delivery</td></tr>
+      </tbody>
+    </table>
+    <p><span class="highlight">Volume moat:</span> Manual clippers offer 5-10 clips/month. Your AI does 50+ at zero marginal cost. Lead with that number in every pitch.</p>
+    <p style="margin-top:8px"><span class="highlight">Monthly target (50 clients x $297):</span> $14,850/month recurring</p>
+  </div>
+
+  <div class="card">
+    <h2>Day 1 Today, April 3 — Target: $1,000</h2>
+    <span class="day-badge day1">Day 1</span>
+    <h3>Core Move: DM 30 creators with a free demo clip of their own content</h3>
+    <ol>
+      <li><strong>Find 30 targets (1 hr)</strong> — Open <a href="/admin/prospect-finder">Prospect Finder</a>. YouTube: finance / crypto / fitness / podcast, subscribers 10k-200k. No consistent short-form presence.</li>
+      <li><strong>Generate demo clips for top 10 (2 hrs)</strong> — Use the Clip Generator tab. 3 clips, 45-90s. Create delivery, copy shareable link.</li>
+      <li><strong>Outreach on all channels simultaneously</strong></li>
+    </ol>
+    <h3>Outreach Channels</h3>
+    <p><span class="platform-badge pb-up">YTjobs.co</span> <a href="https://ytjobs.co/" target="_blank">ytjobs.co</a> — Active clipper job board. Apply to every open listing today. Pitch: "AI pipeline, any URL to clips in 10 min. Sample: [link]"</p>
+    <p><span class="platform-badge pb-up">Upwork</span> <a href="https://www.upwork.com/freelance-jobs/ai-generated-video/" target="_blank">Upwork AI Video Jobs</a> — Apply to $300-$800 AI video jobs. $500 and $720 fixed-price jobs confirmed in this category.</p>
+    <p><span class="platform-badge pb-dc">Discord</span> Video Editors 115K: <a href="https://discord.com/invite/videoeditors" target="_blank">discord.com/invite/videoeditors</a> — Post in #for-hire with demo link.</p>
+    <p><span class="platform-badge pb-dc">Discord</span> Video Editing Hub 55K: <a href="https://discord.com/invite/video-editing-hub-732343015711965204" target="_blank">invite link</a> — Post in hire channel.</p>
+    <div class="total-box" style="text-align:left;padding:12px 16px">
+      <p><span class="highlight">Day 1 math:</span> 1 retainer ($497) + 1 Upwork/YTjobs project ($500) = ~$1,000</p>
+      <p style="margin-top:4px"><span class="warning">Fallback:</span> 3 Discord orders x $97 demo pack + 1 retainer = $788</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Day 2 April 4 — Target: $1,000</h2>
+    <span class="day-badge day2">Day 2</span>
+    <h3>Revenue Stream A: Podcast-to-clips retainer</h3>
+    <p>Target podcasters with 5K-50K downloads/episode who record video but don't post Shorts.</p>
+    <ul>
+      <li>Pricing: <span class="highlight">$150-$350/episode</span> or $497/month unlimited</li>
+      <li>Find them: Twitter/X search "#podcast", <a href="https://podmatch.com/" target="_blank">Podmatch.com</a>, r/podcast [FOR HIRE]</li>
+      <li>Demo move: Clip one of their episodes, send 3 clips before asking</li>
+    </ul>
+    <h3>Revenue Stream B: Course Creator Visual Kit</h3>
+    <p>Target STEM YouTubers, online educators, corporate trainers.</p>
+    <ul>
+      <li>What you deliver: 5 Manim animations (30s each) + 3 Blender title cards + 5 AI thumbnails</li>
+      <li>Price: <span class="highlight">$497/kit</span> (market rate individually is $150-$500 per piece)</li>
+      <li>Find them: LinkedIn, r/elearning, r/OnlineCourses, Twitter/X</li>
+    </ul>
+    <div class="total-box" style="text-align:left;padding:12px 16px">
+      <p><span class="highlight">Day 2 math:</span> 2 podcast clients x $200/episode + 1 visual kit = ~$900-$1,300</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Day 3 April 5 — Close Pipeline + New Channels</h2>
+    <span class="day-badge day3">Day 3</span>
+    <h3>A: Follow up on all Day 1 DMs (48hr follow-up)</h3>
+    <h3>B: Reddit posts</h3>
+    <ul>
+      <li>r/forhire — [FOR HIRE] with demo and pricing (budget required in post)</li>
+      <li>r/NewTubers — offer free demo clips to small creators (builds testimonials)</li>
+      <li>r/podcast — [FOR HIRE] targeting podcasters</li>
+    </ul>
+    <h3>C: Passive income setup (weeks 2-4, not for 72hr target)</h3>
+    <ul>
+      <li><a href="https://reach.cat/" target="_blank">Reach.cat</a> — pay-per-view clipping, $1-6 CPM, weekly payouts</li>
+      <li><a href="https://whop.com/discover/explore/content-rewards/" target="_blank">Whop Content Rewards</a> — brand campaigns, $1-2 CPM</li>
+      <li><a href="https://insolvo.com/audio-video/video-editing/yt-video-clipper" target="_blank">Insolvo.com</a> — marketplace listing</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2>Product Demo Video Vertical</h2>
+    <p>Your Manim + Blender pipeline can produce professional product demos for businesses. High-ticket market.</p>
+    <table>
+      <thead><tr><th>Client Type</th><th>What You Deliver</th><th>Price Range</th></tr></thead>
+      <tbody>
+        <tr><td>SaaS companies</td><td>60-90s animated product walkthrough</td><td class="highlight">$2,990-$7,600</td></tr>
+        <tr><td>E-commerce brands</td><td>30-60s product showcase video</td><td class="highlight">$497-$1,500</td></tr>
+        <tr><td>Real estate agencies</td><td>Property tour + data viz</td><td class="highlight">$300-$2,500/property</td></tr>
+        <tr><td>Corporate training</td><td>5-10 min animated course module</td><td class="highlight">$2,000-$25,000</td></tr>
+        <tr><td>Marketing agencies</td><td>White-label production (resell)</td><td class="highlight">$500-$3,000/video</td></tr>
+      </tbody>
+    </table>
+    <h3>Where to Find Business Clients</h3>
+    <ul>
+      <li>Prospect Finder: Business/Brand type — searches YouTube for company/brand channels</li>
+      <li>LinkedIn: search "SaaS founder", "marketing director", "product manager"</li>
+      <li>Upwork: search "product demo video", "explainer video", "SaaS demo"</li>
+      <li>Cold email: find SaaS companies on ProductHunt, contact founders directly</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2>DM Script Templates</h2>
+    <h3>Creator Clips DM</h3>
+    <div class="dm-box" id="dm1">Hey [Name] — love your [specific recent video topic].
+
+I noticed you're not turning your long-form into Shorts consistently.
+I already clipped your latest video as a free demo: [delivery link]
+
+I can deliver 30-50 clips every month — fully automated, zero extra work from you.
+Most clippers offer 5-10 clips. I do 10x that at the same price.
+
+$297/month for 30 clips or $497/month for 50 clips.
+First week free. Interested?</div>
+    <button class="btn-copy" onclick="navigator.clipboard.writeText(document.getElementById('dm1').textContent).then(()=>this.textContent='Copied!').then(()=>setTimeout(()=>this.textContent='Copy',1500))">Copy</button>
+
+    <h3>Podcast DM</h3>
+    <div class="dm-box" id="dm2">Hey [Name] — I listen to your show. Noticed you're not posting episode clips to Shorts.
+
+I already pulled 3 clips from your last episode: [delivery link]
+
+I do this automatically for every episode you publish — 5-10 clips per episode,
+delivered within 24 hours of publish. $200/episode or $497/month unlimited.
+
+Want the rest of last week's clips free?</div>
+    <button class="btn-copy" onclick="navigator.clipboard.writeText(document.getElementById('dm2').textContent).then(()=>this.textContent='Copied!').then(()=>setTimeout(()=>this.textContent='Copy',1500))">Copy</button>
+
+    <h3>Educator / Manim Visual DM</h3>
+    <div class="dm-box" id="dm3">Hey [Name] — I watched your [topic] video. The concepts would hit way harder with animated visuals.
+
+I generate Manim-style math/data animations and Blender title cards using AI.
+
+$497 for a full kit: 5 animations + 3 title cards + 5 thumbnails, delivered in 24 hours.
+Here's a sample: [portfolio link]
+
+Worth a quick chat?</div>
+    <button class="btn-copy" onclick="navigator.clipboard.writeText(document.getElementById('dm3').textContent).then(()=>this.textContent='Copied!').then(()=>setTimeout(()=>this.textContent='Copy',1500))">Copy</button>
+
+    <h3>Product Demo (Business) DM</h3>
+    <div class="dm-box" id="dm4">Hey [Name] — I noticed [Company] doesn't have a product demo video on their site.
+
+I build AI-generated animated demos using Manim + Blender — same quality as $10k agency work.
+I can deliver a 60-second walkthrough in 48 hours for $997.
+
+Here's a sample: [portfolio link]
+Interested?</div>
+    <button class="btn-copy" onclick="navigator.clipboard.writeText(document.getElementById('dm4').textContent).then(()=>this.textContent='Copied!').then(()=>setTimeout(()=>this.textContent='Copy',1500))">Copy</button>
+
+    <h3>Discord / Reddit For-Hire Post</h3>
+    <div class="dm-box" id="dm5">[FOR HIRE] AI Video Clipper — 10-min turnaround, any YouTube/Twitch URL
+
+I run an AI clipping pipeline that turns long-form content into
+30-50 short clips per month. I can demo your content right now.
+
+Intro offer: $97 for 10 clips (demo pack)
+Monthly: $297-$497/month
+
+Sample: [your portfolio test output link]
+DM me with any URL and I'll clip it as a free sample.</div>
+    <button class="btn-copy" onclick="navigator.clipboard.writeText(document.getElementById('dm5').textContent).then(()=>this.textContent='Copied!').then(()=>setTimeout(()=>this.textContent='Copy',1500))">Copy</button>
+  </div>
+
+  <div class="card">
+    <h2>Revenue Projection</h2>
+    <table>
+      <thead><tr><th>Day</th><th>Source</th><th>Amount</th></tr></thead>
+      <tbody>
+        <tr><td>Day 1</td><td>1 Upwork/YTjobs project</td><td class="highlight">$500</td></tr>
+        <tr><td>Day 1</td><td>1 creator retainer</td><td class="highlight">$497</td></tr>
+        <tr><td>Day 2</td><td>2 podcast clients x $200</td><td class="highlight">$400-$800</td></tr>
+        <tr><td>Day 2</td><td>1 course creator visual kit</td><td class="highlight">$497</td></tr>
+        <tr><td>Day 3</td><td>Follow-up conversions</td><td class="highlight">$300-$600</td></tr>
+        <tr style="font-weight:600"><td colspan="2">Total</td><td class="highlight">$2,200-$2,900</td></tr>
+      </tbody>
+    </table>
+    <p><span class="warning">To hit $3,000:</span> One larger close — a brand, agency, or podcast production company at $500-$1,000.</p>
+    <h3>Long-term Monthly Recurring</h3>
+    <ul>
+      <li>50 creators x $297/month = <span class="highlight">$14,850/month</span></li>
+      <li>20 podcast clients x $200/episode x 4 episodes = <span class="highlight">$16,000/month</span></li>
+      <li>5 business clients x $997/month = <span class="highlight">$4,985/month</span></li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2>Quick Actions</h2>
+    <div style="display:flex;flex-wrap:wrap;gap:10px">
+      <a href="/admin/prospect-finder" style="padding:10px 18px;background:#5c5470;color:#fff;border-radius:8px;text-decoration:none;font-size:0.9rem">Prospect Finder</a>
+      <a href="/manual-clipping" style="padding:10px 18px;background:#0f3460;color:#dbd8e3;border:1px solid #1e3a5f;border-radius:8px;text-decoration:none;font-size:0.9rem">Manual Clipping</a>
+      <a href="/admin/deliveries" style="padding:10px 18px;background:#0f3460;color:#dbd8e3;border:1px solid #1e3a5f;border-radius:8px;text-decoration:none;font-size:0.9rem">Deliveries</a>
+      <a href="/admin/test-runs" style="padding:10px 18px;background:#0f3460;color:#dbd8e3;border:1px solid #1e3a5f;border-radius:8px;text-decoration:none;font-size:0.9rem">Portfolio Tests</a>
+      <a href="https://ytjobs.co/" target="_blank" style="padding:10px 18px;background:#065f46;color:#6ee7b7;border-radius:8px;text-decoration:none;font-size:0.9rem">YTjobs.co</a>
+      <a href="https://www.upwork.com/freelance-jobs/ai-generated-video/" target="_blank" style="padding:10px 18px;background:#1e3a5f;color:#93c5fd;border-radius:8px;text-decoration:none;font-size:0.9rem">Upwork AI Video</a>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>"###;
