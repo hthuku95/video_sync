@@ -76,9 +76,11 @@ pub async fn execute_manual_clipping_job(
     update_status(job_id, "analyzing", 10, None, &app_state.db_pool).await?;
     tracing::info!("🔍 Phase A: Analyzing {}", video_url);
 
+    // Prefer the dedicated manual-clipping key to avoid exhausting the shared quota.
     let gemini = app_state
-        .gemini_client
+        .manual_clipping_gemini_client
         .as_ref()
+        .or(app_state.gemini_client.as_ref())
         .ok_or("Gemini client not configured")?;
 
     let analysis: VideoAnalysis = if video_platform == "youtube" {
@@ -216,7 +218,7 @@ pub async fn execute_manual_clipping_job(
     // audio normalization, etc. before the clips are uploaded.
     // Best-effort: failures are logged but do not abort the job.
     // =========================================================================
-    if let Some(gemini) = app_state.gemini_client.as_ref() {
+    if let Some(gemini) = app_state.manual_clipping_gemini_client.as_ref().or(app_state.gemini_client.as_ref()) {
         update_status(job_id, "enhancing", 65, None, &app_state.db_pool).await?;
         tracing::info!("🤖 Phase D: AI agent enhancing {} clips with 320 tools", clips.len());
 

@@ -56,6 +56,7 @@ pub struct AppState {
     pub vector_db: Option<vector_db::AstraDBClient>,
     pub qdrant_client: Option<qdrant_client::QdrantClient>,
     pub gemini_client: Option<gemini_client::GeminiClient>,
+    pub manual_clipping_gemini_client: Option<gemini_client::GeminiClient>,
     pub claude_client: Option<claude_client::ClaudeClient>,
     pub voyage_embeddings: Option<voyage_embeddings::VoyageEmbeddings>,
     pub pexels_client: Option<pexels_client::PexelsClient>,
