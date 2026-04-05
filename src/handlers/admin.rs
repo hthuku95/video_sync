@@ -7524,6 +7524,66 @@ DM me with any URL and I'll clip it as a free sample.</div>
   </div>
 
   <div class="card">
+    <h2>New High-Value Strategies (Added Apr 5)</h2>
+    <table>
+      <thead><tr><th>Strategy</th><th>Pricing</th><th>Speed to Cash</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><strong>White-label agency model</strong></td>
+          <td class="highlight">$500-1,000/month per partner</td>
+          <td>1-2 weeks</td>
+          <td>Partner with existing video agencies who have clients — they resell your service at a markup. FASTEST path to recurring revenue without direct outreach.</td>
+        </tr>
+        <tr>
+          <td><strong>PeoplePerHour gigs</strong></td>
+          <td class="highlight">£50-150/gig</td>
+          <td>72 hours</td>
+          <td>Less saturated than Fiverr, 0% commission on first £500. List 3-5 fixed-price packages. Gig approval is fast (24-48hrs). URL: <a href="https://www.peopleperhour.com/category/video-animation/video-editing" target="_blank">PeoplePerHour</a></td>
+        </tr>
+        <tr>
+          <td><strong>AI Thumbnail upsell</strong></td>
+          <td class="highlight">$50-150/set (5 thumbnails)</td>
+          <td>Same day</td>
+          <td>Upsell to ANY existing clip client. Platform already generates these. Near-zero marginal cost. Add to every retainer pitch.</td>
+        </tr>
+        <tr>
+          <td><strong>Sports highlights</strong></td>
+          <td class="highlight">$400-1,099/package</td>
+          <td>1-2 weeks</td>
+          <td>Twitch eSports streamers, college sports coaches, local teams. Use Prospect Finder (Twitch, sports niche). Sample: Clip 3 moments from a recent match before the first DM.</td>
+        </tr>
+        <tr>
+          <td><strong>Real estate listing videos</strong></td>
+          <td class="highlight">$25-50/property</td>
+          <td>48 hours</td>
+          <td>Real estate agents need quick listing videos — high volume, low touch. Target agents with 10+ active listings on Zillow/Realtor. $25 entry price gets the relationship; upsell to monthly package.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3>White-label Agency Pitch</h3>
+    <div class="dm-box" id="dm6">Hey [Agency Name] — I run an AI video clipping pipeline that turns any YouTube/Twitch URL into 30-50 clips in under 10 minutes.
+
+I'm looking to white-label this for agencies like yours. You bring the clients, I handle production invisibly.
+
+Your margin: charge clients $500-1,500/month, pay me $297-497/month. Pure profit on volume.
+
+No contracts. Cancel anytime. Want a free 10-clip demo on one of your client's channels?</div>
+    <button class="btn-copy" onclick="navigator.clipboard.writeText(document.getElementById('dm6').textContent).then(()=>this.textContent='Copied!').then(()=>setTimeout(()=>this.textContent='Copy',1500))">Copy</button>
+
+    <h3>Sports Highlights DM</h3>
+    <div class="dm-box" id="dm7">Hey [Name] — caught your [game/stream] on Twitch. Those [specific moments] would go crazy on TikTok/Shorts.
+
+I clipped 3 highlights from your last session: [delivery link]
+
+I can do this for every stream automatically — 10-20 clips per session, same-day delivery.
+$400/month for weekly streams or $99 per one-off session.
+
+Interested?</div>
+    <button class="btn-copy" onclick="navigator.clipboard.writeText(document.getElementById('dm7').textContent).then(()=>this.textContent='Copied!').then(()=>setTimeout(()=>this.textContent='Copy',1500))">Copy</button>
+  </div>
+
+  <div class="card">
     <h2>Quick Actions</h2>
     <div style="display:flex;flex-wrap:wrap;gap:10px">
       <a href="/admin/prospect-finder" style="padding:10px 18px;background:#5c5470;color:#fff;border-radius:8px;text-decoration:none;font-size:0.9rem">Prospect Finder</a>
@@ -7532,6 +7592,7 @@ DM me with any URL and I'll clip it as a free sample.</div>
       <a href="/admin/test-runs" style="padding:10px 18px;background:#0f3460;color:#dbd8e3;border:1px solid #1e3a5f;border-radius:8px;text-decoration:none;font-size:0.9rem">Portfolio Tests</a>
       <a href="https://ytjobs.co/" target="_blank" style="padding:10px 18px;background:#065f46;color:#6ee7b7;border-radius:8px;text-decoration:none;font-size:0.9rem">YTjobs.co</a>
       <a href="https://www.upwork.com/freelance-jobs/ai-generated-video/" target="_blank" style="padding:10px 18px;background:#1e3a5f;color:#93c5fd;border-radius:8px;text-decoration:none;font-size:0.9rem">Upwork AI Video</a>
+      <a href="https://www.peopleperhour.com/category/video-animation/video-editing" target="_blank" style="padding:10px 18px;background:#1e3a5f;color:#93c5fd;border-radius:8px;text-decoration:none;font-size:0.9rem">PeoplePerHour</a>
     </div>
   </div>
 
