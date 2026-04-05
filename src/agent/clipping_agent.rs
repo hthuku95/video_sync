@@ -621,7 +621,7 @@ impl GeminiClippingAgent {
             );
         }
 
-        let analysis = tokio::time::timeout(
+        let gemini_result = tokio::time::timeout(
             tokio::time::Duration::from_secs(180),
             gemini.analyze_video_from_url(
                 &video_url,
@@ -632,11 +632,31 @@ impl GeminiClippingAgent {
             ),
         )
         .await
-        .map_err(|_| "Gemini analysis timed out after 180s".to_string())?
-        .map_err(|e| format!("Gemini analysis failed: {}", e))?;
+        .map_err(|_| "Gemini analysis timed out after 180s".to_string())?;
 
         let _ = stop_tx_a.send(true);
         let _ = heartbeat_handle_a.await;
+
+        let analysis = match gemini_result {
+            Ok(a) => a,
+            Err(e) if e.to_string().contains("429") || e.to_string().to_lowercase().contains("quota") => {
+                tracing::warn!("⚠️ Gemini 429 on Phase A analysis (job {}), falling back to BlenderMCPServer: {}", job_id, e);
+                if let Some(blender) = self.app_state.blender_mcp_client.as_ref() {
+                    blender.analyze_video(
+                        &video_url,
+                        linkage.clips_per_video as u32,
+                        linkage.min_clip_duration_seconds as f64,
+                        linkage.max_clip_duration_seconds as f64,
+                        &learned_factors,
+                    )
+                    .await
+                    .map_err(|be| format!("Gemini quota exceeded (429); BlenderMCP fallback also failed: {}", be))?
+                } else {
+                    return Err(format!("Gemini analysis failed (429 quota): {}. No BlenderMCP fallback configured.", e));
+                }
+            }
+            Err(e) => return Err(format!("Gemini analysis failed: {}", e)),
+        };
 
         let overall_quality = analysis.overall_quality;
         let moments_count = analysis.viral_moments.len();
