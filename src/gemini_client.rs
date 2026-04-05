@@ -16,6 +16,9 @@ pub struct GeminiClient {
     client: Client,
     api_key: String,
     base_url: String,
+    /// Model used for generate_text() and generate_content() calls.
+    /// Default: "gemini-2.5-flash". Override with new_with_model() for Gemma 4.
+    pub text_model: String,
     /// Semaphore that limits concurrent in-flight Gemini API calls.
     semaphore: Arc<tokio::sync::Semaphore>,
 }
@@ -282,6 +285,19 @@ impl GeminiClient {
             client: Client::new(),
             api_key,
             base_url: "https://generativelanguage.googleapis.com/v1beta".to_string(),
+            text_model: "gemini-2.5-flash".to_string(),
+            semaphore: Arc::new(tokio::sync::Semaphore::new(GEMINI_MAX_CONCURRENT)),
+        }
+    }
+
+    /// Create a client that uses a specific model for generate_text() and generate_content().
+    /// Use "gemma-4-27b-it" for Gemma 4 via Google AI Studio (free, own quota).
+    pub fn new_with_model(api_key: String, model: String) -> Self {
+        Self {
+            client: Client::new(),
+            api_key,
+            base_url: "https://generativelanguage.googleapis.com/v1beta".to_string(),
+            text_model: model,
             semaphore: Arc::new(tokio::sync::Semaphore::new(GEMINI_MAX_CONCURRENT)),
         }
     }
@@ -295,8 +311,8 @@ impl GeminiClient {
             .map_err(|e| format!("Gemini semaphore error: {}", e))?;
 
         let url = format!(
-            "{}/models/gemini-2.5-flash:generateContent?key={}",
-            self.base_url, self.api_key
+            "{}/models/{}:generateContent?key={}",
+            self.base_url, self.text_model, self.api_key
         );
 
         // Debug: Log the request to see if thought signatures are present
@@ -8757,8 +8773,8 @@ Provide ONLY the JSON object, no markdown, no code blocks, no other text."#,
             .map_err(|e| format!("Gemini semaphore error: {}", e))?;
 
         let url = format!(
-            "{}/models/gemini-2.5-flash:generateContent?key={}",
-            self.base_url, self.api_key
+            "{}/models/{}:generateContent?key={}",
+            self.base_url, self.text_model, self.api_key
         );
 
         let request_body = serde_json::json!({

@@ -86,7 +86,7 @@ pub async fn execute_clipping_job(
         let gemini_client = app_state.gemini_client.as_ref()
             .ok_or("Gemini client not configured — required for YouTube URL analysis")?;
 
-        let analysis = tokio::time::timeout(
+        let gemini_result = tokio::time::timeout(
             tokio::time::Duration::from_secs(180), // 3 min for analysis
             gemini_client.analyze_video_from_url(
                 &video_url,
@@ -97,8 +97,28 @@ pub async fn execute_clipping_job(
             ),
         )
         .await
-        .map_err(|_| "Gemini video analysis timed out after 180 seconds".to_string())?
-        .map_err(|e| format!("Gemini video analysis failed: {}", e))?;
+        .map_err(|_| "Gemini video analysis timed out after 180 seconds".to_string())?;
+
+        let analysis = match gemini_result {
+            Ok(a) => a,
+            Err(e) if e.to_string().contains("429") || e.to_string().to_lowercase().contains("quota") => {
+                tracing::warn!("⚠️ Gemini 429 on video analysis, falling back to BlenderMCPServer: {}", e);
+                if let Some(blender) = app_state.blender_mcp_client.as_ref() {
+                    blender.analyze_video(
+                        &video_url,
+                        config.clips_per_video as u32,
+                        config.min_clip_duration_seconds as f64,
+                        config.max_clip_duration_seconds as f64,
+                        &[],
+                    )
+                    .await
+                    .map_err(|be| format!("Gemini quota exceeded (429); BlenderMCP fallback also failed: {}", be))?
+                } else {
+                    return Err(format!("Gemini video analysis failed (429 quota): {}. No BlenderMCP fallback configured.", e));
+                }
+            }
+            Err(e) => return Err(format!("Gemini video analysis failed: {}", e)),
+        };
 
         // Fast-fail: if no moments meet quality threshold, skip download entirely
         let qualified_moments = analysis.qualified_moments(0.6);

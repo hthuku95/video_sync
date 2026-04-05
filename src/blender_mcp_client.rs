@@ -505,6 +505,52 @@ impl BlenderMCPClient {
         Err(last_err)
     }
 
+    /// Analyze a video via BlenderMCPServer's `/api/analyze-video` endpoint.
+    ///
+    /// This offloads video analysis to the Python service which uses a SEPARATE Gemini API key
+    /// (`BLENDER_GEMINI_API_KEY`), keeping it fully isolated from the Rust app's quota.
+    ///
+    /// Used as a fallback when the primary Gemini client returns 429.
+    pub async fn analyze_video(
+        &self,
+        video_url: &str,
+        clips_requested: u32,
+        min_duration_sec: f64,
+        max_duration_sec: f64,
+        high_performing_factors: &[String],
+    ) -> Result<crate::clipping::gemini_video_analyzer::VideoAnalysis, String> {
+        let body = json!({
+            "video_url": video_url,
+            "clips_requested": clips_requested,
+            "min_duration": min_duration_sec,
+            "max_duration": max_duration_sec,
+            "high_performing_factors": high_performing_factors,
+        });
+        let url = format!("{}/api/analyze-video", self.base_url);
+        let resp = self
+            .client
+            .post(&url)
+            .bearer_auth(&self.api_key)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| format!("BlenderMCP analyze_video HTTP error: {e}"))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(format!("BlenderMCP analyze_video {status}: {text}"));
+        }
+
+        let val: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| format!("BlenderMCP analyze_video parse error: {e}"))?;
+
+        serde_json::from_value(val)
+            .map_err(|e| format!("BlenderMCP analyze_video deserialize error: {e}"))
+    }
+
     /// Poll job status.  Returns the full JSON status object.
     /// Retries up to 3 times on transient parse errors.
     pub async fn poll_job(&self, job_id: &str) -> Result<serde_json::Value, String> {

@@ -7,6 +7,8 @@ use tokio::sync::Semaphore;
 pub mod agent;
 pub mod db;
 pub mod gemini_client;
+pub mod nvidia_nim_client;
+pub mod llm_utils;
 pub mod claude_client;
 pub mod voyage_embeddings;
 pub mod elevenlabs_client;
@@ -58,6 +60,8 @@ pub struct AppState {
     pub gemini_client: Option<gemini_client::GeminiClient>,
     pub manual_clipping_gemini_client: Option<gemini_client::GeminiClient>,
     pub video_gemini_client: Option<gemini_client::GeminiClient>,
+    pub gemma_client: Option<gemini_client::GeminiClient>,
+    pub nvidia_nim_client: Option<nvidia_nim_client::NvidiaNimClient>,
     pub claude_client: Option<claude_client::ClaudeClient>,
     pub voyage_embeddings: Option<voyage_embeddings::VoyageEmbeddings>,
     pub pexels_client: Option<pexels_client::PexelsClient>,

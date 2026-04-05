@@ -311,7 +311,7 @@ pub fn merge_videos(input_files: &[String], output_file: &str) -> Result<String,
         .arg("-c:v")
         .arg("libx264")
         .arg("-preset")
-        .arg("medium") // medium preset: good balance between speed and quality
+        .arg("fast") // fast preset: ~2.5x faster than medium, ~5% larger file — acceptable for AI-generated videos
         .arg("-crf")
         .arg("23") // Constant Rate Factor: 23 is good quality (lower = better, 18-28 range)
         .arg("-pix_fmt")
@@ -329,8 +329,8 @@ pub fn merge_videos(input_files: &[String], output_file: &str) -> Result<String,
         .arg(output_file);
 
     tracing::info!("⏳ Re-encoding and merging (this may take 30-60 seconds)...");
-    // Use timeout version (10 minutes max for complex merges)
-    let result = execute_ffmpeg_command_with_sync_timeout(command, Some(600))?;
+    // Use timeout version (15 minutes max for complex multi-clip merges)
+    let result = execute_ffmpeg_command_with_sync_timeout(command, Some(900))?;
 
     // Validate the merged output
     tracing::info!("🔍 Validating merged output...");
@@ -422,7 +422,7 @@ pub fn merge_videos_with_transitions(
         .arg("-map").arg("[outv]")
         .arg("-map").arg("[outa]")
         .arg("-c:v").arg("libx264")
-        .arg("-preset").arg("medium")
+        .arg("-preset").arg("fast") // fast preset: ~2.5x faster than medium
         .arg("-crf").arg("23")
         .arg("-pix_fmt").arg("yuv420p")
         .arg("-c:a").arg("aac")
@@ -433,7 +433,7 @@ pub fn merge_videos_with_transitions(
 
     tracing::info!("⏳ Merging {} clips with {:.2}s crossfade transitions...", n, transition_duration);
 
-    match execute_ffmpeg_command_with_sync_timeout(command, Some(600)) {
+    match execute_ffmpeg_command_with_sync_timeout(command, Some(900)) {
         Ok(result) => {
             if std::path::Path::new(output_file).exists()
                 && std::fs::metadata(output_file).map(|m| m.len()).unwrap_or(0) > 1024
@@ -445,9 +445,15 @@ pub fn merge_videos_with_transitions(
                 merge_videos(input_files, output_file)
             }
         }
-        Err(e) => {
-            tracing::warn!("⚠️ Transition merge failed ({}), falling back to hard-cut merge", e);
-            merge_videos(input_files, output_file)
+        Err(xfade_err) => {
+            tracing::warn!("⚠️ Transition merge failed ({}), falling back to hard-cut merge", xfade_err);
+            match merge_videos(input_files, output_file) {
+                Ok(r) => Ok(r),
+                Err(hard_cut_err) => Err(format!(
+                    "Both merge strategies failed. xfade error: {}; hard-cut error: {}",
+                    xfade_err, hard_cut_err
+                )),
+            }
         }
     }
 }

@@ -7,6 +7,8 @@ use tower_http::cors::CorsLayer;
 mod agent;
 mod db;
 mod gemini_client;
+mod nvidia_nim_client;
+mod llm_utils;
 mod claude_client;
 mod voyage_embeddings;
 mod elevenlabs_client; // 🎙️ Eleven Labs TTS, Sound Effects, Music
@@ -49,6 +51,8 @@ pub struct AppState {
     pub gemini_client: Option<gemini_client::GeminiClient>, // Auto clipping pipeline only
     pub manual_clipping_gemini_client: Option<gemini_client::GeminiClient>, // Manual clipping only
     pub video_gemini_client: Option<gemini_client::GeminiClient>, // Video editing, generation, agents, Blender MCP
+    pub gemma_client: Option<gemini_client::GeminiClient>,         // Gemma 4 via Google AI Studio (text tasks, own quota)
+    pub nvidia_nim_client: Option<nvidia_nim_client::NvidiaNimClient>, // Gemma 4 via NVIDIA NIM (40 RPM, text tasks)
     pub claude_client: Option<claude_client::ClaudeClient>,
     pub voyage_embeddings: Option<voyage_embeddings::VoyageEmbeddings>,
     pub pexels_client: Option<pexels_client::PexelsClient>,
@@ -292,7 +296,25 @@ async fn main() {
         }
     };
 
-    // Initialize Qdrant client if API key is provided  
+    // Gemma 4 via Google AI Studio — text-only tasks (DMs, scoring, outreach, code gen).
+    // Uses own quota pool separate from Gemini Flash. Can reuse GEMINI_API_KEY.
+    let gemma_client = std::env::var("GEMMA_API_KEY")
+        .or_else(|_| std::env::var("GEMINI_API_KEY"))
+        .ok()
+        .map(|k| {
+            tracing::info!("Initializing Gemma 4 client (text tasks, own quota)...");
+            gemini_client::GeminiClient::new_with_model(k, "gemma-4-27b-it".to_string())
+        });
+
+    // Gemma 4 via NVIDIA NIM — 40 RPM, OpenAI-compatible, free 1K credits.
+    let nvidia_nim_client = std::env::var("NVIDIA_API_KEY")
+        .ok()
+        .map(|k| {
+            tracing::info!("Initializing NVIDIA NIM client (Gemma 4, 40 RPM)...");
+            nvidia_nim_client::NvidiaNimClient::new(k)
+        });
+
+    // Initialize Qdrant client if API key is provided
     let qdrant_client = match std::env::var("QDRANT_API_KEY").ok() {
         Some(api_key) => {
             tracing::info!("Initializing Qdrant vector database...");
@@ -494,6 +516,8 @@ async fn main() {
         gemini_client,
         manual_clipping_gemini_client,
         video_gemini_client,
+        gemma_client,
+        nvidia_nim_client,
         claude_client,
         voyage_embeddings,
         pexels_client,

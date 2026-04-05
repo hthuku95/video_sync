@@ -2,6 +2,7 @@
 // potential clients (content creators and clippers), scores them with Gemini,
 // and generates personalized DM scripts.
 
+use crate::llm_utils::generate_text_best_effort;
 use crate::middleware::admin::admin_middleware;
 use crate::middleware::auth::auth_middleware;
 use crate::models::auth::ErrorResponse;
@@ -326,7 +327,8 @@ fn extract_twitter_handle(description: &str) -> Option<String> {
     None
 }
 
-/// Use Gemini to score a prospect and generate DM scripts.
+/// Use best available LLM to score a prospect and generate DM scripts.
+/// Priority: NVIDIA NIM → Gemma 4 → Gemini Flash.
 /// Returns (score, reasoning, dm_creator, dm_clipper).
 async fn score_prospect_with_ai(
     state: &Arc<AppState>,
@@ -336,10 +338,9 @@ async fn score_prospect_with_ai(
     category: &str,
     prospect_type: &str,
 ) -> (f64, String, String, String) {
-    let gemini = match state.gemini_client.as_ref() {
-        Some(g) => g,
-        None => return (0.5, "Gemini not configured".to_string(), default_dm_creator(name), default_dm_clipper(name)),
-    };
+    if state.nvidia_nim_client.is_none() && state.gemma_client.is_none() && state.gemini_client.is_none() {
+        return (0.5, "No LLM configured".to_string(), default_dm_creator(name), default_dm_clipper(name));
+    }
 
     let prompt = format!(
         r#"You are an AI assistant helping a video clipping service find clients.
@@ -361,7 +362,12 @@ Return JSON with exactly these fields:
         name, audience_size, category, category, description, prospect_type
     );
 
-    match gemini.generate_text(&prompt).await {
+    match generate_text_best_effort(
+        state.nvidia_nim_client.as_ref(),
+        state.gemma_client.as_ref(),
+        state.gemini_client.as_ref(),
+        &prompt,
+    ).await {
         Ok(text) => {
             let cleaned = text.trim().trim_start_matches("```json").trim_start_matches("```").trim_end_matches("```").trim();
             match serde_json::from_str::<serde_json::Value>(cleaned) {
@@ -540,9 +546,9 @@ async fn generate_outreach_message(
     let existing_dm: String = row.get::<Option<String>, _>("dm_script_creator").unwrap_or_default();
     let audience = subs.or(viewers).unwrap_or(0);
 
-    let gemini = state.video_gemini_client.as_ref()
-        .or(state.gemini_client.as_ref())
-        .ok_or_else(|| (StatusCode::SERVICE_UNAVAILABLE, Json(ErrorResponse { success: false, message: "Gemini not configured".to_string() })))?;
+    if state.nvidia_nim_client.is_none() && state.gemma_client.is_none() && state.video_gemini_client.is_none() && state.gemini_client.is_none() {
+        return Err((StatusCode::SERVICE_UNAVAILABLE, Json(ErrorResponse { success: false, message: "No LLM configured".to_string() })));
+    }
 
     let audience_label = if audience >= 1_000_000 {
         format!("{:.1}M", audience as f64 / 1_000_000.0)
@@ -577,9 +583,14 @@ Tone reference: {existing_dm}"#,
         existing_dm = if existing_dm.is_empty() { "professional and friendly".to_string() } else { existing_dm.chars().take(200).collect() },
     );
 
-    let message = match gemini.generate_text(&prompt).await {
+    let message = match generate_text_best_effort(
+        state.nvidia_nim_client.as_ref(),
+        state.gemma_client.as_ref(),
+        state.video_gemini_client.as_ref().or(state.gemini_client.as_ref()),
+        &prompt,
+    ).await {
         Ok(text) => text.trim().to_string(),
-        Err(e) => return Err((StatusCode::BAD_GATEWAY, Json(ErrorResponse { success: false, message: format!("Gemini error: {}", e) }))),
+        Err(e) => return Err((StatusCode::BAD_GATEWAY, Json(ErrorResponse { success: false, message: format!("LLM error: {}", e) }))),
     };
 
     Ok(Json(json!({ "success": true, "outreach_message": message })))

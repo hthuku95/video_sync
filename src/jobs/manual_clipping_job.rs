@@ -85,7 +85,7 @@ pub async fn execute_manual_clipping_job(
 
     let analysis: VideoAnalysis = if video_platform == "youtube" {
         // YouTube: Gemini can analyze the URL directly
-        tokio::time::timeout(
+        let gemini_result = tokio::time::timeout(
             tokio::time::Duration::from_secs(240),
             gemini.analyze_video_from_url(
                 &video_url,
@@ -96,8 +96,28 @@ pub async fn execute_manual_clipping_job(
             ),
         )
         .await
-        .map_err(|_| "Gemini analysis timed out (240s)".to_string())?
-        .map_err(|e| format!("Gemini analysis failed: {}", e))?
+        .map_err(|_| "Gemini analysis timed out (240s)".to_string())?;
+
+        match gemini_result {
+            Ok(a) => a,
+            Err(e) if e.to_string().contains("429") || e.to_string().to_lowercase().contains("quota") => {
+                tracing::warn!("⚠️ Gemini 429 on manual clipping analysis, falling back to BlenderMCPServer: {}", e);
+                if let Some(blender) = app_state.blender_mcp_client.as_ref() {
+                    blender.analyze_video(
+                        &video_url,
+                        clips_requested as u32,
+                        min_dur as f64,
+                        max_dur as f64,
+                        &[],
+                    )
+                    .await
+                    .map_err(|be| format!("Gemini quota exceeded (429); BlenderMCP fallback also failed: {}", be))?
+                } else {
+                    return Err(format!("Gemini analysis failed (429 quota): {}. No BlenderMCP fallback configured.", e));
+                }
+            }
+            Err(e) => return Err(format!("Gemini analysis failed: {}", e)),
+        }
     } else {
         // Twitch: must download first, then analyze from local file
         update_status(job_id, "downloading", 15, None, &app_state.db_pool).await?;
