@@ -101,19 +101,32 @@ pub async fn execute_manual_clipping_job(
         match gemini_result {
             Ok(a) => a,
             Err(e) if e.to_string().contains("429") || e.to_string().to_lowercase().contains("quota") => {
-                tracing::warn!("⚠️ Gemini 429 on manual clipping analysis, falling back to BlenderMCPServer: {}", e);
-                if let Some(blender) = app_state.blender_mcp_client.as_ref() {
-                    blender.analyze_video(
-                        &video_url,
-                        clips_requested as u32,
-                        min_dur as f64,
-                        max_dur as f64,
-                        &[],
+                tracing::warn!("⚠️ Gemini 429 on manual clipping (YouTube URL), trying video_gemini_client: {}", e);
+                // Tier 2: video_gemini_client (VIDEO_GEMINI_API_KEY — separate quota pool)
+                let video_gemini_result = if let Some(vg) = app_state.video_gemini_client.as_ref() {
+                    tokio::time::timeout(
+                        tokio::time::Duration::from_secs(240),
+                        vg.analyze_video_from_url(&video_url, clips_requested as usize, min_dur as f64, max_dur as f64, &[]),
                     )
                     .await
-                    .map_err(|be| format!("Gemini quota exceeded (429); BlenderMCP fallback also failed: {}", be))?
+                    .ok()
+                    .and_then(|r| r.ok())
                 } else {
-                    return Err(format!("Gemini analysis failed (429 quota): {}. No BlenderMCP fallback configured.", e));
+                    None
+                };
+                if let Some(a) = video_gemini_result {
+                    tracing::info!("✅ video_gemini_client fallback succeeded for YouTube analysis");
+                    a
+                } else {
+                    // Tier 3: BlenderMCPServer (BLENDER_GEMINI_API_KEY — fully isolated quota)
+                    tracing::warn!("⚠️ video_gemini_client also failed or unavailable, falling back to BlenderMCPServer");
+                    if let Some(blender) = app_state.blender_mcp_client.as_ref() {
+                        blender.analyze_video(&video_url, clips_requested as u32, min_dur as f64, max_dur as f64, &[])
+                            .await
+                            .map_err(|be| format!("All Gemini tiers exhausted (429); BlenderMCP fallback also failed: {}", be))?
+                    } else {
+                        return Err(format!("Gemini analysis failed (429 quota): {}. No fallback configured.", e));
+                    }
                 }
             }
             Err(e) => return Err(format!("Gemini analysis failed: {}", e)),
@@ -154,9 +167,26 @@ pub async fn execute_manual_clipping_job(
         match local_analysis_result {
             Ok(a) => a,
             Err(e) if e.to_string().contains("429") || e.to_string().to_lowercase().contains("quota") => {
-                tracing::warn!("⚠️ Gemini 429 on Twitch local analysis, attempting BlenderMCP fallback via R2: {}", e);
-                // Upload the downloaded file to R2, get a presigned URL, pass to BlenderMCP
-                if let (Some(blender), Some(r2)) = (app_state.blender_mcp_client.as_ref(), app_state.r2_client.as_ref()) {
+                tracing::warn!("⚠️ Gemini 429 on Twitch local analysis, trying video_gemini_client: {}", e);
+                // Tier 2: video_gemini_client (VIDEO_GEMINI_API_KEY — separate quota pool)
+                let video_gemini_result = if let Some(vg) = app_state.video_gemini_client.as_ref() {
+                    tokio::time::timeout(
+                        tokio::time::Duration::from_secs(300),
+                        vg.analyze_video_from_local_file(&dl_path, clips_requested as usize, min_dur as f64, max_dur as f64, &[]),
+                    )
+                    .await
+                    .ok()
+                    .and_then(|r| r.ok())
+                } else {
+                    None
+                };
+                if let Some(a) = video_gemini_result {
+                    tracing::info!("✅ video_gemini_client fallback succeeded for Twitch local analysis");
+                    a
+                } else {
+                    // Tier 3: BlenderMCPServer via R2 presigned URL (BLENDER_GEMINI_API_KEY — fully isolated quota)
+                    tracing::warn!("⚠️ video_gemini_client also failed or unavailable, uploading to R2 for BlenderMCP fallback");
+                    if let (Some(blender), Some(r2)) = (app_state.blender_mcp_client.as_ref(), app_state.r2_client.as_ref()) {
                     let r2_key = format!("temp/manual_clipping/{}.mp4", job_id);
                     r2.upload(&dl_path, &r2_key)
                         .await
@@ -176,6 +206,7 @@ pub async fn execute_manual_clipping_job(
                     .map_err(|be| format!("Gemini 429 on local Twitch analysis; BlenderMCP fallback also failed: {}", be))?
                 } else {
                     return Err(format!("Gemini local analysis failed (429 quota): {}. No BlenderMCP/R2 fallback available.", e));
+                }
                 }
             }
             Err(e) => return Err(format!("Gemini local analysis failed: {}", e)),
