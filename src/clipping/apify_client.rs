@@ -698,8 +698,10 @@ async fn download_twitch_hls(video_url: &str, output_path: &str) -> Result<Video
         .filter(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit()))
         .ok_or_else(|| format!("Cannot extract numeric VOD ID from Twitch URL: {}", video_url))?;
 
-    let client_id = std::env::var("TWITCH_TV_CLIENT_ID")
-        .map_err(|_| "TWITCH_TV_CLIENT_ID not configured".to_string())?;
+    // Use Twitch's web player client ID (same one used by yt-dlp and the embedded player).
+    // TWITCH_TV_CLIENT_ID is a registered app credential — different from the web player ID.
+    // Twitch GQL requires the web player client ID for VOD playback access tokens.
+    let client_id = "kimne78kx3ncx6brgo4mv6wki5h1ko".to_string();
 
     // Step 1: Get a signed playback access token from Twitch GQL
     let http = reqwest::Client::builder()
@@ -707,18 +709,20 @@ async fn download_twitch_hls(video_url: &str, output_path: &str) -> Result<Video
         .build()
         .map_err(|e| format!("HTTP client error: {}", e))?;
 
-    // Use a full inline query instead of a persisted query (sha256 hash).
-    // Twitch rotates persisted query hashes when they update the web player;
-    // an outdated hash causes HTTP 400 "Unknown persisted query". The inline
-    // query approach is hash-independent and more resilient to Twitch updates.
-    let query_str = format!(
-        "{{ videoPlaybackAccessToken(id: \"{}\", params: {{ platform: \"web\", playerBackend: \"mediaplayer\", playerType: \"embed\" }}) {{ value signature __typename }} }}",
-        vod_id
-    );
+    // Use the named operation + variables form — Twitch requires the exact operation name
+    // "PlaybackAccessToken_Video" for VOD tokens; the older inline "PlaybackAccessToken"
+    // form returns 400 "no operation with name".
     let gql_body = json!([{
-        "operationName": "PlaybackAccessToken",
-        "query": query_str,
-        "variables": {}
+        "operationName": "PlaybackAccessToken_Video",
+        "query": "query PlaybackAccessToken_Video($id: ID!, $params: PlaybackAccessTokenParams!) { videoPlaybackAccessToken(id: $id, params: $params) { value signature __typename } }",
+        "variables": {
+            "id": vod_id,
+            "params": {
+                "platform": "web",
+                "playerBackend": "mediaplayer",
+                "playerType": "site"
+            }
+        }
     }]);
 
     let gql_resp = http
