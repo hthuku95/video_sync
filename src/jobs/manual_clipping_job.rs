@@ -138,7 +138,7 @@ pub async fn execute_manual_clipping_job(
             .await
             .map_err(|e| format!("All download strategies failed (Twitch VOD): {}", e))?;
 
-        tokio::time::timeout(
+        let local_analysis_result = tokio::time::timeout(
             tokio::time::Duration::from_secs(300),
             gemini.analyze_video_from_local_file(
                 &dl_path,
@@ -149,8 +149,37 @@ pub async fn execute_manual_clipping_job(
             ),
         )
         .await
-        .map_err(|_| "Gemini local analysis timed out (300s)".to_string())?
-        .map_err(|e| format!("Gemini local analysis failed: {}", e))?
+        .map_err(|_| "Gemini local analysis timed out (300s)".to_string())?;
+
+        match local_analysis_result {
+            Ok(a) => a,
+            Err(e) if e.to_string().contains("429") || e.to_string().to_lowercase().contains("quota") => {
+                tracing::warn!("⚠️ Gemini 429 on Twitch local analysis, attempting BlenderMCP fallback via R2: {}", e);
+                // Upload the downloaded file to R2, get a presigned URL, pass to BlenderMCP
+                if let (Some(blender), Some(r2)) = (app_state.blender_mcp_client.as_ref(), app_state.r2_client.as_ref()) {
+                    let r2_key = format!("temp/manual_clipping/{}.mp4", job_id);
+                    r2.upload(&dl_path, &r2_key)
+                        .await
+                        .map_err(|re| format!("R2 upload for BlenderMCP fallback failed: {}", re))?;
+                    let presigned_url = r2.presign_get(&r2_key, 3600)
+                        .await
+                        .map_err(|re| format!("R2 presign for BlenderMCP fallback failed: {}", re))?;
+                    tracing::info!("📤 Uploaded Twitch VOD to R2 for BlenderMCP analysis: {}", r2_key);
+                    blender.analyze_video(
+                        &presigned_url,
+                        clips_requested as u32,
+                        min_dur as f64,
+                        max_dur as f64,
+                        &[],
+                    )
+                    .await
+                    .map_err(|be| format!("Gemini 429 on local Twitch analysis; BlenderMCP fallback also failed: {}", be))?
+                } else {
+                    return Err(format!("Gemini local analysis failed (429 quota): {}. No BlenderMCP/R2 fallback available.", e));
+                }
+            }
+            Err(e) => return Err(format!("Gemini local analysis failed: {}", e)),
+        }
     };
 
     let moments: Vec<crate::clipping::gemini_video_analyzer::ViralMoment> = analysis
