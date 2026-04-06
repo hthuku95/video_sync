@@ -73,16 +73,28 @@ impl AiClipper {
 
         // Collect results
         let mut extracted_clips = Vec::new();
+        let mut first_error: Option<String> = None;
         for handle in handles {
             match handle.await {
                 Ok(Ok(clip)) => extracted_clips.push(clip),
-                Ok(Err(e)) => tracing::warn!("Clip extraction failed (skipping): {}", e),
-                Err(e) => tracing::warn!("Clip extraction task panicked (skipping): {}", e),
+                Ok(Err(e)) => {
+                    tracing::warn!("Clip extraction failed (skipping): {}", e);
+                    if first_error.is_none() {
+                        first_error = Some(e);
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Clip extraction task panicked (skipping): {}", e);
+                    if first_error.is_none() {
+                        first_error = Some(format!("task panicked: {}", e));
+                    }
+                }
             }
         }
 
         if extracted_clips.is_empty() {
-            return Err("All clip extractions failed".to_string());
+            let reason = first_error.unwrap_or_else(|| "unknown — no clips attempted".to_string());
+            return Err(format!("All clip extractions failed. First error: {}", reason));
         }
 
         tracing::info!(
