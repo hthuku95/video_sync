@@ -174,22 +174,18 @@ pub fn trim_and_convert_to_shorts(
     // ── Video filter chain ────────────────────────────────────────────────────
 
     // 1. Portrait crop + scale
-    let crop_scale = "crop=ih*9/16:ih:(iw-ih*9/16)/2:0,scale=1080:1920:flags=lanczos";
+    // fps=30: Twitch streams at 60fps — halve frame count to cut encode time 2x.
+    let crop_scale = "fps=30,crop=ih*9/16:ih:(iw-ih*9/16)/2:0,scale=1080:1920:flags=bilinear";
 
-    // 2. Colour grading — subtle enhancement (saturation, contrast, gamma lift)
-    let color = "eq=saturation=1.12:contrast=1.04:gamma=1.03";
-
-    // 3. Light sharpening
-    let sharpen = "unsharp=3:3:0.4:3:3:0.0";
-
-    // 4. Pixel format
+    // 2. Pixel format (colour grading and sharpening removed — too slow on 1 vCPU)
     let pix_fmt = "format=yuv420p";
 
     // Assemble vf chain.
     // drawtext removed: fontconfig cache-building on first run in a fresh container
     // takes 2-5 minutes and blocks all concurrent FFmpeg processes.
     // deshake removed: scans the entire source file even with input seeking.
-    let vf_parts: Vec<&str> = vec![crop_scale, color, sharpen, pix_fmt];
+    // eq/unsharp removed: each filter adds ~15-20% CPU overhead — skip on 1 vCPU.
+    let vf_parts: Vec<&str> = vec![crop_scale, pix_fmt];
     let vf = vf_parts.join(",");
 
     // ── Audio filter chain ────────────────────────────────────────────────────
@@ -208,8 +204,8 @@ pub fn trim_and_convert_to_shorts(
         .arg("-vf").arg(&vf)
         .arg("-af").arg(&af)
         .arg("-c:v").arg("libx264")
-        .arg("-preset").arg("fast")
-        .arg("-crf").arg("23")
+        .arg("-preset").arg("ultrafast")
+        .arg("-crf").arg("26")
         .arg("-c:a").arg("aac")
         .arg("-b:a").arg("128k")
         .arg("-movflags").arg("faststart")
