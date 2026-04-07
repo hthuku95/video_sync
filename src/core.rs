@@ -173,23 +173,16 @@ pub fn trim_and_convert_to_shorts(
 
     // ── Video filter chain ────────────────────────────────────────────────────
 
-    // 1. Stabilise — stronger for action/sports, lighter for everything else
-    let deshake = if ct == "gaming" || ct == "sports" {
-        "deshake=x=-1:y=-1:w=-1:h=-1:rx=24:ry=24:edge=mirror"
-    } else {
-        "deshake=x=-1:y=-1:w=-1:h=-1:rx=16:ry=16:edge=mirror"
-    };
-
-    // 2. Portrait crop + scale
+    // 1. Portrait crop + scale
     let crop_scale = "crop=ih*9/16:ih:(iw-ih*9/16)/2:0,scale=1080:1920:flags=lanczos";
 
-    // 3. Colour grading — subtle enhancement (saturation, contrast, gamma lift)
+    // 2. Colour grading — subtle enhancement (saturation, contrast, gamma lift)
     let color = "eq=saturation=1.12:contrast=1.04:gamma=1.03";
 
-    // 4. Light sharpening
+    // 3. Light sharpening
     let sharpen = "unsharp=3:3:0.4:3:3:0.0";
 
-    // 5. Title overlay — escape FFmpeg drawtext special chars, truncate to 52 chars
+    // 4. Title overlay — escape FFmpeg drawtext special chars, truncate to 52 chars
     let title_filter = if !title.is_empty() {
         let safe: String = title
             .chars()
@@ -213,11 +206,12 @@ pub fn trim_and_convert_to_shorts(
         String::new()
     };
 
-    // 6. Pixel format
+    // 5. Pixel format
     let pix_fmt = "format=yuv420p";
 
-    // Assemble vf chain
-    let mut vf_parts: Vec<&str> = vec![deshake, crop_scale, color, sharpen];
+    // Assemble vf chain (deshake removed — it scans entire source file even with
+    // input seeking, causing 10+ minute runtimes on long VODs)
+    let mut vf_parts: Vec<&str> = vec![crop_scale, color, sharpen];
     if !title_filter.is_empty() {
         vf_parts.push(&title_filter);
     }
