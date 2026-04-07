@@ -182,40 +182,14 @@ pub fn trim_and_convert_to_shorts(
     // 3. Light sharpening
     let sharpen = "unsharp=3:3:0.4:3:3:0.0";
 
-    // 4. Title overlay — escape FFmpeg drawtext special chars, truncate to 52 chars
-    let title_filter = if !title.is_empty() {
-        let safe: String = title
-            .chars()
-            .take(52)
-            .collect::<String>()
-            .replace('\\', "\\\\")
-            .replace('\'', "\u{2019}")   // replace straight apostrophe with curly
-            .replace(':', "\\:")
-            .replace('%', "\\%");
-        format!(
-            "drawtext=text='{safe}'\
-             :fontsize=46\
-             :fontcolor=white\
-             :x=(w-text_w)/2\
-             :y=h-180\
-             :box=1\
-             :boxcolor=black@0.55\
-             :boxborderw=14"
-        )
-    } else {
-        String::new()
-    };
-
-    // 5. Pixel format
+    // 4. Pixel format
     let pix_fmt = "format=yuv420p";
 
-    // Assemble vf chain (deshake removed — it scans entire source file even with
-    // input seeking, causing 10+ minute runtimes on long VODs)
-    let mut vf_parts: Vec<&str> = vec![crop_scale, color, sharpen];
-    if !title_filter.is_empty() {
-        vf_parts.push(&title_filter);
-    }
-    vf_parts.push(pix_fmt);
+    // Assemble vf chain.
+    // drawtext removed: fontconfig cache-building on first run in a fresh container
+    // takes 2-5 minutes and blocks all concurrent FFmpeg processes.
+    // deshake removed: scans the entire source file even with input seeking.
+    let vf_parts: Vec<&str> = vec![crop_scale, color, sharpen, pix_fmt];
     let vf = vf_parts.join(",");
 
     // ── Audio filter chain ────────────────────────────────────────────────────
