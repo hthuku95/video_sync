@@ -176,10 +176,12 @@ fn extract_single_clip(
     let segment_path = format!("{}.segment.mp4", clip_path);
     let segment_duration = moment.end_sec - moment.start_sec + 2.0; // +2s buffer for keyframe alignment
 
-    // Step 1: copy-extract segment (10–60 seconds, no re-encode)
+    // Step 1: copy-extract segment (10–60 seconds, no re-encode).
+    // -loglevel error suppresses frame-by-frame progress to avoid large stderr buffers.
     let seg_status = std::process::Command::new("ffmpeg")
         .args([
             "-y",
+            "-loglevel", "error",
             "-ss", &moment.start_sec.to_string(),
             "-i", video_path,
             "-t", &segment_duration.to_string(),
@@ -187,13 +189,16 @@ fn extract_single_clip(
             "-avoid_negative_ts", "make_zero",
             &segment_path,
         ])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
         .output()
         .map_err(|e| format!("Clip {} segment extraction spawn failed: {}", clip_number, e))?;
 
     if !seg_status.status.success() {
         let stderr = String::from_utf8_lossy(&seg_status.stderr);
-        return Err(format!("Clip {} segment extraction failed: {}", clip_number, &stderr[..stderr.len().min(300)]));
+        return Err(format!("Clip {} segment extraction failed: {}", clip_number, &stderr[..stderr.len().min(400)]));
     }
+    tracing::info!("✅ Clip {} segment extracted: {}", clip_number, segment_path);
 
     // Step 2: apply the full filter chain to the small segment (starts at t=0)
     let result = crate::core::trim_and_convert_to_shorts(

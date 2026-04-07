@@ -38,32 +38,62 @@ pub fn execute_ffmpeg_command_with_sync_timeout(
     command: Command,
     timeout_secs: Option<u64>,
 ) -> Result<String, String> {
-    // Convert std::process::Command to tokio::process::Command
+    let timeout = std::time::Duration::from_secs(timeout_secs.unwrap_or(300));
+
+    // Extract program and args from the std::process::Command
     let program = command.get_program().to_string_lossy().to_string();
     let args: Vec<String> = command
         .get_args()
-        .map(|arg| arg.to_string_lossy().to_string())
+        .map(|a| a.to_string_lossy().to_string())
         .collect();
 
-    let mut tokio_command = TokioCommand::new(program);
-    tokio_command.args(&args);
+    // Spawn with stderr piped so we can capture errors on failure.
+    // Using std::process directly avoids the block_in_place-inside-spawn_blocking
+    // pitfall: block_in_place inside spawn_blocking stalls the Tokio runtime,
+    // preventing the async timeout future from ever being polled, so the process
+    // runs forever.  A polling loop with try_wait() works in any context.
+    let mut child = std::process::Command::new(&program)
+        .args(&args)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to spawn FFmpeg ({}): {}", program, e))?;
 
-    // If we are already inside a Tokio runtime (e.g. called from an async worker),
-    // creating a second Runtime and calling block_on would panic with
-    // "Cannot start a runtime from within a runtime".
-    // block_in_place tells the scheduler to move other tasks off this thread so
-    // we can safely call handle.block_on() here.
-    match tokio::runtime::Handle::try_current() {
-        Ok(handle) => {
-            tokio::task::block_in_place(|| {
-                handle.block_on(execute_ffmpeg_command_with_timeout(tokio_command, timeout_secs))
-            })
-        }
-        Err(_) => {
-            // Not inside a runtime — create a temporary one.
-            let runtime = tokio::runtime::Runtime::new()
-                .map_err(|e| format!("Failed to create Tokio runtime: {}", e))?;
-            runtime.block_on(execute_ffmpeg_command_with_timeout(tokio_command, timeout_secs))
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                if status.success() {
+                    return Ok(String::new());
+                }
+                // Read stderr for the error message
+                let mut stderr_buf = Vec::new();
+                if let Some(mut stderr) = child.stderr.take() {
+                    use std::io::Read;
+                    let _ = stderr.read_to_end(&mut stderr_buf);
+                }
+                let stderr = String::from_utf8_lossy(&stderr_buf);
+                return Err(format!("FFmpeg error (exit {}): {}",
+                    status.code().unwrap_or(-1),
+                    &stderr[..stderr.len().min(600)]));
+            }
+            Ok(None) => {
+                // Still running — check deadline
+                if std::time::Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(format!(
+                        "FFmpeg operation timed out after {} seconds. \
+                         Process has been terminated.",
+                        timeout.as_secs()
+                    ));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(200));
+            }
+            Err(e) => {
+                let _ = child.kill();
+                return Err(format!("FFmpeg wait error: {}", e));
+            }
         }
     }
 }

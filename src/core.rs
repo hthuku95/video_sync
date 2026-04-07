@@ -230,6 +230,7 @@ pub fn trim_and_convert_to_shorts(
     // ── Build FFmpeg command ──────────────────────────────────────────────────
     let mut command = Command::new("ffmpeg");
     command
+        .arg("-loglevel").arg("error")   // suppress frame-by-frame progress to avoid huge stderr buffers
         .arg("-ss").arg(start_seconds.to_string())
         .arg("-i").arg(input_file)
         .arg("-t").arg(duration.to_string())
