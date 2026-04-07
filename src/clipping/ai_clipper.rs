@@ -108,24 +108,30 @@ impl AiClipper {
         // Gemini inspects 3 frames per clip and selects specific FFmpeg tools to apply
         // (stabilize, vibrance, sharpen, denoise, etc.) based on actual clip quality.
         // Best-effort — if enhancement fails the original clip is preserved unchanged.
+        // 120s total budget for enhancement across all clips.
         if self.app_state.gemini_client.is_some() {
             tracing::info!("🎬 Phase C+: running AI clip enhancement for job {}", job_id);
             let enhancer = ClipEnhancer::new(self.app_state.clone());
-            enhancer
-                .enhance_clips_with_ai(&mut extracted_clips, content_type)
-                .await;
+            match tokio::time::timeout(
+                tokio::time::Duration::from_secs(120),
+                enhancer.enhance_clips_with_ai(&mut extracted_clips, content_type),
+            ).await {
+                Ok(_) => {}
+                Err(_) => tracing::warn!("Phase C+ timed out after 120s — skipping enhancement"),
+            }
         }
 
         // Phase C++: AI thumbnail selection — replace ffmpeg frame with Gemini-selected best frame.
         // Falls back to ffmpeg thumbnail if Gemini is unavailable or rate-limited.
+        // 60s per thumbnail to avoid hanging on quota-exhausted Gemini calls.
         if self.app_state.gemini_client.is_some() {
             let thumbnail_gen = ThumbnailGenerator::new(self.app_state.clone());
             for clip in &mut extracted_clips {
-                match thumbnail_gen
-                    .generate_thumbnail(&clip.local_clip_path, &clip.ai_title, &clip.viral_factors)
-                    .await
-                {
-                    Ok(ai_thumb) => {
+                match tokio::time::timeout(
+                    tokio::time::Duration::from_secs(60),
+                    thumbnail_gen.generate_thumbnail(&clip.local_clip_path, &clip.ai_title, &clip.viral_factors),
+                ).await {
+                    Ok(Ok(ai_thumb)) => {
                         tracing::info!(
                             "🎨 AI thumbnail for clip {}: {}",
                             clip.clip_number,
@@ -134,11 +140,17 @@ impl AiClipper {
                         clip.custom_thumbnail_path = Some(ai_thumb);
                         clip.thumbnail_generation_method = Some("ai_gemini".to_string());
                     }
-                    Err(e) => {
+                    Ok(Err(e)) => {
                         tracing::warn!(
                             "AI thumbnail for clip {} failed (keeping ffmpeg fallback): {}",
                             clip.clip_number,
                             e
+                        );
+                    }
+                    Err(_) => {
+                        tracing::warn!(
+                            "AI thumbnail for clip {} timed out after 60s (keeping ffmpeg fallback)",
+                            clip.clip_number
                         );
                     }
                 }
