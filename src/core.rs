@@ -193,13 +193,10 @@ pub fn trim_and_convert_to_shorts(
     let vf = vf_parts.join(",");
 
     // ── Audio filter chain ────────────────────────────────────────────────────
-    // Tutorial / vlog / educational / news → denoise speech first
-    let is_speech = matches!(ct.as_str(), "tutorial" | "vlog" | "educational" | "news");
-    let af = if is_speech {
-        "afftdn=nf=-25,loudnorm=I=-14:LRA=11:TP=-1".to_string()
-    } else {
-        "loudnorm=I=-14:LRA=11:TP=-1".to_string()
-    };
+    // dynaudnorm: single-pass loudness normalization — much faster than loudnorm
+    // with I/LRA/TP params (which forces two-pass analysis and can run 10+ min
+    // on shared CPU even for a 60s segment).
+    let af = "dynaudnorm=f=75:g=25";
 
     // ── Build FFmpeg command ──────────────────────────────────────────────────
     let mut command = Command::new("ffmpeg");
@@ -219,7 +216,7 @@ pub fn trim_and_convert_to_shorts(
         .arg("-y")
         .arg(output_file);
 
-    execute_ffmpeg_command_with_sync_timeout(command, Some(600))
+    execute_ffmpeg_command_with_sync_timeout(command, Some(300))
 }
 
 pub fn extract_video_segment(
