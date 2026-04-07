@@ -167,17 +167,47 @@ fn extract_single_clip(
         clip_path
     );
 
-    // Trim + Shorts conversion + content-aware enhancements (single FFmpeg pass):
-    //   deshake → 9:16 crop → scale 1080×1920 → colour grade → sharpen
-    //   → title overlay → yuv420p | audio: [denoise →] loudnorm −14 LUFS
-    crate::core::trim_and_convert_to_shorts(
-        video_path,
+    // Two-step extraction to handle large source files efficiently:
+    //   Step 1: extract the raw segment with -c copy (fast, minimal I/O, no filter overhead)
+    //   Step 2: apply the full filter chain to the small segment file
+    //
+    // This avoids the "scan entire 700 MB file to find moov atom" problem that
+    // causes 10-minute FFmpeg timeouts on Render's slow ephemeral disk.
+    let segment_path = format!("{}.segment.mp4", clip_path);
+    let segment_duration = moment.end_sec - moment.start_sec + 2.0; // +2s buffer for keyframe alignment
+
+    // Step 1: copy-extract segment (10–60 seconds, no re-encode)
+    let seg_status = std::process::Command::new("ffmpeg")
+        .args([
+            "-y",
+            "-ss", &moment.start_sec.to_string(),
+            "-i", video_path,
+            "-t", &segment_duration.to_string(),
+            "-c", "copy",
+            "-avoid_negative_ts", "make_zero",
+            &segment_path,
+        ])
+        .output()
+        .map_err(|e| format!("Clip {} segment extraction spawn failed: {}", clip_number, e))?;
+
+    if !seg_status.status.success() {
+        let stderr = String::from_utf8_lossy(&seg_status.stderr);
+        return Err(format!("Clip {} segment extraction failed: {}", clip_number, &stderr[..stderr.len().min(300)]));
+    }
+
+    // Step 2: apply the full filter chain to the small segment (starts at t=0)
+    let result = crate::core::trim_and_convert_to_shorts(
+        &segment_path,
         clip_path,
-        moment.start_sec,
-        moment.end_sec,
+        0.0,
+        moment.end_sec - moment.start_sec,
         &moment.title,
         content_type,
-    ).map_err(|e| format!("Clip {} shorts-enhance failed: {}", clip_number, e))?;
+    ).map_err(|e| format!("Clip {} shorts-enhance failed: {}", clip_number, e));
+
+    // Always clean up the temp segment, even on failure
+    let _ = std::fs::remove_file(&segment_path);
+    result?;
 
     // Extract thumbnail at the Gemini-specified timestamp.
     // Retry up to 3 times with a brief sleep — the trimmed file may not be
