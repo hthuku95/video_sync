@@ -14,6 +14,7 @@ pub mod voyage_embeddings;
 pub mod elevenlabs_client;
 pub mod blender_mcp_client;
 pub mod r2_client;
+pub mod phantombuster_client;
 pub mod youtube_client;
 pub mod youtube_analytics_client;
 pub mod twitch_client;
@@ -77,4 +78,5 @@ pub struct AppState {
     pub token_manager: Option<Arc<token_manager::TokenManager>>,
     pub twitch_client: Option<Arc<twitch_client::TwitchClient>>,
     pub download_semaphore: Arc<Semaphore>,
+    pub phantombuster_client: Option<phantombuster_client::PhantomBusterClient>,
 }

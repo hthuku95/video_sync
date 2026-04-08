@@ -24,6 +24,10 @@ pub fn prospect_routes() -> Router {
     Router::new()
         .route("/admin/prospect-finder", get(prospect_finder_page))
         .route("/api/admin/prospects/search", post(search_prospects))
+        .route("/api/admin/prospects/linkedin/agents", get(linkedin_list_agents))
+        .route("/api/admin/prospects/linkedin/launch", post(linkedin_launch_search))
+        .route("/api/admin/prospects/linkedin/jobs", get(linkedin_list_jobs))
+        .route("/api/admin/prospects/linkedin/jobs/:job_id/results", get(linkedin_fetch_results))
         .route("/api/admin/prospects", get(list_prospects))
         .route("/api/admin/prospects/:id", patch(update_prospect))
         .route("/api/admin/prospects/:id/dm-script", post(regenerate_dm_script))
@@ -1079,3 +1083,168 @@ function copyEl(id) {
 </body>
 </html>
 "###;
+
+// ─── LinkedIn / PhantomBuster handlers ────────────────────────────────────────
+
+#[derive(Debug, serde::Deserialize)]
+struct LinkedInLaunchRequest {
+    agent_id:       String,
+    search_url:     String,
+    session_cookie: String,
+    max_profiles:   Option<u32>,
+}
+
+/// GET /api/admin/prospects/linkedin/agents
+/// Returns PhantomBuster agents visible to this account.
+async fn linkedin_list_agents(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    let Some(pb) = state.phantombuster_client.as_ref() else {
+        return Json(json!({"success": false, "error": "PhantomBuster not configured (PHANTOMBUSTER_API_KEY missing)"}));
+    };
+    match pb.list_agents().await {
+        Ok(agents) => Json(json!({"success": true, "agents": agents})),
+        Err(e)     => Json(json!({"success": false, "error": e})),
+    }
+}
+
+/// POST /api/admin/prospects/linkedin/launch
+/// Launch a Sales Navigator search export phantom.
+async fn linkedin_launch_search(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(req): Json<LinkedInLaunchRequest>,
+) -> Json<serde_json::Value> {
+    let Some(pb) = state.phantombuster_client.as_ref() else {
+        return Json(json!({"success": false, "error": "PhantomBuster not configured"}));
+    };
+
+    let max = req.max_profiles.unwrap_or(100);
+    match pb.launch_agent(&req.agent_id, &req.search_url, &req.session_cookie, max).await {
+        Err(e) => return Json(json!({"success": false, "error": e})),
+        Ok(container_id) => {
+            // Record the job in DB
+            let job_id = match sqlx::query_scalar::<_, uuid::Uuid>(
+                "INSERT INTO phantombuster_jobs (agent_id, search_url, status, launched_at)
+                 VALUES ($1, $2, 'running', NOW()) RETURNING id"
+            )
+            .bind(&req.agent_id)
+            .bind(&req.search_url)
+            .fetch_one(&state.db_pool)
+            .await {
+                Ok(id) => id,
+                Err(e) => return Json(json!({"success": false, "error": format!("DB error: {}", e)})),
+            };
+
+            Json(json!({
+                "success": true,
+                "job_id": job_id.to_string(),
+                "container_id": container_id,
+                "message": format!("Phantom launched. Poll /api/admin/prospects/linkedin/jobs/{}/results to fetch leads when complete.", job_id)
+            }))
+        }
+    }
+}
+
+/// GET /api/admin/prospects/linkedin/jobs
+async fn linkedin_list_jobs(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    let rows = sqlx::query(
+        "SELECT id, agent_id, search_url, status, leads_found, error, launched_at, completed_at
+         FROM phantombuster_jobs ORDER BY created_at DESC LIMIT 50"
+    )
+    .fetch_all(&state.db_pool)
+    .await
+    .unwrap_or_default();
+
+    let jobs: Vec<serde_json::Value> = rows.iter().map(|r| json!({
+        "id":           r.try_get::<uuid::Uuid,_>("id").map(|u| u.to_string()).unwrap_or_default(),
+        "agent_id":     r.try_get::<String,_>("agent_id").unwrap_or_default(),
+        "search_url":   r.try_get::<Option<String>,_>("search_url").unwrap_or_default(),
+        "status":       r.try_get::<String,_>("status").unwrap_or_default(),
+        "leads_found":  r.try_get::<Option<i32>,_>("leads_found").unwrap_or_default(),
+        "error":        r.try_get::<Option<String>,_>("error").unwrap_or_default(),
+        "launched_at":  r.try_get::<Option<chrono::DateTime<chrono::Utc>>,_>("launched_at").ok().flatten().map(|t| t.to_rfc3339()),
+        "completed_at": r.try_get::<Option<chrono::DateTime<chrono::Utc>>,_>("completed_at").ok().flatten().map(|t| t.to_rfc3339()),
+    })).collect();
+
+    Json(json!({"success": true, "jobs": jobs}))
+}
+
+/// GET /api/admin/prospects/linkedin/jobs/:job_id/results
+/// Fetches output from PhantomBuster and imports leads into prospects table.
+async fn linkedin_fetch_results(
+    Extension(state): Extension<Arc<AppState>>,
+    axum::extract::Path(job_id): axum::extract::Path<uuid::Uuid>,
+) -> Json<serde_json::Value> {
+    let Some(pb) = state.phantombuster_client.as_ref() else {
+        return Json(json!({"success": false, "error": "PhantomBuster not configured"}));
+    };
+
+    // Get agent_id from DB
+    let agent_id: String = match sqlx::query_scalar(
+        "SELECT agent_id FROM phantombuster_jobs WHERE id = $1"
+    )
+    .bind(job_id)
+    .fetch_optional(&state.db_pool)
+    .await {
+        Ok(Some(id)) => id,
+        _ => return Json(json!({"success": false, "error": "Job not found"})),
+    };
+
+    // Fetch output
+    let rows = match pb.fetch_output(&agent_id).await {
+        Ok(r) => r,
+        Err(e) => return Json(json!({"success": false, "error": e})),
+    };
+
+    let leads = crate::phantombuster_client::PhantomBusterClient::parse_leads(rows);
+    let count = leads.len();
+
+    // Upsert into prospects table
+    let mut imported = 0usize;
+    for lead in &leads {
+        let linkedin_id = lead.linkedin_url.clone()
+            .unwrap_or_else(|| format!("li_{}", lead.full_name.to_lowercase().replace(' ', "_")));
+
+        let result = sqlx::query(
+            "INSERT INTO prospects
+               (platform, channel_id, display_name, platform_url, prospect_type,
+                linkedin_url, job_title, company_name, company_size, seniority_level, email, contact_status)
+             VALUES ('linkedin', $1, $2, $3, 'linkedin_lead', $4, $5, $6, $7, $8, $9, 'new')
+             ON CONFLICT (platform, channel_id) DO UPDATE
+               SET job_title = EXCLUDED.job_title,
+                   company_name = EXCLUDED.company_name,
+                   updated_at = NOW()"
+        )
+        .bind(&linkedin_id)
+        .bind(&lead.full_name)
+        .bind(lead.linkedin_url.as_deref().unwrap_or(""))
+        .bind(&lead.linkedin_url)
+        .bind(&lead.job_title)
+        .bind(&lead.company_name)
+        .bind(&lead.company_size)
+        .bind(&lead.seniority)
+        .bind(&lead.email)
+        .execute(&state.db_pool)
+        .await;
+
+        if result.is_ok() { imported += 1; }
+    }
+
+    // Update job record
+    let _ = sqlx::query(
+        "UPDATE phantombuster_jobs SET status = 'completed', leads_found = $1, completed_at = NOW() WHERE id = $2"
+    )
+    .bind(imported as i32)
+    .bind(job_id)
+    .execute(&state.db_pool)
+    .await;
+
+    Json(json!({
+        "success": true,
+        "total_fetched": count,
+        "imported_to_prospects": imported,
+        "message": format!("{} LinkedIn leads imported. View them at /admin/prospect-finder", imported)
+    }))
+}

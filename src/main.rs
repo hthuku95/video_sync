@@ -14,6 +14,7 @@ mod voyage_embeddings;
 mod elevenlabs_client; // 🎙️ Eleven Labs TTS, Sound Effects, Music
 mod blender_mcp_client; // 🎨 BlenderMCPServer — 3D rendering + Manim
 mod r2_client;          // ☁️ Cloudflare R2 object storage
+mod phantombuster_client; // 🎯 PhantomBuster — LinkedIn Sales Navigator scraping
 mod youtube_client; // 📺 YouTube Data API v3 for video uploads
 mod youtube_analytics_client; // 📊 YouTube Analytics API for metrics and insights
 mod twitch_client; // 📺 Twitch Helix API client
@@ -68,6 +69,7 @@ pub struct AppState {
     pub token_manager: Option<Arc<token_manager::TokenManager>>, // 🔧 Centralized token refresh
     pub twitch_client: Option<Arc<twitch_client::TwitchClient>>, // 📺 Twitch Helix API
     pub download_semaphore: Arc<Semaphore>, // 🔒 Limits concurrent downloads to 2
+    pub phantombuster_client: Option<phantombuster_client::PhantomBusterClient>, // 🎯 LinkedIn scraping
 }
 
 /// Validate Apify API token on startup
@@ -532,6 +534,12 @@ async fn main() {
         workflow_checkpointer,
         token_manager,
         twitch_client: twitch_client_opt,
+        phantombuster_client: std::env::var("PHANTOMBUSTER_API_KEY").ok()
+            .filter(|k| !k.is_empty())
+            .map(|k| {
+                tracing::info!("🎯 PhantomBuster client initialized");
+                phantombuster_client::PhantomBusterClient::new(k)
+            }),
         download_semaphore: Arc::new(Semaphore::new(
             std::env::var("DOWNLOAD_SEMAPHORE_PERMITS")
                 .ok()
