@@ -26,6 +26,7 @@ pub fn prospect_routes() -> Router {
         .route("/api/admin/prospects/search", post(search_prospects))
         .route("/api/admin/prospects/linkedin/agents", get(linkedin_list_agents))
         .route("/api/admin/prospects/linkedin/launch", post(linkedin_launch_search))
+        .route("/api/admin/prospects/linkedin/search", post(linkedin_smart_search))
         .route("/api/admin/prospects/linkedin/jobs", get(linkedin_list_jobs))
         .route("/api/admin/prospects/linkedin/jobs/:job_id/results", get(linkedin_fetch_results))
         .route("/api/admin/prospects", get(list_prospects))
@@ -1246,5 +1247,107 @@ async fn linkedin_fetch_results(
         "total_fetched": count,
         "imported_to_prospects": imported,
         "message": format!("{} LinkedIn leads imported. View them at /admin/prospect-finder", imported)
+    }))
+}
+
+// ─── Smart search: build URL from filters + auto-launch ───────────────────────
+
+#[derive(Debug, serde::Deserialize)]
+struct SmartSearchRequest {
+    /// e.g. ["YouTuber", "Podcast Host", "Content Creator", "Marketing Manager"]
+    job_titles:    Option<Vec<String>>,
+    /// e.g. ["Online Media", "E-Learning", "Marketing and Advertising"]
+    industries:    Option<Vec<String>>,
+    /// e.g. ["1-10", "11-50"] or LinkedIn codes ["A", "B"]
+    company_sizes: Option<Vec<String>>,
+    /// e.g. ["United States", "United Kingdom"]
+    locations:     Option<Vec<String>>,
+    /// e.g. ["OWNER", "CXO", "VP", "DIRECTOR", "MANAGER"]
+    seniority:     Option<Vec<String>>,
+    /// Max profiles to scrape (default 100)
+    max_profiles:  Option<u32>,
+}
+
+/// POST /api/admin/prospects/linkedin/search
+/// Builds a Sales Navigator search URL from filters and immediately launches
+/// a PhantomBuster export. No manual URL construction needed.
+///
+/// Example body:
+/// {
+///   "job_titles": ["YouTuber", "Content Creator", "Podcast Host"],
+///   "company_sizes": ["1-10", "11-50"],
+///   "locations": ["United States", "United Kingdom"],
+///   "seniority": ["OWNER", "CXO", "DIRECTOR"],
+///   "max_profiles": 150
+/// }
+async fn linkedin_smart_search(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(req): Json<SmartSearchRequest>,
+) -> Json<serde_json::Value> {
+    let Some(pb) = state.phantombuster_client.as_ref() else {
+        return Json(json!({"success": false, "error": "PhantomBuster not configured (PHANTOMBUSTER_API_KEY missing)"}));
+    };
+
+    // Read session cookie from env
+    let session_cookie = match std::env::var("LINKEDIN_SESSION_COOKIE") {
+        Ok(c) if !c.is_empty() => c,
+        _ => return Json(json!({"success": false, "error": "LINKEDIN_SESSION_COOKIE not set in environment"})),
+    };
+
+    // Auto-discover the Sales Navigator agent
+    let agent = match pb.find_sales_nav_agent().await {
+        Ok(Some(a)) => a,
+        Ok(None)    => return Json(json!({"success": false, "error": "No Sales Navigator phantom found in your PhantomBuster account. Add 'LinkedIn Sales Navigator List Export' from the Phantom Store first."})),
+        Err(e)      => return Json(json!({"success": false, "error": format!("Failed to list agents: {}", e)})),
+    };
+
+    // Build the search URL from filters
+    let empty = vec![];
+    let search_url = crate::phantombuster_client::PhantomBusterClient::build_search_url(
+        req.job_titles.as_deref().unwrap_or(&empty),
+        req.industries.as_deref().unwrap_or(&empty),
+        req.company_sizes.as_deref().unwrap_or(&empty),
+        req.locations.as_deref().unwrap_or(&empty),
+        req.seniority.as_deref().unwrap_or(&empty),
+    );
+
+    tracing::info!("LinkedIn smart search URL: {}", search_url);
+
+    let max = req.max_profiles.unwrap_or(100);
+
+    // Launch the phantom
+    let container_id = match pb.launch_agent(&agent.id, &search_url, &session_cookie, max).await {
+        Ok(id)  => id,
+        Err(e)  => return Json(json!({"success": false, "error": e})),
+    };
+
+    // Record in DB
+    let job_id = match sqlx::query_scalar::<_, uuid::Uuid>(
+        "INSERT INTO phantombuster_jobs (agent_id, agent_name, search_url, status, launched_at)
+         VALUES ($1, $2, $3, 'running', NOW()) RETURNING id"
+    )
+    .bind(&agent.id)
+    .bind(&agent.name)
+    .bind(&search_url)
+    .fetch_one(&state.db_pool)
+    .await {
+        Ok(id) => id,
+        Err(e) => return Json(json!({"success": false, "error": format!("DB insert failed: {}", e)})),
+    };
+
+    Json(json!({
+        "success":      true,
+        "job_id":       job_id.to_string(),
+        "container_id": container_id,
+        "agent_name":   agent.name,
+        "search_url":   search_url,
+        "max_profiles": max,
+        "message":      format!(
+            "PhantomBuster launched with {} filters. Poll GET /api/admin/prospects/linkedin/jobs/{}/results in ~5 minutes to import leads.",
+            req.job_titles.as_ref().map(|t| t.len()).unwrap_or(0) +
+            req.industries.as_ref().map(|t| t.len()).unwrap_or(0) +
+            req.locations.as_ref().map(|t| t.len()).unwrap_or(0),
+            job_id
+        )
     }))
 }

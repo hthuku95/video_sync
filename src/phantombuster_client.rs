@@ -165,6 +165,87 @@ impl PhantomBusterClient {
         Ok(leads)
     }
 
+    /// Build a Sales Navigator people-search URL from filter params.
+    ///
+    /// Supported filters:
+    ///   - job_titles   : e.g. ["YouTuber", "Podcast Host", "Content Creator"]
+    ///   - industries   : e.g. ["Online Media", "E-Learning", "Marketing and Advertising"]
+    ///   - company_sizes: e.g. ["A", "B"] where A=1-10, B=11-50, C=51-200, D=201-500
+    ///   - locations    : LinkedIn geo IDs or plain text names (text-only, no geo ID lookup)
+    ///   - seniority    : e.g. ["OWNER", "PARTNER", "CXO", "VP", "DIRECTOR", "MANAGER"]
+    pub fn build_search_url(
+        job_titles:    &[String],
+        industries:    &[String],
+        company_sizes: &[String],
+        locations:     &[String],
+        seniority:     &[String],
+    ) -> String {
+        let mut filters: Vec<String> = vec![];
+
+        if !job_titles.is_empty() {
+            let vals: Vec<String> = job_titles.iter()
+                .map(|t| format!("(text:{},selectionType:INCLUDED)", Self::encode_lurn(t)))
+                .collect();
+            filters.push(format!("(type:CURRENT_TITLE,values:List({}))", vals.join(",")));
+        }
+
+        if !industries.is_empty() {
+            let vals: Vec<String> = industries.iter()
+                .map(|i| format!("(text:{},selectionType:INCLUDED)", Self::encode_lurn(i)))
+                .collect();
+            filters.push(format!("(type:INDUSTRY,values:List({}))", vals.join(",")));
+        }
+
+        if !company_sizes.is_empty() {
+            // Map human-readable sizes to LinkedIn codes
+            let vals: Vec<String> = company_sizes.iter().map(|s| {
+                let upper = s.to_uppercase();
+                let code = match upper.as_str() {
+                    "1-10"    | "A" => "A",
+                    "11-50"   | "B" => "B",
+                    "51-200"  | "C" => "C",
+                    "201-500" | "D" => "D",
+                    "501-1000"| "E" => "E",
+                    other           => other,
+                };
+                format!("(id:{},selectionType:INCLUDED)", code)
+            }).collect();
+            filters.push(format!("(type:COMPANY_HEADCOUNT,values:List({}))", vals.join(",")));
+        }
+
+        if !locations.is_empty() {
+            let vals: Vec<String> = locations.iter()
+                .map(|l| format!("(text:{},selectionType:INCLUDED)", Self::encode_lurn(l)))
+                .collect();
+            filters.push(format!("(type:GEOGRAPHY,values:List({}))", vals.join(",")));
+        }
+
+        if !seniority.is_empty() {
+            let vals: Vec<String> = seniority.iter()
+                .map(|s| format!("(id:{},selectionType:INCLUDED)", s.to_uppercase()))
+                .collect();
+            filters.push(format!("(type:SENIORITY_LEVEL,values:List({}))", vals.join(",")));
+        }
+
+        if filters.is_empty() {
+            return "https://www.linkedin.com/sales/search/people".to_string();
+        }
+
+        format!(
+            "https://www.linkedin.com/sales/search/people?query=(filters:List({}))",
+            filters.join(",")
+        )
+    }
+
+    fn encode_lurn(s: &str) -> String {
+        // Minimal encoding: spaces → %20, special chars that break the filter syntax
+        s.replace(' ', "%20")
+            .replace('(', "%28")
+            .replace(')', "%29")
+            .replace(',', "%2C")
+            .replace(':', "%3A")
+    }
+
     /// Parse raw PhantomBuster output rows into LinkedInLead structs
     pub fn parse_leads(rows: Vec<serde_json::Value>) -> Vec<LinkedInLead> {
         rows.into_iter().filter_map(|row| {
