@@ -70,17 +70,36 @@ impl PhantomBusterClient {
         Ok(agents)
     }
 
-    /// Find the Sales Navigator Search Export agent ID
+    /// Find the best Sales Navigator agent for search-URL-based scraping.
+    /// Prefers "Search Export" over "List Export".
     pub async fn find_sales_nav_agent(&self) -> Result<Option<PbAgent>, String> {
         let agents = self.list_agents().await?;
+        // Prefer Search Export (accepts salesNavigatorUrl)
+        let search_export = agents.iter().find(|a| {
+            let n = a.name.to_lowercase();
+            n.contains("sales navigator") && n.contains("search")
+        }).cloned();
+        if search_export.is_some() { return Ok(search_export); }
+        // Fall back to any Sales Nav agent
+        let any = agents.into_iter().find(|a| {
+            let n = a.name.to_lowercase();
+            n.contains("sales navigator") || n.contains("salesnav")
+        });
+        Ok(any)
+    }
+
+    /// Find a Sales Navigator List Export agent (uses spreadsheetUrl / saved list).
+    pub async fn find_list_export_agent(&self) -> Result<Option<PbAgent>, String> {
+        let agents = self.list_agents().await?;
         let found = agents.into_iter().find(|a| {
-            let name = a.name.to_lowercase();
-            name.contains("sales navigator") || name.contains("salesnav") || name.contains("sales nav")
+            let n = a.name.to_lowercase();
+            n.contains("list export") || (n.contains("sales navigator") && n.contains("list"))
         });
         Ok(found)
     }
 
-    /// Launch an agent with a Sales Navigator search URL
+    /// Launch a Sales Navigator **Search Export** phantom with a search URL.
+    /// The phantom argument key is `salesNavigatorUrl`.
     pub async fn launch_agent(
         &self,
         agent_id: &str,
@@ -92,6 +111,49 @@ impl PhantomBusterClient {
             "sessionCookie": session_cookie,
             "salesNavigatorUrl": search_url,
             "numberOfProfiles": max_profiles,
+            "csvName": format!("leads_{}", chrono::Utc::now().timestamp())
+        });
+
+        let body = serde_json::json!({
+            "id": agent_id,
+            "argument": argument.to_string()
+        });
+
+        let resp = self.http
+            .post(format!("{}/agents/launch", PB_BASE))
+            .header("X-Phantombuster-Key", &self.api_key)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| format!("Launch failed: {}", e))?;
+
+        let result: serde_json::Value = resp.json().await
+            .map_err(|e| format!("Failed to parse launch response: {}", e))?;
+
+        if result.get("status").and_then(|s| s.as_str()) == Some("error") {
+            return Err(format!("PhantomBuster launch error: {}", result.get("error").and_then(|e| e.as_str()).unwrap_or("unknown")));
+        }
+
+        let container_id = result.get("containerId")
+            .and_then(|c| c.as_str())
+            .unwrap_or(agent_id)
+            .to_string();
+        Ok(container_id)
+    }
+
+    /// Launch a Sales Navigator **List Export** phantom with a saved list URL.
+    /// The phantom argument key is `spreadsheetUrl`.
+    pub async fn launch_list_export(
+        &self,
+        agent_id: &str,
+        list_url: &str,
+        session_cookie: &str,
+        max_profiles: u32,
+    ) -> Result<String, String> {
+        let argument = serde_json::json!({
+            "sessionCookie": session_cookie,
+            "spreadsheetUrl": list_url,
+            "numberOfResultsPerLaunch": max_profiles,
             "csvName": format!("leads_{}", chrono::Utc::now().timestamp())
         });
 

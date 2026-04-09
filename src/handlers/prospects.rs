@@ -1266,6 +1266,9 @@ struct SmartSearchRequest {
     seniority:     Option<Vec<String>>,
     /// Max profiles to scrape (default 100)
     max_profiles:  Option<u32>,
+    /// Optional: use a saved Sales Navigator list URL instead of building a search URL.
+    /// If provided, skips filter params and uses the List Export phantom directly.
+    list_url:      Option<String>,
 }
 
 /// POST /api/admin/prospects/linkedin/search
@@ -1294,31 +1297,42 @@ async fn linkedin_smart_search(
         _ => return Json(json!({"success": false, "error": "LINKEDIN_SESSION_COOKIE not set in environment"})),
     };
 
-    // Auto-discover the Sales Navigator agent
-    let agent = match pb.find_sales_nav_agent().await {
-        Ok(Some(a)) => a,
-        Ok(None)    => return Json(json!({"success": false, "error": "No Sales Navigator phantom found in your PhantomBuster account. Add 'LinkedIn Sales Navigator List Export' from the Phantom Store first."})),
-        Err(e)      => return Json(json!({"success": false, "error": format!("Failed to list agents: {}", e)})),
-    };
-
-    // Build the search URL from filters
-    let empty = vec![];
-    let search_url = crate::phantombuster_client::PhantomBusterClient::build_search_url(
-        req.job_titles.as_deref().unwrap_or(&empty),
-        req.industries.as_deref().unwrap_or(&empty),
-        req.company_sizes.as_deref().unwrap_or(&empty),
-        req.locations.as_deref().unwrap_or(&empty),
-        req.seniority.as_deref().unwrap_or(&empty),
-    );
-
-    tracing::info!("LinkedIn smart search URL: {}", search_url);
-
     let max = req.max_profiles.unwrap_or(100);
 
-    // Launch the phantom
-    let container_id = match pb.launch_agent(&agent.id, &search_url, &session_cookie, max).await {
-        Ok(id)  => id,
-        Err(e)  => return Json(json!({"success": false, "error": e})),
+    // Branch: list_url → List Export phantom; filters → Search Export phantom
+    let (agent, search_url, container_id) = if let Some(list_url) = req.list_url.as_deref() {
+        // Use saved Sales Navigator list
+        let agent = match pb.find_list_export_agent().await {
+            Ok(Some(a)) => a,
+            Ok(None)    => return Json(json!({"success": false, "error": "No Sales Navigator List Export phantom found. Add it from the PhantomBuster Phantom Store."})),
+            Err(e)      => return Json(json!({"success": false, "error": format!("Failed to list agents: {}", e)})),
+        };
+        let cid = match pb.launch_list_export(&agent.id, list_url, &session_cookie, max).await {
+            Ok(id) => id,
+            Err(e) => return Json(json!({"success": false, "error": e})),
+        };
+        (agent, list_url.to_string(), cid)
+    } else {
+        // Build search URL from filters and use Search Export phantom
+        let agent = match pb.find_sales_nav_agent().await {
+            Ok(Some(a)) => a,
+            Ok(None)    => return Json(json!({"success": false, "error": "No Sales Navigator Search Export phantom found. Add 'LinkedIn Sales Navigator Search Export' from the PhantomBuster Phantom Store."})),
+            Err(e)      => return Json(json!({"success": false, "error": format!("Failed to list agents: {}", e)})),
+        };
+        let empty = vec![];
+        let url = crate::phantombuster_client::PhantomBusterClient::build_search_url(
+            req.job_titles.as_deref().unwrap_or(&empty),
+            req.industries.as_deref().unwrap_or(&empty),
+            req.company_sizes.as_deref().unwrap_or(&empty),
+            req.locations.as_deref().unwrap_or(&empty),
+            req.seniority.as_deref().unwrap_or(&empty),
+        );
+        tracing::info!("LinkedIn smart search URL: {}", url);
+        let cid = match pb.launch_agent(&agent.id, &url, &session_cookie, max).await {
+            Ok(id) => id,
+            Err(e) => return Json(json!({"success": false, "error": e})),
+        };
+        (agent, url, cid)
     };
 
     // Record in DB
