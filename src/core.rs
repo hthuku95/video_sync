@@ -95,8 +95,11 @@ pub fn trim_video(
     let mut command = Command::new("ffmpeg");
 
     if can_copy {
-        // Use stream copy (fast) - move -ss BEFORE -i for faster seeking
-        tracing::info!("🚀 Using stream copy for fast extraction");
+        // Input seeking (-ss before -i) for fast keyframe alignment on video.
+        // Re-encode audio (never copy) to avoid silent-audio keyframe-misalignment
+        // on Twitch VODs and other variable-keyframe sources where audio sync points
+        // don't match video keyframes.
+        tracing::info!("🚀 Using stream copy (video) + AAC re-encode (audio) for fast extraction");
         command
             .arg("-ss")
             .arg(start_seconds.to_string())
@@ -107,7 +110,9 @@ pub fn trim_video(
             .arg("-c:v")
             .arg("copy")
             .arg("-c:a")
-            .arg("copy")
+            .arg("aac")
+            .arg("-b:a")
+            .arg("192k")
             .arg("-avoid_negative_ts")
             .arg("make_zero")
             .arg("-y")
