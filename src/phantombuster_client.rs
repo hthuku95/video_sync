@@ -346,3 +346,129 @@ impl PhantomBusterClient {
         }).collect()
     }
 }
+
+// ── Instagram lead scraping ───────────────────────────────────────────────────
+
+/// An Instagram profile/creator discovered via PhantomBuster.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct InstagramLead {
+    pub username:        String,
+    pub full_name:       Option<String>,
+    pub bio:             Option<String>,
+    pub followers_count: Option<i64>,
+    pub following_count: Option<i64>,
+    pub posts_count:     Option<i32>,
+    pub profile_url:     Option<String>,
+    pub profile_pic_url: Option<String>,
+    pub is_private:      bool,
+    pub is_verified:     bool,
+    pub external_url:    Option<String>,
+    pub email:           Option<String>,
+}
+
+impl PhantomBusterClient {
+    /// Find the Instagram Hashtag Search Export phantom.
+    pub async fn find_instagram_hashtag_agent(&self) -> Result<Option<PbAgent>, String> {
+        let agents = self.list_agents().await?;
+        let found = agents.into_iter().find(|a| {
+            let n = a.name.to_lowercase();
+            (n.contains("instagram") && n.contains("hashtag")) ||
+            (n.contains("instagram") && n.contains("search"))
+        });
+        Ok(found)
+    }
+
+    /// Find the Instagram Profile Scraper phantom.
+    pub async fn find_instagram_profile_scraper(&self) -> Result<Option<PbAgent>, String> {
+        let agents = self.list_agents().await?;
+        let found = agents.into_iter().find(|a| {
+            let n = a.name.to_lowercase();
+            n.contains("instagram") && (n.contains("profile") || n.contains("scraper"))
+        });
+        Ok(found)
+    }
+
+    /// Launch an Instagram Hashtag Search Export to find profiles posting under a hashtag.
+    ///
+    /// * `agent_id`       — the Instagram Hashtag phantom agent ID
+    /// * `session_cookie` — Instagram `sessionid` cookie value
+    /// * `hashtag`        — hashtag (with or without #, e.g. "contentcreator")
+    /// * `max_posts`      — number of posts to scrape (each post → one lead candidate)
+    pub async fn launch_instagram_hashtag_search(
+        &self,
+        agent_id:       &str,
+        session_cookie: &str,
+        hashtag:        &str,
+        max_posts:      u32,
+    ) -> Result<String, String> {
+        let tag = hashtag.trim_start_matches('#');
+        let hashtag_url = format!("https://www.instagram.com/explore/tags/{}/", tag);
+
+        let argument = serde_json::json!({
+            "sessionCookie": session_cookie,
+            "hashtag":       hashtag_url,
+            "numberOfPosts": max_posts,
+            "csvName":       format!("ig_leads_{}", chrono::Utc::now().timestamp())
+        });
+
+        let body = serde_json::json!({
+            "id":       agent_id,
+            "argument": argument.to_string()
+        });
+
+        let resp = self.http
+            .post(format!("{}/agents/launch", PB_BASE))
+            .header("X-Phantombuster-Key", &self.api_key)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| format!("Instagram launch failed: {}", e))?;
+
+        let result: serde_json::Value = resp.json().await
+            .map_err(|e| format!("Failed to parse Instagram launch response: {}", e))?;
+
+        if result.get("status").and_then(|s| s.as_str()) == Some("error") {
+            return Err(format!("PhantomBuster launch error: {}", result.get("error").and_then(|e| e.as_str()).unwrap_or("unknown")));
+        }
+
+        let container_id = result.get("containerId")
+            .and_then(|c| c.as_str())
+            .unwrap_or(agent_id)
+            .to_string();
+        Ok(container_id)
+    }
+
+    /// Parse raw PhantomBuster Instagram Hashtag output into InstagramLead structs.
+    pub fn parse_instagram_leads(rows: Vec<serde_json::Value>) -> Vec<InstagramLead> {
+        rows.into_iter().filter_map(|row| {
+            let get_str  = |key: &str| row.get(key).and_then(|v| v.as_str()).map(|s| s.to_string());
+            let get_i64  = |key: &str| row.get(key).and_then(|v| v.as_i64());
+            let get_i32  = |key: &str| row.get(key).and_then(|v| v.as_i64()).map(|v| v as i32);
+            let get_bool = |key: &str| row.get(key).and_then(|v| v.as_bool()).unwrap_or(false);
+
+            let username = get_str("username")
+                .or_else(|| get_str("handle"))
+                .unwrap_or_default();
+            if username.is_empty() { return None; }
+
+            let profile_url = get_str("profileUrl")
+                .or_else(|| get_str("url"))
+                .or_else(|| Some(format!("https://www.instagram.com/{}/", username)));
+
+            Some(InstagramLead {
+                username,
+                full_name:       get_str("fullName").or_else(|| get_str("name")),
+                bio:             get_str("biography").or_else(|| get_str("bio")),
+                followers_count: get_i64("followersCount").or_else(|| get_i64("followers")),
+                following_count: get_i64("followingCount").or_else(|| get_i64("following")),
+                posts_count:     get_i32("postsCount").or_else(|| get_i32("posts")),
+                profile_url,
+                profile_pic_url: get_str("profilePictureUrl").or_else(|| get_str("imgUrl")),
+                is_private:      get_bool("isPrivate"),
+                is_verified:     get_bool("isVerified") || get_bool("verified"),
+                external_url:    get_str("externalUrl").or_else(|| get_str("website")),
+                email:           get_str("email"),
+            })
+        }).collect()
+    }
+}

@@ -38,6 +38,17 @@ pub fn prospect_routes() -> Router {
         .layer(axum::middleware::from_fn(auth_middleware))
 }
 
+/// Routes accessible to any authenticated (whitelisted) user — NOT admin-only.
+/// Used by content_machine for Instagram lead generation.
+pub fn instagram_routes() -> Router {
+    Router::new()
+        .route("/api/instagram/leads/search",                post(instagram_search_leads))
+        .route("/api/instagram/leads",                       get(instagram_list_leads))
+        .route("/api/instagram/leads/:id/generate-dm",       post(instagram_generate_dm))
+        .route("/api/instagram/leads/:id/contact-status",    patch(instagram_update_contact_status))
+        .layer(axum::middleware::from_fn(auth_middleware))
+}
+
 #[derive(Debug, Deserialize)]
 struct SearchRequest {
     platform: String,      // "youtube" | "twitch"
@@ -1364,4 +1375,262 @@ async fn linkedin_smart_search(
             job_id
         )
     }))
+}
+
+// ============================================================================
+// Instagram lead generation — accessible to all whitelisted users
+// ============================================================================
+
+#[derive(Debug, Deserialize)]
+struct InstagramSearchRequest {
+    hashtag:   String,           // e.g. "contentcreator" or "#videographer"
+    max_posts: Option<u32>,      // default 50, max 200
+    category:  Option<String>,   // label for this search (stored on leads)
+}
+
+#[derive(Debug, Deserialize)]
+struct InstagramDmRequest {
+    niche: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct InstagramContactStatusRequest {
+    contact_status: String, // new | contacted | replied | converted | skipped
+}
+
+#[derive(Debug, Deserialize)]
+struct InstagramListQuery {
+    hashtag:        Option<String>,
+    contact_status: Option<String>,
+    min_followers:  Option<i64>,
+    limit:          Option<i64>,
+    offset:         Option<i64>,
+}
+
+/// POST /api/instagram/leads/search
+/// Launches a PhantomBuster Instagram Hashtag Search and records leads.
+async fn instagram_search_leads(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(req):        Json<InstagramSearchRequest>,
+) -> Json<serde_json::Value> {
+    let Some(pb) = state.phantombuster_client.as_ref() else {
+        return Json(json!({"success": false, "error": "PhantomBuster not configured (PHANTOMBUSTER_API_KEY missing)"}));
+    };
+
+    let session_cookie = match std::env::var("INSTAGRAM_SESSION_COOKIE") {
+        Ok(c) if !c.is_empty() => c,
+        _ => return Json(json!({"success": false, "error": "INSTAGRAM_SESSION_COOKIE not set. Add your Instagram sessionid cookie to the server env vars."})),
+    };
+
+    let agent = match pb.find_instagram_hashtag_agent().await {
+        Ok(Some(a)) => a,
+        Ok(None)    => return Json(json!({"success": false, "error": "No Instagram Hashtag phantom found. Add 'Instagram Hashtag Search Export' from the PhantomBuster Phantom Store."})),
+        Err(e)      => return Json(json!({"success": false, "error": format!("Failed to list PhantomBuster agents: {}", e)})),
+    };
+
+    let max_posts = req.max_posts.unwrap_or(50).min(200);
+    let hashtag   = req.hashtag.trim_start_matches('#').to_string();
+    let category  = req.category.clone().unwrap_or_else(|| hashtag.clone());
+
+    let container_id = match pb.launch_instagram_hashtag_search(
+        &agent.id, &session_cookie, &hashtag, max_posts,
+    ).await {
+        Ok(id) => id,
+        Err(e) => return Json(json!({"success": false, "error": e})),
+    };
+
+    // Record the PB job
+    let job_id = match sqlx::query_scalar::<_, uuid::Uuid>(
+        "INSERT INTO phantombuster_jobs (agent_id, agent_name, search_url, status, launched_at)
+         VALUES ($1, $2, $3, 'running', NOW()) RETURNING id"
+    )
+    .bind(&agent.id)
+    .bind(&agent.name)
+    .bind(format!("instagram:#{}", hashtag))
+    .fetch_one(&state.db_pool)
+    .await {
+        Ok(id) => id,
+        Err(e) => return Json(json!({"success": false, "error": format!("DB insert failed: {}", e)})),
+    };
+
+    Json(json!({
+        "success":      true,
+        "job_id":       job_id.to_string(),
+        "container_id": container_id,
+        "agent_name":   agent.name,
+        "hashtag":      hashtag,
+        "category":     category,
+        "max_posts":    max_posts,
+        "message":      format!(
+            "PhantomBuster Instagram Hashtag Search launched for #{}. Results typically ready in 3–10 minutes. Job ID: {}",
+            hashtag, job_id
+        )
+    }))
+}
+
+/// GET /api/instagram/leads
+/// List Instagram leads with optional filtering.
+async fn instagram_list_leads(
+    Extension(state): Extension<Arc<AppState>>,
+    Query(q):         Query<InstagramListQuery>,
+) -> Json<serde_json::Value> {
+    let limit  = q.limit.unwrap_or(50).min(200);
+    let offset = q.offset.unwrap_or(0);
+
+    let mut sql = String::from(
+        "SELECT id, username, full_name, bio, followers_count, following_count, posts_count,
+                profile_url, profile_pic_url, is_private, is_verified, category,
+                hashtag_source, email, external_url, dm_script, contact_status,
+                pb_job_id, created_at
+         FROM instagram_leads WHERE 1=1"
+    );
+    let mut binds: Vec<String> = Vec::new();
+
+    if let Some(ref ht) = q.hashtag {
+        binds.push(ht.trim_start_matches('#').to_string());
+        sql.push_str(&format!(" AND hashtag_source = ${}", binds.len()));
+    }
+    if let Some(ref cs) = q.contact_status {
+        binds.push(cs.clone());
+        sql.push_str(&format!(" AND contact_status = ${}", binds.len()));
+    }
+    if let Some(mf) = q.min_followers {
+        binds.push(mf.to_string());
+        sql.push_str(&format!(" AND followers_count >= ${}", binds.len()));
+    }
+    sql.push_str(" ORDER BY followers_count DESC NULLS LAST");
+    sql.push_str(&format!(" LIMIT {} OFFSET {}", limit, offset));
+
+    // Build and execute dynamically — use raw query for variable bind count
+    let mut query = sqlx::query(&sql);
+    for b in &binds {
+        query = query.bind(b);
+    }
+
+    let rows = match query.fetch_all(&state.db_pool).await {
+        Ok(r) => r,
+        Err(e) => return Json(json!({"success": false, "error": format!("DB query failed: {}", e)})),
+    };
+
+    let leads: Vec<serde_json::Value> = rows.iter().map(|r| {
+        json!({
+            "id":              r.get::<Option<uuid::Uuid>, _>("id").map(|u| u.to_string()),
+            "username":        r.get::<Option<String>, _>("username"),
+            "full_name":       r.get::<Option<String>, _>("full_name"),
+            "bio":             r.get::<Option<String>, _>("bio"),
+            "followers_count": r.get::<Option<i64>, _>("followers_count"),
+            "profile_url":     r.get::<Option<String>, _>("profile_url"),
+            "profile_pic_url": r.get::<Option<String>, _>("profile_pic_url"),
+            "is_verified":     r.get::<Option<bool>, _>("is_verified").unwrap_or(false),
+            "category":        r.get::<Option<String>, _>("category"),
+            "hashtag_source":  r.get::<Option<String>, _>("hashtag_source"),
+            "email":           r.get::<Option<String>, _>("email"),
+            "external_url":    r.get::<Option<String>, _>("external_url"),
+            "dm_script":       r.get::<Option<String>, _>("dm_script"),
+            "contact_status":  r.get::<Option<String>, _>("contact_status"),
+        })
+    }).collect();
+
+    Json(json!({"success": true, "leads": leads, "count": leads.len()}))
+}
+
+/// POST /api/instagram/leads/:id/generate-dm
+/// Generate a personalized Instagram cold DM script using AI.
+async fn instagram_generate_dm(
+    Extension(state): Extension<Arc<AppState>>,
+    Path(id):         Path<uuid::Uuid>,
+    Json(req):        Json<Option<InstagramDmRequest>>,
+) -> Json<serde_json::Value> {
+    // Fetch the lead
+    let row = match sqlx::query(
+        "SELECT username, full_name, bio, followers_count, category, hashtag_source, external_url
+         FROM instagram_leads WHERE id = $1"
+    )
+    .bind(id)
+    .fetch_optional(&state.db_pool)
+    .await {
+        Ok(Some(r)) => r,
+        Ok(None)    => return Json(json!({"success": false, "error": "Lead not found"})),
+        Err(e)      => return Json(json!({"success": false, "error": format!("DB error: {}", e)})),
+    };
+
+    let username:  String = row.get::<Option<String>, _>("username").unwrap_or_default();
+    let full_name: String = row.get::<Option<String>, _>("full_name").unwrap_or_else(|| username.clone());
+    let bio:       String = row.get::<Option<String>, _>("bio").unwrap_or_default();
+    let followers: i64    = row.get::<Option<i64>, _>("followers_count").unwrap_or(0);
+    let category:  String = row.get::<Option<String>, _>("category").unwrap_or_default();
+    let ext_url:   String = row.get::<Option<String>, _>("external_url").unwrap_or_default();
+
+    let niche = req.as_ref().and_then(|r| r.niche.as_deref()).unwrap_or(&category);
+
+    let prompt = format!(
+        r#"Write a short, personalized Instagram DM (under 120 words) from a video clipping service to a content creator.
+
+Creator info:
+- Instagram handle: @{username}
+- Name: {full_name}
+- Followers: {followers}
+- Bio: {bio}
+- Niche/category: {niche}
+- Link in bio: {ext_url}
+
+The DM should:
+1. Be personal and reference something specific from their bio or niche
+2. Mention that you already made a free demo clip of their content
+3. Offer 30–50 short clips per month for $297–$497/month
+4. End with a clear call to action (reply to see the demo)
+5. Sound natural, NOT salesy or copy-paste generic
+
+Output ONLY the DM message text, no labels or quotes."#,
+        username  = username,
+        full_name = full_name,
+        followers = followers,
+        bio       = bio,
+        niche     = niche,
+        ext_url   = ext_url,
+    );
+
+    let dm_text = match generate_text_best_effort(
+        state.nvidia_nim_client.as_ref(),
+        state.gemma_client.as_ref(),
+        state.gemini_client.as_ref(),
+        &prompt,
+    ).await {
+        Ok(t)  => t,
+        Err(e) => return Json(json!({"success": false, "error": format!("AI generation failed: {}", e)})),
+    };
+
+    // Save the DM script to the DB
+    let _ = sqlx::query(
+        "UPDATE instagram_leads SET dm_script = $1, updated_at = NOW() WHERE id = $2"
+    )
+    .bind(&dm_text)
+    .bind(id)
+    .execute(&state.db_pool)
+    .await;
+
+    Json(json!({"success": true, "dm_script": dm_text}))
+}
+
+/// PATCH /api/instagram/leads/:id/contact-status
+async fn instagram_update_contact_status(
+    Extension(state): Extension<Arc<AppState>>,
+    Path(id):         Path<uuid::Uuid>,
+    Json(req):        Json<InstagramContactStatusRequest>,
+) -> Json<serde_json::Value> {
+    let valid = ["new", "contacted", "replied", "converted", "skipped"];
+    if !valid.contains(&req.contact_status.as_str()) {
+        return Json(json!({"success": false, "error": "contact_status must be one of: new, contacted, replied, converted, skipped"}));
+    }
+
+    match sqlx::query(
+        "UPDATE instagram_leads SET contact_status = $1, updated_at = NOW() WHERE id = $2"
+    )
+    .bind(&req.contact_status)
+    .bind(id)
+    .execute(&state.db_pool)
+    .await {
+        Ok(_)  => Json(json!({"success": true})),
+        Err(e) => Json(json!({"success": false, "error": format!("DB error: {}", e)})),
+    }
 }

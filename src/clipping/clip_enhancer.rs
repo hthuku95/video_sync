@@ -235,20 +235,34 @@ Duration: {dur:.1}s | File size: {size:.1}MB | FPS: {fps:.0} | Has audio: {audio
 
 The {n} frames below are sampled at 15%, 50%, and 85% of the clip duration.
 
-Choose ONLY enhancements that will clearly improve this specific clip. Be conservative — if quality is already good, return needs_enhancement=false with an empty tools array.
+Choose ONLY enhancements that will clearly improve this specific clip. Be conservative — if quality is already good, return needs_enhancement=false with an empty tools array. Pick at most 3 tools.
 
-Available tools:
-- extra_stabilize: Additional stabilization pass (use ONLY if shaky/jittery motion is clearly visible)
-- vibrance_boost: Boost color saturation/vibrancy (use if colors look flat or washed out)
-- color_temperature: Adjust white balance (use if scene looks too warm, cool, or green-tinted)
-- exposure_fix: Adjust brightness (use if clip is noticeably too dark or overexposed)
-- sharpen: Extra sharpening pass (use if video looks soft or blurry)
-- deflicker: Remove flickering (use if there is visible frame-to-frame brightness variation)
-- audio_denoise: Remove background noise (use if content type suggests noisy environment)
-- audio_boost: Increase loudness (use if content is quiet narration or soft speech)
+Available visual tools:
+- extra_stabilize: Additional stabilization pass (ONLY if shaky/jittery motion is clearly visible)
+- vibrance_boost: Boost color saturation/vibrancy (if colors look flat or washed out)
+- color_temperature: Adjust white balance (if scene looks too warm, cool, or green-tinted)
+- exposure_fix: Adjust brightness/contrast (if clip is noticeably too dark or overexposed)
+- sharpen: Extra sharpening pass (if video looks soft or blurry)
+- deflicker: Remove flickering (if visible frame-to-frame brightness variation)
+- color_balance: Fine-tune shadow/midtone/highlight color balance (if color grading is off)
+- normalize_video: Normalize histogram for more even exposure across frames
+- denoise_video: Spatial+temporal denoising (if video looks grainy or noisy)
+- add_vignette: Subtle vignette to focus attention (for cinematic or talking-head content)
+- split_tone: Apply cool shadows + warm highlights color grade (cinematic look)
+- hue_adjust: Tweak hue/saturation of specific color range
+
+Available audio tools:
+- audio_denoise: Remove background hiss/noise (use if noisy environment evident)
+- audio_boost: Increase loudness of quiet narration or soft speech
+- audio_compress: Dynamic range compression (if audio is too dynamic — loud parts much louder than quiet)
+- audio_gate: Noise gate to silence background noise between speech segments
+- audio_highpass: High-pass filter to remove low-frequency rumble (indoor/outdoor recording)
+- audio_bass_boost: Boost bass frequencies (music, podcast, entertainment content)
+- audio_treble_boost: Boost high frequencies for clearer speech clarity
+- audio_limiter: Final loudness limiter to prevent clipping and ensure broadcast level
 
 Respond with valid JSON only — no markdown, no code fences:
-{{"needs_enhancement": true, "tools": ["tool1"], "reasoning": "brief reason"}}"#,
+{{"needs_enhancement": true, "tools": ["tool1", "tool2"], "reasoning": "brief reason"}}"#,
         title = title,
         content_type = content_type,
         dur = metadata.duration_secs,
@@ -368,6 +382,68 @@ fn apply_enhancement_plan(clip_path: &str, plan: &ClipEnhancementPlan) -> Result
             }
             "audio_boost" => {
                 crate::audio::normalize_loudness(&current_input, &temp_out, -12.0, 11.0, -1.0)
+            }
+            // ── Extended visual tools ─────────────────────────────────────────
+            "color_balance" => {
+                // Slight warm highlights, neutral shadows/midtones
+                crate::visual::color_balance(
+                    &current_input, &temp_out,
+                    (0.0, 0.0, 0.0),       // shadows: neutral
+                    (0.0, 0.0, 0.0),       // midtones: neutral
+                    (0.05, 0.02, -0.03),   // highlights: warm
+                )
+            }
+            "normalize_video" => {
+                crate::visual::normalize_video(&current_input, &temp_out, 10)
+            }
+            "denoise_video" => {
+                // Moderate spatial+temporal denoise (luma_spatial, luma_temporal, chroma_spatial, chroma_temporal)
+                crate::visual::denoise_video(&current_input, &temp_out, 4.0, 3.0, 3.0, 2.0)
+            }
+            "add_vignette" => {
+                crate::visual::add_vignette(
+                    &current_input, &temp_out,
+                    std::f64::consts::PI / 5.0, // ~36° angle
+                    "forward",
+                )
+            }
+            "split_tone" => {
+                // Cool shadows (240° blue-ish), warm highlights (40° orange-ish)
+                crate::visual::split_tone(
+                    &current_input, &temp_out,
+                    240.0, 0.08,  // shadow hue + saturation
+                    40.0,  0.08,  // highlight hue + saturation
+                    0.5,          // balance
+                )
+            }
+            "hue_adjust" => {
+                // Gentle saturation boost via hue filter (no hue shift)
+                crate::visual::adjust_hue(&current_input, &temp_out, 0.0, 1.15)
+            }
+            // ── Extended audio tools ──────────────────────────────────────────
+            "audio_compress" => {
+                // Moderate compression: -18dB threshold, 4:1 ratio, 5ms attack, 100ms release, 2dB makeup
+                crate::audio::compress_audio(&current_input, &temp_out, -18.0, 4.0, 5.0, 100.0, 2.0)
+            }
+            "audio_gate" => {
+                // Noise gate: -35dB threshold, 2:1 ratio, 5ms attack, 150ms release
+                crate::audio::gate_audio(&current_input, &temp_out, -35.0, 2.0, 5.0, 150.0)
+            }
+            "audio_highpass" => {
+                // Remove low-frequency rumble below 80 Hz
+                crate::audio::filter_highpass(&current_input, &temp_out, 80.0, 2, 0.7)
+            }
+            "audio_bass_boost" => {
+                // +3dB around 100 Hz
+                crate::audio::adjust_bass(&current_input, &temp_out, 3.0, 100.0, 200.0)
+            }
+            "audio_treble_boost" => {
+                // +2dB around 8 kHz for clearer speech/presence
+                crate::audio::adjust_treble(&current_input, &temp_out, 2.0, 8000.0, 200.0)
+            }
+            "audio_limiter" => {
+                // Broadcast limiter: -1dB ceiling, 5ms attack, 50ms release
+                crate::audio::audio_limiter(&current_input, &temp_out, -1.0, 5.0, 50.0, true)
             }
             unknown => {
                 tracing::warn!("Unknown enhancement tool '{}' — skipping", unknown);
