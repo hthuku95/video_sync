@@ -109,8 +109,8 @@ impl PhantomBusterClient {
     ) -> Result<String, String> {
         let argument = serde_json::json!({
             "sessionCookie": session_cookie,
-            "salesNavigatorUrl": search_url,
-            "numberOfProfiles": max_profiles,
+            "searches": search_url,
+            "numberOfResultsPerSearch": max_profiles,
             "csvName": format!("leads_{}", chrono::Utc::now().timestamp())
         });
 
@@ -308,24 +308,37 @@ impl PhantomBusterClient {
             .replace(':', "%3A")
     }
 
-    /// Parse raw PhantomBuster output rows into LinkedInLead structs
+    /// Parse raw PhantomBuster output rows into LinkedInLead structs.
+    /// Handles both Sales Navigator Search Export and List Export field names.
     pub fn parse_leads(rows: Vec<serde_json::Value>) -> Vec<LinkedInLead> {
         rows.into_iter().filter_map(|row| {
             let get = |key: &str| row.get(key).and_then(|v| v.as_str()).map(|s| s.to_string());
 
+            // fullName is set by both export types; fall back to first+last
             let full_name = get("fullName")
-                .or_else(|| get("firstName").zip(get("lastName")).map(|(f, l)| format!("{} {}", f, l)))
+                .or_else(|| {
+                    let f = get("firstName").unwrap_or_default();
+                    let l = get("lastName").unwrap_or_default();
+                    let combined = format!("{} {}", f, l).trim().to_string();
+                    if combined.is_empty() { None } else { Some(combined) }
+                })
                 .or_else(|| get("name"))
                 .unwrap_or_default();
 
             if full_name.is_empty() { return None; }
+
+            // Profile URL — Sales Nav export uses "profileUrl" and "linkedInProfileUrl"
+            let linkedin_url = get("linkedInProfileUrl")
+                .or_else(|| get("profileUrl"))
+                .or_else(|| get("defaultProfileUrl"))
+                .or_else(|| get("linkedinUrl"));
 
             Some(LinkedInLead {
                 full_name,
                 job_title:    get("title").or_else(|| get("jobTitle")),
                 company_name: get("companyName").or_else(|| get("company")),
                 company_size: get("companySize"),
-                linkedin_url: get("profileUrl").or_else(|| get("linkedinUrl")),
+                linkedin_url,
                 email:        get("email"),
                 location:     get("location"),
                 seniority:    get("seniorityLevel").or_else(|| get("seniority")),
