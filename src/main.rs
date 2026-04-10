@@ -646,6 +646,19 @@ async fn main() {
         tracing::warn!("YouTube client not available - YouTube channel polling disabled");
     }
 
+    // ── Instagram lead auto-importer — polls PB every 5 min ──────────────────────────
+    {
+        let ig_state = shared_state.clone();
+        tokio::spawn(async move {
+            tracing::info!("📸 Instagram job poller started (5-min interval)");
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(300));
+            loop {
+                interval.tick().await;
+                handlers::prospects::poll_instagram_jobs(&ig_state).await;
+            }
+        });
+    }
+
     // ── Clipping worker and health tasks — always start regardless of youtube_client ──
     // V1 fix: worker must run even when YOUTUBE_API_KEY is not set. Only the channel
     // polling monitor (above) needs youtube_client. The worker itself only needs gemini_client.

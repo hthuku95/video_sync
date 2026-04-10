@@ -43,6 +43,8 @@ pub fn prospect_routes() -> Router {
 pub fn instagram_routes() -> Router {
     Router::new()
         .route("/api/instagram/leads/search",                post(instagram_search_leads))
+        .route("/api/instagram/leads/auto-discover",         post(instagram_auto_discover))
+        .route("/api/instagram/leads/top",                   get(instagram_top_leads))
         .route("/api/instagram/leads",                       get(instagram_list_leads))
         .route("/api/instagram/leads/:id/generate-dm",       post(instagram_generate_dm))
         .route("/api/instagram/leads/:id/contact-status",    patch(instagram_update_contact_status))
@@ -1633,4 +1635,406 @@ async fn instagram_update_contact_status(
         Ok(_)  => Json(json!({"success": true})),
         Err(e) => Json(json!({"success": false, "error": format!("DB error: {}", e)})),
     }
+}
+
+// ============================================================================
+// Instagram auto-discovery — AI-driven hashtag selection + lead scoring
+// ============================================================================
+
+#[derive(Debug, Deserialize)]
+struct AutoDiscoverRequest {
+    /// e.g. "content_creator", "youtuber", "podcaster", "fitness", "gaming"
+    niche:                 Option<String>,
+    /// Max profiles to pull per hashtag (default 30, max 100)
+    max_posts_per_hashtag: Option<u32>,
+    /// How many hashtags to search (default 3, max 6)
+    hashtag_count:         Option<usize>,
+}
+
+/// POST /api/instagram/leads/auto-discover
+///
+/// AI picks the best hashtags for the niche, then launches one PhantomBuster
+/// search per hashtag. The background poller (`poll_instagram_jobs`) will
+/// auto-import results and score leads once PhantomBuster finishes (~5–10 min).
+async fn instagram_auto_discover(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(req):        Json<Option<AutoDiscoverRequest>>,
+) -> Json<serde_json::Value> {
+    let req          = req.unwrap_or(AutoDiscoverRequest { niche: None, max_posts_per_hashtag: None, hashtag_count: None });
+    let niche        = req.niche.as_deref().unwrap_or("content creator");
+    let max_posts    = req.max_posts_per_hashtag.unwrap_or(30).min(100);
+    let hashtag_count = req.hashtag_count.unwrap_or(3).min(6).max(1);
+
+    let Some(pb) = state.phantombuster_client.as_ref() else {
+        return Json(json!({"success": false, "error": "PhantomBuster not configured"}));
+    };
+
+    let session_cookie = match std::env::var("INSTAGRAM_SESSION_COOKIE") {
+        Ok(c) if !c.is_empty() => c,
+        _ => return Json(json!({"success": false, "error": "INSTAGRAM_SESSION_COOKIE not set"})),
+    };
+
+    let agent = match pb.find_instagram_hashtag_agent().await {
+        Ok(Some(a)) => a,
+        Ok(None)    => return Json(json!({"success": false, "error": "No Instagram Hashtag phantom found in PhantomBuster. Add 'Instagram Hashtag Search Export' from the Phantom Store."})),
+        Err(e)      => return Json(json!({"success": false, "error": format!("Agent lookup failed: {}", e)})),
+    };
+
+    // ── Ask AI to pick the best hashtags for this niche ──────────────────────
+    let prompt = format!(
+        r#"You are helping a video clipping agency find potential clients on Instagram.
+
+The agency creates short-form video clips (YouTube Shorts, TikTok clips, Reels) for content creators, podcasters, YouTubers, and online educators.
+
+Target niche: "{niche}"
+
+List {count} Instagram hashtags (no # symbol) where the ideal potential clients would be posting their own content.
+Choose hashtags that:
+1. Content creators in this niche actually use when posting
+2. Have active, public-posting creators (NOT just audience/fans tags)
+3. Will surface creators with 5K–500K followers who need help repurposing content
+
+Return ONLY a JSON array of strings. No explanation. Example: ["youtuber", "contentcreator", "videomarketing"]"#,
+        niche = niche,
+        count = hashtag_count,
+    );
+
+    let hashtags_json = match generate_text_best_effort(
+        state.nvidia_nim_client.as_ref(),
+        state.gemma_client.as_ref(),
+        state.gemini_client.as_ref(),
+        &prompt,
+    ).await {
+        Ok(t) => t,
+        Err(e) => return Json(json!({"success": false, "error": format!("AI hashtag selection failed: {}", e)})),
+    };
+
+    // Strip markdown fences and parse JSON array
+    let cleaned = hashtags_json.trim()
+        .trim_start_matches("```json").trim_start_matches("```")
+        .trim_end_matches("```").trim();
+
+    let hashtags: Vec<String> = match serde_json::from_str(cleaned) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!("Failed to parse AI hashtag response: {} | raw: {}", e, cleaned);
+            // Fallback hashtags based on niche keyword
+            vec![niche.replace(' ', ""), "contentcreator".to_string(), "youtuber".to_string()]
+        }
+    };
+
+    tracing::info!("🎯 Instagram auto-discover for niche '{}': hashtags = {:?}", niche, hashtags);
+
+    // ── Launch a PB search for each hashtag ──────────────────────────────────
+    let mut launched_jobs: Vec<serde_json::Value> = Vec::new();
+    let mut errors: Vec<String> = Vec::new();
+
+    for hashtag in &hashtags {
+        let tag = hashtag.trim_start_matches('#').to_string();
+        match pb.launch_instagram_hashtag_search(&agent.id, &session_cookie, &tag, max_posts).await {
+            Ok(container_id) => {
+                // Record in DB
+                let job_insert = sqlx::query_scalar::<_, uuid::Uuid>(
+                    "INSERT INTO phantombuster_jobs (agent_id, agent_name, search_url, status, launched_at)
+                     VALUES ($1, $2, $3, 'running', NOW()) RETURNING id"
+                )
+                .bind(&agent.id)
+                .bind(&agent.name)
+                .bind(format!("instagram:#{}", tag))
+                .fetch_one(&state.db_pool)
+                .await;
+
+                match job_insert {
+                    Ok(job_id) => {
+                        launched_jobs.push(json!({
+                            "job_id":       job_id.to_string(),
+                            "container_id": container_id,
+                            "hashtag":      tag,
+                        }));
+                    }
+                    Err(e) => errors.push(format!("#{}: DB insert failed: {}", tag, e)),
+                }
+            }
+            Err(e) => errors.push(format!("#{}: {}", tag, e)),
+        }
+        // Small delay between launches to avoid PB rate limits
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+    }
+
+    Json(json!({
+        "success":     !launched_jobs.is_empty(),
+        "niche":       niche,
+        "hashtags":    hashtags,
+        "jobs":        launched_jobs,
+        "errors":      errors,
+        "message":     format!(
+            "Auto-discovery launched {} PB searches for niche '{}'. Results auto-import in ~5–10 minutes. Top leads will be scored automatically.",
+            launched_jobs.len(), niche
+        )
+    }))
+}
+
+/// GET /api/instagram/leads/top
+/// Returns the highest-scored leads (score >= 60), ready for outreach.
+async fn instagram_top_leads(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    let rows = match sqlx::query(
+        "SELECT id, username, full_name, bio, followers_count, profile_url, profile_pic_url,
+                is_verified, category, hashtag_source, email, external_url,
+                dm_script, contact_status, score, score_reason
+         FROM instagram_leads
+         WHERE score >= 60
+           AND contact_status = 'new'
+           AND is_private = FALSE
+         ORDER BY score DESC, followers_count DESC
+         LIMIT 50"
+    )
+    .fetch_all(&state.db_pool)
+    .await {
+        Ok(r) => r,
+        Err(e) => return Json(json!({"success": false, "error": format!("DB error: {}", e)})),
+    };
+
+    let leads: Vec<serde_json::Value> = rows.iter().map(|r| {
+        json!({
+            "id":              r.get::<Option<uuid::Uuid>, _>("id").map(|u| u.to_string()),
+            "username":        r.get::<Option<String>, _>("username"),
+            "full_name":       r.get::<Option<String>, _>("full_name"),
+            "bio":             r.get::<Option<String>, _>("bio"),
+            "followers_count": r.get::<Option<i64>, _>("followers_count"),
+            "profile_url":     r.get::<Option<String>, _>("profile_url"),
+            "profile_pic_url": r.get::<Option<String>, _>("profile_pic_url"),
+            "is_verified":     r.get::<Option<bool>, _>("is_verified").unwrap_or(false),
+            "category":        r.get::<Option<String>, _>("category"),
+            "hashtag_source":  r.get::<Option<String>, _>("hashtag_source"),
+            "email":           r.get::<Option<String>, _>("email"),
+            "external_url":    r.get::<Option<String>, _>("external_url"),
+            "dm_script":       r.get::<Option<String>, _>("dm_script"),
+            "contact_status":  r.get::<Option<String>, _>("contact_status"),
+            "score":           r.get::<Option<i32>, _>("score"),
+            "score_reason":    r.get::<Option<String>, _>("score_reason"),
+        })
+    }).collect();
+
+    Json(json!({"success": true, "leads": leads, "count": leads.len()}))
+}
+
+// ============================================================================
+// Background poller — auto-imports PhantomBuster Instagram results
+// ============================================================================
+
+/// Called by the background task every 5 minutes.
+/// Checks running Instagram PB jobs, imports new leads, and scores them.
+pub async fn poll_instagram_jobs(state: &Arc<AppState>) {
+    let pb = match state.phantombuster_client.as_ref() {
+        Some(pb) => pb,
+        None     => return,
+    };
+
+    // Find running Instagram jobs older than 3 minutes (give PB time to finish)
+    let running_jobs = match sqlx::query(
+        "SELECT id, agent_id, search_url
+         FROM phantombuster_jobs
+         WHERE status = 'running'
+           AND search_url LIKE 'instagram:%'
+           AND launched_at < NOW() - INTERVAL '3 minutes'
+         ORDER BY launched_at ASC
+         LIMIT 10"
+    )
+    .fetch_all(&state.db_pool)
+    .await {
+        Ok(rows) => rows,
+        Err(e) => {
+            tracing::warn!("Instagram job poll: DB query failed: {}", e);
+            return;
+        }
+    };
+
+    if running_jobs.is_empty() { return; }
+
+    tracing::info!("🔄 Instagram job poller: checking {} running jobs", running_jobs.len());
+
+    for row in running_jobs {
+        let job_id:   uuid::Uuid = row.get("id");
+        let agent_id: String     = row.get("agent_id");
+        let search_url: String   = row.get("search_url");
+
+        // Extract hashtag from search_url ("instagram:#contentcreator")
+        let hashtag_source = search_url
+            .trim_start_matches("instagram:#")
+            .trim_start_matches("instagram:")
+            .trim_start_matches('#')
+            .to_string();
+
+        // Fetch PB output
+        let rows = match pb.fetch_output(&agent_id).await {
+            Ok(r) if !r.is_empty() => r,
+            Ok(_) => {
+                tracing::debug!("Instagram job {}: no output yet, will retry", job_id);
+                continue;
+            }
+            Err(e) => {
+                tracing::warn!("Instagram job {}: fetch_output failed: {}", job_id, e);
+                // Mark as failed if we've been trying for > 30 minutes
+                let _ = sqlx::query(
+                    "UPDATE phantombuster_jobs SET status = 'failed', error = $1
+                     WHERE id = $2 AND launched_at < NOW() - INTERVAL '30 minutes'"
+                )
+                .bind(e)
+                .bind(job_id)
+                .execute(&state.db_pool)
+                .await;
+                continue;
+            }
+        };
+
+        let leads = crate::phantombuster_client::PhantomBusterClient::parse_instagram_leads(rows);
+        let total  = leads.len();
+        let mut imported = 0usize;
+
+        for lead in &leads {
+            // Skip private accounts — they can't receive DMs from non-followers
+            if lead.is_private { continue; }
+            // Skip micro-nano accounts unlikely to pay for clipping
+            if lead.followers_count.unwrap_or(0) < 1_000 { continue; }
+
+            let result = sqlx::query(
+                "INSERT INTO instagram_leads
+                    (username, full_name, bio, followers_count, following_count, posts_count,
+                     profile_url, profile_pic_url, is_private, is_verified, external_url, email,
+                     category, hashtag_source, contact_status)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'new')
+                 ON CONFLICT (username) DO UPDATE
+                   SET followers_count = EXCLUDED.followers_count,
+                       bio = COALESCE(EXCLUDED.bio, instagram_leads.bio),
+                       updated_at = NOW()"
+            )
+            .bind(&lead.username)
+            .bind(&lead.full_name)
+            .bind(&lead.bio)
+            .bind(lead.followers_count)
+            .bind(lead.following_count)
+            .bind(lead.posts_count)
+            .bind(&lead.profile_url)
+            .bind(&lead.profile_pic_url)
+            .bind(lead.is_private)
+            .bind(lead.is_verified)
+            .bind(&lead.external_url)
+            .bind(&lead.email)
+            .bind(&hashtag_source)
+            .bind(&hashtag_source)
+            .execute(&state.db_pool)
+            .await;
+
+            if result.is_ok() { imported += 1; }
+        }
+
+        tracing::info!(
+            "✅ Instagram job {}: {} total / {} imported (hashtag: #{})",
+            job_id, total, imported, hashtag_source
+        );
+
+        // Mark job completed
+        let _ = sqlx::query(
+            "UPDATE phantombuster_jobs SET status='completed', leads_found=$1, completed_at=NOW() WHERE id=$2"
+        )
+        .bind(imported as i32)
+        .bind(job_id)
+        .execute(&state.db_pool)
+        .await;
+
+        // Score unscored leads (top 20 by followers to conserve LLM quota)
+        if state.gemini_client.is_some() || state.nvidia_nim_client.is_some() {
+            score_instagram_leads(state, &hashtag_source).await;
+        }
+    }
+}
+
+/// Score unscored Instagram leads for a given hashtag using AI.
+async fn score_instagram_leads(state: &Arc<AppState>, hashtag: &str) {
+    let unscored = match sqlx::query(
+        "SELECT id, username, full_name, bio, followers_count, external_url
+         FROM instagram_leads
+         WHERE score IS NULL
+           AND hashtag_source = $1
+           AND is_private = FALSE
+           AND followers_count >= 1000
+         ORDER BY followers_count DESC
+         LIMIT 20"
+    )
+    .bind(hashtag)
+    .fetch_all(&state.db_pool)
+    .await {
+        Ok(r) => r,
+        Err(_) => return,
+    };
+
+    for row in &unscored {
+        let id:       uuid::Uuid = row.get("id");
+        let username: String     = row.get::<Option<String>, _>("username").unwrap_or_default();
+        let bio:      String     = row.get::<Option<String>, _>("bio").unwrap_or_default();
+        let followers: i64       = row.get::<Option<i64>, _>("followers_count").unwrap_or(0);
+        let ext_url:  String     = row.get::<Option<String>, _>("external_url").unwrap_or_default();
+
+        let prompt = format!(
+            r#"Score this Instagram creator as a potential client for a professional video clipping service (score 0–100).
+
+The clipping service:
+- Takes long-form videos (YouTube, podcast, streams) and repurposes them into 30–90s Shorts/Reels clips
+- Charges $297–$497/month
+- Ideal clients: YouTubers, podcasters, educators, online course creators, coaches with video content
+
+Creator profile:
+- Username: @{username}
+- Followers: {followers}
+- Bio: {bio}
+- Link in bio: {ext_url}
+
+Score guidelines:
+- 80–100: Clear content creator with video content, 10K–500K followers, appears monetised
+- 60–79: Likely content creator, decent following, video content likely
+- 40–59: Could be a creator but unclear from profile
+- 0–39: Fan page, brand account, private/spammy, or clearly not a content creator
+
+Return ONLY valid JSON (no markdown):
+{{"score": 75, "reason": "Podcaster with 45K followers, podcast link in bio, posts video clips"}}"#,
+            username  = username,
+            followers = followers,
+            bio       = bio,
+            ext_url   = ext_url,
+        );
+
+        let result = generate_text_best_effort(
+            state.nvidia_nim_client.as_ref(),
+            state.gemma_client.as_ref(),
+            state.gemini_client.as_ref(),
+            &prompt,
+        ).await;
+
+        if let Ok(text) = result {
+            let cleaned = text.trim()
+                .trim_start_matches("```json").trim_start_matches("```")
+                .trim_end_matches("```").trim();
+
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(cleaned) {
+                let score  = v.get("score").and_then(|s| s.as_i64()).unwrap_or(0) as i32;
+                let reason = v.get("reason").and_then(|r| r.as_str()).unwrap_or("").to_string();
+
+                let _ = sqlx::query(
+                    "UPDATE instagram_leads SET score = $1, score_reason = $2 WHERE id = $3"
+                )
+                .bind(score)
+                .bind(&reason)
+                .bind(id)
+                .execute(&state.db_pool)
+                .await;
+            }
+        }
+
+        // Small delay to avoid quota hammering
+        tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+    }
+
+    tracing::info!("📊 Scored {} Instagram leads for hashtag #{}", unscored.len(), hashtag);
 }
