@@ -933,7 +933,7 @@ pub async fn landing_page() -> Html<String> {
             new DynamicBackgroundManager();
 
             // Hide login/signup buttons if user is authenticated
-            const authToken = localStorage.getItem('authToken');
+            const authToken = localStorage.getItem('auth_token') || localStorage.getItem('authToken');
             if (authToken) {
                 const authButtons = document.querySelectorAll('.auth-buttons, .hero-buttons');
                 authButtons.forEach(container => {
@@ -2281,7 +2281,7 @@ pub async fn dashboard_page() -> Html<String> {
 
     <script>
         // Check authentication
-        const authToken = localStorage.getItem('authToken');
+        const authToken = localStorage.getItem('auth_token') || localStorage.getItem('authToken');
         if (!authToken) {
             window.location.href = '/login';
         }
@@ -2301,7 +2301,7 @@ pub async fn dashboard_page() -> Html<String> {
         // Check access via API to include whitelisted users
         const clippingCard = document.getElementById('clipping-action-card');
         if (clippingCard) {
-            const authToken = localStorage.getItem('authToken');
+            const authToken = localStorage.getItem('auth_token') || localStorage.getItem('authToken');
             if (authToken) {
                 fetch('/api/clipping/access-check', {
                     headers: { 'Authorization': 'Bearer ' + authToken }
@@ -2336,7 +2336,7 @@ pub async fn dashboard_page() -> Html<String> {
         // Load recent chats
         async function loadRecentChats() {
             try {
-                const authToken = localStorage.getItem('authToken');
+                const authToken = localStorage.getItem('auth_token') || localStorage.getItem('authToken');
                 const response = await fetch('/api/chat/recent', {
                     headers: {
                         'Authorization': `Bearer ${authToken}`
@@ -2401,7 +2401,7 @@ pub async fn dashboard_page() -> Html<String> {
         // Load all chats with pagination
         async function loadAllChats(page = 1) {
             try {
-                const authToken = localStorage.getItem('authToken');
+                const authToken = localStorage.getItem('auth_token') || localStorage.getItem('authToken');
                 const response = await fetch(`/api/chat/all?page=${page}&limit=20`, {
                     headers: {
                         'Authorization': `Bearer ${authToken}`
@@ -3141,7 +3141,7 @@ pub async fn chat_interface_with_session_id(session_id: Option<String>) -> Html<
         // Initialize the application
         document.addEventListener('DOMContentLoaded', function() {
             console.log('🚀 DOMContentLoaded event fired - initializing chat interface');
-            console.log('Auth token present:', !!localStorage.getItem('authToken'));
+            console.log('Auth token present:', !!localStorage.getItem('auth_token') || localStorage.getItem('authToken'));
 
             try {
                 initializeSession();
@@ -3176,7 +3176,7 @@ pub async fn chat_interface_with_session_id(session_id: Option<String>) -> Html<
         
         async function loadChatHistory(sessionId) {
             try {
-                const authToken = localStorage.getItem('authToken');
+                const authToken = localStorage.getItem('auth_token') || localStorage.getItem('authToken');
                 if (!authToken) {
                     console.warn('No auth token, cannot load chat history');
                     return;
@@ -3512,7 +3512,7 @@ pub async fn chat_interface_with_session_id(session_id: Option<String>) -> Html<
             content.innerHTML = '<p style="text-align: center; padding: 2rem; color: #6c757d;">Loading your channels...</p>';
 
             try {
-                const authToken = localStorage.getItem('authToken');
+                const authToken = localStorage.getItem('auth_token') || localStorage.getItem('authToken');
                 if (!authToken) {
                     content.innerHTML = `
                         <div style="text-align: center; padding: 2rem;">
@@ -3584,7 +3584,7 @@ pub async fn chat_interface_with_session_id(session_id: Option<String>) -> Html<
 
         async function connectYouTubeChannel() {
             try {
-                const authToken = localStorage.getItem('authToken');
+                const authToken = localStorage.getItem('auth_token') || localStorage.getItem('authToken');
                 if (!authToken) {
                     alert('Please log in first');
                     window.location.href = '/login';
@@ -3641,7 +3641,7 @@ pub async fn chat_interface_with_session_id(session_id: Option<String>) -> Html<
             `;
 
             try {
-                const authToken = localStorage.getItem('authToken');
+                const authToken = localStorage.getItem('auth_token') || localStorage.getItem('authToken');
                 const response = await fetch('/api/youtube/upload', {
                     method: 'POST',
                     headers: {
@@ -3805,7 +3805,7 @@ pub async fn chat_interface_with_session_id(session_id: Option<String>) -> Html<
             if (files.length === 0) return;
             
             // Get JWT token from localStorage
-            const authToken = localStorage.getItem('authToken');
+            const authToken = localStorage.getItem('auth_token') || localStorage.getItem('authToken');
             if (!authToken) {
                 addMessage('assistant', '❌ Please log in to upload files.');
                 return;
@@ -3875,7 +3875,7 @@ pub async fn chat_interface_with_session_id(session_id: Option<String>) -> Html<
 
         async function loadUploadedFiles() {
             // Get JWT token from localStorage
-            const authToken = localStorage.getItem('authToken');
+            const authToken = localStorage.getItem('auth_token') || localStorage.getItem('authToken');
             if (!authToken) {
                 return; // No auth token, can't load files
             }
@@ -4948,7 +4948,7 @@ pub async fn clipping_management_page() -> Html<String> {
     </div>
 
     <script>
-        const authToken = localStorage.getItem('authToken');
+        const authToken = localStorage.getItem('auth_token') || localStorage.getItem('authToken');
         if (!authToken) {
             window.location.href = '/login';
         }
@@ -5926,7 +5926,7 @@ pub async fn video_tools_page() -> Html<String> {
         }
 
         function getAuthHeader() {
-            const token = localStorage.getItem('authToken');
+            const token = localStorage.getItem('auth_token') || localStorage.getItem('authToken');
             return token ? { 'Authorization': 'Bearer ' + token } : {};
         }
 
@@ -6543,7 +6543,7 @@ input[type=number]{width:100%;padding:8px 12px;background:#0f3460;border:1px sol
   </div>
 </div>
 <script>
-const token = localStorage.getItem('authToken') || localStorage.getItem('admin_token');
+const token = localStorage.getItem('auth_token') || localStorage.getItem('authToken') || localStorage.getItem('auth_token') || localStorage.getItem('admin_token');
 if (!token) window.location.href = '/login';
 function parseJwt(t){try{return JSON.parse(atob(t.split('.')[1]));}catch(e){return{};}}
 const claims = parseJwt(token);

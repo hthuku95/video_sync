@@ -440,7 +440,7 @@ pub async fn admin_dashboard() -> Html<String> {
     
     <script>
         // Check admin authentication
-        const authToken = localStorage.getItem('authToken');
+        const authToken = localStorage.getItem('auth_token') || localStorage.getItem('authToken');
         const user = JSON.parse(localStorage.getItem('user') || '{}');
         
         if (!authToken || (!user.is_staff && !user.is_superuser)) {
@@ -1262,7 +1262,7 @@ pub async fn admin_users_list() -> Html<String> {
     </div>
 
     <script>
-        const authToken = localStorage.getItem('authToken');
+        const authToken = localStorage.getItem('auth_token') || localStorage.getItem('authToken');
         const user = JSON.parse(localStorage.getItem('user') || '{}');
 
         if (!authToken || (!user.is_staff && !user.is_superuser)) {
@@ -1563,7 +1563,7 @@ pub async fn admin_user_detail(Path(id): Path<i32>) -> Html<String> {
     </div>
 
     <script>
-        const authToken = localStorage.getItem('authToken');
+        const authToken = localStorage.getItem('auth_token') || localStorage.getItem('authToken');
         const currentUser = JSON.parse(localStorage.getItem('user') || '{{}}');
         const userId = {id};
         let userData = null;
@@ -3571,7 +3571,7 @@ pub async fn admin_clipping_activity_page() -> Html<String> {
         </div>
 
         <script>
-            const token = localStorage.getItem('authToken');
+            const token = localStorage.getItem('auth_token') || localStorage.getItem('authToken');
             const user = JSON.parse(localStorage.getItem('user') || '{}');
             if (!token || (!user.is_staff && !user.is_superuser)) {
                 window.location.href = '/admin/login';
@@ -4740,7 +4740,7 @@ pub async fn admin_clipping_jobs_page() -> Html<String> {
         let currentPage = 1;
         let totalPages = 1;
         let jobs = [];
-        const authToken = localStorage.getItem('authToken');
+        const authToken = localStorage.getItem('auth_token') || localStorage.getItem('authToken');
         const user = JSON.parse(localStorage.getItem('user') || '{}');
 
         // Check auth
@@ -5568,7 +5568,7 @@ pub async fn admin_performance_page() -> Html<String> {
     </div>
 
     <script>
-        const authToken = localStorage.getItem('authToken');
+        const authToken = localStorage.getItem('auth_token') || localStorage.getItem('authToken');
         const user = JSON.parse(localStorage.getItem('user') || '{}');
         if (!authToken || (!user.is_staff && !user.is_superuser)) {
             window.location.href = '/admin/login';
@@ -6105,7 +6105,7 @@ pub async fn admin_test_runs_page() -> Html<String> {
 </div>
 
 <script>
-const token = localStorage.getItem('authToken');
+const token = localStorage.getItem('auth_token') || localStorage.getItem('authToken');
 function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
 function statusBadge(s) {
@@ -6307,7 +6307,7 @@ pub async fn admin_test_run_detail_page(Path(id): Path<String>) -> Html<String> 
 
 <script>
 const RUN_ID = "{id}";
-const token = localStorage.getItem('authToken');
+const token = localStorage.getItem('auth_token') || localStorage.getItem('authToken');
 let autoRefresh = null;
 
 function esc(s) {{ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }}
@@ -7185,7 +7185,7 @@ async function createDelivery() {
   if (cfg.mockupAnim)    extra.animation        = document.getElementById('mockup_animation').value;
   if (cfg.screenshotUrl) extra.screenshot_url   = document.getElementById('screenshot_url').value;
 
-  const token = localStorage.getItem('admin_token');
+  const token = localStorage.getItem('auth_token') || localStorage.getItem('admin_token');
   const body = {
     client_ref: document.getElementById('client_ref').value.trim() || null,
     title, gig_type: gig, prompt,
@@ -7225,7 +7225,7 @@ function fmtDate(iso) {
 }
 
 async function loadDeliveries() {
-  const token = localStorage.getItem('admin_token');
+  const token = localStorage.getItem('auth_token') || localStorage.getItem('admin_token');
   try {
     const resp = await fetch('/api/admin/deliveries', {
       headers: { 'Authorization': `Bearer ${token}` }

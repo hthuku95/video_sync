@@ -802,7 +802,7 @@ tr:hover td{background:#0a0a1a}
 </div>
 
 <script>
-const token = localStorage.getItem('admin_token') || localStorage.getItem('authToken');
+const token = localStorage.getItem('auth_token') || localStorage.getItem('admin_token') || localStorage.getItem('authToken');
 if (!token) window.location.href = '/admin';
 
 let currentFilter = 'all';

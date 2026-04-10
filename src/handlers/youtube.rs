@@ -972,7 +972,7 @@ pub async fn youtube_management_page() -> Html<String> {
     </div>
 
     <script>
-        const authToken = localStorage.getItem('authToken');
+        const authToken = localStorage.getItem('auth_token') || localStorage.getItem('authToken');
         if (!authToken) {
             window.location.href = '/login';
         }
@@ -1047,7 +1047,7 @@ pub async fn youtube_management_page() -> Html<String> {
 
         async function connectNewChannel() {
             // Get auth token from localStorage
-            const authToken = localStorage.getItem('authToken');
+            const authToken = localStorage.getItem('auth_token') || localStorage.getItem('authToken');
 
             if (!authToken) {
                 // Not logged in - redirect to login first
