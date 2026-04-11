@@ -3129,6 +3129,8 @@ pub async fn chat_interface_with_session_id(session_id: Option<String>) -> Html<
         let ws = null;
         let isConnected = false;
         let uploadedFiles = [];
+        let jobPollTimer = null;
+        let seenJobIds = new Set();
         // Session ID passed from server (either specific session or null for new)
         let providedSessionId = SESSION_ID_PLACEHOLDER;
 
@@ -3248,6 +3250,7 @@ pub async fn chat_interface_with_session_id(session_id: Option<String>) -> Html<
                 ws.onopen = function() {
                     isConnected = true;
                     updateConnectionStatus(true);
+                    stopJobPolling(); // WS live — polling not needed
                     console.log('✅ Successfully connected to video editing assistant');
                 };
 
@@ -3263,12 +3266,18 @@ pub async fn chat_interface_with_session_id(session_id: Option<String>) -> Html<
                         case 'message':
                             hideTypingIndicator();
                             hideProgressBar();
+                            seenJobIds.add('ws-' + Date.now());
                             addMessage('assistant', jsonData.content);
                             break;
                         case 'thinking':
                             // Update typing indicator with agent thinking/tool calling details
                             console.log('Thinking update:', jsonData.content);
                             updateThinkingIndicator(jsonData.content);
+                            break;
+                        case 'background_job_status':
+                            // Shown on reconnect when a task is still running in the background
+                            hideTypingIndicator();
+                            addMessage('assistant', jsonData.content, true /* isStatus */);
                             break;
                         case 'progress':
                             // Show agent progress in typing indicator, background job progress in progress bar
@@ -3319,7 +3328,10 @@ pub async fn chat_interface_with_session_id(session_id: Option<String>) -> Html<
                 isConnected = false;
                 updateConnectionStatus(false);
                 console.log('Disconnected from assistant');
-                
+
+                // Start polling for completed background jobs while WS is down
+                startJobPolling();
+
                 // Try to reconnect after 3 seconds
                 setTimeout(initializeWebSocket, 3000);
             };
@@ -3338,6 +3350,50 @@ pub async fn chat_interface_with_session_id(session_id: Option<String>) -> Html<
                 updateConnectionStatus(false);
             }
         }
+
+        // ─── Background job polling (SSR fallback when WS is disconnected) ──────
+        function startJobPolling() {
+            if (jobPollTimer) return;
+            jobPollTimer = setInterval(async function() {
+                const authToken = localStorage.getItem('auth_token') || localStorage.getItem('authToken');
+                if (!authToken) return;
+                try {
+                    const res = await fetch(`/api/chat/sessions/${sessionUuid}/jobs`, {
+                        headers: { 'Authorization': 'Bearer ' + authToken }
+                    });
+                    if (!res.ok) return;
+                    const data = await res.json();
+                    const jobs = data.jobs || [];
+                    for (const job of jobs) {
+                        if (job.status === 'completed' && job.result) {
+                            const msgId = 'job-' + job.id;
+                            if (!seenJobIds.has(msgId)) {
+                                seenJobIds.add(msgId);
+                                hideTypingIndicator();
+                                addMessage('assistant', job.result);
+                            }
+                        } else if (job.status === 'failed' && job.error) {
+                            const msgId = 'job-err-' + job.id;
+                            if (!seenJobIds.has(msgId)) {
+                                seenJobIds.add(msgId);
+                                hideTypingIndicator();
+                                addMessage('assistant', '❌ Task failed: ' + job.error);
+                            }
+                        }
+                    }
+                } catch(e) {
+                    console.warn('Job polling error:', e);
+                }
+            }, 10000); // every 10s
+        }
+
+        function stopJobPolling() {
+            if (jobPollTimer) {
+                clearInterval(jobPollTimer);
+                jobPollTimer = null;
+            }
+        }
+        // ─────────────────────────────────────────────────────────────────────
 
         function setupEventListeners() {
             const chatInput = document.getElementById('chatInput');

@@ -916,11 +916,12 @@ async fn create_agent_job(state: &Arc<AppState>, session_uuid: &str, user_messag
     .flatten()
 }
 
-async fn complete_agent_job(state: &Arc<AppState>, job_id: uuid::Uuid) {
+async fn complete_agent_job(state: &Arc<AppState>, job_id: uuid::Uuid, result: &str) {
     let _ = sqlx::query(
-        "UPDATE agent_background_jobs SET status = 'completed', updated_at = NOW() WHERE id = $1"
+        "UPDATE agent_background_jobs SET status = 'completed', result = $2, updated_at = NOW() WHERE id = $1"
     )
     .bind(job_id)
+    .bind(result)
     .execute(&state.db_pool)
     .await;
 }
@@ -1048,9 +1049,9 @@ async fn run_agent_background(
 
     tracing::info!("✅ Background agent task completed for session: {}", session_id);
 
-    // Mark job as completed in DB
+    // Mark job as completed in DB (also saves result so polling works after reconnect)
     if let Some(jid) = job_id {
-        complete_agent_job(&state, jid).await;
+        complete_agent_job(&state, jid, &response).await;
     }
 
     // Route result back to the WebSocket via job_manager — works even if the user
