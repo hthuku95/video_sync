@@ -74,6 +74,7 @@ pub fn chat_routes() -> Router {
         .route("/api/chat/history/:session_id", get(get_chat_history))
         .route("/api/chat/recent", get(get_recent_chats))
         .route("/api/chat/all", get(get_all_chats))
+        .route("/api/chat/sessions/:session_uuid/jobs", get(get_session_jobs))
         .layer(axum::middleware::from_fn(auth_middleware));
 
     public_routes.merge(protected_routes)
@@ -104,6 +105,19 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>, session_uuid: Option
 
     // 🆕 AGENT PROGRESS: Create separate channel for agent thinking/tool calling updates
     let (agent_progress_tx, mut agent_progress_rx) = tokio::sync::mpsc::unbounded_channel();
+
+    // On reconnect: check if there's a running background agent job for this session
+    // and immediately inform the user so they know work is still happening
+    if let Some(running_msg) = get_running_agent_job_status(&state, &session_id).await {
+        let json_response = serde_json::json!({
+            "type": "background_job_status",
+            "content": running_msg,
+            "timestamp": chrono::Utc::now().to_rfc3339(),
+        });
+        if let Ok(json_str) = serde_json::to_string(&json_response) {
+            let _ = sender.send(Message::Text(json_str)).await;
+        }
+    }
 
     // Get default model from system settings (admin-configurable)
     let default_model = get_default_model(&state.db_pool).await;
@@ -241,70 +255,47 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>, session_uuid: Option
                 query_parts.join("\n\n")
             };
 
-            // 🤖 AI-POWERED ROUTING: Let the AI decide when to start background jobs
-            // The AI has a special tool called "start_background_job" that it can call
+            // 🤖 AI-POWERED ROUTING: Spawn agent as background task so it survives
+            // WebSocket disconnects. User can close the page and come back — the task
+            // keeps running and the result will be delivered on reconnect via job_manager.
             use crate::agent::stateful_agent::{StatefulClaudeAgent, StatefulGeminiAgent};
 
-            tracing::info!("🤖 Processing message with AI-powered routing");
+            tracing::info!("🤖 Spawning AI agent as background task for session: {}", session_id);
 
-            let response = if use_claude {
-                if let Some(ref claude_client) = state.claude_client {
-                    let agent = StatefulClaudeAgent::new(Arc::new(claude_client.clone()));
+            // Create a DB record for this job so we can replay it on reconnect
+            let job_id = create_agent_job(&state, &session_id, &text).await;
 
-                    match agent.chat(
-                        &text,
-                        &session_id,
-                        enhanced_query.clone(),
-                        state.clone(),
-                        state.job_manager.clone(),
-                        Some(agent_progress_tx.clone()),
-                    ).await {
-                        Ok(resp) => resp,
-                        Err(e) => format!("Sorry, I encountered an error: {}", e),
-                    }
-                } else {
-                    "Claude client not configured".to_string()
-                }
-            } else {
-                if let Some(gemini_client) = state.video_gemini_client.as_ref().or(state.gemini_client.as_ref()) {
-                    let agent = StatefulGeminiAgent::new(Arc::new(gemini_client.clone()));
+            // Clone everything the background task needs (state is Arc, cheap clone)
+            let state_bg = state.clone();
+            let session_id_bg = session_id.clone();
+            let text_bg = text.clone();
+            let enhanced_query_bg = enhanced_query.clone();
+            let job_manager_bg = state.job_manager.clone();
+            let agent_tx_bg = agent_progress_tx.clone();
 
-                    match agent.chat(
-                        &text,
-                        &session_id,
-                        enhanced_query.clone(),
-                        state.clone(),
-                        state.job_manager.clone(),
-                        Some(agent_progress_tx.clone()),
-                    ).await {
-                        Ok(resp) => resp,
-                        Err(e) => format!("Sorry, I encountered an error: {}", e),
-                    }
-                } else {
-                    "Gemini client not configured".to_string()
-                }
-            };
+            tokio::spawn(async move {
+                run_agent_background(
+                    state_bg,
+                    session_id_bg,
+                    text_bg,
+                    enhanced_query_bg,
+                    use_claude,
+                    job_id,
+                    job_manager_bg,
+                    agent_tx_bg,
+                ).await;
+            });
 
-            // NOTE: Message saving is handled by the stateful agent (stateful_agent.rs)
-            // to avoid duplicate database entries. The agent saves:
-            // - User message before processing
-            // - AI response after completion
-            // - Qdrant vectorization for both
-
-            // Send AI's response
-            if !response.is_empty() {
-
-                let json_response = serde_json::json!({
-                    "type": "message",
-                    "content": response,
-                    "timestamp": chrono::Utc::now().to_rfc3339(),
-                });
-
-                if let Ok(json_str) = serde_json::to_string(&json_response) {
-                    if sender.send(Message::Text(json_str)).await.is_err() {
-                        tracing::error!("Failed to send message to WebSocket");
-                        break;
-                    }
+            // Send immediate ACK so the user knows the agent has started
+            let ack = serde_json::json!({
+                "type": "thinking",
+                "content": "⏳ Working on this in the background. You can close this page and come back — I'll keep working and your result will be here when you return.",
+                "timestamp": chrono::Utc::now().to_rfc3339(),
+            });
+            if let Ok(json_str) = serde_json::to_string(&ack) {
+                if sender.send(Message::Text(json_str)).await.is_err() {
+                    tracing::error!("Failed to send ACK to WebSocket");
+                    break;
                 }
             }
                 }
@@ -905,5 +896,234 @@ async fn get_all_chats(
             "total": total_count.0,
             "total_pages": (total_count.0 + limit - 1) / limit
         }
+    })))
+}
+
+// ─── Background agent job helpers ────────────────────────────────────────────
+
+/// Create a DB record for a background agent job. Returns the UUID if successful.
+async fn create_agent_job(state: &Arc<AppState>, session_uuid: &str, user_message: &str) -> Option<uuid::Uuid> {
+    sqlx::query_scalar::<_, uuid::Uuid>(
+        "INSERT INTO agent_background_jobs (session_uuid, session_id, user_message, status)
+         VALUES ($1, (SELECT id FROM chat_sessions WHERE session_uuid = $1 LIMIT 1), $2, 'running')
+         RETURNING id"
+    )
+    .bind(session_uuid)
+    .bind(user_message)
+    .fetch_optional(&state.db_pool)
+    .await
+    .ok()
+    .flatten()
+}
+
+async fn complete_agent_job(state: &Arc<AppState>, job_id: uuid::Uuid) {
+    let _ = sqlx::query(
+        "UPDATE agent_background_jobs SET status = 'completed', updated_at = NOW() WHERE id = $1"
+    )
+    .bind(job_id)
+    .execute(&state.db_pool)
+    .await;
+}
+
+async fn fail_agent_job(state: &Arc<AppState>, job_id: uuid::Uuid, error: &str) {
+    let _ = sqlx::query(
+        "UPDATE agent_background_jobs SET status = 'failed', error = $2, updated_at = NOW() WHERE id = $1"
+    )
+    .bind(job_id)
+    .bind(error)
+    .execute(&state.db_pool)
+    .await;
+}
+
+async fn append_job_progress(state: &Arc<AppState>, job_id: uuid::Uuid, message: &str) {
+    let entry = serde_json::json!({
+        "ts": chrono::Utc::now().to_rfc3339(),
+        "msg": message
+    });
+    let _ = sqlx::query(
+        "UPDATE agent_background_jobs
+         SET progress_log = progress_log || $2::jsonb, updated_at = NOW()
+         WHERE id = $1"
+    )
+    .bind(job_id)
+    .bind(serde_json::json!([entry]))
+    .execute(&state.db_pool)
+    .await;
+}
+
+/// Returns a human-readable status string if there's a running agent job for this session,
+/// or None if there's no in-progress work.
+async fn get_running_agent_job_status(state: &Arc<AppState>, session_uuid: &str) -> Option<String> {
+    let row = sqlx::query_as::<_, (uuid::Uuid, String, chrono::DateTime<chrono::Utc>)>(
+        "SELECT id, user_message, created_at
+         FROM agent_background_jobs
+         WHERE session_uuid = $1 AND status = 'running'
+         ORDER BY created_at DESC LIMIT 1"
+    )
+    .bind(session_uuid)
+    .fetch_optional(&state.db_pool)
+    .await
+    .ok()
+    .flatten();
+
+    row.map(|(_, user_msg, created_at)| {
+        let elapsed = chrono::Utc::now().signed_duration_since(created_at);
+        let mins = elapsed.num_minutes();
+        let elapsed_str = if mins < 1 { "just now".to_string() } else { format!("{} min ago", mins) };
+        format!(
+            "⏳ Your task is still running in the background (started {}): \"{}\"\n\nI'll send you the result as soon as it's done. You can also check back later.",
+            elapsed_str,
+            user_msg.chars().take(120).collect::<String>()
+        )
+    })
+}
+
+/// Core background function: runs the agent and routes the result back via job_manager
+/// so it's delivered to whichever WebSocket connection is open for this session.
+#[allow(unused_imports)]
+use crate::agent::stateful_agent::{StatefulClaudeAgent, StatefulGeminiAgent};
+async fn run_agent_background(
+    state: Arc<AppState>,
+    session_id: String,
+    text: String,
+    enhanced_query: String,
+    use_claude: bool,
+    job_id: Option<uuid::Uuid>,
+    job_manager: std::sync::Arc<crate::jobs::JobManager>,
+    agent_progress_tx: tokio::sync::mpsc::UnboundedSender<String>,
+) {
+    tracing::info!("🚀 Background agent task started for session: {}", session_id);
+
+    // Proxy for agent progress: forward to WebSocket channel AND save to DB
+    let (proxy_tx, mut proxy_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let state_prog = state.clone();
+    let job_id_prog = job_id;
+    // Drain the proxy channel in a separate task, saving each message to DB
+    tokio::spawn(async move {
+        while let Some(msg) = proxy_rx.recv().await {
+            // Forward to WebSocket (best-effort — may fail if WS is closed)
+            let _ = agent_progress_tx.send(msg.clone());
+            // Persist to DB
+            if let Some(jid) = job_id_prog {
+                append_job_progress(&state_prog, jid, &msg).await;
+            }
+        }
+    });
+
+    let response = if use_claude {
+        if let Some(ref claude_client) = state.claude_client {
+            let agent = StatefulClaudeAgent::new(Arc::new(claude_client.clone()));
+            match agent.chat(
+                &text,
+                &session_id,
+                enhanced_query,
+                state.clone(),
+                job_manager.clone(),
+                Some(proxy_tx),
+            ).await {
+                Ok(resp) => resp,
+                Err(e) => format!("Sorry, I encountered an error: {}", e),
+            }
+        } else {
+            "Claude client not configured".to_string()
+        }
+    } else {
+        if let Some(gemini_client) = state.video_gemini_client.as_ref().or(state.gemini_client.as_ref()) {
+            let agent = StatefulGeminiAgent::new(Arc::new(gemini_client.clone()));
+            match agent.chat(
+                &text,
+                &session_id,
+                enhanced_query,
+                state.clone(),
+                job_manager.clone(),
+                Some(proxy_tx),
+            ).await {
+                Ok(resp) => resp,
+                Err(e) => format!("Sorry, I encountered an error: {}", e),
+            }
+        } else {
+            "Gemini client not configured".to_string()
+        }
+    };
+
+    tracing::info!("✅ Background agent task completed for session: {}", session_id);
+
+    // Mark job as completed in DB
+    if let Some(jid) = job_id {
+        complete_agent_job(&state, jid).await;
+    }
+
+    // Route result back to the WebSocket via job_manager — works even if the user
+    // reconnected with a new WebSocket after navigating away.
+    // The WebSocket loop handles JobStatus::Completed by sending `result` as a chat message.
+    if !response.is_empty() {
+        let update = crate::jobs::ProgressUpdate::new(
+            job_id.map(|j| j.to_string()).unwrap_or_else(|| session_id.clone()),
+            "Agent task complete".to_string(),
+            crate::jobs::JobStatus::Completed {
+                result: response,
+                output_files: vec![],
+                duration_seconds: 0.0,
+            },
+        );
+        job_manager.send_progress(&session_id, update).await;
+    }
+}
+
+/// REST endpoint: list all agent background jobs for a session (for frontend polling)
+async fn get_session_jobs(
+    axum::extract::Path(session_uuid): axum::extract::Path<String>,
+    Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<crate::models::auth::Claims>,
+) -> Result<axum::response::Json<serde_json::Value>, axum::http::StatusCode> {
+    // Verify ownership
+    let user_id = claims.sub.parse::<i32>().unwrap_or(0);
+    let owner: Option<i32> = sqlx::query_scalar(
+        "SELECT user_id FROM chat_sessions WHERE session_uuid = $1"
+    )
+    .bind(&session_uuid)
+    .fetch_optional(&state.db_pool)
+    .await
+    .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    match owner {
+        Some(oid) if oid != user_id => {
+            return Err(axum::http::StatusCode::FORBIDDEN);
+        }
+        None => {
+            return Err(axum::http::StatusCode::NOT_FOUND);
+        }
+        _ => {}
+    }
+
+    let rows = sqlx::query_as::<_, (uuid::Uuid, String, String, Option<String>, Option<String>, serde_json::Value, chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)>(
+        "SELECT id, user_message, status, result, error, progress_log, created_at, updated_at
+         FROM agent_background_jobs
+         WHERE session_uuid = $1
+         ORDER BY created_at DESC
+         LIMIT 20"
+    )
+    .bind(&session_uuid)
+    .fetch_all(&state.db_pool)
+    .await
+    .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let jobs: Vec<serde_json::Value> = rows.into_iter().map(|(id, msg, status, result, error, progress_log, created_at, updated_at)| {
+        serde_json::json!({
+            "id": id,
+            "user_message": msg,
+            "status": status,
+            "result": result,
+            "error": error,
+            "progress_log": progress_log,
+            "created_at": created_at.to_rfc3339(),
+            "updated_at": updated_at.to_rfc3339(),
+        })
+    }).collect();
+
+    Ok(axum::response::Json(serde_json::json!({
+        "success": true,
+        "session_uuid": session_uuid,
+        "jobs": jobs
     })))
 }
