@@ -123,13 +123,10 @@ async fn search_youtube_prospects(
     }
 
     let base_category = payload.category.clone().unwrap_or_else(|| "general".to_string());
-    let search_query = match payload.prospect_type.as_str() {
-        "clipper"        => "video editor clips shorts creator".to_string(),
-        "podcaster"      => format!("{} podcast episode", base_category),
-        "educator"       => format!("{} tutorial explained course", base_category),
-        "business_owner" => format!("{} company brand products", base_category),
-        _                => base_category.clone(), // content_creator default
-    };
+
+    // AI generates the most effective YouTube search query for this prospect type + category
+    let search_query = ai_generate_youtube_query(state, &payload.prospect_type, &base_category).await;
+    tracing::info!("🔍 YouTube prospect search query (AI): \"{}\"", search_query);
 
     let client = reqwest::Client::new();
     let search_url = format!(
@@ -255,11 +252,38 @@ async fn search_twitch_prospects(
 
     let access_token = token_resp["access_token"].as_str().unwrap_or("").to_string();
 
-    // Search streams
-    let streams_url = format!(
-        "https://api.twitch.tv/helix/streams?first={}",
-        limit.min(100)
-    );
+    // AI picks the best Twitch game/category to search for this prospect type
+    let game_name = ai_generate_twitch_category(state, &payload.prospect_type,
+        &payload.category.clone().unwrap_or_else(|| "general".to_string())).await;
+    tracing::info!("🎮 Twitch prospect category (AI): \"{}\"", game_name);
+
+    // Look up the game ID on Twitch so we can filter streams by category
+    let game_id: Option<String> = if !game_name.is_empty() {
+        let game_url = format!(
+            "https://api.twitch.tv/helix/games?name={}",
+            urlencoding::encode(&game_name)
+        );
+        if let Ok(resp) = client.get(&game_url)
+            .header("Client-Id", &client_id)
+            .header("Authorization", format!("Bearer {}", access_token))
+            .send().await
+        {
+            if let Ok(val) = resp.json::<serde_json::Value>().await {
+                val["data"].as_array()
+                    .and_then(|arr| arr.first())
+                    .and_then(|g| g["id"].as_str())
+                    .map(String::from)
+            } else { None }
+        } else { None }
+    } else { None };
+
+    // Build streams URL — filter by game_id if found, otherwise top streams
+    let streams_url = if let Some(ref gid) = game_id {
+        format!("https://api.twitch.tv/helix/streams?first={}&game_id={}", limit.min(100), gid)
+    } else {
+        format!("https://api.twitch.tv/helix/streams?first={}", limit.min(100))
+    };
+
     let streams_resp: serde_json::Value = client.get(&streams_url)
         .header("Client-Id", &client_id)
         .header("Authorization", format!("Bearer {}", access_token))
@@ -1255,11 +1279,20 @@ async fn linkedin_fetch_results(
     .execute(&state.db_pool)
     .await;
 
+    // Score imported leads with AI in the background (non-blocking)
+    if imported > 0 {
+        let state_clone = state.clone();
+        let job_id_clone = job_id;
+        tokio::spawn(async move {
+            ai_score_linkedin_leads(&state_clone, job_id_clone).await;
+        });
+    }
+
     Json(json!({
         "success": true,
         "total_fetched": count,
         "imported_to_prospects": imported,
-        "message": format!("{} LinkedIn leads imported. View them at /admin/prospect-finder", imported)
+        "message": format!("{} LinkedIn leads imported. AI scoring started in background — check /admin/prospect-finder in ~1 minute.", imported)
     }))
 }
 
@@ -1267,6 +1300,10 @@ async fn linkedin_fetch_results(
 
 #[derive(Debug, serde::Deserialize)]
 struct SmartSearchRequest {
+    /// Plain-English description — AI will generate all filters from this.
+    /// e.g. "YouTubers and podcasters in the US with 10k+ followers who make money from content"
+    /// If provided, all filter fields below are IGNORED and AI generates them.
+    description:   Option<String>,
     /// e.g. ["YouTuber", "Podcast Host", "Content Creator", "Marketing Manager"]
     job_titles:    Option<Vec<String>>,
     /// e.g. ["Online Media", "E-Learning", "Marketing and Advertising"]
@@ -1280,7 +1317,6 @@ struct SmartSearchRequest {
     /// Max profiles to scrape (default 100)
     max_profiles:  Option<u32>,
     /// Optional: use a saved Sales Navigator list URL instead of building a search URL.
-    /// If provided, skips filter params and uses the List Export phantom directly.
     list_url:      Option<String>,
 }
 
@@ -1311,6 +1347,23 @@ async fn linkedin_smart_search(
     };
 
     let max = req.max_profiles.unwrap_or(100);
+
+    // If a plain-English description is given, use AI to generate all filter params
+    let req = if let Some(ref desc) = req.description.clone() {
+        match ai_generate_linkedin_filters(&state, desc).await {
+            Ok(ai_req) => {
+                tracing::info!("🤖 LinkedIn AI filters for \"{}\": {:?} / {:?} / {:?}",
+                    desc, ai_req.job_titles, ai_req.industries, ai_req.locations);
+                ai_req
+            }
+            Err(e) => {
+                tracing::warn!("LinkedIn AI filter generation failed: {} — using raw request", e);
+                req
+            }
+        }
+    } else {
+        req
+    };
 
     // Branch: list_url → List Export phantom; filters → Search Export phantom
     let (agent, search_url, container_id) = if let Some(list_url) = req.list_url.as_deref() {
@@ -2037,4 +2090,196 @@ Return ONLY valid JSON (no markdown):
     }
 
     tracing::info!("📊 Scored {} Instagram leads for hashtag #{}", unscored.len(), hashtag);
+}
+
+// ============================================================================
+// AI helpers — drive discovery, not just scoring
+// ============================================================================
+
+/// Ask the AI to generate the most effective YouTube search query for a prospect type + category.
+/// Replaces all hardcoded search strings.
+async fn ai_generate_youtube_query(state: &Arc<AppState>, prospect_type: &str, category: &str) -> String {
+    let prompt = format!(
+        r#"You are helping a video clipping agency find potential clients on YouTube.
+
+Prospect type: {prospect_type}
+Content category/niche: {category}
+
+Generate ONE concise YouTube search query (5–10 words max) that will find active YouTube CHANNELS
+in this niche who are likely to be content creators with regular uploads.
+
+The query should:
+- Target the channel owners/creators themselves (not tutorials about them)
+- Be specific enough to find real people, not brands or media companies
+- Work as a YouTube channel search
+
+Return ONLY the raw search query string, nothing else."#
+    );
+
+    match generate_text_best_effort(
+        state.nvidia_nim_client.as_ref(),
+        state.gemma_client.as_ref(),
+        state.gemini_client.as_ref(),
+        &prompt,
+    ).await {
+        Ok(t) => {
+            let q = t.trim().trim_matches('"').trim_matches('\'').to_string();
+            if q.is_empty() || q.len() > 100 { category.to_string() } else { q }
+        }
+        Err(_) => category.to_string(), // graceful fallback
+    }
+}
+
+/// Ask the AI to pick the best Twitch game/category to find streamers matching the prospect type.
+async fn ai_generate_twitch_category(state: &Arc<AppState>, prospect_type: &str, category: &str) -> String {
+    let prompt = format!(
+        r#"You are helping a video clipping agency find Twitch streamers as potential clients.
+
+Prospect type: {prospect_type}
+Niche: {category}
+
+Return ONE Twitch game or category name (exactly as it appears on Twitch) that best matches
+this niche. The streamers in this category are likely to be content creators who'd pay for
+short-form clip editing ($300/month).
+
+If the niche is not gaming, pick the closest non-gaming Twitch category (e.g. "Just Chatting",
+"Science & Technology", "Music", "Art", "Fitness & Health", "Podcasts", "Software and Game Dev").
+
+Return ONLY the category name, nothing else."#
+    );
+
+    match generate_text_best_effort(
+        state.nvidia_nim_client.as_ref(),
+        state.gemma_client.as_ref(),
+        state.gemini_client.as_ref(),
+        &prompt,
+    ).await {
+        Ok(t) => t.trim().trim_matches('"').trim_matches('\'').to_string(),
+        Err(_) => category.to_string(),
+    }
+}
+
+/// Ask the AI to generate Sales Navigator filter params from a plain-English description.
+/// Returns a populated SmartSearchRequest ready to use.
+async fn ai_generate_linkedin_filters(
+    state: &Arc<AppState>,
+    description: &str,
+) -> Result<SmartSearchRequest, String> {
+    let prompt = format!(
+        r#"You are generating LinkedIn Sales Navigator search filters for a video clipping agency.
+
+The agency creates short-form clips (YouTube Shorts, Reels, TikTok) for content creators.
+They are looking for potential clients based on this description:
+
+"{description}"
+
+Generate Sales Navigator filters that will find these people. Return ONLY valid JSON:
+{{
+  "job_titles": ["<title1>", "<title2>", "<title3>"],
+  "industries": ["<industry1>", "<industry2>"],
+  "locations": ["<location1>"],
+  "seniority": ["OWNER", "PARTNER"],
+  "company_sizes": ["A", "B"]
+}}
+
+Rules:
+- job_titles: 3–6 titles. Use real LinkedIn job titles (e.g. "YouTuber", "Podcast Host", "Content Creator", "Online Course Creator", "Social Media Influencer")
+- industries: 2–4 industries from LinkedIn's list (e.g. "Online Media", "E-Learning", "Entertainment", "Broadcast Media", "Marketing and Advertising")
+- locations: 1–3 countries/regions (e.g. "United States", "United Kingdom", "Canada")
+- seniority: always ["OWNER", "PARTNER", "CXO"] for independent creators
+- company_sizes: always ["A", "B"] (1–50 employees — solo creators and small teams)
+
+Return ONLY the JSON, no explanation."#
+    );
+
+    let text = generate_text_best_effort(
+        state.nvidia_nim_client.as_ref(),
+        state.gemma_client.as_ref(),
+        state.gemini_client.as_ref(),
+        &prompt,
+    ).await.map_err(|e| format!("LLM error: {}", e))?;
+
+    let cleaned = text.trim()
+        .trim_start_matches("```json").trim_start_matches("```")
+        .trim_end_matches("```").trim();
+
+    #[derive(serde::Deserialize)]
+    struct AiFilters {
+        job_titles:    Option<Vec<String>>,
+        industries:    Option<Vec<String>>,
+        locations:     Option<Vec<String>>,
+        seniority:     Option<Vec<String>>,
+        company_sizes: Option<Vec<String>>,
+    }
+
+    let filters: AiFilters = serde_json::from_str(cleaned)
+        .map_err(|e| format!("JSON parse error: {} | raw: {}", e, cleaned))?;
+
+    Ok(SmartSearchRequest {
+        description:   None, // already consumed
+        job_titles:    filters.job_titles,
+        industries:    filters.industries,
+        company_sizes: filters.company_sizes,
+        locations:     filters.locations,
+        seniority:     filters.seniority,
+        max_profiles:  None,
+        list_url:      None,
+    })
+}
+
+/// Score LinkedIn leads imported from a specific PB job using the same AI scoring
+/// used for YouTube/Twitch prospects.
+async fn ai_score_linkedin_leads(state: &Arc<AppState>, job_id: uuid::Uuid) {
+    // Get unscored LinkedIn prospects imported via this job
+    let rows = match sqlx::query(
+        "SELECT id, display_name, channel_description, subscriber_count, content_category,
+                job_title, company_name, seniority_level
+         FROM prospects
+         WHERE platform = 'linkedin'
+           AND (ai_score IS NULL OR ai_score = 0.5)
+           AND phantombuster_job_id = $1
+         LIMIT 30"
+    )
+    .bind(job_id)
+    .fetch_all(&state.db_pool)
+    .await {
+        Ok(r) => r,
+        Err(e) => { tracing::warn!("LinkedIn scoring: DB error: {}", e); return; }
+    };
+
+    tracing::info!("📊 AI-scoring {} LinkedIn leads for job {}", rows.len(), job_id);
+
+    for row in &rows {
+        let id:          uuid::Uuid = row.get("id");
+        let name:        String     = row.get::<Option<String>, _>("display_name").unwrap_or_default();
+        let description: String     = row.get::<Option<String>, _>("channel_description").unwrap_or_default();
+        let audience:    i64        = row.get::<Option<i64>, _>("subscriber_count").unwrap_or(0);
+        let category:    String     = row.get::<Option<String>, _>("content_category").unwrap_or_default();
+        let job_title:   String     = row.get::<Option<String>, _>("job_title").unwrap_or_default();
+        let company:     String     = row.get::<Option<String>, _>("company_name").unwrap_or_default();
+        let seniority:   String     = row.get::<Option<String>, _>("seniority_level").unwrap_or_default();
+
+        // Build a richer description from LinkedIn fields
+        let enriched_desc = format!(
+            "Job title: {}. Company: {}. Seniority: {}. Bio: {}",
+            job_title, company, seniority, description
+        );
+
+        let (score, reasoning, dm_creator, _) =
+            score_prospect_with_ai(state, &name, audience, &enriched_desc, &category, "linkedin_lead").await;
+
+        let _ = sqlx::query(
+            "UPDATE prospects SET ai_score = $1, ai_reasoning = $2, dm_script_creator = $3, updated_at = NOW() WHERE id = $4"
+        )
+        .bind(score)
+        .bind(&reasoning)
+        .bind(&dm_creator)
+        .bind(id)
+        .execute(&state.db_pool)
+        .await;
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+    }
+
+    tracing::info!("✅ LinkedIn AI scoring complete for job {}", job_id);
 }
