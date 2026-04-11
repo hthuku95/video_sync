@@ -603,6 +603,68 @@ For complex multi-step workflows that benefit from parallel execution:
             Err(e) => tracing::error!("❌ Failed to save user message: {}", e),
         }
 
+        // ── Gemma 4 via NVIDIA NIM (preferred — reduces load on Gemini quota) ──
+        // NVIDIA NIM uses the same OpenAI-compatible API as for text generation,
+        // just with the `tools` parameter added. Gemma 4 has NATIVE function calling
+        // via special tokens, so no prompt-engineering tricks needed.
+        // Falls back to Gemini below if NIM is unavailable or returns an error.
+        if let Some(ref nim_client) = app_state.nvidia_nim_client {
+            send_progress("🤖 Processing your message with Gemma 4...");
+
+            // Build OpenAI-format messages from the same conversation data
+            let mut nim_messages: Vec<serde_json::Value> = vec![
+                serde_json::json!({"role": "system", "content": system_instruction}),
+            ];
+            for msg in &conversation_history {
+                let role = match msg.role {
+                    crate::agent::conversation_manager::MessageRole::Human => "user",
+                    crate::agent::conversation_manager::MessageRole::Assistant => "assistant",
+                    _ => continue,
+                };
+                nim_messages.push(serde_json::json!({"role": role, "content": msg.content}));
+            }
+            // Add current user message (with any extra context prepended)
+            let current_message = if !context.is_empty() {
+                format!("{}\n\n{}", context, user_input)
+            } else {
+                user_input.to_string()
+            };
+            nim_messages.push(serde_json::json!({"role": "user", "content": current_message}));
+
+            let exec_context = crate::agent::tool_executor::ToolExecutionContext {
+                session_id: session_id.to_string(),
+                user_id: None,
+                app_state: app_state.clone(),
+            };
+
+            let nim_result = run_nim_tool_loop(
+                nim_client,
+                &mut nim_messages,
+                &all_tools,
+                &exec_context,
+                &send_progress,
+            ).await;
+
+            match nim_result {
+                Ok(response) if !response.is_empty() => {
+                    // Save assistant response and return
+                    let assistant_msg = ConversationMessage::new_assistant(
+                        session_id.to_string(), response.clone()
+                    );
+                    let _ = conversation_manager.save_message(&assistant_msg).await;
+                    tracing::info!("✅ Gemma 4 (NIM) completed task for session {}", session_id);
+                    return Ok(response);
+                }
+                Ok(_) => {
+                    tracing::warn!("⚠️ Gemma 4 (NIM) returned empty response — falling back to Gemini");
+                }
+                Err(e) => {
+                    tracing::warn!("⚠️ Gemma 4 (NIM) failed: {} — falling back to Gemini", e);
+                }
+            }
+        }
+        // ── Gemini fallback ───────────────────────────────────────────────────
+
         let mut final_response = String::new();
         let mut conversation_contents = contents;
 
@@ -1015,15 +1077,97 @@ For complex multi-step workflows that benefit from parallel execution:
         ];
 
         // Add video editing tools dynamically using ToolSelector.
-        // Cap at 37 video tools (+ 3 control tools above = 40 total).
-        // Gemini's hard limit is 128 declarations but "too many states" INVALID_ARGUMENT
-        // errors start appearing around 50+ complex schemas. 40 is a safe ceiling.
-        // See: https://github.com/googleapis/python-genai/issues/660
+        // ToolSelector returns at most ~25 tools for the catch-all case and a relevant
+        // subset for keyword-matched cases — no truncation needed here.
         let selected_tool_names = crate::tool_selector::ToolSelector::select_tools(user_input);
-        let mut video_tools = crate::gemini_client::GeminiClient::filter_tools_by_name(&selected_tool_names);
-        video_tools.truncate(37);
+        let video_tools = crate::gemini_client::GeminiClient::filter_tools_by_name(&selected_tool_names);
         all_tools.extend(video_tools);
 
         all_tools
     }
+}
+
+// ── Gemma 4 / NVIDIA NIM tool calling loop ────────────────────────────────────
+//
+// Runs the same multi-turn tool loop as the Gemini agent but using NVIDIA NIM's
+// OpenAI-compatible API. Gemma 4 has NATIVE function calling (special tokens,
+// not prompt engineering), so this is a first-class supported path.
+//
+// Conversation format: OpenAI messages array (system / user / assistant / tool).
+// Tool results are added as { role: "tool", tool_call_id, content } messages.
+// Loop exits when `finish_reason` is not "tool_calls".
+
+async fn run_nim_tool_loop<F>(
+    nim_client: &crate::nvidia_nim_client::NvidiaNimClient,
+    messages: &mut Vec<serde_json::Value>,
+    tools: &[crate::gemini_client::FunctionDeclaration],
+    exec_context: &crate::agent::tool_executor::ToolExecutionContext,
+    send_progress: &F,
+) -> Result<String, String>
+where
+    F: Fn(&str),
+{
+    const MAX_TURNS: usize = 10; // prevent infinite loops
+
+    for turn in 0..MAX_TURNS {
+        let response = nim_client
+            .generate_single(messages, tools)
+            .await
+            .map_err(|e| format!("NIM API error: {}", e))?;
+
+        match response {
+            crate::nvidia_nim_client::NimResponse::Text(text) => {
+                tracing::info!("✅ Gemma 4 (NIM) final answer after {} turns", turn + 1);
+                return Ok(text);
+            }
+
+            crate::nvidia_nim_client::NimResponse::ToolCalls(tool_calls) => {
+                // Add Gemma's tool-call message to history
+                let assistant_tool_calls: Vec<serde_json::Value> = tool_calls.iter().map(|tc| {
+                    serde_json::json!({
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.name,
+                            "arguments": tc.arguments.to_string(),
+                        }
+                    })
+                }).collect();
+
+                messages.push(serde_json::json!({
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": assistant_tool_calls,
+                }));
+
+                // Execute each tool and collect results
+                for tc in &tool_calls {
+                    send_progress(&format!("🔧 Gemma calling: {}", tc.name));
+                    tracing::info!("🎬 Gemma 4 tool call: {}", tc.name);
+
+                    // Convert JSON args to the HashMap format tool_executor expects
+                    let args_map: std::collections::HashMap<String, serde_json::Value> =
+                        tc.arguments.as_object()
+                            .map(|o| o.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+                            .unwrap_or_default();
+
+                    let result = crate::agent::tool_executor::execute_tool_gemini_with_context(
+                        &tc.name,
+                        &args_map,
+                        exec_context,
+                    ).await;
+
+                    send_progress(&format!("✅ {} done", tc.name));
+
+                    messages.push(serde_json::json!({
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": result,
+                    }));
+                }
+            }
+        }
+    }
+
+    Err(format!("Gemma 4 (NIM) exceeded max turns ({})", MAX_TURNS))
 }

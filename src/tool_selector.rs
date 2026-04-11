@@ -719,15 +719,17 @@ impl ToolSelector {
         tool_list.sort(); // Sort for consistency
 
         // Catch-all: if nothing matched beyond the always-included categories,
-        // return ALL tools so the AI is never left with a blind spot.
+        // return a curated set of the ~25 most universally-needed tools instead of
+        // all 320. Sending 320 tools to Gemini hits the "too many schema states"
+        // INVALID_ARGUMENT error (see https://github.com/googleapis/python-genai/issues/660).
+        // The general set covers 90%+ of real user requests without schema overflow.
         if tool_list.len() <= ToolCategory::CoreEditing.tools().len()
             + ToolCategory::PlatformExport.tools().len()
         {
             tracing::info!(
-                "No specific category matched — returning all {} tools as catch-all",
-                Self::all_tools().len()
+                "No specific category matched — returning general-purpose tool set (catch-all)"
             );
-            return Self::all_tools();
+            return Self::general_tools();
         }
 
         tracing::info!(
@@ -742,6 +744,46 @@ impl ToolSelector {
     /// Helper function to check if text contains any of the keywords
     fn contains_any(text: &str, keywords: &[&str]) -> bool {
         keywords.iter().any(|keyword| text.contains(keyword))
+    }
+
+    /// Curated set of ~25 most universally-needed tools for general requests.
+    /// Used when no specific category matches, keeping Gemini schema within safe limits.
+    pub fn general_tools() -> Vec<String> {
+        vec![
+            // Core editing (most common operations)
+            "trim_video".into(),
+            "merge_videos".into(),
+            "split_video".into(),
+            "crop_video".into(),
+            "rotate_video".into(),
+            "resize_video".into(),
+            "convert_format".into(),
+            "compress_video".into(),
+            "reverse_video".into(),
+            // Visual
+            "add_text_overlay".into(),
+            "apply_filter".into(),
+            "adjust_color".into(),
+            "create_thumbnail".into(),
+            "add_subtitles".into(),
+            // Audio
+            "extract_audio".into(),
+            "add_audio".into(),
+            "adjust_volume".into(),
+            "denoise_audio".into(),
+            // AI generation
+            "auto_generate_video".into(),
+            "generate_image".into(),
+            // Stock media
+            "search_pexels_videos".into(),
+            "download_pexels_video".into(),
+            // Analysis
+            "analyze_video".into(),
+            // Export
+            "export_for_youtube".into(),
+            "export_for_tiktok".into(),
+            "export_for_instagram".into(),
+        ]
     }
 
     /// Get all available tools (for backwards compatibility or fallback)
