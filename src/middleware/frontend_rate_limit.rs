@@ -20,29 +20,22 @@ pub struct FrontendRateLimiter {
 
 impl FrontendRateLimiter {
     pub fn new() -> Self {
+        fn env_u32(key: &str, default: u32) -> u32 {
+            std::env::var(key).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
+        }
+
         let mut limits = HashMap::new();
-        
-        // Define different rate limits for different frontend operations
-        // These are more generous than API limits but still protect against abuse
-        
-        // Chat operations (most token-intensive)
-        limits.insert("chat".to_string(), (30, Duration::from_secs(60))); // 30 per minute
-        limits.insert("websocket".to_string(), (100, Duration::from_secs(60))); // 100 messages per minute
-        
-        // File operations
-        limits.insert("upload".to_string(), (20, Duration::from_secs(300))); // 20 uploads per 5 minutes
-        limits.insert("download".to_string(), (50, Duration::from_secs(60))); // 50 downloads per minute
-        
-        // UI operations (most lenient)
-        limits.insert("ui".to_string(), (200, Duration::from_secs(60))); // 200 page loads per minute
-        limits.insert("api".to_string(), (150, Duration::from_secs(60))); // 150 API calls per minute
-        
-        // Authentication (strict but reasonable)
-        limits.insert("auth".to_string(), (5, Duration::from_secs(60))); // 5 auth attempts per minute
-        
-        // Admin operations (very strict)
-        limits.insert("admin".to_string(), (20, Duration::from_secs(60))); // 20 admin operations per minute
-        
+
+        // All limits are configurable via env vars; values below are production-safe defaults.
+        limits.insert("chat".to_string(),      (env_u32("RATE_LIMIT_CHAT_RPM", 30),          Duration::from_secs(60)));
+        limits.insert("websocket".to_string(), (env_u32("RATE_LIMIT_WS_PER_MIN", 100),       Duration::from_secs(60)));
+        limits.insert("upload".to_string(),    (env_u32("RATE_LIMIT_UPLOAD_PER_5MIN", 20),   Duration::from_secs(300)));
+        limits.insert("download".to_string(),  (env_u32("RATE_LIMIT_DOWNLOAD_RPM", 50),      Duration::from_secs(60)));
+        limits.insert("ui".to_string(),        (env_u32("RATE_LIMIT_UI_RPM", 200),           Duration::from_secs(60)));
+        limits.insert("api".to_string(),       (env_u32("RATE_LIMIT_API_RPM", 150),          Duration::from_secs(60)));
+        limits.insert("auth".to_string(),      (env_u32("RATE_LIMIT_AUTH_RPM", 5),           Duration::from_secs(60)));
+        limits.insert("admin".to_string(),     (env_u32("RATE_LIMIT_ADMIN_RPM", 20),         Duration::from_secs(60)));
+
         Self {
             clients: Arc::new(Mutex::new(HashMap::new())),
             limits,
@@ -208,13 +201,16 @@ pub struct AIRateLimiter {
 
 impl AIRateLimiter {
     pub fn new() -> Self {
+        fn env_u32(key: &str, default: u32) -> u32 {
+            std::env::var(key).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
+        }
+
         let mut limits = HashMap::new();
-        
-        // Stricter limits for AI operations due to token consumption
-        limits.insert("ai_chat".to_string(), (20, Duration::from_secs(60))); // 20 AI messages per minute
-        limits.insert("ai_processing".to_string(), (10, Duration::from_secs(300))); // 10 video processing per 5 minutes
-        limits.insert("websocket".to_string(), (50, Duration::from_secs(60))); // 50 WebSocket messages per minute
-        
+
+        limits.insert("ai_chat".to_string(),       (env_u32("RATE_LIMIT_AI_CHAT_RPM", 20),             Duration::from_secs(60)));
+        limits.insert("ai_processing".to_string(), (env_u32("RATE_LIMIT_AI_PROCESSING_PER_5MIN", 10),  Duration::from_secs(300)));
+        limits.insert("websocket".to_string(),     (env_u32("RATE_LIMIT_AI_WS_PER_MIN", 50),           Duration::from_secs(60)));
+
         Self {
             clients: Arc::new(Mutex::new(HashMap::new())),
             limits,

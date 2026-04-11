@@ -7,20 +7,21 @@ use tokio::time::{timeout, Duration};
 use tracing::{info, warn, error};
 use chrono::Utc;
 
-/// Workflow executor config
+/// Workflow executor config.
+/// Note: Multi-node execution is always sequential — Axum handler state cannot
+/// be safely shared across tokio::spawn boundaries without significant refactoring.
+/// The former `enable_parallel` flag has been removed; it was always ignored.
 pub struct ExecutorConfig {
     pub max_iterations: usize,
     pub checkpoint_every_n_steps: usize,
-    pub enable_parallel: bool,
     pub timeout_seconds: u64,
 }
 
 impl Default for ExecutorConfig {
     fn default() -> Self {
         Self {
-            max_iterations: 100,  // Much higher than 15!
+            max_iterations: 100,
             checkpoint_every_n_steps: 5,
-            enable_parallel: true,
             timeout_seconds: 600,
         }
     }
@@ -162,10 +163,10 @@ impl WorkflowExecutor {
                 break;
             }
 
-            // Handle parallel execution
-            if next_nodes.len() > 1 && self.config.enable_parallel {
+            // When there are multiple next nodes, execute them all sequentially
+            // before moving to the merge node (if present).
+            if next_nodes.len() > 1 {
                 state = self.execute_parallel_nodes(&next_nodes, state).await?;
-                // After parallel, move to merge node (if exists)
                 if let Some(merge_node) = state.next.clone() {
                     current_node = merge_node;
                 } else {

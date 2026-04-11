@@ -317,13 +317,10 @@ async fn main() {
             nvidia_nim_client::NvidiaNimClient::new(k)
         });
 
-    // Initialize Qdrant client if API key is provided
-    let qdrant_client = match std::env::var("QDRANT_API_KEY").ok() {
-        Some(api_key) => {
+    // Initialize Qdrant client if both API key and URL are provided
+    let qdrant_client = match (std::env::var("QDRANT_API_KEY").ok(), std::env::var("QDRANT_URL").ok()) {
+        (Some(api_key), Some(qdrant_url)) => {
             tracing::info!("Initializing Qdrant vector database...");
-            let qdrant_url = std::env::var("QDRANT_URL")
-                .unwrap_or_else(|_| "https://18635ac0-f6b3-43b3-9255-54a553f6c2fb.us-west-1-0.aws.cloud.qdrant.io:6334".to_string());
-            
             match qdrant_client::QdrantClient::new(qdrant_url, Some(api_key)).await {
                 Ok(client) => {
                     // Try to create the collection
@@ -344,9 +341,8 @@ async fn main() {
                 }
             }
         }
-        None => {
-            tracing::warn!("QDRANT_API_KEY not found. Using AstraDB fallback.");
-            tracing::info!("To enable Qdrant, set: QDRANT_API_KEY and optionally QDRANT_URL");
+        _ => {
+            tracing::info!("Qdrant disabled — set QDRANT_API_KEY and QDRANT_URL to enable it.");
             None
         }
     };

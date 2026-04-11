@@ -312,3 +312,39 @@ impl Default for JobManager {
 
 /// Global job manager instance (to be stored in AppState)
 pub type SharedJobManager = Arc<JobManager>;
+
+/// Typed representation of a clipping job's execution phase.
+/// Replaces brittle substring-matching on step name strings.
+#[derive(Debug, Clone, PartialEq)]
+pub enum JobPhase {
+    Pending,
+    Downloading,
+    Analyzed,
+    ClipsExtracted,
+    Vectorizing,
+    Posting,
+}
+
+impl JobPhase {
+    /// Derive a phase from a step name stored in the DB.
+    pub fn from_step(step: &str) -> Self {
+        match step {
+            s if s.contains("posting") || s.contains("upload") => JobPhase::Posting,
+            s if s.contains("vectoriz") => JobPhase::Vectorizing,
+            s if s.contains("extracting") || s == "clips_extracted" => JobPhase::ClipsExtracted,
+            s if s.contains("download") => JobPhase::Downloading,
+            s if s.contains("analyz") => JobPhase::Analyzed,
+            _ => JobPhase::Pending,
+        }
+    }
+
+    /// Return the step name to resume from, or None if the job should restart from scratch.
+    pub fn resume_from(&self) -> Option<&'static str> {
+        match self {
+            JobPhase::Posting | JobPhase::Vectorizing => Some("clips_extracted"),
+            JobPhase::ClipsExtracted => Some("downloaded"),
+            JobPhase::Downloading => Some("analyzed"),
+            _ => None,
+        }
+    }
+}

@@ -13,6 +13,24 @@ pub struct WorkerConfig {
 
     /// Unique worker instance ID (format: hostname-pid-timestamp)
     pub worker_id: String,
+
+    /// Minutes before a downloading job is considered stuck (default: 25)
+    pub stuck_downloading_mins: u64,
+
+    /// Minutes before an analyzing job is considered stuck (default: 10)
+    pub stuck_analyzing_mins: u64,
+
+    /// Minutes before a clip-extracting job is considered stuck (default: 15)
+    pub stuck_extracting_mins: u64,
+
+    /// Minutes before a posting job is considered stuck (default: 30)
+    pub stuck_posting_mins: u64,
+
+    /// Maximum retries before a job is discarded (default: 10)
+    pub max_retries: u32,
+
+    /// Initial backoff duration in seconds when quota is exhausted (default: 120)
+    pub quota_pause_secs: u64,
 }
 
 impl WorkerConfig {
@@ -27,6 +45,36 @@ impl WorkerConfig {
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(30);
+
+        let stuck_downloading_mins = env::var("CLIPPING_STUCK_DOWNLOADING_MINS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(25);
+
+        let stuck_analyzing_mins = env::var("CLIPPING_STUCK_ANALYZING_MINS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(10);
+
+        let stuck_extracting_mins = env::var("CLIPPING_STUCK_EXTRACTING_MINS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(15);
+
+        let stuck_posting_mins = env::var("CLIPPING_STUCK_POSTING_MINS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(30);
+
+        let max_retries = env::var("CLIPPING_MAX_RETRIES")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(10);
+
+        let quota_pause_secs = env::var("CLIPPING_QUOTA_PAUSE_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(120);
 
         // Generate unique worker ID: hostname-pid-timestamp
         let worker_id = format!(
@@ -43,6 +91,12 @@ impl WorkerConfig {
             concurrency,
             poll_interval_secs,
             worker_id,
+            stuck_downloading_mins,
+            stuck_analyzing_mins,
+            stuck_extracting_mins,
+            stuck_posting_mins,
+            max_retries,
+            quota_pause_secs,
         }
     }
 
@@ -92,6 +146,12 @@ mod tests {
         let config = WorkerConfig::from_env();
         assert_eq!(config.concurrency, 3);
         assert_eq!(config.poll_interval_secs, 30);
+        assert_eq!(config.stuck_downloading_mins, 25);
+        assert_eq!(config.stuck_analyzing_mins, 10);
+        assert_eq!(config.stuck_extracting_mins, 15);
+        assert_eq!(config.stuck_posting_mins, 30);
+        assert_eq!(config.max_retries, 10);
+        assert_eq!(config.quota_pause_secs, 120);
         assert!(!config.worker_id.is_empty());
     }
 
@@ -101,6 +161,12 @@ mod tests {
             concurrency: 3,
             poll_interval_secs: 30,
             worker_id: "test-worker".to_string(),
+            stuck_downloading_mins: 25,
+            stuck_analyzing_mins: 10,
+            stuck_extracting_mins: 15,
+            stuck_posting_mins: 30,
+            max_retries: 10,
+            quota_pause_secs: 120,
         };
 
         assert!(config.validate().is_ok());
@@ -124,6 +190,12 @@ mod tests {
             concurrency: 3,
             poll_interval_secs: 30,
             worker_id: "test".to_string(),
+            stuck_downloading_mins: 25,
+            stuck_analyzing_mins: 10,
+            stuck_extracting_mins: 15,
+            stuck_posting_mins: 30,
+            max_retries: 10,
+            quota_pause_secs: 120,
         };
 
         // 5 (API) + 3 (workers) + 2 (buffer) = 10

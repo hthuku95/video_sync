@@ -22,7 +22,13 @@ pub fn upload_routes() -> Router {
         .route("/upload/form", axum::routing::get(upload_form))
         .route("/upload/status/:file_id", axum::routing::get(get_upload_status))
         .route("/upload/session/:session_uuid", post(upload_files_for_session))
-        .layer(DefaultBodyLimit::max(100 * 1024 * 1024)); // 100MB limit for file uploads
+        .layer(DefaultBodyLimit::max({
+            let limit_mb: usize = std::env::var("UPLOAD_LIMIT_MB")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(100);
+            limit_mb * 1024 * 1024
+        }));
     
     let protected_routes = Router::new()
         .route("/files/session/:session_uuid", axum::routing::get(get_session_files))
@@ -359,7 +365,7 @@ pub async fn upload_files_for_session(
     }
 
     // Get or create chat session
-    let session_id = match get_or_create_session(&state, &session_uuid).await {
+    let session_id = match get_or_create_session(&state, &session_uuid, None).await {
         Ok(id) => Some(id),
         Err(e) => {
             tracing::warn!("Failed to get/create session {}: {}", session_uuid, e);
@@ -529,31 +535,33 @@ pub async fn get_session_files(
     }
 }
 
-// Helper function to get or create a chat session
-pub async fn get_or_create_session(state: &AppState, session_uuid: &str) -> Result<i32, sqlx::Error> {
+// Helper function to get or create a chat session.
+// `user_id` should be the authenticated user's id when known, or None for anonymous
+// connections (which fall back to user_id=1, the system anonymous user).
+pub async fn get_or_create_session(state: &AppState, session_uuid: &str, user_id: Option<i32>) -> Result<i32, sqlx::Error> {
     // First try to find existing session
     let session_row = sqlx::query("SELECT id FROM chat_sessions WHERE session_uuid = $1")
         .bind(session_uuid)
         .fetch_optional(&state.db_pool)
         .await?;
-    
+
     if let Some(session) = session_row {
         let id: i32 = session.get("id");
         return Ok(id);
     }
-    
-    // If no session exists, create a new one with a default user (for now)
-    // In a real app, you'd get the user_id from authentication
-    let default_user_id = 1; // This should come from auth context
-    
+
+    // Use the authenticated user's id, or 1 for truly anonymous sessions.
+    // user_id=1 is the system anonymous user; the NOT NULL constraint is satisfied.
+    let resolved_user_id = user_id.unwrap_or(1);
+
     let new_session = sqlx::query("INSERT INTO chat_sessions (user_id, session_uuid, title) VALUES ($1, $2, $3) RETURNING id")
-        .bind(default_user_id)
+        .bind(resolved_user_id)
         .bind(session_uuid)
         .bind("New Chat Session")
         .fetch_one(&state.db_pool)
         .await?;
-    
+
     let new_id: i32 = new_session.get("id");
-    tracing::info!("Created new chat session: {} (id: {})", session_uuid, new_id);
+    tracing::info!("Created new chat session: {} (id: {}, user_id: {})", session_uuid, new_id, resolved_user_id);
     Ok(new_id)
 }

@@ -333,8 +333,10 @@ pub async fn youtube_oauth_callback(
     };
 
     // Exchange code for tokens
-    let client_id = state.google_oauth_client_id.as_ref().unwrap();
-    let client_secret = state.google_oauth_client_secret.as_ref().unwrap();
+    let client_id = state.google_oauth_client_id.as_ref()
+        .ok_or_else(|| (StatusCode::SERVICE_UNAVAILABLE, Html("<h1>YouTube not configured. Set GOOGLE_CLIENT_ID.</h1>".to_string())))?;
+    let client_secret = state.google_oauth_client_secret.as_ref()
+        .ok_or_else(|| (StatusCode::SERVICE_UNAVAILABLE, Html("<h1>YouTube not configured. Set GOOGLE_CLIENT_SECRET.</h1>".to_string())))?;
     let redirect_uri = std::env::var("GOOGLE_OAUTH_REDIRECT_URI")
         .unwrap_or_else(|_| "http://localhost:3000/youtube/callback".to_string());
 
@@ -713,8 +715,10 @@ pub async fn upload_video_to_youtube(
             (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"success": false, "message": "YouTube client not initialized"})))
         })?;
 
-        let client_id = state.google_oauth_client_id.as_ref().unwrap();
-        let client_secret = state.google_oauth_client_secret.as_ref().unwrap();
+        let client_id = state.google_oauth_client_id.as_ref()
+            .ok_or_else(|| (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": "YouTube not configured. Set GOOGLE_CLIENT_ID."}))))?;
+        let client_secret = state.google_oauth_client_secret.as_ref()
+            .ok_or_else(|| (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": "YouTube not configured. Set GOOGLE_CLIENT_SECRET."}))))?;
 
         let token_response = match youtube.refresh_access_token(
             &channel.refresh_token,
@@ -820,7 +824,8 @@ pub async fn upload_video_to_youtube(
     ))?;
 
     // Upload to YouTube
-    let youtube = state.youtube_client.as_ref().unwrap();
+    let youtube = state.youtube_client.as_ref()
+        .ok_or_else(|| (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": "YouTube not configured."}))))?;
 
     tracing::info!("📤 Uploading video to YouTube: {} ({})", payload.title, channel.channel_name);
 
@@ -2268,8 +2273,10 @@ pub async fn get_video_analytics(
             (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"success": false, "message": "YouTube client not initialized"})))
         })?;
 
-        let client_id = state.google_oauth_client_id.as_ref().unwrap();
-        let client_secret = state.google_oauth_client_secret.as_ref().unwrap();
+        let client_id = state.google_oauth_client_id.as_ref()
+            .ok_or_else(|| (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": "YouTube not configured. Set GOOGLE_CLIENT_ID."}))))?;
+        let client_secret = state.google_oauth_client_secret.as_ref()
+            .ok_or_else(|| (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": "YouTube not configured. Set GOOGLE_CLIENT_SECRET."}))))?;
 
         let token_response = match youtube.refresh_access_token(
             &channel.refresh_token,
@@ -2509,8 +2516,10 @@ pub async fn get_channel_analytics(
             (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"success": false, "message": "YouTube client not initialized"})))
         })?;
 
-        let client_id = state.google_oauth_client_id.as_ref().unwrap();
-        let client_secret = state.google_oauth_client_secret.as_ref().unwrap();
+        let client_id = state.google_oauth_client_id.as_ref()
+            .ok_or_else(|| (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": "YouTube not configured. Set GOOGLE_CLIENT_ID."}))))?;
+        let client_secret = state.google_oauth_client_secret.as_ref()
+            .ok_or_else(|| (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": "YouTube not configured. Set GOOGLE_CLIENT_SECRET."}))))?;
 
         let token_response = match youtube.refresh_access_token(
             &channel.refresh_token,
@@ -3500,8 +3509,10 @@ pub async fn initiate_resumable_upload(
     if channel.token_expiry < chrono::Utc::now() + chrono::Duration::minutes(30) {
         tracing::info!("🔄 Refreshing expired token for channel: {} before resumable upload", channel.channel_name);
 
-        let client_id = state.google_oauth_client_id.as_ref().unwrap();
-        let client_secret = state.google_oauth_client_secret.as_ref().unwrap();
+        let client_id = state.google_oauth_client_id.as_ref()
+            .ok_or_else(|| (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": "YouTube not configured. Set GOOGLE_CLIENT_ID."}))))?;
+        let client_secret = state.google_oauth_client_secret.as_ref()
+            .ok_or_else(|| (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": "YouTube not configured. Set GOOGLE_CLIENT_SECRET."}))))?;
 
         let token_response = match youtube.refresh_access_token(
             &channel.refresh_token,

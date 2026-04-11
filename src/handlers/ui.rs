@@ -3240,7 +3240,9 @@ pub async fn chat_interface_with_session_id(session_id: Option<String>) -> Html<
         function initializeWebSocket() {
             try {
                 const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-                const wsUrl = `${protocol}//${window.location.host}/ws?session=${sessionUuid}`;
+                const authToken = localStorage.getItem('auth_token') || localStorage.getItem('authToken');
+                const tokenParam = authToken ? '&token=' + encodeURIComponent(authToken) : '';
+                const wsUrl = `${protocol}//${window.location.host}/ws?session=${sessionUuid}${tokenParam}`;
 
                 console.log('Attempting WebSocket connection to:', wsUrl);
                 console.log('Session UUID:', sessionUuid);

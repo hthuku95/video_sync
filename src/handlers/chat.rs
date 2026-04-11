@@ -63,6 +63,7 @@ enum WebSocketMessage {
 struct WebSocketQuery {
     session: Option<String>,
     model: Option<String>,
+    token: Option<String>,
 }
 
 pub fn chat_routes() -> Router {
@@ -85,18 +86,27 @@ async fn websocket_handler(
     Query(params): Query<WebSocketQuery>,
     Extension(state): Extension<Arc<AppState>>,
 ) -> impl IntoResponse {
-    ws.on_upgrade(|socket| websocket(socket, state, params.session, params.model))
+    // Validate JWT before upgrading — WebSocket upgrades are HTTP so we can
+    // extract the user_id here and pass it in. The token travels as a query
+    // param because WS clients cannot set Authorization headers.
+    let user_id: Option<i32> = params.token.as_deref().and_then(|t| {
+        match crate::handlers::auth::verify_jwt_token(t) {
+            Ok(claims) => claims.sub.parse::<i32>().ok(),
+            Err(_) => None,
+        }
+    });
+    ws.on_upgrade(move |socket| websocket(socket, state, params.session, params.model, user_id))
 }
 
-async fn websocket(stream: WebSocket, state: Arc<AppState>, session_uuid: Option<String>, _model_preference: Option<String>) {
+async fn websocket(stream: WebSocket, state: Arc<AppState>, session_uuid: Option<String>, _model_preference: Option<String>, user_id: Option<i32>) {
     let (mut sender, mut receiver) = stream.split();
 
     // Use provided session UUID or generate a new one
     let session_id = session_uuid.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-    tracing::info!("🔌 Started new chat session: {}", session_id);
+    tracing::info!("🔌 Started new chat session: {} (user_id: {:?})", session_id, user_id);
 
-    // Ensure the session exists in the database
-    let _ = get_or_create_session(&state, &session_id).await;
+    // Ensure the session exists in the database, attributed to the authenticated user
+    let _ = get_or_create_session(&state, &session_id, user_id).await;
 
     // 🆕 BACKGROUND JOBS: Create progress channel for this WebSocket connection
     let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel();

@@ -107,7 +107,6 @@ pub fn create_video_workflow_executor(
     let config = ExecutorConfig {
         max_iterations,
         checkpoint_every_n_steps: 3,
-        enable_parallel: false,
         timeout_seconds: 600,
     };
 
