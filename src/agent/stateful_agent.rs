@@ -1014,9 +1014,14 @@ For complex multi-step workflows that benefit from parallel execution:
             },
         ];
 
-        // NEW: Add video editing tools dynamically using ToolSelector
+        // Add video editing tools dynamically using ToolSelector.
+        // Cap at 37 video tools (+ 3 control tools above = 40 total).
+        // Gemini's hard limit is 128 declarations but "too many states" INVALID_ARGUMENT
+        // errors start appearing around 50+ complex schemas. 40 is a safe ceiling.
+        // See: https://github.com/googleapis/python-genai/issues/660
         let selected_tool_names = crate::tool_selector::ToolSelector::select_tools(user_input);
-        let video_tools = crate::gemini_client::GeminiClient::filter_tools_by_name(&selected_tool_names);
+        let mut video_tools = crate::gemini_client::GeminiClient::filter_tools_by_name(&selected_tool_names);
+        video_tools.truncate(37);
         all_tools.extend(video_tools);
 
         all_tools
