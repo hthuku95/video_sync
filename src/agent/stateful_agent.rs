@@ -482,8 +482,18 @@ impl StatefulGeminiAgent {
             tracing::info!("{}", msg);
         };
 
-        send_progress("🔧 Initializing Gemini agent with direct access to 53+ video editing tools...");
-        let all_tools = Self::create_all_tools(user_input);
+        send_progress("🧠 Selecting the right tools for your request...");
+        // AI-powered tool selection: Gemma 4 reads the full tool catalog and picks
+        // the most relevant tools for THIS specific request — no keyword lists needed.
+        let selected_video_tools = crate::ai_tool_selector::select_tools_for_request(
+            user_input,
+            app_state.nvidia_nim_client.as_ref(),
+            app_state.video_gemini_client.as_ref().or(app_state.gemini_client.as_ref()),
+        ).await;
+        // Prepend the 3 control tools (always needed for agent self-management)
+        let mut all_tools = Self::create_control_tools_gemini();
+        all_tools.extend(selected_video_tools);
+        tracing::info!("🔧 Agent loaded {} tools for session {}", all_tools.len(), session_id);
 
         // Initialize ConversationManager to retrieve and save conversation history
         let conversation_manager = ConversationManager::new(app_state.db_pool.clone());
@@ -1076,14 +1086,26 @@ For complex multi-step workflows that benefit from parallel execution:
             },
         ];
 
-        // Add video editing tools dynamically using ToolSelector.
-        // ToolSelector returns at most ~25 tools for the catch-all case and a relevant
-        // subset for keyword-matched cases — no truncation needed here.
-        let selected_tool_names = crate::tool_selector::ToolSelector::select_tools(user_input);
-        let video_tools = crate::gemini_client::GeminiClient::filter_tools_by_name(&selected_tool_names);
-        all_tools.extend(video_tools);
-
+        // NOTE: video tools are no longer added here — the caller now uses
+        // ai_tool_selector::select_tools_for_request() for intelligent AI-driven
+        // selection. This method only returns the 3 control tools.
         all_tools
+    }
+
+    /// Returns the 3 agent control tool declarations.
+    /// Video tools are selected separately by ai_tool_selector::select_tools_for_request().
+    fn create_control_tools_gemini() -> Vec<crate::gemini_client::FunctionDeclaration> {
+        // Only the 3 control tools — video tools come from AI-driven selection
+        // This is intentionally a subset of create_all_tools()
+        let all = Self::create_all_tools("__control_tools_only__");
+        // create_all_tools builds the 3 control tools first then extends with video tools.
+        // Filter to only the control tool names.
+        all.into_iter()
+            .filter(|t| matches!(
+                t.name.as_str(),
+                "start_background_job" | "check_job_status" | "search_memory"
+            ))
+            .collect()
     }
 }
 

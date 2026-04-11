@@ -29,6 +29,7 @@ pub mod services;
 pub mod vector_db;
 pub mod clipping;
 pub mod tool_selector;
+pub mod ai_tool_selector;
 pub mod utils;
 pub mod token_manager;
 

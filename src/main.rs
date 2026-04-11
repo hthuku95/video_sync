@@ -28,7 +28,8 @@ mod qdrant_client;
 mod services;
 mod vector_db;
 mod clipping; // 📹 YouTube clipping feature
-mod tool_selector; // 🔧 Dynamic tool selection for AI agents
+mod tool_selector; // 🔧 Dynamic tool selection for AI agents (general/fallback sets)
+mod ai_tool_selector; // 🧠 AI-driven tool selection — Gemma 4 picks relevant tools per request
 mod utils; // 🔧 Utility modules (FFmpeg utilities, etc.)
 mod token_manager; // 🔧 Centralized YouTube OAuth token refresh
 
