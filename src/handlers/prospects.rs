@@ -1551,7 +1551,7 @@ async fn instagram_list_leads(
     }
     if let Some(mf) = q.min_followers {
         binds.push(mf.to_string());
-        sql.push_str(&format!(" AND followers_count >= ${}", binds.len()));
+        sql.push_str(&format!(" AND followers_count >= ${}::bigint", binds.len()));
     }
     sql.push_str(" ORDER BY followers_count DESC NULLS LAST");
     sql.push_str(&format!(" LIMIT {} OFFSET {}", limit, offset));
