@@ -1986,10 +1986,13 @@ pub async fn poll_instagram_jobs(state: &Arc<AppState>) {
         let mut imported = 0usize;
 
         for lead in &leads {
-            // Skip private accounts — they can't receive DMs from non-followers
+            // Skip private accounts — they can't receive DMs from non-followers.
             if lead.is_private { continue; }
-            // Skip micro-nano accounts unlikely to pay for clipping
-            if lead.followers_count.unwrap_or(0) < 1_000 { continue; }
+            // NOTE: do NOT filter by followers_count here. The Instagram
+            // Hashtag Search Export returns post schema (no follower count), so
+            // gating on >=1000 would drop every lead. Hashtag relevance is
+            // itself a qualification — AI scoring and the DM generator decide
+            // which to pursue.
 
             let result = sqlx::query(
                 "INSERT INTO instagram_leads

@@ -535,7 +535,10 @@ impl PhantomBusterClient {
 
     /// Parse raw PhantomBuster Instagram Hashtag output into InstagramLead structs.
     pub fn parse_instagram_leads(rows: Vec<serde_json::Value>) -> Vec<InstagramLead> {
-        rows.into_iter().filter_map(|row| {
+        let mut seen = std::collections::HashSet::<String>::new();
+        let mut out = Vec::<InstagramLead>::new();
+
+        for row in rows.into_iter() {
             let get_str  = |key: &str| row.get(key).and_then(|v| v.as_str()).map(|s| s.to_string());
             let get_i64  = |key: &str| row.get(key).and_then(|v| v.as_i64());
             let get_i32  = |key: &str| row.get(key).and_then(|v| v.as_i64()).map(|v| v as i32);
@@ -544,16 +547,31 @@ impl PhantomBusterClient {
             let username = get_str("username")
                 .or_else(|| get_str("handle"))
                 .unwrap_or_default();
-            if username.is_empty() { return None; }
+            if username.is_empty() { continue; }
+
+            // Hashtag search returns multiple posts per user — dedupe so we
+            // don't waste LLM scoring credits on the same account 5x.
+            if !seen.insert(username.clone()) { continue; }
 
             let profile_url = get_str("profileUrl")
                 .or_else(|| get_str("url"))
                 .or_else(|| Some(format!("https://www.instagram.com/{}/", username)));
 
-            Some(InstagramLead {
+            // Hashtag Search Export returns post schema (no follower counts or
+            // bio) — use the post caption as `bio` so DM generation still has
+            // useful context, and scrape any email out of it.
+            let description = get_str("description");
+            let bio = get_str("biography")
+                .or_else(|| get_str("bio"))
+                .or_else(|| description.clone());
+            let email = get_str("email").or_else(|| {
+                description.as_deref().and_then(Self::extract_email)
+            });
+
+            out.push(InstagramLead {
                 username,
                 full_name:       get_str("fullName").or_else(|| get_str("name")),
-                bio:             get_str("biography").or_else(|| get_str("bio")),
+                bio,
                 followers_count: get_i64("followersCount").or_else(|| get_i64("followers")),
                 following_count: get_i64("followingCount").or_else(|| get_i64("following")),
                 posts_count:     get_i32("postsCount").or_else(|| get_i32("posts")),
@@ -562,8 +580,32 @@ impl PhantomBusterClient {
                 is_private:      get_bool("isPrivate"),
                 is_verified:     get_bool("isVerified") || get_bool("verified"),
                 external_url:    get_str("externalUrl").or_else(|| get_str("website")),
-                email:           get_str("email"),
-            })
-        }).collect()
+                email,
+            });
+        }
+        out
+    }
+
+    /// Cheap email regex-free extractor — walks the string for `@` and builds
+    /// out the local/domain parts using ASCII rules. Good enough to catch
+    /// `info@example.com` in a post caption without pulling a regex dep.
+    fn extract_email(text: &str) -> Option<String> {
+        let at = text.find('@')?;
+        let before: String = text[..at]
+            .chars()
+            .rev()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '_' || *c == '-' || *c == '+')
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        let after: String = text[at + 1..]
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '-')
+            .collect();
+        if before.is_empty() || after.is_empty() || !after.contains('.') {
+            return None;
+        }
+        Some(format!("{}@{}", before, after))
     }
 }
