@@ -202,29 +202,74 @@ impl PhantomBusterClient {
         ))
     }
 
-    /// Fetch the output JSON from the last completed run
+    /// Fetch the output JSON from the last completed run.
+    ///
+    /// PhantomBuster's `/agents/fetch-output` does NOT return the actual result
+    /// rows — its `output` field is the log text. The real lead data lives at
+    /// an S3 URL that the phantom prints into the log as
+    /// `✅ JSON saved at https://phantombuster.s3.amazonaws.com/.../result.json`.
+    /// We parse that URL out and fetch the rows directly.
     pub async fn fetch_output(&self, agent_id: &str) -> Result<Vec<serde_json::Value>, String> {
-        // Get agent output container
         let resp = self.http
-            .get(format!("{}/agents/fetch-output?id={}&withoutResultObject=true", PB_BASE, agent_id))
+            .get(format!("{}/agents/fetch-output?id={}", PB_BASE, agent_id))
             .header("X-Phantombuster-Key", &self.api_key)
             .send()
             .await
             .map_err(|e| format!("Output fetch failed: {}", e))?;
 
-        let output: serde_json::Value = resp.json().await
+        let body: serde_json::Value = resp.json().await
             .map_err(|e| format!("Failed to parse output: {}", e))?;
 
-        // Output is a JSON array of lead objects
-        let leads = if let Some(arr) = output.as_array() {
-            arr.clone()
-        } else if let Some(arr) = output.get("output").and_then(|o| o.as_array()) {
-            arr.clone()
-        } else {
-            vec![]
+        // Fast path: inline resultObject (small payloads, some phantoms).
+        if let Some(arr) = body.get("resultObject").and_then(|v| v.as_array()) {
+            return Ok(arr.clone());
+        }
+        if let Some(s) = body.get("resultObject").and_then(|v| v.as_str()) {
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(s) {
+                if let Some(arr) = parsed.as_array() {
+                    return Ok(arr.clone());
+                }
+            }
+        }
+
+        // Real path: scrape the `result.json` S3 URL from the log.
+        let log = body.get("output").and_then(|v| v.as_str()).unwrap_or("");
+        let json_url = Self::extract_result_json_url(log);
+        let Some(url) = json_url else {
+            return Ok(vec![]);
         };
 
-        Ok(leads)
+        let data_resp = self.http
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("S3 result.json fetch failed: {}", e))?;
+
+        let parsed: serde_json::Value = data_resp.json().await
+            .map_err(|e| format!("S3 result.json parse failed: {}", e))?;
+
+        Ok(parsed.as_array().cloned().unwrap_or_default())
+    }
+
+    /// Find the first `https://phantombuster.s3.amazonaws.com/.../result.json`
+    /// URL in a PB log string.
+    fn extract_result_json_url(log: &str) -> Option<String> {
+        let needle = "https://phantombuster.s3.amazonaws.com/";
+        let start = log.find(needle)?;
+        let tail = &log[start..];
+        let end = tail.find(|c: char| c.is_whitespace() || c == '"' || c == '\\').unwrap_or(tail.len());
+        let url = &tail[..end];
+        if url.ends_with(".json") {
+            Some(url.to_string())
+        } else {
+            // Log may mention the CSV URL first; walk forward for .json
+            let after = &log[start + end..];
+            let next = after.find(needle)?;
+            let tail2 = &after[next..];
+            let end2 = tail2.find(|c: char| c.is_whitespace() || c == '"' || c == '\\').unwrap_or(tail2.len());
+            let url2 = &tail2[..end2];
+            if url2.ends_with(".json") { Some(url2.to_string()) } else { None }
+        }
     }
 
     /// Inspect the last run of an agent. Returns whether PB reports a terminal
