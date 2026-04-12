@@ -1236,6 +1236,29 @@ async fn linkedin_fetch_results(
         Err(e) => return Json(json!({"success": false, "error": e})),
     };
 
+    // If PB returned no rows, confirm whether the run actually succeeded or
+    // errored — otherwise the DB row stays 'running' forever and the caller
+    // has no idea the phantom failed.
+    if rows.is_empty() {
+        if let Ok((errored, log_tail)) = pb.fetch_run_error(&agent_id).await {
+            if errored {
+                let err_msg = log_tail.unwrap_or_else(|| "PhantomBuster script exited with error".to_string());
+                let _ = sqlx::query(
+                    "UPDATE phantombuster_jobs SET status = 'failed', error = $1, completed_at = NOW() WHERE id = $2"
+                )
+                .bind(&err_msg)
+                .bind(job_id)
+                .execute(&state.db_pool)
+                .await;
+                return Json(json!({
+                    "success": false,
+                    "error": err_msg,
+                    "message": "PhantomBuster run failed — see error field. Job marked failed."
+                }));
+            }
+        }
+    }
+
     let leads = crate::phantombuster_client::PhantomBusterClient::parse_leads(rows);
     let count = leads.len();
 
@@ -1924,6 +1947,22 @@ pub async fn poll_instagram_jobs(state: &Arc<AppState>) {
         let rows = match pb.fetch_output(&agent_id).await {
             Ok(r) if !r.is_empty() => r,
             Ok(_) => {
+                // Empty output could mean "still running" OR "phantom errored with
+                // no rows produced". Ask PB directly before assuming still running.
+                if let Ok((errored, log_tail)) = pb.fetch_run_error(&agent_id).await {
+                    if errored {
+                        let err_msg = log_tail.unwrap_or_else(|| "PhantomBuster script exited with error".to_string());
+                        tracing::warn!("Instagram job {}: PB reported error → marking failed: {}", job_id, err_msg);
+                        let _ = sqlx::query(
+                            "UPDATE phantombuster_jobs SET status = 'failed', error = $1, completed_at = NOW() WHERE id = $2"
+                        )
+                        .bind(&err_msg)
+                        .bind(job_id)
+                        .execute(&state.db_pool)
+                        .await;
+                        continue;
+                    }
+                }
                 tracing::debug!("Instagram job {}: no output yet, will retry", job_id);
                 continue;
             }

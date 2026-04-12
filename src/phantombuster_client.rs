@@ -227,6 +227,57 @@ impl PhantomBusterClient {
         Ok(leads)
     }
 
+    /// Inspect the last run of an agent. Returns whether PB reports a terminal
+    /// error and, if so, the last ~800 chars of the log so callers can mark
+    /// their DB row `failed` with a meaningful error instead of hanging on
+    /// `running` forever when the Phantom errored at launch.
+    ///
+    /// Returns `Ok((is_errored, log_tail_opt))`:
+    /// * `is_errored = true` when `containerStatus == "not running"` combined
+    ///   with a non-zero `exitCode`, OR when the log contains `[error]`.
+    /// * `log_tail_opt` is the last ~800 chars of the log when errored.
+    pub async fn fetch_run_error(&self, agent_id: &str) -> Result<(bool, Option<String>), String> {
+        let resp = self.http
+            .get(format!("{}/agents/fetch-output?id={}", PB_BASE, agent_id))
+            .header("X-Phantombuster-Key", &self.api_key)
+            .send()
+            .await
+            .map_err(|e| format!("fetch_run_error request failed: {}", e))?;
+
+        let body: serde_json::Value = resp.json().await
+            .map_err(|e| format!("fetch_run_error parse failed: {}", e))?;
+
+        // PB wraps the real payload under `data` in some responses.
+        let payload = body.get("data").cloned().unwrap_or(body);
+
+        let exit_code = payload.get("exitCode").and_then(|v| v.as_i64());
+        let container_status = payload
+            .get("containerStatus")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let log = payload
+            .get("output")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        let finished_with_error =
+            (container_status == "not running" && exit_code.unwrap_or(0) != 0)
+                || log.contains("[error]");
+
+        if finished_with_error {
+            // Walk back to a valid UTF-8 boundary before slicing — PB logs can
+            // contain emoji (e.g. ❌) that would panic on mid-codepoint slice.
+            let mut start = log.len().saturating_sub(800);
+            while start > 0 && !log.is_char_boundary(start) {
+                start -= 1;
+            }
+            let tail = log[start..].trim().to_string();
+            Ok((true, Some(tail)))
+        } else {
+            Ok((false, None))
+        }
+    }
+
     /// Build a Sales Navigator people-search URL from filter params.
     ///
     /// Supported filters:
@@ -402,13 +453,12 @@ impl PhantomBusterClient {
         max_posts:      u32,
     ) -> Result<String, String> {
         let tag = hashtag.trim_start_matches('#');
-        let hashtag_url = format!("https://www.instagram.com/explore/tags/{}/", tag);
 
         let argument = serde_json::json!({
-            "sessionCookie": session_cookie,
-            "hashtag":       hashtag_url,
-            "numberOfPosts": max_posts,
-            "csvName":       format!("ig_leads_{}", chrono::Utc::now().timestamp())
+            "sessionCookie":          session_cookie,
+            "spreadsheetUrl":         format!("#{}", tag),
+            "maxPosts":               max_posts,
+            "numberOfLinesPerLaunch": 10,
         });
 
         let body = serde_json::json!({
