@@ -55,6 +55,13 @@ CREATE INDEX IF NOT EXISTS idx_instagram_leads_user_id
 ALTER TABLE instagram_leads
     ADD COLUMN IF NOT EXISTS service_type TEXT;
 
+-- Link to a deliveries.id row that holds the auto-generated sample for THIS
+-- specific lead (e.g. a Blender thumbnail or sample animation). When set,
+-- the DM script can include the public /delivery/:id link as a portfolio.
+ALTER TABLE instagram_leads
+    ADD COLUMN IF NOT EXISTS sample_delivery_id UUID
+    REFERENCES deliveries(id) ON DELETE SET NULL;
+
 -- Backfill: stamp existing leads/jobs with the original superadmin user so
 -- they don't spontaneously vanish from the dashboard. Pick the oldest active
 -- superuser; if there isn't one, leave NULL (worker will ignore NULL rows

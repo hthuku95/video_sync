@@ -56,6 +56,7 @@ pub fn instagram_routes() -> Router {
         .route("/api/instagram/leads/top",                   get(instagram_top_leads))
         .route("/api/instagram/leads",                       get(instagram_list_leads))
         .route("/api/instagram/leads/:id/generate-dm",       post(instagram_generate_dm))
+        .route("/api/instagram/leads/:id/generate-sample",   post(instagram_generate_sample))
         .route("/api/instagram/leads/:id/contact-status",    patch(instagram_update_contact_status))
         .layer(axum::middleware::from_fn(auth_middleware))
 }
@@ -2080,6 +2081,149 @@ Output ONLY the DM body. No quotes, no labels, no preamble."#,
     .await;
 
     Json(json!({"success": true, "dm_script": dm_text}))
+}
+
+/// POST /api/instagram/leads/:id/generate-sample
+///
+/// Generates a portfolio sample tailored to the lead's `service_type` and
+/// returns a public /delivery/:id link the user can paste into the DM.
+///
+/// Service routing:
+/// * `thumbnails`  → Blender `thumbnail` (PNG)
+/// * `animations`  → Blender `title_card` (15s MP4) — cheapest scene the
+///                   server reliably renders without input data.
+/// * `ugc` / `full_stack` → Blender `ui_mockup` placeholder
+/// * `clipping`    → returns `requires_source_url=true` because clipping
+///                   needs a video URL the user supplies. The frontend
+///                   should prompt for it then call /api/admin/deliveries
+///                   directly. (Manual clipping isn't a delivery type yet.)
+#[derive(Debug, Deserialize)]
+struct GenerateSampleRequest {
+    /// Optional override — for `clipping`, the user must paste a video URL.
+    source_url: Option<String>,
+}
+
+async fn instagram_generate_sample(
+    Extension(state):  Extension<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
+    Path(id):          Path<uuid::Uuid>,
+    Json(_req):        Json<Option<GenerateSampleRequest>>,
+) -> Json<serde_json::Value> {
+    let user_id: i32 = claims.sub.parse().unwrap_or(0);
+
+    let row = match sqlx::query(
+        "SELECT username, full_name, bio, service_type, sample_delivery_id
+         FROM instagram_leads WHERE id = $1 AND user_id = $2"
+    )
+    .bind(id)
+    .bind(user_id)
+    .fetch_optional(&state.db_pool)
+    .await {
+        Ok(Some(r)) => r,
+        Ok(None)    => return Json(json!({"success": false, "error": "Lead not found"})),
+        Err(e)      => return Json(json!({"success": false, "error": format!("DB error: {}", e)})),
+    };
+
+    // If a sample is already attached, just return it — re-generating costs
+    // money and the user wants the link to paste, not a fresh render.
+    if let Some(existing) = row.get::<Option<uuid::Uuid>, _>("sample_delivery_id") {
+        return Json(json!({
+            "success":      true,
+            "delivery_id":  existing.to_string(),
+            "delivery_url": format!("/delivery/{}", existing),
+            "message":      "Sample already exists for this lead.",
+        }));
+    }
+
+    let username:     String         = row.get::<Option<String>, _>("username").unwrap_or_default();
+    let full_name:    String         = row.get::<Option<String>, _>("full_name").unwrap_or_else(|| username.clone());
+    let bio:          String         = row.get::<Option<String>, _>("bio").unwrap_or_default();
+    let service:      Option<String> = row.get::<Option<String>, _>("service_type");
+
+    // For clipping the lead, we'd need their actual video URL. Tell the
+    // frontend so it can ask the user for one. Don't burn a render slot on
+    // a placeholder for clipping — the value is in clipping THEIR content.
+    if matches!(service.as_deref(), Some("clipping")) {
+        return Json(json!({
+            "success":              false,
+            "requires_source_url":  true,
+            "error":                "Clipping samples need a YouTube/podcast/Twitch URL. Paste one of @{username}'s long-form videos and try again.".replace("{username}", &username),
+        }));
+    }
+
+    // Build a delivery row pointing at a lightweight Blender render.
+    // Default to `thumbnail` if the scorer hasn't set a service yet.
+    let (gig_type, prompt, style, duration, extra) = match service.as_deref() {
+        Some("animations") => (
+            "title_card",
+            format!("{} — channel intro", full_name),
+            "modern",
+            8.0,
+            json!({"subtitle": bio.chars().take(60).collect::<String>()}),
+        ),
+        Some("ugc") | Some("full_stack") => (
+            "ui_mockup",
+            format!("{}'s product showcase", full_name),
+            "modern",
+            6.0,
+            json!({"device": "phone", "animation": "fade_in"}),
+        ),
+        _ => (
+            "thumbnail",
+            format!("Eye-catching thumbnail for @{} — {}", username, bio.chars().take(80).collect::<String>()),
+            "bold",
+            0.0,
+            json!({"title_text": full_name}),
+        ),
+    };
+
+    let title = format!("Sample for @{}", username);
+
+    let delivery_id: uuid::Uuid = match sqlx::query_scalar::<_, uuid::Uuid>(
+        "INSERT INTO deliveries (client_ref, title, gig_type, prompt, style, duration, extra_args, status)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending')
+         RETURNING id"
+    )
+    .bind(format!("ig:{}", username))
+    .bind(&title)
+    .bind(gig_type)
+    .bind(&prompt)
+    .bind(style)
+    .bind(duration)
+    .bind(&extra)
+    .fetch_one(&state.db_pool)
+    .await {
+        Ok(id) => id,
+        Err(e) => return Json(json!({"success": false, "error": format!("DB insert failed: {}", e)})),
+    };
+
+    // Attach the sample to the lead so re-clicking returns the same one.
+    let _ = sqlx::query(
+        "UPDATE instagram_leads SET sample_delivery_id = $1, updated_at = NOW()
+         WHERE id = $2 AND user_id = $3"
+    )
+    .bind(delivery_id)
+    .bind(id)
+    .bind(user_id)
+    .execute(&state.db_pool)
+    .await;
+
+    // Kick off the render in the background — same path the admin endpoint
+    // uses. Returns immediately so the user can paste the /delivery/:id
+    // link into the DM right away (the page will render the result when
+    // BlenderMCPServer finishes; ~1-3 min for thumbnail, ~3-8 min for video).
+    let render_state = state.clone();
+    tokio::spawn(async move {
+        crate::handlers::admin::run_delivery_job(delivery_id, render_state).await;
+    });
+
+    Json(json!({
+        "success":      true,
+        "delivery_id":  delivery_id.to_string(),
+        "delivery_url": format!("/delivery/{}", delivery_id),
+        "service":      service,
+        "message":      "Sample queued. Render takes 1-3 minutes; the /delivery/:id link is shareable immediately and will show the result when ready.",
+    }))
 }
 
 /// PATCH /api/instagram/leads/:id/contact-status

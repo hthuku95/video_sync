@@ -6708,7 +6708,7 @@ pub async fn api_list_deliveries(
 }
 
 /// Background task: renders one custom delivery job and updates the DB.
-async fn run_delivery_job(delivery_id: Uuid, state: Arc<AppState>) {
+pub async fn run_delivery_job(delivery_id: Uuid, state: Arc<AppState>) {
     // Fetch job details
     let row = sqlx::query(
         "SELECT gig_type, prompt, style, duration, extra_args FROM deliveries WHERE id = $1",
