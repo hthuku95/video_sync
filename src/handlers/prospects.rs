@@ -1923,7 +1923,7 @@ async fn instagram_list_leads(
         "SELECT id, username, full_name, bio, followers_count, following_count, posts_count,
                 profile_url, profile_pic_url, is_private, is_verified, category,
                 hashtag_source, email, external_url, dm_script, contact_status,
-                pb_job_id, score, score_reason, created_at
+                pb_job_id, score, score_reason, service_type, created_at
          FROM instagram_leads WHERE user_id = $1"
     );
     let mut binds: Vec<String> = Vec::new();
@@ -1972,6 +1972,7 @@ async fn instagram_list_leads(
             "contact_status":  r.get::<Option<String>, _>("contact_status"),
             "score":           r.get::<Option<i32>, _>("score"),
             "score_reason":    r.get::<Option<String>, _>("score_reason"),
+            "service_type":    r.get::<Option<String>, _>("service_type"),
         })
     }).collect();
 
@@ -1991,7 +1992,7 @@ async fn instagram_generate_dm(
     // Fetch the lead — scoped to the caller so one user can't DM another
     // user's lead or learn that another user has that lead.
     let row = match sqlx::query(
-        "SELECT username, full_name, bio, followers_count, category, hashtag_source, external_url
+        "SELECT username, full_name, bio, followers_count, category, hashtag_source, external_url, service_type
          FROM instagram_leads WHERE id = $1 AND user_id = $2"
     )
     .bind(id)
@@ -2007,36 +2008,54 @@ async fn instagram_generate_dm(
     let full_name: String = row.get::<Option<String>, _>("full_name").unwrap_or_else(|| username.clone());
     let bio:       String = row.get::<Option<String>, _>("bio").unwrap_or_default();
     let followers: i64    = row.get::<Option<i64>, _>("followers_count").unwrap_or(0);
-    let category:  String = row.get::<Option<String>, _>("category").unwrap_or_default();
-    let ext_url:   String = row.get::<Option<String>, _>("external_url").unwrap_or_default();
+    let category:  String          = row.get::<Option<String>, _>("category").unwrap_or_default();
+    let ext_url:   String          = row.get::<Option<String>, _>("external_url").unwrap_or_default();
+    let service:   Option<String>  = row.get::<Option<String>, _>("service_type");
 
     let niche = req.as_ref().and_then(|r| r.niche.as_deref()).unwrap_or(&category);
 
+    let followers_str = if followers > 0 { followers.to_string() } else { "unknown".to_string() };
+
+    // If the scorer already picked a service for this lead, lock the DM to it
+    // — much higher quality than asking the model to re-decide every time.
+    let service_block = match service.as_deref() {
+        Some("clipping")    => "Service to pitch: SHORT-FORM CLIPPING.\n  - What you offer: turn their long videos / podcasts / streams into 20–40 vertical Shorts/Reels/TikToks per month.\n  - Pricing tiers: $297 (30 clips/mo) → $497 (50 clips/mo) → $899 (unlimited + 48h SLA).",
+        Some("animations")  => "Service to pitch: AI-DRIVEN BLENDER ANIMATIONS.\n  - What you offer: explainer scenes, data visualisations, LaTeX equations, lower-thirds, title cards.\n  - Pricing tiers: $50–$150 per 15–60s animation, or $400/month for 5 animations.",
+        Some("thumbnails")  => "Service to pitch: AI-OPTIMISED YOUTUBE THUMBNAILS.\n  - What you offer: 3-frame extract → AI picks the strongest → branded title overlay → CTR-tested.\n  - Pricing tiers: $25–$50 per thumbnail, or $300/month for 30 thumbnails.",
+        Some("ugc")         => "Service to pitch: UGC / PRODUCT-DEMO VIDEOS.\n  - What you offer: vertical-first ad-style demo videos for ecommerce / SaaS founders.\n  - Pricing tiers: $200–$500 per 30–60s UGC video.",
+        Some("full_stack")  => "Service to pitch: FULL-STACK PRODUCTION BUNDLE.\n  - What you offer: clipping + thumbnails + animations + delivery, all in one retainer.\n  - Pricing tiers: $1,500–$3,000/month.",
+        _ => "Pick the strongest-fit service from this menu (mention only ONE in the DM):\n  - SHORT-FORM CLIPPING — long-form → Shorts/Reels. Best fit: podcasters, long-form YouTubers, streamers. $297–$899/mo.\n  - BLENDER ANIMATIONS — explainer/data-viz/LaTeX. Best fit: educators, finance/crypto channels. $50–$150 each.\n  - AI THUMBNAILS — best fit growing YouTubers (5k–100k). $25–$50 each.\n  - UGC / PRODUCT DEMO — best fit Shopify/SaaS founders. $200–$500 each.\n  - FULL STACK — bundle of all of the above. $1,500–$3,000/mo.",
+    };
+
     let prompt = format!(
-        r#"Write a short, personalized Instagram DM (under 120 words) from a video clipping service to a content creator.
+        r#"You are a senior outbound copywriter for a video production studio. Write a personalized Instagram DM (≤120 words) to this creator.
 
 Creator info:
-- Instagram handle: @{username}
-- Name: {full_name}
-- Followers: {followers}
-- Bio: {bio}
-- Niche/category: {niche}
-- Link in bio: {ext_url}
+- Handle:       @{username}
+- Name:         {full_name}
+- Followers:    {followers}
+- Bio / recent post caption: {bio}
+- Niche hint:   {niche}
+- Link in bio:  {ext_url}
 
-The DM should:
-1. Be personal and reference something specific from their bio or niche
-2. Mention that you already made a free demo clip of their content
-3. Offer 30–50 short clips per month for $297–$497/month
-4. End with a clear call to action (reply to see the demo)
-5. Sound natural, NOT salesy or copy-paste generic
+{service_block}
 
-Output ONLY the DM message text, no labels or quotes."#,
-        username  = username,
-        full_name = full_name,
-        followers = followers,
-        bio       = bio,
-        niche     = niche,
-        ext_url   = ext_url,
+The DM must:
+- Be specific. Reference an actual detail from the bio/caption — never generic flattery.
+- State concretely what the studio would do for THEM, with the realistic price from the service block above.
+- Mention you've already made a sample (link will be added separately — do NOT invent a URL).
+- End with a clear ask: "want me to send the sample?" or "free to share the link?"
+- Sound like one founder messaging another. Casual, lowercase ok, no corporate fluff, no emoji spam.
+- Adapt tone to follower size — micro creators (<10k) warm + helpful; mid creators (10k–100k) business-direct; big creators (>100k) concise with clear ROI angle.
+
+Output ONLY the DM body. No quotes, no labels, no preamble."#,
+        username      = username,
+        full_name     = full_name,
+        followers     = followers_str,
+        bio           = bio,
+        niche         = niche,
+        ext_url       = ext_url,
+        service_block = service_block,
     );
 
     let dm_text = match generate_text_best_effort(
@@ -2662,12 +2681,14 @@ async fn score_instagram_leads(state: &Arc<AppState>, hashtag: &str, user_id: i3
         };
 
         let prompt = format!(
-            r#"Score this Instagram creator as a potential client for a professional video clipping service (score 0–100).
+            r#"Score this Instagram creator as a potential client for a video production studio (0–100), and also pick the best service to pitch.
 
-The clipping service:
-- Takes long-form videos (YouTube, podcast, streams) and repurposes them into 30–90s Shorts/Reels clips
-- Charges $297–$497/month
-- Ideal clients: YouTubers, podcasters, educators, online course creators, coaches with video content
+The studio offers:
+- **clipping**     — long-form → Shorts/Reels. Best fit: podcasters, long-form YouTubers, Twitch streamers.
+- **animations**   — Blender explainer/data-viz/LaTeX scenes. Best fit: educators, finance/crypto channels, news/data accounts.
+- **thumbnails**   — AI-generated YouTube thumbnails. Best fit: growing YouTubers (5k–100k subs), MrBeast aspirants.
+- **ugc**          — vertical product-demo ads. Best fit: Shopify/DTC founders, SaaS demos, brand accounts.
+- **full_stack**   — bundle of the above. Best fit: 100k+ creators serious about scaling.
 
 Creator profile:
 - Username: @{username}
@@ -2676,13 +2697,15 @@ Creator profile:
 - Link in bio: {ext_url}
 
 Score guidelines:
-- 80–100: Clear content creator with video content, monetised, posts long-form
-- 60–79: Likely content creator, video content likely (podcaster, streamer, course creator, coach)
-- 40–59: Could be a creator but unclear from the bio/handle
-- 0–39: Fan page, brand account, spammy, OR another video editor (they are competitors not clients)
+- 80–100: Clear paying client. Active creator/founder, monetised, has content the studio can act on right now.
+- 60–79: Likely fit. Bio strongly hints at one of the service types and the audience size makes sense.
+- 40–59: Ambiguous — could be a creator, could be a fan account, can't tell from bio alone.
+- 0–39: Bad fit. Fan page, brand parody, private/spammy account, OR another freelance editor (competitor, not client).
 
-Return ONLY valid JSON (no markdown):
-{{"score": 75, "reason": "Podcaster with podcast link in bio, posts video clips"}}"#,
+Return ONLY valid JSON (no markdown, no code fence):
+{{"score": 75, "service": "clipping", "reason": "podcaster with podcast link in bio, posts long-form clips"}}
+
+`service` MUST be one of: clipping, animations, thumbnails, ugc, full_stack."#,
             username  = username,
             followers = followers_str,
             bio       = bio,
@@ -2702,14 +2725,25 @@ Return ONLY valid JSON (no markdown):
                 .trim_end_matches("```").trim();
 
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(cleaned) {
-                let score  = v.get("score").and_then(|s| s.as_i64()).unwrap_or(0) as i32;
-                let reason = v.get("reason").and_then(|r| r.as_str()).unwrap_or("").to_string();
+                let score   = v.get("score").and_then(|s| s.as_i64()).unwrap_or(0) as i32;
+                let reason  = v.get("reason").and_then(|r| r.as_str()).unwrap_or("").to_string();
+                // Service tag — coerced to one of the 5 known values; anything
+                // else gets stored as NULL so the DM generator falls back to
+                // "all services, AI picks one inline".
+                let service_raw = v.get("service").and_then(|s| s.as_str()).unwrap_or("").to_lowercase();
+                let service = match service_raw.as_str() {
+                    "clipping" | "animations" | "thumbnails" | "ugc" | "full_stack" => Some(service_raw),
+                    _ => None,
+                };
 
                 let _ = sqlx::query(
-                    "UPDATE instagram_leads SET score = $1, score_reason = $2 WHERE id = $3"
+                    "UPDATE instagram_leads
+                     SET score = $1, score_reason = $2, service_type = $3
+                     WHERE id = $4"
                 )
                 .bind(score)
                 .bind(&reason)
+                .bind(service.as_deref())
                 .bind(id)
                 .execute(&state.db_pool)
                 .await;

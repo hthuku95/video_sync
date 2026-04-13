@@ -49,6 +49,12 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_instagram_leads_user_username
 CREATE INDEX IF NOT EXISTS idx_instagram_leads_user_id
     ON instagram_leads(user_id);
 
+-- AI-picked service tag (clipping | animations | thumbnails | ugc | full_stack).
+-- Set by the scorer when it judges the lead. Read by the DM generator so it
+-- pitches the right service per lead instead of always pitching clipping.
+ALTER TABLE instagram_leads
+    ADD COLUMN IF NOT EXISTS service_type TEXT;
+
 -- Backfill: stamp existing leads/jobs with the original superadmin user so
 -- they don't spontaneously vanish from the dashboard. Pick the oldest active
 -- superuser; if there isn't one, leave NULL (worker will ignore NULL rows
