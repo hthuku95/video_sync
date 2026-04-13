@@ -32,6 +32,7 @@ mod tool_selector; // 🔧 Dynamic tool selection for AI agents (general/fallbac
 mod ai_tool_selector; // 🧠 AI-driven tool selection — Gemma 4 picks relevant tools per request
 mod utils; // 🔧 Utility modules (FFmpeg utilities, etc.)
 mod token_manager; // 🔧 Centralized YouTube OAuth token refresh
+mod x402;          // 💰 x402 HTTP-402 payment protocol (USDC on Base)
 
 // Video processing modules (from lib.rs)
 mod types;

@@ -31,7 +31,11 @@ pub fn admin_routes() -> Router {
         .route("/admin/test-runs/:id", get(admin_test_run_detail_page))
         .route("/admin/deliveries", get(admin_deliveries_page))
         .route("/admin/monetization-guide", get(admin_monetization_guide_page))
-        .route("/delivery/:id", get(delivery_page));
+        .route("/delivery/:id", get(delivery_page))
+        // x402 paywall endpoints — public on purpose; auth happens via the
+        // signed USDC payment in the X-Payment header, not via JWT.
+        .route("/delivery/:id/unlock-spec", get(delivery_unlock_spec))
+        .route("/delivery/:id/unlock", post(delivery_unlock));
     
     // API endpoints - protected routes with JWT authentication  
     let protected_admin = Router::new()
@@ -6443,7 +6447,7 @@ pub async fn delivery_page(
     Extension(state): Extension<Arc<AppState>>,
 ) -> Html<String> {
     // Try test_results first, then custom deliveries table
-    let (name, gig_type, status, r2_url, filename, score, feedback) =
+    let (name, gig_type, status, r2_url, filename, score, feedback, unlock_price, unlocked_until) =
         if let Ok(uuid) = uuid::Uuid::parse_str(&id) {
             // 1. Portfolio test result
             let tr = sqlx::query(
@@ -6464,11 +6468,14 @@ pub async fn delivery_page(
                 let f: Option<String> = row.try_get("output_filename").ok();
                 let sc: Option<i32> = row.try_get("llm_review_score").ok();
                 let fb: Option<String> = row.try_get("llm_review_feedback").ok();
-                (Some(n), Some(g), Some(s), u, f, sc, fb)
+                // Portfolio test results are never paywalled — they're
+                // demos that need to be visible to anyone.
+                (Some(n), Some(g), Some(s), u, f, sc, fb, None, None)
             } else {
-                // 2. Custom delivery
+                // 2. Custom delivery — these CAN be paywalled.
                 let dr = sqlx::query(
-                    "SELECT title, gig_type, status, output_r2_url, output_filename \
+                    "SELECT title, gig_type, status, output_r2_url, output_filename, \
+                     unlock_price_usdc, unlocked_until \
                      FROM deliveries WHERE id = $1",
                 )
                 .bind(uuid)
@@ -6483,14 +6490,32 @@ pub async fn delivery_page(
                     let s: String = row.get("status");
                     let u: Option<String> = row.try_get("output_r2_url").ok();
                     let f: Option<String> = row.try_get("output_filename").ok();
-                    (Some(n), Some(g), Some(s), u, f, None, None)
+                    let price: Option<sqlx::types::Decimal> =
+                        row.try_get("unlock_price_usdc").ok().flatten();
+                    let until: Option<chrono::DateTime<chrono::Utc>> =
+                        row.try_get("unlocked_until").ok().flatten();
+                    (Some(n), Some(g), Some(s), u, f, None, None, price, until)
                 } else {
-                    (None, None, None, None, None, None, None)
+                    (None, None, None, None, None, None, None, None, None)
                 }
             }
         } else {
-            (None, None, None, None, None, None, None)
+            (None, None, None, None, None, None, None, None, None)
         };
+
+    // Unlocked = the deliverable can show full-quality download buttons.
+    // Either: no price set (free delivery), or unlocked_until is in the future.
+    let is_unlocked = unlock_price.is_none()
+        || unlocked_until.map(|t| t > chrono::Utc::now()).unwrap_or(false);
+    let price_cents: u64 = unlock_price.as_ref()
+        .and_then(|d| {
+            // Decimal → cents (multiply by 100, truncate fractional).
+            use sqlx::types::Decimal;
+            let hundred = Decimal::new(100, 0);
+            let cents_dec = d * hundred;
+            cents_dec.trunc().to_string().parse::<u64>().ok()
+        })
+        .unwrap_or(500);
 
     let result: Option<()> = name.as_ref().map(|_| ());
 
@@ -6524,21 +6549,47 @@ pub async fn delivery_page(
                 None => r#"<div class="no-media">⏳ Render in progress — check back shortly</div>"#.to_string(),
                 Some(url) => {
                     if is_image {
-                        format!(r#"<img src="{url}" alt="Delivered image" style="max-width:100%;border-radius:12px;">"#)
+                        let watermark_overlay = if !is_unlocked {
+                            r#"<div class="watermark">PREVIEW · UNLOCK FOR HD</div>"#
+                        } else { "" };
+                        format!(r#"<div class="media-stack"><img src="{url}" alt="Delivered image" style="max-width:100%;border-radius:12px;">{watermark_overlay}</div>"#)
                     } else {
-                        format!(r#"<video controls style="width:100%;border-radius:12px;background:#000;">
+                        let watermark_overlay = if !is_unlocked {
+                            r#"<div class="watermark">PREVIEW · UNLOCK FOR HD</div>"#
+                        } else { "" };
+                        // Disable right-click + downloads on the locked preview
+                        // by removing `controlsList=download` and adding
+                        // `disablepictureinpicture` etc. Best-effort.
+                        let video_attrs = if is_unlocked {
+                            "controls"
+                        } else {
+                            r#"controls controlsList="nodownload" disablepictureinpicture oncontextmenu="return false""#
+                        };
+                        format!(r#"<div class="media-stack">
+<video {video_attrs} style="width:100%;border-radius:12px;background:#000;">
   <source src="{url}" type="video/mp4">
   Your browser does not support the video tag.
-</video>"#)
+</video>{watermark_overlay}</div>"#)
                     }
                 }
             };
 
-            let download_btn = match &r2_url {
-                None => String::new(),
-                Some(url) => {
+            // Download button is gated. When LOCKED, show the unlock CTA
+            // instead — this is the entire revenue surface.
+            let download_btn = match (&r2_url, is_unlocked) {
+                (None, _) => String::new(),
+                (Some(url), true) => {
                     let fname = filename.as_deref().unwrap_or("output");
-                    format!(r#"<a href="{url}" download="{fname}" class="btn-download">⬇ Download {fname}</a>"#)
+                    format!(r#"<a href="{url}" download="{fname}" class="btn-download">⬇ Download HD {fname}</a>"#)
+                }
+                (Some(_), false) => {
+                    let dollars = price_cents as f64 / 100.0;
+                    format!(r#"<div class="unlock-cta">
+  <div class="unlock-headline">Preview only — unlock the HD download for ${dollars:.2} USDC</div>
+  <div class="unlock-sub">Pay once with any wallet (Phantom, Coinbase, MetaMask) on Base. 30-day access. No account needed.</div>
+  <button id="x402-unlock-btn" class="btn-download" style="background:#7a4cff;margin-top:8px">🔓 Pay ${dollars:.2} USDC &amp; Unlock</button>
+  <div id="x402-status" style="margin-top:10px;font-size:13px;color:#9999bb"></div>
+</div>"#)
                 }
             };
 
@@ -6596,6 +6647,17 @@ pub async fn delivery_page(
   .feedback {{ font-size: 13px; color: #9999bb; line-height: 1.6; }}
   .footer {{ margin-top: 32px; font-size: 12px; color: #666680; text-align: center; }}
   .footer a {{ color: #6366f1; text-decoration: none; }}
+  /* x402 paywall styling */
+  .media-stack {{ position: relative; }}
+  .watermark {{ position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%) rotate(-15deg);
+                 font-size: 28px; font-weight: 800; color: rgba(255,255,255,0.55);
+                 background: rgba(0,0,0,0.45); padding: 12px 28px; border-radius: 8px;
+                 letter-spacing: 0.08em; pointer-events: none; user-select: none; }}
+  .unlock-cta {{ background: linear-gradient(135deg, rgba(122,76,255,0.12), rgba(99,102,241,0.06));
+                  border: 1px solid rgba(122,76,255,0.3); border-radius: 12px;
+                  padding: 20px; margin-bottom: 24px; }}
+  .unlock-headline {{ font-size: 16px; font-weight: 700; color: #fff; margin-bottom: 4px; }}
+  .unlock-sub {{ font-size: 13px; color: #9999bb; line-height: 1.5; margin-bottom: 8px; }}
 </style>
 </head>
 <body>
@@ -6613,12 +6675,324 @@ pub async fn delivery_page(
 <div class="footer">
   Delivered by <a href="https://videosync.video">VideoSync</a> — AI-Powered Video Generation
 </div>
+<script>
+// x402 paywall flow — runs only when the unlock button is rendered (locked state).
+(function() {{
+  const btn    = document.getElementById('x402-unlock-btn');
+  const status = document.getElementById('x402-status');
+  if (!btn) return; // Already unlocked; nothing to do.
+
+  const setStatus = (msg, isError) => {{
+    status.style.color = isError ? '#f87171' : '#9999bb';
+    status.textContent = msg;
+  }};
+
+  btn.addEventListener('click', async () => {{
+    btn.disabled = true;
+    btn.textContent = 'Connecting wallet...';
+
+    // Step 1 — pull the 402 payment spec from the server.
+    let spec;
+    try {{
+      const r = await fetch(window.location.pathname + '/unlock-spec');
+      if (!r.ok) throw new Error('unlock-spec returned ' + r.status);
+      spec = await r.json();
+    }} catch (e) {{
+      setStatus('Could not fetch payment spec: ' + e.message, true);
+      btn.disabled = false; btn.textContent = '🔓 Try again';
+      return;
+    }}
+
+    const req = (spec.accepts || [])[0];
+    if (!req) {{ setStatus('Payment spec missing requirements.', true); return; }}
+
+    // Step 2 — find an EVM provider. Phantom exposes window.phantom.ethereum
+    // when EVM mode is enabled; MetaMask + Coinbase Wallet expose window.ethereum.
+    const provider = (window.phantom && window.phantom.ethereum) || window.ethereum;
+    if (!provider) {{
+      setStatus('No crypto wallet detected. Install Phantom, MetaMask, or Coinbase Wallet.', true);
+      btn.disabled = false; btn.textContent = '🔓 Try again';
+      return;
+    }}
+
+    // Step 3 — request accounts and ensure we're on Base mainnet (chainId 0x2105).
+    let accounts;
+    try {{
+      accounts = await provider.request({{ method: 'eth_requestAccounts' }});
+    }} catch (e) {{
+      setStatus('Wallet connection rejected.', true);
+      btn.disabled = false; btn.textContent = '🔓 Try again';
+      return;
+    }}
+    const from = accounts[0];
+
+    try {{
+      await provider.request({{
+        method: 'wallet_switchEthereumChain',
+        params: [{{ chainId: '0x2105' }}],
+      }});
+    }} catch (switchErr) {{
+      // Chain might not be added — try adding it.
+      try {{
+        await provider.request({{
+          method: 'wallet_addEthereumChain',
+          params: [{{
+            chainId: '0x2105',
+            chainName: 'Base',
+            nativeCurrency: {{ name: 'Ether', symbol: 'ETH', decimals: 18 }},
+            rpcUrls: ['https://mainnet.base.org'],
+            blockExplorerUrls: ['https://basescan.org']
+          }}]
+        }});
+      }} catch {{
+        setStatus('Switch your wallet to Base network and try again.', true);
+        btn.disabled = false; btn.textContent = '🔓 Try again';
+        return;
+      }}
+    }}
+
+    setStatus('Sign the USDC payment in your wallet to unlock...', false);
+    btn.textContent = 'Awaiting signature...';
+
+    // Step 4 — build the EIP-3009 transferWithAuthorization typed data.
+    const validAfter  = 0;
+    const validBefore = Math.floor(Date.now() / 1000) + req.maxTimeoutSeconds;
+    const nonce       = '0x' + Array.from(crypto.getRandomValues(new Uint8Array(32)))
+                                    .map(b => b.toString(16).padStart(2, '0')).join('');
+    const typedData = {{
+      types: {{
+        EIP712Domain: [
+          {{ name: 'name', type: 'string' }},
+          {{ name: 'version', type: 'string' }},
+          {{ name: 'chainId', type: 'uint256' }},
+          {{ name: 'verifyingContract', type: 'address' }},
+        ],
+        TransferWithAuthorization: [
+          {{ name: 'from',        type: 'address' }},
+          {{ name: 'to',          type: 'address' }},
+          {{ name: 'value',       type: 'uint256' }},
+          {{ name: 'validAfter',  type: 'uint256' }},
+          {{ name: 'validBefore', type: 'uint256' }},
+          {{ name: 'nonce',       type: 'bytes32' }},
+        ],
+      }},
+      primaryType: 'TransferWithAuthorization',
+      domain: {{
+        name: req.extra && req.extra.name    || 'USD Coin',
+        version: req.extra && req.extra.version || '2',
+        chainId: 8453, // Base mainnet
+        verifyingContract: req.asset,
+      }},
+      message: {{
+        from, to: req.payTo,
+        value: req.maxAmountRequired,
+        validAfter, validBefore, nonce,
+      }},
+    }};
+
+    let signature;
+    try {{
+      signature = await provider.request({{
+        method: 'eth_signTypedData_v4',
+        params: [from, JSON.stringify(typedData)],
+      }});
+    }} catch (e) {{
+      setStatus('Signature rejected.', true);
+      btn.disabled = false; btn.textContent = '🔓 Try again';
+      return;
+    }}
+
+    // Step 5 — POST signed authorization back to our /unlock endpoint.
+    setStatus('Submitting payment to Base network...', false);
+    btn.textContent = 'Settling on-chain...';
+
+    const xPaymentBody = {{
+      x402Version: 1,
+      scheme:  req.scheme,
+      network: req.network,
+      payload: {{
+        signature,
+        authorization: {{
+          from, to: req.payTo,
+          value: req.maxAmountRequired,
+          validAfter: String(validAfter),
+          validBefore: String(validBefore),
+          nonce,
+        }},
+      }},
+    }};
+    const xPaymentB64 = btoa(JSON.stringify(xPaymentBody));
+
+    try {{
+      const r = await fetch(window.location.pathname + '/unlock', {{
+        method: 'POST',
+        headers: {{ 'X-Payment': xPaymentB64 }},
+      }});
+      const data = await r.json();
+      if (!r.ok || !data.success) {{
+        throw new Error(data.error || ('HTTP ' + r.status));
+      }}
+      setStatus('✅ Unlocked! Reloading...', false);
+      setTimeout(() => window.location.reload(), 800);
+    }} catch (e) {{
+      setStatus('Settlement failed: ' + e.message, true);
+      btn.disabled = false; btn.textContent = '🔓 Try again';
+    }}
+  }});
+}})();
+</script>
 </body>
 </html>"#)
         }
     };
 
     Html(html)
+}
+
+// =============================================================================
+// x402 paywall — public endpoints (no auth, payment IS the auth)
+// =============================================================================
+
+/// GET /delivery/:id/unlock-spec — returns the HTTP 402 payment requirements
+/// the buyer's wallet needs to sign. We render this as 200 OK with the spec
+/// in the body (rather than literal HTTP 402 with the spec) so the browser's
+/// fetch() doesn't bin it as an error before the JS can parse it.
+pub async fn delivery_unlock_spec(
+    Path(id): Path<String>,
+    Extension(state): Extension<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    let uuid = match uuid::Uuid::parse_str(&id) {
+        Ok(u) => u,
+        Err(_) => return Json(json!({"error": "Invalid delivery id"})),
+    };
+
+    // Look up the price + title for the spec description.
+    let row = sqlx::query(
+        "SELECT title, unlock_price_usdc FROM deliveries WHERE id = $1"
+    )
+    .bind(uuid)
+    .fetch_optional(&state.db_pool)
+    .await
+    .ok()
+    .flatten();
+
+    let (title, price_usd) = match row {
+        Some(r) => {
+            let t: String = r.get("title");
+            let p: Option<sqlx::types::Decimal> = r.try_get("unlock_price_usdc").ok().flatten();
+            (t, p)
+        }
+        None => return Json(json!({"error": "Delivery not found"})),
+    };
+
+    let recipient = match std::env::var("X402_RECIPIENT_ADDRESS") {
+        Ok(a) if !a.is_empty() => a,
+        _ => return Json(json!({"error": "X402_RECIPIENT_ADDRESS env var not set on server"})),
+    };
+
+    // Default to $5 if the row has no price (legacy rows from before the
+    // migration, or programmer-created deliveries that didn't set one).
+    let price_cents: u64 = price_usd
+        .and_then(|d| {
+            use sqlx::types::Decimal;
+            let hundred = Decimal::new(100, 0);
+            (d * hundred).trunc().to_string().parse::<u64>().ok()
+        })
+        .unwrap_or(500);
+
+    let resource_url = format!("{}/delivery/{}/unlock", base_url(), uuid);
+    let description  = format!("Unlock HD download — {}", title);
+
+    let spec = crate::x402::build_payment_required(price_cents, &recipient, &resource_url, &description);
+    Json(serde_json::to_value(spec).unwrap_or(json!({"error": "spec serialise failed"})))
+}
+
+/// POST /delivery/:id/unlock — accepts the X-Payment header, settles via the
+/// facilitator, flips the delivery row to unlocked-for-30-days, returns the
+/// receipt id.
+pub async fn delivery_unlock(
+    Path(id): Path<String>,
+    headers: axum::http::HeaderMap,
+    Extension(state): Extension<Arc<AppState>>,
+) -> (axum::http::StatusCode, Json<serde_json::Value>) {
+    let uuid = match uuid::Uuid::parse_str(&id) {
+        Ok(u) => u,
+        Err(_) => return (axum::http::StatusCode::BAD_REQUEST, Json(json!({"success": false, "error": "Invalid delivery id"}))),
+    };
+
+    let x_payment = match headers.get("X-Payment").and_then(|h| h.to_str().ok()) {
+        Some(s) if !s.is_empty() => s.to_string(),
+        _ => return (axum::http::StatusCode::PAYMENT_REQUIRED,
+                     Json(json!({"success": false, "error": "Missing X-Payment header. Fetch /unlock-spec first, sign with your wallet, then retry with the signed payload."}))),
+    };
+
+    // Re-derive the same requirements we'd put in the 402 spec so the
+    // facilitator can sanity-check the signature. Has to match exactly.
+    let row = match sqlx::query(
+        "SELECT title, unlock_price_usdc FROM deliveries WHERE id = $1"
+    )
+    .bind(uuid)
+    .fetch_optional(&state.db_pool)
+    .await {
+        Ok(Some(r)) => r,
+        Ok(None)    => return (axum::http::StatusCode::NOT_FOUND, Json(json!({"success": false, "error": "Delivery not found"}))),
+        Err(e)      => return (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"success": false, "error": format!("DB error: {}", e)}))),
+    };
+
+    let title: String = row.get("title");
+    let price_usd: Option<sqlx::types::Decimal> = row.try_get("unlock_price_usdc").ok().flatten();
+    let price_cents: u64 = price_usd
+        .and_then(|d| {
+            use sqlx::types::Decimal;
+            let hundred = Decimal::new(100, 0);
+            (d * hundred).trunc().to_string().parse::<u64>().ok()
+        })
+        .unwrap_or(500);
+
+    let recipient = match std::env::var("X402_RECIPIENT_ADDRESS") {
+        Ok(a) if !a.is_empty() => a,
+        _ => return (axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                     Json(json!({"success": false, "error": "X402_RECIPIENT_ADDRESS not configured"}))),
+    };
+
+    let resource_url = format!("{}/delivery/{}/unlock", base_url(), uuid);
+    let description  = format!("Unlock HD download — {}", title);
+    let spec = crate::x402::build_payment_required(price_cents, &recipient, &resource_url, &description);
+    let req  = match spec.accepts.first() {
+        Some(r) => r.clone(),
+        None    => return (axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                           Json(json!({"success": false, "error": "Failed to build payment requirements"}))),
+    };
+
+    let tx_hash = match crate::x402::settle_or_reject(&x_payment, &req).await {
+        Ok(h)  => h,
+        Err(e) => return (axum::http::StatusCode::PAYMENT_REQUIRED,
+                          Json(json!({"success": false, "error": e}))),
+    };
+
+    // Persist the unlock + receipt. 30-day window.
+    let _ = sqlx::query(
+        "UPDATE deliveries
+         SET unlocked_until = NOW() + INTERVAL '30 days',
+             payment_receipt_id = $1
+         WHERE id = $2"
+    )
+    .bind(&tx_hash)
+    .bind(uuid)
+    .execute(&state.db_pool)
+    .await;
+
+    (axum::http::StatusCode::OK, Json(json!({
+        "success":    true,
+        "tx_hash":    tx_hash,
+        "unlocked_for_days": 30,
+    })))
+}
+
+/// Read the public base URL from env, falling back to videosync.video.
+/// Used in x402 spec responses so the wallet shows the canonical resource.
+fn base_url() -> String {
+    std::env::var("PUBLIC_BASE_URL").unwrap_or_else(|_| "https://videosync.video".to_string())
 }
 
 // =============================================================================

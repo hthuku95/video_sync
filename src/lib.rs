@@ -32,6 +32,7 @@ pub mod tool_selector;
 pub mod ai_tool_selector;
 pub mod utils;
 pub mod token_manager;
+pub mod x402;
 
 // Video processing modules
 pub mod types;
