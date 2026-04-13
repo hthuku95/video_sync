@@ -656,6 +656,25 @@ async fn main() {
         });
     }
 
+    // ── PhantomBuster launch dispatcher — every 30s promotes one queued job
+    //    per agent to running if there's no running job. Exists because PB
+    //    free/team plans cap parallel phantom runs, and the users' search-bar
+    //    clicks + auto-discover fan-out produce "Maximum parallel executions
+    //    reached" errors when we launch without queueing. See prospects.rs.
+    {
+        let disp_state = shared_state.clone();
+        tokio::spawn(async move {
+            tracing::info!("🚦 PhantomBuster dispatcher started (30s interval)");
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(30));
+            // First tick fires immediately; skip it so startup isn't noisy.
+            interval.tick().await;
+            loop {
+                interval.tick().await;
+                handlers::prospects::dispatch_queued_pb_jobs(&disp_state).await;
+            }
+        });
+    }
+
     // ── Clipping worker and health tasks — always start regardless of youtube_client ──
     // V1 fix: worker must run even when YOUTUBE_API_KEY is not set. Only the channel
     // polling monitor (above) needs youtube_client. The worker itself only needs gemini_client.

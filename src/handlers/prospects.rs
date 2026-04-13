@@ -1519,39 +1519,34 @@ async fn instagram_search_leads(
     let hashtag   = req.hashtag.trim_start_matches('#').to_string();
     let category  = req.category.clone().unwrap_or_else(|| hashtag.clone());
 
-    let container_id = match pb.launch_instagram_hashtag_search(
-        &agent.id, &session_cookie, &hashtag, max_posts,
+    let (job_id, status, container_id) = match try_launch_or_queue_ig_hashtag_job(
+        &state, pb, &agent, &session_cookie, &hashtag, max_posts,
     ).await {
-        Ok(id) => id,
+        Ok(t)  => t,
         Err(e) => return Json(json!({"success": false, "error": e})),
     };
 
-    // Record the PB job
-    let job_id = match sqlx::query_scalar::<_, uuid::Uuid>(
-        "INSERT INTO phantombuster_jobs (agent_id, agent_name, search_url, status, launched_at)
-         VALUES ($1, $2, $3, 'running', NOW()) RETURNING id"
-    )
-    .bind(&agent.id)
-    .bind(&agent.name)
-    .bind(format!("instagram:#{}", hashtag))
-    .fetch_one(&state.db_pool)
-    .await {
-        Ok(id) => id,
-        Err(e) => return Json(json!({"success": false, "error": format!("DB insert failed: {}", e)})),
+    let message = match status {
+        "queued" => format!(
+            "Your PhantomBuster plan is busy with another search. #{} is queued — it'll auto-launch in a minute or two. Job ID: {}",
+            hashtag, job_id
+        ),
+        _ => format!(
+            "PhantomBuster Instagram Hashtag Search launched for #{}. Results typically ready in 3–10 minutes. Job ID: {}",
+            hashtag, job_id
+        ),
     };
 
     Json(json!({
         "success":      true,
         "job_id":       job_id.to_string(),
+        "status":       status,
         "container_id": container_id,
         "agent_name":   agent.name,
         "hashtag":      hashtag,
         "category":     category,
         "max_posts":    max_posts,
-        "message":      format!(
-            "PhantomBuster Instagram Hashtag Search launched for #{}. Results typically ready in 3–10 minutes. Job ID: {}",
-            hashtag, job_id
-        )
+        "message":      message,
     }))
 }
 
@@ -1814,35 +1809,25 @@ Return ONLY a JSON array of strings. No explanation. Example: ["youtuber", "cont
     let mut launched_jobs: Vec<serde_json::Value> = Vec::new();
     let mut errors: Vec<String> = Vec::new();
 
+    // Only the first hashtag will actually launch — the rest queue because
+    // PhantomBuster caps parallel runs per workspace. The dispatcher below
+    // promotes queued jobs one at a time as slots free up.
     for hashtag in &hashtags {
         let tag = hashtag.trim_start_matches('#').to_string();
-        match pb.launch_instagram_hashtag_search(&agent.id, &session_cookie, &tag, max_posts).await {
-            Ok(container_id) => {
-                // Record in DB
-                let job_insert = sqlx::query_scalar::<_, uuid::Uuid>(
-                    "INSERT INTO phantombuster_jobs (agent_id, agent_name, search_url, status, launched_at)
-                     VALUES ($1, $2, $3, 'running', NOW()) RETURNING id"
-                )
-                .bind(&agent.id)
-                .bind(&agent.name)
-                .bind(format!("instagram:#{}", tag))
-                .fetch_one(&state.db_pool)
-                .await;
-
-                match job_insert {
-                    Ok(job_id) => {
-                        launched_jobs.push(json!({
-                            "job_id":       job_id.to_string(),
-                            "container_id": container_id,
-                            "hashtag":      tag,
-                        }));
-                    }
-                    Err(e) => errors.push(format!("#{}: DB insert failed: {}", tag, e)),
-                }
+        match try_launch_or_queue_ig_hashtag_job(
+            &state, pb, &agent, &session_cookie, &tag, max_posts,
+        ).await {
+            Ok((job_id, status, container_id)) => {
+                launched_jobs.push(json!({
+                    "job_id":       job_id.to_string(),
+                    "container_id": container_id,
+                    "hashtag":      tag,
+                    "status":       status,
+                }));
             }
             Err(e) => errors.push(format!("#{}: {}", tag, e)),
         }
-        // Small delay between launches to avoid PB rate limits
+        // Keep a small gap between DB + PB calls so we don't race ourselves.
         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
     }
 
@@ -2051,6 +2036,195 @@ pub async fn poll_instagram_jobs(state: &Arc<AppState>) {
         // Score unscored leads (top 20 by followers to conserve LLM quota)
         if state.gemini_client.is_some() || state.nvidia_nim_client.is_some() {
             score_instagram_leads(state, &hashtag_source).await;
+        }
+    }
+}
+
+// ============================================================================
+// PhantomBuster launch queue
+// ============================================================================
+//
+// PhantomBuster plans cap the number of concurrent phantom runs (free: 1).
+// Firing multiple searches at once — or auto-discover's N-hashtag fan-out —
+// causes "Maximum number of parallel executions reached" errors from PB.
+// We serialize launches by agent: if an agent already has a `running` job,
+// newer launches are stored with `status='queued'` and dispatched by a
+// background task (`dispatch_queued_pb_jobs`) as slots free up.
+
+/// Returns `true` if the given PB client has a `running` job on `agent_id`.
+async fn agent_has_running_job(pool: &sqlx::PgPool, agent_id: &str) -> bool {
+    let n: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM phantombuster_jobs
+         WHERE agent_id = $1 AND status = 'running'"
+    )
+    .bind(agent_id)
+    .fetch_one(pool)
+    .await
+    .unwrap_or(0);
+    n > 0
+}
+
+/// Heuristic: does this PB error look like "parallel executions reached"?
+/// PB varies the wording ("Maximum number of parallel executions reached",
+/// "parallel_limit", "too many runs"), so we match loosely on the English
+/// user-facing phrase.
+fn is_pb_parallel_limit_error(err: &str) -> bool {
+    let lc = err.to_lowercase();
+    lc.contains("parallel") || lc.contains("maximum number")
+        || lc.contains("concurrency limit") || lc.contains("too many")
+}
+
+/// Try to launch an Instagram Hashtag Search — or enqueue it if the agent
+/// already has a running job (or PB rejects the launch for parallelism).
+///
+/// Returns `(job_id, status, container_id_opt)` where `status` is either
+/// `"running"` (launched immediately) or `"queued"` (will be launched by the
+/// dispatcher when a slot frees up).
+async fn try_launch_or_queue_ig_hashtag_job(
+    state:          &Arc<AppState>,
+    pb:             &crate::phantombuster_client::PhantomBusterClient,
+    agent:          &crate::phantombuster_client::PbAgent,
+    session_cookie: &str,
+    hashtag:        &str,
+    max_posts:      u32,
+) -> Result<(uuid::Uuid, &'static str, Option<String>), String> {
+    let tag = hashtag.trim_start_matches('#').to_string();
+    let search_url = format!("instagram:#{}", tag);
+
+    // Check occupancy first — cheaper than bouncing off PB's parallel limit.
+    let occupied = agent_has_running_job(&state.db_pool, &agent.id).await;
+
+    if !occupied {
+        match pb.launch_instagram_hashtag_search(&agent.id, session_cookie, &tag, max_posts).await {
+            Ok(container_id) => {
+                let job_id = sqlx::query_scalar::<_, uuid::Uuid>(
+                    "INSERT INTO phantombuster_jobs (agent_id, agent_name, search_url, status, launched_at)
+                     VALUES ($1, $2, $3, 'running', NOW()) RETURNING id"
+                )
+                .bind(&agent.id)
+                .bind(&agent.name)
+                .bind(&search_url)
+                .fetch_one(&state.db_pool)
+                .await
+                .map_err(|e| format!("DB insert failed: {}", e))?;
+                return Ok((job_id, "running", Some(container_id)));
+            }
+            Err(e) if is_pb_parallel_limit_error(&e) => {
+                tracing::warn!("PB parallel limit hit launching #{}: {} — queuing", tag, e);
+                // fall through to queue insert below
+            }
+            Err(e) => return Err(e),
+        }
+    }
+
+    // Queue it — dispatcher will launch when the running job completes.
+    let job_id = sqlx::query_scalar::<_, uuid::Uuid>(
+        "INSERT INTO phantombuster_jobs (agent_id, agent_name, search_url, status, created_at)
+         VALUES ($1, $2, $3, 'queued', NOW()) RETURNING id"
+    )
+    .bind(&agent.id)
+    .bind(&agent.name)
+    .bind(&search_url)
+    .fetch_one(&state.db_pool)
+    .await
+    .map_err(|e| format!("DB insert failed: {}", e))?;
+
+    tracing::info!("📥 Queued Instagram job {} for #{} (agent busy)", job_id, tag);
+    Ok((job_id, "queued", None))
+}
+
+/// Background dispatcher — runs periodically, promoting the oldest `queued`
+/// job per agent to `running` if the agent has no in-flight job. One promote
+/// per tick per agent keeps PB well under the parallel limit even across
+/// different phantom types.
+pub async fn dispatch_queued_pb_jobs(state: &Arc<AppState>) {
+    let Some(pb) = state.phantombuster_client.as_ref() else { return; };
+    let Ok(session_cookie) = std::env::var("INSTAGRAM_SESSION_COOKIE") else { return; };
+    if session_cookie.is_empty() { return; }
+
+    // Pick agents that have queued work AND no currently-running job.
+    let rows = match sqlx::query(
+        "SELECT DISTINCT q.agent_id
+         FROM phantombuster_jobs q
+         WHERE q.status = 'queued'
+           AND NOT EXISTS (
+             SELECT 1 FROM phantombuster_jobs r
+             WHERE r.agent_id = q.agent_id AND r.status = 'running'
+           )"
+    )
+    .fetch_all(&state.db_pool)
+    .await {
+        Ok(rs) => rs,
+        Err(e) => {
+            tracing::warn!("PB dispatcher DB query failed: {}", e);
+            return;
+        }
+    };
+
+    if rows.is_empty() { return; }
+
+    for row in rows {
+        let agent_id: String = row.get("agent_id");
+
+        // Oldest queued job for this agent.
+        let job = match sqlx::query(
+            "SELECT id, search_url FROM phantombuster_jobs
+             WHERE agent_id = $1 AND status = 'queued'
+             ORDER BY created_at ASC LIMIT 1"
+        )
+        .bind(&agent_id)
+        .fetch_optional(&state.db_pool)
+        .await {
+            Ok(Some(r)) => r,
+            Ok(None)    => continue,
+            Err(e)      => {
+                tracing::warn!("PB dispatcher oldest-job query failed: {}", e);
+                continue;
+            }
+        };
+
+        let job_id:     uuid::Uuid = job.get("id");
+        let search_url: String     = job.get("search_url");
+
+        // Only Instagram hashtag jobs are auto-dispatched today. LinkedIn
+        // launches require rebuilding the Sales Navigator URL, which is a
+        // bigger retrofit — leave those to manual retry for now.
+        let Some(tag) = search_url.strip_prefix("instagram:#")
+            .or_else(|| search_url.strip_prefix("instagram:"))
+            .map(|s| s.trim_start_matches('#').to_string())
+        else {
+            tracing::debug!("Skipping dispatch for non-IG queued job {} ({})", job_id, search_url);
+            continue;
+        };
+
+        match pb.launch_instagram_hashtag_search(&agent_id, &session_cookie, &tag, 50).await {
+            Ok(_container_id) => {
+                let _ = sqlx::query(
+                    "UPDATE phantombuster_jobs
+                     SET status = 'running', launched_at = NOW()
+                     WHERE id = $1"
+                )
+                .bind(job_id)
+                .execute(&state.db_pool)
+                .await;
+                tracing::info!("🚀 Dispatched queued PB job {} for #{}", job_id, tag);
+            }
+            Err(e) if is_pb_parallel_limit_error(&e) => {
+                tracing::debug!("PB still at parallel limit on agent {}; will retry next tick", agent_id);
+                // leave status='queued' and try again next tick
+            }
+            Err(e) => {
+                tracing::warn!("PB launch failed for queued job {}: {} — marking failed", job_id, e);
+                let _ = sqlx::query(
+                    "UPDATE phantombuster_jobs
+                     SET status = 'failed', error = $1, completed_at = NOW()
+                     WHERE id = $2"
+                )
+                .bind(e)
+                .bind(job_id)
+                .execute(&state.db_pool)
+                .await;
+            }
         }
     }
 }
