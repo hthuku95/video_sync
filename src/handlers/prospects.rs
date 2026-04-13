@@ -2057,14 +2057,18 @@ pub async fn poll_instagram_jobs(state: &Arc<AppState>) {
 
 /// Score unscored Instagram leads for a given hashtag using AI.
 async fn score_instagram_leads(state: &Arc<AppState>, hashtag: &str) {
+    // No `followers_count >= 1000` filter — hashtag-mode leads come from the
+    // post schema and have NULL follower counts. Filtering on them dropped
+    // every lead and the UI showed `—` for every score. Score what we have;
+    // the model is told to judge by bio/handle alone when follower count
+    // is unknown.
     let unscored = match sqlx::query(
         "SELECT id, username, full_name, bio, followers_count, external_url
          FROM instagram_leads
          WHERE score IS NULL
            AND hashtag_source = $1
            AND is_private = FALSE
-           AND followers_count >= 1000
-         ORDER BY followers_count DESC
+         ORDER BY COALESCE(followers_count, 0) DESC, created_at DESC
          LIMIT 20"
     )
     .bind(hashtag)
@@ -2075,11 +2079,16 @@ async fn score_instagram_leads(state: &Arc<AppState>, hashtag: &str) {
     };
 
     for row in &unscored {
-        let id:       uuid::Uuid = row.get("id");
-        let username: String     = row.get::<Option<String>, _>("username").unwrap_or_default();
-        let bio:      String     = row.get::<Option<String>, _>("bio").unwrap_or_default();
-        let followers: i64       = row.get::<Option<i64>, _>("followers_count").unwrap_or(0);
-        let ext_url:  String     = row.get::<Option<String>, _>("external_url").unwrap_or_default();
+        let id:        uuid::Uuid    = row.get("id");
+        let username:  String        = row.get::<Option<String>, _>("username").unwrap_or_default();
+        let bio:       String        = row.get::<Option<String>, _>("bio").unwrap_or_default();
+        let followers: Option<i64>   = row.get::<Option<i64>, _>("followers_count");
+        let ext_url:   String        = row.get::<Option<String>, _>("external_url").unwrap_or_default();
+
+        let followers_str = match followers {
+            Some(n) if n > 0 => n.to_string(),
+            _                => "unknown (came from hashtag search — judge by bio + handle)".to_string(),
+        };
 
         let prompt = format!(
             r#"Score this Instagram creator as a potential client for a professional video clipping service (score 0–100).
@@ -2092,19 +2101,19 @@ The clipping service:
 Creator profile:
 - Username: @{username}
 - Followers: {followers}
-- Bio: {bio}
+- Bio / recent post caption: {bio}
 - Link in bio: {ext_url}
 
 Score guidelines:
-- 80–100: Clear content creator with video content, 10K–500K followers, appears monetised
-- 60–79: Likely content creator, decent following, video content likely
-- 40–59: Could be a creator but unclear from profile
-- 0–39: Fan page, brand account, private/spammy, or clearly not a content creator
+- 80–100: Clear content creator with video content, monetised, posts long-form
+- 60–79: Likely content creator, video content likely (podcaster, streamer, course creator, coach)
+- 40–59: Could be a creator but unclear from the bio/handle
+- 0–39: Fan page, brand account, spammy, OR another video editor (they are competitors not clients)
 
 Return ONLY valid JSON (no markdown):
-{{"score": 75, "reason": "Podcaster with 45K followers, podcast link in bio, posts video clips"}}"#,
+{{"score": 75, "reason": "Podcaster with podcast link in bio, posts video clips"}}"#,
             username  = username,
-            followers = followers,
+            followers = followers_str,
             bio       = bio,
             ext_url   = ext_url,
         );
