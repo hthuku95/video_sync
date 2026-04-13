@@ -5,7 +5,7 @@
 use crate::llm_utils::generate_text_best_effort;
 use crate::middleware::admin::admin_middleware;
 use crate::middleware::auth::auth_middleware;
-use crate::models::auth::ErrorResponse;
+use crate::models::auth::{Claims, ErrorResponse};
 use crate::AppState;
 use axum::{
     extract::{Extension, Path, Query},
@@ -657,47 +657,262 @@ const PROSPECT_FINDER_HTML: &str = r###"<!DOCTYPE html>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Prospect Finder — Admin</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <style>
+/* Deep-purple palette — matches content_machine Enterprise UI redesign */
+:root{
+  --bg:#2a2438;
+  --surface:#352f44;
+  --border:#5c5470;
+  --accent:#dbd8e3;
+  --accent-strong:#8a7ca8;
+  --purple:#7a4cff;
+  --muted:#b8b3c8;
+  --dim:#9999bb;
+  --success:#4ade80;
+  --warn:#facc15;
+  --danger:#f87171;
+}
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:'Inter',system-ui,sans-serif;background:#1a1a2e;color:#e0e0e0;min-height:100vh}
-.header{background:#16213e;border-bottom:1px solid #0f3460;padding:14px 24px;display:flex;align-items:center;gap:16px}
-.header h1{font-size:1.2rem;color:#dbd8e3}
-.back{color:#5c5470;text-decoration:none;font-size:0.9rem}
-.back:hover{color:#dbd8e3}
-.container{max-width:1200px;margin:0 auto;padding:24px}
-.search-card{background:#16213e;border:1px solid #0f3460;border-radius:12px;padding:24px;margin-bottom:24px}
-.search-card h2{font-size:1rem;color:#dbd8e3;margin-bottom:16px}
-.form-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:16px}
-label{font-size:0.8rem;color:#9ca3af;display:block;margin-bottom:4px}
-select,input{width:100%;padding:8px 12px;background:#0f3460;border:1px solid #1e3a5f;border-radius:6px;color:#e0e0e0;font-size:0.9rem}
-select:focus,input:focus{outline:none;border-color:#5c5470}
-.btn{padding:10px 20px;border:none;border-radius:8px;cursor:pointer;font-size:0.9rem;font-weight:500}
-.btn-primary{background:#5c5470;color:#fff}
-.btn-primary:hover{background:#7a6e8a}
-.btn-sm{padding:5px 10px;font-size:0.78rem;border-radius:5px}
-.btn-copy{background:#0f3460;color:#dbd8e3;border:1px solid #1e3a5f}
-.btn-copy:hover{background:#1e3a5f}
+body{
+  font-family:'Inter',system-ui,-apple-system,sans-serif;
+  background:linear-gradient(135deg,#2a2438 0%,#1f1a2a 100%);
+  color:var(--accent);
+  min-height:100vh;
+  font-weight:400;
+  letter-spacing:-0.01em;
+}
+
+.header{
+  background:rgba(53,47,68,0.6);
+  backdrop-filter:blur(18px);
+  -webkit-backdrop-filter:blur(18px);
+  border-bottom:1px solid rgba(92,84,112,0.4);
+  padding:16px 28px;
+  display:flex;align-items:center;gap:16px;
+  position:sticky;top:0;z-index:10;
+}
+.header h1{
+  font-size:1.2rem;font-weight:600;
+  background:linear-gradient(135deg,var(--accent) 0%,#fff 100%);
+  -webkit-background-clip:text;background-clip:text;
+  -webkit-text-fill-color:transparent;
+}
+.back{color:var(--dim);text-decoration:none;font-size:0.9rem;transition:color 0.15s}
+.back:hover{color:var(--accent)}
+.container{max-width:1280px;margin:0 auto;padding:28px}
+
+/* Cards — frosted glass look */
+.search-card{
+  background:rgba(53,47,68,0.7);
+  backdrop-filter:blur(14px);
+  -webkit-backdrop-filter:blur(14px);
+  border:1px solid rgba(92,84,112,0.5);
+  border-radius:14px;
+  padding:24px;
+  margin-bottom:20px;
+  box-shadow:0 4px 24px rgba(0,0,0,0.25);
+}
+.search-card h2{font-size:1rem;font-weight:600;color:var(--accent);margin-bottom:16px}
+.search-card h2 + p{color:var(--muted);font-size:0.85rem;margin-bottom:16px;margin-top:-8px;line-height:1.5}
+
+.form-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin-bottom:16px}
+label{font-size:0.75rem;font-weight:500;color:var(--dim);display:block;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.04em}
+select,input{
+  width:100%;padding:10px 14px;
+  background:rgba(42,36,56,0.6);
+  border:1px solid rgba(92,84,112,0.6);
+  border-radius:8px;
+  color:var(--accent);
+  font-size:0.9rem;
+  font-family:inherit;
+  transition:border-color 0.15s, background 0.15s;
+}
+select:focus,input:focus{outline:none;border-color:var(--purple);background:rgba(42,36,56,0.9)}
+
+/* Buttons */
+.btn{
+  padding:10px 20px;border:none;border-radius:8px;cursor:pointer;
+  font-size:0.9rem;font-weight:600;font-family:inherit;
+  transition:background 0.15s, transform 0.1s;
+  letter-spacing:-0.01em;
+}
+.btn:active{transform:translateY(1px)}
+.btn-primary{background:var(--purple);color:#fff}
+.btn-primary:hover{background:#6a3def}
+.btn-sm{padding:6px 12px;font-size:0.78rem;border-radius:6px}
+.btn-copy{background:rgba(92,84,112,0.3);color:var(--accent);border:1px solid rgba(92,84,112,0.5)}
+.btn-copy:hover{background:rgba(92,84,112,0.5)}
+.btn-ghost{background:transparent;color:var(--dim);border:1px solid rgba(92,84,112,0.5)}
+.btn-ghost:hover{color:var(--accent);border-color:var(--border)}
+
+/* Tabs */
 .tabs{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap}
-.tab{padding:6px 14px;border-radius:6px;cursor:pointer;font-size:0.85rem;background:#0f3460;color:#9ca3af;border:1px solid transparent}
-.tab.active{background:#5c5470;color:#fff}
-table{width:100%;border-collapse:collapse;font-size:0.85rem}
-th{text-align:left;padding:10px 12px;color:#9ca3af;border-bottom:1px solid #1e3a5f;font-weight:500}
-td{padding:10px 12px;border-bottom:1px solid #0f3460;vertical-align:top}
-tr:hover td{background:#0a0a1a}
-.score-badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:0.75rem;font-weight:600}
-.score-high{background:#065f46;color:#6ee7b7}
-.score-mid{background:#78350f;color:#fcd34d}
-.score-low{background:#7f1d1d;color:#fca5a5}
-.status-select{background:#0f3460;border:1px solid #1e3a5f;color:#e0e0e0;padding:3px 6px;border-radius:4px;font-size:0.78rem}
-.platform-yt{color:#ff4444}
-.platform-tw{color:#9147ff}
-.dm-text{background:#0f3460;border:1px solid #1e3a5f;border-radius:6px;padding:8px;font-size:0.8rem;color:#ccc;white-space:pre-wrap;max-height:80px;overflow-y:auto;margin-bottom:4px}
-.loading{text-align:center;padding:40px;color:#5c5470}
-.msg{padding:10px 16px;border-radius:8px;margin-bottom:12px;font-size:0.9rem}
-.msg-success{background:#065f46;color:#6ee7b7}
-.msg-error{background:#7f1d1d;color:#fca5a5}
-.empty{text-align:center;padding:40px;color:#5c5470}
-.row-notes{width:100%;padding:4px 8px;background:#0f3460;border:1px solid #1e3a5f;border-radius:4px;color:#e0e0e0;font-size:0.78rem;margin-top:4px}
+.tab{
+  padding:8px 16px;border-radius:8px;cursor:pointer;
+  font-size:0.85rem;font-weight:500;
+  background:rgba(42,36,56,0.5);color:var(--dim);
+  border:1px solid rgba(92,84,112,0.3);
+  transition:all 0.15s;
+}
+.tab:hover{color:var(--accent);border-color:rgba(92,84,112,0.6)}
+.tab.active{background:var(--purple);color:#fff;border-color:var(--purple)}
+
+/* Table */
+.table-wrap{
+  background:rgba(53,47,68,0.7);
+  backdrop-filter:blur(14px);
+  border:1px solid rgba(92,84,112,0.5);
+  border-radius:14px;
+  overflow:hidden;
+  box-shadow:0 4px 24px rgba(0,0,0,0.25);
+}
+table{width:100%;border-collapse:collapse;font-size:0.88rem}
+th{
+  text-align:left;padding:14px 16px;
+  color:var(--dim);font-weight:500;font-size:0.75rem;
+  text-transform:uppercase;letter-spacing:0.05em;
+  border-bottom:1px solid rgba(92,84,112,0.4);
+  background:rgba(42,36,56,0.4);
+}
+td{
+  padding:14px 16px;
+  border-bottom:1px solid rgba(92,84,112,0.2);
+  vertical-align:top;
+  color:var(--accent);
+}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:rgba(92,84,112,0.12)}
+
+/* Score + status badges */
+.score-badge{display:inline-block;padding:3px 10px;border-radius:12px;font-size:0.75rem;font-weight:700}
+.score-high{background:rgba(74,222,128,0.15);color:var(--success);border:1px solid rgba(74,222,128,0.3)}
+.score-mid{background:rgba(250,204,21,0.15);color:var(--warn);border:1px solid rgba(250,204,21,0.3)}
+.score-low{background:rgba(248,113,113,0.15);color:var(--danger);border:1px solid rgba(248,113,113,0.3)}
+.status-select{
+  background:rgba(42,36,56,0.6);border:1px solid rgba(92,84,112,0.5);
+  color:var(--accent);padding:4px 8px;border-radius:6px;
+  font-size:0.78rem;font-family:inherit;cursor:pointer;
+}
+
+/* Platform chips */
+.platform-yt{color:#ff4d4d;font-weight:600;font-size:0.82rem}
+.platform-tw{color:#9147ff;font-weight:600;font-size:0.82rem}
+
+/* DM preview */
+.dm-text{
+  background:rgba(42,36,56,0.7);
+  border:1px solid rgba(92,84,112,0.4);
+  border-radius:8px;
+  padding:12px;
+  font-size:0.82rem;
+  color:var(--muted);
+  white-space:pre-wrap;
+  max-height:100px;overflow-y:auto;
+  margin-bottom:6px;
+  line-height:1.5;
+}
+
+/* States */
+.loading,.empty{
+  text-align:center;padding:48px 24px;
+  color:var(--dim);
+}
+.empty-icon{font-size:3rem;opacity:0.5;margin-bottom:12px;display:block}
+.empty-hint{font-size:0.85rem;margin-top:8px;color:var(--dim)}
+
+/* Messages */
+.msg{padding:12px 18px;border-radius:10px;margin-bottom:14px;font-size:0.9rem;font-weight:500}
+.msg-success{background:rgba(74,222,128,0.12);color:var(--success);border:1px solid rgba(74,222,128,0.3)}
+.msg-error{background:rgba(248,113,113,0.12);color:var(--danger);border:1px solid rgba(248,113,113,0.3)}
+
+/* Notes input */
+.row-notes{
+  width:100%;padding:6px 10px;
+  background:rgba(42,36,56,0.5);
+  border:1px solid rgba(92,84,112,0.3);
+  border-radius:6px;
+  color:var(--accent);
+  font-size:0.78rem;font-family:inherit;
+  margin-top:6px;
+  transition:border-color 0.15s;
+}
+.row-notes:focus{outline:none;border-color:var(--purple)}
+
+/* Stats strip */
+.stat-strip{
+  display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));
+  gap:12px;margin-bottom:20px;
+}
+.stat-card{
+  background:rgba(53,47,68,0.6);
+  border:1px solid rgba(92,84,112,0.3);
+  border-radius:10px;
+  padding:14px 16px;
+}
+.stat-val{font-size:1.4rem;font-weight:700;color:var(--accent)}
+.stat-label{font-size:0.72rem;text-transform:uppercase;color:var(--dim);letter-spacing:0.05em;margin-top:2px}
+
+/* Progress bar */
+.pbar-track{background:rgba(42,36,56,0.8);border-radius:4px;height:8px;overflow:hidden}
+.pbar-fill{background:linear-gradient(90deg,var(--purple),var(--accent-strong));height:100%;width:0%;transition:width 0.5s}
+
+/* Scrollbar */
+::-webkit-scrollbar{width:8px;height:8px}
+::-webkit-scrollbar-track{background:rgba(42,36,56,0.3)}
+::-webkit-scrollbar-thumb{background:rgba(92,84,112,0.5);border-radius:4px}
+::-webkit-scrollbar-thumb:hover{background:rgba(92,84,112,0.8)}
+
+/* PB job list */
+.pb-job-row{
+  display:grid;
+  grid-template-columns:minmax(0,1fr) auto auto auto;
+  gap:12px;
+  align-items:center;
+  padding:12px 14px;
+  background:rgba(42,36,56,0.5);
+  border:1px solid rgba(92,84,112,0.3);
+  border-radius:10px;
+  margin-bottom:8px;
+}
+.pb-job-url{font-size:0.82rem;color:var(--accent);font-family:'JetBrains Mono',monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pb-job-status{font-size:0.72rem;font-weight:600;text-transform:uppercase;letter-spacing:0.04em;padding:3px 10px;border-radius:10px}
+.pb-job-status.running   {background:rgba(74,222,128,0.15);color:var(--success)}
+.pb-job-status.queued    {background:rgba(250,204,21,0.15);color:var(--warn)}
+.pb-job-status.completed {background:rgba(138,124,168,0.2); color:var(--accent)}
+.pb-job-status.failed    {background:rgba(248,113,113,0.15);color:var(--danger)}
+
+/* Action row (buttons + status) so the top search bar aligns properly */
+.action-row{
+  display:flex;align-items:center;gap:12px;flex-wrap:wrap;
+  padding-top:4px;
+}
+
+/* Mobile / tablet */
+@media (max-width: 900px){
+  .container{padding:18px}
+  .form-grid{grid-template-columns:1fr 1fr}
+  .tabs{gap:6px}
+  .tab{padding:7px 12px;font-size:0.8rem}
+  .stat-strip{grid-template-columns:repeat(2,1fr)}
+  .pb-job-row{grid-template-columns:1fr auto;gap:8px}
+  .pb-job-url{grid-column:1 / -1}
+  /* Horizontal-scroll table instead of squish */
+  .table-wrap{overflow-x:auto}
+  table{min-width:720px}
+}
+@media (max-width: 560px){
+  .header{padding:14px 16px}
+  .container{padding:14px}
+  .form-grid{grid-template-columns:1fr}
+  .btn{width:100%}
+  .action-row .btn{width:auto}
+  .action-row{flex-direction:column;align-items:stretch}
+  .search-card{padding:18px}
+  .stat-strip{grid-template-columns:1fr 1fr}
+}
 </style>
 </head>
 <body>
@@ -708,9 +923,17 @@ tr:hover td{background:#0a0a1a}
 <div class="container">
   <div id="msg"></div>
 
-  <!-- Search Form -->
-  <div class="search-card">
-    <h2>Find Prospects</h2>
+  <!-- Source Selector Tabs -->
+  <div class="tabs" style="margin-bottom:14px">
+    <div class="tab active" onclick="showSource('yt-tw',this)">▶ YouTube / Twitch</div>
+    <div class="tab" onclick="showSource('linkedin',this)">💼 LinkedIn (Sales Navigator)</div>
+    <div class="tab" onclick="showSource('jobs',this)">🚦 PB Job Status</div>
+  </div>
+
+  <!-- YouTube / Twitch Search -->
+  <div id="src-yt-tw" class="search-card">
+    <h2>Find Prospects on YouTube &amp; Twitch</h2>
+    <p>AI discovers creators, scores each 0–100 against your ICP, auto-generates cold DM scripts.</p>
     <div class="form-grid">
       <div>
         <label>Platform</label>
@@ -747,13 +970,41 @@ tr:hover td{background:#0a0a1a}
       </div>
     </div>
     <button class="btn btn-primary" onclick="runSearch()">🔍 Find &amp; Score Prospects</button>
-    <span id="search-status" style="margin-left:12px;color:#9ca3af;font-size:0.85rem"></span>
+    <span id="search-status" style="margin-left:12px;color:var(--dim);font-size:0.85rem"></span>
+  </div>
+
+  <!-- LinkedIn Search -->
+  <div id="src-linkedin" class="search-card" style="display:none">
+    <h2>Find Prospects on LinkedIn (Sales Navigator)</h2>
+    <p>Describe your ideal client in plain English. AI turns the description into a Sales Navigator filter set (title + industry + company size + geography + seniority) and launches a PhantomBuster scrape. Requires a LinkedIn account with an active Sales Navigator subscription.</p>
+    <div class="form-grid">
+      <div style="grid-column:1 / -1">
+        <label>Describe your ideal client</label>
+        <input id="li-description" placeholder="podcasters with 10k–100k monthly downloads who need video editors" value="podcasters with 10k-100k downloads needing video editors">
+      </div>
+      <div>
+        <label>Max Profiles</label>
+        <input id="li-max-profiles" type="number" value="25" min="10" max="2500">
+      </div>
+    </div>
+    <button class="btn btn-primary" onclick="runLinkedInSearch()">💼 Launch LinkedIn Scrape</button>
+    <button class="btn btn-ghost" onclick="listLinkedInAgents()" style="margin-left:8px">List PB Agents</button>
+    <span id="li-status" style="margin-left:12px;color:var(--dim);font-size:0.85rem"></span>
+    <div id="li-agents" style="margin-top:14px"></div>
+  </div>
+
+  <!-- PB Jobs Status -->
+  <div id="src-jobs" class="search-card" style="display:none">
+    <h2>PhantomBuster Job Status</h2>
+    <p>Live view of all LinkedIn + Instagram PB jobs. Click a completed LinkedIn job to import its leads into the Prospects tab.</p>
+    <button class="btn btn-ghost btn-sm" onclick="loadPbJobs()">↻ Refresh</button>
+    <div id="pb-jobs-list" style="margin-top:14px"></div>
   </div>
 
   <!-- View Switcher -->
-  <div style="display:flex;gap:8px;margin-bottom:16px">
+  <div class="action-row" style="margin-bottom:16px">
     <button class="btn btn-primary" id="btn-prospects" onclick="showView('prospects')">📋 Prospects</button>
-    <button class="btn" id="btn-clipgen" style="background:#0f3460;color:#9ca3af;border:1px solid #1e3a5f" onclick="showView('clipgen')">🎬 Clip Generator</button>
+    <button class="btn btn-ghost" id="btn-clipgen" onclick="showView('clipgen')">🎬 Clip Generator</button>
   </div>
 
   <!-- PROSPECTS VIEW -->
@@ -766,7 +1017,7 @@ tr:hover td{background:#0a0a1a}
       <div class="tab" onclick="setFilter('replied',this)">Replied</div>
       <div class="tab" onclick="setFilter('converted',this)">Converted</div>
     </div>
-    <div style="background:#16213e;border:1px solid #0f3460;border-radius:12px;overflow:hidden">
+    <div class="table-wrap">
       <div id="table-area"><div class="loading">Loading prospects…</div></div>
     </div>
   </div>
@@ -804,25 +1055,23 @@ tr:hover td{background:#0a0a1a}
     </div>
 
     <!-- Progress -->
-    <div id="cg-progress" style="display:none;background:#16213e;border:1px solid #0f3460;border-radius:12px;padding:20px;margin-bottom:16px">
-      <div style="color:#dbd8e3;margin-bottom:8px" id="cg-progress-label">Analyzing…</div>
-      <div style="background:#0f3460;border-radius:4px;height:8px;overflow:hidden">
-        <div id="cg-progress-bar" style="background:#5c5470;height:100%;width:0%;transition:width 0.5s"></div>
-      </div>
+    <div id="cg-progress" class="search-card" style="display:none">
+      <div style="color:var(--accent);margin-bottom:10px;font-size:0.9rem" id="cg-progress-label">Analyzing…</div>
+      <div class="pbar-track"><div id="cg-progress-bar" class="pbar-fill"></div></div>
     </div>
 
     <!-- Results -->
-    <div id="cg-results" style="display:none;background:#16213e;border:1px solid #0f3460;border-radius:12px;padding:20px;margin-bottom:16px">
-      <h3 style="color:#dbd8e3;margin-bottom:12px">Generated Clips</h3>
+    <div id="cg-results" class="search-card" style="display:none">
+      <h2>Generated Clips</h2>
       <div id="cg-clips-list"></div>
       <button class="btn btn-primary" style="margin-top:16px" onclick="createDelivery()">📦 Create Delivery Package</button>
     </div>
 
     <!-- Delivery + Outreach -->
-    <div id="cg-delivery" style="display:none;background:#16213e;border:1px solid #0f3460;border-radius:12px;padding:20px">
-      <h3 style="color:#dbd8e3;margin-bottom:8px">Delivery Link</h3>
-      <div style="display:flex;gap:8px;align-items:center;margin-bottom:16px">
-        <input id="cg-delivery-url" readonly style="flex:1;background:#0f3460;border:1px solid #1e3a5f;border-radius:6px;padding:8px 12px;color:#dbd8e3;font-size:0.9rem">
+    <div id="cg-delivery" class="search-card" style="display:none">
+      <h2>Delivery Link</h2>
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:16px;flex-wrap:wrap">
+        <input id="cg-delivery-url" readonly style="flex:1;min-width:240px">
         <button class="btn btn-sm btn-copy" onclick="copyEl('cg-delivery-url')">📋 Copy</button>
       </div>
       <button class="btn btn-primary" onclick="generateOutreach()">🤖 Generate AI Outreach Message</button>
@@ -844,6 +1093,98 @@ function showMsg(text, ok=true){
   const el = document.getElementById('msg');
   el.innerHTML = `<div class="msg ${ok?'msg-success':'msg-error'}">${text}</div>`;
   setTimeout(()=>el.innerHTML='', 4000);
+}
+
+// ── Source-card switcher (YouTube/Twitch vs LinkedIn vs PB Jobs) ──────────
+function showSource(name, btn){
+  document.querySelectorAll('.tabs > .tab').forEach(t=>t.classList.remove('active'));
+  btn.classList.add('active');
+  ['yt-tw','linkedin','jobs'].forEach(s=>{
+    const el = document.getElementById('src-'+s);
+    if(el) el.style.display = (s===name)?'block':'none';
+  });
+  if(name==='jobs') loadPbJobs();
+}
+
+// ── LinkedIn ──────────────────────────────────────────────────────────────
+async function listLinkedInAgents(){
+  const out = document.getElementById('li-agents');
+  out.innerHTML = '<div class="loading">Loading PB agents…</div>';
+  try{
+    const res = await fetch('/api/admin/prospects/linkedin/agents', {headers:{'Authorization':'Bearer '+token}});
+    const data = await res.json();
+    if(!data.success){ out.innerHTML = `<div class="msg msg-error">${data.error||'Failed'}</div>`; return; }
+    const agents = data.agents||[];
+    if(!agents.length){ out.innerHTML = '<div class="empty"><span class="empty-icon">🪐</span>No PB agents found.<div class="empty-hint">Add a Sales Navigator phantom in your PhantomBuster account.</div></div>'; return; }
+    out.innerHTML = '<div style="font-size:0.85rem;color:var(--muted);margin-bottom:6px">PB workspace agents:</div>' +
+      agents.map(a=>`<div class="pb-job-row"><span class="pb-job-url">${a.name}</span><span class="pb-job-status completed">${a.id}</span><span></span><span></span></div>`).join('');
+  }catch(e){ out.innerHTML = `<div class="msg msg-error">${e}</div>`; }
+}
+
+async function runLinkedInSearch(){
+  const desc = document.getElementById('li-description').value.trim();
+  const max  = parseInt(document.getElementById('li-max-profiles').value)||25;
+  if(!desc){ showMsg('Describe your ideal client first.', false); return; }
+
+  const status = document.getElementById('li-status');
+  status.textContent = '⏳ Building Sales Navigator filters via AI + launching PB…';
+  try{
+    const res = await fetch('/api/admin/prospects/linkedin/search', {
+      method:'POST',
+      headers:{'Authorization':'Bearer '+token,'Content-Type':'application/json'},
+      body: JSON.stringify({description: desc, max_profiles: max})
+    });
+    const data = await res.json();
+    if(!data.success){
+      status.textContent = '';
+      showMsg(data.error||data.message||'Launch failed', false);
+      return;
+    }
+    status.textContent = `✓ Launched job ${data.job_id?.slice(0,8)} — agent: ${data.agent_name||'?'}`;
+    showMsg(`LinkedIn scrape launched. Check "PB Job Status" tab in ~3-5 min, then click "Import leads" to bring them into the Prospects list.`);
+  }catch(e){
+    status.textContent = '';
+    showMsg(`Network error: ${e}`, false);
+  }
+}
+
+// ── PB Jobs ───────────────────────────────────────────────────────────────
+async function loadPbJobs(){
+  const out = document.getElementById('pb-jobs-list');
+  out.innerHTML = '<div class="loading">Loading PB jobs…</div>';
+  try{
+    const res = await fetch('/api/admin/prospects/linkedin/jobs', {headers:{'Authorization':'Bearer '+token}});
+    const data = await res.json();
+    if(!data.success){ out.innerHTML = `<div class="msg msg-error">${data.error||'Failed'}</div>`; return; }
+    const jobs = data.jobs||[];
+    if(!jobs.length){ out.innerHTML = '<div class="empty"><span class="empty-icon">🚦</span>No PB jobs yet.<div class="empty-hint">Run a LinkedIn or Instagram search above.</div></div>'; return; }
+    out.innerHTML = jobs.map(j=>{
+      const isLinkedIn = (j.search_url||'').includes('linkedin.com');
+      const importBtn = (isLinkedIn && j.status==='completed')
+        ? `<button class="btn btn-sm btn-primary" onclick="importLinkedInJob('${j.id}')">⬇ Import leads</button>`
+        : '<span></span>';
+      const url = (j.search_url||'').slice(0,80);
+      const launched = j.launched_at ? new Date(j.launched_at).toLocaleString() : '—';
+      return `<div class="pb-job-row" title="${j.error||''}">
+        <span class="pb-job-url">${url}</span>
+        <span class="pb-job-status ${j.status}">${j.status}</span>
+        <span style="font-size:0.78rem;color:var(--dim)">${launched}</span>
+        ${importBtn}
+      </div>`;
+    }).join('');
+  }catch(e){ out.innerHTML = `<div class="msg msg-error">${e}</div>`; }
+}
+
+async function importLinkedInJob(jobId){
+  showMsg('Importing leads from PhantomBuster…');
+  try{
+    const res = await fetch(`/api/admin/prospects/linkedin/jobs/${jobId}/results`, {headers:{'Authorization':'Bearer '+token}});
+    const data = await res.json();
+    if(!data.success){ showMsg(data.error||data.message||'Import failed', false); return; }
+    showMsg(`Imported ${data.imported_to_prospects||0} leads. Check the Prospects tab.`);
+    setTimeout(loadProspects, 800);
+    setTimeout(loadPbJobs, 800);
+  }catch(e){ showMsg(`Network error: ${e}`, false); }
 }
 
 function scoreBadge(score){
@@ -985,11 +1326,15 @@ loadProspects();
 // ── View switcher ──────────────────────────────────────────────
 function showView(v) {
   document.getElementById('view-prospects').style.display = v==='prospects'?'':'none';
-  document.getElementById('view-clipgen').style.display = v==='clipgen'?'':'none';
-  document.getElementById('btn-prospects').style.background = v==='prospects'?'#5c5470':'#0f3460';
-  document.getElementById('btn-prospects').style.color = v==='prospects'?'#fff':'#9ca3af';
-  document.getElementById('btn-clipgen').style.background = v==='clipgen'?'#5c5470':'#0f3460';
-  document.getElementById('btn-clipgen').style.color = v==='clipgen'?'#fff':'#9ca3af';
+  document.getElementById('view-clipgen').style.display   = v==='clipgen'?'':'none';
+  // Toggle the active class instead of inline-style overrides — keeps the
+  // ghost/primary palette consistent with the rest of the UI.
+  const bp = document.getElementById('btn-prospects');
+  const bc = document.getElementById('btn-clipgen');
+  bp.classList.toggle('btn-primary', v==='prospects');
+  bp.classList.toggle('btn-ghost',   v!=='prospects');
+  bc.classList.toggle('btn-primary', v==='clipgen');
+  bc.classList.toggle('btn-ghost',   v!=='clipgen');
   if(v==='clipgen') loadProspectsDropdown();
 }
 
@@ -1071,13 +1416,14 @@ async function pollJob() {
 
 function showClipResults(clips) {
   const list = document.getElementById('cg-clips-list');
-  if(!clips.length) { list.innerHTML='<div style="color:#9ca3af">No clips generated</div>'; }
+  if(!clips.length) { list.innerHTML='<div class="empty">No clips generated</div>'; }
   else {
     list.innerHTML = clips.map((c,i)=>`
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;padding:8px;background:#0f3460;border-radius:6px">
-        <span style="color:#dbd8e3;flex:1">Clip ${i+1}: ${c.title||'Clip '+(i+1)} (${Math.round(c.duration_seconds||0)}s)</span>
-        ${c.r2_clip_url?`<a href="${c.r2_clip_url}" target="_blank" class="btn btn-sm btn-copy">⬇ Download</a>`:''}
-        ${c.r2_clip_url?`<button class="btn btn-sm btn-copy" onclick="copyText('${encodeURIComponent(c.r2_clip_url)}')">🔗 Copy</button>`:''}
+      <div class="pb-job-row">
+        <span class="pb-job-url">Clip ${i+1}: ${c.title||'Clip '+(i+1)} (${Math.round(c.duration_seconds||0)}s)</span>
+        ${c.r2_clip_url?`<a href="${c.r2_clip_url}" target="_blank" class="btn btn-sm btn-copy">⬇ Download</a>`:'<span></span>'}
+        ${c.r2_clip_url?`<button class="btn btn-sm btn-copy" onclick="copyText('${encodeURIComponent(c.r2_clip_url)}')">🔗 Copy</button>`:'<span></span>'}
+        <span></span>
       </div>`).join('');
   }
   document.getElementById('cg-results').style.display='';
@@ -1497,9 +1843,15 @@ struct InstagramListQuery {
 /// POST /api/instagram/leads/search
 /// Launches a PhantomBuster Instagram Hashtag Search and records leads.
 async fn instagram_search_leads(
-    Extension(state): Extension<Arc<AppState>>,
-    Json(req):        Json<InstagramSearchRequest>,
+    Extension(state):  Extension<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
+    Json(req):         Json<InstagramSearchRequest>,
 ) -> Json<serde_json::Value> {
+    let user_id: i32 = claims.sub.parse().unwrap_or(0);
+    if user_id == 0 {
+        return Json(json!({"success": false, "error": "Invalid user id in JWT"}));
+    }
+
     let Some(pb) = state.phantombuster_client.as_ref() else {
         return Json(json!({"success": false, "error": "PhantomBuster not configured (PHANTOMBUSTER_API_KEY missing)"}));
     };
@@ -1520,7 +1872,7 @@ async fn instagram_search_leads(
     let category  = req.category.clone().unwrap_or_else(|| hashtag.clone());
 
     let (job_id, status, container_id) = match try_launch_or_queue_ig_hashtag_job(
-        &state, pb, &agent, &session_cookie, &hashtag, max_posts,
+        &state, pb, &agent, &session_cookie, &hashtag, max_posts, user_id,
     ).await {
         Ok(t)  => t,
         Err(e) => return Json(json!({"success": false, "error": e})),
@@ -1553,38 +1905,46 @@ async fn instagram_search_leads(
 /// GET /api/instagram/leads
 /// List Instagram leads with optional filtering.
 async fn instagram_list_leads(
-    Extension(state): Extension<Arc<AppState>>,
-    Query(q):         Query<InstagramListQuery>,
+    Extension(state):  Extension<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
+    Query(q):          Query<InstagramListQuery>,
 ) -> Json<serde_json::Value> {
+    let user_id: i32 = claims.sub.parse().unwrap_or(0);
+    if user_id == 0 {
+        return Json(json!({"success": false, "error": "Invalid user id in JWT"}));
+    }
+
     let limit  = q.limit.unwrap_or(50).min(200);
     let offset = q.offset.unwrap_or(0);
 
+    // Scope to the caller's own leads. The first bind is always user_id;
+    // subsequent optional filters start at $2.
     let mut sql = String::from(
         "SELECT id, username, full_name, bio, followers_count, following_count, posts_count,
                 profile_url, profile_pic_url, is_private, is_verified, category,
                 hashtag_source, email, external_url, dm_script, contact_status,
-                pb_job_id, created_at
-         FROM instagram_leads WHERE 1=1"
+                pb_job_id, score, score_reason, created_at
+         FROM instagram_leads WHERE user_id = $1"
     );
     let mut binds: Vec<String> = Vec::new();
 
     if let Some(ref ht) = q.hashtag {
         binds.push(ht.trim_start_matches('#').to_string());
-        sql.push_str(&format!(" AND hashtag_source = ${}", binds.len()));
+        sql.push_str(&format!(" AND hashtag_source = ${}", binds.len() + 1));
     }
     if let Some(ref cs) = q.contact_status {
         binds.push(cs.clone());
-        sql.push_str(&format!(" AND contact_status = ${}", binds.len()));
+        sql.push_str(&format!(" AND contact_status = ${}", binds.len() + 1));
     }
     if let Some(mf) = q.min_followers {
         binds.push(mf.to_string());
-        sql.push_str(&format!(" AND followers_count >= ${}::bigint", binds.len()));
+        sql.push_str(&format!(" AND followers_count >= ${}::bigint", binds.len() + 1));
     }
     sql.push_str(" ORDER BY followers_count DESC NULLS LAST");
     sql.push_str(&format!(" LIMIT {} OFFSET {}", limit, offset));
 
     // Build and execute dynamically — use raw query for variable bind count
-    let mut query = sqlx::query(&sql);
+    let mut query = sqlx::query(&sql).bind(user_id);
     for b in &binds {
         query = query.bind(b);
     }
@@ -1610,6 +1970,8 @@ async fn instagram_list_leads(
             "external_url":    r.get::<Option<String>, _>("external_url"),
             "dm_script":       r.get::<Option<String>, _>("dm_script"),
             "contact_status":  r.get::<Option<String>, _>("contact_status"),
+            "score":           r.get::<Option<i32>, _>("score"),
+            "score_reason":    r.get::<Option<String>, _>("score_reason"),
         })
     }).collect();
 
@@ -1619,16 +1981,21 @@ async fn instagram_list_leads(
 /// POST /api/instagram/leads/:id/generate-dm
 /// Generate a personalized Instagram cold DM script using AI.
 async fn instagram_generate_dm(
-    Extension(state): Extension<Arc<AppState>>,
-    Path(id):         Path<uuid::Uuid>,
-    Json(req):        Json<Option<InstagramDmRequest>>,
+    Extension(state):  Extension<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
+    Path(id):          Path<uuid::Uuid>,
+    Json(req):         Json<Option<InstagramDmRequest>>,
 ) -> Json<serde_json::Value> {
-    // Fetch the lead
+    let user_id: i32 = claims.sub.parse().unwrap_or(0);
+
+    // Fetch the lead — scoped to the caller so one user can't DM another
+    // user's lead or learn that another user has that lead.
     let row = match sqlx::query(
         "SELECT username, full_name, bio, followers_count, category, hashtag_source, external_url
-         FROM instagram_leads WHERE id = $1"
+         FROM instagram_leads WHERE id = $1 AND user_id = $2"
     )
     .bind(id)
+    .bind(user_id)
     .fetch_optional(&state.db_pool)
     .await {
         Ok(Some(r)) => r,
@@ -1684,10 +2051,12 @@ Output ONLY the DM message text, no labels or quotes."#,
 
     // Save the DM script to the DB
     let _ = sqlx::query(
-        "UPDATE instagram_leads SET dm_script = $1, updated_at = NOW() WHERE id = $2"
+        "UPDATE instagram_leads SET dm_script = $1, updated_at = NOW()
+         WHERE id = $2 AND user_id = $3"
     )
     .bind(&dm_text)
     .bind(id)
+    .bind(user_id)
     .execute(&state.db_pool)
     .await;
 
@@ -1696,20 +2065,24 @@ Output ONLY the DM message text, no labels or quotes."#,
 
 /// PATCH /api/instagram/leads/:id/contact-status
 async fn instagram_update_contact_status(
-    Extension(state): Extension<Arc<AppState>>,
-    Path(id):         Path<uuid::Uuid>,
-    Json(req):        Json<InstagramContactStatusRequest>,
+    Extension(state):  Extension<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
+    Path(id):          Path<uuid::Uuid>,
+    Json(req):         Json<InstagramContactStatusRequest>,
 ) -> Json<serde_json::Value> {
+    let user_id: i32 = claims.sub.parse().unwrap_or(0);
     let valid = ["new", "contacted", "replied", "converted", "skipped"];
     if !valid.contains(&req.contact_status.as_str()) {
         return Json(json!({"success": false, "error": "contact_status must be one of: new, contacted, replied, converted, skipped"}));
     }
 
     match sqlx::query(
-        "UPDATE instagram_leads SET contact_status = $1, updated_at = NOW() WHERE id = $2"
+        "UPDATE instagram_leads SET contact_status = $1, updated_at = NOW()
+         WHERE id = $2 AND user_id = $3"
     )
     .bind(&req.contact_status)
     .bind(id)
+    .bind(user_id)
     .execute(&state.db_pool)
     .await {
         Ok(_)  => Json(json!({"success": true})),
@@ -1737,9 +2110,15 @@ struct AutoDiscoverRequest {
 /// search per hashtag. The background poller (`poll_instagram_jobs`) will
 /// auto-import results and score leads once PhantomBuster finishes (~5–10 min).
 async fn instagram_auto_discover(
-    Extension(state): Extension<Arc<AppState>>,
-    Json(req):        Json<Option<AutoDiscoverRequest>>,
+    Extension(state):  Extension<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
+    Json(req):         Json<Option<AutoDiscoverRequest>>,
 ) -> Json<serde_json::Value> {
+    let user_id: i32 = claims.sub.parse().unwrap_or(0);
+    if user_id == 0 {
+        return Json(json!({"success": false, "error": "Invalid user id in JWT"}));
+    }
+
     let req          = req.unwrap_or(AutoDiscoverRequest { niche: None, max_posts_per_hashtag: None, hashtag_count: None });
     let niche        = req.niche.as_deref().unwrap_or("content creator");
     let max_posts    = req.max_posts_per_hashtag.unwrap_or(30).min(100);
@@ -1815,7 +2194,7 @@ Return ONLY a JSON array of strings. No explanation. Example: ["youtuber", "cont
     for hashtag in &hashtags {
         let tag = hashtag.trim_start_matches('#').to_string();
         match try_launch_or_queue_ig_hashtag_job(
-            &state, pb, &agent, &session_cookie, &tag, max_posts,
+            &state, pb, &agent, &session_cookie, &tag, max_posts, user_id,
         ).await {
             Ok((job_id, status, container_id)) => {
                 launched_jobs.push(json!({
@@ -1847,19 +2226,23 @@ Return ONLY a JSON array of strings. No explanation. Example: ["youtuber", "cont
 /// GET /api/instagram/leads/top
 /// Returns the highest-scored leads (score >= 60), ready for outreach.
 async fn instagram_top_leads(
-    Extension(state): Extension<Arc<AppState>>,
+    Extension(state):  Extension<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
 ) -> Json<serde_json::Value> {
+    let user_id: i32 = claims.sub.parse().unwrap_or(0);
     let rows = match sqlx::query(
         "SELECT id, username, full_name, bio, followers_count, profile_url, profile_pic_url,
                 is_verified, category, hashtag_source, email, external_url,
                 dm_script, contact_status, score, score_reason
          FROM instagram_leads
-         WHERE score >= 60
+         WHERE user_id = $1
+           AND score >= 60
            AND contact_status = 'new'
            AND is_private = FALSE
-         ORDER BY score DESC, followers_count DESC
+         ORDER BY score DESC, followers_count DESC NULLS LAST
          LIMIT 50"
     )
+    .bind(user_id)
     .fetch_all(&state.db_pool)
     .await {
         Ok(r) => r,
@@ -1904,7 +2287,7 @@ pub async fn poll_instagram_jobs(state: &Arc<AppState>) {
 
     // Find running Instagram jobs older than 3 minutes (give PB time to finish)
     let running_jobs = match sqlx::query(
-        "SELECT id, agent_id, search_url
+        "SELECT id, agent_id, search_url, user_id
          FROM phantombuster_jobs
          WHERE status = 'running'
            AND search_url LIKE 'instagram:%'
@@ -1926,9 +2309,10 @@ pub async fn poll_instagram_jobs(state: &Arc<AppState>) {
     tracing::info!("🔄 Instagram job poller: checking {} running jobs", running_jobs.len());
 
     for row in running_jobs {
-        let job_id:   uuid::Uuid = row.get("id");
-        let agent_id: String     = row.get("agent_id");
-        let search_url: String   = row.get("search_url");
+        let job_id:   uuid::Uuid        = row.get("id");
+        let agent_id: String            = row.get("agent_id");
+        let search_url: String          = row.get("search_url");
+        let job_user_id: Option<i32>    = row.try_get("user_id").ok().flatten();
 
         // Extract hashtag from search_url ("instagram:#contentcreator")
         let hashtag_source = search_url
@@ -1992,9 +2376,9 @@ pub async fn poll_instagram_jobs(state: &Arc<AppState>) {
                 "INSERT INTO instagram_leads
                     (username, full_name, bio, followers_count, following_count, posts_count,
                      profile_url, profile_pic_url, is_private, is_verified, external_url, email,
-                     category, hashtag_source, contact_status)
-                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'new')
-                 ON CONFLICT (username) DO UPDATE
+                     category, hashtag_source, contact_status, user_id)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'new',$15)
+                 ON CONFLICT (user_id, username) DO UPDATE
                    SET followers_count = EXCLUDED.followers_count,
                        bio = COALESCE(EXCLUDED.bio, instagram_leads.bio),
                        updated_at = NOW()"
@@ -2013,6 +2397,7 @@ pub async fn poll_instagram_jobs(state: &Arc<AppState>) {
             .bind(&lead.email)
             .bind(&hashtag_source)
             .bind(&hashtag_source)
+            .bind(job_user_id)
             .execute(&state.db_pool)
             .await;
 
@@ -2033,9 +2418,12 @@ pub async fn poll_instagram_jobs(state: &Arc<AppState>) {
         .execute(&state.db_pool)
         .await;
 
-        // Score unscored leads (top 20 by followers to conserve LLM quota)
+        // Score unscored leads (top 20 by followers to conserve LLM quota).
+        // Per-user scope so one user doesn't trigger another user's scoring.
         if state.gemini_client.is_some() || state.nvidia_nim_client.is_some() {
-            score_instagram_leads(state, &hashtag_source).await;
+            if let Some(uid) = job_user_id {
+                score_instagram_leads(state, &hashtag_source, uid).await;
+            }
         }
     }
 }
@@ -2087,23 +2475,27 @@ async fn try_launch_or_queue_ig_hashtag_job(
     session_cookie: &str,
     hashtag:        &str,
     max_posts:      u32,
+    user_id:        i32,
 ) -> Result<(uuid::Uuid, &'static str, Option<String>), String> {
     let tag = hashtag.trim_start_matches('#').to_string();
     let search_url = format!("instagram:#{}", tag);
 
     // Check occupancy first — cheaper than bouncing off PB's parallel limit.
+    // Global occupancy (any user), because PB's limit is per-workspace.
     let occupied = agent_has_running_job(&state.db_pool, &agent.id).await;
 
     if !occupied {
         match pb.launch_instagram_hashtag_search(&agent.id, session_cookie, &tag, max_posts).await {
             Ok(container_id) => {
                 let job_id = sqlx::query_scalar::<_, uuid::Uuid>(
-                    "INSERT INTO phantombuster_jobs (agent_id, agent_name, search_url, status, launched_at)
-                     VALUES ($1, $2, $3, 'running', NOW()) RETURNING id"
+                    "INSERT INTO phantombuster_jobs
+                        (agent_id, agent_name, search_url, status, launched_at, user_id)
+                     VALUES ($1, $2, $3, 'running', NOW(), $4) RETURNING id"
                 )
                 .bind(&agent.id)
                 .bind(&agent.name)
                 .bind(&search_url)
+                .bind(user_id)
                 .fetch_one(&state.db_pool)
                 .await
                 .map_err(|e| format!("DB insert failed: {}", e))?;
@@ -2119,17 +2511,19 @@ async fn try_launch_or_queue_ig_hashtag_job(
 
     // Queue it — dispatcher will launch when the running job completes.
     let job_id = sqlx::query_scalar::<_, uuid::Uuid>(
-        "INSERT INTO phantombuster_jobs (agent_id, agent_name, search_url, status, created_at)
-         VALUES ($1, $2, $3, 'queued', NOW()) RETURNING id"
+        "INSERT INTO phantombuster_jobs
+            (agent_id, agent_name, search_url, status, created_at, user_id)
+         VALUES ($1, $2, $3, 'queued', NOW(), $4) RETURNING id"
     )
     .bind(&agent.id)
     .bind(&agent.name)
     .bind(&search_url)
+    .bind(user_id)
     .fetch_one(&state.db_pool)
     .await
     .map_err(|e| format!("DB insert failed: {}", e))?;
 
-    tracing::info!("📥 Queued Instagram job {} for #{} (agent busy)", job_id, tag);
+    tracing::info!("📥 Queued Instagram job {} for #{} (agent busy, user={})", job_id, tag, user_id);
     Ok((job_id, "queued", None))
 }
 
@@ -2230,22 +2624,25 @@ pub async fn dispatch_queued_pb_jobs(state: &Arc<AppState>) {
 }
 
 /// Score unscored Instagram leads for a given hashtag using AI.
-async fn score_instagram_leads(state: &Arc<AppState>, hashtag: &str) {
+async fn score_instagram_leads(state: &Arc<AppState>, hashtag: &str, user_id: i32) {
     // No `followers_count >= 1000` filter — hashtag-mode leads come from the
     // post schema and have NULL follower counts. Filtering on them dropped
     // every lead and the UI showed `—` for every score. Score what we have;
     // the model is told to judge by bio/handle alone when follower count
-    // is unknown.
+    // is unknown. Scoped to one user's leads so we don't pay to re-score
+    // the same lead for multiple users.
     let unscored = match sqlx::query(
         "SELECT id, username, full_name, bio, followers_count, external_url
          FROM instagram_leads
          WHERE score IS NULL
            AND hashtag_source = $1
+           AND user_id = $2
            AND is_private = FALSE
          ORDER BY COALESCE(followers_count, 0) DESC, created_at DESC
          LIMIT 20"
     )
     .bind(hashtag)
+    .bind(user_id)
     .fetch_all(&state.db_pool)
     .await {
         Ok(r) => r,
