@@ -21,8 +21,15 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 pub fn prospect_routes() -> Router {
-    Router::new()
-        .route("/admin/prospect-finder", get(prospect_finder_page))
+    // SSR page — public route, uses JS in the browser to read the JWT from
+    // localStorage and call the /api/* endpoints below. Putting middleware
+    // here would reject every navigation because browsers don't send
+    // `Authorization` headers on `<a href>` or address-bar loads.
+    let public_page = Router::new()
+        .route("/admin/prospect-finder", get(prospect_finder_page));
+
+    // API endpoints — still protected by JWT + admin claim.
+    let protected_api = Router::new()
         .route("/api/admin/prospects/search", post(search_prospects))
         .route("/api/admin/prospects/linkedin/agents", get(linkedin_list_agents))
         .route("/api/admin/prospects/linkedin/launch", post(linkedin_launch_search))
@@ -35,7 +42,9 @@ pub fn prospect_routes() -> Router {
         .route("/api/admin/prospects/:id/generate-outreach", post(generate_outreach_message))
         .route("/api/admin/prospects/:id", delete(delete_prospect))
         .layer(axum::middleware::from_fn(admin_middleware))
-        .layer(axum::middleware::from_fn(auth_middleware))
+        .layer(axum::middleware::from_fn(auth_middleware));
+
+    public_page.merge(protected_api)
 }
 
 /// Routes accessible to any authenticated (whitelisted) user — NOT admin-only.
