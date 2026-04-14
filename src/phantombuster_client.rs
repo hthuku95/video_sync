@@ -29,6 +29,25 @@ pub struct PbAgent {
     pub last_end_message: Option<String>,
 }
 
+/// Classification of a LinkedIn search phantom — the launch call shape
+/// differs between Sales Navigator and regular LinkedIn phantoms, so we
+/// return the kind alongside the agent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum LinkedInPhantomKind {
+    /// Needs a LinkedIn account with an active Sales Navigator subscription.
+    /// Accepts Sales Navigator search URLs. Argument key: `searches`.
+    SalesNavSearch,
+    /// Non-Sales-Nav. Accepts regular linkedin.com/search/results URLs.
+    /// Works with any logged-in LinkedIn cookie. Argument key: `search`.
+    LinkedInSearch,
+    /// Non-Sales-Nav. Scrapes the guest list of a LinkedIn Event. Needs
+    /// an event URL, NOT a search URL — so we can't auto-use this, but
+    /// we report it so the admin UI can tell the user.
+    EventGuests,
+    /// Non-Sales-Nav. Scrapes profiles from a Google Sheet of profile URLs.
+    ProfileScraper,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PbLaunchResponse {
     pub status:       String,
@@ -86,6 +105,124 @@ impl PhantomBusterClient {
             n.contains("sales navigator") || n.contains("salesnav")
         });
         Ok(any)
+    }
+
+    /// Find the best available LinkedIn search phantom.
+    ///
+    /// Preference order (highest to lowest):
+    ///   1. Sales Navigator Search Export — works with SN-subscribed cookies.
+    ///   2. Regular "LinkedIn Search Export" — works with ANY logged-in cookie.
+    ///
+    /// If only Event Guests / Profile Scraper are available, returns None
+    /// with a helpful error hint (the caller should surface it to the user).
+    pub async fn find_any_linkedin_search_agent(
+        &self,
+        prefer_non_salesnav: bool,
+    ) -> Result<Option<(PbAgent, LinkedInPhantomKind)>, String> {
+        let agents = self.list_agents().await?;
+
+        let is_sn_search = |n: &str| n.contains("sales navigator") && n.contains("search");
+        let is_regular_search = |n: &str| {
+            // Regular LinkedIn Search Export phantom goes by variants like
+            // "LinkedIn Search Export" / "People Search Export". Anything
+            // that mentions `linkedin` + `search` but NOT `sales navigator`.
+            n.contains("search") && n.contains("linkedin") && !n.contains("sales navigator")
+        };
+
+        // Collect candidates in preferred order.
+        let mut picks: Vec<(PbAgent, LinkedInPhantomKind)> = Vec::new();
+
+        // If the user explicitly prefers non-SN (e.g. their cookie isn't SN),
+        // put regular search first; otherwise SN first.
+        if prefer_non_salesnav {
+            if let Some(a) = agents.iter().find(|a| is_regular_search(&a.name.to_lowercase())).cloned() {
+                picks.push((a, LinkedInPhantomKind::LinkedInSearch));
+            }
+            if let Some(a) = agents.iter().find(|a| is_sn_search(&a.name.to_lowercase())).cloned() {
+                picks.push((a, LinkedInPhantomKind::SalesNavSearch));
+            }
+        } else {
+            if let Some(a) = agents.iter().find(|a| is_sn_search(&a.name.to_lowercase())).cloned() {
+                picks.push((a, LinkedInPhantomKind::SalesNavSearch));
+            }
+            if let Some(a) = agents.iter().find(|a| is_regular_search(&a.name.to_lowercase())).cloned() {
+                picks.push((a, LinkedInPhantomKind::LinkedInSearch));
+            }
+        }
+
+        Ok(picks.into_iter().next())
+    }
+
+    /// Enumerate every LinkedIn phantom in the workspace, classified. Used
+    /// by the admin UI so the user can see which phantoms are available
+    /// and which ones they need to add.
+    pub async fn list_linkedin_phantoms(&self) -> Result<Vec<(PbAgent, LinkedInPhantomKind)>, String> {
+        let agents = self.list_agents().await?;
+        let mut out = Vec::new();
+        for a in agents {
+            let n = a.name.to_lowercase();
+            let kind = if n.contains("sales navigator") && n.contains("search") {
+                LinkedInPhantomKind::SalesNavSearch
+            } else if n.contains("linkedin") && n.contains("search") {
+                LinkedInPhantomKind::LinkedInSearch
+            } else if n.contains("linkedin") && n.contains("event") {
+                LinkedInPhantomKind::EventGuests
+            } else if n.contains("linkedin") && (n.contains("profile") || n.contains("scraper")) {
+                LinkedInPhantomKind::ProfileScraper
+            } else {
+                continue; // not a LinkedIn phantom
+            };
+            out.push((a, kind));
+        }
+        Ok(out)
+    }
+
+    /// Launch a regular (non-Sales-Navigator) LinkedIn Search Export.
+    /// Argument shape differs from Sales Nav — the key is `search` (singular,
+    /// accepts a list) and the filter format is a linkedin.com URL or search
+    /// keywords, not a sales-navigator URL.
+    pub async fn launch_linkedin_search(
+        &self,
+        agent_id: &str,
+        search_url_or_keywords: &str,
+        session_cookie: &str,
+        max_profiles: u32,
+    ) -> Result<String, String> {
+        let argument = serde_json::json!({
+            "sessionCookie":            session_cookie,
+            "search":                   search_url_or_keywords,
+            "numberOfProfilesPerLaunch": max_profiles.min(30), // PB default cap
+            "csvName":                  format!("li_leads_{}", chrono::Utc::now().timestamp()),
+        });
+
+        let body = serde_json::json!({
+            "id":       agent_id,
+            "argument": argument.to_string(),
+        });
+
+        let resp = self.http
+            .post(format!("{}/agents/launch", PB_BASE))
+            .header("X-Phantombuster-Key", &self.api_key)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| format!("LinkedIn Search launch failed: {}", e))?;
+
+        let result: serde_json::Value = resp.json().await
+            .map_err(|e| format!("Failed to parse LinkedIn Search response: {}", e))?;
+
+        if result.get("status").and_then(|s| s.as_str()) == Some("error") {
+            return Err(format!(
+                "PhantomBuster launch error: {}",
+                result.get("error").and_then(|e| e.as_str()).unwrap_or("unknown"),
+            ));
+        }
+
+        let container_id = result.get("containerId")
+            .and_then(|c| c.as_str())
+            .unwrap_or(agent_id)
+            .to_string();
+        Ok(container_id)
     }
 
     /// Find a Sales Navigator List Export agent (uses spreadsheetUrl / saved list).

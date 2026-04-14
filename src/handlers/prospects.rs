@@ -196,20 +196,22 @@ async fn search_youtube_prospects(
         // Extract Twitter/X handle from description
         let twitter_handle = extract_twitter_handle(&description);
 
-        let (score, reasoning, dm_creator, dm_clipper) =
+        let (score, reasoning, service, dm_creator, dm_clipper) =
             score_prospect_with_ai(state, &display_name, sub_count, &description, &category, &payload.prospect_type).await;
 
         sqlx::query(
             "INSERT INTO prospects (platform, channel_id, display_name, platform_url,
              subscriber_count, content_category, channel_description, prospect_type,
-             ai_score, ai_reasoning, dm_script_creator, dm_script_clipper, twitter_handle)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+             ai_score, ai_reasoning, dm_script_creator, dm_script_clipper, twitter_handle,
+             service_type)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
              ON CONFLICT (platform, channel_id) DO UPDATE SET
                ai_score = EXCLUDED.ai_score,
                ai_reasoning = EXCLUDED.ai_reasoning,
                dm_script_creator = EXCLUDED.dm_script_creator,
                dm_script_clipper = EXCLUDED.dm_script_clipper,
                twitter_handle = COALESCE(EXCLUDED.twitter_handle, prospects.twitter_handle),
+               service_type = EXCLUDED.service_type,
                updated_at = NOW()"
         )
         .bind("youtube")
@@ -225,6 +227,7 @@ async fn search_youtube_prospects(
         .bind(&dm_creator)
         .bind(&dm_clipper)
         .bind(twitter_handle.as_deref())
+        .bind(&service)
         .execute(&state.db_pool)
         .await
         .ok();
@@ -323,20 +326,22 @@ async fn search_twitch_prospects(
             game_name.clone()
         };
 
-        let (score, reasoning, dm_creator, dm_clipper) =
+        let (score, reasoning, service, dm_creator, dm_clipper) =
             score_prospect_with_ai(state, &display_name, viewer_count, "", &category, &payload.prospect_type).await;
 
         sqlx::query(
             "INSERT INTO prospects (platform, channel_id, display_name, platform_url,
              avg_viewer_count, content_category, prospect_type,
-             ai_score, ai_reasoning, dm_script_creator, dm_script_clipper)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+             ai_score, ai_reasoning, dm_script_creator, dm_script_clipper,
+             service_type)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
              ON CONFLICT (platform, channel_id) DO UPDATE SET
                avg_viewer_count = EXCLUDED.avg_viewer_count,
                ai_score = EXCLUDED.ai_score,
                ai_reasoning = EXCLUDED.ai_reasoning,
                dm_script_creator = EXCLUDED.dm_script_creator,
                dm_script_clipper = EXCLUDED.dm_script_clipper,
+               service_type = EXCLUDED.service_type,
                updated_at = NOW()"
         )
         .bind("twitch")
@@ -350,6 +355,7 @@ async fn search_twitch_prospects(
         .bind(&reasoning)
         .bind(&dm_creator)
         .bind(&dm_clipper)
+        .bind(&service)
         .execute(&state.db_pool)
         .await
         .ok();
@@ -382,6 +388,9 @@ fn extract_twitter_handle(description: &str) -> Option<String> {
 /// Use best available LLM to score a prospect and generate DM scripts.
 /// Priority: NVIDIA NIM → Gemma 4 → Gemini Flash.
 /// Returns (score, reasoning, dm_creator, dm_clipper).
+/// AI-scored prospect data — matches the IG lead pattern.
+/// Returns `(score_0_1, reasoning, service_type, dm_script, dm_clipper_fallback)`.
+/// `service_type` is one of: clipping | animations | thumbnails | ugc | full_stack.
 async fn score_prospect_with_ai(
     state: &Arc<AppState>,
     name: &str,
@@ -389,29 +398,52 @@ async fn score_prospect_with_ai(
     description: &str,
     category: &str,
     prospect_type: &str,
-) -> (f64, String, String, String) {
+) -> (f64, String, String, String, String) {
     if state.nvidia_nim_client.is_none() && state.gemma_client.is_none() && state.gemini_client.is_none() {
-        return (0.5, "No LLM configured".to_string(), default_dm_creator(name), default_dm_clipper(name));
+        return (0.5, "No LLM configured".to_string(), "clipping".to_string(),
+                default_dm_creator(name), default_dm_clipper(name));
     }
 
+    // Same service-menu pattern as IG leads — AI picks the strongest-fit
+    // service for THIS creator and writes a DM locked to that service.
     let prompt = format!(
-        r#"You are an AI assistant helping a video clipping service find clients.
-Analyze this channel and respond with ONLY valid JSON (no markdown, no code blocks):
+        r#"You are an outbound copywriter for a video production studio. Score this channel as a potential client (0.0-1.0), pick the best-fit service, and write the DM.
 
-Channel name: {}
-Audience size: {} ({})
-Content category: {}
-Description: {}
-Prospect type: {}
+Channel: {name}
+Audience size: {audience} ({category_word})
+Category: {category}
+Description: {description}
+Prospect type (already tagged by us): {prospect_type}
 
-Return JSON with exactly these fields:
+The studio offers these services — pick the ONE that fits best:
+- **clipping**    — long-form → Shorts/Reels. Best fit: podcasters, long-form YouTubers, Twitch streamers. $297-$899/mo.
+- **animations**  — Blender explainer/data-viz/LaTeX scenes. Best fit: educators, finance/crypto channels, news/data accounts. $50-$150 each.
+- **thumbnails**  — AI-generated YouTube thumbnails. Best fit: growing YouTubers (5k-100k subs), MrBeast aspirants. $25-$50 each.
+- **ugc**         — vertical product-demo ads. Best fit: Shopify/DTC founders, SaaS demos, brand accounts. $200-$500 each.
+- **full_stack**  — bundle of the above. Best fit: 100k+ creators serious about scaling. $1500-$3000/mo.
+
+Score guidelines:
+- 0.8-1.0: clear paying client, monetised, has content we can act on now.
+- 0.6-0.8: likely fit, bio + audience size point strongly to one service.
+- 0.4-0.6: ambiguous — could go either way from the signals alone.
+- 0.0-0.4: bad fit (fan page, brand parody, competitor/fellow editor).
+
+Return ONLY valid JSON (no markdown):
 {{
-  "score": <float 0.0-1.0, how likely they need/want a clipping service>,
-  "reasoning": "<1-2 sentences explaining the score>",
-  "dm_creator": "<personalized DM to send to this content creator offering to clip their content — 2-3 sentences, mention their name and category>",
-  "dm_clipper": "<personalized DM to send if this person is a clipper looking for better tools — 2-3 sentences>"
-}}"#,
-        name, audience_size, category, category, description, prospect_type
+  "score": 0.75,
+  "reasoning": "<1-2 sentences explaining the score + why this service>",
+  "service": "clipping",
+  "dm": "<personalized DM locked to the chosen service — 2-3 sentences, mention the name, reference something specific, state concrete price from the menu, end with an ask>",
+  "dm_clipper": "<alt DM treating them as a clipper looking for tooling — 2-3 sentences>"
+}}
+
+`service` MUST be one of: clipping, animations, thumbnails, ugc, full_stack."#,
+        name          = name,
+        audience      = audience_size,
+        category_word = if audience_size > 0 { "subs/viewers" } else { "unknown" },
+        category      = category,
+        description   = description,
+        prospect_type = prospect_type,
     );
 
     match generate_text_best_effort(
@@ -424,25 +456,36 @@ Return JSON with exactly these fields:
             let cleaned = text.trim().trim_start_matches("```json").trim_start_matches("```").trim_end_matches("```").trim();
             match serde_json::from_str::<serde_json::Value>(cleaned) {
                 Ok(v) => {
-                    let score = v["score"].as_f64().unwrap_or(0.5).clamp(0.0, 1.0);
-                    let reasoning = v["reasoning"].as_str().unwrap_or("").to_string();
-                    let dm_creator = v["dm_creator"].as_str().unwrap_or(&default_dm_creator(name)).to_string();
+                    let score      = v["score"].as_f64().unwrap_or(0.5).clamp(0.0, 1.0);
+                    let reasoning  = v["reasoning"].as_str().unwrap_or("").to_string();
+                    let dm_creator = v["dm"].as_str()
+                        .or_else(|| v["dm_creator"].as_str())  // legacy field name
+                        .unwrap_or(&default_dm_creator(name))
+                        .to_string();
                     let dm_clipper = v["dm_clipper"].as_str().unwrap_or(&default_dm_clipper(name)).to_string();
-                    (score, reasoning, dm_creator, dm_clipper)
+                    // Coerce service to one of the 5 valid values.
+                    let service_raw = v["service"].as_str().unwrap_or("clipping").to_lowercase();
+                    let service = match service_raw.as_str() {
+                        "clipping" | "animations" | "thumbnails" | "ugc" | "full_stack" => service_raw,
+                        _ => "clipping".to_string(),
+                    };
+                    (score, reasoning, service, dm_creator, dm_clipper)
                 }
-                Err(_) => (0.5, "Parse error".to_string(), default_dm_creator(name), default_dm_clipper(name)),
+                Err(_) => (0.5, "Parse error".to_string(), "clipping".to_string(),
+                           default_dm_creator(name), default_dm_clipper(name)),
             }
         }
-        Err(_) => (0.5, "AI unavailable".to_string(), default_dm_creator(name), default_dm_clipper(name)),
+        Err(_) => (0.5, "AI unavailable".to_string(), "clipping".to_string(),
+                   default_dm_creator(name), default_dm_clipper(name)),
     }
 }
 
 fn default_dm_creator(name: &str) -> String {
-    format!("Hey {}! I run an AI clipping service that turns your streams/videos into viral shorts automatically. I'd love to send you a free sample — interested?", name)
+    format!("Hey {}! I run an AI video studio that handles clipping, thumbnails, and Blender animations — happy to send a free sample so you can see which one fits your channel. Want me to send the link?", name)
 }
 
 fn default_dm_clipper(name: &str) -> String {
-    format!("Hey {}! I built an AI clipping platform that processes YouTube and Twitch videos 10x faster. Want free access to try it?", name)
+    format!("Hey {}! I built an AI clipping + rendering platform that processes YouTube and Twitch videos 10x faster — short-form clips, animations, and thumbnails in one pipeline. Want free access to try it?", name)
 }
 
 // ============================================================================
@@ -463,7 +506,7 @@ async fn list_prospects(
     let mut sql = "SELECT id, platform, channel_id, display_name, platform_url, \
                    subscriber_count, avg_viewer_count, content_category, prospect_type, \
                    ai_score, ai_reasoning, dm_script_creator, dm_script_clipper, \
-                   contact_status, notes, twitter_handle, created_at \
+                   contact_status, notes, twitter_handle, service_type, created_at \
                    FROM prospects WHERE 1=1".to_string();
 
     for (i, col) in conditions.iter().enumerate() {
@@ -499,6 +542,7 @@ async fn list_prospects(
         "contact_status": r.get::<String, _>("contact_status"),
         "notes": r.get::<Option<String>, _>("notes"),
         "twitter_handle": r.get::<Option<String>, _>("twitter_handle"),
+        "service_type": r.get::<Option<String>, _>("service_type"),
         "created_at": r.get::<chrono::DateTime<chrono::Utc>, _>("created_at"),
     })).collect();
 
@@ -551,16 +595,25 @@ async fn regenerate_dm_script(
     let pt: String = row.get("prospect_type");
 
     let audience = subs.or(viewers).unwrap_or(0);
-    let (score, reasoning, dm_creator, dm_clipper) =
+    let (score, reasoning, service, dm_creator, dm_clipper) =
         score_prospect_with_ai(&state, &name, audience, &description, &category, &pt).await;
 
     sqlx::query(
-        "UPDATE prospects SET ai_score=$1, ai_reasoning=$2, dm_script_creator=$3, dm_script_clipper=$4, updated_at=NOW() WHERE id=$5"
+        "UPDATE prospects
+         SET ai_score=$1, ai_reasoning=$2, dm_script_creator=$3, dm_script_clipper=$4,
+             service_type=$5, updated_at=NOW()
+         WHERE id=$6"
     )
-    .bind(score).bind(&reasoning).bind(&dm_creator).bind(&dm_clipper).bind(id)
+    .bind(score).bind(&reasoning).bind(&dm_creator).bind(&dm_clipper).bind(&service).bind(id)
     .execute(&state.db_pool).await.ok();
 
-    Ok(Json(json!({ "success": true, "dm_creator": dm_creator, "dm_clipper": dm_clipper, "score": score })))
+    Ok(Json(json!({
+        "success":     true,
+        "dm_creator":  dm_creator,
+        "dm_clipper":  dm_clipper,
+        "score":       score,
+        "service":     service,
+    })))
 }
 
 async fn delete_prospect(
@@ -1758,24 +1811,78 @@ async fn linkedin_smart_search(
         };
         (agent, list_url.to_string(), cid)
     } else {
-        // Build search URL from filters and use Search Export phantom
-        let agent = match pb.find_sales_nav_agent().await {
-            Ok(Some(a)) => a,
-            Ok(None)    => return Json(json!({"success": false, "error": "No Sales Navigator Search Export phantom found. Add 'LinkedIn Sales Navigator Search Export' from the PhantomBuster Phantom Store."})),
-            Err(e)      => return Json(json!({"success": false, "error": format!("Failed to list agents: {}", e)})),
+        use crate::phantombuster_client::LinkedInPhantomKind;
+
+        // Prefer non-Sales-Nav phantom because it works with ANY LinkedIn
+        // cookie (Sales Nav requires an active $99/mo subscription on the
+        // account backing the cookie). Fall back to SN if that's all there is.
+        let (agent, kind) = match pb.find_any_linkedin_search_agent(true).await {
+            Ok(Some((a, k))) => (a, k),
+            Ok(None) => {
+                // Nothing usable. Inspect what IS in the workspace and tell
+                // the user what to add.
+                let available = pb.list_linkedin_phantoms().await.unwrap_or_default();
+                let names: Vec<String> = available.iter().map(|(a, _)| a.name.clone()).collect();
+                return Json(json!({
+                    "success": false,
+                    "error":   "No usable LinkedIn search phantom in your PhantomBuster workspace.",
+                    "hint":    "Add either 'LinkedIn Search Export' (works with any LinkedIn cookie) or 'LinkedIn Sales Navigator Search Export' (requires Sales Navigator subscription) from the PhantomBuster Phantom Store.",
+                    "available_linkedin_phantoms": names,
+                }));
+            }
+            Err(e) => return Json(json!({"success": false, "error": format!("Failed to list agents: {}", e)})),
         };
+
         let empty = vec![];
-        let url = crate::phantombuster_client::PhantomBusterClient::build_search_url(
-            req.job_titles.as_deref().unwrap_or(&empty),
-            req.industries.as_deref().unwrap_or(&empty),
-            req.company_sizes.as_deref().unwrap_or(&empty),
-            req.locations.as_deref().unwrap_or(&empty),
-            req.seniority.as_deref().unwrap_or(&empty),
-        );
-        tracing::info!("LinkedIn smart search URL: {}", url);
-        let cid = match pb.launch_agent(&agent.id, &url, &session_cookie, max).await {
-            Ok(id) => id,
-            Err(e) => return Json(json!({"success": false, "error": e})),
+        let (url, cid) = match kind {
+            LinkedInPhantomKind::SalesNavSearch => {
+                // Sales Nav — build the Sales Navigator search URL.
+                let u = crate::phantombuster_client::PhantomBusterClient::build_search_url(
+                    req.job_titles.as_deref().unwrap_or(&empty),
+                    req.industries.as_deref().unwrap_or(&empty),
+                    req.company_sizes.as_deref().unwrap_or(&empty),
+                    req.locations.as_deref().unwrap_or(&empty),
+                    req.seniority.as_deref().unwrap_or(&empty),
+                );
+                tracing::info!("LinkedIn smart search (Sales Nav) URL: {}", u);
+                let c = match pb.launch_agent(&agent.id, &u, &session_cookie, max).await {
+                    Ok(id) => id,
+                    Err(e) => return Json(json!({"success": false, "error": e})),
+                };
+                (u, c)
+            }
+            LinkedInPhantomKind::LinkedInSearch => {
+                // Regular LinkedIn — phantom accepts a keyword string OR a
+                // linkedin.com/search/results/people URL. We build a simple
+                // keyword query from the AI-generated filters.
+                let mut keywords: Vec<String> = Vec::new();
+                if let Some(titles) = req.job_titles.as_ref() {
+                    keywords.extend(titles.iter().map(|t| t.to_string()));
+                }
+                if let Some(industries) = req.industries.as_ref() {
+                    keywords.extend(industries.iter().map(|i| i.to_string()));
+                }
+                if let Some(locs) = req.locations.as_ref() {
+                    keywords.extend(locs.iter().map(|l| l.to_string()));
+                }
+                let search = if keywords.is_empty() {
+                    "content creator".to_string()
+                } else {
+                    keywords.join(" OR ")
+                };
+                tracing::info!("LinkedIn smart search (regular) keywords: {}", search);
+                let c = match pb.launch_linkedin_search(&agent.id, &search, &session_cookie, max).await {
+                    Ok(id) => id,
+                    Err(e) => return Json(json!({"success": false, "error": e})),
+                };
+                (search, c)
+            }
+            _ => {
+                return Json(json!({
+                    "success": false,
+                    "error":   format!("Phantom '{}' is a LinkedIn phantom but not a search phantom — can't use it for smart-search.", agent.name),
+                }));
+            }
         };
         (agent, url, cid)
     };
@@ -3074,15 +3181,19 @@ async fn ai_score_linkedin_leads(state: &Arc<AppState>, job_id: uuid::Uuid) {
             job_title, company, seniority, description
         );
 
-        let (score, reasoning, dm_creator, _) =
+        let (score, reasoning, service, dm_creator, _) =
             score_prospect_with_ai(state, &name, audience, &enriched_desc, &category, "linkedin_lead").await;
 
         let _ = sqlx::query(
-            "UPDATE prospects SET ai_score = $1, ai_reasoning = $2, dm_script_creator = $3, updated_at = NOW() WHERE id = $4"
+            "UPDATE prospects
+             SET ai_score = $1, ai_reasoning = $2, dm_script_creator = $3,
+                 service_type = $4, updated_at = NOW()
+             WHERE id = $5"
         )
         .bind(score)
         .bind(&reasoning)
         .bind(&dm_creator)
+        .bind(&service)
         .bind(id)
         .execute(&state.db_pool)
         .await;
