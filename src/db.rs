@@ -61,7 +61,10 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
 
     // sqlx::migrate!() is a proc macro — Cargo only re-runs it when THIS file
     // changes. Touching this file forces the macro to re-scan ./migrations and
-    // embed all current migration files (including 20260319000000_add_r2_storage).
+    // embed all current migration files.
+    // Last touched: 2026-04-14 to pick up 20260413000001, 20260413000002,
+    // 20260413000003 (x402 paywall + service_type on prospects + IG leads
+    // service/sample columns) after the 20260413000000 checksum-mismatch fix.
     sqlx::migrate!("./migrations").run(pool).await?;
     
     tracing::info!("Database migrations completed successfully");
