@@ -177,10 +177,19 @@ impl PhantomBusterClient {
         Ok(out)
     }
 
-    /// Launch a regular (non-Sales-Navigator) LinkedIn Search Export.
-    /// Argument shape differs from Sales Nav — the key is `search` (singular,
-    /// accepts a list) and the filter format is a linkedin.com URL or search
-    /// keywords, not a sales-navigator URL.
+    /// Launch a regular (non-Sales-Navigator) LinkedIn search phantom.
+    ///
+    /// Two PB phantoms share this argument shape with subtle differences:
+    ///   - **LinkedIn Search Export**: scrapes profiles only.
+    ///       args: `search`, `numberOfProfilesPerLaunch`
+    ///   - **LinkedIn Search to Lead Outreach**: scrapes AND sends a
+    ///     connection request with a templated message.
+    ///       args: `queries` (array), `numberOfProfilesPerLaunch`,
+    ///             `followUpMessage` (REQUIRED — pass empty string to
+    ///             skip the actual outreach and just get the leads).
+    ///
+    /// We send BOTH key sets so either phantom accepts the launch. PB
+    /// silently ignores keys it doesn't recognise.
     pub async fn launch_linkedin_search(
         &self,
         agent_id: &str,
@@ -189,10 +198,15 @@ impl PhantomBusterClient {
         max_profiles: u32,
     ) -> Result<String, String> {
         let argument = serde_json::json!({
-            "sessionCookie":            session_cookie,
-            "search":                   search_url_or_keywords,
+            "sessionCookie":             session_cookie,
+            // Search Export key:
+            "search":                    search_url_or_keywords,
+            // Search to Lead Outreach keys:
+            "queries":                   [search_url_or_keywords],
+            "followUpMessage":           "", // empty = scrape only, no DM sent
+            "sendInMail":                false,
             "numberOfProfilesPerLaunch": max_profiles.min(30), // PB default cap
-            "csvName":                  format!("li_leads_{}", chrono::Utc::now().timestamp()),
+            "csvName":                   format!("li_leads_{}", chrono::Utc::now().timestamp()),
         });
 
         let body = serde_json::json!({
