@@ -570,6 +570,7 @@ async fn main() {
         .merge(handlers::manual_clipping::manual_clipping_routes()) // ✂️ Manual clipping
         .merge(handlers::prospects::prospect_routes()) // 🎯 Prospect finder (admin)
         .merge(handlers::prospects::instagram_routes()) // 📸 Instagram leads (all users)
+        .merge(handlers::api_access::api_access_routes()) // 💳 USDC subscription page
         .merge(handlers::auth::clipper_invite_routes()) // 🎫 Clipper invites
         .merge(admin_only_routes) // Admin-only routes like API docs
         .route("/api/status", axum::routing::get(api_status))
