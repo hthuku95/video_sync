@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Subscribe — VideoSync (Pay $15 USDC)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#2a2438; --surface:#352f44; --border:#5c5470;
+    --accent:#dbd8e3; --purple:#7a4cff; --muted:#b8b3c8; --dim:#9999bb;
+    --success:#4ade80; --warn:#facc15; --danger:#f87171;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    font-family:'Inter',system-ui,-apple-system,sans-serif;
+    background:linear-gradient(135deg,#2a2438 0%,#1f1a2a 100%);
+    color:var(--accent); min-height:100vh; line-height:1.55;
+    -webkit-font-smoothing:antialiased;
+  }
+  .nav{
+    padding:18px 32px; display:flex; align-items:center; justify-content:space-between;
+    background:rgba(53,47,68,0.4); backdrop-filter:blur(18px);
+    border-bottom:1px solid rgba(92,84,112,0.3);
+  }
+  .brand{
+    font-size:14px; font-weight:700; letter-spacing:0.1em;
+    background:linear-gradient(135deg,#dbd8e3,#7a4cff);
+    -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent;
+  }
+  .nav-link{color:var(--dim);text-decoration:none;font-size:14px}
+  .nav-link:hover{color:var(--accent)}
+
+  .hero{padding:60px 28px 20px;max-width:880px;margin:0 auto;text-align:center}
+  .hero h1{
+    font-size:clamp(28px,4vw,42px); font-weight:800; letter-spacing:-0.02em;
+    margin-bottom:12px; color:#fff;
+  }
+  .hero h1 .accent{color:var(--purple)}
+  .hero p{font-size:17px;color:var(--muted);max-width:640px;margin:0 auto 18px}
+  .badges{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin:14px 0 0}
+  .badge{
+    background:rgba(122,76,255,0.12); border:1px solid rgba(122,76,255,0.3);
+    color:var(--purple); padding:5px 14px; border-radius:999px;
+    font-size:12px; font-weight:600; letter-spacing:0.04em;
+  }
+  .badge.green{background:rgba(74,222,128,0.12);border-color:rgba(74,222,128,0.3);color:var(--success)}
+
+  .pricing{max-width:440px;margin:28px auto 50px;padding:0 24px}
+  .tier{
+    background:rgba(53,47,68,0.7); backdrop-filter:blur(14px);
+    border:1px solid var(--purple); border-radius:18px;
+    padding:36px 30px; position:relative; text-align:center;
+    box-shadow:0 8px 40px rgba(122,76,255,0.2);
+  }
+  .tier-name{
+    font-size:13px; font-weight:600; text-transform:uppercase;
+    letter-spacing:0.1em; color:var(--dim); margin-bottom:4px;
+  }
+  .tier-price{font-size:52px;font-weight:800;color:#fff;line-height:1.1}
+  .tier-price span{font-size:16px;font-weight:500;color:var(--dim);margin-left:6px}
+  .tier-sub{font-size:13px;color:var(--muted);margin:6px 0 20px}
+  .tier-features{list-style:none;margin:18px 0;padding:0;text-align:left}
+  .tier-features li{
+    padding:9px 0; font-size:14px; color:var(--accent);
+    border-bottom:1px dashed rgba(92,84,112,0.25);
+  }
+  .tier-features li:last-child{border-bottom:none}
+  .tier-features li::before{content:'✓ ';color:var(--success);font-weight:700;margin-right:6px}
+  .buy-btn{
+    width:100%; padding:15px; border:none; border-radius:10px; cursor:pointer;
+    font-size:15px; font-weight:700; font-family:inherit;
+    background:var(--purple); color:#fff;
+    margin-top:16px; transition:background 0.15s, transform 0.1s;
+  }
+  .buy-btn:hover{background:#6a3def}
+  .buy-btn:active{transform:translateY(1px)}
+  .buy-btn:disabled{opacity:0.6;cursor:not-allowed}
+
+  .modal-bg{
+    position:fixed; inset:0; background:rgba(0,0,0,0.75);
+    display:none; align-items:center; justify-content:center; z-index:100; padding:20px;
+  }
+  .modal-bg.open{display:flex}
+  .modal{
+    background:var(--surface); border:1px solid var(--border);
+    border-radius:16px; padding:32px; max-width:480px; width:100%;
+    box-shadow:0 20px 60px rgba(0,0,0,0.5);
+  }
+  .modal h2{font-size:20px;font-weight:700;color:#fff;margin-bottom:6px}
+  .modal-sub{font-size:14px;color:var(--muted);margin-bottom:18px}
+  .modal-status{
+    margin:14px 0 0;padding:12px;border-radius:8px;font-size:13px;
+    background:rgba(122,76,255,0.08);border:1px solid rgba(122,76,255,0.2);
+    color:var(--accent);
+  }
+  .modal-status.error{background:rgba(248,113,113,0.08);border-color:rgba(248,113,113,0.3);color:var(--danger)}
+  .modal-status.success{background:rgba(74,222,128,0.08);border-color:rgba(74,222,128,0.3);color:var(--success)}
+  .modal-actions{display:flex;gap:10px;margin-top:18px}
+  .btn-cancel{
+    background:transparent;border:1px solid var(--border);color:var(--dim);
+    padding:11px 18px;border-radius:8px;font-family:inherit;font-size:14px;font-weight:600;cursor:pointer;
+  }
+
+  .footer{text-align:center;padding:30px 20px;font-size:12px;color:var(--dim);border-top:1px solid rgba(92,84,112,0.2)}
+  .footer a{color:var(--purple);text-decoration:none}
+
+  @media(max-width:560px){.hero{padding:40px 20px 16px}.pricing{padding:0 20px}.modal{padding:24px}}
+</style>
+</head>
+<body>
+<nav class="nav">
+  <div class="brand">VIDEOSYNC · SUBSCRIBE</div>
+  <a href="/" class="nav-link">← Back to app</a>
+</nav>
+
+<section class="hero">
+  <div class="badges">
+    <span class="badge green">🟢 7-day free trial included on signup</span>
+    <span class="badge">💰 Pay in USDC on Base</span>
+  </div>
+  <h1>Keep creating with <span class="accent">VideoSync</span></h1>
+  <p>Your 7-day free trial starts on signup. After that, $15/mo keeps everything running — AI thumbnails, Blender animations, full agent video pipeline. Pay in USDC on Base. Cancel any time.</p>
+</section>
+
+<section class="pricing">
+  <div class="tier">
+    <div class="tier-name">Monthly</div>
+    <div class="tier-price">$15<span>/month</span></div>
+    <div class="tier-sub">Single tier. Everything unlocked.</div>
+    <ul class="tier-features">
+      <li>AI-generated thumbnails (Gemini)</li>
+      <li>Blender 3D animations — title cards, data viz, lower thirds, LaTeX, UI mockups</li>
+      <li>Full agent video-generation pipeline (<code>auto_generate_video</code>)</li>
+      <li>On-demand FFmpeg tool API (320 tools)</li>
+      <li>All delivery pages + portfolio samples</li>
+      <li>30-day access renewed per payment</li>
+    </ul>
+    <button class="buy-btn" onclick="openPay()">Subscribe — Pay $15 USDC</button>
+    <div style="font-size:12px;color:var(--dim);margin-top:10px">
+      Clipping + manual clipping are separate team tools, not included here.
+    </div>
+  </div>
+</section>
+
+<div class="footer">
+  Questions? Email <a href="mailto:harryomollo95@gmail.com">harryomollo95@gmail.com</a>
+</div>
+
+<div class="modal-bg" id="modal">
+  <div class="modal">
+    <h2>Subscribe for $15 USDC</h2>
+    <div class="modal-sub">Pay on Base mainnet. Your access unlocks the second the transaction settles.</div>
+    <div class="modal-status" id="modal-status">Click Pay to open your wallet (Phantom EVM, MetaMask, or Coinbase Wallet).</div>
+    <div class="modal-actions">
+      <button class="btn-cancel" onclick="closePay()">Close</button>
+      <button class="buy-btn" id="pay-btn" onclick="executePay()">Pay $15 USDC</button>
+    </div>
+  </div>
+</div>
+
+<script>
+function getAuthToken() {
+  return localStorage.getItem('auth_token')
+      || localStorage.getItem('admin_token')
+      || localStorage.getItem('authToken');
+}
+
+function openPay() {
+  if (!getAuthToken()) {
+    // Kick unauthenticated visitors to login first — subscription is
+    // tied to a user account, so signup/login is required.
+    window.location.href = '/admin/login?next=' + encodeURIComponent('/subscribe');
+    return;
+  }
+  document.getElementById('modal').classList.add('open');
+  document.getElementById('pay-btn').disabled = false;
+  document.getElementById('pay-btn').textContent = 'Pay $15 USDC';
+  setStatus('Click Pay to open your wallet.', '');
+}
+function closePay() { document.getElementById('modal').classList.remove('open'); }
+
+function setStatus(msg, kind) {
+  const el = document.getElementById('modal-status');
+  el.textContent = msg;
+  el.className = 'modal-status' + (kind ? ' ' + kind : '');
+}
+
+async function executePay() {
+  const btn = document.getElementById('pay-btn');
+  const token = getAuthToken();
+  if (!token) { setStatus('You need to log in first.', 'error'); return; }
+  btn.disabled = true; btn.textContent = 'Preparing...';
+
+  // 1. Fetch x402 payment requirements
+  let spec;
+  try {
+    const r = await fetch('/api/subscribe/unlock-spec', {
+      headers: { 'Authorization': 'Bearer ' + token },
+    });
+    if (!r.ok) throw new Error('unlock-spec returned ' + r.status);
+    spec = await r.json();
+  } catch (e) {
+    setStatus('Could not fetch payment spec: ' + e.message, 'error');
+    btn.disabled = false; btn.textContent = 'Try again'; return;
+  }
+  const req = (spec.accepts || [])[0];
+  if (!req) { setStatus('Payment spec missing requirements.', 'error'); return; }
+
+  // 2. Connect wallet
+  const provider = (window.phantom && window.phantom.ethereum) || window.ethereum;
+  if (!provider) {
+    setStatus('No crypto wallet detected. Install Phantom (EVM), MetaMask, or Coinbase Wallet.', 'error');
+    btn.disabled = false; btn.textContent = 'Try again'; return;
+  }
+  let accounts;
+  try { accounts = await provider.request({ method: 'eth_requestAccounts' }); }
+  catch { setStatus('Wallet connection rejected.', 'error'); btn.disabled = false; btn.textContent = 'Try again'; return; }
+  const from = accounts[0];
+
+  // 3. Switch to Base
+  try {
+    await provider.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: '0x2105' }] });
+  } catch {
+    try {
+      await provider.request({
+        method: 'wallet_addEthereumChain',
+        params: [{
+          chainId: '0x2105', chainName: 'Base',
+          nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
+          rpcUrls: ['https://mainnet.base.org'],
+          blockExplorerUrls: ['https://basescan.org'],
+        }],
+      });
+    } catch {
+      setStatus('Switch your wallet to Base network and try again.', 'error');
+      btn.disabled = false; btn.textContent = 'Try again'; return;
+    }
+  }
+
+  // 4. Sign EIP-3009
+  setStatus('Sign the USDC payment in your wallet...', '');
+  btn.textContent = 'Awaiting signature...';
+  const validAfter  = 0;
+  const validBefore = Math.floor(Date.now()/1000) + req.maxTimeoutSeconds;
+  const nonce = '0x' + Array.from(crypto.getRandomValues(new Uint8Array(32)))
+                            .map(b => b.toString(16).padStart(2,'0')).join('');
+  const typedData = {
+    types: {
+      EIP712Domain: [
+        { name: 'name', type: 'string' },
+        { name: 'version', type: 'string' },
+        { name: 'chainId', type: 'uint256' },
+        { name: 'verifyingContract', type: 'address' },
+      ],
+      TransferWithAuthorization: [
+        { name: 'from', type: 'address' },
+        { name: 'to', type: 'address' },
+        { name: 'value', type: 'uint256' },
+        { name: 'validAfter', type: 'uint256' },
+        { name: 'validBefore', type: 'uint256' },
+        { name: 'nonce', type: 'bytes32' },
+      ],
+    },
+    primaryType: 'TransferWithAuthorization',
+    domain: {
+      name: req.extra && req.extra.name || 'USD Coin',
+      version: req.extra && req.extra.version || '2',
+      chainId: 8453,
+      verifyingContract: req.asset,
+    },
+    message: {
+      from, to: req.payTo, value: req.maxAmountRequired,
+      validAfter, validBefore, nonce,
+    },
+  };
+  let signature;
+  try {
+    signature = await provider.request({
+      method: 'eth_signTypedData_v4',
+      params: [from, JSON.stringify(typedData)],
+    });
+  } catch { setStatus('Signature rejected.', 'error'); btn.disabled = false; btn.textContent = 'Try again'; return; }
+
+  // 5. Submit to server
+  setStatus('Submitting payment to Base network...', '');
+  btn.textContent = 'Settling on-chain...';
+  const body = {
+    x402Version: 1, scheme: req.scheme, network: req.network,
+    payload: {
+      signature,
+      authorization: {
+        from, to: req.payTo, value: req.maxAmountRequired,
+        validAfter: String(validAfter), validBefore: String(validBefore), nonce,
+      },
+    },
+  };
+  const xPaymentB64 = btoa(JSON.stringify(body));
+  try {
+    const r = await fetch('/api/subscribe/unlock', {
+      method: 'POST',
+      headers: {
+        'X-Payment': xPaymentB64,
+        'Authorization': 'Bearer ' + token,
+      },
+    });
+    const data = await r.json();
+    if (!r.ok || !data.success) throw new Error(data.error || ('HTTP ' + r.status));
+    setStatus('✅ Subscription active — 30 days unlocked. Redirecting...', 'success');
+    setTimeout(() => { window.location.href = '/'; }, 1200);
+  } catch (e) {
+    setStatus('Settlement failed: ' + e.message, 'error');
+    btn.disabled = false; btn.textContent = 'Try again';
+  }
+}
+</script>
+</body>
+</html>

@@ -6,3 +6,4 @@ pub mod clipper;
 pub mod frontend_rate_limit;
 pub mod youtube_access;
 pub mod clipping_access;
+pub mod subscription; // 💳 7-day trial → $15/mo USDC paywall on heavy-compute

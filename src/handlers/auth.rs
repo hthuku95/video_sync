@@ -175,10 +175,16 @@ async fn register(
         }
     };
 
-    // Insert new user (normal users are not staff, superuser, or clipper by default)
+    // Insert new user. Starts a 7-day free trial immediately — the
+    // subscription_middleware will flip status to 'expired' after
+    // trial_ends_at passes. (Existing users were grandfathered by the
+    // 20260415000001 migration and never see this flow.)
     let user_row = sqlx::query(
-        "INSERT INTO users (email, username, password_hash, is_active, is_superuser, is_staff, is_clipper, created_at, updated_at)
-         VALUES ($1, $2, $3, true, false, false, false, NOW(), NOW())
+        "INSERT INTO users (email, username, password_hash, is_active, is_superuser,
+                            is_staff, is_clipper, created_at, updated_at,
+                            subscription_status, trial_ends_at)
+         VALUES ($1, $2, $3, true, false, false, false, NOW(), NOW(),
+                 'trial', NOW() + INTERVAL '7 days')
          RETURNING id, email, username, password_hash, is_active, is_superuser, is_staff, is_clipper, created_at, updated_at"
     )
     .bind(&payload.email)
@@ -200,6 +206,13 @@ async fn register(
                 )
             })?;
             user.password_hash = String::new(); // Don't include password hash in response
+            // Audit-log the trial start. Best-effort — non-fatal if it fails.
+            let _ = sqlx::query(
+                "INSERT INTO user_payment_events (user_id, event_type) VALUES ($1, 'trial_started')"
+            )
+            .bind(user.id)
+            .execute(&state.db_pool)
+            .await;
             user
         },
         Err(e) => {

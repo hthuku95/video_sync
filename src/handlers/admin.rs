@@ -423,7 +423,10 @@ pub async fn admin_dashboard() -> Html<String> {
         </div>
 
         <div class="recent-section">
-            <h2>Recent Users</h2>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
+                <h2>Recent Users</h2>
+                <a href="/admin/users" class="btn">View all users →</a>
+            </div>
             <table>
                 <thead>
                     <tr>
@@ -431,12 +434,13 @@ pub async fn admin_dashboard() -> Html<String> {
                         <th>Email</th>
                         <th>Status</th>
                         <th>Role</th>
+                        <th>Subscription</th>
                         <th>Joined</th>
                         <th>Actions</th>
                     </tr>
                 </thead>
                 <tbody id="recentUsers">
-                    <tr><td colspan="6" style="text-align: center;">Loading...</td></tr>
+                    <tr><td colspan="7" style="text-align: center;">Loading...</td></tr>
                 </tbody>
             </table>
         </div>
@@ -480,16 +484,26 @@ pub async fn admin_dashboard() -> Html<String> {
                 
                 if (data.success) {
                     const tbody = document.getElementById('recentUsers');
-                    tbody.innerHTML = data.users.map(user => `
+                    const subBadge = (s) => {
+                        if (s === 'active')        return 'badge-success';
+                        if (s === 'grandfathered') return 'badge-success';
+                        if (s === 'trial')         return 'badge-warning';
+                        if (s === 'expired')       return 'badge-danger';
+                        return '';
+                    };
+                    tbody.innerHTML = data.users.map(user => {
+                        const status = user.subscription_status || '—';
+                        return `
                         <tr>
                             <td>${user.username}</td>
                             <td>${user.email}</td>
                             <td><span class="badge ${user.is_active ? 'badge-success' : 'badge-danger'}">${user.is_active ? 'Active' : 'Inactive'}</span></td>
                             <td><span class="badge ${user.is_superuser ? 'badge-danger' : user.is_staff ? 'badge-warning' : 'badge-success'}">${user.is_superuser ? 'Superuser' : user.is_staff ? 'Staff' : 'User'}</span></td>
+                            <td><span class="badge ${subBadge(status)}">${status}</span></td>
                             <td>${new Date(user.created_at).toLocaleDateString()}</td>
                             <td><a href="/admin/users/${user.id}" class="btn" style="padding: 0.25rem 0.5rem; font-size: 0.8rem;">View</a></td>
-                        </tr>
-                    `).join('');
+                        </tr>`;
+                    }).join('');
                 }
             } catch (error) {
                 console.error('Error loading users:', error);
@@ -959,53 +973,65 @@ pub async fn admin_users_api(
     let page = params.page.unwrap_or(1);
     let limit = params.limit.unwrap_or(20);
     let offset = (page - 1) * limit;
-    
-    let mut query = "SELECT id, email, username, is_active, is_superuser, is_staff, created_at FROM users".to_string();
+
+    // Full column set including the subscription columns added by the
+    // 20260415000001 migration — surfaces trial status + paid-until on
+    // the admin users page without having to modify UserResponse.
+    let select = "SELECT id, email, username, is_active, is_superuser, is_staff, \
+                  created_at, subscription_status, subscription_tier, \
+                  trial_ends_at, subscription_active_until, last_payment_at \
+                  FROM users";
+    let mut query       = select.to_string();
     let mut count_query = "SELECT COUNT(*) FROM users".to_string();
 
-    if let Some(_search) = &params.search {
-        let search_condition = " WHERE username ILIKE $1 OR email ILIKE $1";
-        query.push_str(search_condition);
-        count_query.push_str(search_condition);
+    if params.search.is_some() {
+        let where_clause = " WHERE username ILIKE $1 OR email ILIKE $1";
+        query.push_str(where_clause);
+        count_query.push_str(where_clause);
     }
-
     query.push_str(&format!(" ORDER BY created_at DESC LIMIT {} OFFSET {}", limit, offset));
 
-    let user_responses: Vec<UserResponse> = if let Some(search) = &params.search {
-        let search_term = format!("%{}%", search);
-        sqlx::query_as(&query)
-            .bind(&search_term)
-            .fetch_all(&state.db_pool)
-            .await
-            .map_err(|e| { tracing::error!("admin_users_api search query failed: {}", e); StatusCode::INTERNAL_SERVER_ERROR })?
+    let rows = if let Some(search) = &params.search {
+        let term = format!("%{}%", search);
+        sqlx::query(&query).bind(&term).fetch_all(&state.db_pool).await
     } else {
-        sqlx::query_as(&query)
-            .fetch_all(&state.db_pool)
-            .await
-            .map_err(|e| { tracing::error!("admin_users_api query failed: {}", e); StatusCode::INTERNAL_SERVER_ERROR })?
-    };
+        sqlx::query(&query).fetch_all(&state.db_pool).await
+    }
+    .map_err(|e| { tracing::error!("admin_users_api query failed: {}", e); StatusCode::INTERNAL_SERVER_ERROR })?;
+
+    let users: Vec<serde_json::Value> = rows.iter().map(|r| {
+        let to_iso = |t: Option<chrono::DateTime<chrono::Utc>>| t.map(|d| d.to_rfc3339());
+        json!({
+            "id":                        r.get::<i32, _>("id"),
+            "email":                     r.get::<String, _>("email"),
+            "username":                  r.get::<String, _>("username"),
+            "is_active":                 r.get::<bool, _>("is_active"),
+            "is_superuser":              r.get::<bool, _>("is_superuser"),
+            "is_staff":                  r.get::<bool, _>("is_staff"),
+            "created_at":                to_iso(r.try_get("created_at").ok()),
+            "subscription_status":       r.try_get::<Option<String>, _>("subscription_status").ok().flatten(),
+            "subscription_tier":         r.try_get::<Option<String>, _>("subscription_tier").ok().flatten(),
+            "trial_ends_at":             to_iso(r.try_get("trial_ends_at").ok().flatten()),
+            "subscription_active_until": to_iso(r.try_get("subscription_active_until").ok().flatten()),
+            "last_payment_at":           to_iso(r.try_get("last_payment_at").ok().flatten()),
+        })
+    }).collect();
 
     let total_count: i64 = if let Some(search) = &params.search {
-        let search_term = format!("%{}%", search);
-        sqlx::query_scalar(&count_query)
-            .bind(&search_term)
-            .fetch_one(&state.db_pool)
-            .await
-            .map_err(|e| { tracing::error!("admin_users_api count query failed: {}", e); StatusCode::INTERNAL_SERVER_ERROR })?
+        let term = format!("%{}%", search);
+        sqlx::query_scalar(&count_query).bind(&term).fetch_one(&state.db_pool).await
     } else {
-        sqlx::query_scalar(&count_query)
-            .fetch_one(&state.db_pool)
-            .await
-            .map_err(|e| { tracing::error!("admin_users_api count query failed: {}", e); StatusCode::INTERNAL_SERVER_ERROR })?
-    };
-    
+        sqlx::query_scalar(&count_query).fetch_one(&state.db_pool).await
+    }
+    .map_err(|e| { tracing::error!("admin_users_api count query failed: {}", e); StatusCode::INTERNAL_SERVER_ERROR })?;
+
     Ok(Json(json!({
         "success": true,
-        "users": user_responses,
+        "users":   users,
         "pagination": {
-            "page": page,
-            "limit": limit,
-            "total": total_count,
+            "page":        page,
+            "limit":       limit,
+            "total":       total_count,
             "total_pages": (total_count as f64 / limit as f64).ceil() as u32
         }
     })))
@@ -1212,12 +1238,15 @@ pub async fn admin_users_list() -> Html<String> {
                         <th>Email</th>
                         <th>Status</th>
                         <th>Role</th>
+                        <th>Subscription</th>
+                        <th>Trial / Paid Until</th>
+                        <th>Last Payment</th>
                         <th>Created</th>
                         <th>Actions</th>
                     </tr>
                 </thead>
                 <tbody id="usersTable">
-                    <tr><td colspan="7" style="text-align: center;">Loading...</td></tr>
+                    <tr><td colspan="10" style="text-align: center;">Loading...</td></tr>
                 </tbody>
             </table>
 
@@ -1318,21 +1347,36 @@ pub async fn admin_users_list() -> Html<String> {
             const tbody = document.getElementById('usersTable');
 
             if (users.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="7" style="text-align: center;">No users found</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="10" style="text-align: center;">No users found</td></tr>';
                 return;
             }
 
-            tbody.innerHTML = users.map(user => `
+            const subBadgeClass = (status) => {
+                if (status === 'active')        return 'badge-success';
+                if (status === 'grandfathered') return 'badge-success';
+                if (status === 'trial')         return 'badge-warning';
+                if (status === 'expired')       return 'badge-danger';
+                return '';
+            };
+            const fmtDate = (iso) => iso ? new Date(iso).toLocaleDateString() : '—';
+
+            tbody.innerHTML = users.map(user => {
+                const status   = user.subscription_status || '—';
+                const untilDate = user.subscription_active_until || user.trial_ends_at;
+                return `
                 <tr>
                     <td>${user.id}</td>
                     <td>${user.username}</td>
                     <td>${user.email}</td>
                     <td><span class="badge ${user.is_active ? 'badge-success' : 'badge-danger'}">${user.is_active ? 'Active' : 'Inactive'}</span></td>
                     <td><span class="badge ${user.is_superuser ? 'badge-danger' : user.is_staff ? 'badge-warning' : 'badge-success'}">${user.is_superuser ? 'Superuser' : user.is_staff ? 'Staff' : 'User'}</span></td>
-                    <td>${new Date(user.created_at).toLocaleDateString()}</td>
+                    <td><span class="badge ${subBadgeClass(status)}">${status}</span></td>
+                    <td>${fmtDate(untilDate)}</td>
+                    <td>${fmtDate(user.last_payment_at)}</td>
+                    <td>${fmtDate(user.created_at)}</td>
                     <td><a href="/admin/users/${user.id}" class="btn btn-sm">View</a></td>
-                </tr>
-            `).join('');
+                </tr>`;
+            }).join('');
         }
 
         function updatePagination() {

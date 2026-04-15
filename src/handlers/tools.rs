@@ -255,9 +255,15 @@ pub async fn run_workflow(
 // ─── Router ───────────────────────────────────────────────────────────────────
 
 pub fn tools_routes() -> Router {
+    // Every endpoint here triggers real compute (FFmpeg / Blender / etc.)
+    // — wrap with auth + subscription so trial-expired users are blocked
+    // until they upgrade to $15/mo. Staff + superusers + grandfathered
+    // users bypass automatically inside subscription_middleware.
     Router::new()
         .route("/api/tools/stabilize", post(stabilize_video))
         .route("/api/tools/convert", post(convert_format))
         .route("/api/tools/visualize-audio", post(visualize_audio))
         .route("/api/tools/workflow", post(run_workflow))
+        .layer(axum::middleware::from_fn(crate::middleware::subscription::subscription_middleware))
+        .layer(axum::middleware::from_fn(crate::middleware::auth::auth_middleware))
 }
