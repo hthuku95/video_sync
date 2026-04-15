@@ -62,9 +62,10 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     // sqlx::migrate!() is a proc macro — Cargo only re-runs it when THIS file
     // changes. Touching this file forces the macro to re-scan ./migrations and
     // embed all current migration files.
-    // Last touched: 2026-04-15 to pick up 20260415000001 (user subscriptions
-    // paywall — trial_ends_at, subscription_status, user_payment_events).
-    // Previous touch: 20260415000000 (api_subscriptions table).
+    // Last touched: 2026-04-15 to pick up 20260415000002 (telegram
+    // opportunities + watch channels table). Previous touches:
+    // 20260415000001 (user subscriptions paywall), 20260415000000
+    // (api_subscriptions table for agency licensing).
     // Older notes:
     // 2026-04-14 — 20260413000001/2/3 (x402 paywall + service_type on
     // prospects + IG leads service/sample) after the 20260413000000

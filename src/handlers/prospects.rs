@@ -41,6 +41,14 @@ pub fn prospect_routes() -> Router {
         .route("/api/admin/prospects/:id/dm-script", post(regenerate_dm_script))
         .route("/api/admin/prospects/:id/generate-outreach", post(generate_outreach_message))
         .route("/api/admin/prospects/:id", delete(delete_prospect))
+        // Telegram opportunity tab (phase 1: manual entry + AI scoring;
+        // phase 2 will add automated grammers-client watcher).
+        .route("/api/admin/telegram/channels",       get(telegram_list_channels))
+        .route("/api/admin/telegram/channels",       post(telegram_add_channel))
+        .route("/api/admin/telegram/channels/:id",   delete(telegram_delete_channel))
+        .route("/api/admin/telegram/opportunities",  get(telegram_list_opportunities))
+        .route("/api/admin/telegram/opportunities",  post(telegram_add_opportunity_manual))
+        .route("/api/admin/telegram/opportunities/:id", patch(telegram_update_opportunity))
         .layer(axum::middleware::from_fn(admin_middleware))
         .layer(axum::middleware::from_fn(auth_middleware));
 
@@ -980,7 +988,8 @@ tr:hover td{background:rgba(92,84,112,0.12)}
   <!-- Source Selector Tabs -->
   <div class="tabs" style="margin-bottom:14px">
     <div class="tab active" onclick="showSource('yt-tw',this)">▶ YouTube / Twitch</div>
-    <div class="tab" onclick="showSource('linkedin',this)">💼 LinkedIn (Sales Navigator)</div>
+    <div class="tab" onclick="showSource('linkedin',this)">💼 LinkedIn</div>
+    <div class="tab" onclick="showSource('telegram',this)">✈️ Telegram Opportunities</div>
     <div class="tab" onclick="showSource('jobs',this)">🚦 PB Job Status</div>
   </div>
 
@@ -1045,6 +1054,47 @@ tr:hover td{background:rgba(92,84,112,0.12)}
     <button class="btn btn-ghost" onclick="listLinkedInAgents()" style="margin-left:8px">List PB Agents</button>
     <span id="li-status" style="margin-left:12px;color:var(--dim);font-size:0.85rem"></span>
     <div id="li-agents" style="margin-top:14px"></div>
+  </div>
+
+  <!-- Telegram Opportunities -->
+  <div id="src-telegram" class="search-card" style="display:none">
+    <h2>Telegram Opportunities</h2>
+    <p>Paste a message you saw in a crypto / SaaS / creator Telegram channel — AI scores it as a paid-gig opportunity and picks the best service to pitch. Default watched channels (future auto-watcher): <code id="tg-watched"></code></p>
+
+    <details style="margin-bottom:16px">
+      <summary style="cursor:pointer;color:var(--dim);font-size:0.85rem">📋 Paste a new opportunity</summary>
+      <div style="margin-top:12px;padding:14px;background:rgba(42,36,56,0.4);border-radius:8px">
+        <div class="form-grid">
+          <div>
+            <label>Channel (without @)</label>
+            <input id="tg-channel" placeholder="cryptojobslist" value="cryptojobslist">
+          </div>
+          <div>
+            <label>Sender (optional)</label>
+            <input id="tg-sender" placeholder="@username">
+          </div>
+          <div style="grid-column: 1 / -1">
+            <label>Message text</label>
+            <textarea id="tg-message" rows="4" style="width:100%;padding:8px 12px;background:rgba(42,36,56,0.6);border:1px solid rgba(92,84,112,0.5);border-radius:8px;color:var(--accent);font-family:inherit;font-size:0.9rem" placeholder="Paste the Telegram message here..."></textarea>
+          </div>
+          <div style="grid-column: 1 / -1">
+            <label>Link to message (optional)</label>
+            <input id="tg-link" placeholder="https://t.me/cryptojobslist/12345">
+          </div>
+        </div>
+        <button class="btn btn-primary" onclick="submitTelegramOpportunity()">Score &amp; Save Opportunity</button>
+        <span id="tg-submit-status" style="margin-left:12px;color:var(--dim);font-size:0.85rem"></span>
+      </div>
+    </details>
+
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
+      <button class="btn btn-ghost btn-sm" onclick="loadTgOpportunities('')">All</button>
+      <button class="btn btn-ghost btn-sm" onclick="loadTgOpportunities('new')">New</button>
+      <button class="btn btn-ghost btn-sm" onclick="loadTgOpportunities('contacted')">Contacted</button>
+      <button class="btn btn-ghost btn-sm" onclick="loadTgOpportunities('won')">Won</button>
+      <button class="btn btn-ghost btn-sm" onclick="loadTgOpportunities('ignored')">Ignored</button>
+    </div>
+    <div id="tg-opportunities-list">Loading...</div>
   </div>
 
   <!-- PB Jobs Status -->
@@ -1153,11 +1203,12 @@ function showMsg(text, ok=true){
 function showSource(name, btn){
   document.querySelectorAll('.tabs > .tab').forEach(t=>t.classList.remove('active'));
   btn.classList.add('active');
-  ['yt-tw','linkedin','jobs'].forEach(s=>{
+  ['yt-tw','linkedin','telegram','jobs'].forEach(s=>{
     const el = document.getElementById('src-'+s);
     if(el) el.style.display = (s===name)?'block':'none';
   });
-  if(name==='jobs') loadPbJobs();
+  if (name === 'jobs')     loadPbJobs();
+  if (name === 'telegram') { loadTelegramChannels(); loadTgOpportunities(''); }
 }
 
 // ── LinkedIn ──────────────────────────────────────────────────────────────
@@ -1239,6 +1290,98 @@ async function importLinkedInJob(jobId){
     setTimeout(loadProspects, 800);
     setTimeout(loadPbJobs, 800);
   }catch(e){ showMsg(`Network error: ${e}`, false); }
+}
+
+// ── Telegram Opportunities ─────────────────────────────────────────────────
+
+async function loadTelegramChannels(){
+  try {
+    const r = await fetch('/api/admin/telegram/channels', {headers:{'Authorization':'Bearer '+token}});
+    const data = await r.json();
+    if (data.success) {
+      const names = data.channels.filter(c=>c.enabled).map(c=>'@'+c.channel).join(', ');
+      const el = document.getElementById('tg-watched');
+      if (el) el.textContent = names || '(none yet)';
+    }
+  } catch {}
+}
+
+async function submitTelegramOpportunity(){
+  const channel = document.getElementById('tg-channel').value.trim().replace(/^@/,'');
+  const sender  = document.getElementById('tg-sender').value.trim();
+  const message = document.getElementById('tg-message').value.trim();
+  const link    = document.getElementById('tg-link').value.trim();
+  const status  = document.getElementById('tg-submit-status');
+  if (!channel || !message) { status.textContent = 'Channel + message are required.'; return; }
+  status.textContent = 'Scoring...';
+  try {
+    const r = await fetch('/api/admin/telegram/opportunities', {
+      method: 'POST',
+      headers: {'Authorization':'Bearer '+token, 'Content-Type':'application/json'},
+      body: JSON.stringify({channel, message, sender: sender||null, link: link||null}),
+    });
+    const data = await r.json();
+    if (!data.success) { status.textContent = 'Error: ' + (data.error||'unknown'); return; }
+    status.textContent = `✓ Scored ${data.score}/100 (service: ${data.service_type||'none'})`;
+    document.getElementById('tg-message').value = '';
+    document.getElementById('tg-link').value = '';
+    loadTgOpportunities('');
+  } catch (e) {
+    status.textContent = 'Network error: ' + e;
+  }
+}
+
+async function loadTgOpportunities(filterStatus){
+  const out = document.getElementById('tg-opportunities-list');
+  out.innerHTML = '<div class="loading">Loading…</div>';
+  try {
+    const qs = filterStatus ? `?status=${encodeURIComponent(filterStatus)}` : '';
+    const r = await fetch('/api/admin/telegram/opportunities'+qs, {headers:{'Authorization':'Bearer '+token}});
+    const data = await r.json();
+    if (!data.success) { out.innerHTML = `<div class="msg msg-error">${data.error||'Failed'}</div>`; return; }
+    const items = data.opportunities || [];
+    if (items.length === 0) {
+      out.innerHTML = '<div class="empty"><span class="empty-icon">✈️</span>No opportunities yet. Paste one above.</div>';
+      return;
+    }
+    out.innerHTML = items.map(o => {
+      const score = o.score != null ? o.score : 0;
+      const cls = score >= 70 ? 'score-high' : score >= 40 ? 'score-mid' : 'score-low';
+      const svc = o.service_type ? `<span class="badge" style="background:rgba(122,76,255,0.15);color:var(--purple);padding:2px 8px;border-radius:10px;font-size:0.75rem;margin-left:6px">${o.service_type}</span>` : '';
+      const linkBtn = o.link ? `<a href="${o.link}" target="_blank" class="btn btn-sm btn-copy">↗ Open</a>` : '';
+      const statusBadge = `<span class="score-badge ${o.status==='new'?'score-mid':o.status==='won'?'score-high':'score-low'}" style="margin-right:8px">${o.status}</span>`;
+      return `
+        <div class="pb-job-row" style="display:block;margin-bottom:10px;padding:14px">
+          <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px;flex-wrap:wrap">
+            <span class="score-badge ${cls}">${score}/100</span>
+            ${svc}
+            <span style="color:var(--dim);font-size:0.85rem">@${o.channel}${o.sender?' · '+o.sender:''}</span>
+            <span style="margin-left:auto">${statusBadge}</span>
+          </div>
+          <div style="color:var(--accent);font-size:0.9rem;line-height:1.5;margin-bottom:6px;white-space:pre-wrap">${o.message.replace(/</g,'&lt;')}</div>
+          ${o.score_reason ? `<div style="color:var(--dim);font-size:0.78rem;font-style:italic;margin-bottom:8px">${o.score_reason}</div>` : ''}
+          <div style="display:flex;gap:6px;flex-wrap:wrap">
+            ${linkBtn}
+            <button class="btn btn-sm btn-copy" onclick="tgSetStatus('${o.id}','contacted')">Contacted</button>
+            <button class="btn btn-sm btn-copy" onclick="tgSetStatus('${o.id}','won')">Won</button>
+            <button class="btn btn-sm btn-copy" onclick="tgSetStatus('${o.id}','ignored')">Ignore</button>
+          </div>
+        </div>`;
+    }).join('');
+  } catch (e) {
+    out.innerHTML = `<div class="msg msg-error">Network error: ${e}</div>`;
+  }
+}
+
+async function tgSetStatus(id, status){
+  try {
+    await fetch(`/api/admin/telegram/opportunities/${id}`, {
+      method: 'PATCH',
+      headers: {'Authorization':'Bearer '+token, 'Content-Type':'application/json'},
+      body: JSON.stringify({status}),
+    });
+    loadTgOpportunities('');
+  } catch {}
 }
 
 function scoreBadge(score){
@@ -3202,4 +3345,276 @@ async fn ai_score_linkedin_leads(state: &Arc<AppState>, job_id: uuid::Uuid) {
     }
 
     tracing::info!("✅ LinkedIn AI scoring complete for job {}", job_id);
+}
+
+// ============================================================================
+// Telegram opportunities (phase 1 — manual entry + AI scoring)
+// ============================================================================
+//
+// Phase 2 will add an automated grammers-client userbot that polls the
+// channels in `telegram_watch_channels` and inserts matching messages.
+// For now admins paste messages they saw in Telegram into a form and
+// the AI scores them as potential paid gigs.
+
+#[derive(Debug, Deserialize)]
+struct AddChannelReq {
+    channel:    String,
+    keyword_re: Option<String>,
+}
+
+async fn telegram_list_channels(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    let rows = match sqlx::query(
+        "SELECT id, channel, keyword_re, enabled, created_at
+         FROM telegram_watch_channels ORDER BY created_at ASC"
+    )
+    .fetch_all(&state.db_pool)
+    .await {
+        Ok(r) => r,
+        Err(e) => return Json(json!({"success": false, "error": format!("DB error: {}", e)})),
+    };
+    let channels: Vec<serde_json::Value> = rows.iter().map(|r| json!({
+        "id":         r.get::<i32, _>("id"),
+        "channel":    r.get::<String, _>("channel"),
+        "keyword_re": r.try_get::<Option<String>, _>("keyword_re").ok().flatten(),
+        "enabled":    r.get::<bool, _>("enabled"),
+    })).collect();
+    Json(json!({"success": true, "channels": channels}))
+}
+
+async fn telegram_add_channel(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(req):        Json<AddChannelReq>,
+) -> Json<serde_json::Value> {
+    let channel = req.channel.trim().trim_start_matches('@').to_string();
+    if channel.is_empty() {
+        return Json(json!({"success": false, "error": "channel is required"}));
+    }
+    match sqlx::query(
+        "INSERT INTO telegram_watch_channels (channel, keyword_re)
+         VALUES ($1, $2)
+         ON CONFLICT (channel) DO UPDATE SET keyword_re = EXCLUDED.keyword_re, enabled = TRUE
+         RETURNING id"
+    )
+    .bind(&channel)
+    .bind(req.keyword_re.as_deref())
+    .fetch_one(&state.db_pool)
+    .await {
+        Ok(_) => Json(json!({"success": true, "channel": channel})),
+        Err(e) => Json(json!({"success": false, "error": format!("DB error: {}", e)})),
+    }
+}
+
+async fn telegram_delete_channel(
+    Extension(state):   Extension<Arc<AppState>>,
+    Path(id):           Path<i32>,
+) -> Json<serde_json::Value> {
+    match sqlx::query("DELETE FROM telegram_watch_channels WHERE id = $1")
+        .bind(id).execute(&state.db_pool).await {
+        Ok(_) => Json(json!({"success": true})),
+        Err(e) => Json(json!({"success": false, "error": format!("DB error: {}", e)})),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct ListOpportunitiesQuery {
+    status: Option<String>,
+    limit:  Option<i64>,
+}
+
+async fn telegram_list_opportunities(
+    Extension(state):  Extension<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
+    Query(q):          Query<ListOpportunitiesQuery>,
+) -> Json<serde_json::Value> {
+    let user_id: i32 = claims.sub.parse().unwrap_or(0);
+    let limit = q.limit.unwrap_or(50).clamp(1, 200);
+
+    let mut sql = String::from(
+        "SELECT id, channel, message_id, sender, message, matched_kw, link,
+                score, score_reason, service_type, status, source, created_at
+         FROM telegram_opportunities
+         WHERE user_id = $1"
+    );
+    if q.status.is_some() {
+        sql.push_str(" AND status = $2");
+    }
+    sql.push_str(" ORDER BY COALESCE(score, 0) DESC, created_at DESC");
+    sql.push_str(&format!(" LIMIT {}", limit));
+
+    let rows = if let Some(s) = q.status.as_deref() {
+        sqlx::query(&sql).bind(user_id).bind(s).fetch_all(&state.db_pool).await
+    } else {
+        sqlx::query(&sql).bind(user_id).fetch_all(&state.db_pool).await
+    };
+    let rows = match rows {
+        Ok(r) => r,
+        Err(e) => return Json(json!({"success": false, "error": format!("DB error: {}", e)})),
+    };
+
+    let items: Vec<serde_json::Value> = rows.iter().map(|r| json!({
+        "id":           r.get::<uuid::Uuid, _>("id").to_string(),
+        "channel":      r.get::<String, _>("channel"),
+        "message":      r.get::<String, _>("message"),
+        "sender":       r.try_get::<Option<String>, _>("sender").ok().flatten(),
+        "link":         r.try_get::<Option<String>, _>("link").ok().flatten(),
+        "score":        r.try_get::<Option<i32>, _>("score").ok().flatten(),
+        "score_reason": r.try_get::<Option<String>, _>("score_reason").ok().flatten(),
+        "service_type": r.try_get::<Option<String>, _>("service_type").ok().flatten(),
+        "status":       r.get::<String, _>("status"),
+        "source":       r.get::<String, _>("source"),
+    })).collect();
+    Json(json!({"success": true, "opportunities": items, "count": items.len()}))
+}
+
+#[derive(Debug, Deserialize)]
+struct AddOpportunityReq {
+    channel: String,
+    message: String,
+    sender:  Option<String>,
+    link:    Option<String>,
+}
+
+async fn telegram_add_opportunity_manual(
+    Extension(state):  Extension<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
+    Json(req):         Json<AddOpportunityReq>,
+) -> Json<serde_json::Value> {
+    let user_id: i32 = claims.sub.parse().unwrap_or(0);
+    let channel = req.channel.trim().trim_start_matches('@').to_string();
+    if channel.is_empty() || req.message.trim().is_empty() {
+        return Json(json!({"success": false, "error": "channel and message are required"}));
+    }
+
+    // AI-score the opportunity using the same service menu as IG leads.
+    // Returns (score 0-100, reason, service).
+    let (score, reason, service) = score_telegram_opportunity(&state, &channel, &req.message).await;
+
+    let id = match sqlx::query_scalar::<_, uuid::Uuid>(
+        "INSERT INTO telegram_opportunities
+           (channel, message, sender, link, score, score_reason, service_type,
+            status, source, user_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 'new', 'manual', $8)
+         RETURNING id"
+    )
+    .bind(&channel)
+    .bind(&req.message)
+    .bind(req.sender.as_deref())
+    .bind(req.link.as_deref())
+    .bind(score)
+    .bind(&reason)
+    .bind(service.as_deref())
+    .bind(user_id)
+    .fetch_one(&state.db_pool)
+    .await {
+        Ok(id) => id,
+        Err(e) => return Json(json!({"success": false, "error": format!("DB error: {}", e)})),
+    };
+
+    Json(json!({
+        "success":      true,
+        "id":           id.to_string(),
+        "score":        score,
+        "score_reason": reason,
+        "service_type": service,
+    }))
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdateOpportunityReq {
+    status: Option<String>,
+}
+
+async fn telegram_update_opportunity(
+    Extension(state):  Extension<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
+    Path(id):          Path<uuid::Uuid>,
+    Json(req):         Json<UpdateOpportunityReq>,
+) -> Json<serde_json::Value> {
+    let user_id: i32 = claims.sub.parse().unwrap_or(0);
+    let valid = ["new", "contacted", "won", "lost", "ignored"];
+    let Some(status) = req.status else {
+        return Json(json!({"success": false, "error": "status is required"}));
+    };
+    if !valid.contains(&status.as_str()) {
+        return Json(json!({"success": false, "error": format!("status must be one of: {}", valid.join(", "))}));
+    }
+    match sqlx::query(
+        "UPDATE telegram_opportunities
+         SET status = $1, updated_at = NOW()
+         WHERE id = $2 AND user_id = $3"
+    )
+    .bind(&status)
+    .bind(id)
+    .bind(user_id)
+    .execute(&state.db_pool)
+    .await {
+        Ok(_)  => Json(json!({"success": true})),
+        Err(e) => Json(json!({"success": false, "error": format!("DB error: {}", e)})),
+    }
+}
+
+/// AI-score a pasted Telegram message as a potential paid gig.
+/// Mirrors the IG lead scorer — same service menu, same 0-100 scale.
+async fn score_telegram_opportunity(
+    state:   &Arc<AppState>,
+    channel: &str,
+    message: &str,
+) -> (i32, String, Option<String>) {
+    let prompt = format!(
+        r#"A message was posted in Telegram channel @{channel}. Decide whether it's a REAL paid gig opportunity for a video production studio and which service to pitch.
+
+The studio offers (pick ONE):
+- clipping    — long-form → Shorts/Reels. Best fit: podcasts, streams, long YouTubers. $297–$899/mo.
+- animations  — Blender explainer / data-viz / LaTeX scenes. Best fit: educators, crypto/finance, news/data. $50–$150 each.
+- thumbnails  — AI YouTube thumbnails. Best fit: growing channels, MrBeast aspirants. $25–$50 each.
+- ugc         — vertical product-demo ads. Best fit: Shopify / DTC / SaaS founders. $200–$500 each.
+- full_stack  — bundle of all. Best fit: 100k+ creators. $1500–$3000/mo.
+
+Message:
+"""
+{message}
+"""
+
+Score guidelines:
+- 80–100: clear paying client posted a real brief with budget/timeline hint.
+- 60–79: likely fit, details missing but the intent is obvious.
+- 40–59: ambiguous — could be a question rather than a buying signal.
+- 0–39: not a gig (news, spam, announcement, cold pitch from someone ELSE offering similar services = competitor).
+
+Return ONLY valid JSON (no markdown):
+{{"score": 75, "service": "clipping", "reason": "Podcaster says 'need someone to cut my 2hr episodes into TikToks, DM for budget'"}}
+
+`service` MUST be one of: clipping, animations, thumbnails, ugc, full_stack — or null if score < 40."#,
+        channel = channel,
+        message = message,
+    );
+
+    let response = match crate::llm_utils::generate_text_best_effort(
+        state.nvidia_nim_client.as_ref(),
+        state.gemma_client.as_ref(),
+        state.gemini_client.as_ref(),
+        &prompt,
+    ).await {
+        Ok(text) => text,
+        Err(_)   => return (0, "scoring failed".to_string(), None),
+    };
+
+    let cleaned = response.trim()
+        .trim_start_matches("```json").trim_start_matches("```")
+        .trim_end_matches("```").trim();
+
+    let v: serde_json::Value = match serde_json::from_str(cleaned) {
+        Ok(v) => v,
+        Err(_) => return (0, "parse failed".to_string(), None),
+    };
+    let score  = v.get("score").and_then(|s| s.as_i64()).unwrap_or(0) as i32;
+    let reason = v.get("reason").and_then(|r| r.as_str()).unwrap_or("").to_string();
+    let svc    = v.get("service").and_then(|s| s.as_str()).map(|s| s.to_lowercase());
+    let service = svc.and_then(|s| match s.as_str() {
+        "clipping" | "animations" | "thumbnails" | "ugc" | "full_stack" => Some(s),
+        _ => None,
+    });
+    (score, reason, service)
 }
