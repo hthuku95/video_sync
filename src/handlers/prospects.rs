@@ -4060,4 +4060,18 @@ async fn telegram_login_verify(
     Extension(state): Extension<Arc<AppState>>,
     Json(req):        Json<TelegramLoginVerifyReq>,
 ) -> Json<serde_json::Value> {
-    match crate::teleg                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                
+    match crate::telegram_client::login_verify(&state, req.phone.trim(), req.code.trim()).await {
+        Ok(()) => Json(json!({
+            "success": true,
+            "message": "Logged in. The Telegram watcher is now active."
+        })),
+        Err(e) => Json(json!({"success": false, "error": e})),
+    }
+}
+
+async fn telegram_watcher_status(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    Json(crate::telegram_client::status(&state).await)
+}
+    match crate::teleg
