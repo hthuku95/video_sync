@@ -6594,12 +6594,12 @@ pub async fn delivery_page(
                 Some(url) => {
                     if is_image {
                         let watermark_overlay = if !is_unlocked {
-                            r#"<div class="watermark">PREVIEW · UNLOCK FOR HD</div>"#
+                            r#"<div class="watermark"><div class="watermark-label">PREVIEW · $5 USDC FOR HD</div></div>"#
                         } else { "" };
                         format!(r#"<div class="media-stack"><img src="{url}" alt="Delivered image" style="max-width:100%;border-radius:12px;">{watermark_overlay}</div>"#)
                     } else {
                         let watermark_overlay = if !is_unlocked {
-                            r#"<div class="watermark">PREVIEW · UNLOCK FOR HD</div>"#
+                            r#"<div class="watermark"><div class="watermark-label">PREVIEW · $5 USDC FOR HD</div></div>"#
                         } else { "" };
                         // Disable right-click + downloads on the locked preview
                         // by removing `controlsList=download` and adding
@@ -6691,12 +6691,29 @@ pub async fn delivery_page(
   .feedback {{ font-size: 13px; color: #9999bb; line-height: 1.6; }}
   .footer {{ margin-top: 32px; font-size: 12px; color: #666680; text-align: center; }}
   .footer a {{ color: #6366f1; text-decoration: none; }}
-  /* x402 paywall styling */
-  .media-stack {{ position: relative; }}
-  .watermark {{ position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%) rotate(-15deg);
-                 font-size: 28px; font-weight: 800; color: rgba(255,255,255,0.55);
-                 background: rgba(0,0,0,0.45); padding: 12px 28px; border-radius: 8px;
-                 letter-spacing: 0.08em; pointer-events: none; user-select: none; }}
+  /* x402 paywall styling — preview = full-length, watermarked diagonally.
+     Buyer sees the entire clip so they know what they're paying for, but
+     the watermark reinforces the "pay $5 for HD" CTA on every frame. */
+  .media-stack {{ position: relative; overflow: hidden; }}
+  .watermark {{
+    position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+    display: flex; align-items: center; justify-content: center;
+    pointer-events: none; user-select: none;
+    background-image: repeating-linear-gradient(
+      -22deg,
+      rgba(255,255,255,0.10) 0px,
+      rgba(255,255,255,0.10) 2px,
+      transparent 2px,
+      transparent 170px
+    );
+  }}
+  .watermark-label {{
+    font-size: 22px; font-weight: 800; color: rgba(255,255,255,0.85);
+    background: rgba(122,76,255,0.55); padding: 10px 24px; border-radius: 10px;
+    letter-spacing: 0.10em; transform: rotate(-15deg);
+    text-shadow: 0 2px 6px rgba(0,0,0,0.4);
+    border: 1px solid rgba(255,255,255,0.25);
+  }}
   .unlock-cta {{ background: linear-gradient(135deg, rgba(122,76,255,0.12), rgba(99,102,241,0.06));
                   border: 1px solid rgba(122,76,255,0.3); border-radius: 12px;
                   padding: 20px; margin-bottom: 24px; }}

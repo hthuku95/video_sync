@@ -76,6 +76,9 @@ pub fn chat_routes() -> Router {
         .route("/api/chat/recent", get(get_recent_chats))
         .route("/api/chat/all", get(get_all_chats))
         .route("/api/chat/sessions/:session_uuid/jobs", get(get_session_jobs))
+        // Paywall: trial-expired users hit HTTP 402 when trying to read
+        // chat history — they still see /subscribe in upgrade_url.
+        .layer(axum::middleware::from_fn(crate::middleware::subscription::subscription_middleware))
         .layer(axum::middleware::from_fn(auth_middleware));
 
     public_routes.merge(protected_routes)
@@ -85,7 +88,7 @@ async fn websocket_handler(
     ws: WebSocketUpgrade,
     Query(params): Query<WebSocketQuery>,
     Extension(state): Extension<Arc<AppState>>,
-) -> impl IntoResponse {
+) -> axum::response::Response {
     // Validate JWT before upgrading — WebSocket upgrades are HTTP so we can
     // extract the user_id here and pass it in. The token travels as a query
     // param because WS clients cannot set Authorization headers.
@@ -95,7 +98,67 @@ async fn websocket_handler(
             Err(_) => None,
         }
     });
-    ws.on_upgrade(move |socket| websocket(socket, state, params.session, params.model, user_id))
+
+    // Subscription gate — the WS route doesn't flow through the standard
+    // axum middleware stack for the upgrade handshake, so we check here.
+    // trial / active / grandfathered / staff / superuser pass; expired
+    // users hit 402 with the upgrade link.
+    if let Some(uid) = user_id {
+        use axum::http::StatusCode;
+        match subscription_ok(&state, uid).await {
+            Ok(true) => {}
+            Ok(false) => {
+                return (
+                    StatusCode::PAYMENT_REQUIRED,
+                    axum::Json(serde_json::json!({
+                        "success":     false,
+                        "error":       "subscription_required",
+                        "message":     "Your free trial has ended. Subscribe for $15/mo USDC to keep the chat running.",
+                        "upgrade_url": "/subscribe",
+                    })),
+                ).into_response();
+            }
+            Err(e) => {
+                tracing::warn!("WS subscription check failed for user {}: {}", uid, e);
+                // fail-open rather than blocking legit users on DB hiccup;
+                // paywalled compute routes will still gate properly.
+            }
+        }
+    }
+
+    ws.on_upgrade(move |socket| websocket(socket, state, params.session, params.model, user_id)).into_response()
+}
+
+/// Returns Ok(true) if the user is allowed to use paid compute right now.
+/// Mirrors the logic in src/middleware/subscription.rs but called inline
+/// because the WS upgrade bypasses standard middleware.
+async fn subscription_ok(state: &Arc<AppState>, user_id: i32) -> Result<bool, sqlx::Error> {
+    let row = sqlx::query(
+        "SELECT is_staff, is_superuser, subscription_status, trial_ends_at, subscription_active_until
+         FROM users WHERE id = $1"
+    )
+    .bind(user_id)
+    .fetch_optional(&state.db_pool)
+    .await?;
+
+    let Some(row) = row else { return Ok(false); };
+    use sqlx::Row;
+    let is_staff:     bool = row.try_get("is_staff").unwrap_or(false);
+    let is_super:     bool = row.try_get("is_superuser").unwrap_or(false);
+    if is_staff || is_super { return Ok(true); }
+
+    let status: String = row.try_get::<Option<String>, _>("subscription_status").ok().flatten()
+        .unwrap_or_else(|| "grandfathered".to_string());
+    let now = chrono::Utc::now();
+
+    Ok(match status.as_str() {
+        "grandfathered" => true,
+        "trial" => row.try_get::<Option<chrono::DateTime<chrono::Utc>>, _>("trial_ends_at").ok().flatten()
+            .map(|t| t > now).unwrap_or(false),
+        "active" => row.try_get::<Option<chrono::DateTime<chrono::Utc>>, _>("subscription_active_until").ok().flatten()
+            .map(|t| t > now).unwrap_or(false),
+        _ => false,
+    })
 }
 
 async fn websocket(stream: WebSocket, state: Arc<AppState>, session_uuid: Option<String>, _model_preference: Option<String>, user_id: Option<i32>) {

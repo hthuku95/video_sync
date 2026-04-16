@@ -424,11 +424,13 @@ Description: {description}
 Prospect type (already tagged by us): {prospect_type}
 
 The studio offers these services — pick the ONE that fits best:
-- **clipping**    — long-form → Shorts/Reels. Best fit: podcasters, long-form YouTubers, Twitch streamers. $297-$899/mo.
-- **animations**  — Blender explainer/data-viz/LaTeX scenes. Best fit: educators, finance/crypto channels, news/data accounts. $50-$150 each.
-- **thumbnails**  — AI-generated YouTube thumbnails. Best fit: growing YouTubers (5k-100k subs), MrBeast aspirants. $25-$50 each.
-- **ugc**         — vertical product-demo ads. Best fit: Shopify/DTC founders, SaaS demos, brand accounts. $200-$500 each.
-- **full_stack**  — bundle of the above. Best fit: 100k+ creators serious about scaling. $1500-$3000/mo.
+- **clipping**       — long-form → Shorts/Reels. Best fit: podcasters, long-form YouTubers, Twitch streamers. $297-$899/mo.
+- **animations**     — Blender explainer/data-viz/LaTeX scenes. Best fit: educators, finance/crypto channels, news/data accounts. $50-$150 each.
+- **thumbnails**     — AI-generated YouTube thumbnails. Best fit: growing YouTubers (5k-100k subs), MrBeast aspirants. $25-$50 each.
+- **ugc**            — vertical product-demo ads. Best fit: Shopify/DTC founders, SaaS demos, brand accounts. $200-$500 each.
+- **product_mockup** — photorealistic product shot rendered on a device/scene (3D mockup). Best fit: ecommerce stores, hardware brands, app developers, Kickstarter creators. $100-$300 each.
+- **landing_page**   — animated hero mockup for a SaaS/startup landing page (we can pull the hero image from their live URL). Best fit: YC/indie-hacker SaaS founders, pre-launch startups, no-code builders. $200-$600 each.
+- **full_stack**     — bundle of the above. Best fit: 100k+ creators serious about scaling. $1500-$3000/mo.
 
 Score guidelines:
 - 0.8-1.0: clear paying client, monetised, has content we can act on now.
@@ -445,7 +447,7 @@ Return ONLY valid JSON (no markdown):
   "dm_clipper": "<alt DM treating them as a clipper looking for tooling — 2-3 sentences>"
 }}
 
-`service` MUST be one of: clipping, animations, thumbnails, ugc, full_stack."#,
+`service` MUST be one of: clipping, animations, thumbnails, ugc, product_mockup, landing_page, full_stack."#,
         name          = name,
         audience      = audience_size,
         category_word = if audience_size > 0 { "subs/viewers" } else { "unknown" },
@@ -474,7 +476,7 @@ Return ONLY valid JSON (no markdown):
                     // Coerce service to one of the 5 valid values.
                     let service_raw = v["service"].as_str().unwrap_or("clipping").to_lowercase();
                     let service = match service_raw.as_str() {
-                        "clipping" | "animations" | "thumbnails" | "ugc" | "full_stack" => service_raw,
+                        "clipping" | "animations" | "thumbnails" | "ugc" | "product_mockup" | "landing_page" | "full_stack" => service_raw,
                         _ => "clipping".to_string(),
                     };
                     (score, reasoning, service, dm_creator, dm_clipper)
@@ -2243,7 +2245,8 @@ async fn instagram_generate_dm(
     // Fetch the lead — scoped to the caller so one user can't DM another
     // user's lead or learn that another user has that lead.
     let row = match sqlx::query(
-        "SELECT username, full_name, bio, followers_count, category, hashtag_source, external_url, service_type
+        "SELECT username, full_name, bio, followers_count, category, hashtag_source,
+                external_url, service_type, sample_delivery_id
          FROM instagram_leads WHERE id = $1 AND user_id = $2"
     )
     .bind(id)
@@ -2262,6 +2265,20 @@ async fn instagram_generate_dm(
     let category:  String          = row.get::<Option<String>, _>("category").unwrap_or_default();
     let ext_url:   String          = row.get::<Option<String>, _>("external_url").unwrap_or_default();
     let service:   Option<String>  = row.get::<Option<String>, _>("service_type");
+    let sample_id: Option<uuid::Uuid> = row.try_get("sample_delivery_id").ok().flatten();
+
+    // Build the sample-link block injected into the prompt. If a sample
+    // exists, the LLM is instructed to work the URL in naturally; without
+    // one, we tell the model not to invent a link.
+    let base_url = std::env::var("PUBLIC_BASE_URL").unwrap_or_else(|_| "https://www.videosync.video".to_string());
+    let sample_block = match sample_id {
+        Some(sid) => format!(
+            "SAMPLE LINK (must appear in the DM, woven in naturally — e.g. \"here's a quick mockup I made: <URL>\" — do NOT just paste it at the end): {}/delivery/{}\nThe link shows a free watermarked preview. Full HD download costs $5 USDC — the DM can hint at that (\"HD version is $5 if you want it for prod\") but don't hard-sell it.",
+            base_url.trim_end_matches('/'),
+            sid
+        ),
+        None => "NO sample exists yet — do NOT invent a URL. Offer to make one: \"want me to put together a quick sample?\"".to_string(),
+    };
 
     let niche = req.as_ref().and_then(|r| r.niche.as_deref()).unwrap_or(&category);
 
@@ -2270,12 +2287,14 @@ async fn instagram_generate_dm(
     // If the scorer already picked a service for this lead, lock the DM to it
     // — much higher quality than asking the model to re-decide every time.
     let service_block = match service.as_deref() {
-        Some("clipping")    => "Service to pitch: SHORT-FORM CLIPPING.\n  - What you offer: turn their long videos / podcasts / streams into 20–40 vertical Shorts/Reels/TikToks per month.\n  - Pricing tiers: $297 (30 clips/mo) → $497 (50 clips/mo) → $899 (unlimited + 48h SLA).",
-        Some("animations")  => "Service to pitch: AI-DRIVEN BLENDER ANIMATIONS.\n  - What you offer: explainer scenes, data visualisations, LaTeX equations, lower-thirds, title cards.\n  - Pricing tiers: $50–$150 per 15–60s animation, or $400/month for 5 animations.",
-        Some("thumbnails")  => "Service to pitch: AI-OPTIMISED YOUTUBE THUMBNAILS.\n  - What you offer: 3-frame extract → AI picks the strongest → branded title overlay → CTR-tested.\n  - Pricing tiers: $25–$50 per thumbnail, or $300/month for 30 thumbnails.",
-        Some("ugc")         => "Service to pitch: UGC / PRODUCT-DEMO VIDEOS.\n  - What you offer: vertical-first ad-style demo videos for ecommerce / SaaS founders.\n  - Pricing tiers: $200–$500 per 30–60s UGC video.",
-        Some("full_stack")  => "Service to pitch: FULL-STACK PRODUCTION BUNDLE.\n  - What you offer: clipping + thumbnails + animations + delivery, all in one retainer.\n  - Pricing tiers: $1,500–$3,000/month.",
-        _ => "Pick the strongest-fit service from this menu (mention only ONE in the DM):\n  - SHORT-FORM CLIPPING — long-form → Shorts/Reels. Best fit: podcasters, long-form YouTubers, streamers. $297–$899/mo.\n  - BLENDER ANIMATIONS — explainer/data-viz/LaTeX. Best fit: educators, finance/crypto channels. $50–$150 each.\n  - AI THUMBNAILS — best fit growing YouTubers (5k–100k). $25–$50 each.\n  - UGC / PRODUCT DEMO — best fit Shopify/SaaS founders. $200–$500 each.\n  - FULL STACK — bundle of all of the above. $1,500–$3,000/mo.",
+        Some("clipping")       => "Service to pitch: SHORT-FORM CLIPPING.\n  - What you offer: turn their long videos / podcasts / streams into 20–40 vertical Shorts/Reels/TikToks per month.\n  - Pricing tiers: $297 (30 clips/mo) → $497 (50 clips/mo) → $899 (unlimited + 48h SLA).",
+        Some("animations")     => "Service to pitch: AI-DRIVEN BLENDER ANIMATIONS.\n  - What you offer: explainer scenes, data visualisations, LaTeX equations, lower-thirds, title cards.\n  - Pricing tiers: $50–$150 per 15–60s animation, or $400/month for 5 animations.",
+        Some("thumbnails")     => "Service to pitch: AI-OPTIMISED YOUTUBE THUMBNAILS.\n  - What you offer: 3-frame extract → AI picks the strongest → branded title overlay → CTR-tested.\n  - Pricing tiers: $25–$50 per thumbnail, or $300/month for 30 thumbnails.",
+        Some("ugc")            => "Service to pitch: UGC / PRODUCT-DEMO VIDEOS.\n  - What you offer: vertical-first ad-style demo videos for ecommerce / SaaS founders.\n  - Pricing tiers: $200–$500 per 30–60s UGC video.",
+        Some("product_mockup") => "Service to pitch: 3D PRODUCT MOCKUPS.\n  - What you offer: photorealistic Blender renders of their product on a device or lifestyle scene — Gemini-generated product shot + cinematic camera move.\n  - Pricing tiers: $100–$300 per mockup, or $600 for a pack of 4 with variations.",
+        Some("landing_page")   => "Service to pitch: ANIMATED LANDING PAGE HERO.\n  - What you offer: cinematic 10–15s animated hero mockup for their SaaS/startup — if they have a live site, we scrape the hero image; otherwise we generate one with Gemini and animate it in Blender.\n  - Pricing tiers: $200–$600 per hero video. Ideal for Product Hunt launches / YC demos.",
+        Some("full_stack")     => "Service to pitch: FULL-STACK PRODUCTION BUNDLE.\n  - What you offer: clipping + thumbnails + animations + mockups + landing-page heroes + delivery, all in one retainer.\n  - Pricing tiers: $1,500–$3,000/month.",
+        _ => "Pick the strongest-fit service from this menu (mention only ONE in the DM):\n  - SHORT-FORM CLIPPING — long-form → Shorts/Reels. Best fit: podcasters, long-form YouTubers, streamers. $297–$899/mo.\n  - BLENDER ANIMATIONS — explainer/data-viz/LaTeX. Best fit: educators, finance/crypto channels. $50–$150 each.\n  - AI THUMBNAILS — best fit growing YouTubers (5k–100k). $25–$50 each.\n  - UGC / PRODUCT DEMO — best fit Shopify/SaaS founders. $200–$500 each.\n  - PRODUCT MOCKUP — 3D product shots. Best fit ecommerce/hardware/app launches. $100–$300 each.\n  - LANDING PAGE HERO — animated SaaS hero. Best fit indie founders / pre-launch. $200–$600 each.\n  - FULL STACK — bundle of all of the above. $1,500–$3,000/mo.",
     };
 
     let prompt = format!(
@@ -2291,11 +2310,13 @@ Creator info:
 
 {service_block}
 
+{sample_block}
+
 The DM must:
 - Be specific. Reference an actual detail from the bio/caption — never generic flattery.
 - State concretely what the studio would do for THEM, with the realistic price from the service block above.
-- Mention you've already made a sample (link will be added separately — do NOT invent a URL).
-- End with a clear ask: "want me to send the sample?" or "free to share the link?"
+- If a SAMPLE LINK is provided above, weave the full URL into the DM body naturally. Never replace it with "link" or paraphrase — paste the exact URL. If no sample exists, offer to make one.
+- End with a clear ask: "want me to send over the breakdown?" or "does this fit what you had in mind?"
 - Sound like one founder messaging another. Casual, lowercase ok, no corporate fluff, no emoji spam.
 - Adapt tone to follower size — micro creators (<10k) warm + helpful; mid creators (10k–100k) business-direct; big creators (>100k) concise with clear ROI angle.
 
@@ -2307,6 +2328,7 @@ Output ONLY the DM body. No quotes, no labels, no preamble."#,
         niche         = niche,
         ext_url       = ext_url,
         service_block = service_block,
+        sample_block  = sample_block,
     );
 
     let dm_text = match generate_text_best_effort(
@@ -2357,9 +2379,10 @@ async fn instagram_generate_sample(
     Extension(state):  Extension<Arc<AppState>>,
     Extension(claims): Extension<Claims>,
     Path(id):          Path<uuid::Uuid>,
-    Json(_req):        Json<Option<GenerateSampleRequest>>,
+    Json(req):         Json<Option<GenerateSampleRequest>>,
 ) -> Json<serde_json::Value> {
     let user_id: i32 = claims.sub.parse().unwrap_or(0);
+    let source_url = req.as_ref().and_then(|r| r.source_url.clone());
 
     let row = match sqlx::query(
         "SELECT username, full_name, bio, service_type, sample_delivery_id
@@ -2403,6 +2426,11 @@ async fn instagram_generate_sample(
 
     // Build a delivery row pointing at a lightweight Blender render.
     // Default to `thumbnail` if the scorer hasn't set a service yet.
+    //
+    // For service types that benefit from a reference image (product_mockup
+    // and landing_page), we generate the image via Gemini Nano Banana or
+    // use a user-supplied source URL, then pass the resulting S3 URL to
+    // the Blender tool.
     let (gig_type, prompt, style, duration, extra) = match service.as_deref() {
         Some("animations") => (
             "title_card",
@@ -2411,6 +2439,64 @@ async fn instagram_generate_sample(
             8.0,
             json!({"subtitle": bio.chars().take(60).collect::<String>()}),
         ),
+
+        Some("product_mockup") => {
+            // Gemini generates a product shot from the lead's bio.
+            // Falls back to empty screenshot_url if generation fails —
+            // Blender will still produce a device frame without the image.
+            let product_prompt = format!(
+                "Professional product photograph, clean white background, studio lighting: {}",
+                bio.chars().take(200).collect::<String>()
+            );
+            let img_url = try_generate_image(&state, &product_prompt).await;
+            (
+                "ui_mockup",
+                format!("{} — product showcase mockup", full_name),
+                "modern",
+                8.0,
+                json!({
+                    "device":         "phone",
+                    "animation":      "zoom_in",
+                    "screenshot_url": img_url.unwrap_or_default(),
+                }),
+            )
+        }
+
+        Some("landing_page") => {
+            // If the user pasted a landing-page URL, try to pull the hero
+            // image (og:image meta tag) from it. Fall back to synthesising
+            // one via Gemini if the site has no usable meta or we can't
+            // reach it. Fall further back to empty — Blender renders a
+            // scene without a reference image rather than erroring.
+            let hero_url = match source_url.as_deref() {
+                Some(url) => match fetch_landing_page_hero(url).await {
+                    Some(u) => u,
+                    None => {
+                        let p = format!("Clean SaaS landing-page hero illustration: {}", bio.chars().take(150).collect::<String>());
+                        try_generate_image(&state, &p).await.unwrap_or_default()
+                    }
+                },
+                None => {
+                    let p = format!(
+                        "Clean SaaS landing-page hero illustration for: {}. Modern, gradient background, tech/startup aesthetic.",
+                        bio.chars().take(200).collect::<String>()
+                    );
+                    try_generate_image(&state, &p).await.unwrap_or_default()
+                }
+            };
+            (
+                "scene",
+                format!("Animated landing page for {}", full_name),
+                "modern",
+                15.0,
+                json!({
+                    "reference_image_url": hero_url,
+                    "animation_style":     "parallax",
+                    "source_url":          source_url,
+                }),
+            )
+        }
+
         Some("ugc") | Some("full_stack") => (
             "ui_mockup",
             format!("{}'s product showcase", full_name),
@@ -2418,6 +2504,7 @@ async fn instagram_generate_sample(
             6.0,
             json!({"device": "phone", "animation": "fade_in"}),
         ),
+
         _ => (
             "thumbnail",
             format!("Eye-catching thumbnail for @{} — {}", username, bio.chars().take(80).collect::<String>()),
@@ -3078,10 +3165,12 @@ async fn score_instagram_leads(state: &Arc<AppState>, hashtag: &str, user_id: i3
             r#"Score this Instagram creator as a potential client for a video production studio (0–100), and also pick the best service to pitch.
 
 The studio offers:
-- **clipping**     — long-form → Shorts/Reels. Best fit: podcasters, long-form YouTubers, Twitch streamers.
-- **animations**   — Blender explainer/data-viz/LaTeX scenes. Best fit: educators, finance/crypto channels, news/data accounts.
-- **thumbnails**   — AI-generated YouTube thumbnails. Best fit: growing YouTubers (5k–100k subs), MrBeast aspirants.
-- **ugc**          — vertical product-demo ads. Best fit: Shopify/DTC founders, SaaS demos, brand accounts.
+- **clipping**       — long-form → Shorts/Reels. Best fit: podcasters, long-form YouTubers, Twitch streamers.
+- **animations**     — Blender explainer/data-viz/LaTeX scenes. Best fit: educators, finance/crypto channels, news/data accounts.
+- **thumbnails**     — AI-generated YouTube thumbnails. Best fit: growing YouTubers (5k–100k subs), MrBeast aspirants.
+- **ugc**            — vertical product-demo ads. Best fit: Shopify/DTC founders, SaaS demos, brand accounts.
+- **product_mockup** — photorealistic product shot on a device/scene. Best fit: ecommerce, hardware brands, app devs, Kickstarter creators.
+- **landing_page**   — animated SaaS hero mockup (we can scrape their existing site URL). Best fit: SaaS/startup founders, no-code builders.
 - **full_stack**   — bundle of the above. Best fit: 100k+ creators serious about scaling.
 
 Creator profile:
@@ -3099,7 +3188,7 @@ Score guidelines:
 Return ONLY valid JSON (no markdown, no code fence):
 {{"score": 75, "service": "clipping", "reason": "podcaster with podcast link in bio, posts long-form clips"}}
 
-`service` MUST be one of: clipping, animations, thumbnails, ugc, full_stack."#,
+`service` MUST be one of: clipping, animations, thumbnails, ugc, product_mockup, landing_page, full_stack."#,
             username  = username,
             followers = followers_str,
             bio       = bio,
@@ -3126,7 +3215,7 @@ Return ONLY valid JSON (no markdown, no code fence):
                 // "all services, AI picks one inline".
                 let service_raw = v.get("service").and_then(|s| s.as_str()).unwrap_or("").to_lowercase();
                 let service = match service_raw.as_str() {
-                    "clipping" | "animations" | "thumbnails" | "ugc" | "full_stack" => Some(service_raw),
+                    "clipping" | "animations" | "thumbnails" | "ugc" | "product_mockup" | "landing_page" | "full_stack" => Some(service_raw),
                     _ => None,
                 };
 
@@ -3566,11 +3655,13 @@ async fn score_telegram_opportunity(
         r#"A message was posted in Telegram channel @{channel}. Decide whether it's a REAL paid gig opportunity for a video production studio and which service to pitch.
 
 The studio offers (pick ONE):
-- clipping    — long-form → Shorts/Reels. Best fit: podcasts, streams, long YouTubers. $297–$899/mo.
-- animations  — Blender explainer / data-viz / LaTeX scenes. Best fit: educators, crypto/finance, news/data. $50–$150 each.
-- thumbnails  — AI YouTube thumbnails. Best fit: growing channels, MrBeast aspirants. $25–$50 each.
-- ugc         — vertical product-demo ads. Best fit: Shopify / DTC / SaaS founders. $200–$500 each.
-- full_stack  — bundle of all. Best fit: 100k+ creators. $1500–$3000/mo.
+- clipping       — long-form → Shorts/Reels. Best fit: podcasts, streams, long YouTubers. $297–$899/mo.
+- animations     — Blender explainer / data-viz / LaTeX scenes. Best fit: educators, crypto/finance, news/data. $50–$150 each.
+- thumbnails     — AI YouTube thumbnails. Best fit: growing channels, MrBeast aspirants. $25–$50 each.
+- ugc            — vertical product-demo ads. Best fit: Shopify / DTC / SaaS founders. $200–$500 each.
+- product_mockup — photorealistic 3D product shot. Best fit: ecommerce / hardware / app launches / Kickstarter. $100–$300 each.
+- landing_page   — animated SaaS landing hero (can scrape their live URL). Best fit: SaaS / indie founders / pre-launch. $200–$600 each.
+- full_stack     — bundle of all. Best fit: 100k+ creators. $1500–$3000/mo.
 
 Message:
 """
@@ -3613,8 +3704,128 @@ Return ONLY valid JSON (no markdown):
     let reason = v.get("reason").and_then(|r| r.as_str()).unwrap_or("").to_string();
     let svc    = v.get("service").and_then(|s| s.as_str()).map(|s| s.to_lowercase());
     let service = svc.and_then(|s| match s.as_str() {
-        "clipping" | "animations" | "thumbnails" | "ugc" | "full_stack" => Some(s),
+        "clipping" | "animations" | "thumbnails" | "ugc" | "product_mockup" | "landing_page" | "full_stack" => Some(s),
         _ => None,
     });
     (score, reason, service)
+}
+
+// ============================================================================
+// Helpers for product_mockup + landing_page sample generation
+// ============================================================================
+
+/// Calls Gemini image-generation, saves the bytes to R2, returns a
+/// pre-signed URL Blender can fetch. Returns None on any failure so the
+/// caller falls back to rendering without a reference image.
+async fn try_generate_image(state: &Arc<AppState>, prompt: &str) -> Option<String> {
+    let gemini = state.gemini_client.as_ref()?;
+
+    let bytes = match gemini.generate_image(prompt, Some("16:9"), None, None).await {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::warn!("try_generate_image: Gemini call failed: {}", e);
+            return None;
+        }
+    };
+
+    // Persist locally long enough to hand to R2's file-based upload API.
+    // outputs/ is gitignored + auto-cleaned.
+    let local_path = format!("outputs/sample_gen_{}.png", chrono::Utc::now().timestamp_millis());
+    if let Err(e) = tokio::fs::write(&local_path, &bytes).await {
+        tracing::warn!("try_generate_image: local write failed: {}", e);
+        return None;
+    }
+
+    let r2 = state.r2_client.as_ref()?;
+    let key = format!("sample_gen/{}.png", uuid::Uuid::new_v4());
+    if let Err(e) = r2.upload(&local_path, &key).await {
+        tracing::warn!("try_generate_image: R2 upload failed: {}", e);
+        return None;
+    }
+
+    // Pre-signed URL valid for 7 days — long enough for Blender to render
+    // AND the delivery page to display the source image as a fallback.
+    match r2.presign_get(&key, 7 * 24 * 3600).await {
+        Ok(url) => Some(url),
+        Err(e) => {
+            tracing::warn!("try_generate_image: presign_get failed: {}", e);
+            None
+        }
+    }
+}
+
+/// Fetch a landing page URL and extract the best hero image. Looks in order:
+///   1. `<meta property="og:image">` — usually the designer-chosen hero
+///   2. `<meta name="twitter:image">`
+///   3. First `<img>` tag with width >= 400 (best-effort regex)
+///
+/// Returns None if the URL is unfetchable or has no suitable image. When
+/// None is returned, the caller falls back to Gemini-synthesised hero.
+async fn fetch_landing_page_hero(url: &str) -> Option<String> {
+    // Only HTTPS URLs — blocks SSRF into internal services.
+    if !url.starts_with("https://") && !url.starts_with("http://") {
+        return None;
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .user_agent("Mozilla/5.0 (compatible; VideoSyncBot/1.0)")
+        .redirect(reqwest::redirect::Policy::limited(5))
+        .build()
+        .ok()?;
+
+    let resp = client.get(url).send().await.ok()?;
+    if !resp.status().is_success() { return None; }
+    let html = resp.text().await.ok()?;
+
+    // Priority 1: og:image meta tag.
+    if let Some(img) = extract_meta_content(&html, "og:image") {
+        return Some(normalise_image_url(&img, url));
+    }
+    if let Some(img) = extract_meta_content(&html, "twitter:image") {
+        return Some(normalise_image_url(&img, url));
+    }
+    None
+}
+
+/// Pull the `content` attribute of the first matching meta tag.
+/// We tolerate both `property="og:image"` and `name="og:image"` variants.
+fn extract_meta_content(html: &str, key: &str) -> Option<String> {
+    let lower = html.to_lowercase();
+    let needles = [
+        format!("property=\"{}\"", key),
+        format!("property='{}'", key),
+        format!("name=\"{}\"", key),
+        format!("name='{}'", key),
+    ];
+    let pos = needles.iter().find_map(|n| lower.find(n))?;
+    // Look for content="..." within the same tag. Meta tags are typically
+    // short so a local window works without a real HTML parser dep.
+    let window_end = (pos + 500).min(html.len());
+    let window = &html[pos..window_end];
+    // Find content=" or content='
+    let start = window.to_lowercase().find("content=")?;
+    let after = &window[start + "content=".len()..];
+    let quote = after.chars().next()?;
+    if quote != '"' && quote != '\'' { return None; }
+    let rest = &after[1..];
+    let end = rest.find(quote)?;
+    Some(rest[..end].to_string())
+}
+
+/// Convert a possibly-relative image URL into an absolute URL.
+fn normalise_image_url(img: &str, page_url: &str) -> String {
+    if img.starts_with("http://") || img.starts_with("https://") {
+        return img.to_string();
+    }
+    if img.starts_with("//") {
+        return format!("https:{}", img);
+    }
+    // Relative path — resolve against the page's origin.
+    if let Ok(base) = url::Url::parse(page_url) {
+        if let Ok(absolute) = base.join(img) {
+            return absolute.to_string();
+        }
+    }
+    img.to_string()
 }

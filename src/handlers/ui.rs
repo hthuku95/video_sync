@@ -616,9 +616,74 @@ pub async fn landing_page() -> Html<String> {
         <div class="container">
             <h1>AI-Powered Video Editing Made Simple</h1>
             <p>Transform your videos with natural language commands and publish directly to YouTube. No complex software, no steep learning curves - just tell our AI what you want, and watch the magic happen.</p>
+            <div style="background:rgba(122,76,255,0.15);border:1px solid rgba(122,76,255,0.4);border-radius:10px;padding:12px 18px;display:inline-block;margin:18px 0 14px;font-size:14px;color:#fff;font-weight:500">
+                🎉 <strong>7-day free trial</strong> &middot; Then <strong>$15/mo</strong> &middot; Pay in <strong>USDC on Base</strong> — no Stripe, no contracts
+            </div>
             <div class="hero-buttons">
                 <a href="/signup" class="btn btn-primary btn-large">Get Started Free</a>
-                <a href="/login" class="btn btn-secondary btn-large">Sign In</a>
+                <a href="#pricing" class="btn btn-secondary btn-large">See Pricing ↓</a>
+            </div>
+        </div>
+    </section>
+
+    <!-- Pricing Section -->
+    <section id="pricing" style="padding:60px 20px;background:#f8f9fa">
+        <div class="container">
+            <h2 style="text-align:center;margin-bottom:12px">Simple, Crypto-Native Pricing</h2>
+            <p style="text-align:center;color:#666;margin-bottom:40px;max-width:680px;margin-left:auto;margin-right:auto">Pay with any EVM wallet — Phantom (multi-chain), MetaMask, or Coinbase Wallet. USDC on Base mainnet. Instant activation. Cancel any time.</p>
+
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:20px;max-width:1100px;margin:0 auto">
+
+                <!-- Creators -->
+                <div style="background:#fff;border:1px solid #e5e7eb;border-radius:16px;padding:32px 26px;box-shadow:0 2px 10px rgba(0,0,0,0.04)">
+                    <div style="font-size:12px;font-weight:700;letter-spacing:0.08em;color:#7a4cff;text-transform:uppercase;margin-bottom:6px">Creators</div>
+                    <div style="font-size:40px;font-weight:800;color:#111">$15<span style="font-size:15px;font-weight:500;color:#888;margin-left:6px">/month</span></div>
+                    <div style="color:#666;font-size:13px;margin:6px 0 16px">After 7-day free trial</div>
+                    <ul style="list-style:none;padding:0;margin:16px 0">
+                        <li style="padding:7px 0;font-size:13.5px;color:#333;border-bottom:1px dashed #eee">✓ AI agent video generation</li>
+                        <li style="padding:7px 0;font-size:13.5px;color:#333;border-bottom:1px dashed #eee">✓ AI thumbnails (Gemini)</li>
+                        <li style="padding:7px 0;font-size:13.5px;color:#333;border-bottom:1px dashed #eee">✓ Blender animations (title cards, data viz, lower thirds, LaTeX, UI mockups)</li>
+                        <li style="padding:7px 0;font-size:13.5px;color:#333;border-bottom:1px dashed #eee">✓ 320 FFmpeg tools (trim, transitions, filters)</li>
+                        <li style="padding:7px 0;font-size:13.5px;color:#333">✓ Delivery pages + portfolio samples</li>
+                    </ul>
+                    <a href="/subscribe" class="btn btn-primary" style="display:block;text-align:center;margin-top:12px">Start 7-day trial →</a>
+                </div>
+
+                <!-- Agencies -->
+                <div style="background:#fff;border:2px solid #7a4cff;border-radius:16px;padding:32px 26px;box-shadow:0 8px 30px rgba(122,76,255,0.12);position:relative">
+                    <div style="position:absolute;top:-12px;right:20px;background:#7a4cff;color:#fff;font-size:11px;font-weight:700;padding:5px 12px;border-radius:999px;letter-spacing:0.04em">POPULAR</div>
+                    <div style="font-size:12px;font-weight:700;letter-spacing:0.08em;color:#7a4cff;text-transform:uppercase;margin-bottom:6px">Agencies</div>
+                    <div style="font-size:40px;font-weight:800;color:#111">$99<span style="font-size:15px;font-weight:500;color:#888;margin-left:6px">to $199/mo</span></div>
+                    <div style="color:#666;font-size:13px;margin:6px 0 16px">Starter or Pro tier — API access</div>
+                    <ul style="list-style:none;padding:0;margin:16px 0">
+                        <li style="padding:7px 0;font-size:13.5px;color:#333;border-bottom:1px dashed #eee">✓ 1,000–5,000 clips / month</li>
+                        <li style="padding:7px 0;font-size:13.5px;color:#333;border-bottom:1px dashed #eee">✓ 500–2,500 AI thumbnails / month</li>
+                        <li style="padding:7px 0;font-size:13.5px;color:#333;border-bottom:1px dashed #eee">✓ Up to 200 Blender animations</li>
+                        <li style="padding:7px 0;font-size:13.5px;color:#333;border-bottom:1px dashed #eee">✓ White-label /delivery/:id pages</li>
+                        <li style="padding:7px 0;font-size:13.5px;color:#333">✓ API key + docs</li>
+                    </ul>
+                    <a href="/api-access" class="btn btn-primary" style="display:block;text-align:center;margin-top:12px">See API Tiers →</a>
+                </div>
+
+                <!-- Per delivery -->
+                <div style="background:#fff;border:1px solid #e5e7eb;border-radius:16px;padding:32px 26px;box-shadow:0 2px 10px rgba(0,0,0,0.04)">
+                    <div style="font-size:12px;font-weight:700;letter-spacing:0.08em;color:#7a4cff;text-transform:uppercase;margin-bottom:6px">Per Delivery</div>
+                    <div style="font-size:40px;font-weight:800;color:#111">$5<span style="font-size:15px;font-weight:500;color:#888;margin-left:6px">/ HD unlock</span></div>
+                    <div style="color:#666;font-size:13px;margin:6px 0 16px">Pay only when a client unlocks</div>
+                    <ul style="list-style:none;padding:0;margin:16px 0">
+                        <li style="padding:7px 0;font-size:13.5px;color:#333;border-bottom:1px dashed #eee">✓ Watermarked preview — free forever</li>
+                        <li style="padding:7px 0;font-size:13.5px;color:#333;border-bottom:1px dashed #eee">✓ Client pays $5 USDC for full HD</li>
+                        <li style="padding:7px 0;font-size:13.5px;color:#333;border-bottom:1px dashed #eee">✓ 30-day access per unlock</li>
+                        <li style="padding:7px 0;font-size:13.5px;color:#333;border-bottom:1px dashed #eee">✓ Phantom / MetaMask / Coinbase Wallet</li>
+                        <li style="padding:7px 0;font-size:13.5px;color:#333">✓ No signup required for buyer</li>
+                    </ul>
+                    <a href="/signup" class="btn btn-secondary" style="display:block;text-align:center;margin-top:12px">Sign up to create →</a>
+                </div>
+            </div>
+
+            <div style="text-align:center;margin-top:36px;padding:20px;background:#fff;border-radius:12px;max-width:740px;margin-left:auto;margin-right:auto;box-shadow:0 2px 10px rgba(0,0,0,0.04)">
+                <div style="font-size:13px;font-weight:600;color:#7a4cff;letter-spacing:0.05em;text-transform:uppercase;margin-bottom:6px">⚡ How payment works</div>
+                <p style="color:#666;font-size:14px;line-height:1.6;margin:0">Click subscribe → your wallet pops up with the USDC charge → sign → you're active instantly. No credit card, no Stripe account, no recurring card-on-file. Settle on <strong>Base mainnet</strong> (sub-cent gas, ~1s finality).</p>
             </div>
         </div>
     </section>
