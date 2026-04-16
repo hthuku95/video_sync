@@ -65,6 +65,19 @@ rustls = { version = "0.23", default-features = false, features = ["ring"] }
 # monitoring: grammers-client subscribes to configured Telegram channels,
 # detects "need editor / hiring" posts, scores them via our LLM, and
 # pings the admin bot with a pre-written custom DM. See src/telegram_client.rs.
-grammers-client  = "0.8"
-grammers-session = "0.8"
+#
+# We pin to a git revision on master rather than the published v0.8.0
+# tag because:
+#   1. grammers-session v0.8.0 on crates.io has a HARD (non-optional)
+#      dep on `sqlite 0.37.0` which links the native `sqlite3` C library.
+#      That collides with sqlx-sqlite's libsqlite3-sys (both `links =
+#      "sqlite3"`), and Cargo refuses to resolve.
+#   2. Master has already made sqlite backing optional (behind a
+#      "sqlite-storage" feature) — and grammers-client itself now
+#      passes `default-features = false` when depending on
+#      grammers-session. No sqlite native library is linked and the
+#      collision goes away.
+# Pinned commit for reproducibility — bump intentionally.
+grammers-client  = { git = "https://github.com/Lonami/grammers", rev = "fa7692e49f301f16dc671c2f305ac1a32cad1a8e" }
+grammers-session = { git = "https://github.com/Lonami/grammers", rev = "fa7692e49f301f16dc671c2f305ac1a32cad1a8e", default-features = false }
 
