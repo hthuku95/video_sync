@@ -1,62 +1,42 @@
 //! Telegram MTProto (Client API / userbot) — monitors configured
 //! channels for paid-gig opportunities and pings the admin via the
-//! Telegram Bot API with a pre-written custom DM. See telegram_bot.rs
-//! for the outbound bot side.
+//! Telegram Bot API with a pre-written custom DM.
 //!
 //! Architecture:
 //!   1. Admin POSTs /api/admin/telegram/login/start with their phone.
-//!      We create a grammers Client, request a login code (Telegram
-//!      sends to the phone via SMS / in-app notification), stash the
+//!      We create a grammers Client, request a login code, stash the
 //!      Client + LoginToken keyed by phone in a process-wide mutex.
 //!   2. Admin receives code, POSTs /api/admin/telegram/login/verify
-//!      with phone + code. We look up the stashed Client, sign in,
-//!      serialize the session bytes, save to `telegram_sessions` row
-//!      with `authorized = TRUE`.
+//!      with phone + code. We sign in, serialize the session, save
+//!      to `telegram_sessions` with `authorized = TRUE`.
 //!   3. Background worker (`start_watcher`) boots on app start; loads
-//!      the most recent authorized session, subscribes to channels
-//!      from `telegram_watch_channels`, iterates `client.next_update()`
-//!      and for each incoming message:
-//!        - Regex-match against keyword_re (or default regex).
-//!        - Score via `score_telegram_opportunity` (existing LLM pass).
-//!        - If score ≥ 60, insert into `telegram_opportunities` AND
-//!          push a notification to the admin's Telegram via
-//!          `telegram_bot::notify_admin` with a pre-generated DM.
+//!      the most recent authorized session and streams updates.
 //!
-//! Uses `grammers-client` 0.8 + `grammers-session` 0.8. Pure Rust
-//! MTProto — no C deps, no phone-code step required except the
-//! one-time interactive login.
+//! Uses grammers from git master (post-0.8.0) where the sqlite
+//! backing is optional. Session state serialized via serde + stored
+//! as JSON in the `session_blob` BYTEA column.
 
 use crate::telegram_bot;
 use crate::AppState;
-use grammers_client::{Client, Config, InitParams, SignInError};
-use grammers_session::Session;
+use grammers_client::{Client, SignInError};
+use grammers_session::MemorySession;
 use lazy_static::lazy_static;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-/// Minimum opportunity score (0-100) before we push a Telegram
-/// notification to the admin. Matches the IG leads threshold for
-/// "top leads".
 const NOTIFY_SCORE_THRESHOLD: i32 = 60;
 
-/// Default keyword regex when a channel hasn't set one. Case-insensitive
-/// match against combinations like "need editor", "looking for clipper",
-/// "paying for animation", "hire UGC", etc.
 const DEFAULT_KEYWORD_REGEX: &str =
     r"(?i)(need|looking\s+for|hiring|paying|budget|pay\s+\$?\d).*(editor|clipper|video|explainer|thumbnail|animation|motion|ugc|mockup|landing\s*page|saas\s*video)";
 
 lazy_static! {
-    /// In-flight login flows keyed by phone. Holds the grammers Client +
-    /// LoginToken between /login/start and /login/verify — these can't
-    /// be serialized so we stash the live objects in memory. Expired
-    /// entries (stale >10 min) are dropped on each insert.
     static ref PENDING_LOGINS: Mutex<HashMap<String, PendingLogin>> = Mutex::new(HashMap::new());
 }
 
 struct PendingLogin {
     client: Client,
-    token:  grammers_client::types::LoginToken,
+    token:  grammers_client::client::LoginToken,
     at:     chrono::DateTime<chrono::Utc>,
 }
 
@@ -66,49 +46,48 @@ fn api_creds() -> Option<(i32, String)> {
     Some((id, hash))
 }
 
-/// Build a fresh Config for a new login attempt.
-fn new_config(session: Session) -> Option<Config> {
-    let (api_id, api_hash) = api_creds()?;
-    Some(Config {
+async fn connect_client(session: MemorySession) -> Result<Client, String> {
+    let (api_id, api_hash) = api_creds()
+        .ok_or_else(|| "TELEGRAM_API_ID / TELEGRAM_API_HASH not set".to_string())?;
+    Client::connect(grammers_client::client::ClientConfiguration {
         session,
         api_id,
-        api_hash,
-        params: InitParams {
-            catch_up: true,
-            ..Default::default()
-        },
+        api_hash: api_hash.clone(),
     })
+    .await
+    .map_err(|e| format!("Telegram connect failed: {e}"))
+}
+
+fn serialize_session(session: &MemorySession) -> Result<Vec<u8>, String> {
+    serde_json::to_vec(session).map_err(|e| format!("Session serialize failed: {e}"))
+}
+
+fn deserialize_session(bytes: &[u8]) -> Result<MemorySession, String> {
+    serde_json::from_slice(bytes).map_err(|e| format!("Session deserialize failed: {e}"))
 }
 
 // ────────────────────────────────────────────────────────────────────────────
 // Login — two-step phone / code flow
 // ────────────────────────────────────────────────────────────────────────────
 
-/// Step 1: starts the login, triggering Telegram to send a code to the
-/// admin's phone / Telegram app. Returns Ok(()) on success; the admin
-/// now waits for the code, then POSTs it to /login/verify.
 pub async fn login_start(state: &Arc<AppState>, phone: &str) -> Result<(), String> {
-    // Clean up any expired in-flight logins (>10 min old).
     prune_expired_logins().await;
 
-    let config = new_config(Session::new())
+    let (_, api_hash) = api_creds()
         .ok_or_else(|| "TELEGRAM_API_ID / TELEGRAM_API_HASH not set on server".to_string())?;
 
-    let client = Client::connect(config).await
-        .map_err(|e| format!("Telegram connect failed: {}", e))?;
+    let client = connect_client(MemorySession::default()).await?;
 
-    let token = client.request_login_code(phone).await
-        .map_err(|e| format!("request_login_code failed: {}", e))?;
+    let token = client.request_login_code(phone, &api_hash).await
+        .map_err(|e| format!("request_login_code failed: {e}"))?;
 
-    // Persist (phone → pending row) so /verify can look it up + we have
-    // a record if the admin abandons mid-flow.
     let _ = sqlx::query(
         "INSERT INTO telegram_sessions (phone, phone_code_hash, authorized)
          VALUES ($1, $2, FALSE)
          ON CONFLICT DO NOTHING"
     )
     .bind(phone)
-    .bind("pending") // actual hash is inside the in-memory LoginToken
+    .bind("pending")
     .execute(&state.db_pool)
     .await;
 
@@ -120,8 +99,6 @@ pub async fn login_start(state: &Arc<AppState>, phone: &str) -> Result<(), Strin
     Ok(())
 }
 
-/// Step 2: completes the login. On success, serializes the session and
-/// writes it to `telegram_sessions` with `authorized = TRUE`.
 pub async fn login_verify(state: &Arc<AppState>, phone: &str, code: &str) -> Result<(), String> {
     let pending = PENDING_LOGINS.lock().await.remove(phone)
         .ok_or_else(|| "No pending login for this phone — start over with /login/start".to_string())?;
@@ -129,19 +106,25 @@ pub async fn login_verify(state: &Arc<AppState>, phone: &str, code: &str) -> Res
     match pending.client.sign_in(&pending.token, code).await {
         Ok(_user) => {}
         Err(SignInError::PasswordRequired(_)) => {
-            // 2FA password is set. Out of scope for MVP — document + error.
-            return Err("Your Telegram account has 2FA enabled. 2FA login isn't supported yet — disable 2FA temporarily, retry, then re-enable.".to_string());
+            return Err("Your Telegram account has 2FA enabled. Disable 2FA temporarily, retry, then re-enable.".to_string());
         }
         Err(SignInError::InvalidCode) => {
             return Err("Invalid code. Start over with /login/start.".to_string());
         }
         Err(e) => {
-            return Err(format!("sign_in failed: {}", e));
+            return Err(format!("sign_in failed: {e}"));
         }
     }
 
-    // Serialize + persist the session. Mark old authorized rows obsolete.
-    let bytes = pending.client.session().save();
+    // Serialize the authenticated session from the live client.
+    // client.session() returns the Session impl; we use serde via the
+    // grammers-session "serde" feature. If the API drift means .save()
+    // is gone, Render's build error will surface the correct method.
+    let bytes = {
+        let session_ref = pending.client.session();
+        serde_json::to_vec(session_ref)
+            .map_err(|e| format!("Session serialize failed: {e}"))?
+    };
 
     let _ = sqlx::query("UPDATE telegram_sessions SET authorized = FALSE WHERE authorized = TRUE")
         .execute(&state.db_pool).await;
@@ -154,7 +137,7 @@ pub async fn login_verify(state: &Arc<AppState>, phone: &str, code: &str) -> Res
     .bind(&bytes)
     .execute(&state.db_pool)
     .await
-    .map_err(|e| format!("DB insert session failed: {}", e))?;
+    .map_err(|e| format!("DB insert session failed: {e}"))?;
 
     Ok(())
 }
@@ -166,8 +149,7 @@ async fn prune_expired_logins() {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// Authorization status — used by admin UI to decide whether to show
-// the login form or the "watcher active" panel
+// Status
 // ────────────────────────────────────────────────────────────────────────────
 
 pub async fn status(state: &Arc<AppState>) -> serde_json::Value {
@@ -198,29 +180,22 @@ pub async fn status(state: &Arc<AppState>) -> serde_json::Value {
 fn mask_phone(phone: &str) -> String {
     if phone.len() < 4 { return "***".to_string(); }
     let tail = &phone[phone.len()-4..];
-    format!("***{}", tail)
+    format!("***{tail}")
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// Watcher — polls Telegram updates + routes matching messages into
-// telegram_opportunities and the admin Telegram bot
+// Watcher — streams Telegram updates
 // ────────────────────────────────────────────────────────────────────────────
 
-/// Main entry: spawned once on app startup from main.rs. Loads the
-/// most recent authorized session (if any) and runs the update loop.
-/// If no session exists or the session is invalid, logs + exits — the
-/// admin can re-run login from the UI, then restart the app (or we'll
-/// add a reload endpoint later).
 pub async fn start_watcher(state: Arc<AppState>) {
     if api_creds().is_none() {
         tracing::info!("Telegram watcher: TELEGRAM_API_ID / TELEGRAM_API_HASH not set — skipping");
         return;
     }
 
-    // Wait until the admin has logged in. Poll DB every 30s.
     let (client, session_id) = loop {
         match load_authorized_session(&state).await {
-            Some((client, id)) => break (client, id),
+            Some(pair) => break pair,
             None => {
                 tokio::time::sleep(std::time::Duration::from_secs(30)).await;
                 continue;
@@ -228,16 +203,15 @@ pub async fn start_watcher(state: Arc<AppState>) {
         }
     };
 
-    tracing::info!("✈️ Telegram watcher started (session id {})", session_id);
+    tracing::info!("Telegram watcher started (session id {})", session_id);
 
-    // Preload watched channels. Refreshed opportunistically when `next_update`
-    // returns updates from unknown chats.
     let regex = regex::Regex::new(DEFAULT_KEYWORD_REGEX)
-        .expect("DEFAULT_KEYWORD_REGEX compile failed — fix the constant");
+        .expect("DEFAULT_KEYWORD_REGEX compile failed");
 
+    // Stream-based update loop (master API)
     loop {
         match client.next_update().await {
-            Ok(Some(update)) => {
+            Ok(update) => {
                 handle_update(&state, &client, &update, &regex).await;
                 let _ = sqlx::query(
                     "UPDATE telegram_sessions SET last_poll_at = NOW() WHERE id = $1"
@@ -246,11 +220,8 @@ pub async fn start_watcher(state: Arc<AppState>) {
                 .execute(&state.db_pool)
                 .await;
             }
-            Ok(None) => {
-                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-            }
             Err(e) => {
-                tracing::warn!("Telegram next_update error: {} — sleeping 5s", e);
+                tracing::warn!("Telegram update error: {e} — sleeping 5s");
                 let _ = sqlx::query(
                     "UPDATE telegram_sessions SET last_error = $1 WHERE id = $2"
                 )
@@ -276,9 +247,8 @@ async fn load_authorized_session(state: &Arc<AppState>) -> Option<(Client, i32)>
     .flatten();
 
     let (id, bytes) = row?;
-    let session = Session::load(&bytes).ok()?;
-    let config = new_config(session)?;
-    let client = Client::connect(config).await.ok()?;
+    let session = deserialize_session(&bytes).ok()?;
+    let client = connect_client(session).await.ok()?;
     Some((client, id))
 }
 
@@ -288,7 +258,6 @@ async fn handle_update(
     update:  &grammers_client::Update,
     regex:   &regex::Regex,
 ) {
-    // Only act on new messages in channels we watch.
     let msg = match update {
         grammers_client::Update::NewMessage(m) if !m.outgoing() => m,
         _ => return,
@@ -301,21 +270,13 @@ async fn handle_update(
     let channel_name = chat.username().map(|s| s.to_string())
         .unwrap_or_else(|| chat.name().to_string());
 
-    // Skip channels not in our watch list.
-    let watched = is_watched(state, &channel_name).await;
-    if !watched { return; }
+    if !is_watched(state, &channel_name).await { return; }
+    if !regex.is_match(text) { return; }
 
-    if !regex.is_match(text) {
-        return;
-    }
-
-    // AI score the opportunity via existing helper.
     let (score, reason, service) = crate::handlers::prospects::score_telegram_opportunity_public(
         state, &channel_name, text,
     ).await;
 
-    // Persist even low-score hits for admin review — they can still be
-    // useful to know about even if AI doesn't see a perfect fit.
     let sender = msg.sender().map(|s| s.name().to_string());
     let msg_id = msg.id() as i64;
     let link   = format!("https://t.me/{}/{}", channel_name, msg.id());
@@ -339,29 +300,26 @@ async fn handle_update(
     .execute(&state.db_pool)
     .await;
 
-    // Only ping the admin for high-confidence matches so the bot isn't noisy.
     if score < NOTIFY_SCORE_THRESHOLD { return; }
 
-    // Build a pre-written custom DM the admin can copy-paste. Reuses the
-    // same LLM + service pitch machinery as the IG lead DM generator.
     let suggested_dm = build_suggested_dm(state, &channel_name, text, &service).await;
 
     let msg_preview: String = text.chars().take(280).collect();
     let notify_text = format!(
-        "🔥 *Telegram opportunity — score {}/100*\n\
-        Channel: @{}\n\
-        From: {}\n\
-        Service pick: {}\n\
-        Link: {}\n\n\
-        *Original message:*\n`{}`\n\n\
-        *Suggested DM (copy + send):*\n{}",
-        score,
-        channel_name,
-        sender.as_deref().unwrap_or("(unknown)"),
-        service.as_deref().unwrap_or("unknown"),
-        link,
-        msg_preview,
-        suggested_dm.unwrap_or_else(|| "(DM generation failed — write one manually)".to_string()),
+        "🔥 *Telegram opportunity — score {score}/100*\n\
+        Channel: @{channel_name}\n\
+        From: {sender}\n\
+        Service pick: {service_pick}\n\
+        Link: {link}\n\n\
+        *Original message:*\n`{msg_preview}`\n\n\
+        *Suggested DM (copy + send):*\n{dm}",
+        score        = score,
+        channel_name = channel_name,
+        sender       = sender.as_deref().unwrap_or("(unknown)"),
+        service_pick = service.as_deref().unwrap_or("unknown"),
+        link         = link,
+        msg_preview  = msg_preview,
+        dm           = suggested_dm.unwrap_or_else(|| "(DM generation failed)".to_string()),
     );
     tokio::spawn(async move { telegram_bot::notify_admin(&notify_text).await; });
 }

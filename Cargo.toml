@@ -79,5 +79,5 @@ rustls = { version = "0.23", default-features = false, features = ["ring"] }
 #      collision goes away.
 # Pinned commit for reproducibility — bump intentionally.
 grammers-client  = { git = "https://github.com/Lonami/grammers", rev = "fa7692e49f301f16dc671c2f305ac1a32cad1a8e" }
-grammers-session = { git = "https://github.com/Lonami/grammers", rev = "fa7692e49f301f16dc671c2f305ac1a32cad1a8e", default-features = false }
+grammers-session = { git = "https://github.com/Lonami/grammers", rev = "fa7692e49f301f16dc671c2f305ac1a32cad1a8e", default-features = false, features = ["serde"] }
 
