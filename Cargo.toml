@@ -10,7 +10,11 @@ axum = { version = "0.7.5", features = ["ws", "multipart"] }
 tokio = { version = "1.37.0", features = ["full"] }
 futures = "0.3"
 async-trait = "0.1.73"
-sqlx = { version = "0.7.4", features = ["runtime-tokio-rustls", "postgres", "chrono", "migrate", "rust_decimal", "json", "uuid"] }
+# default-features = false kills sqlx's `any` driver feature which otherwise
+# drags in sqlx-sqlite → libsqlite3-sys and collides with grammers-session's
+# own native `sqlite3` link (two crates can't `links = "sqlite3"`). We only
+# need the postgres driver.
+sqlx = { version = "0.7.4", default-features = false, features = ["runtime-tokio-rustls", "postgres", "chrono", "migrate", "rust_decimal", "json", "uuid"] }
 dotenvy = "0.15.7"
 tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter", "json", "registry"] }
