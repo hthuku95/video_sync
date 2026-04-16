@@ -33,6 +33,7 @@ mod ai_tool_selector; // 🧠 AI-driven tool selection — Gemma 4 picks relevan
 mod utils; // 🔧 Utility modules (FFmpeg utilities, etc.)
 mod token_manager; // 🔧 Centralized YouTube OAuth token refresh
 mod x402;          // 💰 x402 HTTP-402 payment protocol (USDC on Base)
+mod telegram_bot;  // ✈️ Telegram Bot API — admin pings + AI sales DM replies
 
 // Video processing modules (from lib.rs)
 mod types;
@@ -675,6 +676,16 @@ async fn main() {
                 interval.tick().await;
                 handlers::prospects::dispatch_queued_pb_jobs(&disp_state).await;
             }
+        });
+    }
+
+    // ── Telegram sales bot — long-polls @videosync_sales_bot for DMs,
+    //    replies via AI (NVIDIA NIM → Gemma → Gemini). No-ops when
+    //    TELEGRAM_BOT_TOKEN isn't set. Safe, stateless, no ban risk.
+    {
+        let tg_state = shared_state.clone();
+        tokio::spawn(async move {
+            telegram_bot::start_worker(tg_state).await;
         });
     }
 

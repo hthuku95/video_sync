@@ -284,6 +284,20 @@ async fn subscription_unlock(
     .execute(&state.db_pool)
     .await;
 
+    // Admin Telegram ping — fire-and-forget.
+    let tx_preview = tx_hash.chars().take(10).collect::<String>();
+    let notify_text = format!(
+        "💰 *New agency API signup — {} tier*\n\
+         Price: ${:.2} USDC\n\
+         Tx: `{}...`\n\
+         Subscription id: `{}`",
+        tier_name,
+        price_cents as f64 / 100.0,
+        tx_preview,
+        uuid
+    );
+    tokio::spawn(async move { crate::telegram_bot::notify_admin(&notify_text).await; });
+
     (StatusCode::OK, Json(json!({
         "success":           true,
         "api_key":           api_key,

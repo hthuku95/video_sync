@@ -33,6 +33,7 @@ pub mod ai_tool_selector;
 pub mod utils;
 pub mod token_manager;
 pub mod x402;
+pub mod telegram_bot;
 
 // Video processing modules
 pub mod types;

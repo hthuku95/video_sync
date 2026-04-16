@@ -133,6 +133,18 @@ async fn subscribe_unlock(
     .execute(&state.db_pool)
     .await;
 
+    // Ping admin on Telegram — fire-and-forget so payment response
+    // isn't held up by Telegram latency.
+    let tx_preview = tx_hash.chars().take(10).collect::<String>();
+    let notify_text = format!(
+        "💰 *New $15 USDC subscription*\n\
+         User id: {}\n\
+         Tx: `{}...`\n\
+         Active until: 30 days from now",
+        user_id, tx_preview
+    );
+    tokio::spawn(async move { crate::telegram_bot::notify_admin(&notify_text).await; });
+
     (StatusCode::OK, Json(json!({
         "success":         true,
         "tx_hash":         tx_hash,

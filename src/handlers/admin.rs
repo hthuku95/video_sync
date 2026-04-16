@@ -7026,6 +7026,18 @@ pub async fn delivery_unlock(
     .execute(&state.db_pool)
     .await;
 
+    // Admin Telegram ping — fire-and-forget.
+    let tx_preview = tx_hash.chars().take(10).collect::<String>();
+    let notify_text = format!(
+        "💰 *Delivery HD unlock — ${:.2} USDC*\n\
+         Delivery: `{}`\n\
+         Tx: `{}...`",
+        price_cents as f64 / 100.0,
+        uuid,
+        tx_preview
+    );
+    tokio::spawn(async move { crate::telegram_bot::notify_admin(&notify_text).await; });
+
     (axum::http::StatusCode::OK, Json(json!({
         "success":    true,
         "tx_hash":    tx_hash,
