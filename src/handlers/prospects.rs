@@ -66,6 +66,7 @@ pub fn instagram_routes() -> Router {
         .route("/api/instagram/leads/:id/generate-dm",       post(instagram_generate_dm))
         .route("/api/instagram/leads/:id/generate-sample",   post(instagram_generate_sample))
         .route("/api/instagram/leads/:id/contact-status",    patch(instagram_update_contact_status))
+        .route("/api/instagram/leads/:id/service-type",      patch(instagram_update_service_type))
         .layer(axum::middleware::from_fn(auth_middleware))
 }
 
@@ -2516,9 +2517,14 @@ async fn instagram_generate_sample(
 
     let title = format!("Sample for @{}", username);
 
+    // Stamp the origin lead on the delivery so future x402 unlocks can
+    // trace revenue back to the whitelisted user who sourced this lead.
+    // unlock_price_usdc is set to $5 here so clients pay to download HD —
+    // revenue flows to the sourcing user when that happens.
     let delivery_id: uuid::Uuid = match sqlx::query_scalar::<_, uuid::Uuid>(
-        "INSERT INTO deliveries (client_ref, title, gig_type, prompt, style, duration, extra_args, status)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending')
+        "INSERT INTO deliveries (client_ref, title, gig_type, prompt, style, duration, extra_args, status,
+                                  sourced_from_lead_id, unlock_price_usdc)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', $8, 5.00)
          RETURNING id"
     )
     .bind(format!("ig:{}", username))
@@ -2528,6 +2534,7 @@ async fn instagram_generate_sample(
     .bind(style)
     .bind(duration)
     .bind(&extra)
+    .bind(id)
     .fetch_one(&state.db_pool)
     .await {
         Ok(id) => id,
@@ -2576,8 +2583,22 @@ async fn instagram_update_contact_status(
         return Json(json!({"success": false, "error": "contact_status must be one of: new, contacted, replied, converted, skipped"}));
     }
 
+    // Stamp funnel-stage timestamps as the lead moves through states —
+    // the revenue ledger uses these to show per-user conversion rates.
+    // COALESCE on first_contacted_at preserves the earliest contact time
+    // (don't reset if they flip contacted → replied → contacted).
     match sqlx::query(
-        "UPDATE instagram_leads SET contact_status = $1, updated_at = NOW()
+        "UPDATE instagram_leads
+         SET contact_status     = $1,
+             first_contacted_at = CASE
+                WHEN $1 IN ('contacted','replied','converted') THEN COALESCE(first_contacted_at, NOW())
+                ELSE first_contacted_at
+             END,
+             converted_at       = CASE
+                WHEN $1 = 'converted' THEN COALESCE(converted_at, NOW())
+                ELSE converted_at
+             END,
+             updated_at         = NOW()
          WHERE id = $2 AND user_id = $3"
     )
     .bind(&req.contact_status)
@@ -3828,4 +3849,55 @@ fn normalise_image_url(img: &str, page_url: &str) -> String {
         }
     }
     img.to_string()
+}
+
+// ============================================================================
+// Manual service-type override on an Instagram lead
+// ============================================================================
+//
+// The scorer auto-picks a service_type, but the whitelisted user might
+// have more context (they know the lead's actual product from reading
+// their bio) and want to pitch a different service. This endpoint lets
+// them overwrite. Subsequent `generate-dm` + `generate-sample` calls
+// will use the overridden value.
+
+#[derive(Debug, Deserialize)]
+struct UpdateServiceTypeRequest {
+    service_type: Option<String>,
+}
+
+async fn instagram_update_service_type(
+    Extension(state):  Extension<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
+    Path(id):          Path<uuid::Uuid>,
+    Json(req):         Json<UpdateServiceTypeRequest>,
+) -> Json<serde_json::Value> {
+    let user_id: i32 = claims.sub.parse().unwrap_or(0);
+
+    // Empty string / None → reset to NULL so the next DM re-reads the
+    // AI's default. Anything else must be one of the known service tags.
+    let service: Option<String> = match req.service_type.as_deref() {
+        None | Some("") => None,
+        Some(s) => match s {
+            "clipping" | "animations" | "thumbnails" | "ugc"
+            | "product_mockup" | "landing_page" | "full_stack" => Some(s.to_string()),
+            _ => return Json(json!({
+                "success": false,
+                "error":   format!("service_type must be one of: clipping, animations, thumbnails, ugc, product_mockup, landing_page, full_stack (got: {})", s),
+            })),
+        },
+    };
+
+    match sqlx::query(
+        "UPDATE instagram_leads SET service_type = $1, updated_at = NOW()
+         WHERE id = $2 AND user_id = $3"
+    )
+    .bind(service.as_deref())
+    .bind(id)
+    .bind(user_id)
+    .execute(&state.db_pool)
+    .await {
+        Ok(_)  => Json(json!({"success": true, "service_type": service})),
+        Err(e) => Json(json!({"success": false, "error": format!("DB error: {}", e)})),
+    }
 }

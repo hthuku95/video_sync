@@ -34,6 +34,7 @@ mod utils; // 🔧 Utility modules (FFmpeg utilities, etc.)
 mod token_manager; // 🔧 Centralized YouTube OAuth token refresh
 mod x402;          // 💰 x402 HTTP-402 payment protocol (USDC on Base)
 mod telegram_bot;  // ✈️ Telegram Bot API — admin pings + AI sales DM replies
+mod render_review; // 🔍 LLM QA review of every render before handoff
 
 // Video processing modules (from lib.rs)
 mod types;

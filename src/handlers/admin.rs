@@ -31,6 +31,7 @@ pub fn admin_routes() -> Router {
         .route("/admin/test-runs/:id", get(admin_test_run_detail_page))
         .route("/admin/deliveries", get(admin_deliveries_page))
         .route("/admin/monetization-guide", get(admin_monetization_guide_page))
+        .route("/admin/revenue-ledger", get(admin_revenue_ledger_page))
         .route("/delivery/:id", get(delivery_page))
         // x402 paywall endpoints — public on purpose; auth happens via the
         // signed USDC payment in the X-Payment header, not via JWT.
@@ -76,6 +77,7 @@ pub fn admin_routes() -> Router {
         .route("/api/admin/test-runs/:id", get(api_get_test_run))
         .route("/api/admin/manual-clipping-tests/trigger", post(api_trigger_manual_clipping_test))
         .route("/api/admin/deliveries", get(api_list_deliveries).post(api_create_delivery))
+        .route("/api/admin/revenue-ledger", get(api_revenue_ledger))
         .layer(axum::middleware::from_fn(admin_middleware))
         .layer(axum::middleware::from_fn(auth_middleware));
     
@@ -288,6 +290,7 @@ pub async fn admin_dashboard() -> Html<String> {
             <li><a href="/admin/test-runs">🧪 Portfolio Tests</a></li>
             <li><a href="/admin/prospect-finder">🎯 Prospect Finder</a></li>
             <li><a href="/admin/monetization-guide">💰 Monetization Guide</a></li>
+            <li><a href="/admin/revenue-ledger">💸 Revenue Ledger</a></li>
             <li><a href="#" onclick="showWhitelist()">🛡️ Whitelist</a></li>
             <li><a href="#" onclick="showYoutube()">🎥 YouTube Features</a></li>
             <li><a href="#" onclick="showPricing()">💲 Model Pricing</a></li>
@@ -7256,13 +7259,39 @@ pub async fn run_delivery_job(delivery_id: Uuid, state: Arc<AppState>) {
 
     match final_url {
         Some(url) => {
+            // QA review — call Gemini to verify the output matches the
+            // original brief. Logs to blender_render_reviews for admin
+            // dashboard. Fail-open: if review fails, delivery still
+            // completes (we don't want Gemini downtime to block clients).
+            let review = crate::render_review::review_render(
+                &state,
+                &url,
+                &prompt,
+                &tool,
+                Some(delivery_id),
+            ).await;
+
             let filename = format!("delivery_{delivery_id}.{ext}");
+            // Write an error_message flagging low-quality renders so
+            // admins see them on the deliveries page. Still status='completed'
+            // because the file exists — just with a warning.
+            let error_note: Option<String> = if !review.pass && review.score > 0 {
+                Some(format!("QA warning (score {}): {}", review.score, review.feedback))
+            } else { None };
+
             let _ = sqlx::query(
                 "UPDATE deliveries SET status='completed', output_r2_url=$1, output_filename=$2, \
-                 completed_at=NOW() WHERE id=$3",
+                 error_message=$3, completed_at=NOW() WHERE id=$4",
             )
-            .bind(&url).bind(&filename).bind(delivery_id)
+            .bind(&url).bind(&filename).bind(error_note.as_deref()).bind(delivery_id)
             .execute(&state.db_pool).await;
+
+            if !review.pass {
+                tracing::warn!(
+                    "⚠️ QA review flagged delivery {}: score={}, feedback={}",
+                    delivery_id, review.score, review.feedback
+                );
+            }
         }
         None => {
             let _ = sqlx::query(
@@ -8044,5 +8073,203 @@ Interested?</div>
   </div>
 
 </div>
+</body>
+</html>"###;
+
+// ============================================================================
+// Revenue Ledger — per-whitelisted-user attribution for revenue sharing
+// ============================================================================
+//
+// Aggregates the full funnel per user:
+//   leads sourced → leads contacted → leads converted → deliveries created
+//   → USDC paid on HD unlocks → 50% payout owed.
+//
+// The user-visible SSR page just lists the aggregates; the admin can
+// settle payouts off-ledger (crypto transfer on Base) using this view.
+
+pub async fn api_revenue_ledger(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    // Per-user rollup. Nested CTEs would be cleaner with proper aggregation
+    // but this keeps the SQL readable. Payout split is 50% — surfaced as a
+    // decimal so the admin can override per-user later.
+    let rows = sqlx::query(
+        r#"
+        SELECT
+            u.id                AS user_id,
+            u.username,
+            u.email,
+            -- Lead funnel counts
+            COALESCE(lead_counts.total_leads, 0)      AS leads_sourced,
+            COALESCE(lead_counts.contacted_leads, 0)  AS leads_contacted,
+            COALESCE(lead_counts.converted_leads, 0)  AS leads_converted,
+            -- Delivery + payment rollup
+            COALESCE(delivery_stats.deliveries_created, 0)       AS deliveries_created,
+            COALESCE(delivery_stats.deliveries_unlocked, 0)      AS deliveries_unlocked,
+            COALESCE(delivery_stats.total_usdc_paid, 0)::numeric AS total_usdc_paid,
+            (COALESCE(delivery_stats.total_usdc_paid, 0) * 0.5)::numeric AS pending_payout_usdc
+        FROM users u
+        LEFT JOIN (
+            SELECT user_id,
+                   COUNT(*)                                                  AS total_leads,
+                   COUNT(*) FILTER (WHERE first_contacted_at IS NOT NULL)    AS contacted_leads,
+                   COUNT(*) FILTER (WHERE converted_at IS NOT NULL)          AS converted_leads
+            FROM instagram_leads
+            WHERE user_id IS NOT NULL
+            GROUP BY user_id
+        ) lead_counts ON lead_counts.user_id = u.id
+        LEFT JOIN (
+            SELECT il.user_id,
+                   COUNT(d.id)                                               AS deliveries_created,
+                   COUNT(*) FILTER (WHERE d.unlocked_until IS NOT NULL)      AS deliveries_unlocked,
+                   COALESCE(SUM(d.unlock_price_usdc) FILTER (WHERE d.unlocked_until IS NOT NULL), 0)
+                                                                             AS total_usdc_paid
+            FROM deliveries d
+            JOIN instagram_leads il ON il.id = d.sourced_from_lead_id
+            GROUP BY il.user_id
+        ) delivery_stats ON delivery_stats.user_id = u.id
+        WHERE COALESCE(lead_counts.total_leads, 0) > 0
+           OR COALESCE(delivery_stats.deliveries_created, 0) > 0
+        ORDER BY COALESCE(delivery_stats.total_usdc_paid, 0) DESC,
+                 COALESCE(lead_counts.total_leads, 0) DESC
+        "#,
+    )
+    .fetch_all(&state.db_pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("revenue_ledger query failed: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let items: Vec<serde_json::Value> = rows.iter().map(|r| {
+        let dec_to_f64 = |d: Option<sqlx::types::Decimal>| -> f64 {
+            d.and_then(|d| d.to_string().parse::<f64>().ok()).unwrap_or(0.0)
+        };
+        json!({
+            "user_id":             r.get::<i32, _>("user_id"),
+            "username":            r.get::<String, _>("username"),
+            "email":               r.get::<String, _>("email"),
+            "leads_sourced":       r.get::<i64, _>("leads_sourced"),
+            "leads_contacted":     r.get::<i64, _>("leads_contacted"),
+            "leads_converted":     r.get::<i64, _>("leads_converted"),
+            "deliveries_created":  r.get::<i64, _>("deliveries_created"),
+            "deliveries_unlocked": r.get::<i64, _>("deliveries_unlocked"),
+            "total_usdc_paid":     dec_to_f64(r.try_get("total_usdc_paid").ok().flatten()),
+            "pending_payout_usdc": dec_to_f64(r.try_get("pending_payout_usdc").ok().flatten()),
+        })
+    }).collect();
+
+    Ok(Json(json!({"success": true, "ledger": items, "count": items.len()})))
+}
+
+pub async fn admin_revenue_ledger_page() -> Html<&'static str> {
+    Html(REVENUE_LEDGER_HTML)
+}
+
+const REVENUE_LEDGER_HTML: &str = r###"<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Revenue Ledger — VideoSync Admin</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root{--bg:#2a2438;--surface:#352f44;--border:#5c5470;--accent:#dbd8e3;--purple:#7a4cff;--muted:#b8b3c8;--dim:#9999bb;--success:#4ade80;--warn:#facc15;--danger:#f87171}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Inter',system-ui,sans-serif;background:linear-gradient(135deg,#2a2438 0%,#1f1a2a 100%);color:var(--accent);min-height:100vh}
+  .header{background:rgba(53,47,68,0.6);backdrop-filter:blur(18px);border-bottom:1px solid rgba(92,84,112,0.4);padding:16px 28px;display:flex;align-items:center;gap:16px;position:sticky;top:0;z-index:10}
+  .header h1{font-size:1.2rem;font-weight:600;background:linear-gradient(135deg,var(--accent) 0%,#fff 100%);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+  .back{color:var(--dim);text-decoration:none;font-size:0.9rem}
+  .back:hover{color:var(--accent)}
+  .container{max-width:1320px;margin:0 auto;padding:28px}
+  .intro{background:rgba(53,47,68,0.7);border:1px solid rgba(92,84,112,0.4);border-radius:14px;padding:22px;margin-bottom:22px}
+  .intro h2{font-size:1rem;color:var(--accent);margin-bottom:8px}
+  .intro p{font-size:0.9rem;color:var(--muted);line-height:1.6}
+  .intro code{background:rgba(42,36,56,0.6);padding:2px 8px;border-radius:4px;font-size:0.85em;color:var(--accent)}
+  .table-wrap{background:rgba(53,47,68,0.7);border:1px solid rgba(92,84,112,0.5);border-radius:14px;overflow:auto;box-shadow:0 4px 24px rgba(0,0,0,0.25)}
+  table{width:100%;border-collapse:collapse;font-size:0.88rem;min-width:900px}
+  th{text-align:left;padding:14px 16px;color:var(--dim);font-weight:500;font-size:0.72rem;text-transform:uppercase;letter-spacing:0.05em;border-bottom:1px solid rgba(92,84,112,0.4);background:rgba(42,36,56,0.4)}
+  th.numeric,td.numeric{text-align:right}
+  td{padding:14px 16px;border-bottom:1px solid rgba(92,84,112,0.2);color:var(--accent);vertical-align:middle}
+  tr:hover td{background:rgba(92,84,112,0.12)}
+  .user-cell strong{color:#fff;font-weight:600}
+  .user-cell small{display:block;color:var(--dim);font-size:0.78rem;margin-top:2px}
+  .num{font-variant-numeric:tabular-nums;font-weight:500}
+  .num.big{font-weight:700;color:#fff;font-size:1rem}
+  .num.money{color:var(--success)}
+  .num.pending{color:var(--warn)}
+  .empty{padding:60px 20px;text-align:center;color:var(--dim)}
+  .empty-icon{font-size:3rem;margin-bottom:12px;opacity:0.5}
+  .loading{padding:40px;text-align:center;color:var(--dim)}
+  .totals{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:22px}
+  .stat-card{background:rgba(53,47,68,0.6);border:1px solid rgba(92,84,112,0.3);border-radius:12px;padding:14px 16px}
+  .stat-val{font-size:1.4rem;font-weight:800;color:#fff}
+  .stat-val.money{color:var(--success)}
+  .stat-val.pending{color:var(--warn)}
+  .stat-label{font-size:0.72rem;text-transform:uppercase;color:var(--dim);letter-spacing:0.05em;margin-top:2px}
+</style>
+</head>
+<body>
+<div class="header">
+  <a href="/admin/dashboard" class="back">← Admin</a>
+  <h1>💰 Revenue Ledger</h1>
+</div>
+<div class="container">
+  <div class="intro">
+    <h2>Per-user lead attribution + revenue share</h2>
+    <p>Each row aggregates the full lead funnel for a whitelisted team member: leads they sourced on Instagram → leads they DMed → leads that converted to paid clients → deliveries created → USDC paid on HD unlocks. <strong>Pending payout</strong> shows the 50% cut owed — settle by sending USDC on Base to the user's wallet (you collect email/wallet off-ledger for now). A user only appears here when they've either sourced a lead or had a delivery created from their lead.</p>
+  </div>
+  <div id="totals" class="totals"></div>
+  <div class="table-wrap">
+    <div id="ledger-content"><div class="loading">Loading ledger…</div></div>
+  </div>
+</div>
+<script>
+const token = localStorage.getItem('auth_token') || localStorage.getItem('admin_token') || localStorage.getItem('authToken');
+if (!token) window.location.href = '/admin';
+
+async function loadLedger() {
+  const res = await fetch('/api/admin/revenue-ledger', {headers:{'Authorization':'Bearer '+token}});
+  const data = await res.json();
+  const root = document.getElementById('ledger-content');
+  if (!data.success) { root.innerHTML = '<div class="empty">Failed to load ledger</div>'; return; }
+  const rows = data.ledger || [];
+  if (rows.length === 0) {
+    root.innerHTML = '<div class="empty"><div class="empty-icon">🪙</div>No revenue attribution yet.<div style="font-size:0.85rem;margin-top:8px;color:var(--dim)">As whitelisted users source IG leads and those leads pay for HD unlocks, rows will appear here.</div></div>';
+    document.getElementById('totals').innerHTML = '';
+    return;
+  }
+  const totals = rows.reduce((acc, r) => ({
+    leads:    acc.leads    + (r.leads_sourced || 0),
+    convs:    acc.convs    + (r.leads_converted || 0),
+    unlocks:  acc.unlocks  + (r.deliveries_unlocked || 0),
+    paid:     acc.paid     + (r.total_usdc_paid || 0),
+    pending:  acc.pending  + (r.pending_payout_usdc || 0),
+  }), {leads:0, convs:0, unlocks:0, paid:0, pending:0});
+  document.getElementById('totals').innerHTML = `
+    <div class="stat-card"><div class="stat-val">${totals.leads}</div><div class="stat-label">Total leads sourced</div></div>
+    <div class="stat-card"><div class="stat-val">${totals.convs}</div><div class="stat-label">Conversions</div></div>
+    <div class="stat-card"><div class="stat-val">${totals.unlocks}</div><div class="stat-label">HD unlocks paid</div></div>
+    <div class="stat-card"><div class="stat-val money">$${totals.paid.toFixed(2)}</div><div class="stat-label">Gross USDC</div></div>
+    <div class="stat-card"><div class="stat-val pending">$${totals.pending.toFixed(2)}</div><div class="stat-label">Pending payout (50%)</div></div>
+  `;
+  root.innerHTML = '<table><thead><tr><th>User</th><th class="numeric">Leads sourced</th><th class="numeric">Contacted</th><th class="numeric">Converted</th><th class="numeric">Deliveries created</th><th class="numeric">HD unlocks paid</th><th class="numeric">Gross USDC</th><th class="numeric">Payout owed (50%)</th></tr></thead><tbody>' +
+    rows.map(r => `
+      <tr>
+        <td class="user-cell"><strong>@${r.username}</strong><small>${r.email}</small></td>
+        <td class="numeric num big">${r.leads_sourced}</td>
+        <td class="numeric num">${r.leads_contacted}</td>
+        <td class="numeric num">${r.leads_converted}</td>
+        <td class="numeric num">${r.deliveries_created}</td>
+        <td class="numeric num">${r.deliveries_unlocked}</td>
+        <td class="numeric num money">$${(r.total_usdc_paid || 0).toFixed(2)}</td>
+        <td class="numeric num pending">$${(r.pending_payout_usdc || 0).toFixed(2)}</td>
+      </tr>
+    `).join('') +
+    '</tbody></table>';
+}
+loadLedger();
+</script>
 </body>
 </html>"###;

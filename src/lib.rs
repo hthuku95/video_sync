@@ -34,6 +34,7 @@ pub mod utils;
 pub mod token_manager;
 pub mod x402;
 pub mod telegram_bot;
+pub mod render_review;
 
 // Video processing modules
 pub mod types;
