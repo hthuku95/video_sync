@@ -32,6 +32,7 @@ pub fn admin_routes() -> Router {
         .route("/admin/deliveries", get(admin_deliveries_page))
         .route("/admin/monetization-guide", get(admin_monetization_guide_page))
         .route("/admin/revenue-ledger", get(admin_revenue_ledger_page))
+        .route("/admin/how-it-works", get(admin_how_it_works_page))
         .route("/delivery/:id", get(delivery_page))
         // x402 paywall endpoints — public on purpose; auth happens via the
         // signed USDC payment in the X-Payment header, not via JWT.
@@ -291,6 +292,7 @@ pub async fn admin_dashboard() -> Html<String> {
             <li><a href="/admin/prospect-finder">🎯 Prospect Finder</a></li>
             <li><a href="/admin/monetization-guide">💰 Monetization Guide</a></li>
             <li><a href="/admin/revenue-ledger">💸 Revenue Ledger</a></li>
+            <li><a href="/admin/how-it-works">📘 How We Work</a></li>
             <li><a href="#" onclick="showWhitelist()">🛡️ Whitelist</a></li>
             <li><a href="#" onclick="showYoutube()">🎥 YouTube Features</a></li>
             <li><a href="#" onclick="showPricing()">💲 Model Pricing</a></li>
@@ -8271,5 +8273,352 @@ async function loadLedger() {
 }
 loadLedger();
 </script>
+</body>
+</html>"###;
+
+// ============================================================================
+// Admin "How We Work" guide — the operating manual for the founder
+// ============================================================================
+//
+// Covers every lead source, every service type, payment mechanics,
+// attribution, QA review, and the daily workflow. Complements the
+// whitelisted-team How It Works tab that lives inside content_machine.
+
+pub async fn admin_how_it_works_page() -> Html<&'static str> {
+    Html(HOW_WE_WORK_HTML)
+}
+
+const HOW_WE_WORK_HTML: &str = r###"<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How We Work — VideoSync Admin</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root{--bg:#2a2438;--surface:#352f44;--border:#5c5470;--accent:#dbd8e3;--purple:#7a4cff;--muted:#b8b3c8;--dim:#9999bb;--success:#4ade80;--warn:#facc15;--danger:#f87171}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Inter',system-ui,sans-serif;background:linear-gradient(135deg,#2a2438 0%,#1f1a2a 100%);color:var(--accent);min-height:100vh;line-height:1.65}
+  .header{background:rgba(53,47,68,0.6);backdrop-filter:blur(18px);border-bottom:1px solid rgba(92,84,112,0.4);padding:16px 28px;display:flex;align-items:center;gap:16px;position:sticky;top:0;z-index:10}
+  .header h1{font-size:1.2rem;font-weight:600;background:linear-gradient(135deg,var(--accent) 0%,#fff 100%);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+  .back{color:var(--dim);text-decoration:none;font-size:0.9rem}
+  .back:hover{color:var(--accent)}
+  .container{max-width:960px;margin:0 auto;padding:32px 28px}
+  .intro{background:linear-gradient(135deg,rgba(122,76,255,0.12),rgba(53,47,68,0.6));border:1px solid rgba(122,76,255,0.3);border-radius:14px;padding:22px;margin-bottom:28px}
+  .intro h2{font-size:1.1rem;color:#fff;margin-bottom:8px}
+  .intro p{font-size:0.9rem;color:var(--muted);line-height:1.7}
+  section{background:rgba(53,47,68,0.7);border:1px solid rgba(92,84,112,0.4);border-radius:14px;padding:24px;margin-bottom:20px}
+  section h2{font-size:1.05rem;font-weight:700;color:#fff;margin-bottom:12px;display:flex;align-items:center;gap:8px}
+  section h3{font-size:0.95rem;font-weight:600;color:var(--accent);margin-top:18px;margin-bottom:10px}
+  section p, section li{color:var(--muted);font-size:0.9rem;line-height:1.7}
+  section code{background:rgba(42,36,56,0.8);padding:2px 7px;border-radius:4px;font-size:0.85em;color:var(--accent);border:1px solid rgba(92,84,112,0.3)}
+  section a{color:var(--purple);text-decoration:none}
+  section a:hover{text-decoration:underline}
+  section ol,section ul{padding-left:24px;margin:10px 0}
+  section li{margin-bottom:8px}
+  section li strong{color:var(--accent)}
+  .source-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;margin-top:14px}
+  .source-card{background:rgba(42,36,56,0.5);border:1px solid rgba(92,84,112,0.3);border-radius:10px;padding:16px}
+  .source-card h4{color:#fff;font-size:0.95rem;font-weight:700;margin-bottom:6px}
+  .source-card .who{font-size:0.72rem;text-transform:uppercase;letter-spacing:0.08em;color:var(--purple);font-weight:600;margin-bottom:8px}
+  .source-card p{font-size:0.82rem;line-height:1.55}
+  .service-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;margin-top:12px}
+  .service-card{background:rgba(42,36,56,0.5);border:1px solid rgba(92,84,112,0.3);border-radius:10px;padding:14px}
+  .service-card .name{font-weight:700;color:#fff;margin-bottom:4px;font-size:0.92rem}
+  .service-card .price{color:var(--success);font-size:0.8rem;font-weight:600;margin-bottom:6px;display:block}
+  .service-card .desc{font-size:0.82rem;line-height:1.5;color:var(--muted)}
+  .step{display:flex;gap:14px;margin-bottom:16px;align-items:flex-start}
+  .step-num{flex-shrink:0;width:28px;height:28px;border-radius:50%;background:var(--purple);color:#fff;font-weight:700;font-size:0.85rem;display:flex;align-items:center;justify-content:center}
+  .step-body{flex:1}
+  .step-body strong{color:var(--accent);display:block;margin-bottom:3px}
+  .callout{background:rgba(250,204,21,0.08);border:1px solid rgba(250,204,21,0.3);border-radius:8px;padding:12px 14px;margin:14px 0;font-size:0.85rem;color:var(--warn)}
+  .callout.ok{background:rgba(74,222,128,0.08);border-color:rgba(74,222,128,0.3);color:var(--success)}
+  .toc{background:rgba(53,47,68,0.5);border:1px solid rgba(92,84,112,0.3);border-radius:10px;padding:16px 20px;margin-bottom:24px}
+  .toc h3{color:var(--accent);font-size:0.85rem;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:10px;font-weight:600}
+  .toc ol{padding-left:20px}
+  .toc li{margin-bottom:4px;font-size:0.87rem}
+  .toc a{color:var(--muted)}
+  .toc a:hover{color:var(--accent)}
+</style>
+</head>
+<body>
+<div class="header">
+  <a href="/admin/dashboard" class="back">← Admin</a>
+  <h1>📘 How We Work — The Operating Manual</h1>
+</div>
+<div class="container">
+
+<div class="intro">
+  <h2>The platform in one paragraph</h2>
+  <p>VideoSync is an AI video production studio monetised 4 ways: (1) <b>service sales</b> to creators / founders you source via Instagram, LinkedIn, Telegram, YouTube, and Twitch; (2) <b>per-delivery x402 USDC unlocks</b> on <code>/delivery/:id</code> preview pages; (3) <b>monthly subscriptions</b> — $15/mo creator tier + $99/$199 agency tier; (4) <b>clipping-payout platforms</b> (Whop, Reach.cat, etc.) where we post authorised clips and get paid per 1,000 views. Everything flows to USDC on Base — no Stripe, no contracts.</p>
+</div>
+
+<div class="toc">
+  <h3>In this guide</h3>
+  <ol>
+    <li><a href="#lead-sources">The 5 lead sources + who runs them</a></li>
+    <li><a href="#services">The 7 services + pricing</a></li>
+    <li><a href="#daily">Your daily workflow (hour-by-hour)</a></li>
+    <li><a href="#team">How the whitelisted clipping team works</a></li>
+    <li><a href="#payments">Payment rails + attribution + revenue share</a></li>
+    <li><a href="#qa">LLM QA review on renders</a></li>
+    <li><a href="#paywall">The $15/mo creator paywall</a></li>
+    <li><a href="#faq">FAQ</a></li>
+  </ol>
+</div>
+
+<!-- ═══════ LEAD SOURCES ═══════ -->
+<section id="lead-sources">
+  <h2>1. The 5 lead sources — where leads come from + who runs each</h2>
+  <p>Each source surfaces prospects you can pitch. Some run automatically, some need your attention daily.</p>
+  <div class="source-grid">
+    <div class="source-card">
+      <div class="who">You only</div>
+      <h4>🎯 YouTube / Twitch</h4>
+      <p>AI agent searches for creators by niche + audience size + content type. Runs when you fire it from <a href="/admin/prospect-finder">prospect-finder → YouTube/Twitch</a>. Leads land in the <code>prospects</code> table.</p>
+    </div>
+    <div class="source-card">
+      <div class="who">You only</div>
+      <h4>💼 LinkedIn</h4>
+      <p>Plain-English description → AI builds filters → PhantomBuster scrapes Sales Navigator OR regular LinkedIn Search depending on which phantom you have installed. Results import via <a href="/admin/prospect-finder">prospect-finder → LinkedIn tab</a>.</p>
+    </div>
+    <div class="source-card">
+      <div class="who">Whitelisted team (primary) + you</div>
+      <h4>📸 Instagram</h4>
+      <p>PhantomBuster hashtag search + per-user scoping. Team uses <a href="https://cmachine.devthuku.io/instagram-leads">cmachine → Instagram Leads</a>. You can also run it from the admin prospect-finder. Attribution per whitelisted user flows to the <a href="/admin/revenue-ledger">Revenue Ledger</a>.</p>
+    </div>
+    <div class="source-card">
+      <div class="who">You only (automated)</div>
+      <h4>✈️ Telegram (MTProto watcher)</h4>
+      <p>Once you finish phone-code login on the Telegram tab, the userbot polls configured channels (cryptojobslist, web3_jobs, etc.) for "need editor / hiring / paying" posts, scores them with AI, and pings <code>@videosync_sales_bot</code> with a pre-written custom DM. You copy + send.</p>
+    </div>
+    <div class="source-card">
+      <div class="who">You only (passive income)</div>
+      <h4>💰 Whop / Reach.cat / content-reward platforms</h4>
+      <p>Not outreach — you post authorised clips from creator campaigns to TikTok/Reels/Shorts, get paid per 1,000 views. Highest-CPM niches: crypto/finance ($4-6/1k), creator campaigns ($1-3/1k). <a href="/admin/monetization-guide">Monetization Guide</a> has the current-picks list.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════ SERVICES ═══════ -->
+<section id="services">
+  <h2>2. The 7 services — what we sell + what we charge</h2>
+  <p>Every scored lead gets a service pick from the AI. You (or team members) can override it via the dropdown in the DM dialog.</p>
+  <div class="service-grid">
+    <div class="service-card">
+      <div class="name">🎬 Clipping</div>
+      <span class="price">$297 – $899/mo</span>
+      <p class="desc">Long-form videos → 20–40 vertical Shorts/Reels/TikToks per month. Team-only service (whitelisted team fulfills).</p>
+    </div>
+    <div class="service-card">
+      <div class="name">🎞️ Animations</div>
+      <span class="price">$50 – $150 each</span>
+      <p class="desc">Blender explainer scenes, data visualisations, LaTeX equations, lower-thirds, title cards. Best for educators + crypto / finance.</p>
+    </div>
+    <div class="service-card">
+      <div class="name">🖼️ AI Thumbnails</div>
+      <span class="price">$25 – $50 each</span>
+      <p class="desc">Gemini picks best frame → title overlay → CTR-tested. Best for growing YouTubers.</p>
+    </div>
+    <div class="service-card">
+      <div class="name">📱 UGC / Product-demo Videos</div>
+      <span class="price">$200 – $500 each</span>
+      <p class="desc">Vertical-first ad-style demo videos for Shopify / DTC / SaaS founders.</p>
+    </div>
+    <div class="service-card">
+      <div class="name">📦 Product Mockups</div>
+      <span class="price">$100 – $300 each</span>
+      <p class="desc">3D Blender product renders on device or lifestyle scenes. Gemini synthesises the product shot.</p>
+    </div>
+    <div class="service-card">
+      <div class="name">🚀 Landing-Page Animations</div>
+      <span class="price">$200 – $600 each</span>
+      <p class="desc">Animated SaaS hero mockups. Paste the client's live URL — we scrape their hero image and animate it. Great for Product Hunt launches.</p>
+    </div>
+    <div class="service-card">
+      <div class="name">⭐ Full Stack</div>
+      <span class="price">$1,500 – $3,000/mo</span>
+      <p class="desc">Bundle of all of the above. Best for 100k+ creators + established brands.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════ DAILY WORKFLOW ═══════ -->
+<section id="daily">
+  <h2>3. Your daily workflow</h2>
+  <p>You don't need to run every step every day — automation handles the watching. Your high-leverage time is DMing leads + closing + delivering.</p>
+
+  <h3>Morning (~30 min)</h3>
+  <div class="step">
+    <div class="step-num">1</div>
+    <div class="step-body">
+      <strong>Check Telegram notifications from <code>@videosync_sales_bot</code></strong>
+      Overnight payment pings + new opportunities from the MTProto watcher. Each opportunity already has a pre-written custom DM ready to copy.
+    </div>
+  </div>
+  <div class="step">
+    <div class="step-num">2</div>
+    <div class="step-body">
+      <strong>Open <a href="/admin/dashboard">/admin/dashboard</a></strong>
+      Scan Recent Users (new signups overnight, trials about to expire), check health stats.
+    </div>
+  </div>
+  <div class="step">
+    <div class="step-num">3</div>
+    <div class="step-body">
+      <strong>Open <a href="/admin/prospect-finder">prospect-finder → Telegram tab</a></strong>
+      Review AI-scored opportunities. Click <em>Open in Telegram</em> → paste the pre-written DM → mark as <em>Contacted</em>.
+    </div>
+  </div>
+
+  <h3>Mid-morning (~2h) — revenue work</h3>
+  <div class="step">
+    <div class="step-num">4</div>
+    <div class="step-body">
+      <strong>Run 2–3 LinkedIn smart-searches</strong>
+      Focus on niches you can close fast. Describe your ideal client → AI builds filters → PB scrapes → leads import with AI scoring.
+    </div>
+  </div>
+  <div class="step">
+    <div class="step-num">5</div>
+    <div class="step-body">
+      <strong>Post Whop / Reach.cat clips</strong>
+      Take yesterday's authorised source videos → auto-clipper produces ~20 Shorts per source → post to burner TikTok / Reels / Shorts accounts with tracking links.
+    </div>
+  </div>
+
+  <h3>Afternoon (~3h) — fulfilment</h3>
+  <div class="step">
+    <div class="step-num">6</div>
+    <div class="step-body">
+      <strong>DM top-scored IG / LinkedIn leads</strong>
+      Click each lead → generate DM → attach sample (Blender render or URL-driven landing-page mockup) → the DM body automatically includes the <code>/delivery/:id</code> link. One-tap "Copy &amp; Open Instagram" handles the rest.
+    </div>
+  </div>
+  <div class="step">
+    <div class="step-num">7</div>
+    <div class="step-body">
+      <strong>Close via DM or delivery unlock</strong>
+      Big deals: invoice direct in USDC (your Base address). Small one-offs: client pays $5 to unlock HD on the delivery page. Both attribute correctly on the Revenue Ledger.
+    </div>
+  </div>
+
+  <h3>Evening (~30 min) — triage</h3>
+  <div class="step">
+    <div class="step-num">8</div>
+    <div class="step-body">
+      <strong>Mark leads: replied / won / lost</strong>
+      Keeps the funnel honest + updates the revenue ledger's conversion numbers.
+    </div>
+  </div>
+  <div class="step">
+    <div class="step-num">9</div>
+    <div class="step-body">
+      <strong>Reply to any DMs @videosync_sales_bot flagged for human review</strong>
+      The bot auto-answers simple questions; it forwards complex ones to you.
+    </div>
+  </div>
+</section>
+
+<!-- ═══════ TEAM ═══════ -->
+<section id="team">
+  <h2>4. How the whitelisted clipping team works</h2>
+  <p>Your 15-person team operates through <a href="https://cmachine.devthuku.io">content_machine</a>. They have their own scoped view — each user only sees the leads they sourced.</p>
+  <ol>
+    <li>Log in → <strong>Instagram Leads</strong> page.</li>
+    <li>Run Auto-Discover (AI picks hashtags for their niche) OR Manual Search.</li>
+    <li>Leads come in scored with an AI-picked service type. Team pitches <strong>mostly clipping</strong> but can sell any service — dropdown in the DM dialog overrides the pick.</li>
+    <li>Click lead → Attach sample → Copy DM &amp; Open Instagram → paste, send.</li>
+    <li>Status moves: <em>new</em> → <em>contacted</em> → <em>replied</em> → <em>converted</em>.</li>
+    <li>When converted, fulfilment happens inside VideoSync's main app.</li>
+  </ol>
+  <div class="callout ok">Team members pay NO subscription — they're grandfathered. Their work generates revenue → admin splits 50% on delivery unlocks via the <a href="/admin/revenue-ledger">Revenue Ledger</a>.</div>
+  <p>Team members can see the <strong>How It Works</strong> tab inside their own Instagram Leads page — covers the same workflow from their side.</p>
+</section>
+
+<!-- ═══════ PAYMENTS ═══════ -->
+<section id="payments">
+  <h2>5. Payment rails + attribution + revenue share</h2>
+
+  <h3>Payment rails</h3>
+  <ul>
+    <li><strong>x402 USDC on Base</strong> — every /subscribe, /api-access, /delivery/:id unlock uses the same EIP-3009 transferWithAuthorization flow. Wallet signs once, Coinbase facilitator settles on-chain in ~1s.</li>
+    <li><strong>Direct wallet-to-wallet USDC</strong> — for big retainer deals closed via DM. Give the client your Base address, they send USDC, you invoice outside the app.</li>
+  </ul>
+
+  <h3>Attribution (who sourced who)</h3>
+  <ul>
+    <li>Every Instagram lead has a <code>user_id</code> — the whitelisted user who sourced it. Leads are private to that user.</li>
+    <li>When a team member creates a sample via "+ Attach sample", the generated delivery row gets <code>sourced_from_lead_id</code> + <code>unlock_price_usdc = 5</code>.</li>
+    <li>When a client pays $5 to unlock that delivery, x402 settles on your wallet — but the <a href="/admin/revenue-ledger">Revenue Ledger</a> records which team member's lead drove it.</li>
+  </ul>
+
+  <h3>Revenue share</h3>
+  <ul>
+    <li>Default split: <strong>50% to the whitelisted user who sourced the lead, 50% to you</strong>.</li>
+    <li>Payout schedule: weekly or monthly, on-chain USDC to each team member's Base address.</li>
+    <li>See per-user owed amount on the <a href="/admin/revenue-ledger">Revenue Ledger</a>.</li>
+  </ul>
+</section>
+
+<!-- ═══════ QA ═══════ -->
+<section id="qa">
+  <h2>6. LLM QA review on every render</h2>
+  <p>Before any rendered output (Blender thumbnail, animation, landing-page scene, or <code>auto_generate_video</code> pipeline) is returned to a client, Gemini reviews it against the original prompt.</p>
+  <ul>
+    <li>Review scores <strong>1–10</strong>. ≥6 = ships cleanly. ≤5 = flags a QA warning on the delivery row.</li>
+    <li>Low-score renders STILL return the URL (fail-open) — they just get stamped with a warning in <code>deliveries.error_message</code> so you can spot them in <a href="/admin/deliveries">/admin/deliveries</a>.</li>
+    <li>Every review is logged to <code>blender_render_reviews</code>. Query it if you want to see pass/fail rate per tool over time.</li>
+  </ul>
+</section>
+
+<!-- ═══════ PAYWALL ═══════ -->
+<section id="paywall">
+  <h2>7. The $15/mo creator paywall</h2>
+  <p>New signups (from Twitter ads or direct) get a <strong>7-day free trial</strong>. After that, paywalled endpoints return HTTP 402 with <code>upgrade_url: /subscribe</code> until they pay.</p>
+
+  <h3>What's paywalled (for regular users)</h3>
+  <ul>
+    <li>AI thumbnails (<code>/api/tools/*</code>)</li>
+    <li>Blender animations (title cards, data viz, lower thirds, LaTeX, UI mockups)</li>
+    <li>Full <code>auto_generate_video</code> pipeline (<code>/ws</code> WebSocket chat)</li>
+    <li>FFmpeg tool API</li>
+    <li>Delivery page viewing + generation</li>
+  </ul>
+
+  <h3>What's NOT paywalled</h3>
+  <ul>
+    <li><strong>Clipping + manual clipping</strong> — whitelist-only, team fulfills.</li>
+    <li>Signup, login, basic chat without video generation.</li>
+    <li>Prospect finder + Instagram leads — these are admin/team-only tools; regular users don't see them.</li>
+  </ul>
+
+  <div class="callout">Existing users (signed up before April 16, 2026) are <code>subscription_status = 'grandfathered'</code> — they stay free forever. Only NEW signups hit the trial + paywall flow.</div>
+</section>
+
+<!-- ═══════ FAQ ═══════ -->
+<section id="faq">
+  <h2>8. FAQ</h2>
+  <h3>What if Gemini is down — does the platform stop working?</h3>
+  <p>No. LLM calls are fail-open: scoring returns a neutral score, QA review returns "pass with score 0", DM generation returns a default template. The pipeline never blocks on LLM infra.</p>
+
+  <h3>What if Telegram revokes my MTProto session?</h3>
+  <p>The watcher logs the error to <code>telegram_sessions.last_error</code> and stops. Visit <a href="/admin/prospect-finder">prospect-finder → Telegram tab</a> → status panel shows the error → re-run phone-code login.</p>
+
+  <h3>How do I add new watched Telegram channels?</h3>
+  <p>POST to <code>/api/admin/telegram/channels</code> or edit the <code>telegram_watch_channels</code> table directly. Default list: cryptojobslist, cryptojobs, web3_jobs, SaaSFounders, directoryofmarketers, contentcreators_hub.</p>
+
+  <h3>How do I price custom deliveries?</h3>
+  <p>On <a href="/admin/deliveries">/admin/deliveries</a> set <code>unlock_price_usdc</code> per delivery. Default is $5. For bigger work (e.g. $200 product mockup) set it to 200.</p>
+
+  <h3>A team member sourced a lead that paid $500. What do I owe them?</h3>
+  <p>$250 (50%). The <a href="/admin/revenue-ledger">Revenue Ledger</a> shows this as "Pending payout".</p>
+
+  <h3>Where do I see payment notifications?</h3>
+  <p>Telegram DMs from <code>@videosync_sales_bot</code>. Every successful x402 settlement (subscribe, api-access, delivery unlock) pings you with the amount + tx hash.</p>
+</section>
+
+</div>
 </body>
 </html>"###;
