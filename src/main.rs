@@ -33,8 +33,9 @@ mod ai_tool_selector; // 🧠 AI-driven tool selection — Gemma 4 picks relevan
 mod utils; // 🔧 Utility modules (FFmpeg utilities, etc.)
 mod token_manager; // 🔧 Centralized YouTube OAuth token refresh
 mod x402;          // 💰 x402 HTTP-402 payment protocol (USDC on Base)
-mod telegram_bot;  // ✈️ Telegram Bot API — admin pings + AI sales DM replies
-mod render_review; // 🔍 LLM QA review of every render before handoff
+mod telegram_bot;     // ✈️ Telegram Bot API — admin pings + AI sales DM replies
+mod telegram_client;  // 🛰️ Telegram MTProto userbot — channel watcher for paid-gig leads
+mod render_review;    // 🔍 LLM QA review of every render before handoff
 
 // Video processing modules (from lib.rs)
 mod types;
@@ -687,6 +688,19 @@ async fn main() {
         let tg_state = shared_state.clone();
         tokio::spawn(async move {
             telegram_bot::start_worker(tg_state).await;
+        });
+    }
+
+    // ── Telegram MTProto watcher — userbot that monitors configured
+    //    channels for paid-gig opportunities and pings the admin via
+    //    the sales bot with a pre-written custom DM. Waits in a polling
+    //    loop until the admin completes phone-code login from the admin
+    //    UI, then runs `next_update()` indefinitely. No-ops when
+    //    TELEGRAM_API_ID / TELEGRAM_API_HASH aren't set.
+    {
+        let tg_state = shared_state.clone();
+        tokio::spawn(async move {
+            telegram_client::start_watcher(tg_state).await;
         });
     }
 

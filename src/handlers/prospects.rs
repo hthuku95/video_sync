@@ -49,6 +49,10 @@ pub fn prospect_routes() -> Router {
         .route("/api/admin/telegram/opportunities",  get(telegram_list_opportunities))
         .route("/api/admin/telegram/opportunities",  post(telegram_add_opportunity_manual))
         .route("/api/admin/telegram/opportunities/:id", patch(telegram_update_opportunity))
+        // MTProto watcher — login + status. Bot API lives in telegram_bot.rs.
+        .route("/api/admin/telegram/login/start",    post(telegram_login_start))
+        .route("/api/admin/telegram/login/verify",   post(telegram_login_verify))
+        .route("/api/admin/telegram/status",         get(telegram_watcher_status))
         .layer(axum::middleware::from_fn(admin_middleware))
         .layer(axum::middleware::from_fn(auth_middleware));
 
@@ -1062,7 +1066,46 @@ tr:hover td{background:rgba(92,84,112,0.12)}
   <!-- Telegram Opportunities -->
   <div id="src-telegram" class="search-card" style="display:none">
     <h2>Telegram Opportunities</h2>
-    <p>Paste a message you saw in a crypto / SaaS / creator Telegram channel — AI scores it as a paid-gig opportunity and picks the best service to pitch. Default watched channels (future auto-watcher): <code id="tg-watched"></code></p>
+    <p>AI-watched Telegram channels for paid-gig opportunities. Once you log in with your phone below, the MTProto watcher polls configured channels and pings <code>@videosync_sales_bot</code> with a pre-written custom DM every time it finds a match. You can also paste messages manually. Watched channels: <code id="tg-watched"></code></p>
+
+    <!-- MTProto login panel -->
+    <div id="tg-login" style="margin-bottom:16px;padding:16px;background:rgba(42,36,56,0.6);border:1px solid rgba(122,76,255,0.3);border-radius:10px">
+      <div id="tg-status-summary" style="font-size:0.9rem;color:var(--muted);margin-bottom:10px">Checking Telegram watcher status…</div>
+
+      <div id="tg-login-start" style="display:none">
+        <div class="form-grid">
+          <div>
+            <label>Your Telegram phone (with country code)</label>
+            <input id="tg-phone" placeholder="+14155551234">
+          </div>
+        </div>
+        <button class="btn btn-primary" onclick="tgLoginStart()">Send code to Telegram</button>
+        <span id="tg-login-status" style="margin-left:12px;color:var(--dim);font-size:0.85rem"></span>
+      </div>
+
+      <div id="tg-login-verify" style="display:none">
+        <div class="form-grid">
+          <div>
+            <label>Phone (same as before)</label>
+            <input id="tg-phone-v" placeholder="+14155551234">
+          </div>
+          <div>
+            <label>Code Telegram sent you</label>
+            <input id="tg-code" placeholder="12345" inputmode="numeric">
+          </div>
+        </div>
+        <button class="btn btn-primary" onclick="tgLoginVerify()">Verify &amp; Authorise Watcher</button>
+        <span id="tg-verify-status" style="margin-left:12px;color:var(--dim);font-size:0.85rem"></span>
+      </div>
+
+      <div id="tg-login-active" style="display:none">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <span class="score-badge score-high">✓ Watcher active</span>
+          <span id="tg-active-phone" style="color:var(--dim);font-size:0.85rem"></span>
+          <span id="tg-last-poll" style="color:var(--dim);font-size:0.85rem"></span>
+        </div>
+      </div>
+    </div>
 
     <details style="margin-bottom:16px">
       <summary style="cursor:pointer;color:var(--dim);font-size:0.85rem">📋 Paste a new opportunity</summary>
@@ -1211,7 +1254,7 @@ function showSource(name, btn){
     if(el) el.style.display = (s===name)?'block':'none';
   });
   if (name === 'jobs')     loadPbJobs();
-  if (name === 'telegram') { loadTelegramChannels(); loadTgOpportunities(''); }
+  if (name === 'telegram') { loadTelegramStatus(); loadTelegramChannels(); loadTgOpportunities(''); }
 }
 
 // ── LinkedIn ──────────────────────────────────────────────────────────────
@@ -1296,6 +1339,74 @@ async function importLinkedInJob(jobId){
 }
 
 // ── Telegram Opportunities ─────────────────────────────────────────────────
+
+async function loadTelegramStatus(){
+  try {
+    const r = await fetch('/api/admin/telegram/status', {headers:{'Authorization':'Bearer '+token}});
+    const data = await r.json();
+    const summary = document.getElementById('tg-status-summary');
+    const start   = document.getElementById('tg-login-start');
+    const verify  = document.getElementById('tg-login-verify');
+    const active  = document.getElementById('tg-login-active');
+    start.style.display = 'none';
+    verify.style.display = 'none';
+    active.style.display = 'none';
+    if (data.authorized) {
+      summary.innerHTML = '<b style="color:var(--success)">✓ MTProto watcher active</b> — configured channels are being monitored automatically.';
+      active.style.display = '';
+      document.getElementById('tg-active-phone').textContent = data.phone ? 'Phone: ' + data.phone : '';
+      document.getElementById('tg-last-poll').textContent = data.last_poll_at ? 'Last update: ' + new Date(data.last_poll_at).toLocaleString() : 'Waiting for first update…';
+    } else {
+      summary.innerHTML = 'Watcher not authorised yet. Enter your phone below — Telegram will send you a code via SMS or in-app notification. <b>One-time setup.</b>';
+      start.style.display = '';
+    }
+  } catch (e) {
+    document.getElementById('tg-status-summary').textContent = 'Status check failed: ' + e;
+  }
+}
+
+async function tgLoginStart(){
+  const phone = document.getElementById('tg-phone').value.trim();
+  const status = document.getElementById('tg-login-status');
+  if (!phone) { status.textContent = 'Enter your phone with country code.'; return; }
+  status.textContent = 'Requesting code from Telegram…';
+  try {
+    const r = await fetch('/api/admin/telegram/login/start', {
+      method:'POST',
+      headers:{'Authorization':'Bearer '+token,'Content-Type':'application/json'},
+      body: JSON.stringify({phone}),
+    });
+    const data = await r.json();
+    if (!data.success) { status.textContent = 'Error: ' + (data.error||'unknown'); return; }
+    status.textContent = '✓ ' + (data.message || 'Code sent.');
+    document.getElementById('tg-login-start').style.display = 'none';
+    document.getElementById('tg-login-verify').style.display = '';
+    document.getElementById('tg-phone-v').value = phone;
+  } catch (e) {
+    status.textContent = 'Network error: ' + e;
+  }
+}
+
+async function tgLoginVerify(){
+  const phone = document.getElementById('tg-phone-v').value.trim();
+  const code  = document.getElementById('tg-code').value.trim();
+  const status = document.getElementById('tg-verify-status');
+  if (!phone || !code) { status.textContent = 'Phone + code are required.'; return; }
+  status.textContent = 'Verifying…';
+  try {
+    const r = await fetch('/api/admin/telegram/login/verify', {
+      method:'POST',
+      headers:{'Authorization':'Bearer '+token,'Content-Type':'application/json'},
+      body: JSON.stringify({phone, code}),
+    });
+    const data = await r.json();
+    if (!data.success) { status.textContent = 'Error: ' + (data.error||'unknown'); return; }
+    status.textContent = '✓ ' + (data.message || 'Authorised.');
+    setTimeout(loadTelegramStatus, 1000);
+  } catch (e) {
+    status.textContent = 'Network error: ' + e;
+  }
+}
 
 async function loadTelegramChannels(){
   try {
@@ -3901,3 +4012,52 @@ async fn instagram_update_service_type(
         Err(e) => Json(json!({"success": false, "error": format!("DB error: {}", e)})),
     }
 }
+
+// ============================================================================
+// Public wrapper + login endpoints for the Telegram MTProto watcher
+// ============================================================================
+
+/// Crate-public wrapper around `score_telegram_opportunity` so the
+/// MTProto watcher in src/telegram_client.rs can score inbound messages
+/// with the same AI pass as the manual-entry form.
+pub async fn score_telegram_opportunity_public(
+    state:   &Arc<AppState>,
+    channel: &str,
+    message: &str,
+) -> (i32, String, Option<String>) {
+    score_telegram_opportunity(state, channel, message).await
+}
+
+#[derive(Debug, Deserialize)]
+struct TelegramLoginStartReq {
+    phone: String,
+}
+
+async fn telegram_login_start(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(req):        Json<TelegramLoginStartReq>,
+) -> Json<serde_json::Value> {
+    let phone = req.phone.trim().to_string();
+    if phone.is_empty() {
+        return Json(json!({"success": false, "error": "phone is required (include country code, e.g. +14155551234)"}));
+    }
+    match crate::telegram_client::login_start(&state, &phone).await {
+        Ok(()) => Json(json!({
+            "success": true,
+            "message": "Code sent to your Telegram. POST it to /login/verify with {phone, code} within 10 minutes."
+        })),
+        Err(e) => Json(json!({"success": false, "error": e})),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct TelegramLoginVerifyReq {
+    phone: String,
+    code:  String,
+}
+
+async fn telegram_login_verify(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(req):        Json<TelegramLoginVerifyReq>,
+) -> Json<serde_json::Value> {
+    match crate::teleg                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                

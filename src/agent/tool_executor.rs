@@ -2658,11 +2658,17 @@ async fn execute_auto_generate_video_with_state_gemini(
         video_source
     };
 
-    match effective_source {
+    let result = match effective_source {
         "blender" => execute_auto_generate_video_blender_gemini(args, ctx).await,
         "hybrid"  => execute_auto_generate_video_hybrid_gemini(args, ctx).await,
         _         => execute_auto_generate_video_gemini(args).await,
-    }
+    };
+
+    // QA: review the finished video against the original brief. Only
+    // appends to the response when the review actually flags issues —
+    // successful renders stay clean. Fail-open on Gemini errors.
+    let topic = args.get("topic").and_then(|v| v.as_str()).unwrap_or("");
+    append_qa_review_if_flagged(&result, topic, "auto_generate_video", ctx).await
 }
 
 /// Dispatcher: Claude version.
@@ -2679,10 +2685,75 @@ async fn execute_auto_generate_video_with_state_claude(
         video_source
     };
 
-    match effective_source {
+    let result = match effective_source {
         "blender" => execute_auto_generate_video_blender_claude(args, ctx).await,
         "hybrid"  => execute_auto_generate_video_hybrid_claude(args, ctx).await,
         _         => execute_auto_generate_video_claude(args).await,
+    };
+
+    let topic = args.get("topic").and_then(|v| v.as_str()).unwrap_or("");
+    append_qa_review_if_flagged(&result, topic, "auto_generate_video", ctx).await
+}
+
+/// Runs the shared LLM QA review on the finished video when the response
+/// string contains an "outputs/X.mp4" path. Appends a warning block to the
+/// response only if the review flags the output as below threshold. Silent
+/// pass-through otherwise so successful chats stay clean.
+async fn append_qa_review_if_flagged(
+    response_text: &str,
+    topic: &str,
+    tool_name: &str,
+    ctx: &ToolExecutionContext,
+) -> String {
+    // Cheap check: if the response obviously errored, skip review.
+    if topic.is_empty() || response_text.contains("❌") {
+        return response_text.to_string();
+    }
+
+    // Extract an "outputs/<name>.mp4" path from the response. The pipeline
+    // writes to outputs/, so the path embedded in the reply is our best
+    // pointer to the actual file for reviewing.
+    let path = match extract_output_path(response_text) {
+        Some(p) => p,
+        None    => return response_text.to_string(),
+    };
+
+    let review = crate::render_review::review_render(
+        &ctx.app_state,
+        &path,
+        topic,
+        tool_name,
+        None,
+    ).await;
+
+    if review.pass {
+        return response_text.to_string();
+    }
+
+    let mut out = response_text.to_string();
+    out.push_str(&format!(
+        "\n\n⚠️ **QA review flagged this output (score {}/10)**\n\
+         {}{}",
+        review.score,
+        review.feedback,
+        review.retry_hint.as_ref()
+            .map(|h| format!("\n*Retry hint:* {}", h))
+            .unwrap_or_default(),
+    ));
+    out
+}
+
+fn extract_output_path(text: &str) -> Option<String> {
+    let needle = "outputs/";
+    let start = text.find(needle)?;
+    let tail  = &text[start..];
+    let end   = tail.find(|c: char| c.is_whitespace() || c == ')' || c == ']' || c == '"' || c == '\'').unwrap_or(tail.len());
+    let path  = &tail[..end];
+    // Accept .mp4, .mov, .mkv outputs.
+    if path.ends_with(".mp4") || path.ends_with(".mov") || path.ends_with(".mkv") {
+        Some(path.to_string())
+    } else {
+        None
     }
 }
 
