@@ -4074,4 +4074,3 @@ async fn telegram_watcher_status(
 ) -> Json<serde_json::Value> {
     Json(crate::telegram_client::status(&state).await)
 }
-    match crate::teleg
