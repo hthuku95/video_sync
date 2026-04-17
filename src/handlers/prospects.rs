@@ -2497,7 +2497,7 @@ async fn instagram_generate_sample(
     let source_url = req.as_ref().and_then(|r| r.source_url.clone());
 
     let row = match sqlx::query(
-        "SELECT username, full_name, bio, service_type, sample_delivery_id
+        "SELECT username, full_name, bio, service_type, sample_delivery_id, external_url
          FROM instagram_leads WHERE id = $1 AND user_id = $2"
     )
     .bind(id)
@@ -2524,6 +2524,11 @@ async fn instagram_generate_sample(
     let full_name:    String         = row.get::<Option<String>, _>("full_name").unwrap_or_else(|| username.clone());
     let bio:          String         = row.get::<Option<String>, _>("bio").unwrap_or_default();
     let service:      Option<String> = row.get::<Option<String>, _>("service_type");
+    let lead_ext_url: Option<String> = row.get::<Option<String>, _>("external_url");
+
+    // Auto-detect the lead's website: prefer explicit source_url from request,
+    // fall back to the lead's external_url from their profile (IG bio link, etc.)
+    let source_url = source_url.or(lead_ext_url);
 
     // For clipping the lead, we'd need their actual video URL. Tell the
     // frontend so it can ask the user for one. Don't burn a render slot on
@@ -2553,14 +2558,27 @@ async fn instagram_generate_sample(
         ),
 
         Some("product_mockup") => {
-            // Gemini generates a product shot from the lead's bio.
-            // Falls back to empty screenshot_url if generation fails —
-            // Blender will still produce a device frame without the image.
-            let product_prompt = format!(
-                "Professional product photograph, clean white background, studio lighting: {}",
-                bio.chars().take(200).collect::<String>()
-            );
-            let img_url = try_generate_image(&state, &product_prompt).await;
+            // If the lead has a website, scrape their og:image first —
+            // showing their ACTUAL product is way more compelling than
+            // a generic AI-generated image.
+            let img_url = if let Some(ref url) = source_url {
+                match fetch_landing_page_hero(url).await {
+                    Some(u) => Some(u),
+                    None => {
+                        let product_prompt = format!(
+                            "Professional product photograph, clean white background, studio lighting: {}",
+                            bio.chars().take(200).collect::<String>()
+                        );
+                        try_generate_image(&state, &product_prompt).await
+                    }
+                }
+            } else {
+                let product_prompt = format!(
+                    "Professional product photograph, clean white background, studio lighting: {}",
+                    bio.chars().take(200).collect::<String>()
+                );
+                try_generate_image(&state, &product_prompt).await
+            };
             (
                 "ui_mockup",
                 format!("{} — product showcase mockup", full_name),
@@ -2617,13 +2635,38 @@ async fn instagram_generate_sample(
             json!({"device": "phone", "animation": "fade_in"}),
         ),
 
-        _ => (
-            "thumbnail",
-            format!("Eye-catching thumbnail for @{} — {}", username, bio.chars().take(80).collect::<String>()),
-            "bold",
-            0.0,
-            json!({"title_text": full_name}),
-        ),
+        _ => {
+            // If the lead has a website, generate a scene animation with
+            // their hero image instead of a plain thumbnail — far more
+            // impressive in a DM.
+            if let Some(ref url) = source_url {
+                if let Some(hero) = fetch_landing_page_hero(url).await {
+                    (
+                        "scene",
+                        format!("Professional animated showcase for {}", full_name),
+                        "modern",
+                        10.0,
+                        json!({"reference_image_url": hero, "source_url": url}),
+                    )
+                } else {
+                    (
+                        "thumbnail",
+                        format!("Eye-catching thumbnail for @{} — {}", username, bio.chars().take(80).collect::<String>()),
+                        "bold",
+                        0.0,
+                        json!({"title_text": full_name}),
+                    )
+                }
+            } else {
+                (
+                    "thumbnail",
+                    format!("Eye-catching thumbnail for @{} — {}", username, bio.chars().take(80).collect::<String>()),
+                    "bold",
+                    0.0,
+                    json!({"title_text": full_name}),
+                )
+            }
+        }
     };
 
     let title = format!("Sample for @{}", username);
