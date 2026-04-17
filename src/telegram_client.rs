@@ -16,9 +16,9 @@ use crate::AppState;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use grammers_client::client::{LoginToken, SenderPool, UpdatesConfiguration};
+use grammers_client::client::{LoginToken, UpdatesConfiguration};
 use grammers_client::update::Update;
-use grammers_client::{Client, SignInError};
+use grammers_client::{Client, SenderPool, SignInError};
 use grammers_session::storages::SqliteSession;
 use regex::Regex;
 
@@ -427,8 +427,11 @@ async fn try_run_watcher(state: &Arc<AppState>) -> Result<(), String> {
                     continue;
                 }
 
-                let chat = msg.chat();
-                let chat_name = chat.name().to_string();
+                let chat_name = msg
+                    .peer()
+                    .and_then(|p| p.name().or(p.username()))
+                    .unwrap_or("unknown")
+                    .to_string();
 
                 // Check if this channel is in our watch list.
                 let channel_config = channels.get(&chat_name.to_lowercase());
@@ -454,7 +457,7 @@ async fn try_run_watcher(state: &Arc<AppState>) -> Result<(), String> {
                 let msg_id = msg.id();
                 let sender_name = msg
                     .sender()
-                    .map(|s| s.name().to_string())
+                    .and_then(|s| s.name().map(|n| n.to_string()))
                     .unwrap_or_default();
                 let link = format!("https://t.me/{}/{}", &chat_name, msg_id);
 
