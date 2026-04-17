@@ -452,6 +452,7 @@ pub async fn execute_tool_claude(name: &str, args: &Value) -> String {
         "create_blank_video" => execute_create_blank_video_claude(args),
         "generate_image" => execute_generate_image_claude(args).await,
         "edit_image" => execute_edit_image_claude(args).await,
+        "fetch_website_image" => execute_fetch_website_image_claude(args).await,
         "auto_generate_video" => execute_auto_generate_video_claude(args).await,
         "generate_video_queries" => execute_generate_video_queries_claude(args),
         "analyze_pexels_thumbnail" => execute_analyze_pexels_thumbnail_claude(args).await,
@@ -840,6 +841,7 @@ pub async fn execute_tool_gemini(name: &str, args: &HashMap<String, Value>) -> S
         "create_blank_video" => execute_create_blank_video_gemini(args),
         "generate_image" => execute_generate_image_gemini(args).await,
         "edit_image" => execute_edit_image_gemini(args).await,
+        "fetch_website_image" => execute_fetch_website_image_gemini(args).await,
         "auto_generate_video" => execute_auto_generate_video_gemini(args).await,
         "generate_video_queries" => execute_generate_video_queries_gemini(args),
         "analyze_pexels_thumbnail" => execute_analyze_pexels_thumbnail_gemini(args).await,
@@ -11034,4 +11036,33 @@ async fn execute_blender_simple_manim_claude(
         .map(|m| serde_json::Value::Object(m.clone()))
         .unwrap_or(json!({}));
     blender_render(&client, tool_name, tool_args, "video_url", "mp4", &format!("{} rendered", tool_name)).await
+}
+
+// ── fetch_website_image ─────────────────────────────────────────────────
+// Fetches the og:image / twitter:image hero from a website URL.
+// Used by the agent to extract landing page visuals before passing
+// to blender_generate_scene's reference_image_url parameter.
+
+async fn execute_fetch_website_image_claude(args: &serde_json::Value) -> String {
+    let url = args.get("url").and_then(|v| v.as_str()).unwrap_or("");
+    execute_fetch_website_image_inner(url).await
+}
+
+async fn execute_fetch_website_image_gemini(args: &HashMap<String, serde_json::Value>) -> String {
+    let url = args.get("url").and_then(|v| v.as_str()).unwrap_or("");
+    execute_fetch_website_image_inner(url).await
+}
+
+async fn execute_fetch_website_image_inner(url: &str) -> String {
+    if url.is_empty() {
+        return "Error: 'url' parameter is required".to_string();
+    }
+    match crate::handlers::prospects::fetch_landing_page_hero(url).await {
+        Some(image_url) => {
+            format!("Successfully extracted hero image from {url}. Image URL: {image_url}\n\nYou can now pass this URL as the reference_image_url parameter to blender_generate_scene to create an animated landing page presentation.")
+        }
+        None => {
+            format!("Could not extract a hero image from {url} (no og:image or twitter:image meta tag found). You can still use generate_image to create a visual inspired by the website, then pass that to blender_generate_scene.")
+        }
+    }
 }

@@ -3893,7 +3893,7 @@ async fn try_generate_image(state: &Arc<AppState>, prompt: &str) -> Option<Strin
 ///
 /// Returns None if the URL is unfetchable or has no suitable image. When
 /// None is returned, the caller falls back to Gemini-synthesised hero.
-async fn fetch_landing_page_hero(url: &str) -> Option<String> {
+pub async fn fetch_landing_page_hero(url: &str) -> Option<String> {
     // Only HTTPS URLs — blocks SSRF into internal services.
     if !url.starts_with("https://") && !url.starts_with("http://") {
         return None;

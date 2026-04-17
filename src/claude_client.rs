@@ -1494,6 +1494,21 @@ impl ClaudeClient {
                 },
             },
             ClaudeTool {
+                name: "fetch_website_image".to_string(),
+                description: "Fetch the hero/og:image from a website URL. Use this when a user provides a website URL (e.g. netflix.com, stripe.com) and you need to extract its visual for use in a Blender landing page animation or product mockup. Returns the image URL that you can pass to blender_generate_scene's reference_image_url parameter.".to_string(),
+                input_schema: InputSchema {
+                    schema_type: "object".to_string(),
+                    properties: HashMap::from([
+                        ("url".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "The website URL to extract the hero image from (e.g. 'https://netflix.com')".to_string(),
+                            items: None,
+                        }),
+                    ]),
+                    required: vec!["url".to_string()],
+                },
+            },
+            ClaudeTool {
                 name: "edit_image".to_string(),
                 description: "Edit or transform an existing image using AI. Use when you need to: modify a downloaded Pexels photo, add text/graphics to a video frame, change the style of an image, remove or replace elements, or create a variant of an existing image. Requires a path to the source image on disk. Example workflow: extract a frame with extract_frames, then call edit_image to add a title overlay before compositing it back.".to_string(),
                 input_schema: InputSchema {

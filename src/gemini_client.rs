@@ -2142,6 +2142,27 @@ impl GeminiClient {
                 },
             },
             // =====================================================================
+            // WEBSITE IMAGE EXTRACTION
+            // =====================================================================
+
+            FunctionDeclaration {
+                name: "fetch_website_image".to_string(),
+                description: "Fetch the hero/og:image from a website URL. Use this when a user provides a website URL and you need to extract its visual for use in a Blender scene or product mockup. Returns the image URL string that can be passed to blender_generate_scene's reference_image_url parameter.".to_string(),
+                parameters: Parameters {
+                    param_type: "object".to_string(),
+                    properties: {
+                        let mut props = HashMap::new();
+                        props.insert("url".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "The website URL to extract the hero image from (e.g. 'https://netflix.com')".to_string(),
+                            items: None,
+                        });
+                        props
+                    },
+                    required: vec!["url".to_string()],
+                },
+            },
+
             // BLENDER MCP TOOLS — 3D rendering, Manim, thumbnails, data viz
             // =====================================================================
 
