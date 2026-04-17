@@ -7265,7 +7265,7 @@ pub async fn run_delivery_job(delivery_id: Uuid, state: Arc<AppState>) {
             // original brief. Logs to blender_render_reviews for admin
             // dashboard. Fail-open: if review fails, delivery still
             // completes (we don't want Gemini downtime to block clients).
-            let review = crate::render_review::review_render(
+            let mut review = crate::render_review::review_render(
                 &state,
                 &url,
                 &prompt,
@@ -7273,10 +7273,61 @@ pub async fn run_delivery_job(delivery_id: Uuid, state: Arc<AppState>) {
                 Some(delivery_id),
             ).await;
 
+            // AUTO-RETRY: if the review fails and Gemini gave a retry_hint,
+            // re-render ONCE with the hint prepended to the prompt.
+            // Keep whichever render scored higher.
+            let mut best_url = url.clone();
+            let mut best_score = review.score;
+            let mut best_review = review.clone();
+
+            if !review.pass && review.score > 0 {
+                if let Some(hint) = review.retry_hint.as_ref() {
+                    tracing::info!("🔄 Auto-retrying delivery {} (score {}) with hint: {}", delivery_id, review.score, hint);
+                    let improved_prompt = format!("{hint}. {prompt}");
+                    let (_, retry_args, _, _) = build_delivery_tool_args(&gig_type, &improved_prompt, &style, duration, &extra);
+
+                    if let Ok(retry_job_id) = blender.submit_job(&tool, retry_args).await {
+                        let mut retry_url: Option<String> = None;
+                        for _ in 0..180u16 {
+                            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                            if let Ok(status) = blender.poll_job(&retry_job_id).await {
+                                match status.get("state").and_then(|s| s.as_str()) {
+                                    Some("completed") => {
+                                        retry_url = status.get("result")
+                                            .and_then(|r| r.get(url_key))
+                                            .and_then(|v| v.as_str())
+                                            .map(|s| s.to_string());
+                                        break;
+                                    }
+                                    Some("failed") | Some("error") => break,
+                                    _ => {}
+                                }
+                            }
+                        }
+
+                        if let Some(retry_url_str) = retry_url {
+                            let retry_review = crate::render_review::review_render(
+                                &state,
+                                &retry_url_str,
+                                &improved_prompt,
+                                &tool,
+                                Some(delivery_id),
+                            ).await;
+                            tracing::info!("🔄 Retry review: score {} (was {})", retry_review.score, best_score);
+                            if retry_review.score > best_score {
+                                best_url = retry_url_str;
+                                best_score = retry_review.score;
+                                best_review = retry_review;
+                            }
+                        }
+                    }
+                }
+            }
+
+            review = best_review;
+            let url = best_url;
+
             let filename = format!("delivery_{delivery_id}.{ext}");
-            // Write an error_message flagging low-quality renders so
-            // admins see them on the deliveries page. Still status='completed'
-            // because the file exists — just with a warning.
             let error_note: Option<String> = if !review.pass && review.score > 0 {
                 Some(format!("QA warning (score {}): {}", review.score, review.feedback))
             } else { None };
@@ -7290,7 +7341,7 @@ pub async fn run_delivery_job(delivery_id: Uuid, state: Arc<AppState>) {
 
             if !review.pass {
                 tracing::warn!(
-                    "⚠️ QA review flagged delivery {}: score={}, feedback={}",
+                    "⚠️ QA review flagged delivery {} even after retry: score={}, feedback={}",
                     delivery_id, review.score, review.feedback
                 );
             }
