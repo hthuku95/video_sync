@@ -309,7 +309,7 @@ impl QdrantClient {
             "embedding_provider": "voyage"
         });
 
-        let mut qdrant_payload = std::collections::HashMap::new();
+        let mut qdrant_payload: std::collections::HashMap<String, qdrant_client::qdrant::Value> = std::collections::HashMap::new();
         if let Some(obj) = payload_value.as_object() {
             for (key, value) in obj {
                 qdrant_payload.insert(key.clone(), value.clone().into());
@@ -377,7 +377,7 @@ impl QdrantClient {
             "embedding_provider": "gemini"
         });
 
-        let mut qdrant_payload = std::collections::HashMap::new();
+        let mut qdrant_payload: std::collections::HashMap<String, qdrant_client::qdrant::Value> = std::collections::HashMap::new();
         if let Some(obj) = payload_value.as_object() {
             for (key, value) in obj {
                 qdrant_payload.insert(key.clone(), value.clone().into());
@@ -776,7 +776,7 @@ impl QdrantClient {
         }
 
         // Convert JSON payload to Qdrant payload format
-        let mut qdrant_payload = std::collections::HashMap::new();
+        let mut qdrant_payload: std::collections::HashMap<String, qdrant_client::qdrant::Value> = std::collections::HashMap::new();
         if let Some(obj) = payload.as_object() {
             for (key, value) in obj {
                 qdrant_payload.insert(key.clone(), value.clone().into());
@@ -1061,7 +1061,7 @@ impl QdrantClient {
         embedding: Vec<f32>,
         provider: EmbeddingProvider,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let mut qdrant_payload = std::collections::HashMap::new();
+        let mut qdrant_payload: std::collections::HashMap<String, qdrant_client::qdrant::Value> = std::collections::HashMap::new();
         if let Some(obj) = payload.as_object() {
             for (key, value) in obj {
                 qdrant_payload.insert(key.clone(), value.clone().into());
@@ -1090,7 +1090,7 @@ impl QdrantClient {
         payload: serde_json::Value,
         embedding: Vec<f32>,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let mut qdrant_payload = std::collections::HashMap::new();
+        let mut qdrant_payload: std::collections::HashMap<String, qdrant_client::qdrant::Value> = std::collections::HashMap::new();
         if let Some(obj) = payload.as_object() {
             for (key, value) in obj {
                 qdrant_payload.insert(key.clone(), value.clone().into());

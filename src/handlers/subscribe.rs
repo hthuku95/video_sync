@@ -18,7 +18,6 @@ use axum::{
     Router,
 };
 use serde_json::json;
-use sqlx::Row;
 use std::sync::Arc;
 
 /// Flat-rate USD price for the regular-user subscription. 15 USDC → 30 days.
