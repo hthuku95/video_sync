@@ -453,6 +453,7 @@ pub async fn execute_tool_claude(name: &str, args: &Value) -> String {
         "generate_image" => execute_generate_image_claude(args).await,
         "edit_image" => execute_edit_image_claude(args).await,
         "fetch_website_image" => execute_fetch_website_image_claude(args).await,
+        "read_website_content" => execute_read_website_content_claude(args).await,
         "auto_generate_video" => execute_auto_generate_video_claude(args).await,
         "generate_video_queries" => execute_generate_video_queries_claude(args),
         "analyze_pexels_thumbnail" => execute_analyze_pexels_thumbnail_claude(args).await,
@@ -842,6 +843,7 @@ pub async fn execute_tool_gemini(name: &str, args: &HashMap<String, Value>) -> S
         "generate_image" => execute_generate_image_gemini(args).await,
         "edit_image" => execute_edit_image_gemini(args).await,
         "fetch_website_image" => execute_fetch_website_image_gemini(args).await,
+        "read_website_content" => execute_read_website_content_gemini(args).await,
         "auto_generate_video" => execute_auto_generate_video_gemini(args).await,
         "generate_video_queries" => execute_generate_video_queries_gemini(args),
         "analyze_pexels_thumbnail" => execute_analyze_pexels_thumbnail_gemini(args).await,
@@ -11051,6 +11053,104 @@ async fn execute_fetch_website_image_claude(args: &serde_json::Value) -> String 
 async fn execute_fetch_website_image_gemini(args: &HashMap<String, serde_json::Value>) -> String {
     let url = args.get("url").and_then(|v| v.as_str()).unwrap_or("");
     execute_fetch_website_image_inner(url).await
+}
+
+async fn execute_read_website_content_claude(args: &serde_json::Value) -> String {
+    let url = args.get("url").and_then(|v| v.as_str()).unwrap_or("");
+    execute_read_website_content_inner(url).await
+}
+
+async fn execute_read_website_content_gemini(args: &HashMap<String, serde_json::Value>) -> String {
+    let url = args.get("url").and_then(|v| v.as_str()).unwrap_or("");
+    execute_read_website_content_inner(url).await
+}
+
+async fn execute_read_website_content_inner(url: &str) -> String {
+    if url.is_empty() {
+        return "Error: 'url' parameter is required".to_string();
+    }
+    let full_url = if !url.starts_with("http") { format!("https://{url}") } else { url.to_string() };
+
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .user_agent("Mozilla/5.0 (compatible; VideoSyncBot/1.0)")
+        .redirect(reqwest::redirect::Policy::limited(5))
+        .build() {
+        Ok(c) => c,
+        Err(e) => return format!("Error building HTTP client: {e}"),
+    };
+
+    let resp = match client.get(&full_url).send().await {
+        Ok(r) => r,
+        Err(e) => return format!("Error fetching {full_url}: {e}"),
+    };
+    if !resp.status().is_success() {
+        return format!("HTTP {} fetching {full_url}", resp.status());
+    }
+    let html = match resp.text().await {
+        Ok(t) => t,
+        Err(e) => return format!("Error reading response: {e}"),
+    };
+
+    let title = extract_tag_content(&html, "title").unwrap_or_default();
+    let description = extract_meta(&html, "description").unwrap_or_default();
+    let og_title = extract_meta(&html, "og:title").unwrap_or_default();
+    let og_desc = extract_meta(&html, "og:description").unwrap_or_default();
+    let og_image = extract_meta(&html, "og:image").unwrap_or_default();
+
+    // Extract visible text (strip tags, limit to first 2000 chars)
+    let text = strip_html_tags(&html);
+    let trimmed: String = text.chars().take(2000).collect();
+
+    format!(
+        "Website: {full_url}\n\
+        Title: {title}\n\
+        Description: {description}\n\
+        OG Title: {og_title}\n\
+        OG Description: {og_desc}\n\
+        OG Image: {og_image}\n\n\
+        Page Content (first 2000 chars):\n{trimmed}\n\n\
+        You now understand what this website is about. Use this information to:\n\
+        1. Write a video script with generate_video_script\n\
+        2. Extract the hero image with fetch_website_image for Blender scenes\n\
+        3. Create title cards, lower thirds, and scene animations\n\
+        4. Add voiceover narration with add_voiceover_to_video"
+    )
+}
+
+fn extract_tag_content(html: &str, tag: &str) -> Option<String> {
+    let open = format!("<{}", tag);
+    let close = format!("</{}>", tag);
+    let start = html.to_lowercase().find(&open)?;
+    let after_open = html[start..].find('>')? + start + 1;
+    let end = html[after_open..].to_lowercase().find(&close)? + after_open;
+    Some(html[after_open..end].trim().to_string())
+}
+
+fn extract_meta(html: &str, name: &str) -> Option<String> {
+    crate::handlers::prospects::extract_meta_content_pub(html, name)
+}
+
+fn strip_html_tags(html: &str) -> String {
+    let mut result = String::new();
+    let mut in_tag = false;
+    let mut last_was_space = false;
+    for ch in html.chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' => { in_tag = false; if !last_was_space { result.push(' '); last_was_space = true; } }
+            _ if !in_tag => {
+                if ch.is_whitespace() {
+                    if !last_was_space { result.push(' '); last_was_space = true; }
+                } else {
+                    result.push(ch);
+                    last_was_space = false;
+                }
+            }
+            _ => {}
+        }
+    }
+    result
 }
 
 async fn execute_fetch_website_image_inner(url: &str) -> String {

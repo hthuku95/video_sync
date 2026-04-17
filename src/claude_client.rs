@@ -1494,6 +1494,21 @@ impl ClaudeClient {
                 },
             },
             ClaudeTool {
+                name: "read_website_content".to_string(),
+                description: "Fetch and read a website URL, returning its title, description, and main text content. Use this to understand what a website is about before generating a video script, voiceover, or Blender animation about it.".to_string(),
+                input_schema: InputSchema {
+                    schema_type: "object".to_string(),
+                    properties: HashMap::from([
+                        ("url".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "The website URL to read (e.g. 'https://stripe.com')".to_string(),
+                            items: None,
+                        }),
+                    ]),
+                    required: vec!["url".to_string()],
+                },
+            },
+            ClaudeTool {
                 name: "fetch_website_image".to_string(),
                 description: "Fetch the hero/og:image from a website URL. Use this when a user provides a website URL (e.g. netflix.com, stripe.com) and you need to extract its visual for use in a Blender landing page animation or product mockup. Returns the image URL that you can pass to blender_generate_scene's reference_image_url parameter.".to_string(),
                 input_schema: InputSchema {

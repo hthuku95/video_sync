@@ -3922,6 +3922,10 @@ pub async fn fetch_landing_page_hero(url: &str) -> Option<String> {
 
 /// Pull the `content` attribute of the first matching meta tag.
 /// We tolerate both `property="og:image"` and `name="og:image"` variants.
+pub fn extract_meta_content_pub(html: &str, key: &str) -> Option<String> {
+    extract_meta_content(html, key)
+}
+
 fn extract_meta_content(html: &str, key: &str) -> Option<String> {
     let lower = html.to_lowercase();
     let needles = [

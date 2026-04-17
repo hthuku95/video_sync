@@ -2163,6 +2163,24 @@ impl GeminiClient {
                 },
             },
 
+            FunctionDeclaration {
+                name: "read_website_content".to_string(),
+                description: "Fetch and read a website URL, returning its title, description, and main text content. Use this to understand what a website is about before generating a video script, voiceover, or Blender animation about it. Chain with generate_video_script and blender tools to create a full promotional/informative video from a URL.".to_string(),
+                parameters: Parameters {
+                    param_type: "object".to_string(),
+                    properties: {
+                        let mut props = HashMap::new();
+                        props.insert("url".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "The website URL to read (e.g. 'https://stripe.com')".to_string(),
+                            items: None,
+                        });
+                        props
+                    },
+                    required: vec!["url".to_string()],
+                },
+            },
+
             // BLENDER MCP TOOLS — 3D rendering, Manim, thumbnails, data viz
             // =====================================================================
 
