@@ -2706,14 +2706,23 @@ async fn instagram_generate_sample(
     .execute(&state.db_pool)
     .await;
 
-    // Kick off the render in the background — same path the admin endpoint
-    // uses. Returns immediately so the user can paste the /delivery/:id
-    // link into the DM right away (the page will render the result when
-    // BlenderMCPServer finishes; ~1-3 min for thumbnail, ~3-8 min for video).
+    // For high-value leads with a website, route through the full AI agent
+    // to generate a comprehensive video (script + Blender scenes + voiceover).
+    // For simpler cases, use the direct Blender render path.
+    let has_website = source_url.is_some();
     let render_state = state.clone();
-    tokio::spawn(async move {
-        crate::handlers::admin::run_delivery_job(delivery_id, render_state).await;
-    });
+    if has_website && gig_type == "scene" {
+        let website_url = source_url.clone().unwrap_or_default();
+        let lead_name = full_name.clone();
+        let lead_bio = bio.clone();
+        tokio::spawn(async move {
+            run_agent_video_for_lead(delivery_id, &website_url, &lead_name, &lead_bio, render_state).await;
+        });
+    } else {
+        tokio::spawn(async move {
+            crate::handlers::admin::run_delivery_job(delivery_id, render_state).await;
+        });
+    }
 
     Json(json!({
         "success":      true,
@@ -3883,6 +3892,134 @@ Return ONLY valid JSON (no markdown):
         _ => None,
     });
     (score, reason, service)
+}
+
+// ============================================================================
+// Full AI agent video generation for high-value leads
+// ============================================================================
+
+async fn run_agent_video_for_lead(
+    delivery_id: uuid::Uuid,
+    website_url: &str,
+    lead_name: &str,
+    lead_bio: &str,
+    state: Arc<AppState>,
+) {
+    tracing::info!("🎬 Agent video gen for lead delivery {} — URL: {}", delivery_id, website_url);
+
+    let prompt = format!(
+        r#"Create a 30-second professional promotional video about this business:
+
+Website: {website_url}
+Business name: {lead_name}
+Bio: {lead_bio}
+
+Instructions:
+1. First, use read_website_content to understand what this business does
+2. Use fetch_website_image to get their hero/banner image
+3. Write a compelling 30-second video script using generate_video_script
+4. Create 2-3 Blender scenes:
+   - A title card with their business name using blender_generate_title_card
+   - An animated scene using their hero image via blender_generate_scene with reference_image_url
+   - A lower third with their tagline using blender_generate_lower_third
+5. Add voiceover narration using add_voiceover_to_video
+6. Combine everything into a polished final video
+
+Make it look professional — this will be sent as a sample to pitch our services.
+Output the final video to outputs/lead_sample_{delivery_id}.mp4"#,
+        website_url = website_url,
+        lead_name   = lead_name,
+        lead_bio    = lead_bio.chars().take(200).collect::<String>(),
+        delivery_id = delivery_id,
+    );
+
+    let gemini_client = match state.video_gemini_client.as_ref().or(state.gemini_client.as_ref()) {
+        Some(c) => Arc::new(c.clone()),
+        None => {
+            tracing::error!("No Gemini client available for agent video gen");
+            let _ = sqlx::query("UPDATE deliveries SET status = 'failed', error_message = 'No LLM client available' WHERE id = $1")
+                .bind(delivery_id).execute(&state.db_pool).await;
+            return;
+        }
+    };
+
+    let agent = crate::agent::stateful_agent::StatefulGeminiAgent::new(gemini_client);
+    let session_id = format!("lead-sample-{}", delivery_id);
+
+    match agent.chat(
+        &prompt,
+        &session_id,
+        String::new(),
+        state.clone(),
+        state.job_manager.clone(),
+        None,
+    ).await {
+        Ok(result) => {
+            tracing::info!("✅ Agent video gen complete for delivery {}", delivery_id);
+            let output_path = format!("outputs/lead_sample_{}.mp4", delivery_id);
+
+            // Try to upload the output to R2 if it exists
+            if tokio::fs::metadata(&output_path).await.is_ok() {
+                if let Some(r2) = state.r2_client.as_ref() {
+                    let key = format!("deliveries/{}/sample.mp4", delivery_id);
+                    match r2.upload_file(&output_path, &key).await {
+                        Ok(url) => {
+                            let _ = sqlx::query(
+                                "UPDATE deliveries SET status = 'completed', r2_url = $1, completed_at = NOW() WHERE id = $2"
+                            )
+                            .bind(&url)
+                            .bind(delivery_id)
+                            .execute(&state.db_pool)
+                            .await;
+                            tracing::info!("📦 Uploaded agent video to R2: {}", url);
+                            return;
+                        }
+                        Err(e) => tracing::warn!("R2 upload failed: {e} — falling back"),
+                    }
+                }
+            }
+
+            // If agent produced output but no file found at expected path,
+            // try to extract an output path from the agent's response
+            let output_hint = extract_output_path_from_response(&result);
+            if let Some(path) = output_hint {
+                if tokio::fs::metadata(&path).await.is_ok() {
+                    if let Some(r2) = state.r2_client.as_ref() {
+                        let key = format!("deliveries/{}/sample.mp4", delivery_id);
+                        if let Ok(url) = r2.upload_file(&path, &key).await {
+                            let _ = sqlx::query(
+                                "UPDATE deliveries SET status = 'completed', r2_url = $1, completed_at = NOW() WHERE id = $2"
+                            )
+                            .bind(&url)
+                            .bind(delivery_id)
+                            .execute(&state.db_pool)
+                            .await;
+                            return;
+                        }
+                    }
+                }
+            }
+
+            // Fall back to direct Blender render if agent didn't produce a file
+            tracing::warn!("Agent didn't produce expected output file — falling back to direct Blender render");
+            crate::handlers::admin::run_delivery_job(delivery_id, state).await;
+        }
+        Err(e) => {
+            tracing::warn!("Agent video gen failed: {e} — falling back to direct Blender render");
+            crate::handlers::admin::run_delivery_job(delivery_id, state).await;
+        }
+    }
+}
+
+fn extract_output_path_from_response(response: &str) -> Option<String> {
+    // Look for file paths in the agent's response
+    for word in response.split_whitespace() {
+        let clean = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '/' && c != '.' && c != '_' && c != '-');
+        if clean.ends_with(".mp4") && clean.contains('/') {
+            return Some(clean.to_string());
+        }
+    }
+    None
 }
 
 // ============================================================================
