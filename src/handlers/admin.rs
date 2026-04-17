@@ -7350,11 +7350,18 @@ fn build_delivery_tool_args(
                 url_key, ext,
             )
         }
-        _ => ( // "scene" + default
-            "blender_generate_scene".to_string(),
-            json!({"prompt": prompt, "duration": duration, "style": style}),
-            "video_url", "mp4",
-        ),
+        _ => { // "scene" + default — includes landing_page service type
+            let mut scene_args = json!({"prompt": prompt, "duration": duration, "style": style});
+            let ref_url = get("reference_image_url");
+            if !ref_url.is_empty() {
+                scene_args["reference_image_url"] = serde_json::Value::String(ref_url.to_string());
+            }
+            (
+                "blender_generate_scene".to_string(),
+                scene_args,
+                "video_url", "mp4",
+            )
+        }
     }
 }
 
@@ -7568,6 +7575,11 @@ pub async fn admin_deliveries_page() -> Html<String> {
         <input id="screenshot_url" type="url" placeholder="https://...">
         <span class="hint">Direct image URL to show in the mockup frame</span>
       </div>
+      <div class="form-group hidden" id="grp-ref-image-url">
+        <label>Landing Page / Reference Image URL (optional)</label>
+        <input id="reference_image_url" type="url" placeholder="https://example.com or https://example.com/hero.png">
+        <span class="hint">Pass a website URL or direct image URL — hero image will be scraped and used as the scene background</span>
+      </div>
     </div>
     <div class="form-actions">
       <button class="btn btn-primary" id="create-btn" onclick="createDelivery()">🚀 Create Delivery</button>
@@ -7603,7 +7615,7 @@ pub async fn admin_deliveries_page() -> Html<String> {
 
 <script>
 const GIG_CONFIG = {
-  scene:       { promptLabel:'Scene Description', style:true,  subtitle:false, titleText:false, duration:true,  chartType:false, dataJson:false, animType:false, bgStyle:false, device:false, mockupAnim:false, screenshotUrl:false, defaultDuration:15 },
+  scene:       { promptLabel:'Scene Description', style:true,  subtitle:false, titleText:false, duration:true,  chartType:false, dataJson:false, animType:false, bgStyle:false, device:false, mockupAnim:false, screenshotUrl:false, refImageUrl:true, defaultDuration:15 },
   thumbnail:   { promptLabel:'Thumbnail Description', style:true,  subtitle:false, titleText:true,  duration:false, chartType:false, dataJson:false, animType:false, bgStyle:false, device:false, mockupAnim:false, screenshotUrl:false, defaultDuration:0  },
   title_card:  { promptLabel:'Main Title Text', style:true,  subtitle:true,  titleText:false, duration:true,  chartType:false, dataJson:false, animType:false, bgStyle:false, device:false, mockupAnim:false, screenshotUrl:false, defaultDuration:5  },
   data_viz:    { promptLabel:'Chart Title',     style:false, subtitle:false, titleText:false, duration:true,  chartType:true,  dataJson:true,  animType:false, bgStyle:false, device:false, mockupAnim:false, screenshotUrl:false, defaultDuration:15 },
@@ -7662,6 +7674,7 @@ async function createDelivery() {
   if (cfg.device)        extra.device           = document.getElementById('device').value;
   if (cfg.mockupAnim)    extra.animation        = document.getElementById('mockup_animation').value;
   if (cfg.screenshotUrl) extra.screenshot_url   = document.getElementById('screenshot_url').value;
+  if (cfg.refImageUrl)   extra.reference_image_url = document.getElementById('reference_image_url').value;
 
   const token = localStorage.getItem('auth_token') || localStorage.getItem('admin_token');
   const body = {
