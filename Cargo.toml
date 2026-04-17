@@ -61,10 +61,9 @@ aws-credential-types = "1"
 # we can call install_default() at startup before any TLS connection is made.
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
 
-# Telegram MTProto: grammers-client is temporarily removed while we
-# migrate to the new SenderPool + UpdateStream API (master broke
-# Client::connect + next_update). The module is stubbed in
-# src/telegram_client.rs. Telegram Bot API (telegram_bot.rs) still
-# works for outbound notifications.
-# TODO: re-add grammers-client once the new API integration is ready.
+# Telegram MTProto: grammers-client 0.9 (SenderPool + UpdateStream API).
+# grammers-session sqlite-storage uses libsql (not sqlite3), so no link
+# collision with sqlx (which has default-features = false, no sqlite driver).
+grammers-client = "0.9"
+grammers-session = { version = "0.9", default-features = false, features = ["sqlite-storage"] }
 
