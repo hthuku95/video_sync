@@ -14,7 +14,7 @@ async-trait = "0.1.73"
 # drags in sqlx-sqlite → libsqlite3-sys and collides with grammers-session's
 # own native `sqlite3` link (two crates can't `links = "sqlite3"`). We only
 # need the postgres driver.
-sqlx = { version = "0.7.4", default-features = false, features = ["runtime-tokio-rustls", "postgres", "chrono", "migrate", "rust_decimal", "json", "uuid"] }
+sqlx = { version = "0.7.4", default-features = false, features = ["runtime-tokio-rustls", "postgres", "chrono", "migrate", "macros", "rust_decimal", "json", "uuid"] }
 dotenvy = "0.15.7"
 tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter", "json", "registry"] }
@@ -61,23 +61,10 @@ aws-credential-types = "1"
 # we can call install_default() at startup before any TLS connection is made.
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
 
-# Telegram MTProto (Client API / userbot) — used for automated channel
-# monitoring: grammers-client subscribes to configured Telegram channels,
-# detects "need editor / hiring" posts, scores them via our LLM, and
-# pings the admin bot with a pre-written custom DM. See src/telegram_client.rs.
-#
-# We pin to a git revision on master rather than the published v0.8.0
-# tag because:
-#   1. grammers-session v0.8.0 on crates.io has a HARD (non-optional)
-#      dep on `sqlite 0.37.0` which links the native `sqlite3` C library.
-#      That collides with sqlx-sqlite's libsqlite3-sys (both `links =
-#      "sqlite3"`), and Cargo refuses to resolve.
-#   2. Master has already made sqlite backing optional (behind a
-#      "sqlite-storage" feature) — and grammers-client itself now
-#      passes `default-features = false` when depending on
-#      grammers-session. No sqlite native library is linked and the
-#      collision goes away.
-# Pinned commit for reproducibility — bump intentionally.
-grammers-client  = { git = "https://github.com/Lonami/grammers", rev = "fa7692e49f301f16dc671c2f305ac1a32cad1a8e" }
-grammers-session = { git = "https://github.com/Lonami/grammers", rev = "fa7692e49f301f16dc671c2f305ac1a32cad1a8e", default-features = false, features = ["serde"] }
+# Telegram MTProto: grammers-client is temporarily removed while we
+# migrate to the new SenderPool + UpdateStream API (master broke
+# Client::connect + next_update). The module is stubbed in
+# src/telegram_client.rs. Telegram Bot API (telegram_bot.rs) still
+# works for outbound notifications.
+# TODO: re-add grammers-client once the new API integration is ready.
 
