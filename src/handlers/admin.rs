@@ -6524,7 +6524,7 @@ pub async fn delivery_page(
                 // 2. Custom delivery — these CAN be paywalled.
                 let dr = sqlx::query(
                     "SELECT title, gig_type, status, output_r2_url, output_filename, \
-                     unlock_price_usdc, unlocked_until \
+                     unlock_price_usdc, unlocked_until, preview_r2_url \
                      FROM deliveries WHERE id = $1",
                 )
                 .bind(uuid)
@@ -6537,13 +6537,20 @@ pub async fn delivery_page(
                     let n: String = row.get("title");
                     let g: String = row.get("gig_type");
                     let s: String = row.get("status");
-                    let u: Option<String> = row.try_get("output_r2_url").ok();
+                    let full_u: Option<String> = row.try_get("output_r2_url").ok().flatten();
+                    let preview_u: Option<String> = row.try_get("preview_r2_url").ok().flatten();
                     let f: Option<String> = row.try_get("output_filename").ok();
                     let price: Option<sqlx::types::Decimal> =
                         row.try_get("unlock_price_usdc").ok().flatten();
                     let until: Option<chrono::DateTime<chrono::Utc>> =
                         row.try_get("unlocked_until").ok().flatten();
-                    (Some(n), Some(g), Some(s), u, f, None, None, price, until)
+                    // Pick which URL to show: locked → preview (or full fallback),
+                    // unlocked → full clean HD. The preview URL is the agent's
+                    // watermarked 30-60s clip; paying unlocks the full 3-4min.
+                    let is_unlocked_now = price.is_none()
+                        || until.map(|t| t > chrono::Utc::now()).unwrap_or(false);
+                    let served = if is_unlocked_now { full_u.clone() } else { preview_u.or(full_u.clone()) };
+                    (Some(n), Some(g), Some(s), served, f, None, None, price, until)
                 } else {
                     (None, None, None, None, None, None, None, None, None)
                 }
@@ -6599,12 +6606,12 @@ pub async fn delivery_page(
                 Some(url) => {
                     if is_image {
                         let watermark_overlay = if !is_unlocked {
-                            r#"<div class="watermark"><div class="watermark-label">PREVIEW · $5 USDC FOR HD</div></div>"#
+                            r#"<div class="watermark"><div class="watermark-label">PREVIEW · UNLOCK FULL HD BELOW</div></div>"#
                         } else { "" };
                         format!(r#"<div class="media-stack"><img src="{url}" alt="Delivered image" style="max-width:100%;border-radius:12px;">{watermark_overlay}</div>"#)
                     } else {
                         let watermark_overlay = if !is_unlocked {
-                            r#"<div class="watermark"><div class="watermark-label">PREVIEW · $5 USDC FOR HD</div></div>"#
+                            r#"<div class="watermark"><div class="watermark-label">PREVIEW · UNLOCK FULL HD BELOW</div></div>"#
                         } else { "" };
                         // Disable right-click + downloads on the locked preview
                         // by removing `controlsList=download` and adding
@@ -7261,70 +7268,91 @@ pub async fn run_delivery_job(delivery_id: Uuid, state: Arc<AppState>) {
 
     match final_url {
         Some(url) => {
-            // QA review — call Gemini to verify the output matches the
-            // original brief. Logs to blender_render_reviews for admin
-            // dashboard. Fail-open: if review fails, delivery still
-            // completes (we don't want Gemini downtime to block clients).
-            let mut review = crate::render_review::review_render(
-                &state,
-                &url,
-                &prompt,
-                &tool,
-                Some(delivery_id),
-            ).await;
+            // ITERATIVE QA REVIEW — keep retrying until the reviewer
+            // passes the output or we hit MAX_BLENDER_QA_RETRIES. Each
+            // retry prepends the reviewer's hint to the prompt so we
+            // adjust to the specific issue flagged. Track the best
+            // attempt across all retries so we always ship something.
+            const MAX_BLENDER_QA_RETRIES: usize = 5;
+            let mut best_url    = url.clone();
+            let mut best_score  = -1i32;
+            let mut best_review = None::<crate::render_review::ReviewResult>;
+            let mut current_url = url.clone();
+            let mut current_prompt = prompt.clone();
+            let mut retries_used = 0i32;
 
-            // AUTO-RETRY: if the review fails and Gemini gave a retry_hint,
-            // re-render ONCE with the hint prepended to the prompt.
-            // Keep whichever render scored higher.
-            let mut best_url = url.clone();
-            let mut best_score = review.score;
-            let mut best_review = review.clone();
+            for attempt in 0..MAX_BLENDER_QA_RETRIES {
+                let review = crate::render_review::review_render(
+                    &state,
+                    &current_url,
+                    &current_prompt,
+                    &tool,
+                    Some(delivery_id),
+                ).await;
 
-            if !review.pass && review.score > 0 {
-                if let Some(hint) = review.retry_hint.as_ref() {
-                    tracing::info!("🔄 Auto-retrying delivery {} (score {}) with hint: {}", delivery_id, review.score, hint);
-                    let improved_prompt = format!("{hint}. {prompt}");
-                    let (_, retry_args, _, _) = build_delivery_tool_args(&gig_type, &improved_prompt, &style, duration, &extra);
+                if review.score > best_score {
+                    best_score  = review.score;
+                    best_url    = current_url.clone();
+                    best_review = Some(review.clone());
+                }
 
-                    if let Ok(retry_job_id) = blender.submit_job(&tool, retry_args).await {
-                        let mut retry_url: Option<String> = None;
-                        for _ in 0..180u16 {
-                            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                            if let Ok(status) = blender.poll_job(&retry_job_id).await {
-                                match status.get("state").and_then(|s| s.as_str()) {
-                                    Some("completed") => {
-                                        retry_url = status.get("result")
-                                            .and_then(|r| r.get(url_key))
-                                            .and_then(|v| v.as_str())
-                                            .map(|s| s.to_string());
-                                        break;
-                                    }
-                                    Some("failed") | Some("error") => break,
-                                    _ => {}
-                                }
+                retries_used = attempt as i32;
+
+                if review.pass {
+                    tracing::info!("✅ Delivery {} PASSED review on attempt {} (score {})",
+                        delivery_id, attempt + 1, review.score);
+                    break;
+                }
+
+                if attempt + 1 >= MAX_BLENDER_QA_RETRIES { break; }
+
+                // Retry with the reviewer's hint prepended
+                let hint = review.retry_hint.clone().unwrap_or_else(|| review.feedback.clone());
+                tracing::info!("🔄 Retrying delivery {} (score {}, attempt {}/{}): {}",
+                    delivery_id, review.score, attempt + 1, MAX_BLENDER_QA_RETRIES, hint);
+                current_prompt = format!("{hint}. {prompt}", hint = hint, prompt = prompt);
+                let (_, retry_args, _, _) = build_delivery_tool_args(&gig_type, &current_prompt, &style, duration, &extra);
+
+                let retry_job_id = match blender.submit_job(&tool, retry_args).await {
+                    Ok(id) => id,
+                    Err(e) => {
+                        tracing::warn!("Retry submit failed: {e}");
+                        break;
+                    }
+                };
+
+                let mut retry_url: Option<String> = None;
+                for _ in 0..180u16 {
+                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                    if let Ok(status) = blender.poll_job(&retry_job_id).await {
+                        match status.get("state").and_then(|s| s.as_str()) {
+                            Some("completed") => {
+                                retry_url = status.get("result")
+                                    .and_then(|r| r.get(url_key))
+                                    .and_then(|v| v.as_str())
+                                    .map(|s| s.to_string());
+                                break;
                             }
+                            Some("failed") | Some("error") => break,
+                            _ => {}
                         }
+                    }
+                }
 
-                        if let Some(retry_url_str) = retry_url {
-                            let retry_review = crate::render_review::review_render(
-                                &state,
-                                &retry_url_str,
-                                &improved_prompt,
-                                &tool,
-                                Some(delivery_id),
-                            ).await;
-                            tracing::info!("🔄 Retry review: score {} (was {})", retry_review.score, best_score);
-                            if retry_review.score > best_score {
-                                best_url = retry_url_str;
-                                best_score = retry_review.score;
-                                best_review = retry_review;
-                            }
-                        }
+                match retry_url {
+                    Some(u) => current_url = u,
+                    None    => {
+                        tracing::warn!("Retry produced no output — keeping best so far");
+                        break;
                     }
                 }
             }
 
-            review = best_review;
+            let review = best_review.unwrap_or_else(|| crate::render_review::ReviewResult {
+                pass: false, score: 0,
+                feedback: "Review infrastructure error".to_string(),
+                retry_hint: None,
+            });
             let url = best_url;
 
             let filename = format!("delivery_{delivery_id}.{ext}");
@@ -7334,15 +7362,16 @@ pub async fn run_delivery_job(delivery_id: Uuid, state: Arc<AppState>) {
 
             let _ = sqlx::query(
                 "UPDATE deliveries SET status='completed', output_r2_url=$1, output_filename=$2, \
-                 error_message=$3, completed_at=NOW() WHERE id=$4",
+                 error_message=$3, qa_retry_count=$4, final_qa_score=$5, completed_at=NOW() WHERE id=$6",
             )
-            .bind(&url).bind(&filename).bind(error_note.as_deref()).bind(delivery_id)
+            .bind(&url).bind(&filename).bind(error_note.as_deref())
+            .bind(retries_used + 1).bind(review.score).bind(delivery_id)
             .execute(&state.db_pool).await;
 
             if !review.pass {
                 tracing::warn!(
-                    "⚠️ QA review flagged delivery {} even after retry: score={}, feedback={}",
-                    delivery_id, review.score, review.feedback
+                    "⚠️ QA still flagged delivery {} after {} retries: score={}, feedback={}",
+                    delivery_id, retries_used + 1, review.score, review.feedback
                 );
             }
         }

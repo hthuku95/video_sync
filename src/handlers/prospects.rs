@@ -2673,12 +2673,14 @@ async fn instagram_generate_sample(
 
     // Stamp the origin lead on the delivery so future x402 unlocks can
     // trace revenue back to the whitelisted user who sourced this lead.
-    // unlock_price_usdc is set to $5 here so clients pay to download HD —
-    // revenue flows to the sourcing user when that happens.
+    // Price is market-aligned per service type + whether we have a
+    // website URL (agent-generated comprehensive videos cost more).
+    let unlock_price = unlock_price_for(service.as_deref(), source_url.is_some());
+    let source_url_str: Option<String> = source_url.clone();
     let delivery_id: uuid::Uuid = match sqlx::query_scalar::<_, uuid::Uuid>(
         "INSERT INTO deliveries (client_ref, title, gig_type, prompt, style, duration, extra_args, status,
-                                  sourced_from_lead_id, unlock_price_usdc)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', $8, 5.00)
+                                  sourced_from_lead_id, unlock_price_usdc, source_url)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', $8, $9, $10)
          RETURNING id"
     )
     .bind(format!("ig:{}", username))
@@ -2689,6 +2691,8 @@ async fn instagram_generate_sample(
     .bind(duration)
     .bind(&extra)
     .bind(id)
+    .bind(unlock_price)
+    .bind(source_url_str.as_deref())
     .fetch_one(&state.db_pool)
     .await {
         Ok(id) => id,
@@ -3895,8 +3899,52 @@ Return ONLY valid JSON (no markdown):
 }
 
 // ============================================================================
+// Market-aligned unlock pricing for delivery samples
+// ============================================================================
+//
+// Market rates (per research + honest pricing for cold-DM impulse buys):
+//   SaaS explainer videos:   $1,500-$7,000 (agency rates)
+//   Product promo videos:    $500-$3,000
+//   Landing page videos:     $1,000-$5,000
+//
+// Our pricing (AI-produced, first-touch cold DM, priced for conversion):
+//   Comprehensive agent video w/ website:  $197-$497
+//   Single-shot Blender animation:          $49-$97
+//   Thumbnails / basic Blender:             $9-$29
+
+pub fn unlock_price_for(service: Option<&str>, has_website: bool) -> f64 {
+    if has_website {
+        // Agent-generated comprehensive video (script + scenes + voiceover).
+        // Full production value justifies mid-market pricing.
+        match service {
+            Some("full_stack")       => 497.00, // Most ambitious: long-form brand video
+            Some("landing_page")     => 297.00, // Animated landing page presentation
+            Some("product_mockup")   => 197.00, // Product showcase video
+            Some("ugc")              => 197.00, // UGC-style promo video
+            Some("animations")       => 147.00, // Branded animation package
+            _                        => 197.00, // Default: scene-based branded video
+        }
+    } else {
+        // Single-shot Blender render (faster, cheaper to produce).
+        match service {
+            Some("landing_page")     => 97.00,
+            Some("product_mockup")   => 97.00,
+            Some("animations")       => 49.00,
+            Some("ugc") | Some("full_stack") => 49.00,
+            Some("thumbnails")       => 19.00,
+            _                        => 29.00,
+        }
+    }
+}
+
+// ============================================================================
 // Full AI agent video generation for high-value leads
 // ============================================================================
+
+/// Max iterations on the agent video + QA loop before giving up and
+/// shipping whatever we have. Each iteration is 3-8 minutes of compute,
+/// so a hard cap of 5 keeps the worst-case bounded at ~40 min.
+const AGENT_VIDEO_MAX_RETRIES: usize = 5;
 
 async fn run_agent_video_for_lead(
     delivery_id: uuid::Uuid,
@@ -3907,31 +3955,54 @@ async fn run_agent_video_for_lead(
 ) {
     tracing::info!("🎬 Agent video gen for lead delivery {} — URL: {}", delivery_id, website_url);
 
-    let prompt = format!(
-        r#"Create a 30-second professional promotional video about this business:
+    let full_path = format!("outputs/lead_full_{}.mp4", delivery_id);
+    let preview_path = format!("outputs/lead_preview_{}.mp4", delivery_id);
 
-Website: {website_url}
+    let base_prompt = format!(
+        r#"Create a comprehensive 3-4 minute promotional video about this business,
+then cut a branded 30-60 second preview from it.
+
+Business website: {website_url}
 Business name: {lead_name}
 Bio: {lead_bio}
 
-Instructions:
-1. First, use read_website_content to understand what this business does
-2. Use fetch_website_image to get their hero/banner image
-3. Write a compelling 30-second video script using generate_video_script
-4. Create 2-3 Blender scenes:
-   - A title card with their business name using blender_generate_title_card
-   - An animated scene using their hero image via blender_generate_scene with reference_image_url
-   - A lower third with their tagline using blender_generate_lower_third
-5. Add voiceover narration using add_voiceover_to_video
-6. Combine everything into a polished final video
+Full pipeline (LLM-driven — you pick the exact order and tools):
 
-Make it look professional — this will be sent as a sample to pitch our services.
-Output the final video to outputs/lead_sample_{delivery_id}.mp4"#,
-        website_url = website_url,
-        lead_name   = lead_name,
-        lead_bio    = lead_bio.chars().take(200).collect::<String>(),
-        delivery_id = delivery_id,
+PHASE 1 — Understand the business:
+  - read_website_content({website_url}) to understand what they do
+  - fetch_website_image({website_url}) to get hero/banner visuals
+
+PHASE 2 — Write a comprehensive script (3-4 minutes of narration):
+  - generate_video_script for a long-form explainer:
+    intro → problem → solution (their product) → features → social proof → CTA
+
+PHASE 3 — Produce the full video:
+  - Multiple blender_generate_scene calls using reference_image_url for branded scenes
+  - blender_generate_title_card for the intro/outro
+  - blender_generate_lower_third for feature callouts
+  - add_voiceover_to_video to narrate the full script with ElevenLabs TTS
+  - Composite / concatenate the scenes into ONE final video at: {full_path}
+
+PHASE 4 — Cut a branded preview for free sharing:
+  - Use FFmpeg tools to trim the most engaging 30-60 second segment
+  - Add a watermark overlay: "VideoSync.video — PREVIEW" diagonal text across the frame
+  - Add an "Unlock full video at videosync.video/delivery/{delivery_id}" text banner
+  - Save the preview at: {preview_path}
+
+Deliverables (MUST produce both files):
+  - Full clean HD video: {full_path}
+  - Watermarked preview: {preview_path}
+
+Make it professional — this is pitched to a paying client. No placeholder content.
+Output file paths clearly in your final response so the delivery pipeline can find them."#,
+        website_url  = website_url,
+        lead_name    = lead_name,
+        lead_bio     = lead_bio.chars().take(200).collect::<String>(),
+        full_path    = full_path,
+        preview_path = preview_path,
+        delivery_id  = delivery_id,
     );
+    let prompt = base_prompt.clone();
 
     let gemini_client = match state.video_gemini_client.as_ref().or(state.gemini_client.as_ref()) {
         Some(c) => Arc::new(c.clone()),
@@ -3944,71 +4015,185 @@ Output the final video to outputs/lead_sample_{delivery_id}.mp4"#,
     };
 
     let agent = crate::agent::stateful_agent::StatefulGeminiAgent::new(gemini_client);
-    let session_id = format!("lead-sample-{}", delivery_id);
 
-    match agent.chat(
-        &prompt,
-        &session_id,
-        String::new(),
-        state.clone(),
-        state.job_manager.clone(),
-        None,
-    ).await {
-        Ok(result) => {
-            tracing::info!("✅ Agent video gen complete for delivery {}", delivery_id);
-            let output_path = format!("outputs/lead_sample_{}.mp4", delivery_id);
+    // Iterative retry loop: run the agent, review the output, retry with
+    // accumulated feedback until the reviewer passes it or we hit the cap.
+    // Each retry prepends the QA hint to the prompt so the agent can
+    // adjust specifically for what the reviewer flagged.
+    let mut current_prompt = prompt.clone();
+    let mut best_full: Option<String>    = None;
+    let mut best_preview: Option<String> = None;
+    let mut best_score: i32              = -1;
+    let mut best_feedback: String        = String::new();
+    let mut retries_used: i32            = 0;
 
-            // Try to upload the output to R2 if it exists
-            if tokio::fs::metadata(&output_path).await.is_ok() {
-                if let Some(r2) = state.r2_client.as_ref() {
-                    let key = format!("deliveries/{}/sample.mp4", delivery_id);
-                    match r2.upload_file(&output_path, &key).await {
-                        Ok(url) => {
-                            let _ = sqlx::query(
-                                "UPDATE deliveries SET status = 'completed', r2_url = $1, completed_at = NOW() WHERE id = $2"
-                            )
-                            .bind(&url)
-                            .bind(delivery_id)
-                            .execute(&state.db_pool)
-                            .await;
-                            tracing::info!("📦 Uploaded agent video to R2: {}", url);
-                            return;
-                        }
-                        Err(e) => tracing::warn!("R2 upload failed: {e} — falling back"),
-                    }
-                }
+    for attempt in 0..AGENT_VIDEO_MAX_RETRIES {
+        let session_id = format!("lead-sample-{}-try{}", delivery_id, attempt);
+        tracing::info!("🎬 Agent attempt {}/{} for delivery {}", attempt + 1, AGENT_VIDEO_MAX_RETRIES, delivery_id);
+
+        let agent_result = agent.chat(
+            &current_prompt,
+            &session_id,
+            String::new(),
+            state.clone(),
+            state.job_manager.clone(),
+            None,
+        ).await;
+
+        // Collect the actual output paths the agent produced
+        let (full_produced, preview_produced) = locate_agent_outputs(
+            &agent_result.as_deref().unwrap_or(""),
+            &full_path,
+            &preview_path,
+        ).await;
+
+        // Review the full video against the original brief
+        let review = if let Some(ref full) = full_produced {
+            crate::render_review::review_render(
+                &state,
+                full,
+                &base_prompt,
+                "agent_lead_video",
+                Some(delivery_id),
+            ).await
+        } else {
+            crate::render_review::ReviewResult {
+                pass: false,
+                score: 0,
+                feedback: "Agent did not produce expected full video output".to_string(),
+                retry_hint: Some("Produce the full video at the exact path specified in the prompt".to_string()),
             }
+        };
 
-            // If agent produced output but no file found at expected path,
-            // try to extract an output path from the agent's response
-            let output_hint = extract_output_path_from_response(&result);
-            if let Some(path) = output_hint {
-                if tokio::fs::metadata(&path).await.is_ok() {
-                    if let Some(r2) = state.r2_client.as_ref() {
-                        let key = format!("deliveries/{}/sample.mp4", delivery_id);
-                        if let Ok(url) = r2.upload_file(&path, &key).await {
-                            let _ = sqlx::query(
-                                "UPDATE deliveries SET status = 'completed', r2_url = $1, completed_at = NOW() WHERE id = $2"
-                            )
-                            .bind(&url)
-                            .bind(delivery_id)
-                            .execute(&state.db_pool)
-                            .await;
-                            return;
-                        }
-                    }
-                }
-            }
+        retries_used = attempt as i32;
 
-            // Fall back to direct Blender render if agent didn't produce a file
-            tracing::warn!("Agent didn't produce expected output file — falling back to direct Blender render");
-            crate::handlers::admin::run_delivery_job(delivery_id, state).await;
+        // Track the best attempt so we always ship SOMETHING even if no attempt passes
+        if review.score > best_score {
+            best_score    = review.score;
+            best_full     = full_produced.clone();
+            best_preview  = preview_produced.clone();
+            best_feedback = review.feedback.clone();
         }
-        Err(e) => {
-            tracing::warn!("Agent video gen failed: {e} — falling back to direct Blender render");
-            crate::handlers::admin::run_delivery_job(delivery_id, state).await;
+
+        if review.pass {
+            tracing::info!("✅ Agent video PASSED review on attempt {} (score {})", attempt + 1, review.score);
+            break;
+        }
+
+        // Not passing — prepare the next attempt with accumulated feedback
+        if attempt + 1 < AGENT_VIDEO_MAX_RETRIES {
+            let hint = review.retry_hint.clone().unwrap_or_else(|| review.feedback.clone());
+            tracing::warn!("🔄 Retrying (score {}): {}", review.score, hint);
+            current_prompt = format!(
+                "PREVIOUS ATTEMPT FAILED QA REVIEW (score {}/10).\n\
+                Feedback: {}\n\
+                Retry hint: {}\n\n\
+                Apply the feedback above, then run the full pipeline below:\n\n{}",
+                review.score, review.feedback, hint, base_prompt,
+            );
+        } else {
+            tracing::warn!("⚠️ Hit max retries ({}) for delivery {} — shipping best attempt (score {})",
+                AGENT_VIDEO_MAX_RETRIES, delivery_id, best_score);
         }
     }
+
+    // Upload whatever we ended up with. If even the best attempt produced
+    // no file, fall back to the direct Blender render path.
+    let Some(full_path_final) = best_full else {
+        tracing::warn!("No usable output from {} attempts — falling back to direct Blender", retries_used + 1);
+        crate::handlers::admin::run_delivery_job(delivery_id, state).await;
+        return;
+    };
+
+    let r2 = match state.r2_client.as_ref() {
+        Some(r) => r,
+        None => {
+            tracing::error!("R2 not configured — can't upload agent outputs");
+            let _ = sqlx::query(
+                "UPDATE deliveries SET status = 'failed', error_message = 'R2 not configured' WHERE id = $1"
+            ).bind(delivery_id).execute(&state.db_pool).await;
+            return;
+        }
+    };
+
+    // Upload full clean HD video
+    let full_url = match r2.upload_file(&full_path_final, &format!("deliveries/{}/full.mp4", delivery_id)).await {
+        Ok(u) => u,
+        Err(e) => {
+            tracing::error!("Failed to upload full video: {e}");
+            let _ = sqlx::query(
+                "UPDATE deliveries SET status = 'failed', error_message = $1 WHERE id = $2"
+            ).bind(format!("R2 upload failed: {e}")).bind(delivery_id).execute(&state.db_pool).await;
+            return;
+        }
+    };
+
+    // Upload preview (watermarked) — fall back to full video if preview wasn't produced
+    let preview_url = if let Some(pp) = best_preview.as_ref() {
+        match r2.upload_file(pp, &format!("deliveries/{}/preview.mp4", delivery_id)).await {
+            Ok(u) => Some(u),
+            Err(e) => {
+                tracing::warn!("Preview upload failed: {e} — clients will see full video as preview");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    let qa_note: Option<String> = if best_score < 6 {
+        Some(format!("QA final score {} after {} retries: {}", best_score, retries_used + 1, best_feedback))
+    } else {
+        None
+    };
+
+    let _ = sqlx::query(
+        "UPDATE deliveries SET status='completed', output_r2_url=$1, preview_r2_url=$2,
+         qa_retry_count=$3, final_qa_score=$4, error_message=$5, completed_at=NOW()
+         WHERE id=$6"
+    )
+    .bind(&full_url)
+    .bind(preview_url.as_deref())
+    .bind(retries_used + 1)
+    .bind(best_score)
+    .bind(qa_note.as_deref())
+    .bind(delivery_id)
+    .execute(&state.db_pool)
+    .await;
+
+    tracing::info!("📦 Delivery {} complete — full={}, preview={:?}, score={}, retries={}",
+        delivery_id, full_url, preview_url, best_score, retries_used + 1);
+}
+
+/// Find the full + preview output files the agent produced. Tries the
+/// exact expected paths first, then falls back to parsing the agent's
+/// response for any `outputs/*.mp4` mentions.
+async fn locate_agent_outputs(
+    response: &str,
+    expected_full: &str,
+    expected_preview: &str,
+) -> (Option<String>, Option<String>) {
+    let full = if tokio::fs::metadata(expected_full).await.is_ok() {
+        Some(expected_full.to_string())
+    } else {
+        find_mp4_in_response(response, |p| !p.contains("preview"))
+    };
+    let preview = if tokio::fs::metadata(expected_preview).await.is_ok() {
+        Some(expected_preview.to_string())
+    } else {
+        find_mp4_in_response(response, |p| p.contains("preview"))
+    };
+    (full, preview)
+}
+
+fn find_mp4_in_response(response: &str, filter: impl Fn(&str) -> bool) -> Option<String> {
+    for word in response.split_whitespace() {
+        let clean = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '/' && c != '.' && c != '_' && c != '-');
+        if clean.ends_with(".mp4") && clean.contains('/') && filter(clean) {
+            return Some(clean.to_string());
+        }
+    }
+    None
 }
 
 fn extract_output_path_from_response(response: &str) -> Option<String> {
