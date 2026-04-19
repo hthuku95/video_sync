@@ -8593,7 +8593,7 @@ const HOW_WE_WORK_HTML: &str = r###"<!DOCTYPE html>
     <div class="step-num">7</div>
     <div class="step-body">
       <strong>Close via DM or delivery unlock</strong>
-      Big deals: invoice direct in USDC (your Base address). Small one-offs: client pays $5 to unlock HD on the delivery page. Both attribute correctly on the Revenue Ledger.
+      Big deals: invoice direct in USDC (your Base address). Smaller one-offs: client unlocks the HD delivery on the delivery page at the sample's market-aligned price. Both attribute correctly on the Revenue Ledger.
     </div>
   </div>
 
@@ -8643,8 +8643,8 @@ const HOW_WE_WORK_HTML: &str = r###"<!DOCTYPE html>
   <h3>Attribution (who sourced who)</h3>
   <ul>
     <li>Every Instagram lead has a <code>user_id</code> — the whitelisted user who sourced it. Leads are private to that user.</li>
-    <li>When a team member creates a sample via "+ Attach sample", the generated delivery row gets <code>sourced_from_lead_id</code> + <code>unlock_price_usdc = 5</code>.</li>
-    <li>When a client pays $5 to unlock that delivery, x402 settles on your wallet — but the <a href="/admin/revenue-ledger">Revenue Ledger</a> records which team member's lead drove it.</li>
+    <li>When a team member creates a sample via "+ Attach sample", the generated delivery row gets <code>sourced_from_lead_id</code> plus a market-aligned <code>unlock_price_usdc</code> based on the service and whether a live website was used.</li>
+    <li>When a client pays to unlock that delivery, x402 settles on your wallet — but the <a href="/admin/revenue-ledger">Revenue Ledger</a> records which team member's lead drove it.</li>
   </ul>
 
   <h3>Revenue share</h3>
@@ -8703,7 +8703,7 @@ const HOW_WE_WORK_HTML: &str = r###"<!DOCTYPE html>
   <p>POST to <code>/api/admin/telegram/channels</code> or edit the <code>telegram_watch_channels</code> table directly. Default list: cryptojobslist, cryptojobs, web3_jobs, SaaSFounders, directoryofmarketers, contentcreators_hub.</p>
 
   <h3>How do I price custom deliveries?</h3>
-  <p>On <a href="/admin/deliveries">/admin/deliveries</a> set <code>unlock_price_usdc</code> per delivery. Default is $5. For bigger work (e.g. $200 product mockup) set it to 200.</p>
+  <p>On <a href="/admin/deliveries">/admin/deliveries</a> set <code>unlock_price_usdc</code> per delivery. New lead-generated samples default to market-aligned pricing: lightweight Blender samples start around $19, while website-driven presentation videos start around $197 and can go much higher.</p>
 
   <h3>A team member sourced a lead that paid $500. What do I owe them?</h3>
   <p>$250 (50%). The <a href="/admin/revenue-ledger">Revenue Ledger</a> shows this as "Pending payout".</p>

@@ -2352,6 +2352,14 @@ async fn instagram_generate_dm(
     Path(id):          Path<uuid::Uuid>,
     Json(req):         Json<Option<InstagramDmRequest>>,
 ) -> Json<serde_json::Value> {
+    fn format_unlock_price_usd(price: f64) -> String {
+        if (price.fract()).abs() < f64::EPSILON {
+            format!("{:.0}", price)
+        } else {
+            format!("{:.2}", price)
+        }
+    }
+
     let user_id: i32 = claims.sub.parse().unwrap_or(0);
 
     // Fetch the lead — scoped to the caller so one user can't DM another
@@ -2390,6 +2398,32 @@ async fn instagram_generate_dm(
             sid
         ),
         None => "NO sample exists yet — do NOT invent a URL. Offer to make one: \"want me to put together a quick sample?\"".to_string(),
+    };
+
+    let has_website = !ext_url.trim().is_empty();
+    let sample_block = match sample_id {
+        Some(sid) => {
+            let sample_unlock_price = sqlx::query_scalar::<_, sqlx::types::Decimal>(
+                "SELECT unlock_price_usdc FROM deliveries WHERE id = $1"
+            )
+            .bind(sid)
+            .fetch_optional(&state.db_pool)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|d| d.to_string().parse::<f64>().ok())
+            .unwrap_or_else(|| unlock_price_for(service.as_deref(), has_website));
+            let sample_unlock_price_str = format_unlock_price_usd(sample_unlock_price);
+
+            format!(
+                "SAMPLE LINK (must appear in the DM, woven in naturally - e.g. \"here's a quick mockup I made: <URL>\" - do NOT just paste it at the end): {}/delivery/{}\nThe link shows a free watermarked preview. Full HD download is ${} USDC - the DM can hint at that naturally (\"full HD version is ${} if you want it for prod\") but don't hard-sell it.",
+                base_url.trim_end_matches('/'),
+                sid,
+                sample_unlock_price_str,
+                sample_unlock_price_str
+            )
+        }
+        None => sample_block,
     };
 
     let niche = req.as_ref().and_then(|r| r.niche.as_deref()).unwrap_or(&category);

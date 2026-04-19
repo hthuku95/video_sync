@@ -12,7 +12,7 @@
 //! * Phantom wallet (which the user already has) supports EVM signing on
 //!   Base as of their multi-chain update.
 //! * Per-delivery micropayments unlock the gated `/delivery/:id` HD page:
-//!   $5 USDC → 30 days of full-quality download access.
+//!   delivery-specific USDC pricing → 30 days of full-quality download access.
 //!
 //! Reference:
 //!   <https://github.com/coinbase/x402/blob/main/specs/schemes/exact/scheme_exact_evm.md>

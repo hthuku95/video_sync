@@ -668,11 +668,11 @@ pub async fn landing_page() -> Html<String> {
                 <!-- Per delivery -->
                 <div style="background:#fff;border:1px solid #e5e7eb;border-radius:16px;padding:32px 26px;box-shadow:0 2px 10px rgba(0,0,0,0.04)">
                     <div style="font-size:12px;font-weight:700;letter-spacing:0.08em;color:#7a4cff;text-transform:uppercase;margin-bottom:6px">Per Delivery</div>
-                    <div style="font-size:40px;font-weight:800;color:#111">$5<span style="font-size:15px;font-weight:500;color:#888;margin-left:6px">/ HD unlock</span></div>
-                    <div style="color:#666;font-size:13px;margin:6px 0 16px">Pay only when a client unlocks</div>
+                    <div style="font-size:40px;font-weight:800;color:#111">$19<span style="font-size:15px;font-weight:500;color:#888;margin-left:6px">from / delivery unlock</span></div>
+                    <div style="color:#666;font-size:13px;margin:6px 0 16px">Market-aligned pricing based on the sample you generated</div>
                     <ul style="list-style:none;padding:0;margin:16px 0">
                         <li style="padding:7px 0;font-size:13.5px;color:#333;border-bottom:1px dashed #eee">✓ Watermarked preview — free forever</li>
-                        <li style="padding:7px 0;font-size:13.5px;color:#333;border-bottom:1px dashed #eee">✓ Client pays $5 USDC for full HD</li>
+                        <li style="padding:7px 0;font-size:13.5px;color:#333;border-bottom:1px dashed #eee">✓ Unlock pricing ranges from $19 for lightweight samples to $197+ for website-driven videos</li>
                         <li style="padding:7px 0;font-size:13.5px;color:#333;border-bottom:1px dashed #eee">✓ 30-day access per unlock</li>
                         <li style="padding:7px 0;font-size:13.5px;color:#333;border-bottom:1px dashed #eee">✓ Phantom / MetaMask / Coinbase Wallet</li>
                         <li style="padding:7px 0;font-size:13.5px;color:#333">✓ No signup required for buyer</li>
