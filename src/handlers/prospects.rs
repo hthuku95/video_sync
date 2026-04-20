@@ -685,8 +685,6 @@ async fn generate_outreach_message(
         "business_owner" => "creating a professional product demo video or explainer for their brand",
         _                => "turning their long-form content into 30-50 viral Shorts per month",
     };
-    let service_block = service_offer_prompt(service.as_deref());
-
     let prompt = format!(
         r#"Write a SHORT cold outreach DM (under 90 words) from a video AI agency to {name}, a {category} {pt} with {audience} audience.
 

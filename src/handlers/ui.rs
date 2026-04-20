@@ -599,9 +599,9 @@ pub async fn landing_page() -> Html<String> {
             <nav class="nav">
                 <a href="/" class="logo">🎬 VideoSync</a>
                 <div class="nav-links">
+                    <a href="#offers">Offers</a>
+                    <a href="#pricing">Pricing</a>
                     <a href="#features">Features</a>
-                    <a href="#tools">Tools</a>
-                    <a href="#about">About</a>
                 </div>
                 <div class="auth-buttons">
                     <a href="/login" class="btn btn-secondary">Login</a>
@@ -614,14 +614,52 @@ pub async fn landing_page() -> Html<String> {
     <!-- Hero Section -->
     <section class="hero">
         <div class="container">
-            <h1>AI-Powered Video Editing Made Simple</h1>
-            <p>Transform your videos with natural language commands and publish directly to YouTube. No complex software, no steep learning curves - just tell our AI what you want, and watch the magic happen.</p>
+            <h1>Turn Your Website Into Launch-Ready Video</h1>
+            <p>VideoSync turns SaaS landing pages, product screenshots, and creator content into hero videos, demo reels, 3D mockups, shorts, and paid delivery links. Start with a URL, get a preview, unlock the polished asset when it is ready.</p>
             <div style="background:rgba(122,76,255,0.15);border:1px solid rgba(122,76,255,0.4);border-radius:10px;padding:12px 18px;display:inline-block;margin:18px 0 14px;font-size:14px;color:#fff;font-weight:500">
-                🎉 <strong>7-day free trial</strong> &middot; Then <strong>$15/mo</strong> &middot; Pay in <strong>USDC on Base</strong> — no Stripe, no contracts
+                <strong>SaaS hero videos</strong>, <strong>website demo videos</strong>, <strong>3D mockups</strong>, and <strong>white-label agency production</strong> paid in <strong>USDC on Base</strong>
             </div>
             <div class="hero-buttons">
                 <a href="/signup" class="btn btn-primary btn-large">Get Started Free</a>
-                <a href="#pricing" class="btn btn-secondary btn-large">See Pricing ↓</a>
+                <a href="#offers" class="btn btn-secondary btn-large">See Offers ↓</a>
+            </div>
+        </div>
+    </section>
+
+    <!-- Offers Section -->
+    <section id="offers" style="padding:60px 20px;background:#fff">
+        <div class="container">
+            <h2 style="text-align:center;margin-bottom:12px">Productized Offers You Can Sell Today</h2>
+            <p style="text-align:center;color:#666;margin-bottom:40px;max-width:760px;margin-left:auto;margin-right:auto">The platform is packaged around outcomes, not just features. Start with a URL or a creator profile, generate a preview, then close with an unlock, a launch pack, or a recurring retainer.</p>
+
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:20px;max-width:1150px;margin:0 auto">
+                <div style="background:#f8f9fa;border:1px solid #e5e7eb;border-radius:16px;padding:28px 24px">
+                    <div style="font-size:12px;font-weight:700;letter-spacing:0.08em;color:#7a4cff;text-transform:uppercase;margin-bottom:8px">For SaaS Founders</div>
+                    <h3 style="margin:0 0 10px;color:#111">SaaS Hero Video</h3>
+                    <div style="font-size:32px;font-weight:800;color:#111">$149-$249</div>
+                    <p style="color:#666;font-size:14px;line-height:1.6;margin:12px 0 0">Paste a live URL and generate a 10-30 second animated landing-page hero or app promo built from the product's own visuals.</p>
+                </div>
+
+                <div style="background:#f8f9fa;border:1px solid #e5e7eb;border-radius:16px;padding:28px 24px">
+                    <div style="font-size:12px;font-weight:700;letter-spacing:0.08em;color:#7a4cff;text-transform:uppercase;margin-bottom:8px">For Product Launches</div>
+                    <h3 style="margin:0 0 10px;color:#111">Website Demo Video</h3>
+                    <div style="font-size:32px;font-weight:800;color:#111">$299-$499</div>
+                    <p style="color:#666;font-size:14px;line-height:1.6;margin:12px 0 0">Turn a SaaS or ecommerce website into a 45-90 second product walkthrough with scenes, motion, and optional voiceover.</p>
+                </div>
+
+                <div style="background:#f8f9fa;border:1px solid #e5e7eb;border-radius:16px;padding:28px 24px">
+                    <div style="font-size:12px;font-weight:700;letter-spacing:0.08em;color:#7a4cff;text-transform:uppercase;margin-bottom:8px">For Launch Packs</div>
+                    <h3 style="margin:0 0 10px;color:#111">3D Product Mockups</h3>
+                    <div style="font-size:32px;font-weight:800;color:#111">$97-$197</div>
+                    <p style="color:#666;font-size:14px;line-height:1.6;margin:12px 0 0">Create device mockups, app promos, and cinematic product loops from screenshots, photos, or a live website.</p>
+                </div>
+
+                <div style="background:#f8f9fa;border:1px solid #e5e7eb;border-radius:16px;padding:28px 24px">
+                    <div style="font-size:12px;font-weight:700;letter-spacing:0.08em;color:#7a4cff;text-transform:uppercase;margin-bottom:8px">For Agencies</div>
+                    <h3 style="margin:0 0 10px;color:#111">White-Label Production API</h3>
+                    <div style="font-size:32px;font-weight:800;color:#111">$99-$199<span style="font-size:14px;font-weight:500;color:#888;margin-left:6px">/mo</span></div>
+                    <p style="color:#666;font-size:14px;line-height:1.6;margin:12px 0 0">Resell clipping, thumbnails, animations, and delivery pages under your own brand with API access and operator-friendly pricing.</p>
+                </div>
             </div>
         </div>
     </section>
@@ -629,61 +667,61 @@ pub async fn landing_page() -> Html<String> {
     <!-- Pricing Section -->
     <section id="pricing" style="padding:60px 20px;background:#f8f9fa">
         <div class="container">
-            <h2 style="text-align:center;margin-bottom:12px">Simple, Crypto-Native Pricing</h2>
-            <p style="text-align:center;color:#666;margin-bottom:40px;max-width:680px;margin-left:auto;margin-right:auto">Pay with any EVM wallet — Phantom (multi-chain), MetaMask, or Coinbase Wallet. USDC on Base mainnet. Instant activation. Cancel any time.</p>
+            <h2 style="text-align:center;margin-bottom:12px">Three Ways To Buy</h2>
+            <p style="text-align:center;color:#666;margin-bottom:40px;max-width:760px;margin-left:auto;margin-right:auto">Use VideoSync as a productized service, as a recurring creator workflow, or as a white-label agency backend. Every route settles in USDC on Base with wallet-native checkout.</p>
 
             <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:20px;max-width:1100px;margin:0 auto">
 
-                <!-- Creators -->
+                <!-- Launch Packs -->
                 <div style="background:#fff;border:1px solid #e5e7eb;border-radius:16px;padding:32px 26px;box-shadow:0 2px 10px rgba(0,0,0,0.04)">
+                    <div style="font-size:12px;font-weight:700;letter-spacing:0.08em;color:#7a4cff;text-transform:uppercase;margin-bottom:6px">Launch Packs</div>
+                    <div style="font-size:40px;font-weight:800;color:#111">$149<span style="font-size:15px;font-weight:500;color:#888;margin-left:6px">to $499</span></div>
+                    <div style="color:#666;font-size:13px;margin:6px 0 16px">Best for SaaS founders and product launches</div>
+                    <ul style="list-style:none;padding:0;margin:16px 0">
+                        <li style="padding:7px 0;font-size:13.5px;color:#333;border-bottom:1px dashed #eee">✓ URL-to-video workflow for SaaS hero videos and demo reels</li>
+                        <li style="padding:7px 0;font-size:13.5px;color:#333;border-bottom:1px dashed #eee">✓ 3D product mockups and launch visuals</li>
+                        <li style="padding:7px 0;font-size:13.5px;color:#333;border-bottom:1px dashed #eee">✓ Delivery previews that close straight from a DM or landing page</li>
+                        <li style="padding:7px 0;font-size:13.5px;color:#333;border-bottom:1px dashed #eee">✓ Optional upsell into launch bundles and cutdowns</li>
+                        <li style="padding:7px 0;font-size:13.5px;color:#333">✓ Ideal when you want one strong asset fast</li>
+                    </ul>
+                    <a href="/signup" class="btn btn-primary" style="display:block;text-align:center;margin-top:12px">Create a sample →</a>
+                </div>
+
+                <!-- Creators -->
+                <div style="background:#fff;border:2px solid #7a4cff;border-radius:16px;padding:32px 26px;box-shadow:0 8px 30px rgba(122,76,255,0.12);position:relative">
+                    <div style="position:absolute;top:-12px;right:20px;background:#7a4cff;color:#fff;font-size:11px;font-weight:700;padding:5px 12px;border-radius:999px;letter-spacing:0.04em">BEST FOR RECURRING REVENUE</div>
                     <div style="font-size:12px;font-weight:700;letter-spacing:0.08em;color:#7a4cff;text-transform:uppercase;margin-bottom:6px">Creators</div>
                     <div style="font-size:40px;font-weight:800;color:#111">$15<span style="font-size:15px;font-weight:500;color:#888;margin-left:6px">/month</span></div>
                     <div style="color:#666;font-size:13px;margin:6px 0 16px">After 7-day free trial</div>
                     <ul style="list-style:none;padding:0;margin:16px 0">
-                        <li style="padding:7px 0;font-size:13.5px;color:#333;border-bottom:1px dashed #eee">✓ AI agent video generation</li>
-                        <li style="padding:7px 0;font-size:13.5px;color:#333;border-bottom:1px dashed #eee">✓ AI thumbnails (Gemini)</li>
-                        <li style="padding:7px 0;font-size:13.5px;color:#333;border-bottom:1px dashed #eee">✓ Blender animations (title cards, data viz, lower thirds, LaTeX, UI mockups)</li>
-                        <li style="padding:7px 0;font-size:13.5px;color:#333;border-bottom:1px dashed #eee">✓ 320 FFmpeg tools (trim, transitions, filters)</li>
-                        <li style="padding:7px 0;font-size:13.5px;color:#333">✓ Delivery pages + portfolio samples</li>
+                        <li style="padding:7px 0;font-size:13.5px;color:#333;border-bottom:1px dashed #eee">✓ AI thumbnails and creator growth assets</li>
+                        <li style="padding:7px 0;font-size:13.5px;color:#333;border-bottom:1px dashed #eee">✓ Blender animations, title cards, data viz, and UI mockups</li>
+                        <li style="padding:7px 0;font-size:13.5px;color:#333;border-bottom:1px dashed #eee">✓ FFmpeg toolchain for editing, trims, and delivery</li>
+                        <li style="padding:7px 0;font-size:13.5px;color:#333;border-bottom:1px dashed #eee">✓ Delivery pages, previews, and portfolio samples</li>
+                        <li style="padding:7px 0;font-size:13.5px;color:#333">✓ Best entry point for creators testing the workflow</li>
                     </ul>
                     <a href="/subscribe" class="btn btn-primary" style="display:block;text-align:center;margin-top:12px">Start 7-day trial →</a>
                 </div>
 
                 <!-- Agencies -->
-                <div style="background:#fff;border:2px solid #7a4cff;border-radius:16px;padding:32px 26px;box-shadow:0 8px 30px rgba(122,76,255,0.12);position:relative">
-                    <div style="position:absolute;top:-12px;right:20px;background:#7a4cff;color:#fff;font-size:11px;font-weight:700;padding:5px 12px;border-radius:999px;letter-spacing:0.04em">POPULAR</div>
+                <div style="background:#fff;border:1px solid #e5e7eb;border-radius:16px;padding:32px 26px;box-shadow:0 2px 10px rgba(0,0,0,0.04)">
                     <div style="font-size:12px;font-weight:700;letter-spacing:0.08em;color:#7a4cff;text-transform:uppercase;margin-bottom:6px">Agencies</div>
                     <div style="font-size:40px;font-weight:800;color:#111">$99<span style="font-size:15px;font-weight:500;color:#888;margin-left:6px">to $199/mo</span></div>
-                    <div style="color:#666;font-size:13px;margin:6px 0 16px">Starter or Pro tier — API access</div>
+                    <div style="color:#666;font-size:13px;margin:6px 0 16px">Starter or Pro tier - white-label API access</div>
                     <ul style="list-style:none;padding:0;margin:16px 0">
-                        <li style="padding:7px 0;font-size:13.5px;color:#333;border-bottom:1px dashed #eee">✓ 1,000–5,000 clips / month</li>
-                        <li style="padding:7px 0;font-size:13.5px;color:#333;border-bottom:1px dashed #eee">✓ 500–2,500 AI thumbnails / month</li>
+                        <li style="padding:7px 0;font-size:13.5px;color:#333;border-bottom:1px dashed #eee">✓ 1,000-5,000 clips / month</li>
+                        <li style="padding:7px 0;font-size:13.5px;color:#333;border-bottom:1px dashed #eee">✓ 500-2,500 AI thumbnails / month</li>
                         <li style="padding:7px 0;font-size:13.5px;color:#333;border-bottom:1px dashed #eee">✓ Up to 200 Blender animations</li>
-                        <li style="padding:7px 0;font-size:13.5px;color:#333;border-bottom:1px dashed #eee">✓ White-label /delivery/:id pages</li>
-                        <li style="padding:7px 0;font-size:13.5px;color:#333">✓ API key + docs</li>
+                        <li style="padding:7px 0;font-size:13.5px;color:#333;border-bottom:1px dashed #eee">✓ White-label /delivery/:id pages and launch-friendly outputs</li>
+                        <li style="padding:7px 0;font-size:13.5px;color:#333">✓ API key + docs + agency-friendly resale economics</li>
                     </ul>
                     <a href="/api-access" class="btn btn-primary" style="display:block;text-align:center;margin-top:12px">See API Tiers →</a>
-                </div>
-
-                <!-- Per delivery -->
-                <div style="background:#fff;border:1px solid #e5e7eb;border-radius:16px;padding:32px 26px;box-shadow:0 2px 10px rgba(0,0,0,0.04)">
-                    <div style="font-size:12px;font-weight:700;letter-spacing:0.08em;color:#7a4cff;text-transform:uppercase;margin-bottom:6px">Per Delivery</div>
-                    <div style="font-size:40px;font-weight:800;color:#111">$19<span style="font-size:15px;font-weight:500;color:#888;margin-left:6px">from / delivery unlock</span></div>
-                    <div style="color:#666;font-size:13px;margin:6px 0 16px">Market-aligned pricing based on the sample you generated</div>
-                    <ul style="list-style:none;padding:0;margin:16px 0">
-                        <li style="padding:7px 0;font-size:13.5px;color:#333;border-bottom:1px dashed #eee">✓ Watermarked preview — free forever</li>
-                        <li style="padding:7px 0;font-size:13.5px;color:#333;border-bottom:1px dashed #eee">✓ Unlock pricing ranges from $19 for lightweight samples to $197+ for website-driven videos</li>
-                        <li style="padding:7px 0;font-size:13.5px;color:#333;border-bottom:1px dashed #eee">✓ 30-day access per unlock</li>
-                        <li style="padding:7px 0;font-size:13.5px;color:#333;border-bottom:1px dashed #eee">✓ Phantom / MetaMask / Coinbase Wallet</li>
-                        <li style="padding:7px 0;font-size:13.5px;color:#333">✓ No signup required for buyer</li>
-                    </ul>
-                    <a href="/signup" class="btn btn-secondary" style="display:block;text-align:center;margin-top:12px">Sign up to create →</a>
                 </div>
             </div>
 
             <div style="text-align:center;margin-top:36px;padding:20px;background:#fff;border-radius:12px;max-width:740px;margin-left:auto;margin-right:auto;box-shadow:0 2px 10px rgba(0,0,0,0.04)">
-                <div style="font-size:13px;font-weight:600;color:#7a4cff;letter-spacing:0.05em;text-transform:uppercase;margin-bottom:6px">⚡ How payment works</div>
-                <p style="color:#666;font-size:14px;line-height:1.6;margin:0">Click subscribe → your wallet pops up with the USDC charge → sign → you're active instantly. No credit card, no Stripe account, no recurring card-on-file. Settle on <strong>Base mainnet</strong> (sub-cent gas, ~1s finality).</p>
+                <div style="font-size:13px;font-weight:600;color:#7a4cff;letter-spacing:0.05em;text-transform:uppercase;margin-bottom:6px">How delivery monetization works</div>
+                <p style="color:#666;font-size:14px;line-height:1.6;margin:0">You can sell directly from previews. Lightweight samples unlock from <strong>$19</strong>. Website-driven launch videos unlock from <strong>$197+</strong>. For recurring clients, move them into <strong>$15 creator access</strong> or the <strong>$99-$199 white-label API</strong>.</p>
             </div>
         </div>
     </section>
