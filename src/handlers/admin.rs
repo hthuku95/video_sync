@@ -6941,7 +6941,7 @@ pub async fn delivery_unlock_spec(
 
     // Look up the price + title for the spec description.
     let row = sqlx::query(
-        "SELECT title, unlock_price_usdc FROM deliveries WHERE id = $1"
+        "SELECT title, unlock_price_usdc, source_url FROM deliveries WHERE id = $1"
     )
     .bind(uuid)
     .fetch_optional(&state.db_pool)
@@ -6949,11 +6949,12 @@ pub async fn delivery_unlock_spec(
     .ok()
     .flatten();
 
-    let (title, price_usd) = match row {
+    let (title, price_usd, source_url) = match row {
         Some(r) => {
             let t: String = r.get("title");
             let p: Option<sqlx::types::Decimal> = r.try_get("unlock_price_usdc").ok().flatten();
-            (t, p)
+            let s: Option<String> = r.try_get("source_url").ok().flatten();
+            (t, p, s)
         }
         None => return Json(json!({"error": "Delivery not found"})),
     };
@@ -6963,15 +6964,19 @@ pub async fn delivery_unlock_spec(
         _ => return Json(json!({"error": "X402_RECIPIENT_ADDRESS env var not set on server"})),
     };
 
-    // Default to $5 if the row has no price (legacy rows from before the
-    // migration, or programmer-created deliveries that didn't set one).
+    // Legacy rows can have a missing price. Fall back to the same market-
+    // aligned strategy used when lead-generated samples are created:
+    // website-driven presentation videos are premium; lighter renders are not.
     let price_cents: u64 = price_usd
         .and_then(|d| {
             use sqlx::types::Decimal;
             let hundred = Decimal::new(100, 0);
             (d * hundred).trunc().to_string().parse::<u64>().ok()
         })
-        .unwrap_or(500);
+        .unwrap_or_else(|| {
+            let fallback_usd = crate::handlers::prospects::unlock_price_for(None, source_url.is_some());
+            (fallback_usd * 100.0).round() as u64
+        });
 
     let resource_url = format!("{}/delivery/{}/unlock", base_url(), uuid);
     let description  = format!("Unlock HD download — {}", title);
@@ -7002,7 +7007,7 @@ pub async fn delivery_unlock(
     // Re-derive the same requirements we'd put in the 402 spec so the
     // facilitator can sanity-check the signature. Has to match exactly.
     let row = match sqlx::query(
-        "SELECT title, unlock_price_usdc FROM deliveries WHERE id = $1"
+        "SELECT title, unlock_price_usdc, source_url FROM deliveries WHERE id = $1"
     )
     .bind(uuid)
     .fetch_optional(&state.db_pool)
@@ -7014,13 +7019,17 @@ pub async fn delivery_unlock(
 
     let title: String = row.get("title");
     let price_usd: Option<sqlx::types::Decimal> = row.try_get("unlock_price_usdc").ok().flatten();
+    let source_url: Option<String> = row.try_get("source_url").ok().flatten();
     let price_cents: u64 = price_usd
         .and_then(|d| {
             use sqlx::types::Decimal;
             let hundred = Decimal::new(100, 0);
             (d * hundred).trunc().to_string().parse::<u64>().ok()
         })
-        .unwrap_or(500);
+        .unwrap_or_else(|| {
+            let fallback_usd = crate::handlers::prospects::unlock_price_for(None, source_url.is_some());
+            (fallback_usd * 100.0).round() as u64
+        });
 
     let recipient = match std::env::var("X402_RECIPIENT_ADDRESS") {
         Ok(a) if !a.is_empty() => a,

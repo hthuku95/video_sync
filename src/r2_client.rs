@@ -86,6 +86,13 @@ impl R2Client {
         }
     }
 
+    /// Legacy compatibility helper for call sites that expect upload to
+    /// return a downloadable URL in one step.
+    pub async fn upload_file(&self, local_path: &str, key: &str) -> Result<String, String> {
+        self.upload(local_path, key).await?;
+        self.presign_get(key, 7 * 24 * 3600).await
+    }
+
     async fn upload_simple(&self, local_path: &str, key: &str) -> Result<(), String> {
         let body = ByteStream::from_path(Path::new(local_path))
             .await

@@ -1,5 +1,6 @@
 // src/services/mod.rs
 pub mod output_video;
+pub mod monetization;
 pub mod video_vectorization;
 pub mod token_pricing;
 pub mod token_usage;

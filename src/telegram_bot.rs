@@ -19,6 +19,7 @@
 //!                              for admin pings; optional for inbound AI)
 
 use crate::llm_utils::generate_text_best_effort;
+use crate::services::monetization::telegram_system_pitch;
 use crate::AppState;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -100,30 +101,6 @@ struct User {
 struct Chat {
     id: i64,
 }
-
-/// The pitch the AI responder uses as grounding for sales questions.
-/// Kept short so the LLM doesn't dilute it. Matches the /api-access +
-/// /subscribe pricing tiers so the bot never quotes an outdated number.
-const SYSTEM_PITCH: &str = r#"You are the sales assistant for VideoSync — an AI video production platform. You answer incoming Telegram DMs on behalf of @videosync_sales_bot.
-
-VideoSync offers:
-- Regular users: 7-day free trial, then $15/mo USDC for AI thumbnails, Blender animations (title cards, data viz, LaTeX, lower thirds, UI mockups), full agent video pipeline, and FFmpeg tool API.
-- Agencies: API access — $99/mo Starter (1k clips + 500 thumbs + 50 animations), $199/mo Pro (5k clips + 2.5k thumbs + 200 animations + white-label delivery pages).
-- Paid deliveries: $5 USDC per delivery unlock on /delivery/:id pages.
-
-All payments are USDC on Base (Phantom, MetaMask, Coinbase Wallet). No Stripe, no contracts.
-
-Sign up: https://www.videosync.video
-Subscribe: https://www.videosync.video/subscribe
-Agency API: https://www.videosync.video/api-access
-
-RULES:
-1. Keep replies under 80 words unless asked for detail.
-2. If asked about clipping: say "clipping is reserved for our internal team today — we'll open it up soon; follow the site for updates".
-3. If asked something you don't know, say you'll forward the question to a human and end with "tag @hthuku if urgent".
-4. Sound like a founder. Casual, lowercase ok, no corporate fluff.
-5. Never invent features or prices not listed above.
-"#;
 
 /// Main worker loop — started from main.rs once per process. Long-polls
 /// Telegram's `getUpdates` endpoint; for each text message from a regular
@@ -236,7 +213,7 @@ async fn handle_dm(
     tokio::spawn(async move { notify_admin(&admin_blurb).await; });
 
     // Generate an AI reply using our LLM stack.
-    let prompt = format!("{}\n\nIncoming message from user:\n\"\"\"\n{}\n\"\"\"\n\nYour reply:", SYSTEM_PITCH, text);
+    let prompt = format!("{}\n\nIncoming message from user:\n\"\"\"\n{}\n\"\"\"\n\nYour reply:", telegram_system_pitch(), text);
     let reply = match generate_text_best_effort(
         state.nvidia_nim_client.as_ref(),
         state.gemma_client.as_ref(),

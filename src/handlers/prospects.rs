@@ -6,6 +6,7 @@ use crate::llm_utils::generate_text_best_effort;
 use crate::middleware::admin::admin_middleware;
 use crate::middleware::auth::auth_middleware;
 use crate::models::auth::{Claims, ErrorResponse};
+use crate::services::monetization::service_offer_prompt;
 use crate::AppState;
 use axum::{
     extract::{Extension, Path, Query},
@@ -684,6 +685,7 @@ async fn generate_outreach_message(
         "business_owner" => "creating a professional product demo video or explainer for their brand",
         _                => "turning their long-form content into 30-50 viral Shorts per month",
     };
+    let service_block = service_offer_prompt(service.as_deref());
 
     let prompt = format!(
         r#"Write a SHORT cold outreach DM (under 90 words) from a video AI agency to {name}, a {category} {pt} with {audience} audience.
@@ -2391,14 +2393,8 @@ async fn instagram_generate_dm(
     // exists, the LLM is instructed to work the URL in naturally; without
     // one, we tell the model not to invent a link.
     let base_url = std::env::var("PUBLIC_BASE_URL").unwrap_or_else(|_| "https://www.videosync.video".to_string());
-    let sample_block = match sample_id {
-        Some(sid) => format!(
-            "SAMPLE LINK (must appear in the DM, woven in naturally — e.g. \"here's a quick mockup I made: <URL>\" — do NOT just paste it at the end): {}/delivery/{}\nThe link shows a free watermarked preview. Full HD download costs $5 USDC — the DM can hint at that (\"HD version is $5 if you want it for prod\") but don't hard-sell it.",
-            base_url.trim_end_matches('/'),
-            sid
-        ),
-        None => "NO sample exists yet — do NOT invent a URL. Offer to make one: \"want me to put together a quick sample?\"".to_string(),
-    };
+    let sample_block =
+        "NO sample exists yet — do NOT invent a URL. Offer to make one: \"want me to put together a quick sample?\"".to_string();
 
     let has_website = !ext_url.trim().is_empty();
     let sample_block = match sample_id {
@@ -2430,18 +2426,7 @@ async fn instagram_generate_dm(
 
     let followers_str = if followers > 0 { followers.to_string() } else { "unknown".to_string() };
 
-    // If the scorer already picked a service for this lead, lock the DM to it
-    // — much higher quality than asking the model to re-decide every time.
-    let service_block = match service.as_deref() {
-        Some("clipping")       => "Service to pitch: SHORT-FORM CLIPPING.\n  - What you offer: turn their long videos / podcasts / streams into 20–40 vertical Shorts/Reels/TikToks per month.\n  - Pricing tiers: $297 (30 clips/mo) → $497 (50 clips/mo) → $899 (unlimited + 48h SLA).",
-        Some("animations")     => "Service to pitch: AI-DRIVEN BLENDER ANIMATIONS.\n  - What you offer: explainer scenes, data visualisations, LaTeX equations, lower-thirds, title cards.\n  - Pricing tiers: $50–$150 per 15–60s animation, or $400/month for 5 animations.",
-        Some("thumbnails")     => "Service to pitch: AI-OPTIMISED YOUTUBE THUMBNAILS.\n  - What you offer: 3-frame extract → AI picks the strongest → branded title overlay → CTR-tested.\n  - Pricing tiers: $25–$50 per thumbnail, or $300/month for 30 thumbnails.",
-        Some("ugc")            => "Service to pitch: UGC / PRODUCT-DEMO VIDEOS.\n  - What you offer: vertical-first ad-style demo videos for ecommerce / SaaS founders.\n  - Pricing tiers: $200–$500 per 30–60s UGC video.",
-        Some("product_mockup") => "Service to pitch: 3D PRODUCT MOCKUPS.\n  - What you offer: photorealistic Blender renders of their product on a device or lifestyle scene — Gemini-generated product shot + cinematic camera move.\n  - Pricing tiers: $100–$300 per mockup, or $600 for a pack of 4 with variations.",
-        Some("landing_page")   => "Service to pitch: ANIMATED LANDING PAGE HERO.\n  - What you offer: cinematic 10–15s animated hero mockup for their SaaS/startup — if they have a live site, we scrape the hero image; otherwise we generate one with Gemini and animate it in Blender.\n  - Pricing tiers: $200–$600 per hero video. Ideal for Product Hunt launches / YC demos.",
-        Some("full_stack")     => "Service to pitch: FULL-STACK PRODUCTION BUNDLE.\n  - What you offer: clipping + thumbnails + animations + mockups + landing-page heroes + delivery, all in one retainer.\n  - Pricing tiers: $1,500–$3,000/month.",
-        _ => "Pick the strongest-fit service from this menu (mention only ONE in the DM):\n  - SHORT-FORM CLIPPING — long-form → Shorts/Reels. Best fit: podcasters, long-form YouTubers, streamers. $297–$899/mo.\n  - BLENDER ANIMATIONS — explainer/data-viz/LaTeX. Best fit: educators, finance/crypto channels. $50–$150 each.\n  - AI THUMBNAILS — best fit growing YouTubers (5k–100k). $25–$50 each.\n  - UGC / PRODUCT DEMO — best fit Shopify/SaaS founders. $200–$500 each.\n  - PRODUCT MOCKUP — 3D product shots. Best fit ecommerce/hardware/app launches. $100–$300 each.\n  - LANDING PAGE HERO — animated SaaS hero. Best fit indie founders / pre-launch. $200–$600 each.\n  - FULL STACK — bundle of all of the above. $1,500–$3,000/mo.",
-    };
+    let service_block = service_offer_prompt(service.as_deref());
 
     let prompt = format!(
         r#"You are a senior outbound copywriter for a video production studio. Write a personalized Instagram DM (≤120 words) to this creator.

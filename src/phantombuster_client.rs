@@ -40,6 +40,9 @@ pub enum LinkedInPhantomKind {
     /// Non-Sales-Nav. Accepts regular linkedin.com/search/results URLs.
     /// Works with any logged-in LinkedIn cookie. Argument key: `search`.
     LinkedInSearch,
+    /// Outreach phantom that expects messaging-specific inputs. We expose
+    /// it in the UI, but we do not auto-launch it for scrape-only jobs.
+    LeadOutreach,
     /// Non-Sales-Nav. Scrapes the guest list of a LinkedIn Event. Needs
     /// an event URL, NOT a search URL — so we can't auto-use this, but
     /// we report it so the admin UI can tell the user.
@@ -68,6 +71,34 @@ pub struct LinkedInLead {
 }
 
 impl PhantomBusterClient {
+    fn classify_linkedin_phantom(name: &str) -> Option<LinkedInPhantomKind> {
+        let n = name.to_lowercase();
+
+        if n.contains("sales navigator") && n.contains("search") {
+            return Some(LinkedInPhantomKind::SalesNavSearch);
+        }
+
+        if n.contains("linkedin") && n.contains("lead outreach") {
+            return Some(LinkedInPhantomKind::LeadOutreach);
+        }
+
+        if (n.contains("linkedin") && n.contains("search") && !n.contains("sales navigator"))
+            || (n.contains("people") && n.contains("search") && n.contains("export"))
+        {
+            return Some(LinkedInPhantomKind::LinkedInSearch);
+        }
+
+        if n.contains("linkedin") && n.contains("event") {
+            return Some(LinkedInPhantomKind::EventGuests);
+        }
+
+        if n.contains("linkedin") && (n.contains("profile") || n.contains("scraper")) {
+            return Some(LinkedInPhantomKind::ProfileScraper);
+        }
+
+        None
+    }
+
     pub fn new(api_key: String) -> Self {
         Self {
             api_key,
@@ -121,31 +152,43 @@ impl PhantomBusterClient {
     ) -> Result<Option<(PbAgent, LinkedInPhantomKind)>, String> {
         let agents = self.list_agents().await?;
 
-        let is_sn_search = |n: &str| n.contains("sales navigator") && n.contains("search");
-        let is_regular_search = |n: &str| {
-            // Regular LinkedIn Search Export phantom goes by variants like
-            // "LinkedIn Search Export" / "People Search Export". Anything
-            // that mentions `linkedin` + `search` but NOT `sales navigator`.
-            n.contains("search") && n.contains("linkedin") && !n.contains("sales navigator")
-        };
-
         // Collect candidates in preferred order.
         let mut picks: Vec<(PbAgent, LinkedInPhantomKind)> = Vec::new();
 
         // If the user explicitly prefers non-SN (e.g. their cookie isn't SN),
         // put regular search first; otherwise SN first.
         if prefer_non_salesnav {
-            if let Some(a) = agents.iter().find(|a| is_regular_search(&a.name.to_lowercase())).cloned() {
+            if let Some(a) = agents.iter().find(|a| {
+                matches!(
+                    Self::classify_linkedin_phantom(&a.name),
+                    Some(LinkedInPhantomKind::LinkedInSearch)
+                )
+            }).cloned() {
                 picks.push((a, LinkedInPhantomKind::LinkedInSearch));
             }
-            if let Some(a) = agents.iter().find(|a| is_sn_search(&a.name.to_lowercase())).cloned() {
+            if let Some(a) = agents.iter().find(|a| {
+                matches!(
+                    Self::classify_linkedin_phantom(&a.name),
+                    Some(LinkedInPhantomKind::SalesNavSearch)
+                )
+            }).cloned() {
                 picks.push((a, LinkedInPhantomKind::SalesNavSearch));
             }
         } else {
-            if let Some(a) = agents.iter().find(|a| is_sn_search(&a.name.to_lowercase())).cloned() {
+            if let Some(a) = agents.iter().find(|a| {
+                matches!(
+                    Self::classify_linkedin_phantom(&a.name),
+                    Some(LinkedInPhantomKind::SalesNavSearch)
+                )
+            }).cloned() {
                 picks.push((a, LinkedInPhantomKind::SalesNavSearch));
             }
-            if let Some(a) = agents.iter().find(|a| is_regular_search(&a.name.to_lowercase())).cloned() {
+            if let Some(a) = agents.iter().find(|a| {
+                matches!(
+                    Self::classify_linkedin_phantom(&a.name),
+                    Some(LinkedInPhantomKind::LinkedInSearch)
+                )
+            }).cloned() {
                 picks.push((a, LinkedInPhantomKind::LinkedInSearch));
             }
         }
@@ -160,15 +203,8 @@ impl PhantomBusterClient {
         let agents = self.list_agents().await?;
         let mut out = Vec::new();
         for a in agents {
-            let n = a.name.to_lowercase();
-            let kind = if n.contains("sales navigator") && n.contains("search") {
-                LinkedInPhantomKind::SalesNavSearch
-            } else if n.contains("linkedin") && n.contains("search") {
-                LinkedInPhantomKind::LinkedInSearch
-            } else if n.contains("linkedin") && n.contains("event") {
-                LinkedInPhantomKind::EventGuests
-            } else if n.contains("linkedin") && (n.contains("profile") || n.contains("scraper")) {
-                LinkedInPhantomKind::ProfileScraper
+            let kind = if let Some(kind) = Self::classify_linkedin_phantom(&a.name) {
+                kind
             } else {
                 continue; // not a LinkedIn phantom
             };
@@ -177,19 +213,7 @@ impl PhantomBusterClient {
         Ok(out)
     }
 
-    /// Launch a regular (non-Sales-Navigator) LinkedIn search phantom.
-    ///
-    /// Two PB phantoms share this argument shape with subtle differences:
-    ///   - **LinkedIn Search Export**: scrapes profiles only.
-    ///       args: `search`, `numberOfProfilesPerLaunch`
-    ///   - **LinkedIn Search to Lead Outreach**: scrapes AND sends a
-    ///     connection request with a templated message.
-    ///       args: `queries` (array), `numberOfProfilesPerLaunch`,
-    ///             `followUpMessage` (REQUIRED — pass empty string to
-    ///             skip the actual outreach and just get the leads).
-    ///
-    /// We send BOTH key sets so either phantom accepts the launch. PB
-    /// silently ignores keys it doesn't recognise.
+    /// Launch a regular LinkedIn Search Export phantom for scrape-only jobs.
     pub async fn launch_linkedin_search(
         &self,
         agent_id: &str,
@@ -199,12 +223,7 @@ impl PhantomBusterClient {
     ) -> Result<String, String> {
         let argument = serde_json::json!({
             "sessionCookie":             session_cookie,
-            // Search Export key:
             "search":                    search_url_or_keywords,
-            // Search to Lead Outreach keys:
-            "queries":                   [search_url_or_keywords],
-            "followUpMessage":           "", // empty = scrape only, no DM sent
-            "sendInMail":                false,
             "numberOfProfilesPerLaunch": max_profiles.min(30), // PB default cap
             "csvName":                   format!("li_leads_{}", chrono::Utc::now().timestamp()),
         });

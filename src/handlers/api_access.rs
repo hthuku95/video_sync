@@ -19,6 +19,7 @@
 //! pricing and get notified when the API endpoints land.
 
 use crate::x402;
+use crate::services::monetization::{AGENCY_PRO_USDC_CENTS, AGENCY_STARTER_USDC_CENTS};
 use crate::AppState;
 use axum::{
     extract::{Extension, Path},
@@ -66,7 +67,7 @@ struct TierSpec {
 
 const STARTER: TierSpec = TierSpec {
     name:         "starter",
-    price_cents:  9900, // $99
+    price_cents:  AGENCY_STARTER_USDC_CENTS,
     clip_quota:   1000,
     thumb_quota:  500,
     anim_quota:   50,
@@ -74,7 +75,7 @@ const STARTER: TierSpec = TierSpec {
 
 const PRO: TierSpec = TierSpec {
     name:         "pro",
-    price_cents:  19900, // $199
+    price_cents:  AGENCY_PRO_USDC_CENTS,
     clip_quota:   5000,
     thumb_quota:  2500,
     anim_quota:   200,

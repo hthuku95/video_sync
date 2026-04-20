@@ -8,6 +8,7 @@
 
 use crate::middleware::auth::auth_middleware;
 use crate::models::auth::Claims;
+use crate::services::monetization::CREATOR_MONTHLY_USDC_CENTS;
 use crate::x402;
 use crate::AppState;
 use axum::{
@@ -21,8 +22,6 @@ use serde_json::json;
 use std::sync::Arc;
 
 /// Flat-rate USD price for the regular-user subscription. 15 USDC → 30 days.
-const MONTHLY_USDC_CENTS: u64 = 1500;
-
 pub fn subscribe_routes() -> Router {
     // Page is PUBLIC (buyer might not even be logged in yet — we render
     // the pricing and kick them to /login if they try to pay without auth).
@@ -58,7 +57,7 @@ async fn subscribe_unlock_spec(
     let resource = format!("{}/api/subscribe/unlock", base_url);
     let description = "VideoSync monthly subscription — 30 days access".to_string();
 
-    let spec = x402::build_payment_required(MONTHLY_USDC_CENTS, &recipient, &resource, &description);
+    let spec = x402::build_payment_required(CREATOR_MONTHLY_USDC_CENTS, &recipient, &resource, &description);
     Json(serde_json::to_value(spec).unwrap_or(json!({"error": "spec serialise failed"})))
 }
 
@@ -92,7 +91,7 @@ async fn subscribe_unlock(
         .unwrap_or_else(|_| "https://videosync.video".to_string());
     let resource = format!("{}/api/subscribe/unlock", base_url);
     let description = "VideoSync monthly subscription — 30 days access".to_string();
-    let spec = x402::build_payment_required(MONTHLY_USDC_CENTS, &recipient, &resource, &description);
+    let spec = x402::build_payment_required(CREATOR_MONTHLY_USDC_CENTS, &recipient, &resource, &description);
     let req  = match spec.accepts.first() {
         Some(r) => r.clone(),
         None    => return (StatusCode::INTERNAL_SERVER_ERROR,
@@ -127,7 +126,7 @@ async fn subscribe_unlock(
          VALUES ($1, 'paid', $2, $3)"
     )
     .bind(user_id)
-    .bind(sqlx::types::Decimal::new(MONTHLY_USDC_CENTS as i64, 2))
+    .bind(sqlx::types::Decimal::new(CREATOR_MONTHLY_USDC_CENTS as i64, 2))
     .bind(&tx_hash)
     .execute(&state.db_pool)
     .await;
