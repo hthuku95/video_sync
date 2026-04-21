@@ -13,6 +13,7 @@ pub mod claude_client;
 pub mod voyage_embeddings;
 pub mod elevenlabs_client;
 pub mod blender_mcp_client;
+pub mod blender_quality;
 pub mod r2_client;
 pub mod phantombuster_client;
 pub mod youtube_client;

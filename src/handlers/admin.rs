@@ -6704,8 +6704,8 @@ pub async fn delivery_page(
   .footer {{ margin-top: 32px; font-size: 12px; color: #666680; text-align: center; }}
   .footer a {{ color: #6366f1; text-decoration: none; }}
   /* x402 paywall styling — preview = full-length, watermarked diagonally.
-     Buyer sees the entire clip so they know what they're paying for, but
-     the watermark reinforces the "pay $5 for HD" CTA on every frame. */
+     Buyer sees the entire clip so they know what they're paying for, while
+     the watermark reinforces the paid HD unlock CTA on every frame. */
   .media-stack {{ position: relative; overflow: hidden; }}
   .watermark {{
     position: absolute; top: 0; left: 0; right: 0; bottom: 0;

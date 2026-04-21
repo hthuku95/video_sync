@@ -24,7 +24,13 @@ pub fn ui_routes() -> Router {
 }
 
 pub async fn landing_page() -> Html<String> {
-    let html = r###"
+    let html = build_modern_landing_page_html();
+    Html(html.to_string())
+}
+
+#[allow(dead_code)]
+fn build_landing_page_html() -> &'static str {
+    r###"
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1094,9 +1100,1180 @@ pub async fn landing_page() -> Html<String> {
     </script>
 </body>
 </html>
-    "###;
-    
-    Html(html.to_string())
+    "###
+}
+
+fn build_modern_landing_page_html() -> &'static str {
+    r###"
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VideoSync - AI-Powered Video Editing</title>
+    <style>
+        :root {
+            --bg: #07111d;
+            --panel: rgba(9, 18, 31, 0.82);
+            --panel-strong: rgba(7, 14, 24, 0.92);
+            --line: rgba(148, 163, 184, 0.16);
+            --line-strong: rgba(96, 165, 250, 0.28);
+            --text: #e5eefb;
+            --muted: #a8b8d3;
+            --blue: #60a5fa;
+            --blue-strong: #3b82f6;
+            --green: #22c55e;
+            --shadow: 0 24px 70px rgba(2, 6, 23, 0.45);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html {
+            scroll-behavior: smooth;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            line-height: 1.6;
+            color: var(--text);
+            background:
+                radial-gradient(circle at top left, rgba(59, 130, 246, 0.18), transparent 28%),
+                linear-gradient(135deg, #0a1322 0%, #0d1728 55%, #07111d 100%);
+            background-size: cover;
+            background-position: center;
+            background-attachment: fixed;
+            transition: background-image 1s ease-in-out;
+        }
+
+        a {
+            color: inherit;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 20px;
+        }
+
+        .header {
+            position: fixed;
+            top: 0;
+            width: 100%;
+            z-index: 1000;
+            background: rgba(4, 10, 18, 0.78);
+            backdrop-filter: blur(18px);
+            border-bottom: 1px solid rgba(96, 165, 250, 0.16);
+        }
+
+        .nav {
+            min-height: 78px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .logo {
+            font-size: 1.45rem;
+            font-weight: 800;
+            text-decoration: none;
+            letter-spacing: 0.02em;
+        }
+
+        .nav-links,
+        .auth-buttons {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .nav-links a {
+            text-decoration: none;
+            color: #dbeafe;
+            padding: 0.55rem 0.95rem;
+            border-radius: 999px;
+            transition: background-color 0.25s ease;
+        }
+
+        .nav-links a:hover {
+            background: rgba(59, 130, 246, 0.14);
+        }
+
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0.8rem 1.35rem;
+            border-radius: 999px;
+            text-decoration: none;
+            font-weight: 700;
+            transition: transform 0.25s ease, box-shadow 0.25s ease, background 0.25s ease;
+        }
+
+        .btn:hover {
+            transform: translateY(-1px);
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #3b82f6, #2563eb);
+            color: white;
+            box-shadow: 0 14px 35px rgba(37, 99, 235, 0.28);
+        }
+
+        .btn-secondary {
+            background: rgba(15, 23, 42, 0.7);
+            border: 1px solid rgba(96, 165, 250, 0.22);
+            color: #dbeafe;
+        }
+
+        .btn-large {
+            padding: 1rem 1.8rem;
+            font-size: 1rem;
+        }
+
+        .hero {
+            padding: 126px 0 72px;
+        }
+
+        .hero-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.7rem;
+            padding: 0.85rem 1.2rem;
+            border-radius: 999px;
+            border: 1px solid var(--line-strong);
+            background: rgba(8, 15, 28, 0.78);
+            color: #dbeafe;
+            font-size: 0.95rem;
+            box-shadow: var(--shadow);
+            opacity: 0;
+            transform: translateY(24px);
+            animation: fadeInUp 0.8s ease-out 0.1s forwards;
+        }
+
+        .hero-badge svg,
+        .feature-icon svg,
+        .tool-heading-icon svg {
+            width: 28px;
+            height: 28px;
+            stroke: var(--blue);
+        }
+
+        .hero h1 {
+            margin-top: 1.25rem;
+            font-size: 3.6rem;
+            line-height: 1.05;
+            max-width: 980px;
+            opacity: 0;
+            transform: translateY(28px);
+            animation: fadeInUp 0.85s ease-out 0.2s forwards;
+        }
+
+        .hero-copy {
+            margin-top: 1.3rem;
+            max-width: 840px;
+            font-size: 1.18rem;
+            color: var(--muted);
+            opacity: 0;
+            transform: translateY(28px);
+            animation: fadeInUp 0.85s ease-out 0.35s forwards;
+        }
+
+        .hero-buttons {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 1rem;
+            margin-top: 2rem;
+            opacity: 0;
+            transform: translateY(28px);
+            animation: fadeInUp 0.85s ease-out 0.5s forwards;
+        }
+
+        .hero-showcase {
+            margin-top: 2.2rem;
+            display: grid;
+            grid-template-columns: minmax(0, 1.15fr) minmax(300px, 0.85fr);
+            gap: 1.4rem;
+            opacity: 0;
+            transform: translateY(28px);
+            animation: fadeInUp 0.9s ease-out 0.65s forwards;
+        }
+
+        .hero-slider,
+        .hero-summary {
+            border-radius: 28px;
+            border: 1px solid var(--line);
+            background: var(--panel);
+            box-shadow: var(--shadow);
+            backdrop-filter: blur(18px);
+        }
+
+        .hero-slider {
+            position: relative;
+            overflow: hidden;
+            min-height: 300px;
+            background:
+                radial-gradient(circle at top left, rgba(59, 130, 246, 0.28), transparent 34%),
+                radial-gradient(circle at bottom right, rgba(34, 197, 94, 0.15), transparent 28%),
+                var(--panel-strong);
+        }
+
+        .hero-slide {
+            position: absolute;
+            inset: 0;
+            padding: 2rem;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            opacity: 0;
+            transform: translateY(14px);
+            animation: heroCycle 20s infinite;
+        }
+
+        .hero-slide:nth-child(1) { animation-delay: 0s; }
+        .hero-slide:nth-child(2) { animation-delay: 5s; }
+        .hero-slide:nth-child(3) { animation-delay: 10s; }
+        .hero-slide:nth-child(4) { animation-delay: 15s; }
+
+        .hero-slide-tag {
+            display: inline-flex;
+            width: fit-content;
+            padding: 0.45rem 0.8rem;
+            border-radius: 999px;
+            font-size: 0.78rem;
+            font-weight: 800;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: #dbeafe;
+            background: rgba(59, 130, 246, 0.14);
+            border: 1px solid rgba(96, 165, 250, 0.2);
+        }
+
+        .hero-slide h3 {
+            margin-top: 1rem;
+            font-size: 1.95rem;
+            line-height: 1.1;
+        }
+
+        .hero-slide p {
+            margin-top: 0.9rem;
+            max-width: 680px;
+            color: #c9d7ef;
+        }
+
+        .hero-slide-points {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.65rem;
+            margin-top: 1.2rem;
+        }
+
+        .hero-slide-points span {
+            padding: 0.48rem 0.78rem;
+            border-radius: 999px;
+            background: rgba(15, 23, 42, 0.7);
+            border: 1px solid rgba(148, 163, 184, 0.18);
+            color: #e2e8f0;
+            font-size: 0.88rem;
+        }
+
+        .hero-summary {
+            padding: 1.6rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1.25rem;
+        }
+
+        .hero-summary-label,
+        .section-kicker {
+            font-size: 0.8rem;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: #93c5fd;
+            font-weight: 800;
+        }
+
+        .hero-summary h3 {
+            font-size: 1.6rem;
+            line-height: 1.15;
+        }
+
+        .hero-summary p {
+            color: var(--muted);
+        }
+
+        .hero-metrics {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 0.85rem;
+        }
+
+        .hero-metric {
+            padding: 1rem;
+            border-radius: 18px;
+            background: rgba(15, 23, 42, 0.72);
+            border: 1px solid rgba(148, 163, 184, 0.14);
+        }
+
+        .hero-metric strong {
+            display: block;
+            font-size: 1.15rem;
+        }
+
+        .hero-metric span {
+            display: block;
+            margin-top: 0.2rem;
+            color: #94a3b8;
+            font-size: 0.84rem;
+        }
+
+        .section {
+            padding: 74px 0;
+        }
+
+        .section-dark {
+            background: rgba(6, 12, 20, 0.58);
+            backdrop-filter: blur(16px);
+        }
+
+        .section-intro {
+            text-align: center;
+            max-width: 820px;
+            margin: 0 auto 2.6rem;
+        }
+
+        .section-intro h2 {
+            margin-top: 0.6rem;
+            font-size: 2.55rem;
+        }
+
+        .section-intro p {
+            margin-top: 0.75rem;
+            color: var(--muted);
+        }
+
+        .offer-grid,
+        .pricing-grid,
+        .features-grid,
+        .tools-grid {
+            display: grid;
+            gap: 1.3rem;
+        }
+
+        .offer-grid {
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+        }
+
+        .pricing-grid {
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+        }
+
+        .features-grid {
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+        }
+
+        .tools-grid {
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+        }
+
+        .offer-card,
+        .pricing-card,
+        .feature-card,
+        .tool-category,
+        .about-card,
+        .cta-card {
+            border-radius: 22px;
+            border: 1px solid var(--line);
+            background: var(--panel);
+            box-shadow: var(--shadow);
+            backdrop-filter: blur(16px);
+        }
+
+        .offer-card,
+        .pricing-card,
+        .tool-category,
+        .about-card {
+            padding: 1.7rem;
+        }
+
+        .offer-card h3,
+        .pricing-card h3 {
+            font-size: 1.45rem;
+            margin-top: 0.55rem;
+        }
+
+        .offer-card p,
+        .pricing-card p {
+            color: var(--muted);
+        }
+
+        .eyebrow {
+            color: #93c5fd;
+            font-size: 0.8rem;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            font-weight: 800;
+        }
+
+        .price {
+            margin-top: 0.75rem;
+            font-size: 2rem;
+            font-weight: 800;
+        }
+
+        .pricing-card.featured {
+            border: 2px solid rgba(96, 165, 250, 0.58);
+            position: relative;
+        }
+
+        .featured-badge {
+            position: absolute;
+            top: -12px;
+            right: 18px;
+            padding: 0.35rem 0.75rem;
+            border-radius: 999px;
+            background: var(--blue-strong);
+            color: white;
+            font-size: 0.72rem;
+            font-weight: 800;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+        }
+
+        .pricing-list,
+        .tool-list {
+            list-style: none;
+            margin-top: 1rem;
+        }
+
+        .pricing-list li,
+        .tool-list li {
+            position: relative;
+            padding: 0.45rem 0 0.45rem 1rem;
+            color: #d7e3f5;
+        }
+
+        .pricing-list li::before,
+        .tool-list li::before {
+            content: "";
+            position: absolute;
+            left: 0;
+            top: 0.95rem;
+            width: 6px;
+            height: 6px;
+            border-radius: 999px;
+            background: var(--green);
+        }
+
+        .pricing-note {
+            max-width: 760px;
+            margin: 2rem auto 0;
+            padding: 1.2rem 1.3rem;
+            border-radius: 18px;
+            border: 1px solid var(--line);
+            background: rgba(9, 18, 31, 0.82);
+            color: var(--muted);
+            text-align: center;
+            box-shadow: var(--shadow);
+        }
+
+        .feature-card {
+            padding: 2rem;
+            text-align: center;
+        }
+
+        .feature-icon {
+            width: 74px;
+            height: 74px;
+            margin: 0 auto 1rem;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 22px;
+            background: linear-gradient(135deg, rgba(59, 130, 246, 0.22), rgba(14, 165, 233, 0.06));
+            border: 1px solid rgba(96, 165, 250, 0.18);
+        }
+
+        .feature-card h3 {
+            font-size: 1.35rem;
+        }
+
+        .feature-card p {
+            margin-top: 0.8rem;
+            color: var(--muted);
+        }
+
+        .tool-category h3 {
+            display: flex;
+            align-items: center;
+            gap: 0.7rem;
+            color: #dbeafe;
+            font-size: 1.2rem;
+        }
+
+        .tool-heading-icon {
+            width: 42px;
+            height: 42px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 14px;
+            background: rgba(59, 130, 246, 0.12);
+            border: 1px solid rgba(96, 165, 250, 0.18);
+            flex-shrink: 0;
+        }
+
+        .tools-subcopy {
+            margin: -1rem auto 2.2rem;
+            max-width: 760px;
+            text-align: center;
+            color: var(--muted);
+        }
+
+        .about-grid {
+            display: grid;
+            grid-template-columns: minmax(0, 1.25fr) minmax(260px, 0.75fr);
+            gap: 1.3rem;
+        }
+
+        .about-card h3 {
+            margin-bottom: 0.75rem;
+            color: #dbeafe;
+        }
+
+        .about-card p + h3 {
+            margin-top: 1.35rem;
+        }
+
+        .about-card p {
+            color: var(--muted);
+        }
+
+        .stat-stack {
+            display: grid;
+            gap: 1rem;
+        }
+
+        .stat-item {
+            padding: 1.15rem;
+            border-radius: 18px;
+            background: rgba(15, 23, 42, 0.72);
+            border: 1px solid rgba(148, 163, 184, 0.14);
+        }
+
+        .stat-item strong {
+            display: block;
+            font-size: 2rem;
+            color: #f8fafc;
+        }
+
+        .stat-item span {
+            color: var(--muted);
+        }
+
+        .cta-card {
+            padding: 2.1rem;
+            text-align: center;
+            background:
+                radial-gradient(circle at top left, rgba(59, 130, 246, 0.24), transparent 28%),
+                rgba(8, 15, 28, 0.86);
+        }
+
+        .cta-card h2 {
+            font-size: 2.4rem;
+        }
+
+        .cta-card p {
+            max-width: 700px;
+            margin: 0.9rem auto 1.8rem;
+            color: var(--muted);
+        }
+
+        .footer {
+            padding: 2rem 0 2.5rem;
+        }
+
+        .footer-content {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 1rem;
+            flex-wrap: wrap;
+            color: #94a3b8;
+        }
+
+        .footer-links {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            flex-wrap: wrap;
+        }
+
+        .footer-links a {
+            text-decoration: none;
+            color: #93c5fd;
+        }
+
+        .footer-links span {
+            color: rgba(148, 163, 184, 0.35);
+        }
+
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(28px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        @keyframes heroCycle {
+            0% { opacity: 0; transform: translateY(14px); }
+            4% { opacity: 1; transform: translateY(0); }
+            21% { opacity: 1; transform: translateY(0); }
+            25% { opacity: 0; transform: translateY(-10px); }
+            100% { opacity: 0; transform: translateY(-10px); }
+        }
+
+        @media (max-width: 900px) {
+            .hero-showcase,
+            .about-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .hero h1 {
+                font-size: 2.9rem;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .nav-links {
+                display: none;
+            }
+
+            .auth-buttons {
+                flex-direction: column;
+                gap: 0.55rem;
+            }
+
+            .hero {
+                padding-top: 112px;
+            }
+
+            .hero h1 {
+                font-size: 2.45rem;
+            }
+
+            .hero-buttons {
+                flex-direction: column;
+                align-items: stretch;
+            }
+
+            .hero-slider {
+                min-height: 360px;
+            }
+
+            .hero-metrics {
+                grid-template-columns: 1fr;
+            }
+
+            .section-intro h2,
+            .cta-card h2 {
+                font-size: 2rem;
+            }
+
+            .footer-content {
+                justify-content: center;
+                text-align: center;
+            }
+        }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <div class="container">
+            <nav class="nav">
+                <a href="/" class="logo">VideoSync</a>
+                <div class="nav-links">
+                    <a href="#pricing">Plans</a>
+                    <a href="#offers">Offers</a>
+                    <a href="#features">Features</a>
+                    <a href="#tools">Toolkit</a>
+                </div>
+                <div class="auth-buttons">
+                    <a href="/login" class="btn btn-secondary">Login</a>
+                    <a href="/signup" class="btn btn-primary">Sign Up</a>
+                </div>
+            </nav>
+        </div>
+    </header>
+
+    <section class="hero">
+        <div class="container">
+            <div class="hero-badge">
+                <svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 3l7 4v10l-7 4-7-4V7l7-4Z"></path>
+                    <path d="m8.5 12 2.2 2.2 4.8-4.8"></path>
+                </svg>
+                <span>Lead with the creator subscription, then upsell premium production</span>
+            </div>
+            <h1>AI Video Editing That Grows Into Premium Client Deliverables</h1>
+            <p class="hero-copy">VideoSync is first a <strong>$15/month AI video editing and generation workspace</strong> powered by FFmpeg, Blender, Manim, Pexels, ElevenLabs, and delivery automation. The same stack also sells website-to-video launch packs, 3D motion scenes, creator assets, and white-label agency output.</p>
+            <div class="hero-buttons">
+                <a href="/subscribe" class="btn btn-primary btn-large">Start 7-day trial</a>
+                <a href="#pricing" class="btn btn-secondary btn-large">See plans</a>
+            </div>
+            <div class="hero-showcase">
+                <div class="hero-slider">
+                    <article class="hero-slide">
+                        <div>
+                            <span class="hero-slide-tag">Core Subscription</span>
+                            <h3>The $15/month AI editor stays the main product</h3>
+                            <p>Natural-language editing, generation, thumbnails, voice, stock footage, Blender scenes, Manim explainers, and delivery links in one recurring creator workflow.</p>
+                        </div>
+                        <div class="hero-slide-points">
+                            <span>320 FFmpeg tools</span>
+                            <span>Pexels footage</span>
+                            <span>ElevenLabs voice</span>
+                            <span>Blender and Manim</span>
+                        </div>
+                    </article>
+                    <article class="hero-slide">
+                        <div>
+                            <span class="hero-slide-tag">Launch Packs</span>
+                            <h3>Website URLs can still become premium launch-ready videos</h3>
+                            <p>Paste a SaaS or ecommerce URL to create hero videos, walkthroughs, device mockups, presentation scenes, and buyer-ready previews with unlockable delivery.</p>
+                        </div>
+                        <div class="hero-slide-points">
+                            <span>SaaS hero videos</span>
+                            <span>Demo reels</span>
+                            <span>3D product loops</span>
+                            <span>Wallet checkout</span>
+                        </div>
+                    </article>
+                    <article class="hero-slide">
+                        <div>
+                            <span class="hero-slide-tag">Creator Assets</span>
+                            <h3>Shorts, UGC-style outputs, and branded creator systems</h3>
+                            <p>Use the same engine for talking-head cleanup, thumbnails, short-form repurposing, and recurring creator retainers.</p>
+                        </div>
+                        <div class="hero-slide-points">
+                            <span>Thumbnails</span>
+                            <span>UGC cutdowns</span>
+                            <span>Talking-head cleanup</span>
+                            <span>Cross-platform exports</span>
+                        </div>
+                    </article>
+                    <article class="hero-slide">
+                        <div>
+                            <span class="hero-slide-tag">Agency Backend</span>
+                            <h3>White-label production when you want agency-scale monetization</h3>
+                            <p>Run previews, unlocks, clipping, Blender renders, and client handoff through one backend so agencies can resell the output cleanly.</p>
+                        </div>
+                        <div class="hero-slide-points">
+                            <span>Delivery pages</span>
+                            <span>API access</span>
+                            <span>Resale workflow</span>
+                            <span>Recurring retainers</span>
+                        </div>
+                    </article>
+                </div>
+                <aside class="hero-summary">
+                    <div class="hero-summary-label">Positioning</div>
+                    <h3>The recurring product is the engine. Productized services are the leverage.</h3>
+                    <p>This keeps the long-term subscription strategy clear while still showing the high-ticket services your agents can generate and sell right now.</p>
+                    <div class="hero-metrics">
+                        <div class="hero-metric">
+                            <strong>$15/mo</strong>
+                            <span>Primary creator plan</span>
+                        </div>
+                        <div class="hero-metric">
+                            <strong>$149-$499</strong>
+                            <span>Launch-pack upsells</span>
+                        </div>
+                        <div class="hero-metric">
+                            <strong>$99-$199/mo</strong>
+                            <span>Agency backend tiers</span>
+                        </div>
+                        <div class="hero-metric">
+                            <strong>One stack</strong>
+                            <span>Editing, generation, delivery</span>
+                        </div>
+                    </div>
+                </aside>
+            </div>
+        </div>
+    </section>
+
+    <section id="pricing" class="section">
+        <div class="container">
+            <div class="section-intro">
+                <div class="section-kicker">Monetization Paths</div>
+                <h2>Three Ways To Buy</h2>
+                <p>Use VideoSync as a recurring creator workflow, as a productized service for premium deliverables, or as a white-label backend for agency production. Every route settles in USDC on Base with wallet-native checkout.</p>
+            </div>
+            <div class="pricing-grid">
+                <article class="pricing-card featured">
+                    <div class="featured-badge">Primary Offer</div>
+                    <div class="eyebrow">Creators</div>
+                    <h3>AI Video Editing Membership</h3>
+                    <div class="price">$15<span style="font-size:0.5em;color:#94a3b8;margin-left:0.35rem">/month</span></div>
+                    <p>After a 7-day free trial, creators keep one workflow for editing, generation, voice, motion, export, and delivery.</p>
+                    <ul class="pricing-list">
+                        <li>AI editing, generation, and creator growth assets</li>
+                        <li>Blender animations, Manim explainers, UI mockups, and title cards</li>
+                        <li>FFmpeg trims, exports, recipes, and delivery handoff</li>
+                        <li>Pexels footage, ElevenLabs voice, previews, and delivery pages</li>
+                        <li>Best entry point for recurring revenue</li>
+                    </ul>
+                    <a href="/subscribe" class="btn btn-primary" style="margin-top:1rem">Start 7-day trial</a>
+                </article>
+                <article class="pricing-card">
+                    <div class="eyebrow">Launch Packs</div>
+                    <h3>Premium One-Off Deliverables</h3>
+                    <div class="price">$149<span style="font-size:0.5em;color:#94a3b8;margin-left:0.35rem">to $499</span></div>
+                    <p>Best for founders, launches, and one strong asset that closes quickly from a preview link.</p>
+                    <ul class="pricing-list">
+                        <li>URL-to-video workflow for SaaS hero videos and demo reels</li>
+                        <li>3D product mockups and launch visuals</li>
+                        <li>Delivery previews that close from a DM or landing page</li>
+                        <li>Optional upsells into bundles and cutdowns</li>
+                        <li>Ideal when speed matters more than a subscription</li>
+                    </ul>
+                    <a href="/signup" class="btn btn-secondary" style="margin-top:1rem">Create a sample</a>
+                </article>
+                <article class="pricing-card">
+                    <div class="eyebrow">Agencies</div>
+                    <h3>White-Label Production Backend</h3>
+                    <div class="price">$99<span style="font-size:0.5em;color:#94a3b8;margin-left:0.35rem">to $199/mo</span></div>
+                    <p>API tiers for clipping, thumbnails, Blender output, delivery pages, and resale-friendly production workflows.</p>
+                    <ul class="pricing-list">
+                        <li>1,000-5,000 clips per month</li>
+                        <li>500-2,500 AI thumbnails per month</li>
+                        <li>Up to 200 Blender animations</li>
+                        <li>White-label delivery pages and launch-friendly outputs</li>
+                        <li>API docs plus agency-friendly resale economics</li>
+                    </ul>
+                    <a href="/api-access" class="btn btn-secondary" style="margin-top:1rem">See API tiers</a>
+                </article>
+            </div>
+            <div class="pricing-note">
+                <div class="section-kicker" style="display:block;margin-bottom:0.45rem">Delivery Monetization</div>
+                You can sell directly from previews. Lightweight samples unlock from <strong>$19</strong>. Website-driven launch videos unlock from <strong>$197+</strong>. Recurring clients can move into <strong>$15 creator access</strong> or the <strong>$99-$199 white-label API</strong>.
+            </div>
+        </div>
+    </section>
+
+    <section id="offers" class="section section-dark">
+        <div class="container">
+            <div class="section-intro">
+                <div class="section-kicker">Productized Upsells</div>
+                <h2>Productized Offers You Can Sell Today</h2>
+                <p>These are premium outcome-based offers layered on top of the editing engine. They help you monetize launches, creators, and agency work without confusing the homepage about what the core product is.</p>
+            </div>
+            <div class="offer-grid">
+                <article class="offer-card">
+                    <div class="eyebrow">For SaaS Founders</div>
+                    <h3>SaaS Hero Video</h3>
+                    <div class="price">$149-$249</div>
+                    <p>Paste a live URL and generate a 10-30 second landing-page hero or app promo built from the product's own visuals.</p>
+                </article>
+                <article class="offer-card">
+                    <div class="eyebrow">For Product Launches</div>
+                    <h3>Website Demo Video</h3>
+                    <div class="price">$299-$499</div>
+                    <p>Turn a SaaS or ecommerce website into a 45-90 second walkthrough with scenes, motion, and optional voiceover.</p>
+                </article>
+                <article class="offer-card">
+                    <div class="eyebrow">For Launch Packs</div>
+                    <h3>3D Product Mockups</h3>
+                    <div class="price">$97-$197</div>
+                    <p>Create device mockups, app promos, and cinematic product loops from screenshots, photos, or a live website.</p>
+                </article>
+                <article class="offer-card">
+                    <div class="eyebrow">For Agencies</div>
+                    <h3>White-Label Production API</h3>
+                    <div class="price">$99-$199<span style="font-size:0.5em;color:#94a3b8;margin-left:0.35rem">/mo</span></div>
+                    <p>Resell clipping, thumbnails, animations, and delivery pages under your own brand with operator-friendly pricing.</p>
+                </article>
+            </div>
+        </div>
+    </section>
+
+    <section id="features" class="section">
+        <div class="container">
+            <div class="section-intro">
+                <div class="section-kicker">Platform Strengths</div>
+                <h2>AI video editing stays central to the whole business</h2>
+                <p>The premium offers matter, but they work because the core platform can already edit, generate, package, and deliver a wide range of outputs from one agentic workflow.</p>
+            </div>
+            <div class="features-grid">
+                <article class="feature-card">
+                    <div class="feature-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                            <rect x="7" y="4" width="10" height="13" rx="3"></rect>
+                            <path d="M10 2v2M14 2v2M9 11h6M12 8v6M9 20h6"></path>
+                        </svg>
+                    </div>
+                    <h3>AI-Powered Assistant</h3>
+                    <p>Chat with the agent to edit footage, generate scenes, produce voice, build animations, and ship exports without learning a complex editor first.</p>
+                </article>
+                <article class="feature-card">
+                    <div class="feature-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M13 2 4 14h6l-1 8 9-12h-6l1-8Z"></path>
+                        </svg>
+                    </div>
+                    <h3>Fast Iteration</h3>
+                    <p>Previews, delivery pages, and repeatable recipes make it easier to move from concept to monetizable output quickly.</p>
+                </article>
+                <article class="feature-card">
+                    <div class="feature-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="12" cy="12" r="8"></circle>
+                            <circle cx="12" cy="12" r="4"></circle>
+                            <path d="M12 8v8M8 12h8"></path>
+                        </svg>
+                    </div>
+                    <h3>Professional Quality</h3>
+                    <p>Blend FFmpeg precision with Blender motion design, Manim explainers, and polished handoff for outputs that feel client-ready.</p>
+                </article>
+                <article class="feature-card">
+                    <div class="feature-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                            <rect x="3" y="6" width="15" height="12" rx="2"></rect>
+                            <path d="m18 10 3-2v8l-3-2"></path>
+                        </svg>
+                    </div>
+                    <h3>YouTube Integration</h3>
+                    <p>Upload directly to YouTube, manage videos, track analytics, optimize metadata, and moderate comments from the same system.</p>
+                </article>
+                <article class="feature-card">
+                    <div class="feature-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                            <rect x="5" y="11" width="14" height="10" rx="2"></rect>
+                            <path d="M8 11V8a4 4 0 1 1 8 0v3"></path>
+                        </svg>
+                    </div>
+                    <h3>Secure and Private</h3>
+                    <p>Your videos, previews, and delivery workflows are processed with access control and production-minded backend handling.</p>
+                </article>
+                <article class="feature-card">
+                    <div class="feature-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H7l-4-4V5a2 2 0 0 1 2-2h10"></path>
+                            <path d="M17 3h4v4"></path>
+                            <path d="M10 10h4M10 14h7"></path>
+                        </svg>
+                    </div>
+                    <h3>Smart Memory</h3>
+                    <p>Sessions, prompts, outputs, and delivery context compound over time so the workflow becomes better for repeat creator and client work.</p>
+                </article>
+            </div>
+        </div>
+    </section>
+
+    <section id="tools" class="section section-dark">
+        <div class="container">
+            <div class="section-intro">
+                <div class="section-kicker">Editing Engine</div>
+                <h2>320-Tool FFmpeg Toolkit, fully AI-accessible</h2>
+                <p class="tools-subcopy">Every tool is callable through natural language, so the same agent can move from editing to generation to final export without a context switch.</p>
+            </div>
+            <div class="tools-grid">
+                <article class="tool-category">
+                    <h3><span class="tool-heading-icon"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M7 4v6M17 4v6M6 20l12-12M13 20l7-7"></path></svg></span>Core Editing</h3>
+                    <ul class="tool-list">
+                        <li>Trim, cut, merge, split</li>
+                        <li>Deshake and stabilize</li>
+                        <li>Reverse, loop, concatenate</li>
+                        <li>Scene detection and analysis</li>
+                        <li>Segment and chapter split</li>
+                    </ul>
+                </article>
+                <article class="tool-category">
+                    <h3><span class="tool-heading-icon"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="13.5" cy="6.5" r="2.5"></circle><circle cx="7.5" cy="17.5" r="2.5"></circle><circle cx="18" cy="16" r="2"></circle><path d="m10 8 1.5 6M15.5 8.5 16.8 14"></path></svg></span>Visual Effects</h3>
+                    <ul class="tool-list">
+                        <li>Color grading and LUT3D</li>
+                        <li>Cinematic film grain and vignette</li>
+                        <li>Chroma key and green screen</li>
+                        <li>Motion blur, glow, bloom</li>
+                        <li>Posterize, solarize, vibrance, HSV</li>
+                    </ul>
+                </article>
+                <article class="tool-category">
+                    <h3><span class="tool-heading-icon"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H3v6h3l5 4V5Z"></path><path d="M15.5 8.5a5 5 0 0 1 0 7M18 6a8.5 8.5 0 0 1 0 12"></path></svg></span>Audio Processing</h3>
+                    <ul class="tool-list">
+                        <li>Loudnorm, LUFS, and cleanup</li>
+                        <li>RNN denoise and de-esser</li>
+                        <li>Equalizer, compressor, limiter</li>
+                        <li>Spectrum visualization</li>
+                        <li>Pitch shift and time stretch</li>
+                    </ul>
+                </article>
+                <article class="tool-category">
+                    <h3><span class="tool-heading-icon"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19h16"></path><path d="M7 16V9M12 16V5M17 16v-3"></path></svg></span>Analysis and Review</h3>
+                    <ul class="tool-list">
+                        <li>VMAF, SSIM, and PSNR quality checks</li>
+                        <li>Loudness and silence detection</li>
+                        <li>Scene change detection</li>
+                        <li>Black frame and freeze detection</li>
+                        <li>Bitrate and metadata extraction</li>
+                    </ul>
+                </article>
+                <article class="tool-category">
+                    <h3><span class="tool-heading-icon"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3h7v7"></path><path d="M10 14 21 3"></path><path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"></path></svg></span>Platform Export</h3>
+                    <ul class="tool-list">
+                        <li>YouTube, TikTok, Instagram</li>
+                        <li>Format conversion across major codecs</li>
+                        <li>H.264, H.265, VP9, AV1</li>
+                        <li>GIF palette optimization</li>
+                        <li>HDR to SDR tone mapping</li>
+                    </ul>
+                </article>
+                <article class="tool-category">
+                    <h3><span class="tool-heading-icon"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h11"></path><path d="m12 3 4 4-4 4"></path><path d="M20 17H9"></path><path d="m12 13-4 4 4 4"></path></svg></span>Workflow Recipes</h3>
+                    <ul class="tool-list">
+                        <li>YouTube-ready export</li>
+                        <li>Podcast audio cleanup</li>
+                        <li>Cinematic grade</li>
+                        <li>Talking-head cleanup</li>
+                        <li>GIF creator</li>
+                    </ul>
+                </article>
+            </div>
+        </div>
+    </section>
+
+    <section id="about" class="section">
+        <div class="container">
+            <div class="section-intro">
+                <div class="section-kicker">Built To Compound</div>
+                <h2>One platform, multiple monetization layers</h2>
+                <p>The same orchestration layer can edit creator videos, generate new motion scenes, package productized offers, and hand off polished deliverables through previews and wallet-based unlocks.</p>
+            </div>
+            <div class="about-grid">
+                <article class="about-card">
+                    <h3>Long-term recurring revenue</h3>
+                    <p>The core business stays the creator and team subscription: a dependable workspace for AI editing, generation, export, and delivery that people can use every month.</p>
+                    <h3>Short-term premium revenue</h3>
+                    <p>When needed, the same system produces higher-ticket outputs like SaaS hero videos, website-driven animations, 3D mockups, and launch packs without introducing a second production stack.</p>
+                    <h3>Agent-ready architecture</h3>
+                    <p>Because FFmpeg, Blender, Manim, voice, stock footage, and delivery all sit behind one orchestration layer, improving the agents improves every offer at once.</p>
+                </article>
+                <div class="stat-stack">
+                    <div class="stat-item">
+                        <strong>$15</strong>
+                        <span>Recurring creator plan that should stay the headline offer</span>
+                    </div>
+                    <div class="stat-item">
+                        <strong>320+</strong>
+                        <span>AI-callable FFmpeg tools inside the editing engine</span>
+                    </div>
+                    <div class="stat-item">
+                        <strong>Blender</strong>
+                        <span>3D motion, mockups, title cards, and scene generation for premium deliverables</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="section section-dark">
+        <div class="container">
+            <div class="cta-card">
+                <h2>Start with the editor, then expand into premium offers</h2>
+                <p>Use the recurring AI editing workflow as the stable foundation, then close higher-ticket launch packs, creator assets, or agency production from the same backend.</p>
+                <a href="/signup" class="btn btn-primary btn-large">Start using VideoSync</a>
+            </div>
+        </div>
+    </section>
+
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-content">
+                <p>&copy; 2026 VideoSync. All rights reserved.</p>
+                <div class="footer-links">
+                    <a href="/privacy">Privacy Policy</a>
+                    <span>|</span>
+                    <a href="/terms">Terms of Service</a>
+                    <span>|</span>
+                    <a href="/help">Help Center</a>
+                </div>
+            </div>
+        </div>
+    </footer>
+
+    <script>
+        class DynamicBackgroundManager {
+            constructor() {
+                this.isUpdating = false;
+                this.updateBackground();
+                setInterval(() => this.updateBackground(), 5 * 60 * 1000);
+            }
+
+            async updateBackground() {
+                if (this.isUpdating) return;
+                this.isUpdating = true;
+
+                try {
+                    const response = await fetch('/api/background/image');
+                    if (!response.ok) return;
+
+                    const contentType = response.headers.get('content-type') || '';
+
+                    if (contentType.includes('application/json')) {
+                        const data = await response.json();
+                        if (data.fallback && data.gradient) {
+                            document.body.style.background = data.gradient;
+                        }
+                        return;
+                    }
+
+                    const blob = await response.blob();
+                    const imageUrl = URL.createObjectURL(blob);
+                    const overlay = document.createElement('div');
+                    overlay.style.cssText = `
+                        position: fixed;
+                        inset: 0;
+                        background-image: url(${imageUrl});
+                        background-size: cover;
+                        background-position: center;
+                        background-attachment: fixed;
+                        opacity: 0;
+                        transition: opacity 1s ease-in-out;
+                        z-index: -1;
+                        pointer-events: none;
+                    `;
+                    document.body.appendChild(overlay);
+
+                    setTimeout(() => {
+                        overlay.style.opacity = '0.26';
+                    }, 120);
+
+                    setTimeout(() => {
+                        const layers = Array.from(document.querySelectorAll('div[style*="background-image"]'));
+                        layers.slice(0, -1).forEach(layer => layer.remove());
+                    }, 1200);
+                } catch (error) {
+                    console.error('Failed to update landing background:', error);
+                } finally {
+                    this.isUpdating = false;
+                }
+            }
+        }
+
+        new DynamicBackgroundManager();
+    </script>
+</body>
+</html>
+    "###
 }
 
 pub async fn login_page() -> Html<String> {

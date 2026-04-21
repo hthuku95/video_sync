@@ -10764,12 +10764,18 @@ async fn execute_blender_generate_scene_gemini(
     ctx: &ToolExecutionContext,
 ) -> String {
     let client = match blender_client_or_err(ctx) { Ok(c) => c, Err(e) => return e };
+    let reference_image_url = args.get("reference_image_url").and_then(|v| v.as_str());
+    let prompt = crate::blender_quality::enrich_scene_prompt(
+        args.get("prompt").and_then(|v| v.as_str()).unwrap_or(""),
+        args.get("style").and_then(|v| v.as_str()).unwrap_or("cinematic"),
+        reference_image_url.is_some(),
+    );
     let mut tool_args = json!({
-        "prompt":   args.get("prompt").and_then(|v| v.as_str()).unwrap_or(""),
+        "prompt":   prompt,
         "duration": args.get("duration").and_then(|v| v.as_f64()).unwrap_or(10.0),
         "style":    args.get("style").and_then(|v| v.as_str()).unwrap_or("cinematic"),
     });
-    if let Some(u) = args.get("reference_image_url").and_then(|v| v.as_str()) {
+    if let Some(u) = reference_image_url {
         tool_args["reference_image_url"] = Value::String(u.to_string());
     }
     blender_render(&client, "blender_generate_scene", tool_args, "video_url", "mp4", "Blender scene rendered").await
@@ -10863,8 +10869,12 @@ async fn execute_blender_generate_animation_gemini(
     ctx: &ToolExecutionContext,
 ) -> String {
     let client = match blender_client_or_err(ctx) { Ok(c) => c, Err(e) => return e };
+    let description = crate::blender_quality::enrich_animation_description(
+        args.get("description").and_then(|v| v.as_str()).unwrap_or(""),
+        args.get("quality").and_then(|v| v.as_str()).unwrap_or("m"),
+    );
     let tool_args = json!({
-        "description": args.get("description").and_then(|v| v.as_str()).unwrap_or(""),
+        "description": description,
         "duration":    args.get("duration").and_then(|v| v.as_f64()).unwrap_or(10.0),
         "background":  args.get("background").and_then(|v| v.as_str()).unwrap_or("dark"),
         "quality":     args.get("quality").and_then(|v| v.as_str()).unwrap_or("m"),
@@ -10904,12 +10914,18 @@ async fn execute_blender_generate_chart_gemini(
 
 async fn execute_blender_generate_scene_claude(args: &Value, ctx: &ToolExecutionContext) -> String {
     let client = match blender_client_or_err(ctx) { Ok(c) => c, Err(e) => return e };
+    let reference_image_url = args["reference_image_url"].as_str();
+    let prompt = crate::blender_quality::enrich_scene_prompt(
+        args["prompt"].as_str().unwrap_or(""),
+        args["style"].as_str().unwrap_or("cinematic"),
+        reference_image_url.is_some(),
+    );
     let mut tool_args = json!({
-        "prompt":   args["prompt"].as_str().unwrap_or(""),
+        "prompt":   prompt,
         "duration": args["duration"].as_f64().unwrap_or(10.0),
         "style":    args["style"].as_str().unwrap_or("cinematic"),
     });
-    if let Some(u) = args["reference_image_url"].as_str() {
+    if let Some(u) = reference_image_url {
         tool_args["reference_image_url"] = Value::String(u.to_string());
     }
     blender_render(&client, "blender_generate_scene", tool_args, "video_url", "mp4", "Blender scene rendered").await
@@ -10982,8 +10998,12 @@ async fn execute_blender_generate_ui_mockup_claude(args: &Value, ctx: &ToolExecu
 
 async fn execute_blender_generate_animation_claude(args: &Value, ctx: &ToolExecutionContext) -> String {
     let client = match blender_client_or_err(ctx) { Ok(c) => c, Err(e) => return e };
+    let description = crate::blender_quality::enrich_animation_description(
+        args["description"].as_str().unwrap_or(""),
+        args["quality"].as_str().unwrap_or("m"),
+    );
     let tool_args = json!({
-        "description": args["description"].as_str().unwrap_or(""),
+        "description": description,
         "duration":    args["duration"].as_f64().unwrap_or(10.0),
         "background":  args["background"].as_str().unwrap_or("dark"),
         "quality":     args["quality"].as_str().unwrap_or("m"),

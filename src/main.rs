@@ -4,6 +4,7 @@ use std::sync::Arc;
 use tokio::sync::Semaphore;
 use tower_http::cors::CorsLayer;
 
+mod blender_quality;
 mod agent;
 mod db;
 mod gemini_client;
