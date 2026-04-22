@@ -134,22 +134,7 @@ impl BlenderMCPClient {
         if let Some(url) = reference_image_url {
             args["reference_image_url"] = Value::String(url.to_string());
         }
-
-        let result = self.call_tool("blender_generate_scene", args).await?;
-
-        let video_url = result
-            .get("video_url")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| "blender_generate_scene response missing video_url".to_string())?;
-
-        let filename = format!(
-            "blender_scene_{}.mp4",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs()
-        );
-        self.download_to_outputs(video_url, &filename).await
+        self.render_async("blender_generate_scene", args, "video_url", "mp4").await
     }
 
     /// Generate a 3D thumbnail image. Returns local path inside outputs/.
@@ -164,22 +149,7 @@ impl BlenderMCPClient {
             "title_text": title_text,
             "style": style,
         });
-        let result = self.call_tool("blender_generate_thumbnail", args).await?;
-        let image_url = result
-            .get("image_url")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| "blender_generate_thumbnail response missing image_url".to_string())?;
-        if image_url.is_empty() {
-            return Err("blender_generate_thumbnail: server returned empty image_url".to_string());
-        }
-        let filename = format!(
-            "blender_thumb_{}.png",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs()
-        );
-        self.download_to_outputs(image_url, &filename).await
+        self.render_async("blender_generate_thumbnail", args, "image_url", "png").await
     }
 
     /// Generate an animated title card clip. Returns local path inside outputs/.
@@ -196,22 +166,7 @@ impl BlenderMCPClient {
             "duration": duration,
             "style": style,
         });
-        let result = self.call_tool("blender_generate_title_card", args).await?;
-        let video_url = result
-            .get("video_url")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| "blender_generate_title_card response missing video_url".to_string())?;
-        if video_url.is_empty() {
-            return Err("blender_generate_title_card: server returned empty video_url".to_string());
-        }
-        let filename = format!(
-            "blender_title_{}.mp4",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs()
-        );
-        self.download_to_outputs(video_url, &filename).await
+        self.render_async("blender_generate_title_card", args, "video_url", "mp4").await
     }
 
     /// Generate a data visualisation clip. Returns local path inside outputs/.
@@ -228,22 +183,7 @@ impl BlenderMCPClient {
             "title": title,
             "duration": duration,
         });
-        let result = self.call_tool("blender_generate_data_viz", args).await?;
-        let video_url = result
-            .get("video_url")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| "blender_generate_data_viz response missing video_url".to_string())?;
-        if video_url.is_empty() {
-            return Err("blender_generate_data_viz: server returned empty video_url".to_string());
-        }
-        let filename = format!(
-            "blender_viz_{}.mp4",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs()
-        );
-        self.download_to_outputs(video_url, &filename).await
+        self.render_async("blender_generate_data_viz", args, "video_url", "mp4").await
     }
 
     /// Generate an animated lower-third overlay clip. Returns local path inside outputs/.
@@ -260,22 +200,7 @@ impl BlenderMCPClient {
             "style": style,
             "duration": duration,
         });
-        let result = self.call_tool("blender_generate_lower_third", args).await?;
-        let video_url = result
-            .get("video_url")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| "blender_generate_lower_third response missing video_url".to_string())?;
-        if video_url.is_empty() {
-            return Err("blender_generate_lower_third: server returned empty video_url".to_string());
-        }
-        let filename = format!(
-            "blender_lower_{}.mp4",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs()
-        );
-        self.download_to_outputs(video_url, &filename).await
+        self.render_async("blender_generate_lower_third", args, "video_url", "mp4").await
     }
 
     /// Generate a LaTeX/Manim equation animation clip. Returns local path inside outputs/.
@@ -292,22 +217,7 @@ impl BlenderMCPClient {
             "duration": duration,
             "background_style": background_style,
         });
-        let result = self.call_tool("blender_generate_latex", args).await?;
-        let video_url = result
-            .get("video_url")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| "blender_generate_latex response missing video_url".to_string())?;
-        if video_url.is_empty() {
-            return Err("blender_generate_latex: server returned empty video_url".to_string());
-        }
-        let filename = format!(
-            "blender_latex_{}.mp4",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs()
-        );
-        self.download_to_outputs(video_url, &filename).await
+        self.render_async("blender_generate_latex", args, "video_url", "mp4").await
     }
 
     /// Generate a device UI mockup (iPhone/MacBook/browser/iPad) with optional animation.
@@ -337,36 +247,12 @@ impl BlenderMCPClient {
         if let Some(acc) = accent_color {
             args["accent_color"] = json!(acc);
         }
-
-        let result = self.call_tool("blender_generate_ui_mockup", args).await?;
-
-        // Static renders return image_url; animated return video_url
-        let (url, ext) = if animation == "static" {
-            (
-                result
-                    .get("image_url")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| "blender_generate_ui_mockup response missing image_url".to_string())?,
-                "png",
-            )
+        let (url_key, ext) = if animation == "static" {
+            ("image_url", "png")
         } else {
-            (
-                result
-                    .get("video_url")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| "blender_generate_ui_mockup response missing video_url".to_string())?,
-                "mp4",
-            )
+            ("video_url", "mp4")
         };
-
-        let filename = format!(
-            "blender_mockup_{device}_{animation}_{}.{ext}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs()
-        );
-        self.download_to_outputs(url, &filename).await
+        self.render_async("blender_generate_ui_mockup", args, url_key, ext).await
     }
 
     /// Generate a Manim animation from a natural language description.
