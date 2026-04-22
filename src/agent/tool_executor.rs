@@ -10757,6 +10757,165 @@ async fn blender_render(
     }
 }
 
+async fn normalize_reference_image_url_for_blender(
+    ctx: &ToolExecutionContext,
+    reference_image_url: Option<&str>,
+) -> Option<String> {
+    let source_url = reference_image_url?.trim();
+    if source_url.is_empty() || !(source_url.starts_with("http://") || source_url.starts_with("https://")) {
+        return reference_image_url.map(|value| value.to_string());
+    }
+
+    let r2 = match ctx.app_state.r2_client.as_ref() {
+        Some(client) => client,
+        None => {
+            tracing::warn!(
+                "normalize_reference_image_url_for_blender: R2 not configured, using original URL"
+            );
+            return Some(source_url.to_string());
+        }
+    };
+
+    let http = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(45))
+        .redirect(reqwest::redirect::Policy::limited(5))
+        .user_agent("Mozilla/5.0 (compatible; VideoSyncBot/1.0)")
+        .build()
+    {
+        Ok(client) => client,
+        Err(error) => {
+            tracing::warn!(
+                "normalize_reference_image_url_for_blender: failed to build HTTP client: {}",
+                error
+            );
+            return Some(source_url.to_string());
+        }
+    };
+
+    let response = match http.get(source_url).send().await {
+        Ok(resp) => resp,
+        Err(error) => {
+            tracing::warn!(
+                "normalize_reference_image_url_for_blender: download failed for {}: {}",
+                source_url,
+                error
+            );
+            return Some(source_url.to_string());
+        }
+    };
+
+    if !response.status().is_success() {
+        tracing::warn!(
+            "normalize_reference_image_url_for_blender: download returned {} for {}",
+            response.status(),
+            source_url
+        );
+        return Some(source_url.to_string());
+    }
+
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let bytes = match response.bytes().await {
+        Ok(payload) => payload,
+        Err(error) => {
+            tracing::warn!(
+                "normalize_reference_image_url_for_blender: failed to read bytes for {}: {}",
+                source_url,
+                error
+            );
+            return Some(source_url.to_string());
+        }
+    };
+
+    if bytes.is_empty() {
+        tracing::warn!(
+            "normalize_reference_image_url_for_blender: empty payload for {}",
+            source_url
+        );
+        return Some(source_url.to_string());
+    }
+
+    let parsed_path = reqwest::Url::parse(source_url)
+        .ok()
+        .and_then(|url| {
+            std::path::Path::new(url.path())
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .map(|ext| ext.to_ascii_lowercase())
+        });
+    let ext = parsed_path
+        .or_else(|| {
+            if content_type.contains("png") {
+                Some("png".to_string())
+            } else if content_type.contains("webp") {
+                Some("webp".to_string())
+            } else if content_type.contains("gif") {
+                Some("gif".to_string())
+            } else if content_type.contains("svg") {
+                Some("svg".to_string())
+            } else if content_type.contains("jpeg") || content_type.contains("jpg") {
+                Some("jpg".to_string())
+            } else {
+                None
+            }
+        })
+        .unwrap_or_else(|| "jpg".to_string());
+
+    let digest = {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(&bytes);
+        let hex = format!("{:x}", hasher.finalize());
+        hex.chars().take(24).collect::<String>()
+    };
+
+    let key = format!("assets/reference-images/{}.{}", digest, ext);
+    let local_path = format!(
+        "outputs/reference_asset_{}.{}",
+        uuid::Uuid::new_v4(),
+        ext
+    );
+
+    if let Err(error) = tokio::fs::write(&local_path, &bytes).await {
+        tracing::warn!(
+            "normalize_reference_image_url_for_blender: failed to write temp file {}: {}",
+            local_path,
+            error
+        );
+        return Some(source_url.to_string());
+    }
+
+    let presigned = match r2.upload(&local_path, &key).await {
+        Ok(()) => r2.presign_get(&key, 7 * 24 * 3600).await,
+        Err(error) => Err(error),
+    };
+
+    let _ = tokio::fs::remove_file(&local_path).await;
+
+    match presigned {
+        Ok(url) => {
+            tracing::info!(
+                "normalize_reference_image_url_for_blender: rehosted {} to {}",
+                source_url,
+                key
+            );
+            Some(url)
+        }
+        Err(error) => {
+            tracing::warn!(
+                "normalize_reference_image_url_for_blender: R2 upload failed for {}: {}",
+                source_url,
+                error
+            );
+            Some(source_url.to_string())
+        }
+    }
+}
+
 // ── Gemini blender tool executors ─────────────────────────────────────────────
 
 async fn execute_blender_generate_scene_gemini(
@@ -10764,7 +10923,10 @@ async fn execute_blender_generate_scene_gemini(
     ctx: &ToolExecutionContext,
 ) -> String {
     let client = match blender_client_or_err(ctx) { Ok(c) => c, Err(e) => return e };
-    let reference_image_url = args.get("reference_image_url").and_then(|v| v.as_str());
+    let reference_image_url = normalize_reference_image_url_for_blender(
+        ctx,
+        args.get("reference_image_url").and_then(|v| v.as_str()),
+    ).await;
     let prompt = crate::blender_quality::enrich_scene_prompt(
         args.get("prompt").and_then(|v| v.as_str()).unwrap_or(""),
         args.get("style").and_then(|v| v.as_str()).unwrap_or("cinematic"),
@@ -10869,9 +11031,11 @@ async fn execute_blender_generate_animation_gemini(
     ctx: &ToolExecutionContext,
 ) -> String {
     let client = match blender_client_or_err(ctx) { Ok(c) => c, Err(e) => return e };
-    let description = crate::blender_quality::enrich_animation_description(
+    let description = crate::blender_quality::enrich_animation_description_with_context(
         args.get("description").and_then(|v| v.as_str()).unwrap_or(""),
         args.get("quality").and_then(|v| v.as_str()).unwrap_or("m"),
+        args.get("brief_context").and_then(|v| v.as_str()),
+        args.get("revision_notes").and_then(|v| v.as_str()),
     );
     let tool_args = json!({
         "description": description,
@@ -10914,11 +11078,18 @@ async fn execute_blender_generate_chart_gemini(
 
 async fn execute_blender_generate_scene_claude(args: &Value, ctx: &ToolExecutionContext) -> String {
     let client = match blender_client_or_err(ctx) { Ok(c) => c, Err(e) => return e };
-    let reference_image_url = args["reference_image_url"].as_str();
-    let prompt = crate::blender_quality::enrich_scene_prompt(
+    let reference_image_url = normalize_reference_image_url_for_blender(
+        ctx,
+        args["reference_image_url"]
+            .as_str()
+            .filter(|value| !value.is_empty()),
+    ).await;
+    let prompt = crate::blender_quality::enrich_scene_prompt_with_context(
         args["prompt"].as_str().unwrap_or(""),
         args["style"].as_str().unwrap_or("cinematic"),
         reference_image_url.is_some(),
+        args["brief_context"].as_str(),
+        args["revision_notes"].as_str(),
     );
     let mut tool_args = json!({
         "prompt":   prompt,
@@ -10998,9 +11169,11 @@ async fn execute_blender_generate_ui_mockup_claude(args: &Value, ctx: &ToolExecu
 
 async fn execute_blender_generate_animation_claude(args: &Value, ctx: &ToolExecutionContext) -> String {
     let client = match blender_client_or_err(ctx) { Ok(c) => c, Err(e) => return e };
-    let description = crate::blender_quality::enrich_animation_description(
+    let description = crate::blender_quality::enrich_animation_description_with_context(
         args["description"].as_str().unwrap_or(""),
         args["quality"].as_str().unwrap_or("m"),
+        args["brief_context"].as_str(),
+        args["revision_notes"].as_str(),
     );
     let tool_args = json!({
         "description": description,
