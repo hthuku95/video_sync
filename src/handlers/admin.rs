@@ -7175,6 +7175,174 @@ pub async fn api_list_deliveries(
     Json(json!({"deliveries": deliveries}))
 }
 
+async fn normalize_blender_reference_args(
+    state: &Arc<AppState>,
+    tool: &str,
+    args: serde_json::Value,
+) -> serde_json::Value {
+    if tool != "blender_generate_scene" {
+        return args;
+    }
+
+    let Some(source_url) = args
+        .get("reference_image_url")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return args;
+    };
+
+    if !(source_url.starts_with("http://") || source_url.starts_with("https://")) {
+        return args;
+    }
+
+    let Some(r2) = state.r2_client.as_ref() else {
+        tracing::warn!("normalize_blender_reference_args: R2 not configured, using original URL");
+        return args;
+    };
+
+    let http = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(45))
+        .redirect(reqwest::redirect::Policy::limited(5))
+        .user_agent("Mozilla/5.0 (compatible; VideoSyncBot/1.0)")
+        .build()
+    {
+        Ok(client) => client,
+        Err(error) => {
+            tracing::warn!(
+                "normalize_blender_reference_args: failed to build HTTP client: {}",
+                error
+            );
+            return args;
+        }
+    };
+
+    let response = match http.get(source_url).send().await {
+        Ok(resp) => resp,
+        Err(error) => {
+            tracing::warn!(
+                "normalize_blender_reference_args: download failed for {}: {}",
+                source_url,
+                error
+            );
+            return args;
+        }
+    };
+
+    if !response.status().is_success() {
+        tracing::warn!(
+            "normalize_blender_reference_args: download returned {} for {}",
+            response.status(),
+            source_url
+        );
+        return args;
+    }
+
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let bytes = match response.bytes().await {
+        Ok(payload) => payload,
+        Err(error) => {
+            tracing::warn!(
+                "normalize_blender_reference_args: failed to read bytes for {}: {}",
+                source_url,
+                error
+            );
+            return args;
+        }
+    };
+
+    if bytes.is_empty() {
+        tracing::warn!(
+            "normalize_blender_reference_args: empty payload for {}",
+            source_url
+        );
+        return args;
+    }
+
+    let parsed_ext = reqwest::Url::parse(source_url)
+        .ok()
+        .and_then(|url| {
+            std::path::Path::new(url.path())
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .map(|ext| ext.to_ascii_lowercase())
+        });
+    let ext = parsed_ext
+        .or_else(|| {
+            if content_type.contains("png") {
+                Some("png".to_string())
+            } else if content_type.contains("webp") {
+                Some("webp".to_string())
+            } else if content_type.contains("gif") {
+                Some("gif".to_string())
+            } else if content_type.contains("svg") {
+                Some("svg".to_string())
+            } else if content_type.contains("jpeg") || content_type.contains("jpg") {
+                Some("jpg".to_string())
+            } else {
+                None
+            }
+        })
+        .unwrap_or_else(|| "jpg".to_string());
+
+    let digest = {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(&bytes);
+        let hex = format!("{:x}", hasher.finalize());
+        hex.chars().take(24).collect::<String>()
+    };
+
+    let key = format!("assets/reference-images/{}.{}", digest, ext);
+    let local_path = format!(
+        "outputs/reference_delivery_{}.{}",
+        uuid::Uuid::new_v4(),
+        ext
+    );
+
+    if let Err(error) = tokio::fs::write(&local_path, &bytes).await {
+        tracing::warn!(
+            "normalize_blender_reference_args: failed to write temp file {}: {}",
+            local_path,
+            error
+        );
+        return args;
+    }
+
+    let presigned = match r2.upload(&local_path, &key).await {
+        Ok(()) => r2.presign_get(&key, 7 * 24 * 3600).await,
+        Err(error) => Err(error),
+    };
+    let _ = tokio::fs::remove_file(&local_path).await;
+
+    match presigned {
+        Ok(url) => {
+            tracing::info!(
+                "normalize_blender_reference_args: rehosted {} to {}",
+                source_url,
+                key
+            );
+            let mut normalized = args;
+            normalized["reference_image_url"] = serde_json::Value::String(url);
+            normalized
+        }
+        Err(error) => {
+            tracing::warn!(
+                "normalize_blender_reference_args: R2 upload failed for {}: {}",
+                source_url,
+                error
+            );
+            args
+        }
+    }
+}
+
 /// Background task: renders one custom delivery job and updates the DB.
 pub async fn run_delivery_job(delivery_id: Uuid, state: Arc<AppState>) {
     // Fetch job details
@@ -7223,6 +7391,7 @@ pub async fn run_delivery_job(delivery_id: Uuid, state: Arc<AppState>) {
 
     // Build tool + args
     let (tool, args, url_key, ext) = build_delivery_tool_args(&gig_type, &prompt, &style, duration, &extra);
+    let args = normalize_blender_reference_args(&state, &tool, args).await;
 
     // Submit to BlenderMCPServer async job queue
     let job_id = match blender.submit_job(&tool, args).await {
@@ -7321,6 +7490,7 @@ pub async fn run_delivery_job(delivery_id: Uuid, state: Arc<AppState>) {
                     delivery_id, review.score, attempt + 1, MAX_BLENDER_QA_RETRIES, hint);
                 current_prompt = format!("{hint}. {prompt}", hint = hint, prompt = prompt);
                 let (_, retry_args, _, _) = build_delivery_tool_args(&gig_type, &current_prompt, &style, duration, &extra);
+                let retry_args = normalize_blender_reference_args(&state, &tool, retry_args).await;
 
                 let retry_job_id = match blender.submit_job(&tool, retry_args).await {
                     Ok(id) => id,
