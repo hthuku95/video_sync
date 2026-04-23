@@ -7231,6 +7231,55 @@ pub async fn api_generate_crypto_saas_portfolio_samples(
 
         match existing {
             Ok(Some(row)) => {
+                let status = row
+                    .try_get::<String, _>("status")
+                    .unwrap_or_else(|_| String::new());
+                if status == "failed" {
+                    let (prompt, extra) = build_crypto_saas_render_inputs(&state, target).await;
+                    let title = format!("Portfolio sample - {} Web3 SaaS video", target.company);
+                    let unlock_price = crate::handlers::prospects::unlock_price_for(Some("landing_page"), true);
+                    let delivery_id: Uuid = row.get("id");
+
+                    let updated = sqlx::query(
+                        "UPDATE deliveries
+                         SET title = $2, prompt = $3, style = 'modern', duration = 15.0,
+                             extra_args = $4, status = 'pending', unlock_price_usdc = $5,
+                             source_url = $6, output_r2_url = NULL, preview_r2_url = NULL,
+                             error_message = NULL, completed_at = NULL
+                         WHERE id = $1
+                         RETURNING id, client_ref, title, gig_type, status, output_r2_url, preview_r2_url,
+                                   source_url, unlock_price_usdc, created_at, completed_at, error_message, extra_args",
+                    )
+                    .bind(delivery_id)
+                    .bind(&title)
+                    .bind(&prompt)
+                    .bind(&extra)
+                    .bind(unlock_price)
+                    .bind(target.url)
+                    .fetch_one(&state.db_pool)
+                    .await;
+
+                    match updated {
+                        Ok(updated_row) => {
+                            let render_state = state.clone();
+                            tokio::spawn(async move {
+                                run_delivery_job(delivery_id, render_state).await;
+                            });
+                            queued += 1;
+                            samples.push(portfolio_sample_json_from_row(&updated_row));
+                        }
+                        Err(e) => {
+                            samples.push(json!({
+                                "client_ref": client_ref,
+                                "company": target.company,
+                                "source_url": target.url,
+                                "success": false,
+                                "error": format!("DB requeue failed: {e}"),
+                            }));
+                        }
+                    }
+                    continue;
+                }
                 samples.push(portfolio_sample_json_from_row(&row));
                 continue;
             }
@@ -7247,12 +7296,7 @@ pub async fn api_generate_crypto_saas_portfolio_samples(
             }
         }
 
-        let hero_url = match crate::handlers::prospects::fetch_landing_page_hero(target.url).await {
-            Some(url) => resolve_reference_image_url(&state, &url).await.or(Some(url)),
-            None => None,
-        };
-        let prompt = crate::portfolio_samples::build_crypto_saas_prompt(target);
-        let extra = crate::portfolio_samples::build_crypto_saas_extra(target, hero_url.as_deref());
+        let (prompt, extra) = build_crypto_saas_render_inputs(&state, target).await;
         let title = format!("Portfolio sample - {} Web3 SaaS video", target.company);
         let unlock_price = crate::handlers::prospects::unlock_price_for(Some("landing_page"), true);
 
@@ -7301,11 +7345,35 @@ pub async fn api_generate_crypto_saas_portfolio_samples(
         "queued": queued,
         "samples": samples,
         "message": if queued == 0 {
-            "Portfolio samples already exist. Reuse the delivery links or delete/regenerate individual rows later."
+            "Portfolio samples already exist. Reuse the delivery links, or re-run this action after any sample fails to requeue it."
         } else {
             "Portfolio samples queued. Delivery links are shareable immediately and will show previews when renders finish."
         }
     }))
+}
+
+async fn build_crypto_saas_render_inputs(
+    state: &Arc<AppState>,
+    target: &crate::portfolio_samples::PortfolioTarget,
+) -> (String, serde_json::Value) {
+    let hero_url = match crate::handlers::prospects::fetch_landing_page_hero(target.url).await {
+        Some(url) if is_probable_reference_image_url(&url) => {
+            resolve_reference_image_url(state, &url).await.or(Some(url))
+        }
+        Some(url) => {
+            tracing::warn!(
+                target = target.company,
+                source_url = target.url,
+                candidate_url = url,
+                "Ignoring landing-page hero candidate because it does not look like an image URL"
+            );
+            None
+        }
+        None => None,
+    };
+    let prompt = crate::portfolio_samples::build_crypto_saas_prompt(target);
+    let extra = crate::portfolio_samples::build_crypto_saas_extra(target, hero_url.as_deref());
+    (prompt, extra)
 }
 
 fn portfolio_sample_json_from_row(row: &sqlx::postgres::PgRow) -> serde_json::Value {
@@ -7587,18 +7655,20 @@ async fn resolve_reference_image_url(
     let resolved_url = match reqwest::Url::parse(trimmed) {
         Ok(url) => {
             let path = url.path().to_ascii_lowercase();
-            let looks_like_html = path.is_empty()
-                || path == "/"
-                || (!path.ends_with(".png")
-                    && !path.ends_with(".jpg")
-                    && !path.ends_with(".jpeg")
-                    && !path.ends_with(".webp")
-                    && !path.ends_with(".gif")
-                    && !path.ends_with(".svg"));
+            let looks_like_html = path.is_empty() || path == "/" || !is_probable_reference_image_url(trimmed);
             if looks_like_html {
-                crate::handlers::prospects::fetch_landing_page_hero(trimmed)
-                    .await
-                    .unwrap_or_else(|| trimmed.to_string())
+                match crate::handlers::prospects::fetch_landing_page_hero(trimmed).await {
+                    Some(hero) if is_probable_reference_image_url(&hero) => hero,
+                    Some(hero) => {
+                        tracing::warn!(
+                            source_url = trimmed,
+                            candidate_url = hero,
+                            "Ignoring reference candidate because it does not look like an image URL"
+                        );
+                        return None;
+                    }
+                    None => return None,
+                }
             } else {
                 trimmed.to_string()
             }
@@ -7607,6 +7677,20 @@ async fn resolve_reference_image_url(
     };
 
     rehost_reference_image_to_r2(state, &resolved_url).await
+}
+
+fn is_probable_reference_image_url(source_url: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(source_url.trim()) else {
+        return false;
+    };
+
+    let path = url.path().to_ascii_lowercase();
+    path.ends_with(".png")
+        || path.ends_with(".jpg")
+        || path.ends_with(".jpeg")
+        || path.ends_with(".webp")
+        || path.ends_with(".gif")
+        || path.ends_with(".svg")
 }
 
 async fn rehost_reference_image_to_r2(
