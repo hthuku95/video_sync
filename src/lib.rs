@@ -37,6 +37,7 @@ pub mod x402;
 pub mod telegram_bot;
 pub mod telegram_client;
 pub mod render_review;
+pub mod portfolio_samples;
 
 // Video processing modules
 pub mod types;

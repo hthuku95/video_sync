@@ -10,6 +10,7 @@ use axum::{
     Router,
 };
 use bcrypt::{hash, DEFAULT_COST};
+use base64::Engine;
 use serde::Deserialize;
 use serde_json::json;
 use sqlx::{FromRow, Row};
@@ -30,6 +31,7 @@ pub fn admin_routes() -> Router {
         .route("/admin/test-runs", get(admin_test_runs_page))
         .route("/admin/test-runs/:id", get(admin_test_run_detail_page))
         .route("/admin/deliveries", get(admin_deliveries_page))
+        .route("/admin/portfolio-samples", get(admin_portfolio_samples_page))
         .route("/admin/monetization-guide", get(admin_monetization_guide_page))
         .route("/admin/revenue-ledger", get(admin_revenue_ledger_page))
         .route("/admin/how-it-works", get(admin_how_it_works_page))
@@ -77,7 +79,10 @@ pub fn admin_routes() -> Router {
         .route("/api/admin/test-runs", get(api_list_test_runs).post(api_trigger_test_run))
         .route("/api/admin/test-runs/:id", get(api_get_test_run))
         .route("/api/admin/manual-clipping-tests/trigger", post(api_trigger_manual_clipping_test))
+        .route("/api/admin/reference-assets/normalize", post(api_normalize_reference_asset))
         .route("/api/admin/deliveries", get(api_list_deliveries).post(api_create_delivery))
+        .route("/api/admin/portfolio-samples", get(api_list_portfolio_samples))
+        .route("/api/admin/portfolio-samples/crypto-saas", post(api_generate_crypto_saas_portfolio_samples))
         .route("/api/admin/revenue-ledger", get(api_revenue_ledger))
         .layer(axum::middleware::from_fn(admin_middleware))
         .layer(axum::middleware::from_fn(auth_middleware));
@@ -7105,6 +7110,12 @@ pub struct CreateDeliveryRequest {
     pub extra:       Option<serde_json::Value>,
 }
 
+#[derive(serde::Deserialize)]
+pub struct NormalizeReferenceAssetRequest {
+    pub source_url: Option<String>,
+    pub source_url_b64: Option<String>,
+}
+
 pub async fn api_create_delivery(
     Extension(state): Extension<Arc<AppState>>,
     Json(req): Json<CreateDeliveryRequest>,
@@ -7175,31 +7186,436 @@ pub async fn api_list_deliveries(
     Json(json!({"deliveries": deliveries}))
 }
 
-async fn normalize_blender_reference_args(
-    state: &Arc<AppState>,
-    tool: &str,
-    args: serde_json::Value,
-) -> serde_json::Value {
-    if tool != "blender_generate_scene" {
-        return args;
-    }
+pub async fn api_list_portfolio_samples(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    let rows = sqlx::query(
+        "SELECT id, client_ref, title, gig_type, status, output_r2_url, preview_r2_url,
+                source_url, unlock_price_usdc, created_at, completed_at, error_message, extra_args
+         FROM deliveries
+         WHERE client_ref LIKE 'portfolio:%'
+         ORDER BY created_at DESC
+         LIMIT 100",
+    )
+    .fetch_all(&state.db_pool)
+    .await;
 
-    let Some(source_url) = args
-        .get("reference_image_url")
-        .and_then(|v| v.as_str())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
-        return args;
+    let rows = match rows {
+        Ok(r) => r,
+        Err(e) => return Json(json!({"success": false, "error": format!("DB query failed: {e}")})),
     };
 
-    if !(source_url.starts_with("http://") || source_url.starts_with("https://")) {
-        return args;
+    let samples = rows.iter().map(portfolio_sample_json_from_row).collect::<Vec<_>>();
+    Json(json!({"success": true, "samples": samples, "targets": crate::portfolio_samples::crypto_saas_targets()}))
+}
+
+pub async fn api_generate_crypto_saas_portfolio_samples(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    let mut samples = Vec::new();
+    let mut queued = 0usize;
+
+    for target in crate::portfolio_samples::crypto_saas_targets() {
+        let client_ref = crate::portfolio_samples::client_ref_for(target);
+
+        let existing = sqlx::query(
+            "SELECT id, client_ref, title, gig_type, status, output_r2_url, preview_r2_url,
+                    source_url, unlock_price_usdc, created_at, completed_at, error_message, extra_args
+             FROM deliveries
+             WHERE client_ref = $1
+             LIMIT 1",
+        )
+        .bind(&client_ref)
+        .fetch_optional(&state.db_pool)
+        .await;
+
+        match existing {
+            Ok(Some(row)) => {
+                samples.push(portfolio_sample_json_from_row(&row));
+                continue;
+            }
+            Ok(None) => {}
+            Err(e) => {
+                samples.push(json!({
+                    "client_ref": client_ref,
+                    "company": target.company,
+                    "source_url": target.url,
+                    "success": false,
+                    "error": format!("DB lookup failed: {e}"),
+                }));
+                continue;
+            }
+        }
+
+        let hero_url = match crate::handlers::prospects::fetch_landing_page_hero(target.url).await {
+            Some(url) => resolve_reference_image_url(&state, &url).await.or(Some(url)),
+            None => None,
+        };
+        let prompt = crate::portfolio_samples::build_crypto_saas_prompt(target);
+        let extra = crate::portfolio_samples::build_crypto_saas_extra(target, hero_url.as_deref());
+        let title = format!("Portfolio sample - {} Web3 SaaS video", target.company);
+        let unlock_price = crate::handlers::prospects::unlock_price_for(Some("landing_page"), true);
+
+        let inserted = sqlx::query(
+            "INSERT INTO deliveries (client_ref, title, gig_type, prompt, style, duration, extra_args, status,
+                                      unlock_price_usdc, source_url)
+             VALUES ($1, $2, 'scene', $3, 'modern', 15.0, $4, 'pending', $5, $6)
+             RETURNING id, client_ref, title, gig_type, status, output_r2_url, preview_r2_url,
+                       source_url, unlock_price_usdc, created_at, completed_at, error_message, extra_args",
+        )
+        .bind(&client_ref)
+        .bind(&title)
+        .bind(&prompt)
+        .bind(&extra)
+        .bind(unlock_price)
+        .bind(target.url)
+        .fetch_one(&state.db_pool)
+        .await;
+
+        let row = match inserted {
+            Ok(row) => row,
+            Err(e) => {
+                samples.push(json!({
+                    "client_ref": client_ref,
+                    "company": target.company,
+                    "source_url": target.url,
+                    "success": false,
+                    "error": format!("DB insert failed: {e}"),
+                }));
+                continue;
+            }
+        };
+
+        let delivery_id: Uuid = row.get("id");
+        let render_state = state.clone();
+        tokio::spawn(async move {
+            run_delivery_job(delivery_id, render_state).await;
+        });
+
+        queued += 1;
+        samples.push(portfolio_sample_json_from_row(&row));
     }
 
+    Json(json!({
+        "success": true,
+        "queued": queued,
+        "samples": samples,
+        "message": if queued == 0 {
+            "Portfolio samples already exist. Reuse the delivery links or delete/regenerate individual rows later."
+        } else {
+            "Portfolio samples queued. Delivery links are shareable immediately and will show previews when renders finish."
+        }
+    }))
+}
+
+fn portfolio_sample_json_from_row(row: &sqlx::postgres::PgRow) -> serde_json::Value {
+    let id = row.get::<Uuid, _>("id");
+    let extra = row
+        .try_get::<serde_json::Value, _>("extra_args")
+        .unwrap_or_else(|_| serde_json::Value::Null);
+    let company = extra
+        .get("company")
+        .and_then(|value| value.as_str())
+        .map(|value| value.to_string());
+    let unlock_price = row
+        .try_get::<Option<sqlx::types::Decimal>, _>("unlock_price_usdc")
+        .ok()
+        .flatten()
+        .map(|value| value.to_string());
+
+    json!({
+        "id": id.to_string(),
+        "delivery_id": id.to_string(),
+        "delivery_url": format!("/delivery/{}", id),
+        "client_ref": row.try_get::<String, _>("client_ref").ok(),
+        "title": row.get::<String, _>("title"),
+        "company": company,
+        "gig_type": row.get::<String, _>("gig_type"),
+        "status": row.get::<String, _>("status"),
+        "source_url": row.try_get::<Option<String>, _>("source_url").ok().flatten(),
+        "output_r2_url": row.try_get::<Option<String>, _>("output_r2_url").ok().flatten(),
+        "preview_r2_url": row.try_get::<Option<String>, _>("preview_r2_url").ok().flatten(),
+        "unlock_price_usdc": unlock_price,
+        "created_at": row.get::<chrono::DateTime<chrono::Utc>, _>("created_at").to_rfc3339(),
+        "completed_at": row.try_get::<Option<chrono::DateTime<chrono::Utc>>, _>("completed_at").ok().flatten().map(|d| d.to_rfc3339()),
+        "error": row.try_get::<Option<String>, _>("error_message").ok().flatten(),
+        "extra": extra,
+    })
+}
+
+pub async fn api_normalize_reference_asset(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(req): Json<NormalizeReferenceAssetRequest>,
+) -> Json<serde_json::Value> {
+    let source_url = req
+        .source_url
+        .or_else(|| {
+            req.source_url_b64.and_then(|encoded| {
+                base64::engine::general_purpose::STANDARD
+                    .decode(encoded)
+                    .ok()
+                    .and_then(|bytes| String::from_utf8(bytes).ok())
+            })
+        })
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+
+    let Some(source_url) = source_url else {
+        return Json(json!({"error": "source_url is required"}));
+    };
+
+    match resolve_reference_image_url(&state, &source_url).await {
+        Some(url) => Json(json!({"normalized_url": url})),
+        None => Json(json!({"normalized_url": source_url})),
+    }
+}
+
+pub async fn admin_portfolio_samples_page() -> Html<String> {
+    Html(r#"
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>VideoSync Portfolio Samples</title>
+  <style>
+    :root {
+      --bg: #0b1120;
+      --panel: rgba(15, 23, 42, 0.88);
+      --panel-strong: #111827;
+      --line: rgba(148, 163, 184, 0.22);
+      --text: #e5edf7;
+      --muted: #94a3b8;
+      --cyan: #38bdf8;
+      --green: #34d399;
+      --amber: #fbbf24;
+      --red: #fb7185;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 12% 12%, rgba(56,189,248,0.18), transparent 28rem),
+        radial-gradient(circle at 86% 8%, rgba(52,211,153,0.16), transparent 24rem),
+        linear-gradient(145deg, #07111f 0%, #111827 48%, #0f172a 100%);
+      min-height: 100vh;
+    }
+    header, main { max-width: 1180px; margin: 0 auto; padding: 24px; }
+    nav { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 24px; }
+    nav a {
+      color: var(--muted);
+      text-decoration: none;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 8px 13px;
+      background: rgba(15,23,42,0.55);
+    }
+    nav a.active, nav a:hover { color: var(--text); border-color: rgba(56,189,248,0.7); }
+    .hero {
+      border: 1px solid var(--line);
+      border-radius: 28px;
+      padding: 34px;
+      background: linear-gradient(135deg, rgba(15,23,42,0.94), rgba(8,47,73,0.66));
+      box-shadow: 0 24px 80px rgba(0,0,0,0.28);
+    }
+    h1 { font-size: clamp(2rem, 5vw, 4.2rem); line-height: 0.95; margin: 0 0 16px; letter-spacing: -0.06em; }
+    p { color: var(--muted); line-height: 1.7; max-width: 820px; }
+    .actions { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 24px; }
+    button, .button {
+      border: 0;
+      border-radius: 14px;
+      padding: 12px 18px;
+      color: #06101f;
+      background: linear-gradient(135deg, var(--cyan), var(--green));
+      font-weight: 800;
+      cursor: pointer;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+    button.secondary { color: var(--text); background: rgba(15,23,42,0.92); border: 1px solid var(--line); }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 18px; margin-top: 26px; }
+    .card {
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      padding: 20px;
+      background: var(--panel);
+      min-height: 240px;
+    }
+    .card h3 { margin: 0 0 8px; font-size: 1.2rem; }
+    .meta { color: var(--muted); font-size: 0.9rem; word-break: break-word; }
+    .status {
+      display: inline-flex;
+      margin: 12px 0;
+      border-radius: 999px;
+      padding: 5px 10px;
+      font-size: 0.76rem;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      border: 1px solid var(--line);
+    }
+    .status.completed { color: var(--green); }
+    .status.running, .status.pending { color: var(--amber); }
+    .status.failed { color: var(--red); }
+    .links { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+    .links a {
+      color: var(--cyan);
+      border: 1px solid rgba(56,189,248,0.35);
+      border-radius: 999px;
+      padding: 7px 10px;
+      text-decoration: none;
+      font-size: 0.86rem;
+    }
+    .empty { border: 1px dashed var(--line); border-radius: 18px; padding: 24px; color: var(--muted); margin-top: 24px; }
+    .notice { color: var(--muted); margin-top: 14px; min-height: 24px; }
+  </style>
+</head>
+<body>
+  <header>
+    <nav>
+      <a href="/admin/dashboard">Dashboard</a>
+      <a href="/admin/deliveries">Deliveries</a>
+      <a href="/admin/portfolio-samples" class="active">Portfolio Samples</a>
+      <a href="/admin/prospect-finder">Prospects</a>
+      <a href="/admin/revenue-ledger">Revenue Ledger</a>
+    </nav>
+    <section class="hero">
+      <h1>Crypto SaaS portfolio samples</h1>
+      <p>
+        Generate five speculative website-to-video samples for real Web3 SaaS targets. These queue into the existing delivery pipeline, so every sample gets a public <code>/delivery/:id</code> link, R2-hosted output, and USDC unlock support.
+      </p>
+      <div class="actions">
+        <button id="generate-btn">Generate 5 Crypto SaaS Samples</button>
+        <button id="refresh-btn" class="secondary">Refresh Status</button>
+        <a class="button secondary" href="/admin/deliveries">Open Deliveries</a>
+      </div>
+      <div id="notice" class="notice"></div>
+    </section>
+  </header>
+  <main>
+    <div id="samples" class="grid"></div>
+    <div id="empty" class="empty" style="display:none;">No portfolio samples yet. Generate the first batch to create shareable proof for outbound pitches.</div>
+  </main>
+  <script>
+    const token = localStorage.getItem('auth_token') || localStorage.getItem('authToken') || localStorage.getItem('admin_token');
+    const headers = token ? { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' } : { 'Content-Type': 'application/json' };
+    const notice = document.getElementById('notice');
+    const samplesEl = document.getElementById('samples');
+    const emptyEl = document.getElementById('empty');
+
+    function setNotice(message) {
+      notice.textContent = message || '';
+    }
+
+    function card(sample) {
+      const company = sample.company || (sample.extra && sample.extra.company) || sample.title;
+      const deliveryUrl = sample.delivery_url || `/delivery/${sample.id}`;
+      const source = sample.source_url || (sample.extra && sample.extra.source_url) || '';
+      const output = sample.output_r2_url || sample.preview_r2_url;
+      return `
+        <article class="card">
+          <h3>${company}</h3>
+          <div class="meta">${sample.title || ''}</div>
+          <span class="status ${sample.status || 'pending'}">${sample.status || 'pending'}</span>
+          <div class="meta">Source: ${source ? `<a href="${source}" target="_blank" rel="noreferrer">${source}</a>` : 'Not set'}</div>
+          <div class="meta">Price: ${sample.unlock_price_usdc ? `$${sample.unlock_price_usdc} USDC` : 'Uses default delivery price'}</div>
+          ${sample.error ? `<p style="color:#fb7185">${sample.error}</p>` : ''}
+          <div class="links">
+            <a href="${deliveryUrl}" target="_blank" rel="noreferrer">Delivery Page</a>
+            ${output ? `<a href="${output}" target="_blank" rel="noreferrer">Rendered Output</a>` : ''}
+          </div>
+        </article>
+      `;
+    }
+
+    async function loadSamples() {
+      const resp = await fetch('/api/admin/portfolio-samples', { headers });
+      const data = await resp.json();
+      if (!data.success) throw new Error(data.error || 'Failed to load samples');
+      const samples = data.samples || [];
+      samplesEl.innerHTML = samples.map(card).join('');
+      emptyEl.style.display = samples.length ? 'none' : 'block';
+      return samples;
+    }
+
+    async function generateSamples() {
+      setNotice('Queueing portfolio samples and fetching website hero images...');
+      document.getElementById('generate-btn').disabled = true;
+      try {
+        const resp = await fetch('/api/admin/portfolio-samples/crypto-saas', {
+          method: 'POST',
+          headers,
+          body: '{}',
+        });
+        const data = await resp.json();
+        if (!data.success) throw new Error(data.error || 'Failed to queue samples');
+        setNotice(data.message || `Queued ${data.queued || 0} samples.`);
+        await loadSamples();
+      } catch (err) {
+        setNotice(err.message || String(err));
+      } finally {
+        document.getElementById('generate-btn').disabled = false;
+      }
+    }
+
+    document.getElementById('generate-btn').addEventListener('click', generateSamples);
+    document.getElementById('refresh-btn').addEventListener('click', () => loadSamples().catch(err => setNotice(err.message)));
+    loadSamples().catch(err => setNotice(err.message));
+  </script>
+</body>
+</html>
+"#.to_string())
+}
+
+async fn resolve_reference_image_url(
+    state: &Arc<AppState>,
+    source_url: &str,
+) -> Option<String> {
+    let trimmed = source_url.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if !(trimmed.starts_with("http://") || trimmed.starts_with("https://")) {
+        return None;
+    }
+
+    let resolved_url = match reqwest::Url::parse(trimmed) {
+        Ok(url) => {
+            let path = url.path().to_ascii_lowercase();
+            let looks_like_html = path.is_empty()
+                || path == "/"
+                || (!path.ends_with(".png")
+                    && !path.ends_with(".jpg")
+                    && !path.ends_with(".jpeg")
+                    && !path.ends_with(".webp")
+                    && !path.ends_with(".gif")
+                    && !path.ends_with(".svg"));
+            if looks_like_html {
+                crate::handlers::prospects::fetch_landing_page_hero(trimmed)
+                    .await
+                    .unwrap_or_else(|| trimmed.to_string())
+            } else {
+                trimmed.to_string()
+            }
+        }
+        Err(_) => trimmed.to_string(),
+    };
+
+    rehost_reference_image_to_r2(state, &resolved_url).await
+}
+
+async fn rehost_reference_image_to_r2(
+    state: &Arc<AppState>,
+    source_url: &str,
+) -> Option<String> {
     let Some(r2) = state.r2_client.as_ref() else {
-        tracing::warn!("normalize_blender_reference_args: R2 not configured, using original URL");
-        return args;
+        tracing::warn!("rehost_reference_image_to_r2: R2 not configured, using original URL");
+        return None;
     };
 
     let http = match reqwest::Client::builder()
@@ -7211,10 +7627,10 @@ async fn normalize_blender_reference_args(
         Ok(client) => client,
         Err(error) => {
             tracing::warn!(
-                "normalize_blender_reference_args: failed to build HTTP client: {}",
+                "rehost_reference_image_to_r2: failed to build HTTP client: {}",
                 error
             );
-            return args;
+            return None;
         }
     };
 
@@ -7222,21 +7638,21 @@ async fn normalize_blender_reference_args(
         Ok(resp) => resp,
         Err(error) => {
             tracing::warn!(
-                "normalize_blender_reference_args: download failed for {}: {}",
+                "rehost_reference_image_to_r2: download failed for {}: {}",
                 source_url,
                 error
             );
-            return args;
+            return None;
         }
     };
 
     if !response.status().is_success() {
         tracing::warn!(
-            "normalize_blender_reference_args: download returned {} for {}",
+            "rehost_reference_image_to_r2: download returned {} for {}",
             response.status(),
             source_url
         );
-        return args;
+        return None;
     }
 
     let content_type = response
@@ -7245,24 +7661,33 @@ async fn normalize_blender_reference_args(
         .and_then(|value| value.to_str().ok())
         .unwrap_or("")
         .to_ascii_lowercase();
+
+    if content_type.contains("text/html") {
+        tracing::warn!(
+            "rehost_reference_image_to_r2: {} resolved to HTML instead of an image",
+            source_url
+        );
+        return None;
+    }
+
     let bytes = match response.bytes().await {
         Ok(payload) => payload,
         Err(error) => {
             tracing::warn!(
-                "normalize_blender_reference_args: failed to read bytes for {}: {}",
+                "rehost_reference_image_to_r2: failed to read bytes for {}: {}",
                 source_url,
                 error
             );
-            return args;
+            return None;
         }
     };
 
     if bytes.is_empty() {
         tracing::warn!(
-            "normalize_blender_reference_args: empty payload for {}",
+            "rehost_reference_image_to_r2: empty payload for {}",
             source_url
         );
-        return args;
+        return None;
     }
 
     let parsed_ext = reqwest::Url::parse(source_url)
@@ -7300,19 +7725,15 @@ async fn normalize_blender_reference_args(
     };
 
     let key = format!("assets/reference-images/{}.{}", digest, ext);
-    let local_path = format!(
-        "outputs/reference_delivery_{}.{}",
-        uuid::Uuid::new_v4(),
-        ext
-    );
+    let local_path = format!("outputs/reference_delivery_{}.{}", uuid::Uuid::new_v4(), ext);
 
     if let Err(error) = tokio::fs::write(&local_path, &bytes).await {
         tracing::warn!(
-            "normalize_blender_reference_args: failed to write temp file {}: {}",
+            "rehost_reference_image_to_r2: failed to write temp file {}: {}",
             local_path,
             error
         );
-        return args;
+        return None;
     }
 
     let presigned = match r2.upload(&local_path, &key).await {
@@ -7324,22 +7745,48 @@ async fn normalize_blender_reference_args(
     match presigned {
         Ok(url) => {
             tracing::info!(
-                "normalize_blender_reference_args: rehosted {} to {}",
+                "rehost_reference_image_to_r2: rehosted {} to {}",
                 source_url,
                 key
             );
+            Some(url)
+        }
+        Err(error) => {
+            tracing::warn!(
+                "rehost_reference_image_to_r2: R2 upload failed for {}: {}",
+                source_url,
+                error
+            );
+            None
+        }
+    }
+}
+
+async fn normalize_blender_reference_args(
+    state: &Arc<AppState>,
+    tool: &str,
+    args: serde_json::Value,
+) -> serde_json::Value {
+    if tool != "blender_generate_scene" {
+        return args;
+    }
+
+    let Some(source_url) = args
+        .get("reference_image_url")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return args;
+    };
+
+    match resolve_reference_image_url(state, source_url).await {
+        Some(url) => {
             let mut normalized = args;
             normalized["reference_image_url"] = serde_json::Value::String(url);
             normalized
         }
-        Err(error) => {
-            tracing::warn!(
-                "normalize_blender_reference_args: R2 upload failed for {}: {}",
-                source_url,
-                error
-            );
-            args
-        }
+        None => args,
     }
 }
 
@@ -7945,6 +8392,22 @@ async function createDelivery() {
   };
 
   try {
+    if (body.extra && body.extra.reference_image_url) {
+      status.textContent = 'Normalizing reference asset...';
+      const encodedUrl = btoa(unescape(encodeURIComponent(body.extra.reference_image_url)));
+      const normalizeResp = await fetch('/api/admin/reference-assets/normalize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ source_url_b64: encodedUrl }),
+      });
+      const normalizeData = await normalizeResp.json();
+      if (normalizeData.error) throw new Error(normalizeData.error);
+      if (normalizeData.normalized_url) {
+        body.extra.reference_image_url = normalizeData.normalized_url;
+      }
+    }
+
+    status.textContent = 'Creating delivery...';
     const resp = await fetch('/api/admin/deliveries', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },

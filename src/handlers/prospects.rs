@@ -64,6 +64,8 @@ pub fn prospect_routes() -> Router {
 /// Used by content_machine for Instagram lead generation.
 pub fn instagram_routes() -> Router {
     Router::new()
+        .route("/api/portfolio-samples",                    get(crate::handlers::admin::api_list_portfolio_samples))
+        .route("/api/portfolio-samples/crypto-saas",        post(crate::handlers::admin::api_generate_crypto_saas_portfolio_samples))
         .route("/api/instagram/leads/search",                post(instagram_search_leads))
         .route("/api/instagram/leads/auto-discover",         post(instagram_auto_discover))
         .route("/api/instagram/leads/top",                   get(instagram_top_leads))

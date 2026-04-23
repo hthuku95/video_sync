@@ -37,6 +37,7 @@ mod x402;          // 💰 x402 HTTP-402 payment protocol (USDC on Base)
 mod telegram_bot;     // ✈️ Telegram Bot API — admin pings + AI sales DM replies
 mod telegram_client;  // 🛰️ Telegram MTProto userbot — channel watcher for paid-gig leads
 mod render_review;    // 🔍 LLM QA review of every render before handoff
+mod portfolio_samples; // 💼 Monetizable portfolio sample targets + prompts
 
 // Video processing modules (from lib.rs)
 mod types;
