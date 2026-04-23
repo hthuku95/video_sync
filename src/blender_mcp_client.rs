@@ -379,7 +379,23 @@ impl BlenderMCPClient {
                 Ok(r) => r,
                 Err(e) => { last_err = format!("BlenderMCP submit_job HTTP error: {e}"); continue; }
             };
-            let json: serde_json::Value = match resp.json().await {
+            let status = resp.status();
+            let bytes = match resp.bytes().await {
+                Ok(b) => b,
+                Err(e) => {
+                    last_err = format!("BlenderMCP submit_job body read error: {e}");
+                    continue;
+                }
+            };
+            if !status.is_success() {
+                last_err = format!(
+                    "BlenderMCP submit_job HTTP {}: {}",
+                    status,
+                    Self::body_snippet_from_bytes(&bytes),
+                );
+                continue;
+            }
+            let json: serde_json::Value = match Self::parse_json_body(&bytes) {
                 Ok(j) => j,
                 Err(e) => { last_err = format!("BlenderMCP submit_job parse error: {e}"); continue; }
             };
@@ -442,9 +458,10 @@ impl BlenderMCPClient {
     pub async fn poll_job(&self, job_id: &str) -> Result<serde_json::Value, String> {
         let url = format!("{}/api/jobs/{}", self.base_url, job_id);
         let mut last_err = String::new();
-        for attempt in 0..3u8 {
+        let mut saw_transient_issue = false;
+        for attempt in 0..5u8 {
             if attempt > 0 {
-                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                tokio::time::sleep(std::time::Duration::from_secs(3 + (attempt as u64 * 2))).await;
             }
             let resp = match self
                 .client
@@ -456,11 +473,81 @@ impl BlenderMCPClient {
                 Ok(r) => r,
                 Err(e) => { last_err = format!("BlenderMCP poll_job HTTP error: {e}"); continue; }
             };
-            match resp.json::<serde_json::Value>().await {
+            let status = resp.status();
+            let bytes = match resp.bytes().await {
+                Ok(b) => b,
+                Err(e) => {
+                    saw_transient_issue = true;
+                    last_err = format!("BlenderMCP poll_job body read error: {e}");
+                    continue;
+                }
+            };
+
+            if status == reqwest::StatusCode::NOT_FOUND {
+                return Err(format!(
+                    "BlenderMCP poll_job 404 for job {job_id}: {}",
+                    Self::body_snippet_from_bytes(&bytes)
+                ));
+            }
+
+            if !status.is_success() {
+                let snippet = Self::body_snippet_from_bytes(&bytes);
+                last_err = format!("BlenderMCP poll_job HTTP {status}: {snippet}");
+                if status.is_server_error() || status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                    saw_transient_issue = true;
+                    continue;
+                }
+                return Err(last_err);
+            }
+
+            match Self::parse_json_body(&bytes) {
                 Ok(j) => return Ok(j),
-                Err(e) => { last_err = format!("BlenderMCP poll_job parse error: {e}"); }
+                Err(e) => {
+                    saw_transient_issue = true;
+                    last_err = format!("BlenderMCP poll_job parse error: {e}");
+                }
             }
         }
+        if saw_transient_issue {
+            return Ok(json!({
+                "state": "running",
+                "poll_error": last_err,
+            }));
+        }
         Err(last_err)
+    }
+
+    fn parse_json_body(bytes: &[u8]) -> Result<serde_json::Value, String> {
+        if let Ok(value) = serde_json::from_slice::<serde_json::Value>(bytes) {
+            return Ok(value);
+        }
+
+        let text = String::from_utf8_lossy(bytes);
+        if let (Some(start), Some(end)) = (text.find('{'), text.rfind('}')) {
+            if start <= end {
+                if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text[start..=end]) {
+                    return Ok(value);
+                }
+            }
+        }
+
+        Err(format!(
+            "unable to decode JSON body: {}",
+            Self::body_snippet_from_text(&text),
+        ))
+    }
+
+    fn body_snippet_from_bytes(bytes: &[u8]) -> String {
+        Self::body_snippet_from_text(&String::from_utf8_lossy(bytes))
+    }
+
+    fn body_snippet_from_text(text: &str) -> String {
+        let compact = text.replace('\r', " ").replace('\n', " ");
+        let trimmed = compact.trim();
+        if trimmed.len() <= 240 {
+            trimmed.to_string()
+        } else {
+            format!("{}...", &trimmed[..240])
+        }
     }
 }
