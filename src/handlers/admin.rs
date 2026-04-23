@@ -7262,7 +7262,11 @@ pub async fn api_generate_crypto_saas_portfolio_samples(
                     match updated {
                         Ok(updated_row) => {
                             let render_state = state.clone();
+                            let delay_seconds = (queued as u64) * 90;
                             tokio::spawn(async move {
+                                if delay_seconds > 0 {
+                                    tokio::time::sleep(std::time::Duration::from_secs(delay_seconds)).await;
+                                }
                                 run_delivery_job(delivery_id, render_state).await;
                             });
                             queued += 1;
@@ -7332,7 +7336,11 @@ pub async fn api_generate_crypto_saas_portfolio_samples(
 
         let delivery_id: Uuid = row.get("id");
         let render_state = state.clone();
+        let delay_seconds = (queued as u64) * 90;
         tokio::spawn(async move {
+            if delay_seconds > 0 {
+                tokio::time::sleep(std::time::Duration::from_secs(delay_seconds)).await;
+            }
             run_delivery_job(delivery_id, render_state).await;
         });
 
