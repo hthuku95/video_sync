@@ -7884,6 +7884,13 @@ async fn normalize_blender_reference_args(
 
 /// Background task: renders one custom delivery job and updates the DB.
 pub async fn run_delivery_job(delivery_id: Uuid, state: Arc<AppState>) {
+    let poll_interval_secs = 5u64;
+    let poll_timeout_secs = std::env::var("DELIVERY_RENDER_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(1800);
+    let max_poll_attempts = std::cmp::max(1u64, poll_timeout_secs.div_ceil(poll_interval_secs)) as u16;
+
     // Fetch job details
     let row = sqlx::query(
         "SELECT gig_type, prompt, style, duration, extra_args FROM deliveries WHERE id = $1",
@@ -7922,6 +7929,20 @@ pub async fn run_delivery_job(delivery_id: Uuid, state: Arc<AppState>) {
         }
     };
 
+    let _delivery_permit = match state.delivery_render_semaphore.clone().acquire_owned().await {
+        Ok(permit) => permit,
+        Err(_) => {
+            let _ = sqlx::query(
+                "UPDATE deliveries SET status='failed', error_message=$1, completed_at=NOW() WHERE id=$2",
+            )
+            .bind("Delivery render semaphore closed")
+            .bind(delivery_id)
+            .execute(&state.db_pool)
+            .await;
+            return;
+        }
+    };
+
     // Mark running
     let _ = sqlx::query("UPDATE deliveries SET status='running' WHERE id=$1")
         .bind(delivery_id)
@@ -7944,10 +7965,10 @@ pub async fn run_delivery_job(delivery_id: Uuid, state: Arc<AppState>) {
         }
     };
 
-    // Poll until completed / failed (up to 15 min, 5s interval)
+    // Poll until completed / failed using a configurable delivery timeout budget.
     let mut final_url: Option<String> = None;
-    for _ in 0..180u16 {
-        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+    for _ in 0..max_poll_attempts {
+        tokio::time::sleep(std::time::Duration::from_secs(poll_interval_secs)).await;
         let status = match blender.poll_job(&job_id).await {
             Ok(s) => s,
             Err(e) => {
@@ -8040,8 +8061,8 @@ pub async fn run_delivery_job(delivery_id: Uuid, state: Arc<AppState>) {
                 };
 
                 let mut retry_url: Option<String> = None;
-                for _ in 0..180u16 {
-                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                for _ in 0..max_poll_attempts {
+                    tokio::time::sleep(std::time::Duration::from_secs(poll_interval_secs)).await;
                     if let Ok(status) = blender.poll_job(&retry_job_id).await {
                         match status.get("state").and_then(|s| s.as_str()) {
                             Some("completed") => {
@@ -8095,9 +8116,10 @@ pub async fn run_delivery_job(delivery_id: Uuid, state: Arc<AppState>) {
         }
         None => {
             let _ = sqlx::query(
-                "UPDATE deliveries SET status='failed', error_message='Timed out after 900s', \
-                 completed_at=NOW() WHERE id=$1",
+                "UPDATE deliveries SET status='failed', error_message=$1, \
+                 completed_at=NOW() WHERE id=$2",
             )
+            .bind(format!("Timed out after {}s", poll_timeout_secs))
             .bind(delivery_id).execute(&state.db_pool).await;
         }
     }

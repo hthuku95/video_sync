@@ -76,6 +76,7 @@ pub struct AppState {
     pub token_manager: Option<Arc<token_manager::TokenManager>>, // 🔧 Centralized token refresh
     pub twitch_client: Option<Arc<twitch_client::TwitchClient>>, // 📺 Twitch Helix API
     pub download_semaphore: Arc<Semaphore>, // 🔒 Limits concurrent downloads to 2
+    pub delivery_render_semaphore: Arc<Semaphore>, // 🎬 Limits concurrent delivery renders to avoid OOM
     pub phantombuster_client: Option<phantombuster_client::PhantomBusterClient>, // 🎯 LinkedIn scraping
 }
 
@@ -548,6 +549,12 @@ async fn main() {
                 .ok()
                 .and_then(|v| v.parse::<usize>().ok())
                 .unwrap_or(4), // 4 concurrent downloads (was 2)
+        )),
+        delivery_render_semaphore: Arc::new(Semaphore::new(
+            std::env::var("DELIVERY_RENDER_PERMITS")
+                .ok()
+                .and_then(|v| v.parse::<usize>().ok())
+                .unwrap_or(1), // default to 1 active delivery render to reduce memory spikes
         )),
     });
 

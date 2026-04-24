@@ -85,5 +85,6 @@ pub struct AppState {
     pub token_manager: Option<Arc<token_manager::TokenManager>>,
     pub twitch_client: Option<Arc<twitch_client::TwitchClient>>,
     pub download_semaphore: Arc<Semaphore>,
+    pub delivery_render_semaphore: Arc<Semaphore>,
     pub phantombuster_client: Option<phantombuster_client::PhantomBusterClient>,
 }
