@@ -320,8 +320,10 @@ impl BlenderMCPClient {
 
         let job_id = self.submit_job(tool, args).await?;
 
-        // Poll every 5 seconds for up to 15 minutes (180 polls)
-        for _ in 0..180 {
+        // Poll every 5 seconds for up to 30 minutes (360 polls).
+        // This leaves enough room for heavier reference-driven renders that
+        // now run behind the durable Blender workflow.
+        for _ in 0..360 {
             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
             let status = self.poll_job(&job_id).await?;
             match status.get("state").and_then(|s| s.as_str()) {
@@ -353,7 +355,7 @@ impl BlenderMCPClient {
                 }
             }
         }
-        Err(format!("Blender job {job_id} timed out after 900s"))
+        Err(format!("Blender job {job_id} timed out after 1800s"))
     }
 
     /// Submit a long-running job to the Phase 5 async queue.
