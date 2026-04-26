@@ -11286,7 +11286,7 @@ async fn execute_blender_generate_chart_gemini(
         .and_then(|v| v.as_str())
         .and_then(|s| serde_json::from_str(s).ok())
         .unwrap_or(json!([]));
-    let tool_args = json!({
+    let mut tool_args = json!({
         "chart_type": args.get("chart_type").and_then(|v| v.as_str()).unwrap_or("bar_chart"),
         "title":      args.get("title").and_then(|v| v.as_str()).unwrap_or(""),
         "data":       data,
@@ -11294,6 +11294,7 @@ async fn execute_blender_generate_chart_gemini(
         "duration":   args.get("duration").and_then(|v| v.as_f64()).unwrap_or(10.0),
         "colors":     colors,
     });
+    maybe_insert_blender_narration_args_from_gemini(&mut tool_args, args);
     blender_render(&client, "blender_generate_chart", tool_args, "video_url", "mp4", "Manim chart rendered").await
 }
 
@@ -11421,7 +11422,7 @@ async fn execute_blender_generate_chart_claude(args: &Value, ctx: &ToolExecution
     let colors: Value = args["colors"].as_str()
         .and_then(|s| serde_json::from_str(s).ok())
         .unwrap_or(json!([]));
-    let tool_args = json!({
+    let mut tool_args = json!({
         "chart_type": args["chart_type"].as_str().unwrap_or("bar_chart"),
         "title":      args["title"].as_str().unwrap_or(""),
         "data":       data,
@@ -11429,6 +11430,7 @@ async fn execute_blender_generate_chart_claude(args: &Value, ctx: &ToolExecution
         "duration":   args["duration"].as_f64().unwrap_or(10.0),
         "colors":     colors,
     });
+    maybe_insert_blender_narration_args_from_claude(&mut tool_args, args);
     blender_render(&client, "blender_generate_chart", tool_args, "video_url", "mp4", "Manim chart rendered").await
 }
 
