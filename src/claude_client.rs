@@ -1255,6 +1255,35 @@ impl ClaudeClient {
                 },
             },
             ClaudeTool {
+                name: "transcribe_audio_url".to_string(),
+                description: "Transcribes speech from a public audio URL using the shared VibeVoice transcription service. Useful for voice notes, podcast clips, narration drafts, interviews, and subtitle prep.".to_string(),
+                input_schema: InputSchema {
+                    schema_type: "object".to_string(),
+                    properties: HashMap::from([
+                        ("audio_url".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Publicly accessible audio URL to transcribe".to_string(),
+                            items: None,
+                        }),
+                        ("language".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Optional language hint such as 'en', 'sw', or 'fr'".to_string(),
+                            items: None,
+                        }),
+                        ("hotwords".to_string(), PropertyDefinition {
+                            prop_type: "array".to_string(),
+                            description: "Optional list of terms, names, or product words to bias the transcription toward".to_string(),
+                            items: Some(Box::new(PropertyDefinition {
+                                prop_type: "string".to_string(),
+                                description: "Hotword".to_string(),
+                                items: None,
+                            })),
+                        }),
+                    ]),
+                    required: vec!["audio_url".to_string()],
+                },
+            },
+            ClaudeTool {
                 name: "generate_video_script".to_string(),
                 description: "Generates a video script based on topic and requirements using AI".to_string(),
                 input_schema: InputSchema {
@@ -6963,6 +6992,9 @@ impl ClaudeClient {
                         ("duration".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Clip length in seconds (default: 10)".to_string(), items: None }),
                         ("style".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Visual style: 'cinematic' | 'minimal' | 'energetic' | 'calm'".to_string(), items: None }),
                         ("reference_image_url".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Optional URL of a reference image for style guidance".to_string(), items: None }),
+                        ("include_narration".to_string(), PropertyDefinition { prop_type: "boolean".to_string(), description: "Optional. If true, generate narration audio and a narrated video variant when VibeVoice is configured".to_string(), items: None }),
+                        ("narration_text".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Optional narration script to speak over the rendered scene".to_string(), items: None }),
+                        ("narration_speaker".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Optional VibeVoice speaker preset name, e.g. 'Emma' or 'Carter'".to_string(), items: None }),
                     ]),
                     required: vec!["prompt".to_string()],
                 },
@@ -7032,6 +7064,9 @@ impl ClaudeClient {
                         ("animation_type".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Animation style: 'appear' | 'morph' | 'step_by_step'".to_string(), items: None }),
                         ("duration".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Clip length in seconds (default: 8)".to_string(), items: None }),
                         ("background_style".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Background: 'dark' | 'light' | 'transparent'".to_string(), items: None }),
+                        ("include_narration".to_string(), PropertyDefinition { prop_type: "boolean".to_string(), description: "Optional. If true, generate narration audio and a narrated video variant for this math render".to_string(), items: None }),
+                        ("narration_text".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Optional narration script to speak during the animation".to_string(), items: None }),
+                        ("narration_speaker".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Optional VibeVoice speaker preset name, e.g. 'Emma' or 'Carter'".to_string(), items: None }),
                     ]),
                     required: vec!["latex_expression".to_string()],
                 },
@@ -7364,6 +7399,9 @@ impl ClaudeClient {
                         ("duration".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Clip length in seconds (default: 10)".to_string(), items: None }),
                         ("background".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Background: 'dark' (default) | 'light' | 'transparent'".to_string(), items: None }),
                         ("quality".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Render quality: 'l' (480p fast) | 'm' (720p, default) | 'h' (1080p slow)".to_string(), items: None }),
+                        ("include_narration".to_string(), PropertyDefinition { prop_type: "boolean".to_string(), description: "Optional. If true, generate narration audio and a narrated video variant for this animation".to_string(), items: None }),
+                        ("narration_text".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Optional narration script to speak during the animation".to_string(), items: None }),
+                        ("narration_speaker".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Optional VibeVoice speaker preset name, e.g. 'Emma' or 'Carter'".to_string(), items: None }),
                     ]),
                     required: vec!["description".to_string()],
                 },

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import os
+import subprocess
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -39,6 +40,7 @@ class TranscribeRequest(BaseModel):
     audio_url: str
     hotwords: list[str] = Field(default_factory=list)
     language: str | None = None
+    context_info: str | None = None
     job_id: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -52,8 +54,52 @@ def runtime() -> Any:
     return VibeVoiceRuntime.from_env()
 
 
+def maybe_convert_audio(local_path: Path, output_format: str) -> Path:
+    requested = (output_format or "wav").lower()
+    current = local_path.suffix.lstrip(".").lower()
+    if requested == current or not requested:
+        return local_path
+
+    converted_path = local_path.with_suffix(f".{requested}")
+    command = [
+        os.getenv("FFMPEG_BIN", "ffmpeg"),
+        "-y",
+        "-i",
+        str(local_path),
+        str(converted_path),
+    ]
+    try:
+        subprocess.run(
+            command,
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(
+            status_code=501,
+            detail=(
+                f"Requested output format '{requested}' requires ffmpeg conversion, but ffmpeg "
+                f"is not available: {exc}"
+            ),
+        ) from exc
+    except subprocess.CalledProcessError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"ffmpeg conversion to '{requested}' failed: "
+                f"{exc.stderr or exc.stdout or str(exc)}"
+            ),
+        ) from exc
+
+    return converted_path
+
+
 @app.get("/health")
 def health() -> dict[str, Any]:
+    runtime_obj = VibeVoiceRuntime.from_env() if VibeVoiceRuntime is not None else None
+    capabilities = runtime_obj.capabilities() if runtime_obj is not None else {}
     return {
         "ok": True,
         "service": "videosync-vibevoice",
@@ -61,6 +107,26 @@ def health() -> dict[str, Any]:
         "import_error": IMPORT_ERROR,
         "tts_model": os.getenv("VIBEVOICE_TTS_MODEL", ""),
         "asr_model": os.getenv("VIBEVOICE_ASR_MODEL", ""),
+        "speaker_count": len(capabilities.get("tts", {}).get("available_speakers", [])),
+        "capabilities": capabilities,
+    }
+
+
+@app.get("/api/capabilities")
+def capabilities() -> dict[str, Any]:
+    return {
+        "success": True,
+        **runtime().capabilities(),
+    }
+
+
+@app.get("/api/speakers")
+def speakers() -> dict[str, Any]:
+    runtime_obj = runtime()
+    capabilities = runtime_obj.capabilities()
+    return {
+        "success": True,
+        "speakers": capabilities.get("tts", {}).get("available_speakers", []),
     }
 
 
@@ -76,6 +142,10 @@ async def text_to_speech(req: TtsRequest) -> dict[str, Any]:
         job_id=req.job_id or str(uuid4()),
         metadata=req.metadata,
     )
+    local_path = result.get("local_path")
+    if local_path:
+        converted = maybe_convert_audio(Path(local_path), req.format)
+        result["local_path"] = str(converted)
     return {"success": True, **result}
 
 
@@ -95,6 +165,7 @@ async def transcribe(req: TranscribeRequest) -> dict[str, Any]:
             audio_path=audio_path,
             hotwords=req.hotwords,
             language=req.language,
+            context_info=req.context_info,
             job_id=req.job_id or str(uuid4()),
             metadata=req.metadata,
         )

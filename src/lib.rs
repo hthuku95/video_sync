@@ -12,6 +12,7 @@ pub mod llm_utils;
 pub mod claude_client;
 pub mod voyage_embeddings;
 pub mod elevenlabs_client;
+pub mod vibevoice_client;
 pub mod blender_mcp_client;
 pub mod blender_quality;
 pub mod r2_client;
@@ -74,6 +75,7 @@ pub struct AppState {
     pub voyage_embeddings: Option<voyage_embeddings::VoyageEmbeddings>,
     pub pexels_client: Option<pexels_client::PexelsClient>,
     pub elevenlabs_client: Option<elevenlabs_client::ElevenLabsClient>,
+    pub vibevoice_client: Option<vibevoice_client::VibeVoiceClient>,
     pub blender_mcp_client: Option<blender_mcp_client::BlenderMCPClient>,
     pub r2_client: Option<std::sync::Arc<r2_client::R2Client>>,
     pub youtube_client: Option<youtube_client::YouTubeClient>,

@@ -75,6 +75,13 @@ pub fn build_crypto_saas_prompt(target: &PortfolioTarget) -> String {
 }
 
 pub fn build_crypto_saas_extra(target: &PortfolioTarget, reference_image_url: Option<&str>) -> Value {
+    let narration_text = format!(
+        "{company} powers {market}. This speculative VideoSync sample shows {angle} in a polished website-to-video explainer built for outbound sales.",
+        company = target.company,
+        market = target.market,
+        angle = target.angle,
+    );
+
     json!({
         "portfolio_category": "crypto_saas",
         "company": target.company,
@@ -82,6 +89,8 @@ pub fn build_crypto_saas_extra(target: &PortfolioTarget, reference_image_url: Op
         "animation_style": "website_to_video",
         "reference_image_url": reference_image_url.unwrap_or_default(),
         "visual_direction": target.visual_direction,
+        "include_narration": true,
+        "narration_text": narration_text,
         "sales_positioning": "Use as a speculative outbound portfolio sample for crypto SaaS/startup prospects.",
         "compliance_note": "Speculative demo only; not commissioned by or affiliated with the referenced company."
     })
@@ -123,5 +132,9 @@ mod tests {
         assert_eq!(extra["company"], target.company);
         assert_eq!(extra["source_url"], target.url);
         assert_eq!(extra["reference_image_url"], "https://assets.example/hero.png");
+        assert_eq!(extra["include_narration"], true);
+        assert!(extra["narration_text"]
+            .as_str()
+            .is_some_and(|text| text.contains(target.company)));
     }
 }

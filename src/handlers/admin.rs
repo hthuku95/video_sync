@@ -7386,6 +7386,7 @@ async fn build_crypto_saas_render_inputs(
 
 fn portfolio_sample_json_from_row(row: &sqlx::postgres::PgRow) -> serde_json::Value {
     let id = row.get::<Uuid, _>("id");
+    let delivery_path = format!("/delivery/{}", id);
     let extra = row
         .try_get::<serde_json::Value, _>("extra_args")
         .unwrap_or_else(|_| serde_json::Value::Null);
@@ -7393,17 +7394,60 @@ fn portfolio_sample_json_from_row(row: &sqlx::postgres::PgRow) -> serde_json::Va
         .get("company")
         .and_then(|value| value.as_str())
         .map(|value| value.to_string());
+    let portfolio_category = extra
+        .get("portfolio_category")
+        .and_then(|value| value.as_str())
+        .map(|value| value.to_string());
+    let sales_positioning = extra
+        .get("sales_positioning")
+        .and_then(|value| value.as_str())
+        .map(|value| value.to_string());
+    let visual_direction = extra
+        .get("visual_direction")
+        .and_then(|value| value.as_str())
+        .map(|value| value.to_string());
+    let reference_image_url = extra
+        .get("reference_image_url")
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_string());
+    let include_narration = extra
+        .get("include_narration")
+        .and_then(|value| value.as_bool());
+    let narration_text = extra
+        .get("narration_text")
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_string());
+    let narration_speaker = extra
+        .get("narration_speaker")
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_string());
+    let slug = row
+        .try_get::<String, _>("client_ref")
+        .ok()
+        .and_then(|client_ref| client_ref.split(':').last().map(str::to_string));
     let unlock_price = row
         .try_get::<Option<sqlx::types::Decimal>, _>("unlock_price_usdc")
         .ok()
         .flatten()
         .map(|value| value.to_string());
+    let created_at = row.get::<chrono::DateTime<chrono::Utc>, _>("created_at");
+    let completed_at = row
+        .try_get::<Option<chrono::DateTime<chrono::Utc>>, _>("completed_at")
+        .ok()
+        .flatten();
+    let completed_in_seconds = completed_at.map(|completed| (completed - created_at).num_seconds());
+    let completed_in_minutes = completed_in_seconds.map(|seconds| seconds as f64 / 60.0);
 
     json!({
         "id": id.to_string(),
         "delivery_id": id.to_string(),
-        "delivery_url": format!("/delivery/{}", id),
+        "delivery_url": delivery_path,
+        "public_delivery_url": format!("{}{}", base_url(), delivery_path),
         "client_ref": row.try_get::<String, _>("client_ref").ok(),
+        "slug": slug,
         "title": row.get::<String, _>("title"),
         "company": company,
         "gig_type": row.get::<String, _>("gig_type"),
@@ -7412,9 +7456,18 @@ fn portfolio_sample_json_from_row(row: &sqlx::postgres::PgRow) -> serde_json::Va
         "output_r2_url": row.try_get::<Option<String>, _>("output_r2_url").ok().flatten(),
         "preview_r2_url": row.try_get::<Option<String>, _>("preview_r2_url").ok().flatten(),
         "unlock_price_usdc": unlock_price,
-        "created_at": row.get::<chrono::DateTime<chrono::Utc>, _>("created_at").to_rfc3339(),
-        "completed_at": row.try_get::<Option<chrono::DateTime<chrono::Utc>>, _>("completed_at").ok().flatten().map(|d| d.to_rfc3339()),
+        "created_at": created_at.to_rfc3339(),
+        "completed_at": completed_at.map(|d| d.to_rfc3339()),
+        "completed_in_seconds": completed_in_seconds,
+        "completed_in_minutes": completed_in_minutes,
         "error": row.try_get::<Option<String>, _>("error_message").ok().flatten(),
+        "portfolio_category": portfolio_category,
+        "sales_positioning": sales_positioning,
+        "visual_direction": visual_direction,
+        "reference_image_url": reference_image_url,
+        "include_narration": include_narration,
+        "narration_text": narration_text,
+        "narration_speaker": narration_speaker,
         "extra": extra,
     })
 }
@@ -7499,6 +7552,24 @@ pub async fn admin_portfolio_samples_page() -> Html<String> {
     h1 { font-size: clamp(2rem, 5vw, 4.2rem); line-height: 0.95; margin: 0 0 16px; letter-spacing: -0.06em; }
     p { color: var(--muted); line-height: 1.7; max-width: 820px; }
     .actions { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 24px; }
+    .stats {
+      display:grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 14px;
+      margin-top: 24px;
+    }
+    .stat {
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 18px;
+      background: rgba(8, 15, 30, 0.45);
+    }
+    .stat strong {
+      display:block;
+      font-size: 1.9rem;
+      line-height:1;
+      margin-bottom: 8px;
+    }
     button, .button {
       border: 0;
       border-radius: 14px;
@@ -7517,12 +7588,13 @@ pub async fn admin_portfolio_samples_page() -> Html<String> {
     .card {
       border: 1px solid var(--line);
       border-radius: 22px;
-      padding: 20px;
+      padding: 18px;
       background: var(--panel);
       min-height: 240px;
     }
     .card h3 { margin: 0 0 8px; font-size: 1.2rem; }
     .meta { color: var(--muted); font-size: 0.9rem; word-break: break-word; }
+    .eyebrow { color: var(--cyan); font-size: 0.72rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.08em; }
     .status {
       display: inline-flex;
       margin: 12px 0;
@@ -7538,13 +7610,32 @@ pub async fn admin_portfolio_samples_page() -> Html<String> {
     .status.running, .status.pending { color: var(--amber); }
     .status.failed { color: var(--red); }
     .links { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
-    .links a {
+    .links a, .links button {
       color: var(--cyan);
       border: 1px solid rgba(56,189,248,0.35);
       border-radius: 999px;
       padding: 7px 10px;
       text-decoration: none;
       font-size: 0.86rem;
+      background: transparent;
+      cursor: pointer;
+    }
+    .preview {
+      width: 100%;
+      border-radius: 16px;
+      border: 1px solid var(--line);
+      background: rgba(2, 6, 23, 0.75);
+      margin: 10px 0 14px;
+      aspect-ratio: 16 / 9;
+      object-fit: cover;
+    }
+    .pitch {
+      margin-top: 12px;
+      padding: 12px;
+      border-radius: 16px;
+      border: 1px dashed rgba(148,163,184,0.25);
+      background: rgba(2, 6, 23, 0.35);
+      color: var(--text);
     }
     .empty { border: 1px dashed var(--line); border-radius: 18px; padding: 24px; color: var(--muted); margin-top: 24px; }
     .notice { color: var(--muted); margin-top: 14px; min-height: 24px; }
@@ -7569,6 +7660,7 @@ pub async fn admin_portfolio_samples_page() -> Html<String> {
         <button id="refresh-btn" class="secondary">Refresh Status</button>
         <a class="button secondary" href="/admin/deliveries">Open Deliveries</a>
       </div>
+      <div class="stats" id="stats"></div>
       <div id="notice" class="notice"></div>
     </section>
   </header>
@@ -7582,27 +7674,72 @@ pub async fn admin_portfolio_samples_page() -> Html<String> {
     const notice = document.getElementById('notice');
     const samplesEl = document.getElementById('samples');
     const emptyEl = document.getElementById('empty');
+    const statsEl = document.getElementById('stats');
 
     function setNotice(message) {
       notice.textContent = message || '';
     }
 
+    function formatMinutes(value) {
+      if (typeof value !== 'number' || !isFinite(value)) return 'In progress';
+      return `${value.toFixed(1)} min`;
+    }
+
+    function averageMinutes(samples) {
+      const completed = samples.filter(sample => typeof sample.completed_in_minutes === 'number');
+      if (!completed.length) return null;
+      const total = completed.reduce((sum, sample) => sum + sample.completed_in_minutes, 0);
+      return total / completed.length;
+    }
+
+    function renderStats(samples) {
+      const completed = samples.filter(sample => sample.status === 'completed').length;
+      const running = samples.filter(sample => sample.status === 'running').length;
+      const pending = samples.filter(sample => sample.status === 'pending').length;
+      const avg = averageMinutes(samples);
+      statsEl.innerHTML = [
+        { label: 'Completed', value: completed },
+        { label: 'Running', value: running },
+        { label: 'Queued', value: pending },
+        { label: 'Avg Render Time', value: avg ? `${avg.toFixed(1)} min` : 'Waiting' },
+      ].map(stat => `
+        <div class="stat">
+          <strong>${stat.value}</strong>
+          <span>${stat.label}</span>
+        </div>
+      `).join('');
+    }
+
+    function salesPitch(sample) {
+      const company = sample.company || (sample.extra && sample.extra.company) || 'this company';
+      const angle = sample.visual_direction || (sample.extra && sample.extra.visual_direction) || 'a fast product story';
+      return `Spec ad for ${company}: 15-second crypto SaaS explainer focused on ${angle}. Use this as proof-of-execution in outreach.`;
+    }
+
     function card(sample) {
       const company = sample.company || (sample.extra && sample.extra.company) || sample.title;
       const deliveryUrl = sample.delivery_url || `/delivery/${sample.id}`;
+      const publicDeliveryUrl = sample.public_delivery_url || deliveryUrl;
       const source = sample.source_url || (sample.extra && sample.extra.source_url) || '';
       const output = sample.output_r2_url || sample.preview_r2_url;
+      const poster = sample.reference_image_url || (sample.extra && sample.extra.reference_image_url) || '';
       return `
         <article class="card">
+          <div class="eyebrow">${sample.portfolio_category || 'portfolio sample'}</div>
           <h3>${company}</h3>
           <div class="meta">${sample.title || ''}</div>
           <span class="status ${sample.status || 'pending'}">${sample.status || 'pending'}</span>
+          ${output ? `<video class="preview" src="${output}" ${poster ? `poster="${poster}"` : ''} controls preload="metadata"></video>` : ''}
           <div class="meta">Source: ${source ? `<a href="${source}" target="_blank" rel="noreferrer">${source}</a>` : 'Not set'}</div>
           <div class="meta">Price: ${sample.unlock_price_usdc ? `$${sample.unlock_price_usdc} USDC` : 'Uses default delivery price'}</div>
+          <div class="meta">Turnaround: ${formatMinutes(sample.completed_in_minutes)}</div>
+          <div class="meta">Narration: ${sample.include_narration ? 'Enabled' : 'Silent'}</div>
           ${sample.error ? `<p style="color:#fb7185">${sample.error}</p>` : ''}
+          <div class="pitch">${sample.sales_positioning || salesPitch(sample)}</div>
           <div class="links">
             <a href="${deliveryUrl}" target="_blank" rel="noreferrer">Delivery Page</a>
             ${output ? `<a href="${output}" target="_blank" rel="noreferrer">Rendered Output</a>` : ''}
+            <button type="button" data-copy="${publicDeliveryUrl.replace(/"/g, '&quot;')}">Copy Share Link</button>
           </div>
         </article>
       `;
@@ -7613,8 +7750,19 @@ pub async fn admin_portfolio_samples_page() -> Html<String> {
       const data = await resp.json();
       if (!data.success) throw new Error(data.error || 'Failed to load samples');
       const samples = data.samples || [];
+      renderStats(samples);
       samplesEl.innerHTML = samples.map(card).join('');
       emptyEl.style.display = samples.length ? 'none' : 'block';
+      document.querySelectorAll('[data-copy]').forEach((button) => {
+        button.addEventListener('click', async () => {
+          try {
+            await navigator.clipboard.writeText(button.getAttribute('data-copy') || '');
+            setNotice('Share link copied to clipboard.');
+          } catch (_err) {
+            setNotice('Unable to copy automatically. Open the delivery page and copy the URL manually.');
+          }
+        });
+      });
       return samples;
     }
 
@@ -7982,11 +8130,7 @@ pub async fn run_delivery_job(delivery_id: Uuid, state: Arc<AppState>) {
 
         match status.get("state").and_then(|s| s.as_str()) {
             Some("completed") => {
-                if let Some(url) = status.get("result")
-                    .and_then(|r| r.get(url_key))
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string())
-                {
+                if let Some(url) = delivery_result_media_url(status.get("result"), url_key) {
                     final_url = Some(url);
                 }
                 break;
@@ -8066,10 +8210,7 @@ pub async fn run_delivery_job(delivery_id: Uuid, state: Arc<AppState>) {
                     if let Ok(status) = blender.poll_job(&retry_job_id).await {
                         match status.get("state").and_then(|s| s.as_str()) {
                             Some("completed") => {
-                                retry_url = status.get("result")
-                                    .and_then(|r| r.get(url_key))
-                                    .and_then(|v| v.as_str())
-                                    .map(|s| s.to_string());
+                                retry_url = delivery_result_media_url(status.get("result"), url_key);
                                 break;
                             }
                             Some("failed") | Some("error") => break,
@@ -8125,6 +8266,68 @@ pub async fn run_delivery_job(delivery_id: Uuid, state: Arc<AppState>) {
     }
 }
 
+fn delivery_result_media_url(
+    result: Option<&serde_json::Value>,
+    url_key: &str,
+) -> Option<String> {
+    let result = result?;
+    if url_key == "video_url" {
+        result
+            .get("narrated_video_url")
+            .and_then(|v| v.as_str())
+            .filter(|v| !v.trim().is_empty())
+            .or_else(|| result.get("video_url").and_then(|v| v.as_str()))
+            .map(|s| s.to_string())
+    } else {
+        result
+            .get(url_key)
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+    }
+}
+
+fn maybe_insert_delivery_narration_args(
+    tool_name: &str,
+    args: &mut serde_json::Value,
+    extra: &serde_json::Value,
+) {
+    let supports_narration = matches!(
+        tool_name,
+        "blender_generate_scene" | "blender_generate_latex" | "blender_generate_animation"
+    );
+
+    if !supports_narration {
+        return;
+    }
+
+    let include_narration = extra
+        .get("include_narration")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
+
+    if include_narration {
+        args["include_narration"] = serde_json::Value::Bool(true);
+    }
+
+    if let Some(text) = extra
+        .get("narration_text")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        args["narration_text"] = serde_json::Value::String(text.to_string());
+    }
+
+    if let Some(speaker) = extra
+        .get("narration_speaker")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        args["narration_speaker"] = serde_json::Value::String(speaker.to_string());
+    }
+}
+
 /// Map gig_type → (tool_name, args, url_key, file_extension)
 fn build_delivery_tool_args(
     gig_type: &str,
@@ -8155,11 +8358,21 @@ fn build_delivery_tool_args(
             json!({"name_text": prompt, "subtitle_text": get("subtitle"), "style": style, "duration": duration}),
             "video_url", "mp4",
         ),
-        "latex" => (
-            "blender_generate_latex".to_string(),
-            json!({"latex_expression": prompt, "animation_type": get("animation_type"), "duration": duration, "background_style": get("background_style")}),
-            "video_url", "mp4",
-        ),
+        "latex" => {
+            let tool_name = "blender_generate_latex".to_string();
+            let mut args = json!({
+                "latex_expression": prompt,
+                "animation_type": get("animation_type"),
+                "duration": duration,
+                "background_style": get("background_style")
+            });
+            maybe_insert_delivery_narration_args(&tool_name, &mut args, extra);
+            (
+                tool_name,
+                args,
+                "video_url", "mp4",
+            )
+        }
         "ui_mockup" => {
             let animation = get("animation");
             let url_key = if animation == "static" { "image_url" } else { "video_url" };
@@ -8171,13 +8384,15 @@ fn build_delivery_tool_args(
             )
         }
         _ => { // "scene" + default — includes landing_page service type
+            let tool_name = "blender_generate_scene".to_string();
             let mut scene_args = json!({"prompt": prompt, "duration": duration, "style": style});
             let ref_url = get("reference_image_url");
             if !ref_url.is_empty() {
                 scene_args["reference_image_url"] = serde_json::Value::String(ref_url.to_string());
             }
+            maybe_insert_delivery_narration_args(&tool_name, &mut scene_args, extra);
             (
-                "blender_generate_scene".to_string(),
+                tool_name,
                 scene_args,
                 "video_url", "mp4",
             )
@@ -8400,6 +8615,21 @@ pub async fn admin_deliveries_page() -> Html<String> {
         <input id="reference_image_url" type="url" placeholder="https://example.com or https://example.com/hero.png">
         <span class="hint">Pass a website URL or direct image URL — hero image will be scraped and used as the scene background</span>
       </div>
+      <div class="form-group hidden" id="grp-include-narration">
+        <label>Narration</label>
+        <label style="display:flex;align-items:center;gap:8px;text-transform:none;letter-spacing:normal;color:#fff;font-size:14px;font-weight:500;">
+          <input id="include_narration" type="checkbox" style="width:auto;">
+          Generate VibeVoice narration and return the narrated video when available
+        </label>
+      </div>
+      <div class="form-group form-full hidden" id="grp-narration-text">
+        <label>Narration Script (optional)</label>
+        <textarea id="narration_text" placeholder="Leave blank to reuse the main prompt as a rough narration brief."></textarea>
+      </div>
+      <div class="form-group hidden" id="grp-narration-speaker">
+        <label>Narration Speaker (optional)</label>
+        <input id="narration_speaker" type="text" placeholder="e.g. default, narrator, en-female-1">
+      </div>
     </div>
     <div class="form-actions">
       <button class="btn btn-primary" id="create-btn" onclick="createDelivery()">🚀 Create Delivery</button>
@@ -8435,13 +8665,13 @@ pub async fn admin_deliveries_page() -> Html<String> {
 
 <script>
 const GIG_CONFIG = {
-  scene:       { promptLabel:'Scene Description', style:true,  subtitle:false, titleText:false, duration:true,  chartType:false, dataJson:false, animType:false, bgStyle:false, device:false, mockupAnim:false, screenshotUrl:false, refImageUrl:true, defaultDuration:15 },
-  thumbnail:   { promptLabel:'Thumbnail Description', style:true,  subtitle:false, titleText:true,  duration:false, chartType:false, dataJson:false, animType:false, bgStyle:false, device:false, mockupAnim:false, screenshotUrl:false, defaultDuration:0  },
-  title_card:  { promptLabel:'Main Title Text', style:true,  subtitle:true,  titleText:false, duration:true,  chartType:false, dataJson:false, animType:false, bgStyle:false, device:false, mockupAnim:false, screenshotUrl:false, defaultDuration:5  },
-  data_viz:    { promptLabel:'Chart Title',     style:false, subtitle:false, titleText:false, duration:true,  chartType:true,  dataJson:true,  animType:false, bgStyle:false, device:false, mockupAnim:false, screenshotUrl:false, defaultDuration:15 },
-  lower_third: { promptLabel:'Name / Main Text', style:true,  subtitle:true,  titleText:false, duration:true,  chartType:false, dataJson:false, animType:false, bgStyle:false, device:false, mockupAnim:false, screenshotUrl:false, defaultDuration:5  },
-  latex:       { promptLabel:'LaTeX Expression (e.g. \\\\frac{d}{dx})', style:false, subtitle:false, titleText:false, duration:true,  chartType:false, dataJson:false, animType:true,  bgStyle:true,  device:false, mockupAnim:false, screenshotUrl:false, defaultDuration:10 },
-  ui_mockup:   { promptLabel:'App / Product Description', style:false, subtitle:false, titleText:false, duration:true,  chartType:false, dataJson:false, animType:false, bgStyle:false, device:true,  mockupAnim:true,  screenshotUrl:true,  defaultDuration:8  },
+  scene:       { promptLabel:'Scene Description', style:true,  subtitle:false, titleText:false, duration:true,  chartType:false, dataJson:false, animType:false, bgStyle:false, device:false, mockupAnim:false, screenshotUrl:false, refImageUrl:true,  narration:true,  defaultDuration:15 },
+  thumbnail:   { promptLabel:'Thumbnail Description', style:true,  subtitle:false, titleText:true,  duration:false, chartType:false, dataJson:false, animType:false, bgStyle:false, device:false, mockupAnim:false, screenshotUrl:false, refImageUrl:false, narration:false, defaultDuration:0  },
+  title_card:  { promptLabel:'Main Title Text', style:true,  subtitle:true,  titleText:false, duration:true,  chartType:false, dataJson:false, animType:false, bgStyle:false, device:false, mockupAnim:false, screenshotUrl:false, refImageUrl:false, narration:false, defaultDuration:5  },
+  data_viz:    { promptLabel:'Chart Title',     style:false, subtitle:false, titleText:false, duration:true,  chartType:true,  dataJson:true,  animType:false, bgStyle:false, device:false, mockupAnim:false, screenshotUrl:false, refImageUrl:false, narration:false, defaultDuration:15 },
+  lower_third: { promptLabel:'Name / Main Text', style:true,  subtitle:true,  titleText:false, duration:true,  chartType:false, dataJson:false, animType:false, bgStyle:false, device:false, mockupAnim:false, screenshotUrl:false, refImageUrl:false, narration:false, defaultDuration:5  },
+  latex:       { promptLabel:'LaTeX Expression (e.g. \\\\frac{d}{dx})', style:false, subtitle:false, titleText:false, duration:true,  chartType:false, dataJson:false, animType:true,  bgStyle:true,  device:false, mockupAnim:false, screenshotUrl:false, refImageUrl:false, narration:true,  defaultDuration:10 },
+  ui_mockup:   { promptLabel:'App / Product Description', style:false, subtitle:false, titleText:false, duration:true,  chartType:false, dataJson:false, animType:false, bgStyle:false, device:true,  mockupAnim:true,  screenshotUrl:true,  refImageUrl:false, narration:false, defaultDuration:8  },
 };
 
 function show(id, v) { document.getElementById(id).classList.toggle('hidden', !v); }
@@ -8460,7 +8690,16 @@ function onGigTypeChange() {
   show('grp-device',        cfg.device);
   show('grp-mockup-anim',   cfg.mockupAnim);
   show('grp-screenshot-url',cfg.screenshotUrl);
+  show('grp-ref-image-url', cfg.refImageUrl);
+  show('grp-include-narration', cfg.narration);
+  show('grp-narration-text', cfg.narration);
+  show('grp-narration-speaker', cfg.narration);
   if (cfg.defaultDuration) document.getElementById('duration').value = cfg.defaultDuration;
+  if (!cfg.narration) {
+    document.getElementById('include_narration').checked = false;
+    document.getElementById('narration_text').value = '';
+    document.getElementById('narration_speaker').value = '';
+  }
   // Update subtitle label
   const gt = document.getElementById('gig_type').value;
   document.getElementById('subtitle-label').textContent = (gt === 'lower_third') ? 'Subtitle / Role' : 'Subtitle';
@@ -8495,6 +8734,12 @@ async function createDelivery() {
   if (cfg.mockupAnim)    extra.animation        = document.getElementById('mockup_animation').value;
   if (cfg.screenshotUrl) extra.screenshot_url   = document.getElementById('screenshot_url').value;
   if (cfg.refImageUrl)   extra.reference_image_url = document.getElementById('reference_image_url').value;
+  if (cfg.narration && document.getElementById('include_narration').checked) {
+    extra.include_narration = true;
+    extra.narration_text = document.getElementById('narration_text').value.trim() || prompt;
+    const narrationSpeaker = document.getElementById('narration_speaker').value.trim();
+    if (narrationSpeaker) extra.narration_speaker = narrationSpeaker;
+  }
 
   const token = localStorage.getItem('auth_token') || localStorage.getItem('admin_token');
   const body = {

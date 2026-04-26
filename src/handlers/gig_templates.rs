@@ -255,11 +255,7 @@ async fn run_sample_generation(
 
         match status.get("state").and_then(|s| s.as_str()) {
             Some("completed") => {
-                if let Some(url) = status.get("result")
-                    .and_then(|r| r.get(url_key))
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string())
-                {
+                if let Some(url) = sample_result_media_url(status.get("result"), url_key) {
                     final_url = Some(url);
                 }
                 break;
@@ -294,6 +290,23 @@ async fn run_sample_generation(
     }
 }
 
+fn sample_result_media_url(result: Option<&Value>, url_key: &str) -> Option<String> {
+    let result = result?;
+    if url_key == "video_url" {
+        result
+            .get("narrated_video_url")
+            .and_then(|v| v.as_str())
+            .filter(|v| !v.trim().is_empty())
+            .or_else(|| result.get("video_url").and_then(|v| v.as_str()))
+            .map(|s| s.to_string())
+    } else {
+        result
+            .get(url_key)
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+    }
+}
+
 fn build_sample_tool_args(service_type: &str, prompt: &str) -> (String, Value, &'static str, &'static str) {
     match service_type {
         "thumbnail" => (
@@ -324,7 +337,9 @@ fn build_sample_tool_args(service_type: &str, prompt: &str) -> (String, Value, &
         "latex" => (
             "blender_generate_latex".to_string(),
             json!({"latex_expression": prompt.split(" ").next().unwrap_or(prompt),
-                   "animation_type": "step_by_step", "duration": 10.0, "background_style": "dark"}),
+                   "animation_type": "step_by_step", "duration": 10.0, "background_style": "dark",
+                   "include_narration": true,
+                   "narration_text": format!("Animated formula breakdown for {prompt}.")}),
             "video_url", "mp4",
         ),
         "ui_mockup" => (
@@ -334,7 +349,9 @@ fn build_sample_tool_args(service_type: &str, prompt: &str) -> (String, Value, &
         ),
         _ => ( // "scene" / "auto_video" / default → generate_scene
             "blender_generate_scene".to_string(),
-            json!({"prompt": prompt, "duration": 12.0, "style": "cinematic"}),
+            json!({"prompt": prompt, "duration": 12.0, "style": "cinematic",
+                   "include_narration": true,
+                   "narration_text": format!("Speculative promo sample for {prompt}.")}),
             "video_url", "mp4",
         ),
     }

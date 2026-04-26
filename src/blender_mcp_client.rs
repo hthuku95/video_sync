@@ -328,11 +328,18 @@ impl BlenderMCPClient {
             let status = self.poll_job(&job_id).await?;
             match status.get("state").and_then(|s| s.as_str()) {
                 Some("completed") => {
-                    let url = status
+                    let result = status
                         .get("result")
-                        .and_then(|r| r.get(url_key))
-                        .and_then(|v| v.as_str())
-                        .ok_or_else(|| format!("Job result missing '{url_key}'"))?;
+                        .ok_or_else(|| "Job result missing 'result'".to_string())?;
+                    let url = if url_key == "video_url" {
+                        result
+                            .get("narrated_video_url")
+                            .and_then(|v| v.as_str())
+                            .or_else(|| result.get(url_key).and_then(|v| v.as_str()))
+                    } else {
+                        result.get(url_key).and_then(|v| v.as_str())
+                    }
+                    .ok_or_else(|| format!("Job result missing '{url_key}'"))?;
                     return self.download_to_outputs(url, &filename).await;
                 }
                 Some("error") | Some("failed") => {

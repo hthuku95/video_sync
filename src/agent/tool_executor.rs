@@ -93,6 +93,9 @@ pub async fn execute_tool_claude_with_context(
     if name == "add_voiceover_to_video" {
         return execute_add_voiceover_to_video_with_state_claude(args, ctx).await;
     }
+    if name == "transcribe_audio_url" {
+        return execute_transcribe_audio_url_with_state_claude(args, ctx).await;
+    }
     if name == "set_chat_title" {
         return execute_set_chat_title_with_state_claude(args, ctx).await;
     }
@@ -256,6 +259,9 @@ pub async fn execute_tool_gemini_with_context(
     }
     if name == "add_voiceover_to_video" {
         return execute_add_voiceover_to_video_with_state_gemini(args, ctx).await;
+    }
+    if name == "transcribe_audio_url" {
+        return execute_transcribe_audio_url_with_state_gemini(args, ctx).await;
     }
     if name == "set_chat_title" {
         return execute_set_chat_title_with_state_gemini(args, ctx).await;
@@ -448,6 +454,7 @@ pub async fn execute_tool_claude(name: &str, args: &Value) -> String {
         "generate_sound_effect" => execute_generate_sound_effect_placeholder_claude(args).await,
         "generate_music" => execute_generate_music_placeholder_claude(args).await,
         "add_voiceover_to_video" => execute_add_voiceover_placeholder_claude(args).await,
+        "transcribe_audio_url" => execute_transcribe_audio_url_placeholder_claude(args).await,
         "generate_video_script" => execute_generate_video_script_claude(args).await,
         "create_blank_video" => execute_create_blank_video_claude(args),
         "generate_image" => execute_generate_image_claude(args).await,
@@ -838,6 +845,7 @@ pub async fn execute_tool_gemini(name: &str, args: &HashMap<String, Value>) -> S
         "generate_sound_effect" => execute_generate_sound_effect_placeholder_gemini(args).await,
         "generate_music" => execute_generate_music_placeholder_gemini(args).await,
         "add_voiceover_to_video" => execute_add_voiceover_placeholder_gemini(args).await,
+        "transcribe_audio_url" => execute_transcribe_audio_url_placeholder_gemini(args).await,
         "generate_video_script" => execute_generate_video_script_gemini(args).await,
         "create_blank_video" => execute_create_blank_video_gemini(args),
         "generate_image" => execute_generate_image_gemini(args).await,
@@ -4566,6 +4574,37 @@ async fn execute_add_voiceover_placeholder_gemini(_args: &HashMap<String, Value>
     "❌ Internal error: add_voiceover_to_video must be called with context".to_string()
 }
 
+async fn execute_transcribe_audio_url_placeholder_claude(_args: &Value) -> String {
+    "❌ Internal error: transcribe_audio_url must be called with context".to_string()
+}
+
+async fn execute_transcribe_audio_url_placeholder_gemini(_args: &HashMap<String, Value>) -> String {
+    "❌ Internal error: transcribe_audio_url must be called with context".to_string()
+}
+
+fn format_transcription_result(payload: &Value) -> String {
+    let provider = payload.get("provider").and_then(|v| v.as_str()).unwrap_or("unknown");
+    let model = payload.get("model").and_then(|v| v.as_str()).unwrap_or("unknown");
+    let text = payload.get("text").and_then(|v| v.as_str()).unwrap_or("").trim();
+    let segment_count = payload
+        .get("segments")
+        .and_then(|v| v.as_array())
+        .map(|segments| segments.len())
+        .unwrap_or(0);
+
+    if text.is_empty() {
+        format!(
+            "✅ Transcription completed using {} ({}) but returned no transcript text.",
+            provider, model
+        )
+    } else {
+        format!(
+            "✅ Transcription completed using {} ({}).\nTranscript:\n{}\n\nSegments: {}",
+            provider, model, text, segment_count
+        )
+    }
+}
+
 /// Generate text-to-speech using Eleven Labs (Claude version)
 async fn execute_generate_text_to_speech_with_state_claude(args: &Value, ctx: &ToolExecutionContext) -> String {
     let text = args["text"].as_str().unwrap_or("");
@@ -4596,6 +4635,27 @@ async fn execute_generate_text_to_speech_with_state_claude(args: &Value, ctx: &T
             }
             Err(e) => {
                 tracing::warn!("Eleven Labs TTS failed, falling back to Gemini: {}", e);
+            }
+        }
+    }
+
+    if let Some(ref vibevoice_client) = ctx.app_state.vibevoice_client {
+        tracing::info!("🎤 generate_text_to_speech: Trying VibeVoice microservice");
+        let metadata = serde_json::json!({
+            "pipeline": "videosync-rust",
+            "tool": "generate_text_to_speech",
+            "provider_order": "elevenlabs_then_vibevoice_then_gemini",
+        });
+        match vibevoice_client
+            .text_to_speech_base64(text, voice, "mp3", None, Some(metadata))
+            .await
+        {
+            Ok(audio_bytes) => match tokio::fs::write(&output_file, &audio_bytes).await {
+                Ok(_) => return format!("✅ Generated speech using VibeVoice ({}) and saved to: {}", voice, output_file),
+                Err(e) => return format!("❌ Failed to save audio file: {}", e),
+            },
+            Err(e) => {
+                tracing::warn!("VibeVoice TTS failed, falling back to Gemini: {}", e);
             }
         }
     }
@@ -4635,6 +4695,27 @@ async fn execute_generate_text_to_speech_with_state_gemini(args: &HashMap<String
             }
             Err(e) => {
                 tracing::warn!("Eleven Labs TTS failed, falling back to Gemini: {}", e);
+            }
+        }
+    }
+
+    if let Some(ref vibevoice_client) = ctx.app_state.vibevoice_client {
+        tracing::info!("🎤 generate_text_to_speech: Trying VibeVoice microservice");
+        let metadata = serde_json::json!({
+            "pipeline": "videosync-rust",
+            "tool": "generate_text_to_speech",
+            "provider_order": "elevenlabs_then_vibevoice_then_gemini",
+        });
+        match vibevoice_client
+            .text_to_speech_base64(text, voice, "mp3", None, Some(metadata))
+            .await
+        {
+            Ok(audio_bytes) => match tokio::fs::write(&output_file, &audio_bytes).await {
+                Ok(_) => return format!("✅ Generated speech using VibeVoice ({}) and saved to: {}", voice, output_file),
+                Err(e) => return format!("❌ Failed to save audio file: {}", e),
+            },
+            Err(e) => {
+                tracing::warn!("VibeVoice TTS failed, falling back to Gemini: {}", e);
             }
         }
     }
@@ -4948,6 +5029,92 @@ async fn execute_add_voiceover_to_video_with_state_gemini(args: &HashMap<String,
     } else {
         tracing::info!("✅ add_voiceover_to_video: Successfully completed - Output: {}", output_video);
         format!("✅ Successfully added voiceover ({}) to video and saved to: {}", voice, output_video)
+    }
+}
+
+async fn execute_transcribe_audio_url_with_state_claude(args: &Value, ctx: &ToolExecutionContext) -> String {
+    let audio_url = args.get("audio_url").and_then(|v| v.as_str()).unwrap_or("").trim();
+    let language = args
+        .get("language")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|v| !v.is_empty());
+    let hotwords = args
+        .get("hotwords")
+        .and_then(|v| v.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str())
+                .map(|word| word.trim().to_string())
+                .filter(|word| !word.is_empty())
+                .collect::<Vec<String>>()
+        })
+        .unwrap_or_default();
+
+    if audio_url.is_empty() {
+        return "❌ Error: audio_url is required".to_string();
+    }
+
+    let Some(ref vibevoice_client) = ctx.app_state.vibevoice_client else {
+        return "❌ VibeVoice client not available. Set VIBEVOICE_SERVICE_URL to enable transcription.".to_string();
+    };
+
+    let metadata = serde_json::json!({
+        "pipeline": "videosync-rust",
+        "tool": "transcribe_audio_url",
+        "session_id": ctx.session_id,
+    });
+
+    match vibevoice_client
+        .transcribe_url(audio_url, &hotwords, language, None, Some(metadata))
+        .await
+    {
+        Ok(payload) => format_transcription_result(&payload),
+        Err(e) => format!("❌ Failed to transcribe audio with VibeVoice: {}", e),
+    }
+}
+
+async fn execute_transcribe_audio_url_with_state_gemini(args: &HashMap<String, Value>, ctx: &ToolExecutionContext) -> String {
+    let audio_url = args.get("audio_url").and_then(|v| v.as_str()).unwrap_or("").trim();
+    let language = args
+        .get("language")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|v| !v.is_empty());
+    let hotwords = args
+        .get("hotwords")
+        .and_then(|v| v.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str())
+                .map(|word| word.trim().to_string())
+                .filter(|word| !word.is_empty())
+                .collect::<Vec<String>>()
+        })
+        .unwrap_or_default();
+
+    if audio_url.is_empty() {
+        return "❌ Error: audio_url is required".to_string();
+    }
+
+    let Some(ref vibevoice_client) = ctx.app_state.vibevoice_client else {
+        return "❌ VibeVoice client not available. Set VIBEVOICE_SERVICE_URL to enable transcription.".to_string();
+    };
+
+    let metadata = serde_json::json!({
+        "pipeline": "videosync-rust",
+        "tool": "transcribe_audio_url",
+        "session_id": ctx.session_id,
+    });
+
+    match vibevoice_client
+        .transcribe_url(audio_url, &hotwords, language, None, Some(metadata))
+        .await
+    {
+        Ok(payload) => format_transcription_result(&payload),
+        Err(e) => format!("❌ Failed to transcribe audio with VibeVoice: {}", e),
     }
 }
 
@@ -10916,6 +11083,59 @@ async fn normalize_reference_image_url_for_blender(
     }
 }
 
+fn maybe_insert_blender_narration_args_from_gemini(
+    tool_args: &mut Value,
+    args: &HashMap<String, Value>,
+) {
+    if args
+        .get("include_narration")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        tool_args["include_narration"] = Value::Bool(true);
+    }
+
+    if let Some(narration_text) = args
+        .get("narration_text")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        tool_args["narration_text"] = Value::String(narration_text.to_string());
+    }
+
+    if let Some(narration_speaker) = args
+        .get("narration_speaker")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        tool_args["narration_speaker"] = Value::String(narration_speaker.to_string());
+    }
+}
+
+fn maybe_insert_blender_narration_args_from_claude(tool_args: &mut Value, args: &Value) {
+    if args["include_narration"].as_bool().unwrap_or(false) {
+        tool_args["include_narration"] = Value::Bool(true);
+    }
+
+    if let Some(narration_text) = args["narration_text"]
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        tool_args["narration_text"] = Value::String(narration_text.to_string());
+    }
+
+    if let Some(narration_speaker) = args["narration_speaker"]
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        tool_args["narration_speaker"] = Value::String(narration_speaker.to_string());
+    }
+}
+
 // ── Gemini blender tool executors ─────────────────────────────────────────────
 
 async fn execute_blender_generate_scene_gemini(
@@ -10940,6 +11160,7 @@ async fn execute_blender_generate_scene_gemini(
     if let Some(u) = reference_image_url {
         tool_args["reference_image_url"] = Value::String(u.to_string());
     }
+    maybe_insert_blender_narration_args_from_gemini(&mut tool_args, args);
     blender_render(&client, "blender_generate_scene", tool_args, "video_url", "mp4", "Blender scene rendered").await
 }
 
@@ -11003,12 +11224,13 @@ async fn execute_blender_generate_latex_gemini(
     ctx: &ToolExecutionContext,
 ) -> String {
     let client = match blender_client_or_err(ctx) { Ok(c) => c, Err(e) => return e };
-    let tool_args = json!({
+    let mut tool_args = json!({
         "latex_expression": args.get("latex_expression").and_then(|v| v.as_str()).unwrap_or(""),
         "animation_type":   args.get("animation_type").and_then(|v| v.as_str()).unwrap_or("appear"),
         "duration":         args.get("duration").and_then(|v| v.as_f64()).unwrap_or(8.0),
         "background_style": args.get("background_style").and_then(|v| v.as_str()).unwrap_or("dark"),
     });
+    maybe_insert_blender_narration_args_from_gemini(&mut tool_args, args);
     blender_render(&client, "blender_generate_latex", tool_args, "video_url", "mp4", "Blender LaTeX animation rendered").await
 }
 
@@ -11037,12 +11259,13 @@ async fn execute_blender_generate_animation_gemini(
         args.get("brief_context").and_then(|v| v.as_str()),
         args.get("revision_notes").and_then(|v| v.as_str()),
     );
-    let tool_args = json!({
+    let mut tool_args = json!({
         "description": description,
         "duration":    args.get("duration").and_then(|v| v.as_f64()).unwrap_or(10.0),
         "background":  args.get("background").and_then(|v| v.as_str()).unwrap_or("dark"),
         "quality":     args.get("quality").and_then(|v| v.as_str()).unwrap_or("m"),
     });
+    maybe_insert_blender_narration_args_from_gemini(&mut tool_args, args);
     blender_render(&client, "blender_generate_animation", tool_args, "video_url", "mp4", "Manim animation rendered").await
 }
 
@@ -11099,6 +11322,7 @@ async fn execute_blender_generate_scene_claude(args: &Value, ctx: &ToolExecution
     if let Some(u) = reference_image_url {
         tool_args["reference_image_url"] = Value::String(u.to_string());
     }
+    maybe_insert_blender_narration_args_from_claude(&mut tool_args, args);
     blender_render(&client, "blender_generate_scene", tool_args, "video_url", "mp4", "Blender scene rendered").await
 }
 
@@ -11147,12 +11371,13 @@ async fn execute_blender_generate_lower_third_claude(args: &Value, ctx: &ToolExe
 
 async fn execute_blender_generate_latex_claude(args: &Value, ctx: &ToolExecutionContext) -> String {
     let client = match blender_client_or_err(ctx) { Ok(c) => c, Err(e) => return e };
-    let tool_args = json!({
+    let mut tool_args = json!({
         "latex_expression": args["latex_expression"].as_str().unwrap_or(""),
         "animation_type":   args["animation_type"].as_str().unwrap_or("appear"),
         "duration":         args["duration"].as_f64().unwrap_or(8.0),
         "background_style": args["background_style"].as_str().unwrap_or("dark"),
     });
+    maybe_insert_blender_narration_args_from_claude(&mut tool_args, args);
     blender_render(&client, "blender_generate_latex", tool_args, "video_url", "mp4", "Blender LaTeX animation rendered").await
 }
 
@@ -11175,12 +11400,13 @@ async fn execute_blender_generate_animation_claude(args: &Value, ctx: &ToolExecu
         args["brief_context"].as_str(),
         args["revision_notes"].as_str(),
     );
-    let tool_args = json!({
+    let mut tool_args = json!({
         "description": description,
         "duration":    args["duration"].as_f64().unwrap_or(10.0),
         "background":  args["background"].as_str().unwrap_or("dark"),
         "quality":     args["quality"].as_str().unwrap_or("m"),
     });
+    maybe_insert_blender_narration_args_from_claude(&mut tool_args, args);
     blender_render(&client, "blender_generate_animation", tool_args, "video_url", "mp4", "Manim animation rendered").await
 }
 

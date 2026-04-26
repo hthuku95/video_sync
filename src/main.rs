@@ -13,6 +13,7 @@ mod llm_utils;
 mod claude_client;
 mod voyage_embeddings;
 mod elevenlabs_client; // 🎙️ Eleven Labs TTS, Sound Effects, Music
+mod vibevoice_client; // 🎤 VibeVoice microservice — TTS + transcription
 mod blender_mcp_client; // 🎨 BlenderMCPServer — 3D rendering + Manim
 mod r2_client;          // ☁️ Cloudflare R2 object storage
 mod phantombuster_client; // 🎯 PhantomBuster — LinkedIn Sales Navigator scraping
@@ -65,6 +66,7 @@ pub struct AppState {
     pub voyage_embeddings: Option<voyage_embeddings::VoyageEmbeddings>,
     pub pexels_client: Option<pexels_client::PexelsClient>,
     pub elevenlabs_client: Option<elevenlabs_client::ElevenLabsClient>, // 🎙️ Audio generation
+    pub vibevoice_client: Option<vibevoice_client::VibeVoiceClient>, // 🎤 Shared TTS + transcription microservice
     pub blender_mcp_client: Option<blender_mcp_client::BlenderMCPClient>, // 🎨 3D rendering + Manim
     pub r2_client: Option<Arc<r2_client::R2Client>>,                      // ☁️ Cloudflare R2 storage
     pub youtube_client: Option<youtube_client::YouTubeClient>, // 📺 YouTube integration
@@ -396,6 +398,18 @@ async fn main() {
         }
     };
 
+    let vibevoice_client = match std::env::var("VIBEVOICE_SERVICE_URL").ok() {
+        Some(url) if !url.is_empty() => {
+            tracing::info!("🎤 Initializing VibeVoice microservice client...");
+            let api_key = std::env::var("VIBEVOICE_SERVICE_API_KEY").ok();
+            Some(vibevoice_client::VibeVoiceClient::new(url, api_key))
+        }
+        _ => {
+            tracing::info!("VibeVoice service not configured (set VIBEVOICE_SERVICE_URL to enable shared TTS/transcription)");
+            None
+        }
+    };
+
     // Initialize YouTube client if API key is provided
     let youtube_client = match std::env::var("YOUTUBE_API_KEY").ok() {
         Some(api_key) if !api_key.is_empty() => {
@@ -528,6 +542,7 @@ async fn main() {
         voyage_embeddings,
         pexels_client,
         elevenlabs_client,
+        vibevoice_client,
         blender_mcp_client,
         r2_client,
         youtube_client,
@@ -1229,6 +1244,7 @@ async fn api_status(Extension(state): Extension<Arc<AppState>>) -> axum::respons
     let qdrant_status = if state.qdrant_client.is_some() { "configured" } else { "not_configured" };
     let astra_status = if state.vector_db.is_some() { "configured" } else { "not_configured" };
     let elevenlabs_status = if state.elevenlabs_client.is_some() { "configured" } else { "not_configured" };
+    let vibevoice_status = if state.vibevoice_client.is_some() { "configured" } else { "not_configured" };
     
     axum::response::Json(json!({
         "status": "operational",
@@ -1238,6 +1254,7 @@ async fn api_status(Extension(state): Extension<Arc<AppState>>) -> axum::respons
             "claude_ai": claude_status,
             "gemini_ai": gemini_status,
             "elevenlabs_audio": elevenlabs_status,
+            "vibevoice_audio": vibevoice_status,
             "qdrant_vector_db": qdrant_status,
             "astra_vector_db": astra_status
         },
