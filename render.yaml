@@ -1,5 +1,24 @@
 services:
   - type: web
+    name: videosync-vibevoice
+    runtime: docker
+    dockerfilePath: VibeVoiceService/Dockerfile
+    rootDir: VideoSyncIntegrations
+    dockerContext: .
+    region: oregon
+    plan: standard
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: PORT
+        value: 8015
+      - key: VIBEVOICE_OUTPUT_DIR
+        value: /tmp/videosync-vibevoice
+      - key: VIBEVOICE_TTS_MODEL
+        value: microsoft/VibeVoice-Realtime-0.5B
+      - key: VIBEVOICE_ASR_MODEL
+        value: microsoft/VibeVoice-ASR-7B
+  - type: web
     name: video_sync
     runtime: rust
     buildCommand: pip3 install --upgrade yt-dlp && cargo build --release
