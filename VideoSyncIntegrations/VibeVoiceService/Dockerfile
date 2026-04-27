@@ -8,14 +8,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app/VideoSyncIntegrations/VibeVoiceService
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg \
+    && apt-get install -y --no-install-recommends ffmpeg git \
     && rm -rf /var/lib/apt/lists/*
 
 COPY VibeVoiceService/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY VibeVoice /app/VideoSyncIntegrations/VibeVoice
-RUN pip install --no-cache-dir /app/VideoSyncIntegrations/VibeVoice
+RUN git clone --depth 1 https://github.com/microsoft/VibeVoice.git /app/VideoSyncIntegrations/VibeVoice \
+    && pip install --no-cache-dir /app/VideoSyncIntegrations/VibeVoice
 
 COPY VibeVoiceService /app/VideoSyncIntegrations/VibeVoiceService
 
