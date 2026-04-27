@@ -48,17 +48,19 @@ class VibeVoiceRuntime:
         output_dir: Path,
     ) -> tuple[list[str], Path]:
         repo_dir = self._repo_dir()
-        script_path = repo_dir / "demo" / "realtime_model_inference_from_file.py"
+        script_path = Path(__file__).resolve().with_name("vibevoice_tts_adapter.py")
         if not script_path.exists():
             raise RuntimeError(
-                f"Unable to locate upstream VibeVoice realtime demo at {script_path}. "
-                "Set VIBEVOICE_REPO_DIR or configure VIBEVOICE_TTS_COMMAND explicitly."
+                f"Unable to locate VideoSync TTS adapter at {script_path}. "
+                "Configure VIBEVOICE_TTS_COMMAND explicitly."
             )
 
         expected_output = output_dir / f"{text_path.stem}_generated.wav"
         command = [
             self._python_bin(),
             str(script_path),
+            "--repo_dir",
+            str(repo_dir),
             "--model_path",
             self.tts_model,
             "--txt_path",
