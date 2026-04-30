@@ -2,8 +2,8 @@
 // NO Rig framework - direct API calls that actually work
 // Uses comprehensive tool_executor with all 35 tools
 
-use crate::claude_client::{ClaudeClient, ClaudeMessage, ClaudeContent, ContentBlock};
 use crate::agent::tool_executor::{execute_tool_claude_with_context, ToolExecutionContext};
+use crate::claude_client::{ClaudeClient, ClaudeContent, ClaudeMessage, ContentBlock};
 use std::sync::Arc;
 
 pub struct SimpleClaudeAgent {
@@ -37,11 +37,22 @@ impl SimpleClaudeAgent {
             app_state: app_state.clone(),
         };
 
-        // 🔧 Dynamic tool selection: Select relevant tools based on user input (max 20)
-        // This optimizes Claude's performance even though it doesn't have Gemini's strict limits
-        let selected_tool_names = crate::tool_selector::ToolSelector::select_tools(user_input);
+        // Use the same AI-driven selector family as the stateful chat agent so
+        // clipping/background agents can reach the broader video-generation stack.
+        let selected_tool_names = crate::ai_tool_selector::select_tools_for_request(
+            user_input,
+            app_state.nvidia_nim_client.as_ref(),
+            app_state
+                .video_gemini_client
+                .as_ref()
+                .or(app_state.gemini_client.as_ref()),
+        )
+        .await
+        .into_iter()
+        .map(|tool| tool.name)
+        .collect::<Vec<_>>();
         tracing::info!(
-            "🎯 Selected {} tools for Claude (optimized from 53): {:?}",
+            "🎯 Selected {} tools for Claude simple agent: {:?}",
             selected_tool_names.len(),
             selected_tool_names.iter().take(5).collect::<Vec<_>>()
         );
@@ -98,6 +109,8 @@ Look for this in your context:
 ```
 PREVIOUSLY GENERATED OUTPUT VIDEOS IN THIS SESSION:
 1. "video_name.mp4" - USE THIS PATH: outputs/video_name.mp4
+   - Watch link: /api/outputs/stream/<file_id>
+   - Download link: /api/outputs/download/<file_id>
 ```
 
 ### Re-Editing Example:
@@ -109,6 +122,11 @@ view_video({ video_path: "outputs/shilereads_ad.mp4" })  // Verify what's in it
 generate_text_to_speech({ text: "Welcome to ShileReads...", voice: "Rachel", output_file: "voiceover.mp3" })
 add_voiceover_to_video({ video_path: "outputs/shilereads_ad.mp4", voiceover_path: "voiceover.mp3", ... })
 ```
+
+### User Delivery Rule:
+- Internal file paths are for tool execution, not for user delivery
+- If context includes a watch or download link for an output, share that link with the user
+- Do not tell the user to fetch files from internal directories like `outputs/...`
 
 ## YOUR CAPABILITIES
 
@@ -331,11 +349,15 @@ IMPORTANT: You do NOT use AI to generate videos. Instead, you fetch stock media 
             iterations += 1;
             send_progress(0.0, "🤖 Agent is thinking...");
 
-            let response = self.client.generate_content(
-                messages.clone(),
-                Some(tools.clone()),
-                Some(system_prompt.clone()),
-            ).await.map_err(|e| format!("Claude API Error: {}", e))?;
+            let response = self
+                .client
+                .generate_content(
+                    messages.clone(),
+                    Some(tools.clone()),
+                    Some(system_prompt.clone()),
+                )
+                .await
+                .map_err(|e| format!("Claude API Error: {}", e))?;
 
             // Record token usage and cost
             let pool = exec_context.app_state.db_pool.clone();
@@ -346,12 +368,11 @@ IMPORTANT: You do NOT use AI to generate videos. Instead, you fetch stock media 
             let msg_count = messages.len();
             tokio::spawn(async move {
                 // Get session DB ID
-                let session_result: Result<(i32,), sqlx::Error> = sqlx::query_as(
-                    "SELECT id FROM chat_sessions WHERE session_uuid = $1"
-                )
-                .bind(&session_id_str)
-                .fetch_one(&pool)
-                .await;
+                let session_result: Result<(i32,), sqlx::Error> =
+                    sqlx::query_as("SELECT id FROM chat_sessions WHERE session_uuid = $1")
+                        .bind(&session_id_str)
+                        .fetch_one(&pool)
+                        .await;
 
                 if let Ok((session_db_id,)) = session_result {
                     let user_db_id = user_id_val.unwrap_or(1);
@@ -399,7 +420,8 @@ IMPORTANT: You do NOT use AI to generate videos. Instead, you fetch stock media 
                             input: input.clone(),
                         });
 
-                        let result = execute_tool_claude_with_context(name, input, &exec_context).await;
+                        let result =
+                            execute_tool_claude_with_context(name, input, &exec_context).await;
 
                         // CRITICAL: If this is submit_final_answer, capture its result as the final response and exit
                         if name == "submit_final_answer" && !result.is_empty() {

@@ -2,8 +2,11 @@
 // NO Rig framework - direct API calls that actually work
 // Uses comprehensive tool_executor with all 34 tools
 
-use crate::gemini_client::{GeminiClient, GenerateContentRequest, Content, Part, Tool, GenerationConfig, ToolConfig, FunctionCallingConfig, FunctionCallingMode};
 use crate::agent::tool_executor::{execute_tool_gemini_with_context, ToolExecutionContext};
+use crate::gemini_client::{
+    Content, FunctionCallingConfig, FunctionCallingMode, GeminiClient, GenerateContentRequest,
+    GenerationConfig, Part, Tool, ToolConfig,
+};
 use serde_json::Value;
 use std::sync::Arc;
 
@@ -37,15 +40,19 @@ impl SimpleGeminiAgent {
             app_state: app_state.clone(),
         };
 
-        // 🔧 Dynamic tool selection: Select relevant tools based on user input (max 20)
-        // This reduces schema complexity and avoids Gemini's "too many states" error
-        let selected_tool_names = crate::tool_selector::ToolSelector::select_tools(user_input);
+        // Use the same AI-driven selector family as the stateful chat agent so
+        // clipping/background agents can reach the broader video-generation stack.
+        let tools = crate::ai_tool_selector::select_tools_for_request(
+            user_input,
+            app_state.nvidia_nim_client.as_ref(),
+            Some(self.client.as_ref()),
+        )
+        .await;
         tracing::info!(
-            "🎯 Selected {} tools for Gemini (optimized from 53): {:?}",
-            selected_tool_names.len(),
-            selected_tool_names.iter().take(5).collect::<Vec<_>>()
+            "🎯 Selected {} tools for Gemini simple agent: {:?}",
+            tools.len(),
+            tools.iter().take(5).map(|tool| tool.name.as_str()).collect::<Vec<_>>()
         );
-        let tools = GeminiClient::filter_tools_by_name(&selected_tool_names);
 
         let mut conversation: Vec<Content> = vec![];
 
@@ -100,6 +107,8 @@ Look for this in your context:
 ```
 PREVIOUSLY GENERATED OUTPUT VIDEOS IN THIS SESSION:
 1. "video_name.mp4" - USE THIS PATH: outputs/video_name.mp4
+   - Watch link: /api/outputs/stream/<file_id>
+   - Download link: /api/outputs/download/<file_id>
 ```
 
 ### Re-Editing Example:
@@ -111,6 +120,11 @@ view_video({ video_path: "outputs/shilereads_ad.mp4" })  // Verify what's in it
 generate_text_to_speech({ text: "Welcome to ShileReads...", voice: "Rachel", output_file: "voiceover.mp3" })
 add_voiceover_to_video({ video_path: "outputs/shilereads_ad.mp4", voiceover_path: "voiceover.mp3", ... })
 ```
+
+### User Delivery Rule:
+- Internal file paths are for tool execution, not for user delivery
+- If context includes a watch or download link for an output, share that link with the user
+- Do not tell the user to fetch files from internal directories like `outputs/...`
 
 ## YOUR CAPABILITIES
 
@@ -321,7 +335,9 @@ IMPORTANT: You do NOT use AI to generate videos. Instead, you fetch stock media 
 
         // Add system context + user message
         conversation.push(Content {
-            parts: vec![Part::Text { text: format!("{}\n\nUser request: {}", system_instruction, user_input) }],
+            parts: vec![Part::Text {
+                text: format!("{}\n\nUser request: {}", system_instruction, user_input),
+            }],
             role: Some("user".to_string()),
         });
 
@@ -335,7 +351,9 @@ IMPORTANT: You do NOT use AI to generate videos. Instead, you fetch stock media 
 
             let request = GenerateContentRequest {
                 contents: conversation.clone(),
-                tools: Some(vec![Tool { function_declarations: tools.iter().cloned().collect() }]),
+                tools: Some(vec![Tool {
+                    function_declarations: tools.iter().cloned().collect(),
+                }]),
                 generation_config: Some(GenerationConfig {
                     temperature: 0.3,
                     top_k: 40,
@@ -344,13 +362,16 @@ IMPORTANT: You do NOT use AI to generate videos. Instead, you fetch stock media 
                 }),
                 tool_config: Some(ToolConfig {
                     function_calling_config: FunctionCallingConfig {
-                        mode: FunctionCallingMode::Any,  // CRITICAL FIX: Force tool calling like Claude does
+                        mode: FunctionCallingMode::Any, // CRITICAL FIX: Force tool calling like Claude does
                     },
                 }),
                 system_instruction: None,
             };
 
-            let response = self.client.generate_content(request).await
+            let response = self
+                .client
+                .generate_content(request)
+                .await
                 .map_err(|e| format!("Gemini API Error: {}", e))?;
 
             // Record token usage and cost
@@ -362,12 +383,11 @@ IMPORTANT: You do NOT use AI to generate videos. Instead, you fetch stock media 
                 let output_tokens = usage_metadata.candidates_token_count;
                 tokio::spawn(async move {
                     // Get session DB ID
-                    let session_result: Result<(i32,), sqlx::Error> = sqlx::query_as(
-                        "SELECT id FROM chat_sessions WHERE session_uuid = $1"
-                    )
-                    .bind(&session_id_str)
-                    .fetch_one(&pool)
-                    .await;
+                    let session_result: Result<(i32,), sqlx::Error> =
+                        sqlx::query_as("SELECT id FROM chat_sessions WHERE session_uuid = $1")
+                            .bind(&session_id_str)
+                            .fetch_one(&pool)
+                            .await;
 
                     if let Ok((session_db_id,)) = session_result {
                         let user_db_id = user_id_val.unwrap_or(1);
@@ -397,55 +417,61 @@ IMPORTANT: You do NOT use AI to generate videos. Instead, you fetch stock media 
                     let mut tool_results = vec![];
 
                     for part in &content.parts {
-                    match part {
-                        Part::Text { text } => {
-                            final_text = text.clone();
-                        }
-                        Part::FunctionCall { function_call } => {
-                            has_tool_calls = true;
-                            tracing::info!("🔧 Gemini calling: {}", function_call.name);
-                            send_progress(0.0, &format!("🔧 {}...", function_call.name));
-
-                            let result = execute_tool_gemini_with_context(&function_call.name, &function_call.args, &exec_context).await;
-
-                            // CRITICAL: If this is submit_final_answer, return immediately
-                            if function_call.name == "submit_final_answer" && !result.is_empty() {
-                                send_progress(0.0, "✅ Task completed!");
-                                return Ok(result);
+                        match part {
+                            Part::Text { text } => {
+                                final_text = text.clone();
                             }
+                            Part::FunctionCall { function_call } => {
+                                has_tool_calls = true;
+                                tracing::info!("🔧 Gemini calling: {}", function_call.name);
+                                send_progress(0.0, &format!("🔧 {}...", function_call.name));
 
-                            // Add ONLY the FunctionResponse (not the FunctionCall again)
-                            // The model already sent the FunctionCall, we just need to respond with the result
-                            tool_results.push(Part::FunctionResponse {
-                                function_response: crate::gemini_client::FunctionResponse {
-                                    name: function_call.name.clone(),
-                                    response: {
-                                        let mut map = std::collections::HashMap::new();
-                                        map.insert("result".to_string(), Value::String(result));
-                                        map
+                                let result = execute_tool_gemini_with_context(
+                                    &function_call.name,
+                                    &function_call.args,
+                                    &exec_context,
+                                )
+                                .await;
+
+                                // CRITICAL: If this is submit_final_answer, return immediately
+                                if function_call.name == "submit_final_answer" && !result.is_empty()
+                                {
+                                    send_progress(0.0, "✅ Task completed!");
+                                    return Ok(result);
+                                }
+
+                                // Add ONLY the FunctionResponse (not the FunctionCall again)
+                                // The model already sent the FunctionCall, we just need to respond with the result
+                                tool_results.push(Part::FunctionResponse {
+                                    function_response: crate::gemini_client::FunctionResponse {
+                                        name: function_call.name.clone(),
+                                        response: {
+                                            let mut map = std::collections::HashMap::new();
+                                            map.insert("result".to_string(), Value::String(result));
+                                            map
+                                        },
+                                        thought_signature: function_call.thought_signature.clone(),
                                     },
-                                    thought_signature: function_call.thought_signature.clone(),
-                                },
-                            });
+                                });
+                            }
+                            _ => {}
                         }
-                        _ => {}
                     }
-                }
 
-                // Add model response to conversation
-                conversation.push(content.clone());
+                    // Add model response to conversation
+                    conversation.push(content.clone());
 
-                if !has_tool_calls {
-                    break;
-                }
+                    if !has_tool_calls {
+                        break;
+                    }
 
-                // Add tool results for next iteration
-                if !tool_results.is_empty() {
-                    conversation.push(Content {
-                        parts: tool_results,
-                        role: Some("user".to_string()),
-                    });
-                }
+                    // Add tool results for next iteration
+                    if !tool_results.is_empty() {
+                        conversation.push(Content {
+                            parts: tool_results,
+                            role: Some("user".to_string()),
+                        });
+                    }
                 } else {
                     // No content in response
                     tracing::warn!("Gemini response has no content");

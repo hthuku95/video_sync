@@ -1,8 +1,4 @@
-use axum::{
-    response::Html,
-    routing::get,
-    Router,
-};
+use axum::{response::Html, routing::get, Router};
 
 pub fn ui_routes() -> Router {
     Router::new()
@@ -609,7 +605,7 @@ fn build_landing_page_html() -> &'static str {
                     <a href="#pricing">Pricing</a>
                     <a href="#features">Features</a>
                 </div>
-                <div class="auth-buttons">
+                <div class="auth-buttons" id="homepageAuthButtons">
                     <a href="/login" class="btn btn-secondary">Login</a>
                     <a href="/signup" class="btn btn-primary">Sign Up</a>
                 </div>
@@ -625,7 +621,7 @@ fn build_landing_page_html() -> &'static str {
             <div style="background:rgba(122,76,255,0.15);border:1px solid rgba(122,76,255,0.4);border-radius:10px;padding:12px 18px;display:inline-block;margin:18px 0 14px;font-size:14px;color:#fff;font-weight:500">
                 <strong>SaaS hero videos</strong>, <strong>website demo videos</strong>, <strong>3D mockups</strong>, and <strong>white-label agency production</strong> paid in <strong>USDC on Base</strong>
             </div>
-            <div class="hero-buttons">
+            <div class="hero-buttons" id="homepageHeroButtons">
                 <a href="/signup" class="btn btn-primary btn-large">Get Started Free</a>
                 <a href="#offers" class="btn btn-secondary btn-large">See Offers ↓</a>
             </div>
@@ -1041,19 +1037,24 @@ fn build_landing_page_html() -> &'static str {
         document.addEventListener('DOMContentLoaded', () => {
             new DynamicBackgroundManager();
 
-            // Hide login/signup buttons if user is authenticated
+            // Swap anonymous CTAs for dashboard actions if the user is authenticated.
             const authToken = localStorage.getItem('auth_token') || localStorage.getItem('authToken');
             if (authToken) {
-                const authButtons = document.querySelectorAll('.auth-buttons, .hero-buttons');
-                authButtons.forEach(container => {
-                    container.style.display = 'none';
-                });
+                const navButtons = document.getElementById('homepageAuthButtons');
+                const heroButtons = document.getElementById('homepageHeroButtons');
 
-                // Show logged-in state
-                const nav = document.querySelector('nav .auth-buttons');
-                if (nav) {
-                    nav.innerHTML = '<a href="/dashboard" class="btn btn-primary">Go to Dashboard</a>';
-                    nav.style.display = 'flex';
+                if (navButtons) {
+                    navButtons.innerHTML = [
+                        '<a href="/dashboard" class="btn btn-primary">Dashboard</a>',
+                        '<a href="/chat" class="btn btn-secondary">Open Chat</a>'
+                    ].join('');
+                }
+
+                if (heroButtons) {
+                    heroButtons.innerHTML = [
+                        '<a href="/chat" class="btn btn-primary btn-large">Start New Chat</a>',
+                        '<a href="/dashboard" class="btn btn-secondary btn-large">Go to Dashboard</a>'
+                    ].join('');
                 }
             }
         });
@@ -2694,7 +2695,7 @@ pub async fn login_page() -> Html<String> {
 </body>
 </html>
     "###;
-    
+
     Html(html.to_string())
 }
 
@@ -3156,7 +3157,7 @@ pub async fn signup_page() -> Html<String> {
 </body>
 </html>
     "###;
-    
+
     Html(html.to_string())
 }
 
@@ -3358,6 +3359,25 @@ pub async fn dashboard_page() -> Html<String> {
             gap: 0.5rem;
         }
 
+        .action-icon {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 1.3rem;
+            height: 1.3rem;
+            flex-shrink: 0;
+        }
+
+        .action-icon svg {
+            width: 100%;
+            height: 100%;
+            fill: none;
+            stroke: currentColor;
+            stroke-width: 1.9;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+        }
+
         .recent-chats {
             background: rgba(255, 255, 255, 0.05);
             backdrop-filter: blur(20px);
@@ -3495,36 +3515,36 @@ pub async fn dashboard_page() -> Html<String> {
             <h2>Quick Actions</h2>
             <div class="action-grid">
                 <a href="/chat" class="action-card">
-                    <h3>💬 Start New Chat</h3>
+                    <h3><span class="action-icon"><svg viewBox="0 0 24 24"><path d="M7 10h10"></path><path d="M7 14h6"></path><path d="M5 19V6a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H9l-4 3Z"></path></svg></span>Start New Chat</h3>
                     <p>Begin a new video editing session with our AI assistant</p>
                 </a>
                 <a href="/youtube/manage" class="action-card">
-                    <h3>📺 Connect YouTube Channels</h3>
+                    <h3><span class="action-icon"><svg viewBox="0 0 24 24"><path d="M3 7.5a2.5 2.5 0 0 1 2.5-2.5h9A2.5 2.5 0 0 1 17 7.5v9a2.5 2.5 0 0 1-2.5 2.5h-9A2.5 2.5 0 0 1 3 16.5Z"></path><path d="m10 9 4 3-4 3Z"></path><path d="M17 10.5 21 8v8l-4-2.5"></path></svg></span>Connect YouTube Channels</h3>
                     <p>Connect and manage your YouTube channels for seamless publishing</p>
                 </a>
                 <a href="/analytics" class="action-card">
-                    <h3>📊 Analytics Dashboard</h3>
+                    <h3><span class="action-icon"><svg viewBox="0 0 24 24"><path d="M4 19h16"></path><path d="M7 16V9"></path><path d="M12 16V5"></path><path d="M17 16v-4"></path></svg></span>Analytics Dashboard</h3>
                     <p>View YouTube channel performance and video analytics</p>
                 </a>
                 <!-- YouTube Clipping Card (only for admins/whitelisted users) -->
                 <a href="/clipping/manage" class="action-card" id="clipping-action-card" style="display: none;">
-                    <h3>✂️ YouTube Clipping</h3>
+                    <h3><span class="action-icon"><svg viewBox="0 0 24 24"><circle cx="6" cy="6" r="2"></circle><circle cx="6" cy="18" r="2"></circle><path d="M8 7.5 19 4"></path><path d="M8 16.5 19 20"></path><path d="M14 12h7"></path></svg></span>YouTube Clipping</h3>
                     <p>Auto-generate viral clips from popular channels and post to your channel</p>
                 </a>
                 <a href="/video-tools" class="action-card">
-                    <h3>🛠️ Video Tools</h3>
+                    <h3><span class="action-icon"><svg viewBox="0 0 24 24"><path d="m14.7 6.3 3 3"></path><path d="M4 20l4.5-1 9.2-9.2a2.1 2.1 0 1 0-3-3L5.5 16 4 20Z"></path><path d="M13 8 16 11"></path></svg></span>Video Tools</h3>
                     <p>Stabilize, convert formats, visualize audio, and run workflow recipes directly</p>
                 </a>
                 <a href="/gig-templates" class="action-card">
-                    <h3>💼 Gig Templates</h3>
+                    <h3><span class="action-icon"><svg viewBox="0 0 24 24"><path d="M4 8h16v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2Z"></path><path d="M9 8V6a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"></path><path d="M4 12h16"></path></svg></span>Gig Templates</h3>
                     <p>Fiverr & PPH gig info with pricing tiers, copy-paste descriptions, and AI sample video generation</p>
                 </a>
                 <a href="/manual-clipping" class="action-card">
-                    <h3>✂️ Manual Clipping</h3>
+                    <h3><span class="action-icon"><svg viewBox="0 0 24 24"><circle cx="6" cy="6" r="2"></circle><circle cx="6" cy="18" r="2"></circle><path d="M8 7.5 19 4"></path><path d="M8 16.5 19 20"></path><path d="M14 12h7"></path></svg></span>Manual Clipping</h3>
                     <p>Paste any YouTube or Twitch URL to extract viral clips with download links — no destination channel needed</p>
                 </a>
                 <a href="/help" class="action-card">
-                    <h3>📖 Help & Guide</h3>
+                    <h3><span class="action-icon"><svg viewBox="0 0 24 24"><path d="M5 4h11a3 3 0 0 1 3 3v13H8a3 3 0 0 0-3 3Z"></path><path d="M8 4v16a3 3 0 0 0-3 3V7a3 3 0 0 1 3-3Z"></path><path d="M11 9h4"></path><path d="M11 13h4"></path></svg></span>Help & Guide</h3>
                     <p>Learn how to use the AI video editor and YouTube features</p>
                 </a>
             </div>
@@ -3740,7 +3760,7 @@ pub async fn dashboard_page() -> Html<String> {
 </body>
 </html>
     "###;
-    
+
     Html(html.to_string())
 }
 
@@ -3758,9 +3778,9 @@ pub async fn chat_interface() -> Html<String> {
 pub async fn chat_interface_with_session_id(session_id: Option<String>) -> Html<String> {
     let session_id_js = match session_id {
         Some(id) => format!("'{}'", id),
-        None => "null".to_string()
+        None => "null".to_string(),
     };
-    
+
     let html = r###"
 <!DOCTYPE html>
 <html lang="en">
@@ -5347,10 +5367,10 @@ pub async fn chat_interface_with_session_id(session_id: Option<String>) -> Html<
 </body>
 </html>
     "###;
-    
+
     // Replace the session ID placeholder with the actual value
     let html = html.replace("SESSION_ID_PLACEHOLDER", &session_id_js);
-    
+
     Html(html)
 }
 
@@ -7788,7 +7808,6 @@ pub async fn terms_of_service_page() -> Html<String> {
     "###;
     Html(html.to_string())
 }
-
 
 // ============================================================================
 // Manual Clipping Dashboard

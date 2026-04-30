@@ -12,10 +12,10 @@
 
 use crate::clipping::{
     ai_clipper::{AiClipper, ExtractedClipData},
+    apify_client::ApifyClient,
     gemini_video_analyzer::VideoAnalysis,
     models::{ChannelLinkage, ClippingConfig, ClippingJob},
     uploader::ClipUploader,
-    apify_client::ApifyClient,
 };
 use crate::models::youtube::ConnectedYouTubeChannel;
 use crate::services::VideoVectorizationService;
@@ -34,10 +34,7 @@ enum StartingPhase {
 }
 
 /// Execute clipping job workflow
-pub async fn execute_clipping_job(
-    job_id: i32,
-    app_state: Arc<AppState>,
-) -> Result<String, String> {
+pub async fn execute_clipping_job(job_id: i32, app_state: Arc<AppState>) -> Result<String, String> {
     tracing::info!("🎬 Starting clipping job {} (5-phase pipeline)", job_id);
 
     let job = fetch_job_details(job_id, &app_state.db_pool).await?;
@@ -55,10 +52,10 @@ pub async fn execute_clipping_job(
     // Phase Determination — Smart Resume via resume_from column
     // =========================================================================
     let starting_phase = match job.resume_from.as_deref().unwrap_or("") {
-        "analyzed"        => StartingPhase::B,
-        "downloaded"      => StartingPhase::C,
+        "analyzed" => StartingPhase::B,
+        "downloaded" => StartingPhase::C,
         "clips_extracted" => StartingPhase::E,
-        _                 => StartingPhase::A,
+        _ => StartingPhase::A,
     };
 
     if starting_phase != StartingPhase::A {
@@ -83,7 +80,9 @@ pub async fn execute_clipping_job(
         update_job_status(job_id, "analyzing", 10, None, &app_state.db_pool).await?;
         tracing::info!("🔍 Phase A: Analyzing via YouTube URL (1 Gemini call)");
 
-        let gemini_client = app_state.gemini_client.as_ref()
+        let gemini_client = app_state
+            .gemini_client
+            .as_ref()
             .ok_or("Gemini client not configured — required for YouTube URL analysis")?;
 
         let gemini_result = tokio::time::timeout(
@@ -101,18 +100,30 @@ pub async fn execute_clipping_job(
 
         let analysis = match gemini_result {
             Ok(a) => a,
-            Err(e) if e.to_string().contains("429") || e.to_string().to_lowercase().contains("quota") => {
-                tracing::warn!("⚠️ Gemini 429 on video analysis, falling back to BlenderMCPServer: {}", e);
+            Err(e)
+                if e.to_string().contains("429")
+                    || e.to_string().to_lowercase().contains("quota") =>
+            {
+                tracing::warn!(
+                    "⚠️ Gemini 429 on video analysis, falling back to BlenderMCPServer: {}",
+                    e
+                );
                 if let Some(blender) = app_state.blender_mcp_client.as_ref() {
-                    blender.analyze_video(
-                        &video_url,
-                        config.clips_per_video as u32,
-                        config.min_clip_duration_seconds as f64,
-                        config.max_clip_duration_seconds as f64,
-                        &[],
-                    )
-                    .await
-                    .map_err(|be| format!("Gemini quota exceeded (429); BlenderMCP fallback also failed: {}", be))?
+                    blender
+                        .analyze_video(
+                            &video_url,
+                            config.clips_per_video as u32,
+                            config.min_clip_duration_seconds as f64,
+                            config.max_clip_duration_seconds as f64,
+                            &[],
+                        )
+                        .await
+                        .map_err(|be| {
+                            format!(
+                                "Gemini quota exceeded (429); BlenderMCP fallback also failed: {}",
+                                be
+                            )
+                        })?
                 } else {
                     return Err(format!("Gemini video analysis failed (429 quota): {}. No BlenderMCP fallback configured.", e));
                 }
@@ -127,15 +138,26 @@ pub async fn execute_clipping_job(
                 "No viral moments found with quality >= 0.6 (overall quality: {:.2}). Video may not be suitable for clips.",
                 analysis.overall_quality
             );
-            update_job_status(job_id, "no_clips_found", 100, Some(&status_msg), &app_state.db_pool).await?;
+            update_job_status(
+                job_id,
+                "no_clips_found",
+                100,
+                Some(&status_msg),
+                &app_state.db_pool,
+            )
+            .await?;
             mark_job_completed(job_id, &app_state.db_pool).await?;
-            return Ok(format!("No qualifying clips found (overall_quality={:.2})", analysis.overall_quality));
+            return Ok(format!(
+                "No qualifying clips found (overall_quality={:.2})",
+                analysis.overall_quality
+            ));
         }
 
         // Hard-cap clip duration to config max (never exceed for Shorts compatibility).
         // Gemini sometimes returns moments slightly over the requested max.
         let shorts_max = config.max_clip_duration_seconds as f64;
-        let moments: Vec<_> = analysis.top_moments(config.clips_per_video as usize)
+        let moments: Vec<_> = analysis
+            .top_moments(config.clips_per_video as usize)
             .into_iter()
             .cloned()
             .map(|mut m| {
@@ -143,7 +165,9 @@ pub async fn execute_clipping_job(
                 if dur > shorts_max {
                     tracing::warn!(
                         "Moment '{title}' is {dur:.1}s — truncating end to {max}s cap",
-                        title = m.title, dur = dur, max = shorts_max
+                        title = m.title,
+                        dur = dur,
+                        max = shorts_max
                     );
                     m.end_sec = m.start_sec + shorts_max;
                 }
@@ -163,7 +187,7 @@ pub async fn execute_clipping_job(
         sqlx::query(
             "UPDATE clipping_jobs
              SET viral_moments_json = $1, analysis_quality = $2
-             WHERE id = $3"
+             WHERE id = $3",
         )
         .bind(serde_json::to_value(&analysis).unwrap_or(serde_json::Value::Null))
         .bind(analysis.overall_quality)
@@ -184,7 +208,8 @@ pub async fn execute_clipping_job(
             .map_err(|e| format!("Failed to deserialize VideoAnalysis from DB: {}", e))?;
 
         let shorts_max = config.max_clip_duration_seconds as f64;
-        let moments: Vec<_> = analysis.top_moments(config.clips_per_video as usize)
+        let moments: Vec<_> = analysis
+            .top_moments(config.clips_per_video as usize)
             .into_iter()
             .cloned()
             .map(|mut m| {
@@ -195,7 +220,11 @@ pub async fn execute_clipping_job(
             })
             .collect();
 
-        tracing::info!("✅ Loaded {} moments from DB (overall_quality={:.2})", moments.len(), analysis.overall_quality);
+        tracing::info!(
+            "✅ Loaded {} moments from DB (overall_quality={:.2})",
+            moments.len(),
+            analysis.overall_quality
+        );
         (moments, analysis)
     };
 
@@ -208,15 +237,16 @@ pub async fn execute_clipping_job(
         update_job_status(job_id, "downloading", 25, None, &app_state.db_pool).await?;
         tracing::info!("⬇️  Phase B: Downloading video");
 
-        let apify_token = std::env::var("APIFY_TOKEN")
-            .map_err(|_| "APIFY_TOKEN not configured")?;
+        let apify_token = std::env::var("APIFY_TOKEN").map_err(|_| "APIFY_TOKEN not configured")?;
         let apify_actor = std::env::var("APIFY_YOUTUBE_CLIENT_ACTOR")
             .map_err(|_| "APIFY_YOUTUBE_CLIENT_ACTOR not configured")?;
 
         let apify_client = ApifyClient::new(apify_token, apify_actor);
 
         tracing::info!("Downloading video: {}", video_url);
-        let _download_result = apify_client.download_video(&video_url, &path).await
+        let _download_result = apify_client
+            .download_video(&video_url, &path)
+            .await
             .map_err(|e| format!("Download failed: {}", e))?;
 
         // Validate downloaded file
@@ -237,21 +267,25 @@ pub async fn execute_clipping_job(
 
         // Upload raw download to R2 for persistence across restarts (best-effort)
         if let Some(r2) = app_state.r2_client.as_ref() {
-            let ext = if job.used_twitch_fallback { "mp4" } else { "mp4" };
+            let ext = if job.used_twitch_fallback {
+                "mp4"
+            } else {
+                "mp4"
+            };
             let raw_key = crate::r2_client::R2Client::key_raw_download(
-                linkage.user_id, &job.source_video_id, ext,
+                linkage.user_id,
+                &job.source_video_id,
+                ext,
             );
             match r2.upload(&path, &raw_key).await {
                 Ok(()) => {
                     tracing::info!("R2: uploaded raw download → {}", raw_key);
-                    sqlx::query(
-                        "UPDATE clipping_jobs SET r2_raw_key = $1 WHERE id = $2",
-                    )
-                    .bind(&raw_key)
-                    .bind(job_id)
-                    .execute(&app_state.db_pool)
-                    .await
-                    .ok();
+                    sqlx::query("UPDATE clipping_jobs SET r2_raw_key = $1 WHERE id = $2")
+                        .bind(&raw_key)
+                        .bind(job_id)
+                        .execute(&app_state.db_pool)
+                        .await
+                        .ok();
                 }
                 Err(e) => tracing::warn!("R2 raw upload failed (non-fatal): {}", e),
             }
@@ -260,8 +294,9 @@ pub async fn execute_clipping_job(
         path
     } else {
         // Resume from Phase C or E: use the path stored in DB at download time
-        let path = job.local_video_path.clone()
-            .unwrap_or_else(|| format!("downloads/clipping_{}_{}.mp4", job_id, job.source_video_id));
+        let path = job.local_video_path.clone().unwrap_or_else(|| {
+            format!("downloads/clipping_{}_{}.mp4", job_id, job.source_video_id)
+        });
         tracing::info!("⏭️  Phase B skipped: using stored path '{}'", path);
         path
     };
@@ -272,22 +307,47 @@ pub async fn execute_clipping_job(
     // =========================================================================
     let (clips, clip_db_ids) = if starting_phase <= StartingPhase::C {
         update_job_status(job_id, "extracting_clips", 50, None, &app_state.db_pool).await?;
-        tracing::info!("✂️  Phase C: Parallel clip extraction ({} clips)", moments.len());
+        tracing::info!(
+            "✂️  Phase C: Parallel clip extraction ({} clips)",
+            moments.len()
+        );
 
         // Create output directory
-        tokio::fs::create_dir_all("outputs").await
+        tokio::fs::create_dir_all("outputs")
+            .await
             .map_err(|e| format!("Failed to create outputs directory: {}", e))?;
 
         let clipper = AiClipper::new(app_state.clone());
-        let clips = clipper
+        let mut clips = clipper
             .extract_clips_from_moments(job_id, &video_path, &moments, &analysis.content_type)
             .await?;
+
+        let min_duration = config.min_clip_duration_seconds as f64;
+        let max_duration = config.max_clip_duration_seconds as f64;
+        let before_duration_filter = clips.len();
+        clips.retain(|clip| {
+            clip.duration_seconds >= min_duration && clip.duration_seconds <= max_duration
+        });
+
+        if clips.len() != before_duration_filter {
+            tracing::warn!(
+                "Clipping job {} dropped {} clip(s) outside configured duration bounds (min={}s, max={}s)",
+                job_id,
+                before_duration_filter.saturating_sub(clips.len()),
+                config.min_clip_duration_seconds,
+                config.max_clip_duration_seconds
+            );
+        }
 
         if clips.is_empty() {
             return Err("All clip extractions failed".to_string());
         }
 
-        tracing::info!("✅ Phase C complete: {}/{} clips extracted", clips.len(), moments.len());
+        tracing::info!(
+            "✅ Phase C complete: {}/{} clips extracted",
+            clips.len(),
+            moments.len()
+        );
         update_job_status(job_id, "clips_extracted", 60, None, &app_state.db_pool).await?;
 
         // Phase C→D: Upload clips + thumbnails to R2 (best-effort, non-fatal)
@@ -297,16 +357,14 @@ pub async fn execute_clipping_job(
                 let clip_n = (i + 1) as usize;
                 let clip_key = crate::r2_client::R2Client::key_clip(job_id, clip_n);
                 match r2.upload(&clip.local_clip_path, &clip_key).await {
-                    Ok(()) => {
-                        match r2.presign_get(&clip_key, 86400).await {
-                            Ok(url) => {
-                                clip.r2_clip_key = Some(clip_key.clone());
-                                clip.r2_clip_url = Some(url);
-                                tracing::info!("R2: uploaded clip {} → {}", clip_n, clip_key);
-                            }
-                            Err(e) => tracing::warn!("R2 presign failed for clip {}: {}", clip_n, e),
+                    Ok(()) => match r2.presign_get(&clip_key, 86400).await {
+                        Ok(url) => {
+                            clip.r2_clip_key = Some(clip_key.clone());
+                            clip.r2_clip_url = Some(url);
+                            tracing::info!("R2: uploaded clip {} → {}", clip_n, clip_key);
                         }
-                    }
+                        Err(e) => tracing::warn!("R2 presign failed for clip {}: {}", clip_n, e),
+                    },
                     Err(e) => tracing::warn!("R2 upload failed for clip {}: {}", clip_n, e),
                 }
                 if let Some(thumb_path) = &clip.custom_thumbnail_path {
@@ -316,7 +374,9 @@ pub async fn execute_clipping_job(
                             clip.r2_thumb_key = Some(thumb_key.clone());
                             tracing::info!("R2: uploaded thumbnail {} → {}", clip_n, thumb_key);
                         }
-                        Err(e) => tracing::warn!("R2 upload failed for thumbnail {}: {}", clip_n, e),
+                        Err(e) => {
+                            tracing::warn!("R2 upload failed for thumbnail {}: {}", clip_n, e)
+                        }
                     }
                 }
             }
@@ -336,13 +396,16 @@ pub async fn execute_clipping_job(
             None, // channel_id set from linkage if needed
             &analysis,
             &app_state,
-        ).await {
+        )
+        .await
+        {
             Ok(()) => tracing::info!("✅ Phase D complete: video_content stored"),
             Err(e) => tracing::warn!("Phase D vectorization failed (non-fatal): {}", e),
         }
 
         // Save clips to database (idempotent: deletes stale clips first)
-        let clip_db_ids = save_clips_to_database(job_id, &clips, &linkage, &app_state.db_pool).await?;
+        let clip_db_ids =
+            save_clips_to_database(job_id, &clips, &linkage, &app_state.db_pool).await?;
         (clips, clip_db_ids)
     } else {
         // Phase E resume: clips already extracted and saved — load from DB
@@ -351,13 +414,19 @@ pub async fn execute_clipping_job(
 
         if db_clips.is_empty() {
             // All clips already published on a previous partial run — job is done
-            tracing::info!("Job {}: all clips already published, marking complete", job_id);
+            tracing::info!(
+                "Job {}: all clips already published, marking complete",
+                job_id
+            );
             update_job_status(job_id, "completed", 100, None, &app_state.db_pool).await?;
             mark_job_completed(job_id, &app_state.db_pool).await?;
             return Ok("All clips already published (Phase E resume)".to_string());
         }
 
-        tracing::info!("Loaded {} unpublished clips from DB for retry", db_clips.len());
+        tracing::info!(
+            "Loaded {} unpublished clips from DB for retry",
+            db_clips.len()
+        );
         (db_clips, db_ids)
     };
 
@@ -367,7 +436,8 @@ pub async fn execute_clipping_job(
     update_job_status(job_id, "posting", 70, None, &app_state.db_pool).await?;
     tracing::info!("📤 Phase E: Uploading {} clips to YouTube", clips.len());
 
-    let destination_channel = fetch_destination_channel(linkage.destination_channel_id, &app_state.db_pool).await?;
+    let destination_channel =
+        fetch_destination_channel(linkage.destination_channel_id, &app_state.db_pool).await?;
 
     let youtube_client = app_state
         .youtube_client
@@ -392,7 +462,32 @@ pub async fn execute_clipping_job(
     );
 
     let mut uploaded_count = 0;
+    let min_duration = config.min_clip_duration_seconds as f64;
+    let max_duration = config.max_clip_duration_seconds as f64;
     for (clip, clip_id) in clips.iter().zip(clip_db_ids.iter()) {
+        if clip.duration_seconds < min_duration || clip.duration_seconds > max_duration {
+            tracing::warn!(
+                "Skipping clip {} for job {} because duration {:.2}s is outside configured bounds (min={}s, max={}s)",
+                clip.clip_number,
+                job_id,
+                clip.duration_seconds,
+                config.min_clip_duration_seconds,
+                config.max_clip_duration_seconds
+            );
+            let _ = uploader
+                .mark_upload_failed(
+                    *clip_id,
+                    &format!(
+                        "Skipped before upload: duration {:.2}s outside configured bounds (min={}s, max={}s)",
+                        clip.duration_seconds,
+                        config.min_clip_duration_seconds,
+                        config.max_clip_duration_seconds
+                    ),
+                )
+                .await;
+            continue;
+        }
+
         // Enforce daily 4-clip limit at upload time (not just at job-creation time).
         let clips_today = count_clips_posted_today(destination_channel.id, &app_state.db_pool)
             .await
@@ -405,14 +500,23 @@ pub async fn execute_clipping_job(
             break;
         }
 
-        match uploader.upload_clip(clip, *clip_id, &destination_channel, linkage.requires_human_approval).await {
+        match uploader
+            .upload_clip(
+                clip,
+                *clip_id,
+                &destination_channel,
+                linkage.requires_human_approval,
+            )
+            .await
+        {
             Ok(_) => {
                 uploaded_count += 1;
                 let progress = 70 + (uploaded_count * 30 / clips.len() as i32);
                 update_job_status(job_id, "posting", progress, None, &app_state.db_pool).await?;
 
                 // Store clip in extracted_clips Qdrant collection (best-effort)
-                store_clip_in_qdrant(*clip_id, job_id, &job.source_video_id, clip, &app_state).await;
+                store_clip_in_qdrant(*clip_id, job_id, &job.source_video_id, clip, &app_state)
+                    .await;
             }
             Err(e) => {
                 tracing::error!("Failed to upload clip {}: {}", clip.clip_number, e);
@@ -431,12 +535,14 @@ pub async fn execute_clipping_job(
             0,
             Some("All clip uploads failed. Job will retry when OAuth tokens are valid."),
             &app_state.db_pool,
-        ).await?;
+        )
+        .await?;
         update_linkage_stats(linkage.id, clips.len() as i32, 0, &app_state.db_pool).await?;
         let _ = tokio::fs::remove_file(&video_path).await;
         tracing::error!(
             "❌ Clipping job {} marked failed: 0/{} clips uploaded",
-            job_id, clips.len()
+            job_id,
+            clips.len()
         );
         return Err("All clip uploads failed — check OAuth token validity".to_string());
     }
@@ -445,7 +551,13 @@ pub async fn execute_clipping_job(
     update_job_status(job_id, "completed", 100, None, &app_state.db_pool).await?;
     mark_job_completed(job_id, &app_state.db_pool).await?;
     update_linkage_session_timestamp(linkage.id, &app_state.db_pool).await?;
-    update_linkage_stats(linkage.id, clips.len() as i32, uploaded_count, &app_state.db_pool).await?;
+    update_linkage_stats(
+        linkage.id,
+        clips.len() as i32,
+        uploaded_count,
+        &app_state.db_pool,
+    )
+    .await?;
 
     // Mark video as successfully clipped — only written here (job completion), never at job creation.
     // This ensures the monitor can re-queue a video whose job previously failed or was cancelled.
@@ -453,7 +565,7 @@ pub async fn execute_clipping_job(
         "INSERT INTO clipped_source_videos
          (source_channel_id, video_id, video_title)
          VALUES ($1, $2, $3)
-         ON CONFLICT (source_channel_id, video_id) DO NOTHING"
+         ON CONFLICT (source_channel_id, video_id) DO NOTHING",
     )
     .bind(linkage.source_channel_id)
     .bind(&job.source_video_id)
@@ -467,10 +579,16 @@ pub async fn execute_clipping_job(
 
     tracing::info!(
         "✅ Clipping job {} completed: {}/{} clips posted",
-        job_id, uploaded_count, clips.len()
+        job_id,
+        uploaded_count,
+        clips.len()
     );
 
-    Ok(format!("Successfully posted {}/{} clips", uploaded_count, clips.len()))
+    Ok(format!(
+        "Successfully posted {}/{} clips",
+        uploaded_count,
+        clips.len()
+    ))
 }
 
 /// Load unpublished clips from the extracted_clips table for Phase E resume.
@@ -490,7 +608,7 @@ pub async fn load_clips_from_db(
          FROM extracted_clips
          WHERE clipping_job_id = $1
            AND upload_status != 'published'
-         ORDER BY clip_number"
+         ORDER BY clip_number",
     )
     .bind(job_id)
     .fetch_all(pool)
@@ -507,11 +625,15 @@ pub async fn load_clips_from_db(
         let ai_tags: Option<Vec<String>> = row.try_get("ai_tags").ok().flatten();
         let ai_confidence_score: Option<f64> = row.try_get("ai_confidence_score").ok().flatten();
         let viral_factors: Option<Vec<String>> = row.try_get("viral_factors").ok().flatten();
-        let custom_thumbnail_path: Option<String> = row.try_get("custom_thumbnail_path").ok().flatten();
-        let thumbnail_generation_method: Option<String> = row.try_get("thumbnail_generation_method").ok().flatten();
+        let custom_thumbnail_path: Option<String> =
+            row.try_get("custom_thumbnail_path").ok().flatten();
+        let thumbnail_generation_method: Option<String> =
+            row.try_get("thumbnail_generation_method").ok().flatten();
         let enhancement_applied: bool = row.try_get("enhancement_applied").ok().unwrap_or(false);
-        let enhancement_tools: Vec<String> = row.try_get("enhancement_tools").ok().unwrap_or_default();
-        let enhancement_reasoning: Option<String> = row.try_get("enhancement_reasoning").ok().flatten();
+        let enhancement_tools: Vec<String> =
+            row.try_get("enhancement_tools").ok().unwrap_or_default();
+        let enhancement_reasoning: Option<String> =
+            row.try_get("enhancement_reasoning").ok().flatten();
 
         clips.push(ExtractedClipData {
             clip_number: row.get("clip_number"),
@@ -557,7 +679,10 @@ async fn store_clip_in_qdrant(
     let embedding = if let Some(ref voyage) = app_state.voyage_embeddings {
         voyage.generate_single_embedding(text_to_embed).await.ok()
     } else if let Some(ref gemini) = app_state.gemini_client {
-        gemini.embed_content(&format!("{} {}", clip.ai_title, clip.ai_description)).await.ok()
+        gemini
+            .embed_content(&format!("{} {}", clip.ai_title, clip.ai_description))
+            .await
+            .ok()
     } else {
         None
     };
@@ -584,8 +709,15 @@ async fn store_clip_in_qdrant(
         "uploaded_at": chrono::Utc::now().to_rfc3339(),
     });
 
-    if let Err(e) = qdrant_client.store_extracted_clip(clip_id, payload, embedding).await {
-        tracing::debug!("Failed to store clip {} in Qdrant (non-fatal): {}", clip_id, e);
+    if let Err(e) = qdrant_client
+        .store_extracted_clip(clip_id, payload, embedding)
+        .await
+    {
+        tracing::debug!(
+            "Failed to store clip {} in Qdrant (non-fatal): {}",
+            clip_id,
+            e
+        );
     }
 }
 
@@ -643,11 +775,7 @@ pub async fn update_job_status(
     Ok(())
 }
 
-async fn update_job_video_path(
-    job_id: i32,
-    video_path: &str,
-    pool: &PgPool,
-) -> Result<(), String> {
+async fn update_job_video_path(job_id: i32, video_path: &str, pool: &PgPool) -> Result<(), String> {
     sqlx::query("UPDATE clipping_jobs SET local_video_path = $1, started_at = $2 WHERE id = $3")
         .bind(video_path)
         .bind(Utc::now())
@@ -670,7 +798,10 @@ pub async fn mark_job_completed(job_id: i32, pool: &PgPool) -> Result<(), String
     Ok(())
 }
 
-pub async fn update_linkage_session_timestamp(linkage_id: i32, pool: &PgPool) -> Result<(), String> {
+pub async fn update_linkage_session_timestamp(
+    linkage_id: i32,
+    pool: &PgPool,
+) -> Result<(), String> {
     sqlx::query(
         "UPDATE youtube_channel_linkages SET last_clipping_session_at = NOW() WHERE id = $1",
     )
@@ -741,7 +872,10 @@ pub async fn save_clips_to_database(
 }
 
 /// Count clips successfully published for a destination channel in the last 24 hours.
-pub async fn count_clips_posted_today(destination_channel_id: i32, pool: &PgPool) -> Result<i64, String> {
+pub async fn count_clips_posted_today(
+    destination_channel_id: i32,
+    pool: &PgPool,
+) -> Result<i64, String> {
     sqlx::query_scalar::<_, i64>(
         "SELECT COUNT(*) FROM extracted_clips
          WHERE destination_channel_id = $1

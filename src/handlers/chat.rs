@@ -12,8 +12,8 @@ use axum::{
     routing::get,
     Router,
 };
-use serde::{Deserialize, Serialize};
 use futures::{sink::SinkExt, stream::StreamExt};
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use uuid;
 
@@ -26,13 +26,25 @@ fn format_relative_time(timestamp: &chrono::DateTime<chrono::Utc>) -> String {
         "just now".to_string()
     } else if duration.num_minutes() < 60 {
         let mins = duration.num_minutes();
-        if mins == 1 { "1 minute ago".to_string() } else { format!("{} minutes ago", mins) }
+        if mins == 1 {
+            "1 minute ago".to_string()
+        } else {
+            format!("{} minutes ago", mins)
+        }
     } else if duration.num_hours() < 24 {
         let hours = duration.num_hours();
-        if hours == 1 { "1 hour ago".to_string() } else { format!("{} hours ago", hours) }
+        if hours == 1 {
+            "1 hour ago".to_string()
+        } else {
+            format!("{} hours ago", hours)
+        }
     } else if duration.num_days() < 30 {
         let days = duration.num_days();
-        if days == 1 { "1 day ago".to_string() } else { format!("{} days ago", days) }
+        if days == 1 {
+            "1 day ago".to_string()
+        } else {
+            format!("{} days ago", days)
+        }
     } else {
         timestamp.format("%B %d, %Y").to_string()
     }
@@ -47,7 +59,7 @@ enum WebSocketMessage {
         message: String,
         operation_id: String,
     },
-    #[serde(rename = "result")]  
+    #[serde(rename = "result")]
     Result {
         content: String,
         operation_id: String,
@@ -67,18 +79,26 @@ struct WebSocketQuery {
 }
 
 pub fn chat_routes() -> Router {
-    let public_routes = Router::new()
-        .route("/ws", get(websocket_handler))
-        .layer(axum::middleware::from_fn(ai_operation_rate_limit_middleware));
+    let public_routes =
+        Router::new()
+            .route("/ws", get(websocket_handler))
+            .layer(axum::middleware::from_fn(
+                ai_operation_rate_limit_middleware,
+            ));
 
     let protected_routes = Router::new()
         .route("/api/chat/history/:session_id", get(get_chat_history))
         .route("/api/chat/recent", get(get_recent_chats))
         .route("/api/chat/all", get(get_all_chats))
-        .route("/api/chat/sessions/:session_uuid/jobs", get(get_session_jobs))
+        .route(
+            "/api/chat/sessions/:session_uuid/jobs",
+            get(get_session_jobs),
+        )
         // Paywall: trial-expired users hit HTTP 402 when trying to read
         // chat history — they still see /subscribe in upgrade_url.
-        .layer(axum::middleware::from_fn(crate::middleware::subscription::subscription_middleware))
+        .layer(axum::middleware::from_fn(
+            crate::middleware::subscription::subscription_middleware,
+        ))
         .layer(axum::middleware::from_fn(auth_middleware));
 
     public_routes.merge(protected_routes)
@@ -92,12 +112,14 @@ async fn websocket_handler(
     // Validate JWT before upgrading — WebSocket upgrades are HTTP so we can
     // extract the user_id here and pass it in. The token travels as a query
     // param because WS clients cannot set Authorization headers.
-    let user_id: Option<i32> = params.token.as_deref().and_then(|t| {
-        match crate::handlers::auth::verify_jwt_token(t) {
-            Ok(claims) => claims.sub.parse::<i32>().ok(),
-            Err(_) => None,
-        }
-    });
+    let user_id: Option<i32> =
+        params
+            .token
+            .as_deref()
+            .and_then(|t| match crate::handlers::auth::verify_jwt_token(t) {
+                Ok(claims) => claims.sub.parse::<i32>().ok(),
+                Err(_) => None,
+            });
 
     // Subscription gate — the WS route doesn't flow through the standard
     // axum middleware stack for the upgrade handshake, so we check here.
@@ -126,7 +148,8 @@ async fn websocket_handler(
         }
     }
 
-    ws.on_upgrade(move |socket| websocket(socket, state, params.session, params.model, user_id)).into_response()
+    ws.on_upgrade(move |socket| websocket(socket, state, params.session, params.model, user_id))
+        .into_response()
 }
 
 /// Returns Ok(true) if the user is allowed to use paid compute right now.
@@ -141,39 +164,67 @@ async fn subscription_ok(state: &Arc<AppState>, user_id: i32) -> Result<bool, sq
     .fetch_optional(&state.db_pool)
     .await?;
 
-    let Some(row) = row else { return Ok(false); };
+    let Some(row) = row else {
+        return Ok(false);
+    };
     use sqlx::Row;
-    let is_staff:     bool = row.try_get("is_staff").unwrap_or(false);
-    let is_super:     bool = row.try_get("is_superuser").unwrap_or(false);
-    if is_staff || is_super { return Ok(true); }
+    let is_staff: bool = row.try_get("is_staff").unwrap_or(false);
+    let is_super: bool = row.try_get("is_superuser").unwrap_or(false);
+    if is_staff || is_super {
+        return Ok(true);
+    }
 
-    let status: String = row.try_get::<Option<String>, _>("subscription_status").ok().flatten()
+    let status: String = row
+        .try_get::<Option<String>, _>("subscription_status")
+        .ok()
+        .flatten()
         .unwrap_or_else(|| "grandfathered".to_string());
     let now = chrono::Utc::now();
 
     Ok(match status.as_str() {
         "grandfathered" => true,
-        "trial" => row.try_get::<Option<chrono::DateTime<chrono::Utc>>, _>("trial_ends_at").ok().flatten()
-            .map(|t| t > now).unwrap_or(false),
-        "active" => row.try_get::<Option<chrono::DateTime<chrono::Utc>>, _>("subscription_active_until").ok().flatten()
-            .map(|t| t > now).unwrap_or(false),
+        "trial" => row
+            .try_get::<Option<chrono::DateTime<chrono::Utc>>, _>("trial_ends_at")
+            .ok()
+            .flatten()
+            .map(|t| t > now)
+            .unwrap_or(false),
+        "active" => row
+            .try_get::<Option<chrono::DateTime<chrono::Utc>>, _>("subscription_active_until")
+            .ok()
+            .flatten()
+            .map(|t| t > now)
+            .unwrap_or(false),
         _ => false,
     })
 }
 
-async fn websocket(stream: WebSocket, state: Arc<AppState>, session_uuid: Option<String>, _model_preference: Option<String>, user_id: Option<i32>) {
+async fn websocket(
+    stream: WebSocket,
+    state: Arc<AppState>,
+    session_uuid: Option<String>,
+    _model_preference: Option<String>,
+    user_id: Option<i32>,
+) {
     let (mut sender, mut receiver) = stream.split();
 
     // Use provided session UUID or generate a new one
     let session_id = session_uuid.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-    tracing::info!("🔌 Started new chat session: {} (user_id: {:?})", session_id, user_id);
+    tracing::info!(
+        "🔌 Started new chat session: {} (user_id: {:?})",
+        session_id,
+        user_id
+    );
 
     // Ensure the session exists in the database, attributed to the authenticated user
     let _ = get_or_create_session(&state, &session_id, user_id).await;
 
     // 🆕 BACKGROUND JOBS: Create progress channel for this WebSocket connection
     let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel();
-    state.job_manager.register_progress_sender(session_id.clone(), progress_tx).await;
+    state
+        .job_manager
+        .register_progress_sender(session_id.clone(), progress_tx)
+        .await;
     tracing::info!("📡 Registered progress updates for session: {}", session_id);
 
     // 🆕 AGENT PROGRESS: Create separate channel for agent thinking/tool calling updates
@@ -201,15 +252,27 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>, session_uuid: Option
     };
 
     if use_claude {
-        tracing::info!("Using Claude AI (Sonnet 4.5) for session: {} [Admin Default]", session_id);
+        tracing::info!(
+            "Using Claude AI (Sonnet 4.5) for session: {} [Admin Default]",
+            session_id
+        );
     } else {
-        tracing::info!("Using Gemini AI (2.5 Flash) for session: {} [Admin Default]", session_id);
+        tracing::info!(
+            "Using Gemini AI (2.5 Flash) for session: {} [Admin Default]",
+            session_id
+        );
     }
 
-    tracing::info!("✅ Initialized video editing agent for session: {}", session_id);
+    tracing::info!(
+        "✅ Initialized video editing agent for session: {}",
+        session_id
+    );
 
     // 🆕 BACKGROUND JOBS: Main event loop - handles both user messages AND progress updates
-    tracing::info!("🔄 Entering WebSocket event loop for session: {}", session_id);
+    tracing::info!(
+        "🔄 Entering WebSocket event loop for session: {}",
+        session_id
+    );
 
     loop {
         tokio::select! {
@@ -297,7 +360,7 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>, session_uuid: Option
             let session_files = get_session_files(&session_id, &state).await.unwrap_or_default();
             let output_videos = get_session_output_videos(&session_id, &state).await.unwrap_or_default();
             let file_context = build_file_context(&session_files, &output_videos);
-            
+
             if !session_files.is_empty() || !output_videos.is_empty() {
                 tracing::info!("Including {} uploaded file(s) and {} output video(s) in AI context for session {}",
                               session_files.len(), output_videos.len(), session_id);
@@ -503,48 +566,68 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>, session_uuid: Option
     }
 
     // Cleanup: Unregister progress sender when WebSocket disconnects
-    state.job_manager.unregister_progress_sender(&session_id).await;
+    state
+        .job_manager
+        .unregister_progress_sender(&session_id)
+        .await;
     tracing::info!("🔌 WebSocket handler exiting for session: {}", session_id);
 }
 
-
 // Get uploaded files for the current session
-async fn get_session_files(session_id: &str, state: &AppState) -> Result<Vec<crate::models::file::UploadedFile>, sqlx::Error> {
+async fn get_session_files(
+    session_id: &str,
+    state: &AppState,
+) -> Result<Vec<crate::models::file::UploadedFile>, sqlx::Error> {
     let files = sqlx::query_as::<_, crate::models::file::UploadedFile>(
         "SELECT uf.* FROM uploaded_files uf 
          JOIN chat_sessions cs ON uf.session_id = cs.id 
          WHERE cs.session_uuid = $1 
-         ORDER BY uf.created_at DESC"
+         ORDER BY uf.created_at DESC",
     )
     .bind(session_id)
     .fetch_all(&state.db_pool)
     .await?;
-    
+
     Ok(files)
 }
 
-async fn get_session_output_videos(session_id: &str, state: &AppState) -> Result<Vec<crate::models::file::OutputVideo>, sqlx::Error> {
+async fn get_session_output_videos(
+    session_id: &str,
+    state: &AppState,
+) -> Result<Vec<crate::models::file::OutputVideo>, sqlx::Error> {
     let output_videos = sqlx::query_as::<_, crate::models::file::OutputVideo>(
         "SELECT ov.* FROM output_videos ov 
          JOIN chat_sessions cs ON ov.session_id = cs.id 
          WHERE cs.session_uuid = $1 AND ov.processing_status = 'completed'
-         ORDER BY ov.created_at DESC"
+         ORDER BY ov.created_at DESC",
     )
     .bind(session_id)
     .fetch_all(&state.db_pool)
     .await?;
-    
+
     Ok(output_videos)
 }
 
+fn output_file_id_from_path(path: &str) -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = DefaultHasher::new();
+    path.hash(&mut hasher);
+    format!("{:x}", hasher.finish())
+}
+
 // Build file context string for AI agent
-fn build_file_context(files: &[crate::models::file::UploadedFile], output_videos: &[crate::models::file::OutputVideo]) -> String {
+fn build_file_context(
+    files: &[crate::models::file::UploadedFile],
+    output_videos: &[crate::models::file::OutputVideo],
+) -> String {
     let mut context = String::new();
-    
+
     // Add uploaded files section
     if !files.is_empty() {
         context.push_str("UPLOADED FILES IN THIS CHAT SESSION:\n");
-        
+
         for (index, file) in files.iter().enumerate() {
             context.push_str(&format!(
                 "{}. \"{}\" - USE THIS PATH: {}\n   - Type: {} ({})\n   - Size: {:.2} MB\n   - Uploaded: {}\n\n",
@@ -558,29 +641,33 @@ fn build_file_context(files: &[crate::models::file::UploadedFile], output_videos
             ));
         }
     }
-    
+
     // Add output videos section
     if !output_videos.is_empty() {
         context.push_str("PREVIOUSLY GENERATED OUTPUT VIDEOS IN THIS SESSION:\n");
-        
+
         for (index, video) in output_videos.iter().enumerate() {
+            let file_id = output_file_id_from_path(&video.file_path);
             context.push_str(&format!(
-                "{}. \"{}\" - USE THIS PATH: {}\n   - Operation: {} using {}\n   - Size: {:.2} MB\n   - Created: {}\n\n",
+                "{}. \"{}\" - USE THIS PATH: {}\n   - Operation: {} using {}\n   - Size: {:.2} MB\n   - Watch link: /api/outputs/stream/{}\n   - Download link: /api/outputs/download/{}\n   - Created: {}\n\n",
                 index + 1,
                 video.file_name,
                 video.file_path,
                 video.operation_type,
                 video.tool_used,
                 video.file_size as f64 / (1024.0 * 1024.0),
+                file_id,
+                file_id,
                 video.created_at.format("%Y-%m-%d %H:%M:%S UTC")
             ));
         }
     }
 
     if !files.is_empty() || !output_videos.is_empty() {
-        context.push_str("CRITICAL INSTRUCTION: When using ANY video editing tool, you MUST use the PATH shown above (the path after 'USE THIS PATH:'). NEVER use just the filename like 'GothamChess.mp4' - always use the full path like 'uploads/uuid_files.mp4'. The tools will FAIL if you use only the filename!\n\n");
+        context.push_str("CRITICAL INSTRUCTION: When using ANY video editing tool, you MUST use the PATH shown above (the path after 'USE THIS PATH:'). NEVER use just the filename like 'GothamChess.mp4' - always use the full path like 'uploads/uuid_files.mp4'. The tools will FAIL if you use only the filename!\n");
+        context.push_str("CRITICAL USER-FACING INSTRUCTION: Internal server paths are for tool execution only. When telling the user where to watch or download a completed output video, prefer the Watch link or Download link shown above instead of exposing the raw internal path.\n\n");
     }
-    
+
     context
 }
 
@@ -588,7 +675,7 @@ fn build_file_context(files: &[crate::models::file::UploadedFile], output_videos
 // Returns the actual provider identifier ("claude" or "gemini"), not the full model name
 async fn get_default_model(pool: &sqlx::PgPool) -> String {
     let result = sqlx::query_scalar::<_, String>(
-        "SELECT setting_value FROM system_settings WHERE setting_key = 'default_ai_model'"
+        "SELECT setting_value FROM system_settings WHERE setting_key = 'default_ai_model'",
     )
     .fetch_optional(pool)
     .await;
@@ -603,16 +690,23 @@ async fn get_default_model(pool: &sqlx::PgPool) -> String {
             "gemini".to_string()
         }
         Err(e) => {
-            tracing::warn!("Failed to fetch default model from settings: {}, using Gemini", e);
+            tracing::warn!(
+                "Failed to fetch default model from settings: {}, using Gemini",
+                e
+            );
             "gemini".to_string()
         }
     }
 }
 
 // Extract file references from user message
-async fn extract_file_references(_message: &str, session_id: &str, state: &AppState) -> Vec<String> {
+async fn extract_file_references(
+    _message: &str,
+    session_id: &str,
+    state: &AppState,
+) -> Vec<String> {
     let mut file_references = Vec::new();
-    
+
     // Get all files for this session
     if let Ok(files) = sqlx::query_scalar::<_, String>(
         "SELECT uf.id FROM uploaded_files uf JOIN chat_sessions cs ON uf.session_id = cs.id WHERE cs.session_uuid = $1"
@@ -625,7 +719,7 @@ async fn extract_file_references(_message: &str, session_id: &str, state: &AppSt
         // In a full implementation, we'd check if the message mentions specific files
         file_references = files;
     }
-    
+
     file_references
 }
 
@@ -636,19 +730,18 @@ async fn get_chat_history(
 ) -> Result<axum::response::Json<serde_json::Value>, axum::http::StatusCode> {
     // CRITICAL: Verify that the session belongs to the authenticated user
     let user_id = claims.sub.parse::<i32>().unwrap_or(0);
-    
+
     // Check if the session belongs to the user
-    let session_owner = sqlx::query_scalar::<_, i32>(
-        "SELECT user_id FROM chat_sessions WHERE session_uuid = $1"
-    )
-    .bind(&session_id)
-    .fetch_optional(&state.db_pool)
-    .await
-    .map_err(|e| {
-        tracing::error!("Failed to verify session ownership: {}", e);
-        axum::http::StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-    
+    let session_owner =
+        sqlx::query_scalar::<_, i32>("SELECT user_id FROM chat_sessions WHERE session_uuid = $1")
+            .bind(&session_id)
+            .fetch_optional(&state.db_pool)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to verify session ownership: {}", e);
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+
     // If session doesn't exist or doesn't belong to the user, return forbidden
     match session_owner {
         Some(owner_id) if owner_id == user_id => {
@@ -656,7 +749,11 @@ async fn get_chat_history(
         }
         Some(_) => {
             // Session exists but belongs to another user
-            tracing::warn!("User {} attempted to access session {} owned by another user", user_id, session_id);
+            tracing::warn!(
+                "User {} attempted to access session {} owned by another user",
+                user_id,
+                session_id
+            );
             return Ok(axum::response::Json(serde_json::json!({
                 "success": false,
                 "message": "Access denied: You don't have permission to view this chat session",
@@ -672,7 +769,7 @@ async fn get_chat_history(
             })));
         }
     }
-    
+
     // Fetch history from PostgreSQL - try conversation_messages first (new schema)
     tracing::debug!("Fetching conversation history for session: {}", session_id);
 
@@ -681,7 +778,7 @@ async fn get_chat_history(
          FROM conversation_messages
          WHERE session_id = (SELECT id FROM chat_sessions WHERE session_uuid = $1)
          ORDER BY created_at ASC
-         LIMIT 200"
+         LIMIT 200",
     )
     .bind(&session_id)
     .fetch_all(&state.db_pool)
@@ -689,11 +786,20 @@ async fn get_chat_history(
 
     match new_messages {
         Ok(msgs) if !msgs.is_empty() => {
-            tracing::info!("Found {} messages in conversation_messages table for session {}", msgs.len(), session_id);
+            tracing::info!(
+                "Found {} messages in conversation_messages table for session {}",
+                msgs.len(),
+                session_id
+            );
 
             // Log all messages for debugging
             for (i, (role, content, _)) in msgs.iter().enumerate() {
-                tracing::debug!("Message {}: role='{}', content_length={}", i, role, content.len());
+                tracing::debug!(
+                    "Message {}: role='{}', content_length={}",
+                    i,
+                    role,
+                    content.len()
+                );
             }
 
             // Reconstruct conversation from role-based messages
@@ -714,7 +820,8 @@ async fn get_chat_history(
                         }
                         current_user_msg = Some((content, timestamp));
                     }
-                    "model" | "assistant" => {  // Handle BOTH "model" (Gemini) and "assistant" (Claude)
+                    "model" | "assistant" => {
+                        // Handle BOTH "model" (Gemini) and "assistant" (Claude)
                         if let Some((user_msg, user_ts)) = current_user_msg.take() {
                             // Pair with previous user message
                             formatted_history.push(serde_json::json!({
@@ -756,20 +863,25 @@ async fn get_chat_history(
         Ok(_) => {
             tracing::info!("No messages found in conversation_messages table for session {}. Falling back to chat_messages", session_id);
 
-            let old_messages = sqlx::query_as::<_, (String, String, chrono::DateTime<chrono::Utc>)>(
-                "SELECT user_message, ai_message, created_at
+            let old_messages =
+                sqlx::query_as::<_, (String, String, chrono::DateTime<chrono::Utc>)>(
+                    "SELECT user_message, ai_message, created_at
                  FROM chat_messages
                  WHERE session_id = (SELECT id FROM chat_sessions WHERE session_uuid = $1)
                  ORDER BY created_at ASC
-                 LIMIT 100"
-            )
-            .bind(&session_id)
-            .fetch_all(&state.db_pool)
-            .await;
+                 LIMIT 100",
+                )
+                .bind(&session_id)
+                .fetch_all(&state.db_pool)
+                .await;
 
             match old_messages {
                 Ok(msgs) if !msgs.is_empty() => {
-                    tracing::info!("Found {} messages in chat_messages table for session {}", msgs.len(), session_id);
+                    tracing::info!(
+                        "Found {} messages in chat_messages table for session {}",
+                        msgs.len(),
+                        session_id
+                    );
                     let formatted_history: Vec<serde_json::Value> = msgs
                         .into_iter()
                         .map(|(user_msg, assistant_msg, timestamp)| {
@@ -789,7 +901,10 @@ async fn get_chat_history(
                     })))
                 }
                 _ => {
-                    tracing::warn!("No messages found in chat_messages table either for session {}", session_id);
+                    tracing::warn!(
+                        "No messages found in chat_messages table either for session {}",
+                        session_id
+                    );
                     Ok(axum::response::Json(serde_json::json!({
                         "success": true,
                         "session_id": session_id,
@@ -799,22 +914,30 @@ async fn get_chat_history(
             }
         }
         Err(e) => {
-            tracing::warn!("Error fetching from conversation_messages: {}. Falling back to chat_messages", e);
+            tracing::warn!(
+                "Error fetching from conversation_messages: {}. Falling back to chat_messages",
+                e
+            );
 
-            let old_messages = sqlx::query_as::<_, (String, String, chrono::DateTime<chrono::Utc>)>(
-                "SELECT user_message, ai_message, created_at
+            let old_messages =
+                sqlx::query_as::<_, (String, String, chrono::DateTime<chrono::Utc>)>(
+                    "SELECT user_message, ai_message, created_at
                  FROM chat_messages
                  WHERE session_id = (SELECT id FROM chat_sessions WHERE session_uuid = $1)
                  ORDER BY created_at ASC
-                 LIMIT 100"
-            )
-            .bind(&session_id)
-            .fetch_all(&state.db_pool)
-            .await;
+                 LIMIT 100",
+                )
+                .bind(&session_id)
+                .fetch_all(&state.db_pool)
+                .await;
 
             match old_messages {
                 Ok(msgs) if !msgs.is_empty() => {
-                    tracing::info!("Found {} messages in chat_messages table for session {}", msgs.len(), session_id);
+                    tracing::info!(
+                        "Found {} messages in chat_messages table for session {}",
+                        msgs.len(),
+                        session_id
+                    );
                     let formatted_history: Vec<serde_json::Value> = msgs
                         .into_iter()
                         .map(|(user_msg, assistant_msg, timestamp)| {
@@ -834,7 +957,10 @@ async fn get_chat_history(
                     })))
                 }
                 Ok(_) => {
-                    tracing::warn!("No messages found in chat_messages table for session {}", session_id);
+                    tracing::warn!(
+                        "No messages found in chat_messages table for session {}",
+                        session_id
+                    );
                     // No messages in either table, return empty
                     Ok(axum::response::Json(serde_json::json!({
                         "success": true,
@@ -843,7 +969,11 @@ async fn get_chat_history(
                     })))
                 }
                 Err(e) => {
-                    tracing::error!("Error fetching from chat_messages table for session {}: {}", session_id, e);
+                    tracing::error!(
+                        "Error fetching from chat_messages table for session {}: {}",
+                        session_id,
+                        e
+                    );
                     // No messages in either table, return empty
                     Ok(axum::response::Json(serde_json::json!({
                         "success": true,
@@ -911,16 +1041,15 @@ async fn get_all_chats(
     let user_id = claims.sub.parse::<i32>().unwrap_or(0);
 
     // Get total count
-    let total_count: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM chat_sessions WHERE user_id = $1"
-    )
-    .bind(user_id)
-    .fetch_one(&state.db_pool)
-    .await
-    .map_err(|e| {
-        tracing::error!("Failed to get chat count: {}", e);
-        axum::http::StatusCode::INTERNAL_SERVER_ERROR
-    })?;
+    let total_count: (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM chat_sessions WHERE user_id = $1")
+            .bind(user_id)
+            .fetch_one(&state.db_pool)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to get chat count: {}", e);
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR
+            })?;
 
     // Get paginated chats
     let rows = sqlx::query_as::<_, (i32, String, String, chrono::DateTime<chrono::Utc>)>(
@@ -928,7 +1057,7 @@ async fn get_all_chats(
          FROM chat_sessions cs
          WHERE cs.user_id = $1
          ORDER BY cs.created_at DESC
-         LIMIT $2 OFFSET $3"
+         LIMIT $2 OFFSET $3",
     )
     .bind(user_id)
     .bind(limit)
@@ -943,13 +1072,12 @@ async fn get_all_chats(
     let mut chats = Vec::new();
     for (id, session_uuid, title, created_at) in rows {
         // Get message count for this session
-        let message_count: (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM conversation_messages WHERE session_id = $1"
-        )
-        .bind(id)
-        .fetch_one(&state.db_pool)
-        .await
-        .unwrap_or((0,));
+        let message_count: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM conversation_messages WHERE session_id = $1")
+                .bind(id)
+                .fetch_one(&state.db_pool)
+                .await
+                .unwrap_or((0,));
 
         chats.push(serde_json::json!({
             "id": id,
@@ -975,11 +1103,15 @@ async fn get_all_chats(
 // ─── Background agent job helpers ────────────────────────────────────────────
 
 /// Create a DB record for a background agent job. Returns the UUID if successful.
-async fn create_agent_job(state: &Arc<AppState>, session_uuid: &str, user_message: &str) -> Option<uuid::Uuid> {
+async fn create_agent_job(
+    state: &Arc<AppState>,
+    session_uuid: &str,
+    user_message: &str,
+) -> Option<uuid::Uuid> {
     sqlx::query_scalar::<_, uuid::Uuid>(
         "INSERT INTO agent_background_jobs (session_uuid, session_id, user_message, status)
          VALUES ($1, (SELECT id FROM chat_sessions WHERE session_uuid = $1 LIMIT 1), $2, 'running')
-         RETURNING id"
+         RETURNING id",
     )
     .bind(session_uuid)
     .bind(user_message)
@@ -1017,7 +1149,7 @@ async fn append_job_progress(state: &Arc<AppState>, job_id: uuid::Uuid, message:
     let _ = sqlx::query(
         "UPDATE agent_background_jobs
          SET progress_log = progress_log || $2::jsonb, updated_at = NOW()
-         WHERE id = $1"
+         WHERE id = $1",
     )
     .bind(job_id)
     .bind(serde_json::json!([entry]))
@@ -1032,7 +1164,7 @@ async fn get_running_agent_job_status(state: &Arc<AppState>, session_uuid: &str)
         "SELECT id, user_message, created_at
          FROM agent_background_jobs
          WHERE session_uuid = $1 AND status = 'running'
-         ORDER BY created_at DESC LIMIT 1"
+         ORDER BY created_at DESC LIMIT 1",
     )
     .bind(session_uuid)
     .fetch_optional(&state.db_pool)
@@ -1066,7 +1198,10 @@ async fn run_agent_background(
     job_manager: std::sync::Arc<crate::jobs::JobManager>,
     agent_progress_tx: tokio::sync::mpsc::UnboundedSender<String>,
 ) {
-    tracing::info!("🚀 Background agent task started for session: {}", session_id);
+    tracing::info!(
+        "🚀 Background agent task started for session: {}",
+        session_id
+    );
 
     // Proxy for agent progress: forward to WebSocket channel AND save to DB
     let (proxy_tx, mut proxy_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
@@ -1087,14 +1222,17 @@ async fn run_agent_background(
     let response = if use_claude {
         if let Some(ref claude_client) = state.claude_client {
             let agent = StatefulClaudeAgent::new(Arc::new(claude_client.clone()));
-            match agent.chat(
-                &text,
-                &session_id,
-                enhanced_query,
-                state.clone(),
-                job_manager.clone(),
-                Some(proxy_tx),
-            ).await {
+            match agent
+                .chat(
+                    &text,
+                    &session_id,
+                    enhanced_query,
+                    state.clone(),
+                    job_manager.clone(),
+                    Some(proxy_tx),
+                )
+                .await
+            {
                 Ok(resp) => resp,
                 Err(e) => format!("Sorry, I encountered an error: {}", e),
             }
@@ -1102,16 +1240,23 @@ async fn run_agent_background(
             "Claude client not configured".to_string()
         }
     } else {
-        if let Some(gemini_client) = state.video_gemini_client.as_ref().or(state.gemini_client.as_ref()) {
+        if let Some(gemini_client) = state
+            .video_gemini_client
+            .as_ref()
+            .or(state.gemini_client.as_ref())
+        {
             let agent = StatefulGeminiAgent::new(Arc::new(gemini_client.clone()));
-            match agent.chat(
-                &text,
-                &session_id,
-                enhanced_query,
-                state.clone(),
-                job_manager.clone(),
-                Some(proxy_tx),
-            ).await {
+            match agent
+                .chat(
+                    &text,
+                    &session_id,
+                    enhanced_query,
+                    state.clone(),
+                    job_manager.clone(),
+                    Some(proxy_tx),
+                )
+                .await
+            {
                 Ok(resp) => resp,
                 Err(e) => format!("Sorry, I encountered an error: {}", e),
             }
@@ -1120,7 +1265,10 @@ async fn run_agent_background(
         }
     };
 
-    tracing::info!("✅ Background agent task completed for session: {}", session_id);
+    tracing::info!(
+        "✅ Background agent task completed for session: {}",
+        session_id
+    );
 
     // Mark job as completed in DB (also saves result so polling works after reconnect)
     if let Some(jid) = job_id {
@@ -1132,7 +1280,9 @@ async fn run_agent_background(
     // The WebSocket loop handles JobStatus::Completed by sending `result` as a chat message.
     if !response.is_empty() {
         let update = crate::jobs::ProgressUpdate::new(
-            job_id.map(|j| j.to_string()).unwrap_or_else(|| session_id.clone()),
+            job_id
+                .map(|j| j.to_string())
+                .unwrap_or_else(|| session_id.clone()),
             "Agent task complete".to_string(),
             crate::jobs::JobStatus::Completed {
                 result: response,
@@ -1155,42 +1305,58 @@ async fn get_session_jobs(
     // get_or_create_session) so a strict owner == JWT user_id check always fails.
     // Any authenticated user who holds the correct UUID can poll it — this matches
     // how most UUID-keyed APIs work (UUID is the unforgeable capability).
-    let exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM chat_sessions WHERE session_uuid = $1)"
-    )
-    .bind(&session_uuid)
-    .fetch_one(&state.db_pool)
-    .await
-    .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
+    let exists: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM chat_sessions WHERE session_uuid = $1)")
+            .bind(&session_uuid)
+            .fetch_one(&state.db_pool)
+            .await
+            .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
 
     if !exists {
         return Err(axum::http::StatusCode::NOT_FOUND);
     }
 
-    let rows = sqlx::query_as::<_, (uuid::Uuid, String, String, Option<String>, Option<String>, serde_json::Value, chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)>(
+    let rows = sqlx::query_as::<
+        _,
+        (
+            uuid::Uuid,
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+            serde_json::Value,
+            chrono::DateTime<chrono::Utc>,
+            chrono::DateTime<chrono::Utc>,
+        ),
+    >(
         "SELECT id, user_message, status, result, error, progress_log, created_at, updated_at
          FROM agent_background_jobs
          WHERE session_uuid = $1
          ORDER BY created_at DESC
-         LIMIT 20"
+         LIMIT 20",
     )
     .bind(&session_uuid)
     .fetch_all(&state.db_pool)
     .await
     .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let jobs: Vec<serde_json::Value> = rows.into_iter().map(|(id, msg, status, result, error, progress_log, created_at, updated_at)| {
-        serde_json::json!({
-            "id": id,
-            "user_message": msg,
-            "status": status,
-            "result": result,
-            "error": error,
-            "progress_log": progress_log,
-            "created_at": created_at.to_rfc3339(),
-            "updated_at": updated_at.to_rfc3339(),
-        })
-    }).collect();
+    let jobs: Vec<serde_json::Value> = rows
+        .into_iter()
+        .map(
+            |(id, msg, status, result, error, progress_log, created_at, updated_at)| {
+                serde_json::json!({
+                    "id": id,
+                    "user_message": msg,
+                    "status": status,
+                    "result": result,
+                    "error": error,
+                    "progress_log": progress_log,
+                    "created_at": created_at.to_rfc3339(),
+                    "updated_at": updated_at.to_rfc3339(),
+                })
+            },
+        )
+        .collect();
 
     Ok(axum::response::Json(serde_json::json!({
         "success": true,

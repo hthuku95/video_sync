@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import base64
+import logging
 import os
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -19,6 +22,9 @@ except Exception as exc:  # pragma: no cover - import guard for lightweight depl
     IMPORT_ERROR = str(exc)
 else:
     IMPORT_ERROR = None
+
+logger = logging.getLogger(__name__)
+_runtime_lock = asyncio.Lock()
 
 
 app = FastAPI(
@@ -96,6 +102,18 @@ def maybe_convert_audio(local_path: Path, output_format: str) -> Path:
     return converted_path
 
 
+def _tts_job_id(req: TtsRequest) -> str:
+    return req.job_id or str(uuid4())
+
+
+def _transcribe_job_id(req: TranscribeRequest) -> str:
+    return req.job_id or str(uuid4())
+
+
+def _error_detail(kind: str, *, job_id: str, exc: Exception) -> str:
+    return f"{kind} failed for job {job_id}: {type(exc).__name__}: {exc}"
+
+
 @app.get("/health")
 def health() -> dict[str, Any]:
     runtime_obj = VibeVoiceRuntime.from_env() if VibeVoiceRuntime is not None else None
@@ -135,17 +153,51 @@ async def text_to_speech(req: TtsRequest) -> dict[str, Any]:
     if not req.text.strip():
         raise HTTPException(status_code=400, detail="text is required")
 
-    result = await runtime().text_to_speech(
-        text=req.text,
-        speaker=req.speaker or "Emma",
-        output_format=req.format,
-        job_id=req.job_id or str(uuid4()),
-        metadata=req.metadata,
+    job_id = _tts_job_id(req)
+    speaker = req.speaker or "Emma"
+    started = time.monotonic()
+    logger.info(
+        "vibevoice.tts.start job_id=%s speaker=%s format=%s text_length=%s",
+        job_id,
+        speaker,
+        req.format,
+        len(req.text),
     )
-    local_path = result.get("local_path")
-    if local_path:
-        converted = maybe_convert_audio(Path(local_path), req.format)
-        result["local_path"] = str(converted)
+
+    try:
+        async with _runtime_lock:
+            result = await runtime().text_to_speech(
+                text=req.text,
+                speaker=speaker,
+                output_format=req.format,
+                job_id=job_id,
+                metadata=req.metadata,
+            )
+        local_path = result.get("local_path")
+        if local_path:
+            converted = maybe_convert_audio(Path(local_path), req.format)
+            result["local_path"] = str(converted)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception(
+            "vibevoice.tts.failed job_id=%s speaker=%s format=%s text_length=%s elapsed=%.2fs",
+            job_id,
+            speaker,
+            req.format,
+            len(req.text),
+            time.monotonic() - started,
+        )
+        raise HTTPException(status_code=500, detail=_error_detail("TTS inference", job_id=job_id, exc=exc)) from exc
+
+    logger.info(
+        "vibevoice.tts.success job_id=%s speaker=%s format=%s text_length=%s elapsed=%.2fs",
+        job_id,
+        speaker,
+        req.format,
+        len(req.text),
+        time.monotonic() - started,
+    )
     return {"success": True, **result}
 
 
@@ -154,6 +206,16 @@ async def transcribe(req: TranscribeRequest) -> dict[str, Any]:
     if not req.audio_url.startswith(("https://", "http://")):
         raise HTTPException(status_code=400, detail="audio_url must be http(s)")
 
+    job_id = _transcribe_job_id(req)
+    started = time.monotonic()
+    logger.info(
+        "vibevoice.asr.start job_id=%s audio_url=%s hotwords=%s language=%s",
+        job_id,
+        req.audio_url,
+        len(req.hotwords),
+        req.language or "",
+    )
+
     with tempfile.TemporaryDirectory(prefix="videosync-vibevoice-") as tmp:
         audio_path = Path(tmp) / "input_audio"
         async with httpx.AsyncClient(timeout=120.0, follow_redirects=True) as client:
@@ -161,14 +223,35 @@ async def transcribe(req: TranscribeRequest) -> dict[str, Any]:
             response.raise_for_status()
             audio_path.write_bytes(response.content)
 
-        result = await runtime().transcribe(
-            audio_path=audio_path,
-            hotwords=req.hotwords,
-            language=req.language,
-            context_info=req.context_info,
-            job_id=req.job_id or str(uuid4()),
-            metadata=req.metadata,
-        )
+        try:
+            async with _runtime_lock:
+                result = await runtime().transcribe(
+                    audio_path=audio_path,
+                    hotwords=req.hotwords,
+                    language=req.language,
+                    context_info=req.context_info,
+                    job_id=job_id,
+                    metadata=req.metadata,
+                )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.exception(
+                "vibevoice.asr.failed job_id=%s hotwords=%s language=%s elapsed=%.2fs",
+                job_id,
+                len(req.hotwords),
+                req.language or "",
+                time.monotonic() - started,
+            )
+            raise HTTPException(status_code=500, detail=_error_detail("ASR inference", job_id=job_id, exc=exc)) from exc
+
+    logger.info(
+        "vibevoice.asr.success job_id=%s hotwords=%s language=%s elapsed=%.2fs",
+        job_id,
+        len(req.hotwords),
+        req.language or "",
+        time.monotonic() - started,
+    )
     return {"success": True, **result}
 
 

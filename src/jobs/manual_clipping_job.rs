@@ -4,9 +4,7 @@
 //   - Uploads clips to R2 and returns presigned download URLs
 
 use crate::clipping::{
-    ai_clipper::AiClipper,
-    apify_client::ApifyClient,
-    gemini_video_analyzer::VideoAnalysis,
+    ai_clipper::AiClipper, apify_client::ApifyClient, gemini_video_analyzer::VideoAnalysis,
 };
 use crate::AppState;
 use sqlx::Row;
@@ -100,13 +98,22 @@ pub async fn execute_manual_clipping_job(
 
         match gemini_result {
             Ok(a) => a,
-            Err(e) if e.to_string().contains("429") || e.to_string().to_lowercase().contains("quota") => {
+            Err(e)
+                if e.to_string().contains("429")
+                    || e.to_string().to_lowercase().contains("quota") =>
+            {
                 tracing::warn!("⚠️ Gemini 429 on manual clipping (YouTube URL), trying video_gemini_client: {}", e);
                 // Tier 2: video_gemini_client (VIDEO_GEMINI_API_KEY — separate quota pool)
                 let video_gemini_result = if let Some(vg) = app_state.video_gemini_client.as_ref() {
                     tokio::time::timeout(
                         tokio::time::Duration::from_secs(240),
-                        vg.analyze_video_from_url(&video_url, clips_requested as usize, min_dur as f64, max_dur as f64, &[]),
+                        vg.analyze_video_from_url(
+                            &video_url,
+                            clips_requested as usize,
+                            min_dur as f64,
+                            max_dur as f64,
+                            &[],
+                        ),
                     )
                     .await
                     .ok()
@@ -115,7 +122,9 @@ pub async fn execute_manual_clipping_job(
                     None
                 };
                 if let Some(a) = video_gemini_result {
-                    tracing::info!("✅ video_gemini_client fallback succeeded for YouTube analysis");
+                    tracing::info!(
+                        "✅ video_gemini_client fallback succeeded for YouTube analysis"
+                    );
                     a
                 } else {
                     // Tier 3: BlenderMCPServer (BLENDER_GEMINI_API_KEY — fully isolated quota)
@@ -125,7 +134,10 @@ pub async fn execute_manual_clipping_job(
                             .await
                             .map_err(|be| format!("All Gemini tiers exhausted (429); BlenderMCP fallback also failed: {}", be))?
                     } else {
-                        return Err(format!("Gemini analysis failed (429 quota): {}. No fallback configured.", e));
+                        return Err(format!(
+                            "Gemini analysis failed (429 quota): {}. No fallback configured.",
+                            e
+                        ));
                     }
                 }
             }
@@ -166,13 +178,25 @@ pub async fn execute_manual_clipping_job(
 
         match local_analysis_result {
             Ok(a) => a,
-            Err(e) if e.to_string().contains("429") || e.to_string().to_lowercase().contains("quota") => {
-                tracing::warn!("⚠️ Gemini 429 on Twitch local analysis, trying video_gemini_client: {}", e);
+            Err(e)
+                if e.to_string().contains("429")
+                    || e.to_string().to_lowercase().contains("quota") =>
+            {
+                tracing::warn!(
+                    "⚠️ Gemini 429 on Twitch local analysis, trying video_gemini_client: {}",
+                    e
+                );
                 // Tier 2: video_gemini_client (VIDEO_GEMINI_API_KEY — separate quota pool)
                 let video_gemini_result = if let Some(vg) = app_state.video_gemini_client.as_ref() {
                     tokio::time::timeout(
                         tokio::time::Duration::from_secs(300),
-                        vg.analyze_video_from_local_file(&dl_path, clips_requested as usize, min_dur as f64, max_dur as f64, &[]),
+                        vg.analyze_video_from_local_file(
+                            &dl_path,
+                            clips_requested as usize,
+                            min_dur as f64,
+                            max_dur as f64,
+                            &[],
+                        ),
                     )
                     .await
                     .ok()
@@ -181,21 +205,29 @@ pub async fn execute_manual_clipping_job(
                     None
                 };
                 if let Some(a) = video_gemini_result {
-                    tracing::info!("✅ video_gemini_client fallback succeeded for Twitch local analysis");
+                    tracing::info!(
+                        "✅ video_gemini_client fallback succeeded for Twitch local analysis"
+                    );
                     a
                 } else {
                     // Tier 3: BlenderMCPServer via R2 presigned URL (BLENDER_GEMINI_API_KEY — fully isolated quota)
                     tracing::warn!("⚠️ video_gemini_client also failed or unavailable, uploading to R2 for BlenderMCP fallback");
-                    if let (Some(blender), Some(r2)) = (app_state.blender_mcp_client.as_ref(), app_state.r2_client.as_ref()) {
-                    let r2_key = format!("temp/manual_clipping/{}.mp4", job_id);
-                    r2.upload(&dl_path, &r2_key)
-                        .await
-                        .map_err(|re| format!("R2 upload for BlenderMCP fallback failed: {}", re))?;
-                    let presigned_url = r2.presign_get(&r2_key, 3600)
-                        .await
-                        .map_err(|re| format!("R2 presign for BlenderMCP fallback failed: {}", re))?;
-                    tracing::info!("📤 Uploaded Twitch VOD to R2 for BlenderMCP analysis: {}", r2_key);
-                    blender.analyze_video(
+                    if let (Some(blender), Some(r2)) = (
+                        app_state.blender_mcp_client.as_ref(),
+                        app_state.r2_client.as_ref(),
+                    ) {
+                        let r2_key = format!("temp/manual_clipping/{}.mp4", job_id);
+                        r2.upload(&dl_path, &r2_key).await.map_err(|re| {
+                            format!("R2 upload for BlenderMCP fallback failed: {}", re)
+                        })?;
+                        let presigned_url = r2.presign_get(&r2_key, 3600).await.map_err(|re| {
+                            format!("R2 presign for BlenderMCP fallback failed: {}", re)
+                        })?;
+                        tracing::info!(
+                            "📤 Uploaded Twitch VOD to R2 for BlenderMCP analysis: {}",
+                            r2_key
+                        );
+                        blender.analyze_video(
                         &presigned_url,
                         clips_requested as u32,
                         min_dur as f64,
@@ -204,9 +236,9 @@ pub async fn execute_manual_clipping_job(
                     )
                     .await
                     .map_err(|be| format!("Gemini 429 on local Twitch analysis; BlenderMCP fallback also failed: {}", be))?
-                } else {
-                    return Err(format!("Gemini local analysis failed (429 quota): {}. No BlenderMCP/R2 fallback available.", e));
-                }
+                    } else {
+                        return Err(format!("Gemini local analysis failed (429 quota): {}. No BlenderMCP/R2 fallback available.", e));
+                    }
                 }
             }
             Err(e) => return Err(format!("Gemini local analysis failed: {}", e)),
@@ -232,7 +264,14 @@ pub async fn execute_manual_clipping_job(
          WHERE id = $3",
     )
     .bind(&moments_json)
-    .bind(analysis.video_summary.lines().next().unwrap_or("").to_string())
+    .bind(
+        analysis
+            .video_summary
+            .lines()
+            .next()
+            .unwrap_or("")
+            .to_string(),
+    )
     .bind(job_id)
     .execute(&app_state.db_pool)
     .await
@@ -287,10 +326,36 @@ pub async fn execute_manual_clipping_job(
         .abs();
 
     let clipper = AiClipper::new(app_state.clone());
-    let clips = clipper
+    let mut clips = clipper
         .extract_clips_from_moments(pseudo_job_id, &video_path, &moments, &analysis.content_type)
         .await
         .map_err(|e| format!("Clip extraction failed: {}", e))?;
+
+    let min_duration = min_dur as f64;
+    let max_duration = max_dur as f64;
+    let before_duration_filter = clips.len();
+    clips.retain(|clip| {
+        clip.duration_seconds >= min_duration && clip.duration_seconds <= max_duration
+    });
+
+    if clips.len() != before_duration_filter {
+        tracing::warn!(
+            "Manual clipping job {} dropped {} clip(s) outside configured duration bounds (min={}s, max={}s)",
+            job_id,
+            before_duration_filter.saturating_sub(clips.len()),
+            min_dur,
+            max_dur
+        );
+    }
+
+    if clips.is_empty() {
+        let msg = format!(
+            "All extracted clips were outside configured duration bounds (min={}s, max={}s)",
+            min_dur, max_dur
+        );
+        update_status(job_id, "failed", 0, Some(&msg), &app_state.db_pool).await?;
+        return Err(msg);
+    }
 
     // =========================================================================
     // Phase D: AI Agent enhancement — runs the full 320-tool Gemini agent on
@@ -298,13 +363,20 @@ pub async fn execute_manual_clipping_job(
     // audio normalization, etc. before the clips are uploaded.
     // Best-effort: failures are logged but do not abort the job.
     // =========================================================================
-    if let Some(gemini) = app_state.manual_clipping_gemini_client.as_ref().or(app_state.gemini_client.as_ref()) {
+    if let Some(gemini) = app_state
+        .manual_clipping_gemini_client
+        .as_ref()
+        .or(app_state.gemini_client.as_ref())
+    {
         update_status(job_id, "enhancing", 65, None, &app_state.db_pool).await?;
-        tracing::info!("🤖 Phase D: AI agent enhancing {} clips with 320 tools", clips.len());
-
-        let agent = crate::agent::simple_gemini_agent::SimpleGeminiAgent::new(
-            std::sync::Arc::new(gemini.clone()),
+        tracing::info!(
+            "🤖 Phase D: AI agent enhancing {} clips with 320 tools",
+            clips.len()
         );
+
+        let agent = crate::agent::simple_gemini_agent::SimpleGeminiAgent::new(std::sync::Arc::new(
+            gemini.clone(),
+        ));
 
         for (i, clip) in clips.iter().enumerate() {
             let clip_path = &clip.local_clip_path;
@@ -344,7 +416,9 @@ pub async fn execute_manual_clipping_job(
                     i + 1,
                     result.chars().take(100).collect::<String>()
                 ),
-                Ok(Err(e)) => tracing::warn!("⚠️  Clip {} enhancement failed (non-fatal): {}", i + 1, e),
+                Ok(Err(e)) => {
+                    tracing::warn!("⚠️  Clip {} enhancement failed (non-fatal): {}", i + 1, e)
+                }
                 Err(_) => tracing::warn!("⚠️  Clip {} enhancement timed out (non-fatal)", i + 1),
             }
         }
@@ -373,8 +447,12 @@ pub async fn execute_manual_clipping_job(
         // Upload clip
         let (clip_url, clip_expires) = match r2.upload(&clip.local_clip_path, &clip_key).await {
             Ok(()) => {
-                let url = r2.presign_get(&clip_key, seven_days_secs).await.unwrap_or_default();
-                let expires = chrono::Utc::now() + chrono::Duration::seconds(seven_days_secs as i64);
+                let url = r2
+                    .presign_get(&clip_key, seven_days_secs)
+                    .await
+                    .unwrap_or_default();
+                let expires =
+                    chrono::Utc::now() + chrono::Duration::seconds(seven_days_secs as i64);
                 (Some(url), Some(expires))
             }
             Err(e) => {
@@ -388,7 +466,10 @@ pub async fn execute_manual_clipping_job(
             Some(tp) if std::path::Path::new(tp).exists() => {
                 match r2.upload(tp, &thumb_key).await {
                     Ok(()) => {
-                        let url = r2.presign_get(&thumb_key, seven_days_secs).await.unwrap_or_default();
+                        let url = r2
+                            .presign_get(&thumb_key, seven_days_secs)
+                            .await
+                            .unwrap_or_default();
                         (Some(url), Some(thumb_key.clone()))
                     }
                     Err(e) => {
@@ -450,6 +531,10 @@ pub async fn execute_manual_clipping_job(
         }
     }
 
-    tracing::info!("✅ Manual clipping job {} completed: {} clips", job_id, clips.len());
+    tracing::info!(
+        "✅ Manual clipping job {} completed: {} clips",
+        job_id,
+        clips.len()
+    );
     Ok(format!("{} clips generated", clips.len()))
 }

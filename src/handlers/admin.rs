@@ -1,16 +1,16 @@
-use crate::models::{admin::*, auth::*};
 use crate::middleware::admin::{admin_middleware, superuser_middleware};
 use crate::middleware::auth::auth_middleware;
+use crate::models::{admin::*, auth::*};
 use crate::AppState;
 use axum::{
     extract::{Extension, Path, Query},
     http::StatusCode,
     response::{Html, Json},
-    routing::{get, post, put, delete},
+    routing::{delete, get, post, put},
     Router,
 };
-use bcrypt::{hash, DEFAULT_COST};
 use base64::Engine;
+use bcrypt::{hash, DEFAULT_COST};
 use serde::Deserialize;
 use serde_json::json;
 use sqlx::{FromRow, Row};
@@ -25,14 +25,23 @@ pub fn admin_routes() -> Router {
         .route("/admin/dashboard", get(admin_dashboard))
         .route("/admin/users", get(admin_users_list))
         .route("/admin/users/:id", get(admin_user_detail))
-        .route("/admin/clipping-activity", get(admin_clipping_activity_page))
+        .route(
+            "/admin/clipping-activity",
+            get(admin_clipping_activity_page),
+        )
         .route("/admin/clipping-jobs", get(admin_clipping_jobs_page))
         .route("/admin/performance", get(admin_performance_page))
         .route("/admin/test-runs", get(admin_test_runs_page))
         .route("/admin/test-runs/:id", get(admin_test_run_detail_page))
         .route("/admin/deliveries", get(admin_deliveries_page))
-        .route("/admin/portfolio-samples", get(admin_portfolio_samples_page))
-        .route("/admin/monetization-guide", get(admin_monetization_guide_page))
+        .route(
+            "/admin/portfolio-samples",
+            get(admin_portfolio_samples_page),
+        )
+        .route(
+            "/admin/monetization-guide",
+            get(admin_monetization_guide_page),
+        )
         .route("/admin/revenue-ledger", get(admin_revenue_ledger_page))
         .route("/admin/how-it-works", get(admin_how_it_works_page))
         .route("/delivery/:id", get(delivery_page))
@@ -40,8 +49,8 @@ pub fn admin_routes() -> Router {
         // signed USDC payment in the X-Payment header, not via JWT.
         .route("/delivery/:id/unlock-spec", get(delivery_unlock_spec))
         .route("/delivery/:id/unlock", post(delivery_unlock));
-    
-    // API endpoints - protected routes with JWT authentication  
+
+    // API endpoints - protected routes with JWT authentication
     let protected_admin = Router::new()
         .route("/admin/users", post(admin_create_user))
         .route("/admin/users/:id", put(admin_update_user))
@@ -50,14 +59,23 @@ pub fn admin_routes() -> Router {
         .route("/api/admin/users", get(admin_users_api))
         .route("/api/admin/users/:id", get(admin_user_api))
         .route("/api/admin/users/:id", put(admin_update_user_api))
-        .route("/api/admin/users/:id/toggle-active", post(admin_toggle_user_active))
+        .route(
+            "/api/admin/users/:id/toggle-active",
+            post(admin_toggle_user_active),
+        )
         .route("/api/admin/users/:id/make-staff", post(admin_make_staff))
-        .route("/api/admin/users/:id/remove-staff", post(admin_remove_staff))
+        .route(
+            "/api/admin/users/:id/remove-staff",
+            post(admin_remove_staff),
+        )
         .route("/api/admin/whitelist/status", get(get_whitelist_status))
         .route("/api/admin/whitelist/toggle", post(toggle_whitelist))
         .route("/api/admin/whitelist/emails", get(get_whitelist_emails))
         .route("/api/admin/whitelist/emails", post(add_whitelist_email))
-        .route("/api/admin/whitelist/emails/:id", delete(remove_whitelist_email))
+        .route(
+            "/api/admin/whitelist/emails/:id",
+            delete(remove_whitelist_email),
+        )
         .route("/api/admin/pricing", get(get_model_pricing))
         .route("/api/admin/pricing", post(update_model_pricing))
         .route("/api/admin/default-model", get(get_default_model))
@@ -65,35 +83,83 @@ pub fn admin_routes() -> Router {
         .route("/api/admin/youtube/status", get(get_youtube_feature_status))
         .route("/api/admin/youtube/toggle", post(toggle_youtube_features))
         .route("/api/admin/clipping/stats", get(admin_clipping_stats))
-        .route("/api/admin/clipping/user/:user_id/details", get(admin_user_clipping_details))
+        .route(
+            "/api/admin/clipping/user/:user_id/details",
+            get(admin_user_clipping_details),
+        )
         .route("/api/admin/clipping/jobs", get(admin_list_all_jobs))
         .route("/api/admin/clipping/jobs/:id", get(admin_get_job_details))
         .route("/api/admin/clipping/jobs/:id/retry", post(admin_retry_job))
-        .route("/api/admin/clipping/jobs/:id/cancel", post(admin_cancel_job))
-        .route("/api/admin/clipping/jobs/:id/clips", get(admin_get_job_clips))
-        .route("/api/admin/clipping/throughput", get(admin_clipping_throughput))
-        .route("/api/admin/performance/viral-factors", get(admin_viral_factor_performance))
-        .route("/api/admin/performance/channel-health", get(admin_channel_health))
-        .route("/api/admin/performance/recommendations", get(admin_learning_recommendations))
-        .route("/api/admin/performance/thumbnails", get(admin_thumbnail_stats))
-        .route("/api/admin/test-runs", get(api_list_test_runs).post(api_trigger_test_run))
+        .route(
+            "/api/admin/clipping/jobs/:id/cancel",
+            post(admin_cancel_job),
+        )
+        .route(
+            "/api/admin/clipping/jobs/:id/clips",
+            get(admin_get_job_clips),
+        )
+        .route(
+            "/api/admin/clipping/throughput",
+            get(admin_clipping_throughput),
+        )
+        .route(
+            "/api/admin/performance/viral-factors",
+            get(admin_viral_factor_performance),
+        )
+        .route(
+            "/api/admin/performance/channel-health",
+            get(admin_channel_health),
+        )
+        .route(
+            "/api/admin/performance/recommendations",
+            get(admin_learning_recommendations),
+        )
+        .route(
+            "/api/admin/performance/thumbnails",
+            get(admin_thumbnail_stats),
+        )
+        .route(
+            "/api/admin/test-runs",
+            get(api_list_test_runs).post(api_trigger_test_run),
+        )
         .route("/api/admin/test-runs/:id", get(api_get_test_run))
-        .route("/api/admin/manual-clipping-tests/trigger", post(api_trigger_manual_clipping_test))
-        .route("/api/admin/reference-assets/normalize", post(api_normalize_reference_asset))
-        .route("/api/admin/deliveries", get(api_list_deliveries).post(api_create_delivery))
-        .route("/api/admin/portfolio-samples", get(api_list_portfolio_samples))
-        .route("/api/admin/portfolio-samples/crypto-saas", post(api_generate_crypto_saas_portfolio_samples))
+        .route(
+            "/api/admin/manual-clipping-tests/trigger",
+            post(api_trigger_manual_clipping_test),
+        )
+        .route(
+            "/api/admin/reference-assets/normalize",
+            post(api_normalize_reference_asset),
+        )
+        .route(
+            "/api/admin/deliveries",
+            get(api_list_deliveries).post(api_create_delivery),
+        )
+        .route(
+            "/api/admin/portfolio-samples",
+            get(api_list_portfolio_samples),
+        )
+        .route(
+            "/api/admin/portfolio-samples/crypto-saas",
+            post(api_generate_crypto_saas_portfolio_samples),
+        )
         .route("/api/admin/revenue-ledger", get(api_revenue_ledger))
         .layer(axum::middleware::from_fn(admin_middleware))
         .layer(axum::middleware::from_fn(auth_middleware));
-    
+
     let superuser_only = Router::new()
-        .route("/api/admin/users/:id/make-superuser", post(admin_make_superuser))
-        .route("/api/admin/users/:id/remove-superuser", post(admin_remove_superuser))
+        .route(
+            "/api/admin/users/:id/make-superuser",
+            post(admin_make_superuser),
+        )
+        .route(
+            "/api/admin/users/:id/remove-superuser",
+            post(admin_remove_superuser),
+        )
         .route("/api/admin/create-superuser", post(create_superuser_api))
         .layer(axum::middleware::from_fn(superuser_middleware))
         .layer(axum::middleware::from_fn(auth_middleware));
-    
+
     public_admin.merge(protected_admin).merge(superuser_only)
 }
 
@@ -231,7 +297,7 @@ pub async fn admin_login_page() -> Html<String> {
 </body>
 </html>
     "###;
-    
+
     Html(html.to_string())
 }
 
@@ -294,6 +360,7 @@ pub async fn admin_dashboard() -> Html<String> {
             <li><a href="/admin/clipping-activity">🎬 Clipping Activity</a></li>
             <li><a href="/admin/performance">📈 Performance</a></li>
             <li><a href="/admin/test-runs">🧪 Portfolio Tests</a></li>
+            <li><a href="/admin/portfolio-samples">🧠 Portfolio Samples</a></li>
             <li><a href="/admin/prospect-finder">🎯 Prospect Finder</a></li>
             <li><a href="/admin/monetization-guide">💰 Monetization Guide</a></li>
             <li><a href="/admin/revenue-ledger">💸 Revenue Ledger</a></li>
@@ -939,32 +1006,35 @@ pub async fn admin_dashboard() -> Html<String> {
 </body>
 </html>
     "###;
-    
+
     Html(html.to_string())
 }
 
 // API Endpoints
-pub async fn admin_stats_api(Extension(state): Extension<Arc<AppState>>) -> Result<Json<serde_json::Value>, StatusCode> {
+pub async fn admin_stats_api(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
     let total_users = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users")
         .fetch_one(&state.db_pool)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    
-    let active_users = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users WHERE is_active = true")
-        .fetch_one(&state.db_pool)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    
+
+    let active_users =
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users WHERE is_active = true")
+            .fetch_one(&state.db_pool)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
     let total_chat_sessions = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM chat_sessions")
         .fetch_one(&state.db_pool)
         .await
         .unwrap_or(0);
-    
+
     let total_files = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM uploaded_files")
         .fetch_one(&state.db_pool)
         .await
         .unwrap_or(0);
-    
+
     Ok(Json(json!({
         "success": true,
         "stats": {
@@ -978,7 +1048,7 @@ pub async fn admin_stats_api(Extension(state): Extension<Arc<AppState>>) -> Resu
 
 pub async fn admin_users_api(
     Query(params): Query<UsersQuery>,
-    Extension(state): Extension<Arc<AppState>>
+    Extension(state): Extension<Arc<AppState>>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let page = params.page.unwrap_or(1);
     let limit = params.limit.unwrap_or(20);
@@ -991,7 +1061,7 @@ pub async fn admin_users_api(
                   created_at, subscription_status, subscription_tier, \
                   trial_ends_at, subscription_active_until, last_payment_at \
                   FROM users";
-    let mut query       = select.to_string();
+    let mut query = select.to_string();
     let mut count_query = "SELECT COUNT(*) FROM users".to_string();
 
     if params.search.is_some() {
@@ -999,15 +1069,24 @@ pub async fn admin_users_api(
         query.push_str(where_clause);
         count_query.push_str(where_clause);
     }
-    query.push_str(&format!(" ORDER BY created_at DESC LIMIT {} OFFSET {}", limit, offset));
+    query.push_str(&format!(
+        " ORDER BY created_at DESC LIMIT {} OFFSET {}",
+        limit, offset
+    ));
 
     let rows = if let Some(search) = &params.search {
         let term = format!("%{}%", search);
-        sqlx::query(&query).bind(&term).fetch_all(&state.db_pool).await
+        sqlx::query(&query)
+            .bind(&term)
+            .fetch_all(&state.db_pool)
+            .await
     } else {
         sqlx::query(&query).fetch_all(&state.db_pool).await
     }
-    .map_err(|e| { tracing::error!("admin_users_api query failed: {}", e); StatusCode::INTERNAL_SERVER_ERROR })?;
+    .map_err(|e| {
+        tracing::error!("admin_users_api query failed: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
 
     let users: Vec<serde_json::Value> = rows.iter().map(|r| {
         let to_iso = |t: Option<chrono::DateTime<chrono::Utc>>| t.map(|d| d.to_rfc3339());
@@ -1029,11 +1108,19 @@ pub async fn admin_users_api(
 
     let total_count: i64 = if let Some(search) = &params.search {
         let term = format!("%{}%", search);
-        sqlx::query_scalar(&count_query).bind(&term).fetch_one(&state.db_pool).await
+        sqlx::query_scalar(&count_query)
+            .bind(&term)
+            .fetch_one(&state.db_pool)
+            .await
     } else {
-        sqlx::query_scalar(&count_query).fetch_one(&state.db_pool).await
+        sqlx::query_scalar(&count_query)
+            .fetch_one(&state.db_pool)
+            .await
     }
-    .map_err(|e| { tracing::error!("admin_users_api count query failed: {}", e); StatusCode::INTERNAL_SERVER_ERROR })?;
+    .map_err(|e| {
+        tracing::error!("admin_users_api count query failed: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
 
     Ok(Json(json!({
         "success": true,
@@ -1113,7 +1200,7 @@ pub async fn create_superuser_api(
     let user_row = sqlx::query(
         "INSERT INTO users (email, username, password_hash, is_active, is_superuser, is_staff) 
          VALUES ($1, $2, $3, true, true, true) 
-         RETURNING id, email, username, is_active, is_superuser, is_staff, created_at, updated_at"
+         RETURNING id, email, username, is_active, is_superuser, is_staff, created_at, updated_at",
     )
     .bind(&payload.email)
     .bind(&payload.username)
@@ -1479,7 +1566,8 @@ pub async fn admin_users_list() -> Html<String> {
 }
 
 pub async fn admin_user_detail(Path(id): Path<i32>) -> Html<String> {
-    let html = format!(r###"
+    let html = format!(
+        r###"
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1859,7 +1947,9 @@ pub async fn admin_user_detail(Path(id): Path<i32>) -> Html<String> {
     </script>
 </body>
 </html>
-    "###, id = id);
+    "###,
+        id = id
+    );
 
     Html(html)
 }
@@ -1870,22 +1960,20 @@ pub async fn admin_user_api(
     Path(id): Path<i32>,
     Extension(state): Extension<Arc<AppState>>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let user = sqlx::query_as::<_, User>(
-        "SELECT * FROM users WHERE id = $1"
-    )
-    .bind(id)
-    .fetch_optional(&state.db_pool)
-    .await
-    .map_err(|e| {
-        tracing::error!("❌ Database error: {}", e);
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({
-                "success": false,
-                "message": "Database error"
-            }))
-        )
-    })?;
+    let user = sqlx::query_as::<_, User>("SELECT * FROM users WHERE id = $1")
+        .bind(id)
+        .fetch_optional(&state.db_pool)
+        .await
+        .map_err(|e| {
+            tracing::error!("❌ Database error: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "success": false,
+                    "message": "Database error"
+                })),
+            )
+        })?;
 
     match user {
         Some(user) => {
@@ -1895,15 +1983,13 @@ pub async fn admin_user_api(
                 "user": UserResponse::from(user)
             })))
         }
-        None => {
-            Err((
-                StatusCode::NOT_FOUND,
-                Json(json!({
-                    "success": false,
-                    "message": "User not found"
-                }))
-            ))
-        }
+        None => Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({
+                "success": false,
+                "message": "User not found"
+            })),
+        )),
     }
 }
 
@@ -1921,7 +2007,7 @@ pub async fn admin_update_user_api(
                 Json(json!({
                     "success": false,
                     "message": "Invalid email format"
-                }))
+                })),
             ));
         }
     }
@@ -1938,7 +2024,7 @@ pub async fn admin_update_user_api(
                 Json(json!({
                     "success": false,
                     "message": "Database error"
-                }))
+                })),
             )
         })?;
 
@@ -1947,7 +2033,7 @@ pub async fn admin_update_user_api(
         Json(json!({
             "success": false,
             "message": "User not found"
-        }))
+        })),
     ))?;
 
     // Check uniqueness if email or username is being changed
@@ -1956,24 +2042,23 @@ pub async fn admin_update_user_api(
 
     // Only check if values are actually changing
     if payload.email.is_some() || payload.username.is_some() {
-        let existing = sqlx::query(
-            "SELECT id FROM users WHERE (email = $1 OR username = $2) AND id != $3"
-        )
-        .bind(email_to_check)
-        .bind(username_to_check)
-        .bind(id)
-        .fetch_optional(&state.db_pool)
-        .await
-        .map_err(|e| {
-            tracing::error!("❌ Database error: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({
-                    "success": false,
-                    "message": "Database error"
-                }))
-            )
-        })?;
+        let existing =
+            sqlx::query("SELECT id FROM users WHERE (email = $1 OR username = $2) AND id != $3")
+                .bind(email_to_check)
+                .bind(username_to_check)
+                .bind(id)
+                .fetch_optional(&state.db_pool)
+                .await
+                .map_err(|e| {
+                    tracing::error!("❌ Database error: {}", e);
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({
+                            "success": false,
+                            "message": "Database error"
+                        })),
+                    )
+                })?;
 
         if existing.is_some() {
             return Err((
@@ -1981,7 +2066,7 @@ pub async fn admin_update_user_api(
                 Json(json!({
                     "success": false,
                     "message": "Email or username already exists"
-                }))
+                })),
             ));
         }
     }
@@ -1991,7 +2076,7 @@ pub async fn admin_update_user_api(
     let username = payload.username.unwrap_or(current_user.username);
 
     let updated_user = sqlx::query_as::<_, User>(
-        "UPDATE users SET email = $1, username = $2, updated_at = NOW() WHERE id = $3 RETURNING *"
+        "UPDATE users SET email = $1, username = $2, updated_at = NOW() WHERE id = $3 RETURNING *",
     )
     .bind(&email)
     .bind(&username)
@@ -2005,7 +2090,7 @@ pub async fn admin_update_user_api(
             Json(json!({
                 "success": false,
                 "message": "Failed to update user"
-            }))
+            })),
         )
     })?;
 
@@ -2030,19 +2115,22 @@ pub async fn admin_toggle_user_active(
             Json(json!({
                 "success": false,
                 "message": "Invalid user ID"
-            }))
+            })),
         )
     })?;
 
     // Self-protection
     if id == current_user_id {
-        tracing::warn!("⚠️ Attempt to modify own account status by {}", claims.username);
+        tracing::warn!(
+            "⚠️ Attempt to modify own account status by {}",
+            claims.username
+        );
         return Err((
             StatusCode::BAD_REQUEST,
             Json(json!({
                 "success": false,
                 "message": "Cannot modify your own account status"
-            }))
+            })),
         ));
     }
 
@@ -2059,14 +2147,14 @@ pub async fn admin_toggle_user_active(
                     Json(json!({
                         "success": false,
                         "message": "Database error"
-                    }))
+                    })),
                 )
             })?;
 
         if let Some(user) = user {
             if user.is_superuser {
                 let superuser_count: i64 = sqlx::query_scalar(
-                    "SELECT COUNT(*) FROM users WHERE is_superuser = true AND is_active = true"
+                    "SELECT COUNT(*) FROM users WHERE is_superuser = true AND is_active = true",
                 )
                 .fetch_one(&state.db_pool)
                 .await
@@ -2077,7 +2165,7 @@ pub async fn admin_toggle_user_active(
                         Json(json!({
                             "success": false,
                             "message": "Database error"
-                        }))
+                        })),
                     )
                 })?;
 
@@ -2087,7 +2175,7 @@ pub async fn admin_toggle_user_active(
                         Json(json!({
                             "success": false,
                             "message": "Cannot deactivate the last active superuser"
-                        }))
+                        })),
                     ));
                 }
             }
@@ -2095,7 +2183,7 @@ pub async fn admin_toggle_user_active(
     }
 
     let updated_user = sqlx::query_as::<_, User>(
-        "UPDATE users SET is_active = $1, updated_at = NOW() WHERE id = $2 RETURNING *"
+        "UPDATE users SET is_active = $1, updated_at = NOW() WHERE id = $2 RETURNING *",
     )
     .bind(payload.is_active)
     .bind(id)
@@ -2108,14 +2196,18 @@ pub async fn admin_toggle_user_active(
             Json(json!({
                 "success": false,
                 "message": "Failed to update user status"
-            }))
+            })),
         )
     })?;
 
     tracing::info!(
         "👤 User {} {} by admin {}",
         updated_user.username,
-        if payload.is_active { "activated" } else { "deactivated" },
+        if payload.is_active {
+            "activated"
+        } else {
+            "deactivated"
+        },
         claims.username
     );
 
@@ -2142,7 +2234,7 @@ pub async fn admin_make_staff(
                 Json(json!({
                     "success": false,
                     "message": "Database error"
-                }))
+                })),
             )
         })?;
 
@@ -2151,7 +2243,7 @@ pub async fn admin_make_staff(
         Json(json!({
             "success": false,
             "message": "User not found"
-        }))
+        })),
     ))?;
 
     if user.is_staff {
@@ -2160,12 +2252,12 @@ pub async fn admin_make_staff(
             Json(json!({
                 "success": false,
                 "message": "User is already a staff member"
-            }))
+            })),
         ));
     }
 
     let updated_user = sqlx::query_as::<_, User>(
-        "UPDATE users SET is_staff = true, updated_at = NOW() WHERE id = $1 RETURNING *"
+        "UPDATE users SET is_staff = true, updated_at = NOW() WHERE id = $1 RETURNING *",
     )
     .bind(id)
     .fetch_one(&state.db_pool)
@@ -2177,11 +2269,15 @@ pub async fn admin_make_staff(
             Json(json!({
                 "success": false,
                 "message": "Failed to update user"
-            }))
+            })),
         )
     })?;
 
-    tracing::info!("👤 User {} granted staff access by admin {}", updated_user.username, claims.username);
+    tracing::info!(
+        "👤 User {} granted staff access by admin {}",
+        updated_user.username,
+        claims.username
+    );
 
     Ok(Json(json!({
         "success": true,
@@ -2201,19 +2297,22 @@ pub async fn admin_remove_staff(
             Json(json!({
                 "success": false,
                 "message": "Invalid user ID"
-            }))
+            })),
         )
     })?;
 
     // Self-protection
     if id == current_user_id {
-        tracing::warn!("⚠️ Attempt to remove own staff status by {}", claims.username);
+        tracing::warn!(
+            "⚠️ Attempt to remove own staff status by {}",
+            claims.username
+        );
         return Err((
             StatusCode::BAD_REQUEST,
             Json(json!({
                 "success": false,
                 "message": "Cannot remove your own staff status"
-            }))
+            })),
         ));
     }
 
@@ -2228,7 +2327,7 @@ pub async fn admin_remove_staff(
                 Json(json!({
                     "success": false,
                     "message": "Database error"
-                }))
+                })),
             )
         })?;
 
@@ -2237,7 +2336,7 @@ pub async fn admin_remove_staff(
         Json(json!({
             "success": false,
             "message": "User not found"
-        }))
+        })),
     ))?;
 
     if !user.is_staff {
@@ -2246,12 +2345,12 @@ pub async fn admin_remove_staff(
             Json(json!({
                 "success": false,
                 "message": "User is not a staff member"
-            }))
+            })),
         ));
     }
 
     let updated_user = sqlx::query_as::<_, User>(
-        "UPDATE users SET is_staff = false, updated_at = NOW() WHERE id = $1 RETURNING *"
+        "UPDATE users SET is_staff = false, updated_at = NOW() WHERE id = $1 RETURNING *",
     )
     .bind(id)
     .fetch_one(&state.db_pool)
@@ -2263,11 +2362,15 @@ pub async fn admin_remove_staff(
             Json(json!({
                 "success": false,
                 "message": "Failed to update user"
-            }))
+            })),
         )
     })?;
 
-    tracing::info!("👤 User {} staff access removed by admin {}", updated_user.username, claims.username);
+    tracing::info!(
+        "👤 User {} staff access removed by admin {}",
+        updated_user.username,
+        claims.username
+    );
 
     Ok(Json(json!({
         "success": true,
@@ -2292,7 +2395,7 @@ pub async fn admin_make_superuser(
                 Json(json!({
                     "success": false,
                     "message": "Database error"
-                }))
+                })),
             )
         })?;
 
@@ -2301,7 +2404,7 @@ pub async fn admin_make_superuser(
         Json(json!({
             "success": false,
             "message": "User not found"
-        }))
+        })),
     ))?;
 
     if user.is_superuser {
@@ -2310,7 +2413,7 @@ pub async fn admin_make_superuser(
             Json(json!({
                 "success": false,
                 "message": "User is already a superuser"
-            }))
+            })),
         ));
     }
 
@@ -2331,7 +2434,11 @@ pub async fn admin_make_superuser(
         )
     })?;
 
-    tracing::info!("🔐 User {} granted superuser access by {}", updated_user.username, claims.username);
+    tracing::info!(
+        "🔐 User {} granted superuser access by {}",
+        updated_user.username,
+        claims.username
+    );
 
     Ok(Json(json!({
         "success": true,
@@ -2351,25 +2458,28 @@ pub async fn admin_remove_superuser(
             Json(json!({
                 "success": false,
                 "message": "Invalid user ID"
-            }))
+            })),
         )
     })?;
 
     // Self-protection
     if id == current_user_id {
-        tracing::warn!("⚠️ Attempt to remove own superuser status by {}", claims.username);
+        tracing::warn!(
+            "⚠️ Attempt to remove own superuser status by {}",
+            claims.username
+        );
         return Err((
             StatusCode::BAD_REQUEST,
             Json(json!({
                 "success": false,
                 "message": "Cannot remove your own superuser status"
-            }))
+            })),
         ));
     }
 
     // Check if this is the last superuser
     let superuser_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM users WHERE is_superuser = true AND is_active = true"
+        "SELECT COUNT(*) FROM users WHERE is_superuser = true AND is_active = true",
     )
     .fetch_one(&state.db_pool)
     .await
@@ -2380,7 +2490,7 @@ pub async fn admin_remove_superuser(
             Json(json!({
                 "success": false,
                 "message": "Database error"
-            }))
+            })),
         )
     })?;
 
@@ -2390,7 +2500,7 @@ pub async fn admin_remove_superuser(
             Json(json!({
                 "success": false,
                 "message": "Cannot remove the last superuser"
-            }))
+            })),
         ));
     }
 
@@ -2405,7 +2515,7 @@ pub async fn admin_remove_superuser(
                 Json(json!({
                     "success": false,
                     "message": "Database error"
-                }))
+                })),
             )
         })?;
 
@@ -2414,7 +2524,7 @@ pub async fn admin_remove_superuser(
         Json(json!({
             "success": false,
             "message": "User not found"
-        }))
+        })),
     ))?;
 
     if !user.is_superuser {
@@ -2423,12 +2533,12 @@ pub async fn admin_remove_superuser(
             Json(json!({
                 "success": false,
                 "message": "User is not a superuser"
-            }))
+            })),
         ));
     }
 
     let updated_user = sqlx::query_as::<_, User>(
-        "UPDATE users SET is_superuser = false, updated_at = NOW() WHERE id = $1 RETURNING *"
+        "UPDATE users SET is_superuser = false, updated_at = NOW() WHERE id = $1 RETURNING *",
     )
     .bind(id)
     .fetch_one(&state.db_pool)
@@ -2440,11 +2550,15 @@ pub async fn admin_remove_superuser(
             Json(json!({
                 "success": false,
                 "message": "Failed to update user"
-            }))
+            })),
         )
     })?;
 
-    tracing::info!("🔐 User {} superuser access removed by {}", updated_user.username, claims.username);
+    tracing::info!(
+        "🔐 User {} superuser access removed by {}",
+        updated_user.username,
+        claims.username
+    );
 
     Ok(Json(json!({
         "success": true,
@@ -2464,7 +2578,7 @@ pub async fn admin_delete_user(
             Json(json!({
                 "success": false,
                 "message": "Invalid user ID"
-            }))
+            })),
         )
     })?;
 
@@ -2476,7 +2590,7 @@ pub async fn admin_delete_user(
             Json(json!({
                 "success": false,
                 "message": "Cannot delete your own account"
-            }))
+            })),
         ));
     }
 
@@ -2492,7 +2606,7 @@ pub async fn admin_delete_user(
                 Json(json!({
                     "success": false,
                     "message": "Database error"
-                }))
+                })),
             )
         })?;
 
@@ -2501,12 +2615,12 @@ pub async fn admin_delete_user(
         Json(json!({
             "success": false,
             "message": "User not found"
-        }))
+        })),
     ))?;
 
     if user.is_superuser {
         let superuser_count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM users WHERE is_superuser = true AND is_active = true"
+            "SELECT COUNT(*) FROM users WHERE is_superuser = true AND is_active = true",
         )
         .fetch_one(&state.db_pool)
         .await
@@ -2517,7 +2631,7 @@ pub async fn admin_delete_user(
                 Json(json!({
                     "success": false,
                     "message": "Database error"
-                }))
+                })),
             )
         })?;
 
@@ -2527,7 +2641,7 @@ pub async fn admin_delete_user(
                 Json(json!({
                     "success": false,
                     "message": "Cannot delete the last superuser"
-                }))
+                })),
             ));
         }
     }
@@ -2546,7 +2660,7 @@ pub async fn admin_delete_user(
                 Json(json!({
                     "success": false,
                     "message": "Failed to delete user"
-                }))
+                })),
             )
         })?;
 
@@ -2570,7 +2684,7 @@ pub async fn admin_create_user(
             Json(json!({
                 "success": false,
                 "message": "Email, username, and password are required"
-            }))
+            })),
         ));
     }
 
@@ -2580,7 +2694,7 @@ pub async fn admin_create_user(
             Json(json!({
                 "success": false,
                 "message": "Invalid email format"
-            }))
+            })),
         ));
     }
 
@@ -2590,7 +2704,7 @@ pub async fn admin_create_user(
             Json(json!({
                 "success": false,
                 "message": "Password must be at least 6 characters long"
-            }))
+            })),
         ));
     }
 
@@ -2607,7 +2721,7 @@ pub async fn admin_create_user(
                 Json(json!({
                     "success": false,
                     "message": "Database error"
-                }))
+                })),
             )
         })?;
 
@@ -2617,7 +2731,7 @@ pub async fn admin_create_user(
             Json(json!({
                 "success": false,
                 "message": "User with this email or username already exists"
-            }))
+            })),
         ));
     }
 
@@ -2629,7 +2743,7 @@ pub async fn admin_create_user(
             Json(json!({
                 "success": false,
                 "message": "Failed to hash password"
-            }))
+            })),
         )
     })?;
 
@@ -2658,7 +2772,11 @@ pub async fn admin_create_user(
         )
     })?;
 
-    tracing::info!("👤 User {} created by admin {}", user.username, claims.username);
+    tracing::info!(
+        "👤 User {} created by admin {}",
+        user.username,
+        claims.username
+    );
 
     Ok(Json(json!({
         "success": true,
@@ -2680,11 +2798,11 @@ pub async fn admin_update_user(
 
 // Whitelist Management Functions
 pub async fn get_whitelist_status(
-    Extension(state): Extension<Arc<AppState>>
+    Extension(state): Extension<Arc<AppState>>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     // Get whitelist enabled status
     let setting = sqlx::query_as::<_, SystemSetting>(
-        "SELECT * FROM system_settings WHERE setting_key = 'whitelist_enabled'"
+        "SELECT * FROM system_settings WHERE setting_key = 'whitelist_enabled'",
     )
     .fetch_optional(&state.db_pool)
     .await
@@ -2714,7 +2832,7 @@ pub async fn toggle_whitelist(
     Json(payload): Json<WhitelistToggleRequest>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let setting_value = if payload.enabled { "true" } else { "false" };
-    
+
     // Update or insert the whitelist_enabled setting
     sqlx::query(
         "INSERT INTO system_settings (setting_key, setting_value, setting_type, description, updated_at) 
@@ -2735,7 +2853,7 @@ pub async fn toggle_whitelist(
 }
 
 pub async fn get_whitelist_emails(
-    Extension(state): Extension<Arc<AppState>>
+    Extension(state): Extension<Arc<AppState>>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let emails = sqlx::query_as::<_, WhitelistEmail>(
         "SELECT id, email, added_by, created_at, updated_at FROM whitelist_emails ORDER BY created_at DESC"
@@ -2744,7 +2862,8 @@ pub async fn get_whitelist_emails(
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let email_responses: Vec<WhitelistEmailResponse> = emails.into_iter()
+    let email_responses: Vec<WhitelistEmailResponse> = emails
+        .into_iter()
         .map(WhitelistEmailResponse::from)
         .collect();
 
@@ -2765,7 +2884,7 @@ pub async fn add_whitelist_email(
             Json(json!({
                 "success": false,
                 "message": "Invalid email format"
-            }))
+            })),
         ));
     }
 
@@ -2774,13 +2893,15 @@ pub async fn add_whitelist_email(
         .bind(&payload.email)
         .fetch_optional(&state.db_pool)
         .await
-        .map_err(|_| (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({
-                "success": false,
-                "message": "Database error"
-            }))
-        ))?;
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "success": false,
+                    "message": "Database error"
+                })),
+            )
+        })?;
 
     if existing.is_some() {
         return Err((
@@ -2788,7 +2909,7 @@ pub async fn add_whitelist_email(
             Json(json!({
                 "success": false,
                 "message": "Email already exists in whitelist"
-            }))
+            })),
         ));
     }
 
@@ -2796,26 +2917,30 @@ pub async fn add_whitelist_email(
     let row = sqlx::query(
         "INSERT INTO whitelist_emails (email, created_at, updated_at) 
          VALUES ($1, NOW(), NOW()) 
-         RETURNING id, email, added_by, created_at, updated_at"
+         RETURNING id, email, added_by, created_at, updated_at",
     )
     .bind(&payload.email)
     .fetch_one(&state.db_pool)
     .await
-    .map_err(|_| (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        Json(json!({
-            "success": false,
-            "message": "Failed to add email to whitelist"
-        }))
-    ))?;
+    .map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "success": false,
+                "message": "Failed to add email to whitelist"
+            })),
+        )
+    })?;
 
-    let whitelist_email = WhitelistEmail::from_row(&row).map_err(|_| (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        Json(json!({
-            "success": false,
-            "message": "Database error"
-        }))
-    ))?;
+    let whitelist_email = WhitelistEmail::from_row(&row).map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "success": false,
+                "message": "Database error"
+            })),
+        )
+    })?;
 
     Ok(Json(json!({
         "success": true,
@@ -2832,13 +2957,15 @@ pub async fn remove_whitelist_email(
         .bind(id)
         .execute(&state.db_pool)
         .await
-        .map_err(|_| (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({
-                "success": false,
-                "message": "Database error"
-            }))
-        ))?;
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "success": false,
+                    "message": "Database error"
+                })),
+            )
+        })?;
 
     if result.rows_affected() == 0 {
         return Err((
@@ -2846,7 +2973,7 @@ pub async fn remove_whitelist_email(
             Json(json!({
                 "success": false,
                 "message": "Email not found in whitelist"
-            }))
+            })),
         ));
     }
 
@@ -2881,7 +3008,8 @@ pub async fn get_model_pricing(
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     // Group by model
-    let mut models: std::collections::HashMap<String, serde_json::Value> = std::collections::HashMap::new();
+    let mut models: std::collections::HashMap<String, serde_json::Value> =
+        std::collections::HashMap::new();
 
     for setting in pricing_settings {
         let parts: Vec<&str> = setting.setting_key.split('.').collect();
@@ -2889,13 +3017,23 @@ pub async fn get_model_pricing(
             let model_name = parts[1];
             let price_type = parts[2];
 
-            let entry = models.entry(model_name.to_string())
+            let entry = models
+                .entry(model_name.to_string())
                 .or_insert_with(|| json!({"model": model_name}));
 
             if let Some(obj) = entry.as_object_mut() {
-                obj.insert(price_type.to_string(), json!(setting.setting_value.parse::<f64>().unwrap_or(0.0)));
-                obj.insert(format!("{}_description", price_type), json!(setting.description.unwrap_or_default()));
-                obj.insert("last_updated".to_string(), json!(setting.updated_at.to_rfc3339()));
+                obj.insert(
+                    price_type.to_string(),
+                    json!(setting.setting_value.parse::<f64>().unwrap_or(0.0)),
+                );
+                obj.insert(
+                    format!("{}_description", price_type),
+                    json!(setting.description.unwrap_or_default()),
+                );
+                obj.insert(
+                    "last_updated".to_string(),
+                    json!(setting.updated_at.to_rfc3339()),
+                );
             }
         }
     }
@@ -2918,7 +3056,7 @@ pub async fn update_model_pricing(
             Json(json!({
                 "success": false,
                 "message": "Prices cannot be negative"
-            }))
+            })),
         ));
     }
 
@@ -3058,7 +3196,7 @@ pub async fn get_default_model(
     Extension(state): Extension<Arc<AppState>>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let setting = sqlx::query_as::<_, SystemSetting>(
-        "SELECT * FROM system_settings WHERE setting_key = 'default_ai_model'"
+        "SELECT * FROM system_settings WHERE setting_key = 'default_ai_model'",
     )
     .fetch_optional(&state.db_pool)
     .await
@@ -3086,7 +3224,7 @@ pub async fn update_default_model(
             Json(json!({
                 "success": false,
                 "message": "Invalid model. Must be 'claude' or 'gemini'"
-            }))
+            })),
         ));
     }
 
@@ -3126,10 +3264,10 @@ pub async fn update_default_model(
 // ============================================================================
 
 pub async fn get_youtube_feature_status(
-    Extension(state): Extension<Arc<AppState>>
+    Extension(state): Extension<Arc<AppState>>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let setting = sqlx::query_as::<_, SystemSetting>(
-        "SELECT * FROM system_settings WHERE setting_key = 'youtube_features_enabled'"
+        "SELECT * FROM system_settings WHERE setting_key = 'youtube_features_enabled'",
     )
     .fetch_optional(&state.db_pool)
     .await
@@ -3180,7 +3318,11 @@ pub async fn toggle_youtube_features(
 
     tracing::info!(
         "YouTube features {} by admin user {} ({})",
-        if payload.enabled { "enabled" } else { "disabled" },
+        if payload.enabled {
+            "enabled"
+        } else {
+            "disabled"
+        },
         claims.username,
         claims.email
     );
@@ -3223,7 +3365,9 @@ pub async fn admin_clipping_stats(
     let failed: i64 = overview_row.try_get("failed").unwrap_or(0);
     let active: i64 = overview_row.try_get("active").unwrap_or(0);
     let total: i64 = overview_row.try_get("total").unwrap_or(0);
-    let success_rate: rust_decimal::Decimal = overview_row.try_get("success_rate").unwrap_or_else(|_| rust_decimal::Decimal::new(0, 0));
+    let success_rate: rust_decimal::Decimal = overview_row
+        .try_get("success_rate")
+        .unwrap_or_else(|_| rust_decimal::Decimal::new(0, 0));
 
     // Query 2: Per-user breakdown
     let user_rows = sqlx::query(
@@ -3325,7 +3469,7 @@ pub async fn admin_user_clipping_details(
         JOIN connected_youtube_channels cyc ON ycl.destination_channel_id = cyc.id
         WHERE ycl.user_id = $1
         ORDER BY ycl.created_at DESC
-        "#
+        "#,
     )
     .bind(user_id)
     .fetch_all(&state.db_pool)
@@ -3377,7 +3521,7 @@ pub async fn admin_user_clipping_details(
         WHERE ycl.user_id = $1
         ORDER BY cj.created_at DESC
         LIMIT 10
-        "#
+        "#,
     )
     .bind(user_id)
     .fetch_all(&state.db_pool)
@@ -3387,24 +3531,27 @@ pub async fn admin_user_clipping_details(
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
-    let recent_jobs: Vec<serde_json::Value> = job_rows.iter().map(|row| {
-        use sqlx::Row;
-        json!({
-            "id": row.get::<i32, _>("id"),
-            "source_video_id": row.get::<String, _>("source_video_id"),
-            "source_video_title": row.get::<Option<String>, _>("source_video_title"),
-            "status": row.get::<String, _>("status"),
-            "current_step": row.get::<Option<String>, _>("current_step"),
-            "progress_percent": row.get::<Option<i32>, _>("progress_percent"),
-            "error_message": row.get::<Option<String>, _>("error_message"),
-            "retry_count": row.get::<i32, _>("retry_count"),
-            "created_at": row.get::<chrono::DateTime<chrono::Utc>, _>("created_at"),
-            "updated_at": row.get::<chrono::DateTime<chrono::Utc>, _>("updated_at"),
-            "completed_at": row.get::<Option<chrono::DateTime<chrono::Utc>>, _>("completed_at"),
-            "linkage_id": row.get::<i32, _>("linkage_id"),
-            "source_channel": row.get::<String, _>("source_channel"),
+    let recent_jobs: Vec<serde_json::Value> = job_rows
+        .iter()
+        .map(|row| {
+            use sqlx::Row;
+            json!({
+                "id": row.get::<i32, _>("id"),
+                "source_video_id": row.get::<String, _>("source_video_id"),
+                "source_video_title": row.get::<Option<String>, _>("source_video_title"),
+                "status": row.get::<String, _>("status"),
+                "current_step": row.get::<Option<String>, _>("current_step"),
+                "progress_percent": row.get::<Option<i32>, _>("progress_percent"),
+                "error_message": row.get::<Option<String>, _>("error_message"),
+                "retry_count": row.get::<i32, _>("retry_count"),
+                "created_at": row.get::<chrono::DateTime<chrono::Utc>, _>("created_at"),
+                "updated_at": row.get::<chrono::DateTime<chrono::Utc>, _>("updated_at"),
+                "completed_at": row.get::<Option<chrono::DateTime<chrono::Utc>>, _>("completed_at"),
+                "linkage_id": row.get::<i32, _>("linkage_id"),
+                "source_channel": row.get::<String, _>("source_channel"),
+            })
         })
-    }).collect();
+        .collect();
 
     // Query 3: Extracted clips with analytics for those jobs
     let job_ids: Vec<i32> = {
@@ -3448,7 +3595,7 @@ pub async fn admin_user_clipping_details(
             ) yva ON ec.youtube_video_id IS NOT NULL
             WHERE ec.clipping_job_id = ANY($1)
             ORDER BY ec.clipping_job_id, ec.clip_number
-            "#
+            "#,
         )
         .bind(&job_ids)
         .fetch_all(&state.db_pool)
@@ -3459,31 +3606,34 @@ pub async fn admin_user_clipping_details(
         })?
     };
 
-    let clips: Vec<serde_json::Value> = clip_rows.iter().map(|row| {
-        use sqlx::Row;
-        json!({
-            "id": row.get::<i32, _>("id"),
-            "clipping_job_id": row.get::<i32, _>("clipping_job_id"),
-            "clip_number": row.get::<i32, _>("clip_number"),
-            "ai_title": row.get::<Option<String>, _>("ai_title"),
-            "ai_description": row.get::<Option<String>, _>("ai_description"),
-            "ai_confidence_score": row.get::<Option<f64>, _>("ai_confidence_score"),
-            "viral_factors": row.get::<Option<Vec<String>>, _>("viral_factors"),
-            "youtube_video_id": row.get::<Option<String>, _>("youtube_video_id"),
-            "youtube_url": row.get::<Option<String>, _>("youtube_url"),
-            "upload_status": row.get::<String, _>("upload_status"),
-            "published_at": row.get::<Option<chrono::DateTime<chrono::Utc>>, _>("published_at"),
-            "views_24h": row.get::<i32, _>("views_24h"),
-            "likes_24h": row.get::<i32, _>("likes_24h"),
-            "comments_24h": row.get::<i32, _>("comments_24h"),
-            "start_time_seconds": row.get::<f64, _>("start_time_seconds"),
-            "end_time_seconds": row.get::<f64, _>("end_time_seconds"),
-            "duration_seconds": row.get::<f64, _>("duration_seconds"),
-            "total_views": row.get::<i64, _>("total_views"),
-            "total_likes": row.get::<i64, _>("total_likes"),
-            "total_comments": row.get::<i64, _>("total_comments"),
+    let clips: Vec<serde_json::Value> = clip_rows
+        .iter()
+        .map(|row| {
+            use sqlx::Row;
+            json!({
+                "id": row.get::<i32, _>("id"),
+                "clipping_job_id": row.get::<i32, _>("clipping_job_id"),
+                "clip_number": row.get::<i32, _>("clip_number"),
+                "ai_title": row.get::<Option<String>, _>("ai_title"),
+                "ai_description": row.get::<Option<String>, _>("ai_description"),
+                "ai_confidence_score": row.get::<Option<f64>, _>("ai_confidence_score"),
+                "viral_factors": row.get::<Option<Vec<String>>, _>("viral_factors"),
+                "youtube_video_id": row.get::<Option<String>, _>("youtube_video_id"),
+                "youtube_url": row.get::<Option<String>, _>("youtube_url"),
+                "upload_status": row.get::<String, _>("upload_status"),
+                "published_at": row.get::<Option<chrono::DateTime<chrono::Utc>>, _>("published_at"),
+                "views_24h": row.get::<i32, _>("views_24h"),
+                "likes_24h": row.get::<i32, _>("likes_24h"),
+                "comments_24h": row.get::<i32, _>("comments_24h"),
+                "start_time_seconds": row.get::<f64, _>("start_time_seconds"),
+                "end_time_seconds": row.get::<f64, _>("end_time_seconds"),
+                "duration_seconds": row.get::<f64, _>("duration_seconds"),
+                "total_views": row.get::<i64, _>("total_views"),
+                "total_likes": row.get::<i64, _>("total_likes"),
+                "total_comments": row.get::<i64, _>("total_comments"),
+            })
         })
-    }).collect();
+        .collect();
 
     Ok(Json(json!({
         "success": true,
@@ -3943,7 +4093,7 @@ pub async fn admin_list_all_jobs(
             "SELECT COUNT(*) FROM clipping_jobs cj
              JOIN youtube_channel_linkages ycl ON cj.linkage_id = ycl.id
              WHERE ($1::text IS NULL OR cj.status = $1)
-             AND ($2::int IS NULL OR ycl.user_id = $2)"
+             AND ($2::int IS NULL OR ycl.user_id = $2)",
         )
         .bind(&query.status)
         .bind(query.user_id)
@@ -3951,13 +4101,10 @@ pub async fn admin_list_all_jobs(
         sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM clipping_jobs")
     };
 
-    let total: i64 = count_query
-        .fetch_one(&state.db_pool)
-        .await
-        .map_err(|e| {
-            tracing::error!("Failed to count jobs: {}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+    let total: i64 = count_query.fetch_one(&state.db_pool).await.map_err(|e| {
+        tracing::error!("Failed to count jobs: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
 
     // Build dynamic ORDER BY clause
     let order_clause = match sort {
@@ -4085,7 +4232,7 @@ pub async fn admin_get_job_details(
 
     // Fetch extracted clips
     let clips_rows = sqlx::query(
-        "SELECT * FROM extracted_clips WHERE clipping_job_id = $1 ORDER BY clip_number ASC"
+        "SELECT * FROM extracted_clips WHERE clipping_job_id = $1 ORDER BY clip_number ASC",
     )
     .bind(job_id)
     .fetch_all(&state.db_pool)
@@ -4177,11 +4324,12 @@ pub async fn admin_retry_job(
 
     if current_step.is_none() {
         // Job doesn't exist or isn't in a retryable status — check which.
-        let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM clipping_jobs WHERE id = $1)")
-            .bind(job_id)
-            .fetch_one(&state.db_pool)
-            .await
-            .unwrap_or(false);
+        let exists: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM clipping_jobs WHERE id = $1)")
+                .bind(job_id)
+                .fetch_one(&state.db_pool)
+                .await
+                .unwrap_or(false);
         return Ok(Json(json!({
             "success": false,
             "message": if exists {
@@ -4196,16 +4344,25 @@ pub async fn admin_retry_job(
     let step = current_step.as_deref().unwrap_or("");
     let resume_from: Option<&str> = match step {
         s if s.contains("posting") || s.contains("upload") => Some("clips_extracted"),
-        s if s.contains("vectoriz")                         => Some("clips_extracted"),
+        s if s.contains("vectoriz") => Some("clips_extracted"),
         s if s.contains("extracting") || s == "clips_extracted" => Some("downloaded"),
-        s if s.contains("download")                         => Some("analyzed"),
-        _                                                   => None,
+        s if s.contains("download") => Some("analyzed"),
+        _ => None,
     };
 
     if let Some(phase) = resume_from {
-        tracing::info!("Admin retrying job {} — resuming from '{}' (was at: {:?})", job_id, phase, step);
+        tracing::info!(
+            "Admin retrying job {} — resuming from '{}' (was at: {:?})",
+            job_id,
+            phase,
+            step
+        );
     } else {
-        tracing::info!("Admin retrying job {} — restarting from Phase A (current_step: {:?})", job_id, step);
+        tracing::info!(
+            "Admin retrying job {} — restarting from Phase A (current_step: {:?})",
+            job_id,
+            step
+        );
     }
 
     // Step 3: Reset to pending with the computed resume_from.
@@ -4224,7 +4381,7 @@ pub async fn admin_retry_job(
             claimed_at = NULL,
             updated_at = NOW()
          WHERE id = $1 AND status IN ('failed', 'cancelled', 'discarded')
-         RETURNING retry_count"
+         RETURNING retry_count",
     )
     .bind(job_id)
     .bind(resume_from)
@@ -4271,7 +4428,7 @@ pub async fn admin_cancel_job(
             completed_at = NOW(),
             claimed_by = NULL,
             claimed_at = NULL
-         WHERE id = $1 AND status NOT IN ('completed', 'failed', 'cancelled')"
+         WHERE id = $1 AND status NOT IN ('completed', 'failed', 'cancelled')",
     )
     .bind(job_id)
     .execute(&state.db_pool)
@@ -4301,7 +4458,7 @@ pub async fn admin_get_job_clips(
     Path(job_id): Path<i32>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let clips_rows = sqlx::query(
-        "SELECT * FROM extracted_clips WHERE clipping_job_id = $1 ORDER BY clip_number ASC"
+        "SELECT * FROM extracted_clips WHERE clipping_job_id = $1 ORDER BY clip_number ASC",
     )
     .bind(job_id)
     .fetch_all(&state.db_pool)
@@ -4312,26 +4469,29 @@ pub async fn admin_get_job_clips(
     })?;
 
     use sqlx::Row;
-    let clips: Vec<serde_json::Value> = clips_rows.iter().map(|row| {
-        json!({
-            "id": row.get::<i32, _>("id"),
-            "clip_number": row.get::<i32, _>("clip_number"),
-            "local_clip_path": row.get::<String, _>("local_clip_path"),
-            "start_time_seconds": row.get::<f64, _>("start_time_seconds"),
-            "end_time_seconds": row.get::<f64, _>("end_time_seconds"),
-            "duration_seconds": row.get::<f64, _>("duration_seconds"),
-            "ai_title": row.get::<Option<String>, _>("ai_title"),
-            "ai_description": row.get::<Option<String>, _>("ai_description"),
-            "ai_confidence_score": row.get::<Option<f64>, _>("ai_confidence_score"),
-            "youtube_video_id": row.get::<Option<String>, _>("youtube_video_id"),
-            "youtube_url": row.get::<Option<String>, _>("youtube_url"),
-            "upload_status": row.get::<String, _>("upload_status"),
-            "published_at": row.get::<Option<chrono::DateTime<chrono::Utc>>, _>("published_at"),
-            "views_24h": row.get::<i32, _>("views_24h"),
-            "likes_24h": row.get::<i32, _>("likes_24h"),
-            "comments_24h": row.get::<i32, _>("comments_24h"),
+    let clips: Vec<serde_json::Value> = clips_rows
+        .iter()
+        .map(|row| {
+            json!({
+                "id": row.get::<i32, _>("id"),
+                "clip_number": row.get::<i32, _>("clip_number"),
+                "local_clip_path": row.get::<String, _>("local_clip_path"),
+                "start_time_seconds": row.get::<f64, _>("start_time_seconds"),
+                "end_time_seconds": row.get::<f64, _>("end_time_seconds"),
+                "duration_seconds": row.get::<f64, _>("duration_seconds"),
+                "ai_title": row.get::<Option<String>, _>("ai_title"),
+                "ai_description": row.get::<Option<String>, _>("ai_description"),
+                "ai_confidence_score": row.get::<Option<f64>, _>("ai_confidence_score"),
+                "youtube_video_id": row.get::<Option<String>, _>("youtube_video_id"),
+                "youtube_url": row.get::<Option<String>, _>("youtube_url"),
+                "upload_status": row.get::<String, _>("upload_status"),
+                "published_at": row.get::<Option<chrono::DateTime<chrono::Utc>>, _>("published_at"),
+                "views_24h": row.get::<i32, _>("views_24h"),
+                "likes_24h": row.get::<i32, _>("likes_24h"),
+                "comments_24h": row.get::<i32, _>("comments_24h"),
+            })
         })
-    }).collect();
+        .collect();
 
     Ok(Json(json!({
         "success": true,
@@ -4377,7 +4537,7 @@ pub async fn admin_clipping_throughput(
         FROM hours h
         LEFT JOIN job_counts jc ON jc.hour_bucket = h.hour_bucket
         ORDER BY h.hour_bucket ASC
-        "#
+        "#,
     )
     .fetch_all(&state.db_pool)
     .await
@@ -4386,13 +4546,16 @@ pub async fn admin_clipping_throughput(
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
-    let data: Vec<serde_json::Value> = rows.iter().map(|r| {
-        json!({
-            "hour": r.hour_bucket,
-            "completed": r.completed,
-            "failed": r.failed,
+    let data: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| {
+            json!({
+                "hour": r.hour_bucket,
+                "completed": r.completed,
+                "failed": r.failed,
+            })
         })
-    }).collect();
+        .collect();
 
     Ok(Json(json!({ "success": true, "data": data })))
 }
@@ -5141,7 +5304,7 @@ pub async fn admin_viral_factor_performance(
                 last_calculated_at
          FROM viral_factor_performance
          WHERE viral_factor != 'initialization'
-         ORDER BY performance_score DESC"
+         ORDER BY performance_score DESC",
     )
     .fetch_all(&state.db_pool)
     .await;
@@ -5181,7 +5344,7 @@ pub async fn admin_channel_health(
                 sch.last_calculated_at
          FROM youtube_source_channels sc
          LEFT JOIN source_channel_health sch ON sch.source_channel_id = sc.id
-         ORDER BY COALESCE(sch.health_score, 1.0) ASC, sc.channel_name"
+         ORDER BY COALESCE(sch.health_score, 1.0) ASC, sc.channel_name",
     )
     .fetch_all(&state.db_pool)
     .await;
@@ -5217,7 +5380,7 @@ pub async fn admin_learning_recommendations(
                 is_active, created_at, updated_at
          FROM learning_recommendations
          WHERE is_active = true
-         ORDER BY confidence DESC"
+         ORDER BY confidence DESC",
     )
     .fetch_all(&state.db_pool)
     .await;
@@ -5249,25 +5412,31 @@ pub async fn admin_thumbnail_stats(
             COUNT(*) AS count
          FROM extracted_clips
          GROUP BY thumbnail_generation_method
-         ORDER BY count DESC"
+         ORDER BY count DESC",
     )
     .fetch_all(&state.db_pool)
     .await;
 
     match rows {
         Ok(rows) => {
-            let stats: Vec<serde_json::Value> = rows.iter().map(|r| {
-                serde_json::json!({
-                    "method": r.try_get::<String, _>("method").unwrap_or_default(),
-                    "count": r.try_get::<i64, _>("count").unwrap_or(0),
+            let stats: Vec<serde_json::Value> = rows
+                .iter()
+                .map(|r| {
+                    serde_json::json!({
+                        "method": r.try_get::<String, _>("method").unwrap_or_default(),
+                        "count": r.try_get::<i64, _>("count").unwrap_or(0),
+                    })
                 })
-            }).collect();
+                .collect();
 
-            let total: i64 = stats.iter()
-                .map(|s| s["count"].as_i64().unwrap_or(0))
-                .sum();
-            let ai_count: i64 = stats.iter()
-                .filter(|s| s["method"].as_str().map_or(false, |m| m.contains("ai") || m.contains("hybrid")))
+            let total: i64 = stats.iter().map(|s| s["count"].as_i64().unwrap_or(0)).sum();
+            let ai_count: i64 = stats
+                .iter()
+                .filter(|s| {
+                    s["method"]
+                        .as_str()
+                        .map_or(false, |m| m.contains("ai") || m.contains("hybrid"))
+                })
                 .map(|s| s["count"].as_i64().unwrap_or(0))
                 .sum();
             let ai_rate = if total > 0 { ai_count * 100 / total } else { 0 };
@@ -5280,9 +5449,7 @@ pub async fn admin_thumbnail_stats(
                 "ai_success_rate_pct": ai_rate,
             }))
         }
-        Err(e) => {
-            axum::Json(serde_json::json!({ "success": false, "error": e.to_string() }))
-        }
+        Err(e) => axum::Json(serde_json::json!({ "success": false, "error": e.to_string() })),
     }
 }
 
@@ -5959,7 +6126,12 @@ pub async fn api_list_test_runs(
     )
     .fetch_all(&state.db_pool)
     .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() }))))?;
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e.to_string() })),
+        )
+    })?;
 
     let runs: Vec<serde_json::Value> = rows
         .into_iter()
@@ -5995,8 +6167,18 @@ pub async fn api_get_test_run(
     .bind(id)
     .fetch_optional(&state.db_pool)
     .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() }))))?
-    .ok_or_else(|| (StatusCode::NOT_FOUND, Json(json!({ "error": "Test run not found" }))))?;
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e.to_string() })),
+        )
+    })?
+    .ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "Test run not found" })),
+        )
+    })?;
 
     let results = sqlx::query(
         "SELECT id, test_name, gig_type, prompt, status, \
@@ -6008,7 +6190,12 @@ pub async fn api_get_test_run(
     .bind(id)
     .fetch_all(&state.db_pool)
     .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() }))))?;
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e.to_string() })),
+        )
+    })?;
 
     let results_json: Vec<serde_json::Value> = results
         .into_iter()
@@ -6265,7 +6452,8 @@ setInterval(loadRuns, 15000);
 }
 
 pub async fn admin_test_run_detail_page(Path(id): Path<String>) -> Html<String> {
-    let html = format!(r###"<!DOCTYPE html>
+    let html = format!(
+        r###"<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -6487,7 +6675,9 @@ async function load() {{
 load();
 </script>
 </body>
-</html>"###, id = id);
+</html>"###,
+        id = id
+    );
     Html(html)
 }
 
@@ -6518,7 +6708,16 @@ pub async fn delivery_page(
                 let n: String = row.get("test_name");
                 let g: String = row.get("gig_type");
                 let s: String = row.get("status");
-                let u: Option<String> = row.try_get("output_r2_url").ok();
+                let u = row
+                    .try_get::<Option<String>, _>("output_r2_url")
+                    .ok()
+                    .flatten();
+                let u = match u {
+                    Some(existing) => refresh_r2_presigned_url_from_existing(&state, &existing)
+                        .await
+                        .or(Some(existing)),
+                    None => None,
+                };
                 let f: Option<String> = row.try_get("output_filename").ok();
                 let sc: Option<i32> = row.try_get("llm_review_score").ok();
                 let fb: Option<String> = row.try_get("llm_review_feedback").ok();
@@ -6542,8 +6741,26 @@ pub async fn delivery_page(
                     let n: String = row.get("title");
                     let g: String = row.get("gig_type");
                     let s: String = row.get("status");
-                    let full_u: Option<String> = row.try_get("output_r2_url").ok().flatten();
-                    let preview_u: Option<String> = row.try_get("preview_r2_url").ok().flatten();
+                    let full_u = row
+                        .try_get::<Option<String>, _>("output_r2_url")
+                        .ok()
+                        .flatten();
+                    let preview_u = row
+                        .try_get::<Option<String>, _>("preview_r2_url")
+                        .ok()
+                        .flatten();
+                    let full_u = match full_u {
+                        Some(existing) => refresh_r2_presigned_url_from_existing(&state, &existing)
+                            .await
+                            .or(Some(existing)),
+                        None => None,
+                    };
+                    let preview_u = match preview_u {
+                        Some(existing) => refresh_r2_presigned_url_from_existing(&state, &existing)
+                            .await
+                            .or(Some(existing)),
+                        None => None,
+                    };
                     let f: Option<String> = row.try_get("output_filename").ok();
                     let price: Option<sqlx::types::Decimal> =
                         row.try_get("unlock_price_usdc").ok().flatten();
@@ -6552,10 +6769,24 @@ pub async fn delivery_page(
                     // Pick which URL to show: locked → preview (or full fallback),
                     // unlocked → full clean HD. The preview URL is the agent's
                     // watermarked 30-60s clip; paying unlocks the full 3-4min.
-                    let is_unlocked_now = price.is_none()
-                        || until.map(|t| t > chrono::Utc::now()).unwrap_or(false);
-                    let served = if is_unlocked_now { full_u.clone() } else { preview_u.or(full_u.clone()) };
-                    (Some(n), Some(g), Some(s), served, f, None, None, price, until)
+                    let is_unlocked_now =
+                        price.is_none() || until.map(|t| t > chrono::Utc::now()).unwrap_or(false);
+                    let served = if is_unlocked_now {
+                        full_u.clone()
+                    } else {
+                        preview_u.or(full_u.clone())
+                    };
+                    (
+                        Some(n),
+                        Some(g),
+                        Some(s),
+                        served,
+                        f,
+                        None,
+                        None,
+                        price,
+                        until,
+                    )
                 } else {
                     (None, None, None, None, None, None, None, None, None)
                 }
@@ -6567,8 +6798,11 @@ pub async fn delivery_page(
     // Unlocked = the deliverable can show full-quality download buttons.
     // Either: no price set (free delivery), or unlocked_until is in the future.
     let is_unlocked = unlock_price.is_none()
-        || unlocked_until.map(|t| t > chrono::Utc::now()).unwrap_or(false);
-    let price_cents: u64 = unlock_price.as_ref()
+        || unlocked_until
+            .map(|t| t > chrono::Utc::now())
+            .unwrap_or(false);
+    let price_cents: u64 = unlock_price
+        .as_ref()
         .and_then(|d| {
             // Decimal → cents (multiply by 100, truncate fractional).
             use sqlx::types::Decimal;
@@ -6581,7 +6815,8 @@ pub async fn delivery_page(
     let result: Option<()> = name.as_ref().map(|_| ());
 
     let html = match result {
-        None => format!(r#"<!DOCTYPE html>
+        None => format!(
+            r#"<!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8">
 <title>Delivery Not Found — VideoSync</title>
 <style>
@@ -6592,7 +6827,8 @@ pub async fn delivery_page(
   p {{ color: #9999bb; }}
 </style></head>
 <body><div class="box"><h1>404</h1><p>Delivery not found. The link may have expired.</p></div></body>
-</html>"#),
+</html>"#
+        ),
         Some(()) => {
             let name = name.unwrap_or_default();
             let gig_type = gig_type.unwrap_or_default();
@@ -6602,22 +6838,30 @@ pub async fn delivery_page(
             let score = score;
             let feedback = feedback;
 
-            let is_image = filename.as_deref()
+            let is_image = filename
+                .as_deref()
                 .map(|f| f.ends_with(".png") || f.ends_with(".jpg"))
                 .unwrap_or(false);
 
             let media_html = match &r2_url {
-                None => r#"<div class="no-media">⏳ Render in progress — check back shortly</div>"#.to_string(),
+                None => r#"<div class="no-media">⏳ Render in progress — check back shortly</div>"#
+                    .to_string(),
                 Some(url) => {
                     if is_image {
                         let watermark_overlay = if !is_unlocked {
                             r#"<div class="watermark"><div class="watermark-label">PREVIEW · UNLOCK FULL HD BELOW</div></div>"#
-                        } else { "" };
-                        format!(r#"<div class="media-stack"><img src="{url}" alt="Delivered image" style="max-width:100%;border-radius:12px;">{watermark_overlay}</div>"#)
+                        } else {
+                            ""
+                        };
+                        format!(
+                            r#"<div class="media-stack"><img src="{url}" alt="Delivered image" style="max-width:100%;border-radius:12px;">{watermark_overlay}</div>"#
+                        )
                     } else {
                         let watermark_overlay = if !is_unlocked {
                             r#"<div class="watermark"><div class="watermark-label">PREVIEW · UNLOCK FULL HD BELOW</div></div>"#
-                        } else { "" };
+                        } else {
+                            ""
+                        };
                         // Disable right-click + downloads on the locked preview
                         // by removing `controlsList=download` and adding
                         // `disablepictureinpicture` etc. Best-effort.
@@ -6626,11 +6870,13 @@ pub async fn delivery_page(
                         } else {
                             r#"controls controlsList="nodownload" disablepictureinpicture oncontextmenu="return false""#
                         };
-                        format!(r#"<div class="media-stack">
+                        format!(
+                            r#"<div class="media-stack">
 <video {video_attrs} style="width:100%;border-radius:12px;background:#000;">
   <source src="{url}" type="video/mp4">
   Your browser does not support the video tag.
-</video>{watermark_overlay}</div>"#)
+</video>{watermark_overlay}</div>"#
+                        )
                     }
                 }
             };
@@ -6641,27 +6887,34 @@ pub async fn delivery_page(
                 (None, _) => String::new(),
                 (Some(url), true) => {
                     let fname = filename.as_deref().unwrap_or("output");
-                    format!(r#"<a href="{url}" download="{fname}" class="btn-download">⬇ Download HD {fname}</a>"#)
+                    format!(
+                        r#"<a href="{url}" download="{fname}" class="btn-download">⬇ Download HD {fname}</a>"#
+                    )
                 }
                 (Some(_), false) => {
                     let dollars = price_cents as f64 / 100.0;
-                    format!(r#"<div class="unlock-cta">
+                    format!(
+                        r#"<div class="unlock-cta">
   <div class="unlock-headline">Preview only — unlock the HD download for ${dollars:.2} USDC</div>
   <div class="unlock-sub">Pay once with any wallet (Phantom, Coinbase, MetaMask) on Base. 30-day access. No account needed.</div>
   <button id="x402-unlock-btn" class="btn-download" style="background:#7a4cff;margin-top:8px">🔓 Pay ${dollars:.2} USDC &amp; Unlock</button>
   <div id="x402-status" style="margin-top:10px;font-size:13px;color:#9999bb"></div>
-</div>"#)
+</div>"#
+                    )
                 }
             };
 
             let score_html = match score {
                 Some(s) if s > 0 => {
-                    let stars: String = "★".repeat(s as usize / 2) + &"☆".repeat(5 - s as usize / 2);
+                    let stars: String =
+                        "★".repeat(s as usize / 2) + &"☆".repeat(5 - s as usize / 2);
                     let fb = feedback.as_deref().unwrap_or("");
-                    format!(r#"<div class="review-box">
+                    format!(
+                        r#"<div class="review-box">
   <div class="score">AI Quality Score: <strong>{s}/10</strong> <span class="stars">{stars}</span></div>
   <p class="feedback">{fb}</p>
-</div>"#)
+</div>"#
+                    )
                 }
                 _ => String::new(),
             };
@@ -6673,7 +6926,8 @@ pub async fn delivery_page(
                 _ => "#9ca3af",
             };
 
-            format!(r#"<!DOCTYPE html>
+            format!(
+                r#"<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -6920,7 +7174,8 @@ pub async fn delivery_page(
 }})();
 </script>
 </body>
-</html>"#)
+</html>"#
+            )
         }
     };
 
@@ -6945,14 +7200,13 @@ pub async fn delivery_unlock_spec(
     };
 
     // Look up the price + title for the spec description.
-    let row = sqlx::query(
-        "SELECT title, unlock_price_usdc, source_url FROM deliveries WHERE id = $1"
-    )
-    .bind(uuid)
-    .fetch_optional(&state.db_pool)
-    .await
-    .ok()
-    .flatten();
+    let row =
+        sqlx::query("SELECT title, unlock_price_usdc, source_url FROM deliveries WHERE id = $1")
+            .bind(uuid)
+            .fetch_optional(&state.db_pool)
+            .await
+            .ok()
+            .flatten();
 
     let (title, price_usd, source_url) = match row {
         Some(r) => {
@@ -6979,14 +7233,16 @@ pub async fn delivery_unlock_spec(
             (d * hundred).trunc().to_string().parse::<u64>().ok()
         })
         .unwrap_or_else(|| {
-            let fallback_usd = crate::handlers::prospects::unlock_price_for(None, source_url.is_some());
+            let fallback_usd =
+                crate::handlers::prospects::unlock_price_for(None, source_url.is_some());
             (fallback_usd * 100.0).round() as u64
         });
 
     let resource_url = format!("{}/delivery/{}/unlock", base_url(), uuid);
-    let description  = format!("Unlock HD download — {}", title);
+    let description = format!("Unlock HD download — {}", title);
 
-    let spec = crate::x402::build_payment_required(price_cents, &recipient, &resource_url, &description);
+    let spec =
+        crate::x402::build_payment_required(price_cents, &recipient, &resource_url, &description);
     Json(serde_json::to_value(spec).unwrap_or(json!({"error": "spec serialise failed"})))
 }
 
@@ -7000,26 +7256,48 @@ pub async fn delivery_unlock(
 ) -> (axum::http::StatusCode, Json<serde_json::Value>) {
     let uuid = match uuid::Uuid::parse_str(&id) {
         Ok(u) => u,
-        Err(_) => return (axum::http::StatusCode::BAD_REQUEST, Json(json!({"success": false, "error": "Invalid delivery id"}))),
+        Err(_) => {
+            return (
+                axum::http::StatusCode::BAD_REQUEST,
+                Json(json!({"success": false, "error": "Invalid delivery id"})),
+            )
+        }
     };
 
     let x_payment = match headers.get("X-Payment").and_then(|h| h.to_str().ok()) {
         Some(s) if !s.is_empty() => s.to_string(),
-        _ => return (axum::http::StatusCode::PAYMENT_REQUIRED,
-                     Json(json!({"success": false, "error": "Missing X-Payment header. Fetch /unlock-spec first, sign with your wallet, then retry with the signed payload."}))),
+        _ => {
+            return (
+                axum::http::StatusCode::PAYMENT_REQUIRED,
+                Json(
+                    json!({"success": false, "error": "Missing X-Payment header. Fetch /unlock-spec first, sign with your wallet, then retry with the signed payload."}),
+                ),
+            )
+        }
     };
 
     // Re-derive the same requirements we'd put in the 402 spec so the
     // facilitator can sanity-check the signature. Has to match exactly.
     let row = match sqlx::query(
-        "SELECT title, unlock_price_usdc, source_url FROM deliveries WHERE id = $1"
+        "SELECT title, unlock_price_usdc, source_url FROM deliveries WHERE id = $1",
     )
     .bind(uuid)
     .fetch_optional(&state.db_pool)
-    .await {
+    .await
+    {
         Ok(Some(r)) => r,
-        Ok(None)    => return (axum::http::StatusCode::NOT_FOUND, Json(json!({"success": false, "error": "Delivery not found"}))),
-        Err(e)      => return (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"success": false, "error": format!("DB error: {}", e)}))),
+        Ok(None) => {
+            return (
+                axum::http::StatusCode::NOT_FOUND,
+                Json(json!({"success": false, "error": "Delivery not found"})),
+            )
+        }
+        Err(e) => {
+            return (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"success": false, "error": format!("DB error: {}", e)})),
+            )
+        }
     };
 
     let title: String = row.get("title");
@@ -7032,29 +7310,43 @@ pub async fn delivery_unlock(
             (d * hundred).trunc().to_string().parse::<u64>().ok()
         })
         .unwrap_or_else(|| {
-            let fallback_usd = crate::handlers::prospects::unlock_price_for(None, source_url.is_some());
+            let fallback_usd =
+                crate::handlers::prospects::unlock_price_for(None, source_url.is_some());
             (fallback_usd * 100.0).round() as u64
         });
 
     let recipient = match std::env::var("X402_RECIPIENT_ADDRESS") {
         Ok(a) if !a.is_empty() => a,
-        _ => return (axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                     Json(json!({"success": false, "error": "X402_RECIPIENT_ADDRESS not configured"}))),
+        _ => {
+            return (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"success": false, "error": "X402_RECIPIENT_ADDRESS not configured"})),
+            )
+        }
     };
 
     let resource_url = format!("{}/delivery/{}/unlock", base_url(), uuid);
-    let description  = format!("Unlock HD download — {}", title);
-    let spec = crate::x402::build_payment_required(price_cents, &recipient, &resource_url, &description);
-    let req  = match spec.accepts.first() {
+    let description = format!("Unlock HD download — {}", title);
+    let spec =
+        crate::x402::build_payment_required(price_cents, &recipient, &resource_url, &description);
+    let req = match spec.accepts.first() {
         Some(r) => r.clone(),
-        None    => return (axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                           Json(json!({"success": false, "error": "Failed to build payment requirements"}))),
+        None => {
+            return (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"success": false, "error": "Failed to build payment requirements"})),
+            )
+        }
     };
 
     let tx_hash = match crate::x402::settle_or_reject(&x_payment, &req).await {
-        Ok(h)  => h,
-        Err(e) => return (axum::http::StatusCode::PAYMENT_REQUIRED,
-                          Json(json!({"success": false, "error": e}))),
+        Ok(h) => h,
+        Err(e) => {
+            return (
+                axum::http::StatusCode::PAYMENT_REQUIRED,
+                Json(json!({"success": false, "error": e})),
+            )
+        }
     };
 
     // Persist the unlock + receipt. 30-day window.
@@ -7062,7 +7354,7 @@ pub async fn delivery_unlock(
         "UPDATE deliveries
          SET unlocked_until = NOW() + INTERVAL '30 days',
              payment_receipt_id = $1
-         WHERE id = $2"
+         WHERE id = $2",
     )
     .bind(&tx_hash)
     .bind(uuid)
@@ -7079,13 +7371,18 @@ pub async fn delivery_unlock(
         uuid,
         tx_preview
     );
-    tokio::spawn(async move { crate::telegram_bot::notify_admin(&notify_text).await; });
+    tokio::spawn(async move {
+        crate::telegram_bot::notify_admin(&notify_text).await;
+    });
 
-    (axum::http::StatusCode::OK, Json(json!({
-        "success":    true,
-        "tx_hash":    tx_hash,
-        "unlocked_for_days": 30,
-    })))
+    (
+        axum::http::StatusCode::OK,
+        Json(json!({
+            "success":    true,
+            "tx_hash":    tx_hash,
+            "unlocked_for_days": 30,
+        })),
+    )
 }
 
 /// Read the public base URL from env, falling back to videosync.video.
@@ -7101,13 +7398,13 @@ fn base_url() -> String {
 
 #[derive(serde::Deserialize)]
 pub struct CreateDeliveryRequest {
-    pub client_ref:  Option<String>,
-    pub title:       String,
-    pub gig_type:    String,
-    pub prompt:      String,
-    pub style:       Option<String>,
-    pub duration:    Option<f64>,
-    pub extra:       Option<serde_json::Value>,
+    pub client_ref: Option<String>,
+    pub title: String,
+    pub gig_type: String,
+    pub prompt: String,
+    pub style: Option<String>,
+    pub duration: Option<f64>,
+    pub extra: Option<serde_json::Value>,
 }
 
 #[derive(serde::Deserialize)]
@@ -7120,9 +7417,9 @@ pub async fn api_create_delivery(
     Extension(state): Extension<Arc<AppState>>,
     Json(req): Json<CreateDeliveryRequest>,
 ) -> Json<serde_json::Value> {
-    let style    = req.style.unwrap_or_else(|| "cinematic".to_string());
+    let style = req.style.unwrap_or_else(|| "cinematic".to_string());
     let duration = req.duration.unwrap_or(10.0);
-    let extra    = req.extra.unwrap_or(serde_json::Value::Null);
+    let extra = req.extra.unwrap_or(serde_json::Value::Null);
 
     let row = sqlx::query(
         "INSERT INTO deliveries (client_ref, title, gig_type, prompt, style, duration, extra_args, status) \
@@ -7168,20 +7465,26 @@ pub async fn api_list_deliveries(
         Err(e) => return Json(json!({"error": format!("DB query failed: {e}")})),
     };
 
-    let deliveries: Vec<serde_json::Value> = rows.iter().map(|r| {
-        json!({
-            "id":           r.get::<Uuid, _>("id").to_string(),
-            "client_ref":   r.try_get::<String, _>("client_ref").ok(),
-            "title":        r.get::<String, _>("title"),
-            "gig_type":     r.get::<String, _>("gig_type"),
-            "status":       r.get::<String, _>("status"),
-            "output_r2_url":  r.try_get::<String, _>("output_r2_url").ok(),
-            "output_filename": r.try_get::<String, _>("output_filename").ok(),
-            "created_at":   r.get::<chrono::DateTime<chrono::Utc>, _>("created_at").to_rfc3339(),
-            "completed_at": r.try_get::<chrono::DateTime<chrono::Utc>, _>("completed_at").ok().map(|d| d.to_rfc3339()),
-            "error":        r.try_get::<String, _>("error_message").ok(),
-        })
-    }).collect();
+    let mut deliveries = Vec::with_capacity(rows.len());
+    for row in &rows {
+        let output_url = row
+            .try_get::<String, _>("output_r2_url")
+            .ok()
+            .filter(|value| !value.trim().is_empty());
+
+        deliveries.push(json!({
+            "id":           row.get::<Uuid, _>("id").to_string(),
+            "client_ref":   row.try_get::<String, _>("client_ref").ok(),
+            "title":        row.get::<String, _>("title"),
+            "gig_type":     row.get::<String, _>("gig_type"),
+            "status":       row.get::<String, _>("status"),
+            "output_r2_url": refreshed_r2_media_value(&state, output_url).await,
+            "output_filename": row.try_get::<String, _>("output_filename").ok(),
+            "created_at":   row.get::<chrono::DateTime<chrono::Utc>, _>("created_at").to_rfc3339(),
+            "completed_at": row.try_get::<chrono::DateTime<chrono::Utc>, _>("completed_at").ok().map(|d| d.to_rfc3339()),
+            "error":        row.try_get::<String, _>("error_message").ok(),
+        }));
+    }
 
     Json(json!({"deliveries": deliveries}))
 }
@@ -7205,8 +7508,13 @@ pub async fn api_list_portfolio_samples(
         Err(e) => return Json(json!({"success": false, "error": format!("DB query failed: {e}")})),
     };
 
-    let samples = rows.iter().map(portfolio_sample_json_from_row).collect::<Vec<_>>();
-    Json(json!({"success": true, "samples": samples, "targets": crate::portfolio_samples::crypto_saas_targets()}))
+    let mut samples = Vec::with_capacity(rows.len());
+    for row in &rows {
+        samples.push(portfolio_sample_json_with_fresh_media_urls(&state, row).await);
+    }
+    Json(
+        json!({"success": true, "samples": samples, "targets": crate::portfolio_samples::crypto_saas_targets()}),
+    )
 }
 
 pub async fn api_generate_crypto_saas_portfolio_samples(
@@ -7237,7 +7545,8 @@ pub async fn api_generate_crypto_saas_portfolio_samples(
                 if status == "failed" {
                     let (prompt, extra) = build_crypto_saas_render_inputs(&state, target).await;
                     let title = format!("Portfolio sample - {} Web3 SaaS video", target.company);
-                    let unlock_price = crate::handlers::prospects::unlock_price_for(Some("landing_page"), true);
+                    let unlock_price =
+                        crate::handlers::prospects::unlock_price_for(Some("landing_page"), true);
                     let delivery_id: Uuid = row.get("id");
 
                     let updated = sqlx::query(
@@ -7265,12 +7574,18 @@ pub async fn api_generate_crypto_saas_portfolio_samples(
                             let delay_seconds = (queued as u64) * 90;
                             tokio::spawn(async move {
                                 if delay_seconds > 0 {
-                                    tokio::time::sleep(std::time::Duration::from_secs(delay_seconds)).await;
+                                    tokio::time::sleep(std::time::Duration::from_secs(
+                                        delay_seconds,
+                                    ))
+                                    .await;
                                 }
                                 run_delivery_job(delivery_id, render_state).await;
                             });
                             queued += 1;
-                            samples.push(portfolio_sample_json_from_row(&updated_row));
+                            samples.push(
+                                portfolio_sample_json_with_fresh_media_urls(&state, &updated_row)
+                                    .await,
+                            );
                         }
                         Err(e) => {
                             samples.push(json!({
@@ -7284,7 +7599,7 @@ pub async fn api_generate_crypto_saas_portfolio_samples(
                     }
                     continue;
                 }
-                samples.push(portfolio_sample_json_from_row(&row));
+                samples.push(portfolio_sample_json_with_fresh_media_urls(&state, &row).await);
                 continue;
             }
             Ok(None) => {}
@@ -7345,7 +7660,7 @@ pub async fn api_generate_crypto_saas_portfolio_samples(
         });
 
         queued += 1;
-        samples.push(portfolio_sample_json_from_row(&row));
+        samples.push(portfolio_sample_json_with_fresh_media_urls(&state, &row).await);
     }
 
     Json(json!({
@@ -7382,6 +7697,98 @@ async fn build_crypto_saas_render_inputs(
     let prompt = crate::portfolio_samples::build_crypto_saas_prompt(target);
     let extra = crate::portfolio_samples::build_crypto_saas_extra(target, hero_url.as_deref());
     (prompt, extra)
+}
+
+async fn portfolio_sample_json_with_fresh_media_urls(
+    state: &Arc<AppState>,
+    row: &sqlx::postgres::PgRow,
+) -> serde_json::Value {
+    let mut sample = portfolio_sample_json_from_row(row);
+
+    if let Some(obj) = sample.as_object_mut() {
+        let output_url = obj
+            .get("output_r2_url")
+            .and_then(|value| value.as_str())
+            .filter(|value| !value.trim().is_empty())
+            .map(str::to_string);
+        let preview_url = obj
+            .get("preview_r2_url")
+            .and_then(|value| value.as_str())
+            .filter(|value| !value.trim().is_empty())
+            .map(str::to_string);
+
+        obj.insert(
+            "output_r2_url".to_string(),
+            refreshed_r2_media_value(state, output_url).await,
+        );
+        obj.insert(
+            "preview_r2_url".to_string(),
+            refreshed_r2_media_value(state, preview_url).await,
+        );
+    }
+
+    sample
+}
+
+async fn refreshed_r2_media_value(
+    state: &Arc<AppState>,
+    existing_url: Option<String>,
+) -> serde_json::Value {
+    let Some(existing_url) = existing_url else {
+        return serde_json::Value::Null;
+    };
+
+    let refreshed = refresh_r2_presigned_url_from_existing(state, &existing_url)
+        .await
+        .unwrap_or(existing_url);
+
+    serde_json::Value::String(refreshed)
+}
+
+async fn refresh_r2_presigned_url_from_existing(
+    state: &Arc<AppState>,
+    existing_url: &str,
+) -> Option<String> {
+    let r2 = state.r2_client.as_ref()?;
+    let key = extract_r2_object_key_from_url(existing_url, &r2.bucket)?;
+
+    match r2.presign_get(&key, 7 * 24 * 3600).await {
+        Ok(url) => Some(url),
+        Err(error) => {
+            tracing::warn!(
+                key = %key,
+                "Failed to refresh presigned R2 URL from existing delivery media URL: {}",
+                error
+            );
+            None
+        }
+    }
+}
+
+fn extract_r2_object_key_from_url(existing_url: &str, bucket: &str) -> Option<String> {
+    let parsed = reqwest::Url::parse(existing_url).ok()?;
+    let host = parsed.host_str().unwrap_or_default();
+    let segments = parsed
+        .path_segments()?
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+
+    if segments.is_empty() {
+        return None;
+    }
+
+    if host.starts_with(&format!("{bucket}.")) {
+        return Some(segments.join("/"));
+    }
+
+    if segments.first().copied() == Some(bucket) {
+        if segments.len() < 2 {
+            return None;
+        }
+        return Some(segments[1..].join("/"));
+    }
+
+    Some(segments.join("/"))
 }
 
 fn portfolio_sample_json_from_row(row: &sqlx::postgres::PgRow) -> serde_json::Value {
@@ -7795,10 +8202,7 @@ pub async fn admin_portfolio_samples_page() -> Html<String> {
 "#.to_string())
 }
 
-async fn resolve_reference_image_url(
-    state: &Arc<AppState>,
-    source_url: &str,
-) -> Option<String> {
+async fn resolve_reference_image_url(state: &Arc<AppState>, source_url: &str) -> Option<String> {
     let trimmed = source_url.trim();
     if trimmed.is_empty() {
         return None;
@@ -7811,7 +8215,8 @@ async fn resolve_reference_image_url(
     let resolved_url = match reqwest::Url::parse(trimmed) {
         Ok(url) => {
             let path = url.path().to_ascii_lowercase();
-            let looks_like_html = path.is_empty() || path == "/" || !is_probable_reference_image_url(trimmed);
+            let looks_like_html =
+                path.is_empty() || path == "/" || !is_probable_reference_image_url(trimmed);
             if looks_like_html {
                 match crate::handlers::prospects::fetch_landing_page_hero(trimmed).await {
                     Some(hero) if is_probable_reference_image_url(&hero) => hero,
@@ -7849,10 +8254,7 @@ fn is_probable_reference_image_url(source_url: &str) -> bool {
         || path.ends_with(".svg")
 }
 
-async fn rehost_reference_image_to_r2(
-    state: &Arc<AppState>,
-    source_url: &str,
-) -> Option<String> {
+async fn rehost_reference_image_to_r2(state: &Arc<AppState>, source_url: &str) -> Option<String> {
     let Some(r2) = state.r2_client.as_ref() else {
         tracing::warn!("rehost_reference_image_to_r2: R2 not configured, using original URL");
         return None;
@@ -7930,14 +8332,12 @@ async fn rehost_reference_image_to_r2(
         return None;
     }
 
-    let parsed_ext = reqwest::Url::parse(source_url)
-        .ok()
-        .and_then(|url| {
-            std::path::Path::new(url.path())
-                .extension()
-                .and_then(|ext| ext.to_str())
-                .map(|ext| ext.to_ascii_lowercase())
-        });
+    let parsed_ext = reqwest::Url::parse(source_url).ok().and_then(|url| {
+        std::path::Path::new(url.path())
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| ext.to_ascii_lowercase())
+    });
     let ext = parsed_ext
         .or_else(|| {
             if content_type.contains("png") {
@@ -7965,7 +8365,11 @@ async fn rehost_reference_image_to_r2(
     };
 
     let key = format!("assets/reference-images/{}.{}", digest, ext);
-    let local_path = format!("outputs/reference_delivery_{}.{}", uuid::Uuid::new_v4(), ext);
+    let local_path = format!(
+        "outputs/reference_delivery_{}.{}",
+        uuid::Uuid::new_v4(),
+        ext
+    );
 
     if let Err(error) = tokio::fs::write(&local_path, &bytes).await {
         tracing::warn!(
@@ -8037,7 +8441,8 @@ pub async fn run_delivery_job(delivery_id: Uuid, state: Arc<AppState>) {
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(1800);
-    let max_poll_attempts = std::cmp::max(1u64, poll_timeout_secs.div_ceil(poll_interval_secs)) as u16;
+    let max_poll_attempts =
+        std::cmp::max(1u64, poll_timeout_secs.div_ceil(poll_interval_secs)) as u16;
 
     // Fetch job details
     let row = sqlx::query(
@@ -8055,11 +8460,12 @@ pub async fn run_delivery_job(delivery_id: Uuid, state: Arc<AppState>) {
         }
     };
 
-    let gig_type: String        = row.get("gig_type");
-    let prompt:   String        = row.get("prompt");
-    let style:    String        = row.get("style");
-    let duration: f64           = row.get("duration");
-    let extra: serde_json::Value = row.try_get::<serde_json::Value, _>("extra_args")
+    let gig_type: String = row.get("gig_type");
+    let prompt: String = row.get("prompt");
+    let style: String = row.get("style");
+    let duration: f64 = row.get("duration");
+    let extra: serde_json::Value = row
+        .try_get::<serde_json::Value, _>("extra_args")
         .unwrap_or(serde_json::Value::Null);
 
     // Check BlenderMCPClient
@@ -8077,7 +8483,12 @@ pub async fn run_delivery_job(delivery_id: Uuid, state: Arc<AppState>) {
         }
     };
 
-    let _delivery_permit = match state.delivery_render_semaphore.clone().acquire_owned().await {
+    let _delivery_permit = match state
+        .delivery_render_semaphore
+        .clone()
+        .acquire_owned()
+        .await
+    {
         Ok(permit) => permit,
         Err(_) => {
             let _ = sqlx::query(
@@ -8098,7 +8509,8 @@ pub async fn run_delivery_job(delivery_id: Uuid, state: Arc<AppState>) {
         .await;
 
     // Build tool + args
-    let (tool, args, url_key, ext) = build_delivery_tool_args(&gig_type, &prompt, &style, duration, &extra);
+    let (tool, args, url_key, ext) =
+        build_delivery_tool_args(&gig_type, &prompt, &style, duration, &extra);
     let args = normalize_blender_reference_args(&state, &tool, args).await;
 
     // Submit to BlenderMCPServer async job queue
@@ -8136,8 +8548,11 @@ pub async fn run_delivery_job(delivery_id: Uuid, state: Arc<AppState>) {
                 break;
             }
             Some("failed") | Some("error") => {
-                let msg = status.get("error").and_then(|v| v.as_str())
-                    .unwrap_or("render failed").to_string();
+                let msg = status
+                    .get("error")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("render failed")
+                    .to_string();
                 let _ = sqlx::query(
                     "UPDATE deliveries SET status='failed', error_message=$1, completed_at=NOW() WHERE id=$2",
                 )
@@ -8156,8 +8571,8 @@ pub async fn run_delivery_job(delivery_id: Uuid, state: Arc<AppState>) {
             // adjust to the specific issue flagged. Track the best
             // attempt across all retries so we always ship something.
             const MAX_BLENDER_QA_RETRIES: usize = 5;
-            let mut best_url    = url.clone();
-            let mut best_score  = -1i32;
+            let mut best_url = url.clone();
+            let mut best_score = -1i32;
             let mut best_review = None::<crate::render_review::ReviewResult>;
             let mut current_url = url.clone();
             let mut current_prompt = prompt.clone();
@@ -8170,30 +8585,47 @@ pub async fn run_delivery_job(delivery_id: Uuid, state: Arc<AppState>) {
                     &current_prompt,
                     &tool,
                     Some(delivery_id),
-                ).await;
+                )
+                .await;
 
                 if review.score > best_score {
-                    best_score  = review.score;
-                    best_url    = current_url.clone();
+                    best_score = review.score;
+                    best_url = current_url.clone();
                     best_review = Some(review.clone());
                 }
 
                 retries_used = attempt as i32;
 
                 if review.pass {
-                    tracing::info!("✅ Delivery {} PASSED review on attempt {} (score {})",
-                        delivery_id, attempt + 1, review.score);
+                    tracing::info!(
+                        "✅ Delivery {} PASSED review on attempt {} (score {})",
+                        delivery_id,
+                        attempt + 1,
+                        review.score
+                    );
                     break;
                 }
 
-                if attempt + 1 >= MAX_BLENDER_QA_RETRIES { break; }
+                if attempt + 1 >= MAX_BLENDER_QA_RETRIES {
+                    break;
+                }
 
                 // Retry with the reviewer's hint prepended
-                let hint = review.retry_hint.clone().unwrap_or_else(|| review.feedback.clone());
-                tracing::info!("🔄 Retrying delivery {} (score {}, attempt {}/{}): {}",
-                    delivery_id, review.score, attempt + 1, MAX_BLENDER_QA_RETRIES, hint);
+                let hint = review
+                    .retry_hint
+                    .clone()
+                    .unwrap_or_else(|| review.feedback.clone());
+                tracing::info!(
+                    "🔄 Retrying delivery {} (score {}, attempt {}/{}): {}",
+                    delivery_id,
+                    review.score,
+                    attempt + 1,
+                    MAX_BLENDER_QA_RETRIES,
+                    hint
+                );
                 current_prompt = format!("{hint}. {prompt}", hint = hint, prompt = prompt);
-                let (_, retry_args, _, _) = build_delivery_tool_args(&gig_type, &current_prompt, &style, duration, &extra);
+                let (_, retry_args, _, _) =
+                    build_delivery_tool_args(&gig_type, &current_prompt, &style, duration, &extra);
                 let retry_args = normalize_blender_reference_args(&state, &tool, retry_args).await;
 
                 let retry_job_id = match blender.submit_job(&tool, retry_args).await {
@@ -8210,7 +8642,8 @@ pub async fn run_delivery_job(delivery_id: Uuid, state: Arc<AppState>) {
                     if let Ok(status) = blender.poll_job(&retry_job_id).await {
                         match status.get("state").and_then(|s| s.as_str()) {
                             Some("completed") => {
-                                retry_url = delivery_result_media_url(status.get("result"), url_key);
+                                retry_url =
+                                    delivery_result_media_url(status.get("result"), url_key);
                                 break;
                             }
                             Some("failed") | Some("error") => break,
@@ -8221,7 +8654,7 @@ pub async fn run_delivery_job(delivery_id: Uuid, state: Arc<AppState>) {
 
                 match retry_url {
                     Some(u) => current_url = u,
-                    None    => {
+                    None => {
                         tracing::warn!("Retry produced no output — keeping best so far");
                         break;
                     }
@@ -8229,7 +8662,8 @@ pub async fn run_delivery_job(delivery_id: Uuid, state: Arc<AppState>) {
             }
 
             let review = best_review.unwrap_or_else(|| crate::render_review::ReviewResult {
-                pass: false, score: 0,
+                pass: false,
+                score: 0,
                 feedback: "Review infrastructure error".to_string(),
                 retry_hint: None,
             });
@@ -8237,8 +8671,13 @@ pub async fn run_delivery_job(delivery_id: Uuid, state: Arc<AppState>) {
 
             let filename = format!("delivery_{delivery_id}.{ext}");
             let error_note: Option<String> = if !review.pass && review.score > 0 {
-                Some(format!("QA warning (score {}): {}", review.score, review.feedback))
-            } else { None };
+                Some(format!(
+                    "QA warning (score {}): {}",
+                    review.score, review.feedback
+                ))
+            } else {
+                None
+            };
 
             let _ = sqlx::query(
                 "UPDATE deliveries SET status='completed', output_r2_url=$1, output_filename=$2, \
@@ -8251,7 +8690,10 @@ pub async fn run_delivery_job(delivery_id: Uuid, state: Arc<AppState>) {
             if !review.pass {
                 tracing::warn!(
                     "⚠️ QA still flagged delivery {} after {} retries: score={}, feedback={}",
-                    delivery_id, retries_used + 1, review.score, review.feedback
+                    delivery_id,
+                    retries_used + 1,
+                    review.score,
+                    review.feedback
                 );
             }
         }
@@ -8261,15 +8703,14 @@ pub async fn run_delivery_job(delivery_id: Uuid, state: Arc<AppState>) {
                  completed_at=NOW() WHERE id=$2",
             )
             .bind(format!("Timed out after {}s", poll_timeout_secs))
-            .bind(delivery_id).execute(&state.db_pool).await;
+            .bind(delivery_id)
+            .execute(&state.db_pool)
+            .await;
         }
     }
 }
 
-fn delivery_result_media_url(
-    result: Option<&serde_json::Value>,
-    url_key: &str,
-) -> Option<String> {
+fn delivery_result_media_url(result: Option<&serde_json::Value>, url_key: &str) -> Option<String> {
     let result = result?;
     if url_key == "video_url" {
         result
@@ -8341,22 +8782,26 @@ fn build_delivery_tool_args(
         "thumbnail" => (
             "blender_generate_thumbnail".to_string(),
             json!({"prompt": prompt, "title_text": get("title_text"), "style": style}),
-            "image_url", "png",
+            "image_url",
+            "png",
         ),
         "title_card" => (
             "blender_generate_title_card".to_string(),
             json!({"title": prompt, "subtitle": get("subtitle"), "duration": duration, "style": style}),
-            "video_url", "mp4",
+            "video_url",
+            "mp4",
         ),
         "data_viz" => (
             "blender_generate_data_viz".to_string(),
             json!({"data_json": get("data_json"), "chart_type": get("chart_type"), "title": prompt, "duration": duration}),
-            "video_url", "mp4",
+            "video_url",
+            "mp4",
         ),
         "lower_third" => (
             "blender_generate_lower_third".to_string(),
             json!({"name_text": prompt, "subtitle_text": get("subtitle"), "style": style, "duration": duration}),
-            "video_url", "mp4",
+            "video_url",
+            "mp4",
         ),
         "latex" => {
             let tool_name = "blender_generate_latex".to_string();
@@ -8367,23 +8812,25 @@ fn build_delivery_tool_args(
                 "background_style": get("background_style")
             });
             maybe_insert_delivery_narration_args(&tool_name, &mut args, extra);
-            (
-                tool_name,
-                args,
-                "video_url", "mp4",
-            )
+            (tool_name, args, "video_url", "mp4")
         }
         "ui_mockup" => {
             let animation = get("animation");
-            let url_key = if animation == "static" { "image_url" } else { "video_url" };
-            let ext     = if animation == "static" { "png" }       else { "mp4" };
+            let url_key = if animation == "static" {
+                "image_url"
+            } else {
+                "video_url"
+            };
+            let ext = if animation == "static" { "png" } else { "mp4" };
             (
                 "blender_generate_ui_mockup".to_string(),
                 json!({"device": get("device"), "animation": animation, "duration": duration, "screenshot_url": get("screenshot_url")}),
-                url_key, ext,
+                url_key,
+                ext,
             )
         }
-        _ => { // "scene" + default — includes landing_page service type
+        _ => {
+            // "scene" + default — includes landing_page service type
             let tool_name = "blender_generate_scene".to_string();
             let mut scene_args = json!({"prompt": prompt, "duration": duration, "style": style});
             let ref_url = get("reference_image_url");
@@ -8391,11 +8838,7 @@ fn build_delivery_tool_args(
                 scene_args["reference_image_url"] = serde_json::Value::String(ref_url.to_string());
             }
             maybe_insert_delivery_narration_args(&tool_name, &mut scene_args, extra);
-            (
-                tool_name,
-                scene_args,
-                "video_url", "mp4",
-            )
+            (tool_name, scene_args, "video_url", "mp4")
         }
     }
 }
@@ -9237,25 +9680,31 @@ pub async fn api_revenue_ledger(
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
-    let items: Vec<serde_json::Value> = rows.iter().map(|r| {
-        let dec_to_f64 = |d: Option<sqlx::types::Decimal>| -> f64 {
-            d.and_then(|d| d.to_string().parse::<f64>().ok()).unwrap_or(0.0)
-        };
-        json!({
-            "user_id":             r.get::<i32, _>("user_id"),
-            "username":            r.get::<String, _>("username"),
-            "email":               r.get::<String, _>("email"),
-            "leads_sourced":       r.get::<i64, _>("leads_sourced"),
-            "leads_contacted":     r.get::<i64, _>("leads_contacted"),
-            "leads_converted":     r.get::<i64, _>("leads_converted"),
-            "deliveries_created":  r.get::<i64, _>("deliveries_created"),
-            "deliveries_unlocked": r.get::<i64, _>("deliveries_unlocked"),
-            "total_usdc_paid":     dec_to_f64(r.try_get("total_usdc_paid").ok().flatten()),
-            "pending_payout_usdc": dec_to_f64(r.try_get("pending_payout_usdc").ok().flatten()),
+    let items: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| {
+            let dec_to_f64 = |d: Option<sqlx::types::Decimal>| -> f64 {
+                d.and_then(|d| d.to_string().parse::<f64>().ok())
+                    .unwrap_or(0.0)
+            };
+            json!({
+                "user_id":             r.get::<i32, _>("user_id"),
+                "username":            r.get::<String, _>("username"),
+                "email":               r.get::<String, _>("email"),
+                "leads_sourced":       r.get::<i64, _>("leads_sourced"),
+                "leads_contacted":     r.get::<i64, _>("leads_contacted"),
+                "leads_converted":     r.get::<i64, _>("leads_converted"),
+                "deliveries_created":  r.get::<i64, _>("deliveries_created"),
+                "deliveries_unlocked": r.get::<i64, _>("deliveries_unlocked"),
+                "total_usdc_paid":     dec_to_f64(r.try_get("total_usdc_paid").ok().flatten()),
+                "pending_payout_usdc": dec_to_f64(r.try_get("pending_payout_usdc").ok().flatten()),
+            })
         })
-    }).collect();
+        .collect();
 
-    Ok(Json(json!({"success": true, "ledger": items, "count": items.len()})))
+    Ok(Json(
+        json!({"success": true, "ledger": items, "count": items.len()}),
+    ))
 }
 
 pub async fn admin_revenue_ledger_page() -> Html<&'static str> {
