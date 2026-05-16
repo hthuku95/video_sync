@@ -6,9 +6,140 @@ use chrono::Utc;
 use sqlx::PgPool;
 use std::sync::Arc;
 
+const ACTIVE_CLIPPING_JOB_STATUSES: &[&str] = &[
+    "pending",
+    "downloading",
+    "analyzing",
+    "extracting_clips",
+    "posting",
+];
+
 pub struct ChannelMonitor {
     pub youtube_client: Arc<YouTubeClient>,
     pub db_pool: PgPool,
+}
+
+async fn create_clipping_workflow(
+    pool: &PgPool,
+    linkage: &ChannelLinkage,
+    source_video_id: &str,
+    source_video_title: &str,
+) -> Result<uuid::Uuid, String> {
+    let workflow_runtime = crate::services::WorkflowRuntime::new(pool.clone());
+    let workflow_id = workflow_runtime
+        .create_or_reuse_workflow(crate::services::NewWorkflow {
+            idempotency_key: Some(format!(
+                "auto-clipping:{}:{}",
+                source_video_id, linkage.id
+            )),
+            workflow_type: "auto_clipping_job".to_string(),
+            status: crate::services::WorkflowStatus::Queued,
+            session_uuid: None,
+            user_id: Some(linkage.user_id),
+            source_table: Some("clipping_jobs".to_string()),
+            source_record_id: None,
+            request_summary: format!(
+                "Auto clipping for video {} on linkage {}",
+                source_video_title, linkage.id
+            )
+            .chars()
+            .take(200)
+            .collect::<String>(),
+            current_step: Some("job_created".to_string()),
+            metadata: serde_json::json!({
+                "linkage_id": linkage.id,
+                "source_video_id": source_video_id,
+                "source_video_title": source_video_title,
+                "destination_channel_id": linkage.destination_channel_id,
+            }),
+            artifact_requirements: serde_json::json!([
+                {
+                    "kind": "uploaded_clips",
+                    "required": true,
+                    "must_create_extracted_clip_records": true
+                }
+            ]),
+        })
+        .await?;
+
+    let _ = workflow_runtime
+        .append_event(
+            workflow_id,
+            "queued",
+            Some("job_created"),
+            "Auto clipping job created and queued for the clipping worker.",
+            serde_json::json!({
+                "linkage_id": linkage.id,
+                "source_video_id": source_video_id,
+            }),
+        )
+        .await;
+
+    Ok(workflow_id)
+}
+
+async fn find_active_clipping_job(
+    pool: &PgPool,
+    linkage_id: i32,
+    source_video_id: &str,
+) -> Result<Option<i32>, String> {
+    sqlx::query_scalar::<_, i32>(
+        "SELECT id
+         FROM clipping_jobs
+         WHERE linkage_id = $1
+           AND source_video_id = $2
+           AND status = ANY($3)
+         ORDER BY
+             CASE WHEN claimed_by IS NOT NULL THEN 0 ELSE 1 END,
+             created_at ASC
+         LIMIT 1",
+    )
+    .bind(linkage_id)
+    .bind(source_video_id)
+    .bind(ACTIVE_CLIPPING_JOB_STATUSES)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| format!("Failed to lookup active clipping job: {}", e))
+}
+
+async fn enqueue_clipping_job(
+    pool: &PgPool,
+    linkage: &ChannelLinkage,
+    source_video_id: &str,
+    source_video_title: &str,
+) -> Result<(i32, bool), String> {
+    if let Some(existing_job_id) = find_active_clipping_job(pool, linkage.id, source_video_id).await?
+    {
+        return Ok((existing_job_id, false));
+    }
+
+    let workflow_id =
+        create_clipping_workflow(pool, linkage, source_video_id, source_video_title).await?;
+
+    match sqlx::query_scalar::<_, i32>(
+        "INSERT INTO clipping_jobs
+         (linkage_id, source_video_id, source_video_title, status, workflow_id)
+         VALUES ($1, $2, $3, 'pending', $4)
+         RETURNING id",
+    )
+    .bind(linkage.id)
+    .bind(source_video_id)
+    .bind(source_video_title)
+    .bind(workflow_id)
+    .fetch_one(pool)
+    .await
+    {
+        Ok(job_id) => Ok((job_id, true)),
+        Err(sqlx::Error::Database(db_err)) if db_err.is_unique_violation() => {
+            let existing_job_id = find_active_clipping_job(pool, linkage.id, source_video_id)
+                .await?
+                .ok_or_else(|| {
+                    "Active clipping job appeared to exist after unique violation, but it could not be fetched".to_string()
+                })?;
+            Ok((existing_job_id, false))
+        }
+        Err(e) => Err(format!("Failed to create clipping job: {}", e)),
+    }
 }
 
 impl ChannelMonitor {
@@ -63,13 +194,15 @@ impl ChannelMonitor {
         } else if fail_count > 0 {
             tracing::warn!(
                 "{}/{} channel polls failed this cycle",
-                fail_count, channels.len()
+                fail_count,
+                channels.len()
             );
         }
 
         tracing::info!(
             "✅ Channel polling cycle completed ({} succeeded, {} failed)",
-            success_count, fail_count
+            success_count,
+            fail_count
         );
         Ok(())
     }
@@ -91,12 +224,11 @@ impl ChannelMonitor {
         // attempt, even if the YouTube API call below fails. Without this, a persistent API
         // failure leaves last_polled_at stale (e.g., 5 days old) making it impossible to tell
         // from the DB whether the monitor is running at all.
-        let _ = sqlx::query(
-            "UPDATE youtube_source_channels SET last_polled_at = NOW() WHERE id = $1",
-        )
-        .bind(channel.id)
-        .execute(&self.db_pool)
-        .await;
+        let _ =
+            sqlx::query("UPDATE youtube_source_channels SET last_polled_at = NOW() WHERE id = $1")
+                .bind(channel.id)
+                .execute(&self.db_pool)
+                .await;
 
         // CRITICAL FIX: Use playlistItems API instead of search API to save quota
         // The YouTube Data API v3 charges:
@@ -150,7 +282,11 @@ impl ChannelMonitor {
         // Create clipping jobs for new videos
         for video in &new_videos {
             if let Err(e) = self.create_clipping_job(channel, video).await {
-                tracing::error!("Failed to create clipping job for video {}: {}", video.id.video_id, e);
+                tracing::error!(
+                    "Failed to create clipping job for video {}: {}",
+                    video.id.video_id,
+                    e
+                );
             }
         }
 
@@ -160,8 +296,11 @@ impl ChannelMonitor {
                 .await?;
         } else {
             // No new videos, just update timestamp
-            self.update_poll_timestamp(channel.id, &channel.last_video_checked.clone().unwrap_or_default())
-                .await?;
+            self.update_poll_timestamp(
+                channel.id,
+                &channel.last_video_checked.clone().unwrap_or_default(),
+            )
+            .await?;
         }
 
         // Mark as no longer polling
@@ -282,7 +421,9 @@ impl ChannelMonitor {
             }
 
             // CHECK 2: Daily 4-clip limit
-            let clips_today = self.count_clips_posted_today(linkage.destination_channel_id).await?;
+            let clips_today = self
+                .count_clips_posted_today(linkage.destination_channel_id)
+                .await?;
             if clips_today >= 4 {
                 tracing::info!(
                     "Destination channel {} reached daily limit (4 clips) - storing video for tomorrow",
@@ -292,22 +433,13 @@ impl ChannelMonitor {
                 continue;
             }
 
-            // CHECK 3: Job doesn't already exist
-            let exists = sqlx::query_scalar::<_, bool>(
-                "SELECT EXISTS(
-                    SELECT 1 FROM clipping_jobs
-                    WHERE linkage_id = $1 AND source_video_id = $2
-                )",
-            )
-            .bind(linkage.id)
-            .bind(&video.id.video_id)
-            .fetch_one(&self.db_pool)
-            .await
-            .unwrap_or(false);
-
-            if exists {
+            // CHECK 3: Active job doesn't already exist
+            if find_active_clipping_job(&self.db_pool, linkage.id, &video.id.video_id)
+                .await?
+                .is_some()
+            {
                 tracing::debug!(
-                    "Job already exists for video {} on linkage {}",
+                    "Active job already exists for video {} on linkage {}",
                     video.id.video_id,
                     linkage.id
                 );
@@ -315,28 +447,34 @@ impl ChannelMonitor {
             }
 
             // ALL CHECKS PASSED - Create job
-            sqlx::query(
-                "INSERT INTO clipping_jobs
-                 (linkage_id, source_video_id, source_video_title, status)
-                 VALUES ($1, $2, $3, 'pending')",
+            let (job_id, created) = enqueue_clipping_job(
+                &self.db_pool,
+                &linkage,
+                &video.id.video_id,
+                &video.snippet.title,
             )
-            .bind(linkage.id)
-            .bind(&video.id.video_id)
-            .bind(&video.snippet.title)
-            .execute(&self.db_pool)
-            .await
-            .map_err(|e| format!("Failed to create clipping job: {}", e))?;
+            .await?;
 
             // NOTE: clipped_source_videos is NOT inserted here.
             // It is only written upon successful job completion in execute_clipping_job().
             // This allows the monitor to re-queue a video whose job previously failed or
             // was cancelled, since filter_new_videos() checks clipped_source_videos first.
 
-            tracing::info!(
-                "✅ Created clipping job for video '{}' (linkage: {})",
-                video.snippet.title,
-                linkage.id
-            );
+            if created {
+                tracing::info!(
+                    "✅ Created clipping job {} for video '{}' (linkage: {})",
+                    job_id,
+                    video.snippet.title,
+                    linkage.id
+                );
+            } else {
+                tracing::info!(
+                    "♻️ Reused active clipping job {} for video '{}' (linkage: {})",
+                    job_id,
+                    video.snippet.title,
+                    linkage.id
+                );
+            }
         }
 
         Ok(())
@@ -493,14 +631,12 @@ impl ChannelMonitor {
 
     /// Clear pending video after job creation
     async fn clear_pending_video(&self, linkage_id: i32, video_id: &str) -> Result<(), String> {
-        sqlx::query(
-            "DELETE FROM pending_unclipped_videos WHERE linkage_id = $1 AND video_id = $2",
-        )
-        .bind(linkage_id)
-        .bind(video_id)
-        .execute(&self.db_pool)
-        .await
-        .map_err(|e| format!("Failed to clear pending: {}", e))?;
+        sqlx::query("DELETE FROM pending_unclipped_videos WHERE linkage_id = $1 AND video_id = $2")
+            .bind(linkage_id)
+            .bind(video_id)
+            .execute(&self.db_pool)
+            .await
+            .map_err(|e| format!("Failed to clear pending: {}", e))?;
 
         Ok(())
     }
@@ -525,7 +661,9 @@ impl ChannelMonitor {
             }
 
             // Check daily limit
-            let clips_today = self.count_clips_posted_today(linkage.destination_channel_id).await?;
+            let clips_today = self
+                .count_clips_posted_today(linkage.destination_channel_id)
+                .await?;
             if clips_today >= 4 {
                 continue; // Daily limit reached
             }
@@ -545,22 +683,26 @@ impl ChannelMonitor {
 
             // Take first pending video (FIFO order)
             if let Some(video_id) = pending_videos.first() {
-                // Create job
-                sqlx::query(
-                    "INSERT INTO clipping_jobs
-                     (linkage_id, source_video_id, source_video_title, status)
-                     VALUES ($1, $2, 'Pending Video', 'pending')",
-                )
-                .bind(linkage.id)
-                .bind(video_id)
-                .execute(&self.db_pool)
-                .await
-                .map_err(|e| format!("Failed to create job from pending: {}", e))?;
+                let (job_id, created) =
+                    enqueue_clipping_job(&self.db_pool, &linkage, video_id, "Pending Video")
+                        .await?;
 
                 // Clear from pending
                 self.clear_pending_video(linkage.id, video_id).await?;
 
-                tracing::info!("✅ Created job from pending video: {}", video_id);
+                if created {
+                    tracing::info!(
+                        "✅ Created job {} from pending video {}",
+                        job_id,
+                        video_id
+                    );
+                } else {
+                    tracing::info!(
+                        "♻️ Pending video {} already has active clipping job {}",
+                        video_id,
+                        job_id
+                    );
+                }
             }
         }
 

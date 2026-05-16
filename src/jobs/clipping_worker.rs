@@ -10,12 +10,13 @@ use std::sync::Arc;
 use tokio::task::JoinSet;
 use tokio::time::{sleep, Duration};
 
-/// Process clipping jobs once (function-based to avoid lifetime issues)
-pub async fn process_clipping_jobs_once(app_state: &Arc<AppState>) -> Result<(), String> {
-    // Create a temporary worker instance
-    let worker = ClippingWorker::new(app_state.clone(), 60);
-    worker.process_pending_jobs().await
-}
+const ACTIVE_CLIPPING_JOB_STATUSES: &[&str] = &[
+    "pending",
+    "downloading",
+    "analyzing",
+    "extracting_clips",
+    "posting",
+];
 
 /// Run the clipping worker in a background loop (spawnable)
 /// Supports true parallel job processing via JoinSet.
@@ -45,14 +46,16 @@ pub async fn run_clipping_worker_loop(app_state: Arc<AppState>) {
         .and_then(|v| v.parse().ok())
         .unwrap_or(0);
     if startup_delay_secs > 0 {
-        tracing::info!("⏳ Worker startup delay: {}s (set via WORKER_STARTUP_DELAY_SECS)", startup_delay_secs);
+        tracing::info!(
+            "⏳ Worker startup delay: {}s (set via WORKER_STARTUP_DELAY_SECS)",
+            startup_delay_secs
+        );
         sleep(Duration::from_secs(startup_delay_secs)).await;
         tracing::info!("✅ Startup delay complete, worker is now active");
     }
 
-    let mut interval = tokio::time::interval(
-        tokio::time::Duration::from_secs(config.poll_interval_secs)
-    );
+    let mut interval =
+        tokio::time::interval(tokio::time::Duration::from_secs(config.poll_interval_secs));
 
     loop {
         interval.tick().await;
@@ -72,114 +75,6 @@ pub async fn run_clipping_worker_loop(app_state: Arc<AppState>) {
     }
 }
 
-pub struct ClippingWorker {
-    app_state: Arc<AppState>,
-    poll_interval_seconds: u64,
-}
-
-impl ClippingWorker {
-    pub fn new(app_state: Arc<AppState>, poll_interval_seconds: u64) -> Self {
-        Self {
-            app_state,
-            poll_interval_seconds,
-        }
-    }
-
-    /// Start the worker loop (runs forever)
-    pub async fn run(self) {
-        tracing::info!(
-            "🔧 Clipping worker started (polling every {}s)",
-            self.poll_interval_seconds
-        );
-
-        loop {
-            if let Err(e) = self.process_pending_jobs().await {
-                tracing::error!("Worker error: {}", e);
-            }
-
-            sleep(Duration::from_secs(self.poll_interval_seconds)).await;
-        }
-    }
-
-    /// Process all pending clipping jobs (public for external use)
-    pub async fn process_pending_jobs_once(&self) -> Result<(), String> {
-        self.process_pending_jobs().await
-    }
-
-    /// Process all pending clipping jobs (backward compatibility)
-    async fn process_pending_jobs(&self) -> Result<(), String> {
-        self.detect_stuck_jobs().await?;
-        self.auto_retry_failed_jobs().await?;
-
-        let query = String::from(
-            "SELECT cj.id FROM clipping_jobs cj \
-             JOIN youtube_channel_linkages l ON l.id = cj.linkage_id \
-             WHERE cj.status = 'pending' \
-             ORDER BY \
-               CASE WHEN l.user_id = -1 THEN 0 ELSE 1 END, \
-               cj.created_at ASC \
-             LIMIT 1"
-        );
-        let job_id: Option<i32> = sqlx::query_scalar(&query)
-            .fetch_optional(&self.app_state.db_pool)
-            .await
-            .map_err(|e| format!("Failed to fetch job: {}", e))?;
-
-        if let Some(job_id) = job_id {
-            tracing::info!("▶️  Executing clipping job {} (sequential mode)", job_id);
-
-            match execute_clipping_job(job_id, self.app_state.clone()).await {
-                Ok(msg) => {
-                    tracing::info!("✅ Job {} completed: {}", job_id, msg);
-                }
-                Err(e) => {
-                    tracing::error!("❌ Job {} failed: {}", job_id, e);
-
-                    let new_status = match classify(&e) {
-                        ErrorClass::Permanent => "cancelled",
-                        ErrorClass::OAuthExpired => {
-                            tracing::warn!(
-                                "🔑 Job {} failed: OAuth token expired — will retry automatically \
-                                 once channel owner reconnects their YouTube account",
-                                job_id
-                            );
-                            "failed"
-                        }
-                        _ => "failed",
-                    };
-
-                    let fail_query = format!(
-                        "UPDATE clipping_jobs \
-                         SET status = '{}', error_message = $1, completed_at = NOW() \
-                         WHERE id = $2",
-                        new_status
-                    );
-                    if let Err(db_err) = sqlx::query(&fail_query)
-                        .bind(&e)
-                        .bind(job_id)
-                        .execute(&self.app_state.db_pool)
-                        .await
-                    {
-                        tracing::error!("Failed to update job {} status to {}: {} — job may be stuck", job_id, new_status, db_err);
-                    }
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Automatically retry failed jobs — delegates to standalone function
-    async fn auto_retry_failed_jobs(&self) -> Result<(), String> {
-        auto_retry_failed_jobs(&self.app_state).await
-    }
-
-    /// Detect stuck jobs — delegates to standalone function
-    async fn detect_stuck_jobs(&self) -> Result<(), String> {
-        detect_stuck_jobs(&self.app_state).await
-    }
-}
-
 // ============================================================================
 // True parallel job processor — JoinSet-based
 // ============================================================================
@@ -190,8 +85,10 @@ async fn process_clipping_jobs_parallel(
     app_state: &Arc<AppState>,
     config: &WorkerConfig,
 ) -> Result<(), String> {
+    crate::jobs::clipping_supervisor::run_clipping_supervisor_once(app_state).await?;
     detect_stuck_jobs(app_state).await?;
     auto_retry_failed_jobs(app_state).await?;
+    cleanup_stale_pending_jobs(app_state).await?;
     check_pending_too_long(app_state).await;
 
     // Compile-time assertion: GeminiClippingAgent must be Send + 'static for JoinSet::spawn
@@ -202,7 +99,7 @@ async fn process_clipping_jobs_parallel(
     }
 
     let pending_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM clipping_jobs WHERE status = 'pending' AND claimed_by IS NULL"
+        "SELECT COUNT(*) FROM clipping_jobs WHERE status = 'pending' AND claimed_by IS NULL",
     )
     .fetch_one(&app_state.db_pool)
     .await
@@ -236,9 +133,7 @@ async fn process_clipping_jobs_parallel(
                 .await
             {
                 Ok(Some(job_id)) => {
-                    join_set.spawn(async move {
-                        execute_claimed_job(state, job_id).await
-                    });
+                    join_set.spawn(async move { execute_claimed_job(state, job_id).await });
                 }
                 Ok(None) => break, // no unclaimed pending jobs
                 Err(e) => {
@@ -261,7 +156,10 @@ async fn process_clipping_jobs_parallel(
             }
             Some(Ok(Err(e))) => {
                 total_failed += 1;
-                if e.contains("RESOURCE_EXHAUSTED") || e.contains("Resource has been exhausted") || e.contains("quota") {
+                if e.contains("RESOURCE_EXHAUSTED")
+                    || e.contains("Resource has been exhausted")
+                    || e.contains("quota")
+                {
                     quota_exhausted = true;
                     tracing::warn!("⏸️  Gemini quota hit — stopping new claims this cycle");
                 }
@@ -283,12 +181,20 @@ async fn process_clipping_jobs_parallel(
         // Add ±20% jitter to avoid thundering herd when multiple workers hit quota simultaneously
         let jitter_pct = rand::random::<f64>() * 0.4 - 0.2; // -20% to +20%
         let pause_secs = (cfg.quota_pause_secs as f64 * (1.0 + jitter_pct)).round() as u64;
-        tracing::warn!("⏸️  Pausing {}s for Gemini quota recovery (base: {}s)", pause_secs, cfg.quota_pause_secs);
+        tracing::warn!(
+            "⏸️  Pausing {}s for Gemini quota recovery (base: {}s)",
+            pause_secs,
+            cfg.quota_pause_secs
+        );
         sleep(Duration::from_secs(pause_secs)).await;
     }
 
     if total_completed > 0 || total_failed > 0 {
-        tracing::info!("📊 Cycle: {} completed, {} failed", total_completed, total_failed);
+        tracing::info!(
+            "📊 Cycle: {} completed, {} failed",
+            total_completed,
+            total_failed
+        );
     }
 
     Ok(())
@@ -334,7 +240,11 @@ async fn execute_claimed_job(app_state: Arc<AppState>, job_id: i32) -> Result<i3
 
             let new_status = match classify(&e) {
                 ErrorClass::Permanent => {
-                    tracing::warn!("🚫 Job {} permanently failed ({}), setting status=cancelled", job_id, e);
+                    tracing::warn!(
+                        "🚫 Job {} permanently failed ({}), setting status=cancelled",
+                        job_id,
+                        e
+                    );
                     "cancelled"
                 }
                 ErrorClass::OAuthExpired => {
@@ -361,7 +271,32 @@ async fn execute_claimed_job(app_state: Arc<AppState>, job_id: i32) -> Result<i3
                 .execute(&app_state.db_pool)
                 .await
             {
-                tracing::error!("Failed to update job {} status to {}: {} — job may be stuck", job_id, new_status, db_err);
+                tracing::error!(
+                    "Failed to update job {} status to {}: {} — job may be stuck",
+                    job_id,
+                    new_status,
+                    db_err
+                );
+            }
+
+            if let Ok(Some(Some(workflow_id))) = sqlx::query_scalar::<_, Option<uuid::Uuid>>(
+                "SELECT workflow_id FROM clipping_jobs WHERE id = $1",
+            )
+            .bind(job_id)
+            .fetch_optional(&app_state.db_pool)
+            .await
+            {
+                let workflow_runtime =
+                    crate::services::WorkflowRuntime::new(app_state.db_pool.clone());
+                let _ = if new_status == "cancelled" {
+                    workflow_runtime
+                        .mark_cancelled(workflow_id, Some(new_status), &e)
+                        .await
+                } else {
+                    workflow_runtime
+                        .mark_failed(workflow_id, Some(new_status), &e, None)
+                        .await
+                };
             }
 
             Err(format!("Job {} failed: {}", job_id, e))
@@ -388,14 +323,39 @@ async fn execute_claimed_job(app_state: Arc<AppState>, job_id: i32) -> Result<i3
                     .bind(&timeout_msg)
                     .bind(job_id)
                     .execute(&app_state.db_pool),
-            ).await {
+            )
+            .await
+            {
                 Ok(Ok(_)) => {}
                 Ok(Err(e)) => {
-                    tracing::error!("❌ Failed to reset timed-out job {}: {} — stuck-detection will handle it", job_id, e);
+                    tracing::error!(
+                        "❌ Failed to reset timed-out job {}: {} — stuck-detection will handle it",
+                        job_id,
+                        e
+                    );
                 }
                 Err(_) => {
                     tracing::error!("❌ Cleanup for timed-out job {} timed out after 10s — stuck-detection will handle it", job_id);
                 }
+            }
+
+            if let Ok(Some(Some(workflow_id))) = sqlx::query_scalar::<_, Option<uuid::Uuid>>(
+                "SELECT workflow_id FROM clipping_jobs WHERE id = $1",
+            )
+            .bind(job_id)
+            .fetch_optional(&app_state.db_pool)
+            .await
+            {
+                let workflow_runtime =
+                    crate::services::WorkflowRuntime::new(app_state.db_pool.clone());
+                let _ = workflow_runtime
+                    .mark_failed(
+                        workflow_id,
+                        Some("timeout"),
+                        &timeout_msg,
+                        None,
+                    )
+                    .await;
             }
 
             Err(format!("Job {} timed out", job_id))
@@ -424,7 +384,7 @@ pub async fn update_worker_heartbeat(
         "INSERT INTO worker_heartbeats (worker_id, last_seen_at, updated_at, current_job_id)
          VALUES ($1, NOW(), NOW(), $2)
          ON CONFLICT (worker_id) DO UPDATE
-           SET last_seen_at = NOW(), updated_at = NOW(), current_job_id = EXCLUDED.current_job_id"
+           SET last_seen_at = NOW(), updated_at = NOW(), current_job_id = EXCLUDED.current_job_id",
     )
     .bind(worker_id)
     .bind(current_job_id)
@@ -451,7 +411,7 @@ async fn detect_stuck_jobs(app_state: &Arc<AppState>) -> Result<(), String> {
          SET claimed_by = NULL, claimed_at = NULL, updated_at = NOW() \
          WHERE status = 'pending' \
          AND claimed_by IS NOT NULL \
-         AND claimed_at < NOW() - INTERVAL '5 minutes'"
+         AND claimed_at < NOW() - INTERVAL '5 minutes'",
     );
     match sqlx::query(&stale_claim_query)
         .execute(&app_state.db_pool)
@@ -502,7 +462,10 @@ async fn detect_stuck_jobs(app_state: &Arc<AppState>) -> Result<(), String> {
         return Ok(());
     }
 
-    tracing::warn!("🔄 Found {} stuck jobs, resetting to failed", stuck_jobs.len());
+    tracing::warn!(
+        "🔄 Found {} stuck jobs, resetting to failed",
+        stuck_jobs.len()
+    );
 
     for (job_id, status, last_seen) in stuck_jobs {
         let error_message = format!(
@@ -519,7 +482,7 @@ async fn detect_stuck_jobs(app_state: &Arc<AppState>) -> Result<(), String> {
                  claimed_by = NULL, \
                  worker_heartbeat_at = NULL, \
                  stuck_detection_count = COALESCE(stuck_detection_count, 0) + 1 \
-             WHERE id = $2"
+             WHERE id = $2",
         );
         match sqlx::query(&reset_stuck_query)
             .bind(&error_message)
@@ -530,7 +493,9 @@ async fn detect_stuck_jobs(app_state: &Arc<AppState>) -> Result<(), String> {
             Ok(_) => {
                 tracing::info!(
                     "✅ Job {} reset from '{}' to 'failed' (stuck for too long, last seen: {})",
-                    job_id, status, last_seen
+                    job_id,
+                    status,
+                    last_seen
                 );
             }
             Err(e) => {
@@ -570,7 +535,10 @@ async fn detect_stuck_jobs(app_state: &Arc<AppState>) -> Result<(), String> {
         }
         Ok(_) => {}
         Err(e) => {
-            tracing::warn!("Failed to reset NULL started_at stuck jobs (non-fatal): {}", e);
+            tracing::warn!(
+                "Failed to reset NULL started_at stuck jobs (non-fatal): {}",
+                e
+            );
         }
     }
 
@@ -587,7 +555,7 @@ async fn check_pending_too_long(app_state: &Arc<AppState>) {
          FROM clipping_jobs \
          WHERE status = 'pending' \
            AND claimed_by IS NULL \
-           AND created_at < NOW() - INTERVAL '15 minutes'"
+           AND created_at < NOW() - INTERVAL '15 minutes'",
     )
     .fetch_optional(&app_state.db_pool)
     .await
@@ -603,7 +571,7 @@ async fn check_pending_too_long(app_state: &Arc<AppState>) {
                 "SELECT COUNT(*) > 0 FROM clipping_jobs \
                  WHERE status = 'pending' \
                    AND claimed_by IS NULL \
-                   AND created_at < NOW() - INTERVAL '60 minutes'"
+                   AND created_at < NOW() - INTERVAL '60 minutes'",
             )
             .fetch_one(&app_state.db_pool)
             .await
@@ -613,17 +581,58 @@ async fn check_pending_too_long(app_state: &Arc<AppState>) {
                 tracing::error!(
                     "🚨 WORKER ALERT: {} jobs pending >15 min unclaimed (oldest: {}). \
                      Worker may be down or severely overloaded!",
-                    count, oldest
+                    count,
+                    oldest
                 );
             } else {
                 tracing::warn!(
                     "⚠️  {} jobs pending >15 min unclaimed (oldest: {}). \
                      Worker may be slow or restarting.",
-                    count, oldest
+                    count,
+                    oldest
                 );
             }
         }
     }
+}
+
+/// Discard ancient unclaimed pending jobs so the queue reflects actionable work.
+///
+/// This is intentionally conservative:
+/// - only `pending` jobs are touched
+/// - only jobs with no active claim are touched
+/// - default threshold is 24 hours via `CLIPPING_STALE_PENDING_DISCARD_MINS`
+/// - jobs are moved to `discarded` so admins can still retry them manually
+async fn cleanup_stale_pending_jobs(app_state: &Arc<AppState>) -> Result<(), String> {
+    let cfg = crate::jobs::worker_config::WorkerConfig::from_env();
+    let discard_query = format!(
+        "UPDATE clipping_jobs \
+         SET status = 'discarded', \
+             error_message = COALESCE(error_message || ' ', '') || \
+                 '[Auto-discarded after remaining pending/unclaimed for more than {} minutes. Use admin retry if still needed.]', \
+             completed_at = NOW(), \
+             updated_at = NOW() \
+         WHERE status = 'pending' \
+           AND claimed_by IS NULL \
+           AND created_at < NOW() - INTERVAL '{} minutes'",
+        cfg.stale_pending_discard_mins,
+        cfg.stale_pending_discard_mins
+    );
+
+    let result = sqlx::query(&discard_query)
+        .execute(&app_state.db_pool)
+        .await
+        .map_err(|e| format!("Failed to discard stale pending jobs: {}", e))?;
+
+    if result.rows_affected() > 0 {
+        tracing::warn!(
+            "🧹 Discarded {} stale pending jobs older than {} minutes",
+            result.rows_affected(),
+            cfg.stale_pending_discard_mins
+        );
+    }
+
+    Ok(())
 }
 
 // ============================================================================
@@ -650,8 +659,8 @@ async fn auto_retry_failed_jobs(app_state: &Arc<AppState>) -> Result<(), String>
         cfg.max_retries, cfg.max_retries
     );
     if let Err(e) = sqlx::query(&discard_query)
-    .execute(&app_state.db_pool)
-    .await
+        .execute(&app_state.db_pool)
+        .await
     {
         tracing::error!("Failed to discard exhausted clipping jobs: {}", e);
     }
@@ -660,7 +669,7 @@ async fn auto_retry_failed_jobs(app_state: &Arc<AppState>) -> Result<(), String>
     let exhausted: Vec<(i32, Option<String>)> = sqlx::query_as(
         "SELECT id, error_message FROM clipping_jobs \
          WHERE status = 'discarded' \
-         AND updated_at > NOW() - INTERVAL '1 hour'"
+         AND updated_at > NOW() - INTERVAL '1 hour'",
     )
     .fetch_all(&app_state.db_pool)
     .await
@@ -670,7 +679,9 @@ async fn auto_retry_failed_jobs(app_state: &Arc<AppState>) -> Result<(), String>
         tracing::error!(
             "🚨 CLIPPING JOB {} DISCARDED (exhausted 10 retries) — admin review required. \
              Use POST /api/admin/clipping/jobs/{}/retry to reset. Last error: {:?}",
-            job_id, job_id, err
+            job_id,
+            job_id,
+            err
         );
     }
 
@@ -719,22 +730,27 @@ async fn auto_retry_failed_jobs(app_state: &Arc<AppState>) -> Result<(), String>
         return Ok(());
     }
 
-    tracing::info!("🔄 Found {} failed jobs eligible for automatic retry", retry_jobs.len());
+    tracing::info!(
+        "🔄 Found {} failed jobs eligible for automatic retry",
+        retry_jobs.len()
+    );
 
     for (job_id, current_step) in retry_jobs {
-        let resume_from: Option<&str> = crate::jobs::JobPhase::from_step(
-            current_step.as_deref().unwrap_or("")
-        ).resume_from();
+        let resume_from: Option<&str> =
+            crate::jobs::JobPhase::from_step(current_step.as_deref().unwrap_or("")).resume_from();
 
         if let Some(phase) = resume_from {
             tracing::info!(
                 "✅ Job {} reset to pending, will resume from '{}' (was at: {:?})",
-                job_id, phase, current_step
+                job_id,
+                phase,
+                current_step
             );
         } else {
             tracing::info!(
                 "✅ Job {} reset to pending, will restart from Phase A (current_step: {:?})",
-                job_id, current_step
+                job_id,
+                current_step
             );
         }
 
@@ -750,18 +766,38 @@ async fn auto_retry_failed_jobs(app_state: &Arc<AppState>) -> Result<(), String>
                  claimed_by = NULL, \
                  claimed_at = NULL, \
                  worker_heartbeat_at = NULL, \
+                 supervisor_status = 'healthy', \
+                 supervisor_reason = NULL, \
+                 supervisor_last_action = 'auto_retry_requeued', \
+                 supervisor_last_run_at = NOW(), \
+                 blocked_by_job_id = NULL, \
                  updated_at = NOW(), \
                  retry_count = COALESCE(retry_count, 0) + 1, \
                  last_retry_at = NOW() \
              WHERE id = $2 \
-             AND status = 'failed'"
+             AND status = 'failed' \
+             AND NOT EXISTS ( \
+                 SELECT 1 \
+                 FROM clipping_jobs sibling \
+                 WHERE sibling.linkage_id = clipping_jobs.linkage_id \
+                   AND sibling.source_video_id = clipping_jobs.source_video_id \
+                   AND sibling.id <> clipping_jobs.id \
+                   AND sibling.status = ANY($3) \
+             )",
         );
         match sqlx::query(&reset_query)
             .bind(resume_from)
             .bind(job_id)
+            .bind(ACTIVE_CLIPPING_JOB_STATUSES)
             .execute(&app_state.db_pool)
             .await
         {
+            Ok(result) if result.rows_affected() == 0 => {
+                tracing::info!(
+                    "⏭️ Skipping auto-retry for job {} because another active job for the same source video already exists",
+                    job_id
+                );
+            }
             Ok(_) => {}
             Err(e) => {
                 tracing::error!("Failed to reset job {} for retry: {}", job_id, e);
@@ -789,7 +825,9 @@ async fn process_manual_jobs(app_state: &Arc<AppState>) -> Result<(), String> {
         tracing::info!("▶️  Executing manual clipping job {}", id);
         let state = Arc::clone(app_state);
         tokio::spawn(async move {
-            match crate::jobs::manual_clipping_job::execute_manual_clipping_job(id, state.clone()).await {
+            match crate::jobs::manual_clipping_job::execute_manual_clipping_job(id, state.clone())
+                .await
+            {
                 Ok(msg) => tracing::info!("✅ Manual job {} completed: {}", id, msg),
                 Err(e) => {
                     tracing::error!("❌ Manual job {} failed: {}", id, e);
@@ -802,6 +840,24 @@ async fn process_manual_jobs(app_state: &Arc<AppState>) -> Result<(), String> {
                     .await
                     {
                         tracing::error!("Failed to mark manual clipping job {} as failed: {} — job may be stuck", id, db_err);
+                    }
+                    if let Ok(Some(Some(workflow_id))) = sqlx::query_scalar::<_, Option<uuid::Uuid>>(
+                        "SELECT workflow_id FROM manual_clipping_jobs WHERE id = $1",
+                    )
+                    .bind(id)
+                    .fetch_optional(&state.db_pool)
+                    .await
+                    {
+                        let workflow_runtime =
+                            crate::services::WorkflowRuntime::new(state.db_pool.clone());
+                        let _ = workflow_runtime
+                            .mark_failed(
+                                workflow_id,
+                                Some("manual_clipping_worker"),
+                                &e,
+                                None,
+                            )
+                            .await;
                     }
                 }
             }

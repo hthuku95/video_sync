@@ -1,58 +1,59 @@
 // Build: 2026-03-10 — deploy with YOUTUBE_API_KEY + Gemini retry fixes
-use axum::{Extension, Router, extract::DefaultBodyLimit};
+use axum::{extract::DefaultBodyLimit, Extension, Router};
+mod tool_registry;
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 use tower_http::cors::CorsLayer;
 
-mod blender_quality;
 mod agent;
-mod db;
-mod gemini_client;
-mod nvidia_nim_client;
-mod llm_utils;
-mod claude_client;
-mod voyage_embeddings;
-mod elevenlabs_client; // 🎙️ Eleven Labs TTS, Sound Effects, Music
-mod vibevoice_client; // 🎤 VibeVoice microservice — TTS + transcription
+mod ai_tool_selector; // 🧠 AI-driven tool selection — Gemma 4 picks relevant tools per request
 mod blender_mcp_client; // 🎨 BlenderMCPServer — 3D rendering + Manim
-mod r2_client;          // ☁️ Cloudflare R2 object storage
-mod phantombuster_client; // 🎯 PhantomBuster — LinkedIn Sales Navigator scraping
-mod youtube_client; // 📺 YouTube Data API v3 for video uploads
-mod youtube_analytics_client; // 📊 YouTube Analytics API for metrics and insights
-mod twitch_client; // 📺 Twitch Helix API client
+mod blender_quality;
+mod claude_client;
+mod clipping; // 📹 YouTube clipping feature
+mod db;
+mod elevenlabs_client; // 🎙️ Eleven Labs TTS, Sound Effects, Music
+mod gemini_client;
 mod handlers;
 mod jobs; // 🆕 Background job system for video editing
-mod workflow; // 🆕 LangGraph-style workflow orchestration
+mod llm_utils;
 mod middleware;
 mod models;
+mod nvidia_nim_client;
 mod pexels_client;
+mod phantombuster_client; // 🎯 PhantomBuster — LinkedIn Sales Navigator scraping
+mod portfolio_samples;
 mod qdrant_client;
+mod r2_client; // ☁️ Cloudflare R2 object storage
+mod render_review; // 🔍 LLM QA review of every render before handoff
 mod services;
-mod vector_db;
-mod clipping; // 📹 YouTube clipping feature
-mod tool_selector; // 🔧 Dynamic tool selection for AI agents (general/fallback sets)
-mod ai_tool_selector; // 🧠 AI-driven tool selection — Gemma 4 picks relevant tools per request
-mod utils; // 🔧 Utility modules (FFmpeg utilities, etc.)
+mod telegram_bot; // ✈️ Telegram Bot API — admin pings + AI sales DM replies
+mod telegram_client; // 🛰️ Telegram MTProto userbot — channel watcher for paid-gig leads
 mod token_manager; // 🔧 Centralized YouTube OAuth token refresh
-mod x402;          // 💰 x402 HTTP-402 payment protocol (USDC on Base)
-mod telegram_bot;     // ✈️ Telegram Bot API — admin pings + AI sales DM replies
-mod telegram_client;  // 🛰️ Telegram MTProto userbot — channel watcher for paid-gig leads
-mod render_review;    // 🔍 LLM QA review of every render before handoff
-mod portfolio_samples; // 💼 Monetizable portfolio sample targets + prompts
+mod twitch_client; // 📺 Twitch Helix API client
+mod utils; // 🔧 Utility modules (FFmpeg utilities, etc.)
+mod vector_db;
+mod vertex_multimodal_embeddings;
+mod vibevoice_client; // 🎤 VibeVoice microservice — TTS + transcription
+mod voyage_embeddings;
+mod x402; // 💰 x402 HTTP-402 payment protocol (USDC on Base)
+mod youtube_analytics_client; // 📊 YouTube Analytics API for metrics and insights
+mod youtube_client; // 📺 YouTube Data API v3 for video uploads // 💼 Monetizable portfolio sample targets + prompts
 
 // Video processing modules (from lib.rs)
-mod types;
-mod core;
-mod audio;
-mod visual;
-mod transform;
 mod advanced;
+mod audio;
+mod core;
 mod export;
-mod workflows; // Named multi-step FFmpeg workflow chains
-mod portfolio_tests;
 mod manual_clipping_tests;
+mod portfolio_tests;
+mod transform;
+mod types;
+mod visual;
+mod workflows; // Named multi-step FFmpeg workflow chains
 
-// AppState now holds the database connection pool, vector database clients, Claude/Gemini client, Pexels client, job manager, and workflow checkpointer
+// AppState now holds the database connection pool, vector database clients, Claude/Gemini
+// clients, production integrations, and shared runtime services.
 pub struct AppState {
     pub db_pool: sqlx::PgPool,
     pub vector_db: Option<vector_db::AstraDBClient>, // Keep for backward compatibility
@@ -60,21 +61,21 @@ pub struct AppState {
     pub gemini_client: Option<gemini_client::GeminiClient>, // Auto clipping pipeline only
     pub manual_clipping_gemini_client: Option<gemini_client::GeminiClient>, // Manual clipping only
     pub video_gemini_client: Option<gemini_client::GeminiClient>, // Video editing, generation, agents, Blender MCP
-    pub gemma_client: Option<gemini_client::GeminiClient>,         // Gemma 4 via Google AI Studio (text tasks, own quota)
+    pub gemma_client: Option<gemini_client::GeminiClient>, // Gemma 4 via Google AI Studio (text tasks, own quota)
     pub nvidia_nim_client: Option<nvidia_nim_client::NvidiaNimClient>, // Gemma 4 via NVIDIA NIM (40 RPM, text tasks)
     pub claude_client: Option<claude_client::ClaudeClient>,
+    pub vertex_multimodal_embeddings: Option<vertex_multimodal_embeddings::VertexMultimodalEmbeddingsClient>,
     pub voyage_embeddings: Option<voyage_embeddings::VoyageEmbeddings>,
     pub pexels_client: Option<pexels_client::PexelsClient>,
     pub elevenlabs_client: Option<elevenlabs_client::ElevenLabsClient>, // 🎙️ Audio generation
     pub vibevoice_client: Option<vibevoice_client::VibeVoiceClient>, // 🎤 Shared TTS + transcription microservice
     pub blender_mcp_client: Option<blender_mcp_client::BlenderMCPClient>, // 🎨 3D rendering + Manim
-    pub r2_client: Option<Arc<r2_client::R2Client>>,                      // ☁️ Cloudflare R2 storage
-    pub youtube_client: Option<youtube_client::YouTubeClient>, // 📺 YouTube integration
+    pub r2_client: Option<Arc<r2_client::R2Client>>,                 // ☁️ Cloudflare R2 storage
+    pub youtube_client: Option<youtube_client::YouTubeClient>,       // 📺 YouTube integration
     pub youtube_analytics_client: Option<youtube_analytics_client::YouTubeAnalyticsClient>, // 📊 YouTube Analytics
     pub google_oauth_client_id: Option<String>, // Google OAuth client ID
     pub google_oauth_client_secret: Option<String>, // Google OAuth client secret
-    pub job_manager: jobs::SharedJobManager, // 🆕 Background job management
-    pub workflow_checkpointer: Option<workflow::checkpoint::WorkflowCheckpointer>, // 🆕 Workflow state persistence
+    pub job_manager: jobs::SharedJobManager,    // 🆕 Background job management
     pub token_manager: Option<Arc<token_manager::TokenManager>>, // 🔧 Centralized token refresh
     pub twitch_client: Option<Arc<twitch_client::TwitchClient>>, // 📺 Twitch Helix API
     pub download_semaphore: Arc<Semaphore>, // 🔒 Limits concurrent downloads to 2
@@ -105,7 +106,9 @@ async fn validate_apify_token() {
                         "⚠️ INVALID APIFY TOKEN: {}. Check your .env file configuration.",
                         e
                     );
-                    tracing::warn!("⚠️ Clipping will fall back to yt-dlp (may be slower and less reliable)");
+                    tracing::warn!(
+                        "⚠️ Clipping will fall back to yt-dlp (may be slower and less reliable)"
+                    );
                 }
             }
         }
@@ -208,11 +211,18 @@ async fn main() {
         .await
         .expect("Failed to create database pool.");
 
-    // Reset orphaned jobs on startup (jobs stuck during server crashes)
-    reset_orphaned_jobs(&db_pool).await;
-
-    // Validate Apify API token on startup (if configured)
-    validate_apify_token().await;
+    // Do not block server startup on maintenance/validation tasks.
+    // Cloud Run needs the process to bind quickly, and these can take tens of
+    // seconds on pooled DB / third-party network hiccups.
+    {
+        let db_pool_for_reset = db_pool.clone();
+        tokio::spawn(async move {
+            reset_orphaned_jobs(&db_pool_for_reset).await;
+        });
+    }
+    tokio::spawn(async {
+        validate_apify_token().await;
+    });
 
     // Initialize Astra DB client if credentials are provided
     let vector_db = match (
@@ -223,21 +233,23 @@ async fn main() {
         (Some(endpoint), Some(token), Some(keyspace)) => {
             tracing::info!("Initializing Astra DB connection...");
             let client = vector_db::AstraDBClient::new(endpoint, token, keyspace);
-            
-            // Try to create the collection (will succeed if it doesn't exist)
-            match client.create_collection().await {
-                Ok(_) => {
-                    tracing::info!("Astra DB initialized successfully");
-                    Some(client)
+            let background_client = client.clone();
+            tokio::spawn(async move {
+                match background_client.create_collection().await {
+                    Ok(_) => {
+                        tracing::info!("Astra DB initialized successfully");
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to initialize Astra DB collection: {}", e);
+                    }
                 }
-                Err(e) => {
-                    tracing::error!("Failed to initialize Astra DB: {}", e);
-                    None
-                }
-            }
+            });
+            Some(client)
         }
         _ => {
-            tracing::warn!("Astra DB credentials not found. Vector memory features will be disabled.");
+            tracing::warn!(
+                "Astra DB credentials not found. Vector memory features will be disabled."
+            );
             tracing::info!("To enable vector memory, set: ASTRA_DB_API_ENDPOINT, ASTRA_DB_APPLICATION_TOKEN, ASTRA_DB_KEYSPACE");
             None
         }
@@ -319,30 +331,35 @@ async fn main() {
         });
 
     // Gemma 4 via NVIDIA NIM — 40 RPM, OpenAI-compatible, free 1K credits.
-    let nvidia_nim_client = std::env::var("NVIDIA_API_KEY")
-        .ok()
-        .map(|k| {
-            tracing::info!("Initializing NVIDIA NIM client (Gemma 4, 40 RPM)...");
-            nvidia_nim_client::NvidiaNimClient::new(k)
+    let nvidia_nim_client = std::env::var("NVIDIA_API_KEY").ok().map(|k| {
+        tracing::info!("Initializing NVIDIA NIM client (Gemma 4, 40 RPM)...");
+        nvidia_nim_client::NvidiaNimClient::new(k)
+    });
+
+    let vertex_multimodal_embeddings =
+        vertex_multimodal_embeddings::VertexMultimodalEmbeddingsClient::from_env().map(|client| {
+            tracing::info!("Initializing Vertex multimodal embeddings client for gemini_mm lane...");
+            client
         });
 
     // Initialize Qdrant client if both API key and URL are provided
-    let qdrant_client = match (std::env::var("QDRANT_API_KEY").ok(), std::env::var("QDRANT_URL").ok()) {
+    let qdrant_client = match (
+        std::env::var("QDRANT_API_KEY").ok(),
+        std::env::var("QDRANT_URL").ok(),
+    ) {
         (Some(api_key), Some(qdrant_url)) => {
             tracing::info!("Initializing Qdrant vector database...");
             match qdrant_client::QdrantClient::new(qdrant_url, Some(api_key)).await {
                 Ok(client) => {
-                    // Try to create the collection
-                    match client.create_collection().await {
-                        Ok(_) => {
-                            tracing::info!("Qdrant initialized successfully");
-                            Some(client)
+                    tracing::info!("Qdrant client initialized; deferring collection/index setup to background");
+                    let background_client = client.clone();
+                    tokio::spawn(async move {
+                        match background_client.create_collection().await {
+                            Ok(_) => tracing::info!("Qdrant initialized successfully"),
+                            Err(e) => tracing::error!("Failed to initialize Qdrant collection: {}", e),
                         }
-                        Err(e) => {
-                            tracing::error!("Failed to initialize Qdrant collection: {}", e);
-                            None
-                        }
-                    }
+                    });
+                    Some(client)
                 }
                 Err(e) => {
                     tracing::error!("Failed to connect to Qdrant: {}", e);
@@ -380,7 +397,9 @@ async fn main() {
             Some(blender_mcp_client::BlenderMCPClient::new(url, api_key))
         }
         _ => {
-            tracing::info!("BlenderMCPServer not configured (set BLENDER_MCP_URL to enable 3D rendering)");
+            tracing::info!(
+                "BlenderMCPServer not configured (set BLENDER_MCP_URL to enable 3D rendering)"
+            );
             None
         }
     };
@@ -392,7 +411,9 @@ async fn main() {
             Some(elevenlabs_client::ElevenLabsClient::new(api_key))
         }
         _ => {
-            tracing::warn!("ELEVEN_LABS_API_KEY not found. Audio generation features will be limited.");
+            tracing::warn!(
+                "ELEVEN_LABS_API_KEY not found. Audio generation features will be limited."
+            );
             tracing::info!("To enable Eleven Labs integration, set: ELEVEN_LABS_API_KEY");
             None
         }
@@ -446,15 +467,6 @@ async fn main() {
     let job_manager = Arc::new(jobs::JobManager::new());
     tracing::info!("🎬 Job manager initialized for background video processing");
 
-    // Initialize workflow checkpointer
-    let workflow_checkpointer = Some(workflow::checkpoint::WorkflowCheckpointer::new(db_pool.clone()));
-    if let Some(ref checkpointer) = workflow_checkpointer {
-        match checkpointer.setup().await {
-            Ok(_) => tracing::info!("✅ Workflow checkpointing enabled (PostgreSQL)"),
-            Err(e) => tracing::error!("❌ Failed to setup workflow checkpointing: {}", e),
-        }
-    }
-
     // Initialize Twitch client if credentials are provided
     let twitch_client_opt: Option<Arc<twitch_client::TwitchClient>> = match (
         std::env::var("TWITCH_TV_CLIENT_ID").ok(),
@@ -485,7 +497,9 @@ async fn main() {
                 google_oauth_client_secret.clone().unwrap(),
                 db_pool.clone(),
             );
-            tracing::info!("🔧 Token manager initialized for centralized YouTube OAuth token refresh");
+            tracing::info!(
+                "🔧 Token manager initialized for centralized YouTube OAuth token refresh"
+            );
             Some(Arc::new(tm))
         } else {
             tracing::warn!("Token manager disabled (OAuth credentials not configured)");
@@ -508,16 +522,22 @@ async fn main() {
             tracing::info!("☁️ Initializing Cloudflare R2 storage client (bucket: {bucket})...");
             match r2_client::R2Client::new(&account_id, &access_key, &secret_key, &bucket).await {
                 Ok(client) => {
-                    if client.health_check().await {
-                        tracing::info!("✅ R2 storage connected — bucket: {bucket}");
-                        Some(Arc::new(client))
-                    } else {
-                        tracing::warn!("R2 health check failed — file storage will use local disk");
-                        None
-                    }
+                    tracing::info!("☁️ R2 client initialized; deferring health check to background");
+                    let background_client = client.clone();
+                    let bucket_name = bucket.clone();
+                    tokio::spawn(async move {
+                        if background_client.health_check().await {
+                            tracing::info!("✅ R2 storage connected — bucket: {bucket_name}");
+                        } else {
+                            tracing::warn!("R2 health check failed — uploads may fall back to local disk semantics");
+                        }
+                    });
+                    Some(Arc::new(client))
                 }
                 Err(e) => {
-                    tracing::warn!("Failed to init R2 client: {e} — file storage will use local disk");
+                    tracing::warn!(
+                        "Failed to init R2 client: {e} — file storage will use local disk"
+                    );
                     None
                 }
             }
@@ -539,6 +559,7 @@ async fn main() {
         gemma_client,
         nvidia_nim_client,
         claude_client,
+        vertex_multimodal_embeddings,
         voyage_embeddings,
         pexels_client,
         elevenlabs_client,
@@ -550,10 +571,10 @@ async fn main() {
         google_oauth_client_id,
         google_oauth_client_secret,
         job_manager,
-        workflow_checkpointer,
         token_manager,
         twitch_client: twitch_client_opt,
-        phantombuster_client: std::env::var("PHANTOMBUSTER_API_KEY").ok()
+        phantombuster_client: std::env::var("PHANTOMBUSTER_API_KEY")
+            .ok()
             .filter(|k| !k.is_empty())
             .map(|k| {
                 tracing::info!("🎯 PhantomBuster client initialized");
@@ -576,12 +597,15 @@ async fn main() {
     // Admin-only routes
     let admin_only_routes = Router::new()
         .route("/api/docs", axum::routing::get(api_documentation))
-        .layer(axum::middleware::from_fn(middleware::admin::admin_middleware))
+        .layer(axum::middleware::from_fn(
+            middleware::admin::admin_middleware,
+        ))
         .layer(axum::middleware::from_fn(middleware::auth::auth_middleware));
 
     // Build our application with all routes and shared state
     let app = Router::new()
         .merge(handlers::ui::ui_routes())
+        .merge(handlers::ui::ui_private_routes())
         .merge(handlers::auth::auth_routes())
         .merge(handlers::chat::chat_routes())
         .merge(handlers::upload::upload_routes())
@@ -598,16 +622,27 @@ async fn main() {
         .merge(handlers::prospects::prospect_routes()) // 🎯 Prospect finder (admin)
         .merge(handlers::prospects::instagram_routes()) // 📸 Instagram leads (all users)
         .merge(handlers::api_access::api_access_routes()) // 💳 Agency USDC license
-        .merge(handlers::subscribe::subscribe_routes())   // 💳 Regular-user $15/mo paywall
+        .merge(handlers::subscribe::subscribe_routes()) // 💳 Regular-user $15/mo paywall
         .merge(handlers::auth::clipper_invite_routes()) // 🎫 Clipper invites
         .merge(admin_only_routes) // Admin-only routes like API docs
         .route("/api/status", axum::routing::get(api_status))
         // .layer(axum::middleware::from_fn(middleware::frontend_rate_limit::frontend_rate_limit_middleware))
         // .layer(axum::middleware::from_fn(middleware::rate_limit::rate_limit_middleware))
-        .layer(axum::middleware::from_fn(middleware::logging::request_logging_middleware))
+        .layer(axum::middleware::from_fn(
+            middleware::logging::request_logging_middleware,
+        ))
         .layer(CorsLayer::permissive())
         .layer(DefaultBodyLimit::max(100 * 1024 * 1024)) // 100MB limit for video uploads
         .layer(Extension(shared_state.clone()));
+
+    // Bind the port as early as possible so Cloud Run startup probes can pass
+    // while the rest of the background platform comes online.
+    let port = std::env::var("PORT").unwrap_or_else(|_| "3000".to_string());
+    let bind_addr = format!("0.0.0.0:{}", port);
+    let listener = tokio::net::TcpListener::bind(&bind_addr)
+        .await
+        .expect(&format!("Failed to bind to {bind_addr}"));
+    tracing::info!("listening on {}", listener.local_addr().unwrap());
 
     // Start background polling task for YouTube clipping (requires youtube_client)
     if shared_state.youtube_client.is_some() {
@@ -651,9 +686,13 @@ async fn main() {
                 let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(900)); // 15 minutes
                 loop {
                     interval.tick().await;
-                    tracing::info!("🔄 Running scheduled token refresh for all YouTube channels...");
+                    tracing::info!(
+                        "🔄 Running scheduled token refresh for all YouTube channels..."
+                    );
 
-                    match jobs::token_refresh::refresh_all_expiring_tokens(&token_manager, &db_pool).await {
+                    match jobs::token_refresh::refresh_all_expiring_tokens(&token_manager, &db_pool)
+                        .await
+                    {
                         Ok(refreshed_count) => {
                             if refreshed_count > 0 {
                                 tracing::info!("✅ Refreshed {} channel tokens", refreshed_count);
@@ -735,26 +774,27 @@ async fn main() {
         // Background worker for executing clipping jobs in separate thread.
         // Uses std::thread + restart loop to recover from unexpected panics.
         let worker_state = shared_state.clone();
-        std::thread::spawn(move || {
-            loop {
-                let state = worker_state.clone();
-                let handle = std::thread::spawn(move || {
-                    let rt = tokio::runtime::Runtime::new()
-                        .expect("Failed to create tokio runtime for worker");
-                    rt.block_on(async move {
-                        jobs::clipping_worker::run_clipping_worker_loop(state).await
-                    });
-                });
-                match handle.join() {
-                    Ok(_) => {
-                        tracing::warn!("⚠️ Clipping worker exited unexpectedly. Restarting in 5s...");
-                    }
-                    Err(e) => {
-                        tracing::error!("💥 Clipping worker thread panicked: {:?}. Restarting in 5s...", e);
-                    }
+        std::thread::spawn(move || loop {
+            let state = worker_state.clone();
+            let handle = std::thread::spawn(move || {
+                let rt = tokio::runtime::Runtime::new()
+                    .expect("Failed to create tokio runtime for worker");
+                rt.block_on(
+                    async move { jobs::clipping_worker::run_clipping_worker_loop(state).await },
+                );
+            });
+            match handle.join() {
+                Ok(_) => {
+                    tracing::warn!("⚠️ Clipping worker exited unexpectedly. Restarting in 5s...");
                 }
-                std::thread::sleep(std::time::Duration::from_secs(5));
+                Err(e) => {
+                    tracing::error!(
+                        "💥 Clipping worker thread panicked: {:?}. Restarting in 5s...",
+                        e
+                    );
+                }
             }
+            std::thread::sleep(std::time::Duration::from_secs(5));
         });
 
         // Independent stuck-job detection task — runs every 60s in the main tokio runtime.
@@ -764,7 +804,9 @@ async fn main() {
             interval.tick().await; // skip first immediate tick
             loop {
                 interval.tick().await;
-                if let Err(e) = jobs::clipping_worker::run_stuck_job_detection(&stuck_detect_state).await {
+                if let Err(e) =
+                    jobs::clipping_worker::run_stuck_job_detection(&stuck_detect_state).await
+                {
                     tracing::warn!("Stuck job detection error: {}", e);
                 }
             }
@@ -781,11 +823,21 @@ async fn main() {
             let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(30));
             loop {
                 interval.tick().await;
-                jobs::clipping_worker::update_worker_heartbeat(&hb_state, &hb_worker_id, None).await;
+                jobs::clipping_worker::update_worker_heartbeat(&hb_state, &hb_worker_id, None)
+                    .await;
             }
         });
 
-        tracing::info!("✅ Clipping worker enabled — auto-retry, stuck detection, and heartbeat active");
+        // DB-aware clipping supervisor — investigates queue pathologies, suppresses
+        // duplicates, annotates quota/capacity waits, and escalates fallback deliveries.
+        let supervisor_state = shared_state.clone();
+        tokio::spawn(async move {
+            jobs::clipping_supervisor::run_clipping_supervisor_loop(supervisor_state).await;
+        });
+
+        tracing::info!(
+            "✅ Clipping worker enabled — auto-retry, stuck detection, supervisor, and heartbeat active"
+        );
     }
 
     // Spawn Twitch → YouTube channel auto-mapper cron (10-minute interval)
@@ -812,37 +864,33 @@ async fn main() {
         tracing::info!("✅ Analytics sync job started");
     }
 
-    // Render (and other PaaS) inject $PORT; fall back to 3000 for local dev.
-    let port = std::env::var("PORT").unwrap_or_else(|_| "3000".to_string());
-    let bind_addr = format!("0.0.0.0:{}", port);
-
     // Run the server with ConnectInfo to provide socket addresses for rate limiting
-    let listener = tokio::net::TcpListener::bind(&bind_addr)
-        .await
-        .expect(&format!("Failed to bind to {bind_addr}"));
-    tracing::info!("listening on {}", listener.local_addr().unwrap());
-    axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
-        .await
-        .unwrap();
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await
+    .unwrap();
 }
 
 // Production-grade logging configuration
 fn init_logging() -> Result<(), Box<dyn std::error::Error>> {
-    use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, fmt, Layer};
-    
+    use tracing_subscriber::{
+        fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer,
+    };
+
     // Get log level from environment or default to INFO for production
-    let log_level = std::env::var("RUST_LOG")
-        .unwrap_or_else(|_| {
-            if cfg!(debug_assertions) {
-                "debug,video_editor=trace,sqlx=info,reqwest=info,hyper=info,tower=info".to_string()
-            } else {
-                "info,video_editor=info,sqlx=warn,reqwest=warn,hyper=warn,tower=warn".to_string()
-            }
-        });
-    
-    let env_filter = EnvFilter::try_from_default_env()
-        .or_else(|_| EnvFilter::try_new(&log_level))?;
-    
+    let log_level = std::env::var("RUST_LOG").unwrap_or_else(|_| {
+        if cfg!(debug_assertions) {
+            "debug,video_editor=trace,sqlx=info,reqwest=info,hyper=info,tower=info".to_string()
+        } else {
+            "info,video_editor=info,sqlx=warn,reqwest=warn,hyper=warn,tower=warn".to_string()
+        }
+    });
+
+    let env_filter =
+        EnvFilter::try_from_default_env().or_else(|_| EnvFilter::try_new(&log_level))?;
+
     // Configure structured logging for production
     let fmt_layer = if std::env::var("LOG_FORMAT").as_deref() == Ok("json") {
         // JSON logging for production (easier for log aggregation)
@@ -853,7 +901,7 @@ fn init_logging() -> Result<(), Box<dyn std::error::Error>> {
             .with_target(true)
             .with_thread_ids(true)
             .with_thread_names(true)
-.boxed()
+            .boxed()
     } else {
         // Human-readable logging for development
         fmt::layer()
@@ -862,33 +910,42 @@ fn init_logging() -> Result<(), Box<dyn std::error::Error>> {
             .with_thread_names(false)
             .with_file(true)
             .with_line_number(true)
-.boxed()
+            .boxed()
     };
-    
+
     tracing_subscriber::registry()
         .with(env_filter)
         .with(fmt_layer)
         .init();
-    
+
     // Log startup information
     tracing::info!("🎬 VideoSync starting up...");
     tracing::info!("Version: {}", env!("CARGO_PKG_VERSION"));
-    tracing::info!("Build mode: {}", if cfg!(debug_assertions) { "development" } else { "production" });
+    tracing::info!(
+        "Build mode: {}",
+        if cfg!(debug_assertions) {
+            "development"
+        } else {
+            "production"
+        }
+    );
     tracing::info!("Log level: {}", log_level);
-    
+
     // Log environment configuration
     let gemini_configured = std::env::var("GEMINI_API_KEY").is_ok();
     let qdrant_configured = std::env::var("QDRANT_API_KEY").is_ok();
-    let astra_configured = std::env::var("ASTRA_DB_API_ENDPOINT").is_ok() && std::env::var("ASTRA_DB_APPLICATION_TOKEN").is_ok();
+    let astra_configured = std::env::var("ASTRA_DB_API_ENDPOINT").is_ok()
+        && std::env::var("ASTRA_DB_APPLICATION_TOKEN").is_ok();
     let db_configured = std::env::var("DATABASE_URL").is_ok();
-    
-    tracing::info!("Configuration - Database: {}, Gemini AI: {}, Qdrant: {}, AstraDB: {}", 
+
+    tracing::info!(
+        "Configuration - Database: {}, Gemini AI: {}, Qdrant: {}, AstraDB: {}",
         if db_configured { "✅" } else { "❌" },
         if gemini_configured { "✅" } else { "❌" },
         if qdrant_configured { "✅" } else { "❌" },
         if astra_configured { "✅" } else { "❌" }
     );
-    
+
     Ok(())
 }
 
@@ -1226,26 +1283,52 @@ fetch('/upload/session/my-session-123', {
 </body>
 </html>
     "###;
-    
+
     axum::response::Html(html.to_string())
 }
 
 // API Status endpoint
-async fn api_status(Extension(state): Extension<Arc<AppState>>) -> axum::response::Json<serde_json::Value> {
+async fn api_status(
+    Extension(state): Extension<Arc<AppState>>,
+) -> axum::response::Json<serde_json::Value> {
     use serde_json::json;
-    
+
     let db_status = match sqlx::query("SELECT 1").fetch_one(&state.db_pool).await {
         Ok(_) => "healthy",
-        Err(_) => "unhealthy"
+        Err(_) => "unhealthy",
     };
-    
-    let gemini_status = if state.gemini_client.is_some() { "configured" } else { "not_configured" };
-    let claude_status = if state.claude_client.is_some() { "configured" } else { "not_configured" };
-    let qdrant_status = if state.qdrant_client.is_some() { "configured" } else { "not_configured" };
-    let astra_status = if state.vector_db.is_some() { "configured" } else { "not_configured" };
-    let elevenlabs_status = if state.elevenlabs_client.is_some() { "configured" } else { "not_configured" };
-    let vibevoice_status = if state.vibevoice_client.is_some() { "configured" } else { "not_configured" };
-    
+
+    let gemini_status = if state.gemini_client.is_some() {
+        "configured"
+    } else {
+        "not_configured"
+    };
+    let claude_status = if state.claude_client.is_some() {
+        "configured"
+    } else {
+        "not_configured"
+    };
+    let qdrant_status = if state.qdrant_client.is_some() {
+        "configured"
+    } else {
+        "not_configured"
+    };
+    let astra_status = if state.vector_db.is_some() {
+        "configured"
+    } else {
+        "not_configured"
+    };
+    let elevenlabs_status = if state.elevenlabs_client.is_some() {
+        "configured"
+    } else {
+        "not_configured"
+    };
+    let vibevoice_status = if state.vibevoice_client.is_some() {
+        "configured"
+    } else {
+        "not_configured"
+    };
+
     axum::response::Json(json!({
         "status": "operational",
         "version": env!("CARGO_PKG_VERSION"),

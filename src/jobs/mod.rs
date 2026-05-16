@@ -2,23 +2,24 @@
 //! Background job system for video editing tasks
 //! Enables non-blocking video processing with real-time progress updates via WebSocket
 
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
 use uuid::Uuid;
-use serde::{Serialize, Deserialize};
-use chrono::{DateTime, Utc};
 
-pub mod video_job;
-pub mod clipping_job;
-pub mod clipping_worker;
-pub mod manual_clipping_job;
 pub mod analytics_sync_job;
-pub mod token_refresh;
-pub mod worker_config;
-pub mod job_claimer;
-pub mod twitch_mapper_job;
+pub mod clipping_job;
+pub mod clipping_supervisor;
+pub mod clipping_worker;
 pub mod error_classifier;
+pub mod job_claimer;
+pub mod manual_clipping_job;
+pub mod token_refresh;
+pub mod twitch_mapper_job;
+pub mod video_job;
+pub mod worker_config;
 
 pub use analytics_sync_job::AnalyticsSyncJob;
 
@@ -30,20 +31,18 @@ pub type JobId = String;
 #[serde(tag = "status", rename_all = "lowercase")]
 pub enum JobStatus {
     /// Job is queued and waiting to start
-    Queued {
-        position: usize,
-    },
+    Queued { position: usize },
     /// Job is currently running
     Running {
         current_step: String,
         #[serde(skip_serializing_if = "Option::is_none")]
-        progress_percent: Option<f64>,  // Now optional - use only when meaningful
+        progress_percent: Option<f64>, // Now optional - use only when meaningful
         steps_completed: usize,
         total_steps: usize,
         #[serde(skip_serializing_if = "Option::is_none")]
-        completed_actions: Option<Vec<String>>,  // NEW: List of completed steps for visibility
+        completed_actions: Option<Vec<String>>, // NEW: List of completed steps for visibility
         #[serde(skip_serializing_if = "Option::is_none")]
-        current_action_detail: Option<String>,  // NEW: Detailed sub-step info
+        current_action_detail: Option<String>, // NEW: Detailed sub-step info
     },
     /// Job completed successfully
     Completed {
@@ -62,9 +61,7 @@ pub enum JobStatus {
         progress_percent: f64,
     },
     /// Job was cancelled by user
-    Cancelled {
-        cancelled_at_step: String,
-    },
+    Cancelled { cancelled_at_step: String },
 }
 
 /// Progress update message sent to WebSocket
@@ -104,7 +101,7 @@ pub struct Job {
     pub created_at: DateTime<Utc>,
     pub started_at: Option<DateTime<Utc>>,
     pub completed_at: Option<DateTime<Utc>>,
-    pub last_heartbeat: DateTime<Utc>,  // NEW: Track last progress update to detect stuck jobs
+    pub last_heartbeat: DateTime<Utc>, // NEW: Track last progress update to detect stuck jobs
     pub status: JobStatus,
     pub input_data: serde_json::Value,
 }
@@ -180,14 +177,20 @@ impl JobManager {
         let mut senders = self.progress_senders.write().await;
         let session_id_clone = session_id.clone();
         senders.insert(session_id, sender);
-        tracing::info!("📡 Registered progress sender for session: {}", session_id_clone);
+        tracing::info!(
+            "📡 Registered progress sender for session: {}",
+            session_id_clone
+        );
     }
 
     /// Unregister progress sender when WebSocket disconnects
     pub async fn unregister_progress_sender(&self, session_id: &str) {
         let mut senders = self.progress_senders.write().await;
         senders.remove(session_id);
-        tracing::info!("📡 Unregistered progress sender for session: {}", session_id);
+        tracing::info!(
+            "📡 Unregistered progress sender for session: {}",
+            session_id
+        );
     }
 
     /// Send progress update to session's WebSocket
@@ -195,12 +198,24 @@ impl JobManager {
         let senders = self.progress_senders.read().await;
         if let Some(sender) = senders.get(session_id) {
             if let Err(e) = sender.send(update.clone()) {
-                tracing::warn!("Failed to send progress update to session {}: {}", session_id, e);
+                tracing::warn!(
+                    "Failed to send progress update to session {}: {}",
+                    session_id,
+                    e
+                );
             } else {
-                tracing::info!("📤 Sent progress to session {}: {}", session_id, update.message);
+                tracing::info!(
+                    "📤 Sent progress to session {}: {}",
+                    session_id,
+                    update.message
+                );
             }
         } else {
-            tracing::warn!("⚠️ No active WebSocket for session {}, progress not sent (message: {})", session_id, update.message);
+            tracing::warn!(
+                "⚠️ No active WebSocket for session {}, progress not sent (message: {})",
+                session_id,
+                update.message
+            );
         }
     }
 
@@ -239,7 +254,9 @@ impl JobManager {
                 JobStatus::Running { .. } if job.started_at.is_none() => {
                     job.started_at = Some(Utc::now());
                 }
-                JobStatus::Completed { .. } | JobStatus::Failed { .. } | JobStatus::Cancelled { .. } => {
+                JobStatus::Completed { .. }
+                | JobStatus::Failed { .. }
+                | JobStatus::Cancelled { .. } => {
                     job.completed_at = Some(Utc::now());
                 }
                 _ => {}
@@ -273,7 +290,9 @@ impl JobManager {
     pub async fn send_control(&self, job_id: &str, command: JobControl) -> Result<(), String> {
         let channels = self.control_channels.read().await;
         if let Some(sender) = channels.get(job_id) {
-            sender.send(command).map_err(|e| format!("Failed to send control: {}", e))?;
+            sender
+                .send(command)
+                .map_err(|e| format!("Failed to send control: {}", e))?;
             Ok(())
         } else {
             Err(format!("No control channel for job {}", job_id))

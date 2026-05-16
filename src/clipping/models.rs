@@ -4,6 +4,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
+use uuid::Uuid;
 
 /// Source channel to monitor (e.g., Mr Beast)
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
@@ -57,6 +58,7 @@ pub struct ClippingJob {
     pub current_step: Option<String>,
     pub progress_percent: i32,
     pub error_message: Option<String>,
+    pub workflow_id: Option<Uuid>,
     pub started_at: Option<DateTime<Utc>>,
     pub completed_at: Option<DateTime<Utc>>,
     pub retry_count: i32,
@@ -78,6 +80,23 @@ pub struct ClippingJob {
     pub twitch_video_id: Option<String>,
     /// Overrides source_video_id URL when Twitch fallback is active.
     pub active_video_url: Option<String>,
+    /// Generated longform fallback delivery row created when download fails.
+    pub fallback_delivery_id: Option<Uuid>,
+    /// Fallback mode used for this job, e.g. "generated_summary_delivery".
+    pub fallback_strategy: Option<String>,
+    /// When the fallback path was activated.
+    pub fallback_activated_at: Option<DateTime<Utc>>,
+    /// High-level supervisor health label for queue triage/remediation.
+    #[serde(default)]
+    pub supervisor_status: String,
+    /// Human-readable reason for the current supervisor state.
+    pub supervisor_reason: Option<String>,
+    /// Last action the clipping supervisor took for this job.
+    pub supervisor_last_action: Option<String>,
+    /// Last time the clipping supervisor evaluated this job.
+    pub supervisor_last_run_at: Option<DateTime<Utc>>,
+    /// Canonical active job that this duplicate or blocked job is waiting behind.
+    pub blocked_by_job_id: Option<i32>,
 }
 
 // ─────────────────────────── Twitch models ────────────────────────────────────
@@ -149,6 +168,11 @@ pub struct ExtractedClip {
     pub upload_status: String,
     pub published_at: Option<DateTime<Utc>>,
     pub upload_error: Option<String>,
+    #[serde(default)]
+    pub qa_status: String,
+    pub qa_score: Option<i32>,
+    pub qa_feedback: Option<String>,
+    pub qa_retry_hint: Option<String>,
     pub views_24h: i32,
     pub likes_24h: i32,
     pub comments_24h: i32,
