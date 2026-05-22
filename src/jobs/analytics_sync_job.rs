@@ -76,27 +76,6 @@ impl AnalyticsSyncJob {
 
         Ok(())
     }
-
-    /// Manually trigger an analytics sync (useful for testing or admin actions)
-    pub async fn trigger_sync_now(&self) -> Result<(), String> {
-        tracing::info!("🔄 Manual analytics sync triggered");
-
-        match self.performance_tracker.sync_all_clip_analytics().await {
-            Ok(report) => {
-                tracing::info!(
-                    "✅ Manual sync completed: {} clips synced, {} failed",
-                    report.clips_synced,
-                    report.clips_failed
-                );
-                self.log_sync_report(&report).await?;
-                Ok(())
-            }
-            Err(e) => {
-                tracing::error!("❌ Manual sync failed: {}", e);
-                Err(e)
-            }
-        }
-    }
 }
 
 // Note: Add this table to a future migration if monitoring is needed:

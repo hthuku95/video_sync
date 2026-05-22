@@ -34,11 +34,7 @@ impl BlenderMCPClient {
     // Core call_tool — calls POST /api/call_tool, returns raw JSON result
     // -------------------------------------------------------------------------
 
-    pub async fn call_tool(
-        &self,
-        tool_name: &str,
-        args: Value,
-    ) -> Result<Value, String> {
+    pub async fn call_tool(&self, tool_name: &str, args: Value) -> Result<Value, String> {
         let url = format!("{}/api/call_tool", self.base_url);
         let body = json!({
             "tool": tool_name,
@@ -79,11 +75,7 @@ impl BlenderMCPClient {
     // Download helper — fetches a presigned URL and saves to outputs/
     // -------------------------------------------------------------------------
 
-    async fn download_to_outputs(
-        &self,
-        url: &str,
-        filename: &str,
-    ) -> Result<String, String> {
+    async fn download_to_outputs(&self, url: &str, filename: &str) -> Result<String, String> {
         std::fs::create_dir_all("outputs")
             .map_err(|e| format!("Failed to create outputs/ dir: {e}"))?;
 
@@ -96,11 +88,7 @@ impl BlenderMCPClient {
             .map_err(|e| format!("Download failed: {e}"))?;
 
         if !resp.status().is_success() {
-            return Err(format!(
-                "Download HTTP error {}: {}",
-                resp.status(),
-                url
-            ));
+            return Err(format!("Download HTTP error {}: {}", resp.status(), url));
         }
 
         let bytes = resp
@@ -108,8 +96,7 @@ impl BlenderMCPClient {
             .await
             .map_err(|e| format!("Failed to read download body: {e}"))?;
 
-        std::fs::write(&dest, &bytes)
-            .map_err(|e| format!("Failed to write {dest}: {e}"))?;
+        std::fs::write(&dest, &bytes).map_err(|e| format!("Failed to write {dest}: {e}"))?;
 
         Ok(dest)
     }
@@ -134,7 +121,8 @@ impl BlenderMCPClient {
         if let Some(url) = reference_image_url {
             args["reference_image_url"] = Value::String(url.to_string());
         }
-        self.render_async("blender_generate_scene", args, "video_url", "mp4").await
+        self.render_async("blender_generate_scene", args, "video_url", "mp4")
+            .await
     }
 
     /// Generate a 3D thumbnail image. Returns local path inside outputs/.
@@ -149,7 +137,8 @@ impl BlenderMCPClient {
             "title_text": title_text,
             "style": style,
         });
-        self.render_async("blender_generate_thumbnail", args, "image_url", "png").await
+        self.render_async("blender_generate_thumbnail", args, "image_url", "png")
+            .await
     }
 
     /// Generate an animated title card clip. Returns local path inside outputs/.
@@ -166,7 +155,8 @@ impl BlenderMCPClient {
             "duration": duration,
             "style": style,
         });
-        self.render_async("blender_generate_title_card", args, "video_url", "mp4").await
+        self.render_async("blender_generate_title_card", args, "video_url", "mp4")
+            .await
     }
 
     /// Generate a data visualisation clip. Returns local path inside outputs/.
@@ -183,7 +173,8 @@ impl BlenderMCPClient {
             "title": title,
             "duration": duration,
         });
-        self.render_async("blender_generate_data_viz", args, "video_url", "mp4").await
+        self.render_async("blender_generate_data_viz", args, "video_url", "mp4")
+            .await
     }
 
     /// Generate an animated lower-third overlay clip. Returns local path inside outputs/.
@@ -200,7 +191,8 @@ impl BlenderMCPClient {
             "style": style,
             "duration": duration,
         });
-        self.render_async("blender_generate_lower_third", args, "video_url", "mp4").await
+        self.render_async("blender_generate_lower_third", args, "video_url", "mp4")
+            .await
     }
 
     /// Generate a LaTeX/Manim equation animation clip. Returns local path inside outputs/.
@@ -217,7 +209,8 @@ impl BlenderMCPClient {
             "duration": duration,
             "background_style": background_style,
         });
-        self.render_async("blender_generate_latex", args, "video_url", "mp4").await
+        self.render_async("blender_generate_latex", args, "video_url", "mp4")
+            .await
     }
 
     /// Generate a device UI mockup (iPhone/MacBook/browser/iPad) with optional animation.
@@ -239,7 +232,7 @@ impl BlenderMCPClient {
             "screenshot_url": screenshot_url,
         });
         if let Some(spec) = screenshot_spec {
-            args["screenshot_spec"] = serde_json::Value::String(spec.to_string());
+            args["screenshot_spec"] = spec.clone();
         }
         if let Some(bg) = background_color {
             args["background_color"] = json!(bg);
@@ -252,7 +245,8 @@ impl BlenderMCPClient {
         } else {
             ("video_url", "mp4")
         };
-        self.render_async("blender_generate_ui_mockup", args, url_key, ext).await
+        self.render_async("blender_generate_ui_mockup", args, url_key, ext)
+            .await
     }
 
     /// Generate a Manim animation from a natural language description.
@@ -261,16 +255,17 @@ impl BlenderMCPClient {
         &self,
         description: &str,
         duration: f64,
-        background: &str,
-        quality: &str,
+        background_style: &str,
+        composite_over_scene: bool,
     ) -> Result<String, String> {
         let args = json!({
             "description": description,
-            "duration":    duration,
-            "background":  background,
-            "quality":     quality,
+            "duration": duration,
+            "background_style": background_style,
+            "composite_over_scene": composite_over_scene,
         });
-        self.render_async("blender_generate_animation", args, "video_url", "mp4").await
+        self.render_async("blender_generate_animation", args, "video_url", "mp4")
+            .await
     }
 
     /// Generate an animated data visualisation (bar/line/pie/counter/scatter).
@@ -292,7 +287,8 @@ impl BlenderMCPClient {
             "duration":   duration,
             "colors":     colors,
         });
-        self.render_async("blender_generate_chart", args, "video_url", "mp4").await
+        self.render_async("blender_generate_chart", args, "video_url", "mp4")
+            .await
     }
 
     /// Submit a render job and poll until completion, then download the result.
@@ -386,7 +382,10 @@ impl BlenderMCPClient {
                 .await
             {
                 Ok(r) => r,
-                Err(e) => { last_err = format!("BlenderMCP submit_job HTTP error: {e}"); continue; }
+                Err(e) => {
+                    last_err = format!("BlenderMCP submit_job HTTP error: {e}");
+                    continue;
+                }
             };
             let status = resp.status();
             let bytes = match resp.bytes().await {
@@ -406,11 +405,20 @@ impl BlenderMCPClient {
             }
             let json: serde_json::Value = match Self::parse_json_body(&bytes) {
                 Ok(j) => j,
-                Err(e) => { last_err = format!("BlenderMCP submit_job parse error: {e}"); continue; }
+                Err(e) => {
+                    last_err = format!("BlenderMCP submit_job parse error: {e}");
+                    continue;
+                }
             };
-            match json.get("job_id").and_then(|v| v.as_str()).map(|s| s.to_string()) {
+            match json
+                .get("job_id")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+            {
                 Some(id) => return Ok(id),
-                None => { last_err = format!("BlenderMCP submit_job: no job_id in response: {json}"); }
+                None => {
+                    last_err = format!("BlenderMCP submit_job: no job_id in response: {json}");
+                }
             }
         }
         Err(last_err)
@@ -480,7 +488,10 @@ impl BlenderMCPClient {
                 .await
             {
                 Ok(r) => r,
-                Err(e) => { last_err = format!("BlenderMCP poll_job HTTP error: {e}"); continue; }
+                Err(e) => {
+                    last_err = format!("BlenderMCP poll_job HTTP error: {e}");
+                    continue;
+                }
             };
             let status = resp.status();
             let bytes = match resp.bytes().await {

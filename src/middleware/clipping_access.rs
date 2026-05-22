@@ -2,6 +2,8 @@
 // CRITICAL: Only whitelisted users and admins can access clipping
 // This is independent of the youtube_features_enabled toggle
 
+use crate::models::auth::Claims;
+use crate::AppState;
 use axum::{
     extract::Request,
     http::StatusCode,
@@ -9,8 +11,6 @@ use axum::{
     response::{IntoResponse, Response},
     Extension, Json,
 };
-use crate::models::auth::Claims;
-use crate::AppState;
 use serde_json::json;
 use std::sync::Arc;
 
@@ -38,10 +38,7 @@ pub async fn clipping_access_middleware(
 
     // Admins and staff ALWAYS have access
     if claims.is_staff || claims.is_superuser {
-        tracing::debug!(
-            "Clipping access granted to admin user: {}",
-            claims.username
-        );
+        tracing::debug!("Clipping access granted to admin user: {}", claims.username);
         request.extensions_mut().insert(claims);
         return Ok(next.run(request).await);
     }

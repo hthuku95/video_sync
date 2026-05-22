@@ -24,8 +24,8 @@ pub async fn ensure_and_login(
     password: &str,
 ) -> Result<String, String> {
     // Hash the password
-    let hash = bcrypt::hash(password, bcrypt::DEFAULT_COST)
-        .map_err(|e| format!("bcrypt error: {}", e))?;
+    let hash =
+        bcrypt::hash(password, bcrypt::DEFAULT_COST).map_err(|e| format!("bcrypt error: {}", e))?;
 
     // Whitelist the email
     sqlx::query(
@@ -119,13 +119,11 @@ pub async fn start_test_result(
     prompt: &str,
 ) -> Result<Uuid, String> {
     // Bump total_tests on the parent run
-    sqlx::query(
-        "UPDATE test_runs SET total_tests = total_tests + 1 WHERE id = $1",
-    )
-    .bind(run_id)
-    .execute(pool)
-    .await
-    .map_err(|e| format!("bump total_tests error: {}", e))?;
+    sqlx::query("UPDATE test_runs SET total_tests = total_tests + 1 WHERE id = $1")
+        .bind(run_id)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("bump total_tests error: {}", e))?;
 
     let id: Uuid = sqlx::query_scalar(
         "INSERT INTO test_results
@@ -155,12 +153,10 @@ pub async fn pass_test_result(pool: &PgPool, result_id: Uuid, run_id: Uuid, deta
     .execute(pool)
     .await;
 
-    let _ = sqlx::query(
-        "UPDATE test_runs SET passed_tests = passed_tests + 1 WHERE id = $1",
-    )
-    .bind(run_id)
-    .execute(pool)
-    .await;
+    let _ = sqlx::query("UPDATE test_runs SET passed_tests = passed_tests + 1 WHERE id = $1")
+        .bind(run_id)
+        .execute(pool)
+        .await;
 }
 
 /// Mark a test_result as failed and store the error message.
@@ -175,36 +171,30 @@ pub async fn fail_test_result(pool: &PgPool, result_id: Uuid, run_id: Uuid, erro
     .execute(pool)
     .await;
 
-    let _ = sqlx::query(
-        "UPDATE test_runs SET failed_tests = failed_tests + 1 WHERE id = $1",
-    )
-    .bind(run_id)
-    .execute(pool)
-    .await;
+    let _ = sqlx::query("UPDATE test_runs SET failed_tests = failed_tests + 1 WHERE id = $1")
+        .bind(run_id)
+        .execute(pool)
+        .await;
 }
 
 /// Close out a test_run: set status to 'completed' or 'failed' depending on
 /// whether any test_results have status='failed'.
 pub async fn finalize_run(pool: &PgPool, run_id: Uuid) {
-    let row = sqlx::query(
-        "SELECT passed_tests, failed_tests FROM test_runs WHERE id = $1",
-    )
-    .bind(run_id)
-    .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten();
+    let row = sqlx::query("SELECT passed_tests, failed_tests FROM test_runs WHERE id = $1")
+        .bind(run_id)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten();
 
     if let Some(row) = row {
         let failed: i32 = row.try_get("failed_tests").unwrap_or(0);
         let status = if failed > 0 { "failed" } else { "completed" };
-        let _ = sqlx::query(
-            "UPDATE test_runs SET status=$1, completed_at=NOW() WHERE id=$2",
-        )
-        .bind(status)
-        .bind(run_id)
-        .execute(pool)
-        .await;
+        let _ = sqlx::query("UPDATE test_runs SET status=$1, completed_at=NOW() WHERE id=$2")
+            .bind(status)
+            .bind(run_id)
+            .execute(pool)
+            .await;
     }
 }
 
@@ -213,18 +203,16 @@ pub async fn finalize_run(pool: &PgPool, run_id: Uuid) {
 /// Poll `phantombuster_jobs.status` every 15 s until `completed` / `failed` or timeout.
 /// Returns `true` if status reached 'completed', `false` on timeout or failure.
 pub async fn poll_phantombuster_job(pool: &PgPool, job_id: Uuid, timeout_secs: u64) -> bool {
-    let deadline = tokio::time::Instant::now()
-        + tokio::time::Duration::from_secs(timeout_secs);
+    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(timeout_secs);
 
     loop {
-        let status: Option<String> = sqlx::query_scalar(
-            "SELECT status FROM phantombuster_jobs WHERE id = $1",
-        )
-        .bind(job_id)
-        .fetch_optional(pool)
-        .await
-        .ok()
-        .flatten();
+        let status: Option<String> =
+            sqlx::query_scalar("SELECT status FROM phantombuster_jobs WHERE id = $1")
+                .bind(job_id)
+                .fetch_optional(pool)
+                .await
+                .ok()
+                .flatten();
 
         match status.as_deref() {
             Some("completed") => return true,
@@ -253,22 +241,20 @@ pub async fn poll_phantombuster_jobs_for_run(
     pb_job_ids: &[Uuid],
     timeout_secs: u64,
 ) -> bool {
-    let deadline = tokio::time::Instant::now()
-        + tokio::time::Duration::from_secs(timeout_secs);
+    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(timeout_secs);
 
     loop {
         let mut all_done = true;
         let mut any_failed = false;
 
         for &job_id in pb_job_ids {
-            let status: Option<String> = sqlx::query_scalar(
-                "SELECT status FROM phantombuster_jobs WHERE id = $1",
-            )
-            .bind(job_id)
-            .fetch_optional(pool)
-            .await
-            .ok()
-            .flatten();
+            let status: Option<String> =
+                sqlx::query_scalar("SELECT status FROM phantombuster_jobs WHERE id = $1")
+                    .bind(job_id)
+                    .fetch_optional(pool)
+                    .await
+                    .ok()
+                    .flatten();
 
             match status.as_deref() {
                 Some("completed") => {}
@@ -282,8 +268,12 @@ pub async fn poll_phantombuster_jobs_for_run(
             }
         }
 
-        if any_failed { return false; }
-        if all_done   { return true;  }
+        if any_failed {
+            return false;
+        }
+        if all_done {
+            return true;
+        }
 
         if tokio::time::Instant::now() >= deadline {
             eprintln!("PhantomBuster jobs timed out after {}s", timeout_secs);

@@ -15,7 +15,8 @@ use axum::{
     routing::{delete, get, patch, post},
     Router,
 };
-use serde::Deserialize;
+use regex::Regex;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sqlx::Row;
 use std::sync::Arc;
@@ -26,34 +27,84 @@ pub fn prospect_routes() -> Router {
     // localStorage and call the /api/* endpoints below. Putting middleware
     // here would reject every navigation because browsers don't send
     // `Authorization` headers on `<a href>` or address-bar loads.
-    let public_page = Router::new()
-        .route("/admin/prospect-finder", get(prospect_finder_page));
+    let public_page = Router::new().route("/admin/prospect-finder", get(prospect_finder_page));
 
     // API endpoints — still protected by JWT + admin claim.
     let protected_api = Router::new()
         .route("/api/admin/prospects/search", post(search_prospects))
-        .route("/api/admin/prospects/linkedin/agents", get(linkedin_list_agents))
-        .route("/api/admin/prospects/linkedin/launch", post(linkedin_launch_search))
-        .route("/api/admin/prospects/linkedin/search", post(linkedin_smart_search))
-        .route("/api/admin/prospects/linkedin/jobs", get(linkedin_list_jobs))
-        .route("/api/admin/prospects/linkedin/jobs/:job_id/results", get(linkedin_fetch_results))
+        .route(
+            "/api/admin/prospects/linkedin/agents",
+            get(linkedin_list_agents),
+        )
+        .route(
+            "/api/admin/prospects/linkedin/launch",
+            post(linkedin_launch_search),
+        )
+        .route(
+            "/api/admin/prospects/linkedin/search",
+            post(linkedin_smart_search),
+        )
+        .route(
+            "/api/admin/prospects/linkedin/jobs",
+            get(linkedin_list_jobs),
+        )
+        .route(
+            "/api/admin/prospects/linkedin/jobs/:job_id/results",
+            get(linkedin_fetch_results),
+        )
         .route("/api/admin/prospects", get(list_prospects))
         .route("/api/admin/prospects/:id", patch(update_prospect))
-        .route("/api/admin/prospects/:id/dm-script", post(regenerate_dm_script))
-        .route("/api/admin/prospects/:id/generate-outreach", post(generate_outreach_message))
+        .route(
+            "/api/admin/prospects/:id/dm-script",
+            post(regenerate_dm_script),
+        )
+        .route(
+            "/api/admin/prospects/:id/generate-outreach",
+            post(generate_outreach_message),
+        )
+        .route(
+            "/api/admin/prospects/:id/generate-sample-pack",
+            post(generate_prospect_sample_pack),
+        )
         .route("/api/admin/prospects/:id", delete(delete_prospect))
         // Telegram opportunity tab (phase 1: manual entry + AI scoring;
         // phase 2 will add automated grammers-client watcher).
-        .route("/api/admin/telegram/channels",       get(telegram_list_channels))
-        .route("/api/admin/telegram/channels",       post(telegram_add_channel))
-        .route("/api/admin/telegram/channels/:id",   delete(telegram_delete_channel))
-        .route("/api/admin/telegram/opportunities",  get(telegram_list_opportunities))
-        .route("/api/admin/telegram/opportunities",  post(telegram_add_opportunity_manual))
-        .route("/api/admin/telegram/opportunities/:id", patch(telegram_update_opportunity))
+        .route("/api/admin/telegram/channels", get(telegram_list_channels))
+        .route("/api/admin/telegram/channels", post(telegram_add_channel))
+        .route(
+            "/api/admin/telegram/channels/:id",
+            delete(telegram_delete_channel),
+        )
+        .route(
+            "/api/admin/telegram/opportunities",
+            get(telegram_list_opportunities),
+        )
+        .route(
+            "/api/admin/telegram/opportunities",
+            post(telegram_add_opportunity_manual),
+        )
+        .route(
+            "/api/admin/telegram/opportunities/:id",
+            patch(telegram_update_opportunity),
+        )
         // MTProto watcher — login + status. Bot API lives in telegram_bot.rs.
-        .route("/api/admin/telegram/login/start",    post(telegram_login_start))
-        .route("/api/admin/telegram/login/verify",   post(telegram_login_verify))
-        .route("/api/admin/telegram/status",         get(telegram_watcher_status))
+        .route(
+            "/api/admin/telegram/login/start",
+            post(telegram_login_start),
+        )
+        .route(
+            "/api/admin/telegram/login/verify",
+            post(telegram_login_verify),
+        )
+        .route("/api/admin/telegram/status", get(telegram_watcher_status))
+        .route(
+            "/api/admin/telegram/discover",
+            post(telegram_discover_channels),
+        )
+        .route(
+            "/api/admin/telegram/discovered",
+            get(telegram_list_discovered_channels),
+        )
         .layer(axum::middleware::from_fn(admin_middleware))
         .layer(axum::middleware::from_fn(auth_middleware));
 
@@ -64,32 +115,64 @@ pub fn prospect_routes() -> Router {
 /// Used by content_machine for Instagram lead generation.
 pub fn instagram_routes() -> Router {
     Router::new()
-        .route("/api/portfolio-samples",                    get(crate::handlers::admin::api_list_portfolio_samples))
-        .route("/api/portfolio-samples/crypto-saas",        post(crate::handlers::admin::api_generate_crypto_saas_portfolio_samples))
-        .route("/api/instagram/leads/search",                post(instagram_search_leads))
-        .route("/api/instagram/leads/auto-discover",         post(instagram_auto_discover))
-        .route("/api/instagram/leads/top",                   get(instagram_top_leads))
-        .route("/api/instagram/leads",                       get(instagram_list_leads))
-        .route("/api/instagram/leads/:id/generate-dm",       post(instagram_generate_dm))
-        .route("/api/instagram/leads/:id/generate-sample",   post(instagram_generate_sample))
-        .route("/api/instagram/leads/:id/contact-status",    patch(instagram_update_contact_status))
-        .route("/api/instagram/leads/:id/service-type",      patch(instagram_update_service_type))
+        .route(
+            "/api/portfolio-samples/crypto-saas",
+            post(crate::handlers::admin::api_generate_crypto_saas_portfolio_samples),
+        )
+        .route("/api/instagram/leads/search", post(instagram_search_leads))
+        .route(
+            "/api/instagram/leads/auto-discover",
+            post(instagram_auto_discover),
+        )
+        .route("/api/instagram/leads/top", get(instagram_top_leads))
+        .route("/api/instagram/leads", get(instagram_list_leads))
+        .route(
+            "/api/instagram/leads/:id/generate-dm",
+            post(instagram_generate_dm),
+        )
+        .route(
+            "/api/instagram/leads/:id/generate-sample",
+            post(instagram_generate_sample),
+        )
+        .route(
+            "/api/instagram/leads/:id/contact-status",
+            patch(instagram_update_contact_status),
+        )
+        .route(
+            "/api/instagram/leads/:id/service-type",
+            patch(instagram_update_service_type),
+        )
         .layer(axum::middleware::from_fn(auth_middleware))
 }
 
 #[derive(Debug, Deserialize)]
 struct SearchRequest {
     platform: String,      // "youtube" | "twitch"
-    prospect_type: String, // "content_creator" | "clipper" | "podcaster" | "educator" | "business_owner"
+    prospect_type: String, // "content_creator" | "creator_manager" | "clipper" | "podcaster" | "educator" | "business_owner"
     category: Option<String>,
     min_viewers: Option<i64>,
     max_viewers: Option<i64>,
     limit: Option<usize>,
 }
 
+#[derive(Debug, Serialize)]
+struct ProspectAgentCheckpoint {
+    step: String,
+    state: serde_json::Value,
+    notes: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 struct GenerateOutreachRequest {
     delivery_url: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GenerateProspectSamplePackRequest {
+    source_url: Option<String>,
+    product_name: Option<String>,
+    offer_type: Option<String>,
+    notes: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -113,29 +196,208 @@ async fn prospect_finder_page() -> Html<String> {
     Html(PROSPECT_FINDER_HTML.to_string())
 }
 
+async fn create_prospect_agent_run(
+    state: &Arc<AppState>,
+    user_id: Option<i32>,
+    run_type: &str,
+    goal: &str,
+    input: serde_json::Value,
+) -> Option<Uuid> {
+    sqlx::query_scalar::<_, Uuid>(
+        "INSERT INTO prospect_agent_runs (user_id, run_type, goal, input, state, current_step)
+         VALUES ($1, $2, $3, $4, $4, 'planned')
+         RETURNING id",
+    )
+    .bind(user_id)
+    .bind(run_type)
+    .bind(goal)
+    .bind(input)
+    .fetch_optional(&state.db_pool)
+    .await
+    .ok()
+    .flatten()
+}
+
+async fn checkpoint_prospect_agent_run(
+    state: &Arc<AppState>,
+    run_id: Option<Uuid>,
+    step: &str,
+    checkpoint_state: serde_json::Value,
+    notes: Option<&str>,
+) {
+    let Some(run_id) = run_id else {
+        return;
+    };
+
+    let next_num = sqlx::query_scalar::<_, i32>(
+        "SELECT COALESCE(MAX(checkpoint_num), 0) + 1
+         FROM prospect_agent_checkpoints
+         WHERE run_id = $1",
+    )
+    .bind(run_id)
+    .fetch_one(&state.db_pool)
+    .await
+    .unwrap_or(1);
+
+    let checkpoint = ProspectAgentCheckpoint {
+        step: step.to_string(),
+        state: checkpoint_state.clone(),
+        notes: notes.map(str::to_string),
+    };
+
+    let _ = sqlx::query(
+        "INSERT INTO prospect_agent_checkpoints (run_id, checkpoint_num, step, state, notes)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (run_id, checkpoint_num) DO NOTHING",
+    )
+    .bind(run_id)
+    .bind(next_num)
+    .bind(&checkpoint.step)
+    .bind(&checkpoint.state)
+    .bind(checkpoint.notes.as_deref())
+    .execute(&state.db_pool)
+    .await;
+
+    let _ = sqlx::query(
+        "UPDATE prospect_agent_runs
+         SET current_step = $1, state = $2, updated_at = NOW()
+         WHERE id = $3",
+    )
+    .bind(step)
+    .bind(&checkpoint_state)
+    .bind(run_id)
+    .execute(&state.db_pool)
+    .await;
+}
+
+async fn complete_prospect_agent_run(
+    state: &Arc<AppState>,
+    run_id: Option<Uuid>,
+    status: &str,
+    final_state: serde_json::Value,
+    error: Option<&str>,
+) {
+    let Some(run_id) = run_id else {
+        return;
+    };
+    let _ = sqlx::query(
+        "UPDATE prospect_agent_runs
+         SET status=$1, current_step=$2, state=$3, last_error=$4,
+             completed_at = CASE WHEN $1 IN ('completed','failed') THEN NOW() ELSE completed_at END,
+             updated_at=NOW()
+         WHERE id=$5",
+    )
+    .bind(status)
+    .bind(status)
+    .bind(final_state)
+    .bind(error)
+    .bind(run_id)
+    .execute(&state.db_pool)
+    .await;
+}
+
 // ============================================================================
 // Search — AI-powered prospect discovery
 // ============================================================================
 
 async fn search_prospects(
     Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
     Json(payload): Json<SearchRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
     let limit = payload.limit.unwrap_or(20).min(50);
     let mut found = 0usize;
+    let user_id = claims.sub.parse::<i32>().ok();
+    let run_input = json!({
+        "platform": payload.platform.clone(),
+        "prospect_type": payload.prospect_type.clone(),
+        "category": payload.category.clone(),
+        "min_viewers": payload.min_viewers,
+        "max_viewers": payload.max_viewers,
+        "limit": limit,
+    });
+    let run_id = create_prospect_agent_run(
+        &state,
+        user_id,
+        "prospect_search",
+        "Autonomously discover, enrich, score, and prepare outreach for revenue prospects.",
+        run_input.clone(),
+    )
+    .await;
+    checkpoint_prospect_agent_run(
+        &state,
+        run_id,
+        "planned",
+        json!({
+            "input": run_input,
+            "next_steps": ["generate_search_query", "search_platform", "enrich_contacts", "score_fit", "write_outreach"]
+        }),
+        Some("Created stateful prospect discovery run."),
+    )
+    .await;
 
-    if payload.platform == "youtube" {
-        found += search_youtube_prospects(&state, &payload, limit).await?;
+    let search_result = if payload.platform == "youtube" {
+        search_youtube_prospects(&state, &payload, limit).await
     } else if payload.platform == "twitch" {
-        found += search_twitch_prospects(&state, &payload, limit).await?;
+        search_twitch_prospects(&state, &payload, limit).await
     } else {
+        complete_prospect_agent_run(
+            &state,
+            run_id,
+            "failed",
+            json!({"error": "unsupported_platform", "platform": payload.platform}),
+            Some("platform must be 'youtube' or 'twitch'"),
+        )
+        .await;
         return Err((
             StatusCode::BAD_REQUEST,
-            Json(ErrorResponse { success: false, message: "platform must be 'youtube' or 'twitch'".to_string() }),
+            Json(ErrorResponse {
+                success: false,
+                message: "platform must be 'youtube' or 'twitch'".to_string(),
+            }),
         ));
-    }
+    };
 
-    Ok(Json(json!({ "success": true, "found": found, "message": format!("Found and scored {} prospects", found) })))
+    match search_result {
+        Ok(count) => found += count,
+        Err(e) => {
+            complete_prospect_agent_run(
+                &state,
+                run_id,
+                "failed",
+                json!({"error": "platform_search_failed"}),
+                Some("Platform prospect search failed."),
+            )
+            .await;
+            return Err(e);
+        }
+    };
+
+    checkpoint_prospect_agent_run(
+        &state,
+        run_id,
+        "completed",
+        json!({"found": found, "platform": payload.platform.clone(), "prospect_type": payload.prospect_type.clone()}),
+        Some("Prospects persisted with contact enrichment, fit score, and outreach scripts."),
+    )
+    .await;
+    complete_prospect_agent_run(
+        &state,
+        run_id,
+        "completed",
+        json!({"found": found, "platform": payload.platform.clone(), "prospect_type": payload.prospect_type.clone()}),
+        None,
+    )
+    .await;
+
+    Ok(Json(
+        json!({
+            "success": true,
+            "found": found,
+            "agent_run_id": run_id.map(|id| id.to_string()),
+            "message": format!("Found and scored {} prospects", found)
+        }),
+    ))
 }
 
 async fn search_youtube_prospects(
@@ -145,14 +407,27 @@ async fn search_youtube_prospects(
 ) -> Result<usize, (StatusCode, Json<ErrorResponse>)> {
     let api_key = std::env::var("YOUTUBE_API_KEY").unwrap_or_default();
     if api_key.is_empty() {
-        return Err((StatusCode::SERVICE_UNAVAILABLE, Json(ErrorResponse { success: false, message: "YOUTUBE_API_KEY not configured".to_string() })));
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ErrorResponse {
+                success: false,
+                message: "YOUTUBE_API_KEY not configured".to_string(),
+            }),
+        ));
     }
 
-    let base_category = payload.category.clone().unwrap_or_else(|| "general".to_string());
+    let base_category = payload
+        .category
+        .clone()
+        .unwrap_or_else(|| "general".to_string());
 
     // AI generates the most effective YouTube search query for this prospect type + category
-    let search_query = ai_generate_youtube_query(state, &payload.prospect_type, &base_category).await;
-    tracing::info!("🔍 YouTube prospect search query (AI): \"{}\"", search_query);
+    let search_query =
+        ai_generate_youtube_query(state, &payload.prospect_type, &base_category).await;
+    tracing::info!(
+        "🔍 YouTube prospect search query (AI): \"{}\"",
+        search_query
+    );
 
     let client = reqwest::Client::new();
     let search_url = format!(
@@ -160,11 +435,30 @@ async fn search_youtube_prospects(
         urlencoding::encode(&search_query), limit.min(50), api_key
     );
 
-    let search_resp: serde_json::Value = client.get(&search_url)
-        .send().await
-        .map_err(|e| (StatusCode::BAD_GATEWAY, Json(ErrorResponse { success: false, message: format!("YouTube API error: {}", e) })))?
-        .json().await
-        .map_err(|e| (StatusCode::BAD_GATEWAY, Json(ErrorResponse { success: false, message: format!("YouTube parse error: {}", e) })))?;
+    let search_resp: serde_json::Value = client
+        .get(&search_url)
+        .send()
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(ErrorResponse {
+                    success: false,
+                    message: format!("YouTube API error: {}", e),
+                }),
+            )
+        })?
+        .json()
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(ErrorResponse {
+                    success: false,
+                    message: format!("YouTube parse error: {}", e),
+                }),
+            )
+        })?;
 
     let items = match search_resp["items"].as_array() {
         Some(arr) => arr.clone(),
@@ -172,63 +466,133 @@ async fn search_youtube_prospects(
     };
 
     // Collect channel IDs for stats lookup
-    let channel_ids: Vec<String> = items.iter()
+    let channel_ids: Vec<String> = items
+        .iter()
         .filter_map(|item| item["id"]["channelId"].as_str().map(String::from))
         .collect();
 
-    if channel_ids.is_empty() { return Ok(0); }
+    if channel_ids.is_empty() {
+        return Ok(0);
+    }
 
     let stats_url = format!(
         "https://www.googleapis.com/youtube/v3/channels?part=snippet,statistics&id={}&key={}",
-        channel_ids.join(","), api_key
+        channel_ids.join(","),
+        api_key
     );
-    let stats_resp: serde_json::Value = client.get(&stats_url)
-        .send().await.map_err(|e| (StatusCode::BAD_GATEWAY, Json(ErrorResponse { success: false, message: e.to_string() })))?
-        .json().await.map_err(|e| (StatusCode::BAD_GATEWAY, Json(ErrorResponse { success: false, message: e.to_string() })))?;
+    let stats_resp: serde_json::Value = client
+        .get(&stats_url)
+        .send()
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(ErrorResponse {
+                    success: false,
+                    message: e.to_string(),
+                }),
+            )
+        })?
+        .json()
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(ErrorResponse {
+                    success: false,
+                    message: e.to_string(),
+                }),
+            )
+        })?;
 
     let channels = stats_resp["items"].as_array().cloned().unwrap_or_default();
     let mut count = 0;
 
     for channel in &channels {
         let channel_id = channel["id"].as_str().unwrap_or("").to_string();
-        let display_name = channel["snippet"]["title"].as_str().unwrap_or("").to_string();
-        let description = channel["snippet"]["description"].as_str().unwrap_or("").to_string();
+        let display_name = channel["snippet"]["title"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+        let description = channel["snippet"]["description"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
         let sub_count: i64 = channel["statistics"]["subscriberCount"]
-            .as_str().unwrap_or("0").parse().unwrap_or(0);
+            .as_str()
+            .unwrap_or("0")
+            .parse()
+            .unwrap_or(0);
 
-        if display_name.is_empty() || channel_id.is_empty() { continue; }
+        if display_name.is_empty() || channel_id.is_empty() {
+            continue;
+        }
 
         // Apply viewer range filter
         if let Some(min) = payload.min_viewers {
-            if sub_count < min { continue; }
+            if sub_count < min {
+                continue;
+            }
         }
         if let Some(max) = payload.max_viewers {
-            if sub_count > max { continue; }
+            if sub_count > max {
+                continue;
+            }
         }
 
         let platform_url = format!("https://youtube.com/channel/{}", channel_id);
-        let category = payload.category.clone().unwrap_or_else(|| "general".to_string());
+        let category = payload
+            .category
+            .clone()
+            .unwrap_or_else(|| "general".to_string());
 
-        // Extract Twitter/X handle from description
-        let twitter_handle = extract_twitter_handle(&description);
+        // Extract creator contact fields from the public channel description.
+        let mut twitter_handle = extract_best_twitter_handle(&description);
+        let mut instagram_handle = extract_best_instagram_handle(&description);
+        let mut business_email = extract_best_business_email(&description);
+        let mut external_url = extract_best_external_url(&description);
+        let enrichment_url = external_url.clone();
+        let contact_enrichment = enrich_public_contact_fields(
+            enrichment_url.as_deref(),
+            &mut twitter_handle,
+            &mut instagram_handle,
+            &mut business_email,
+            &mut external_url,
+        )
+        .await;
+        let scoring_description = build_scoring_description(&description);
 
-        let (score, reasoning, service, dm_creator, dm_clipper) =
-            score_prospect_with_ai(state, &display_name, sub_count, &description, &category, &payload.prospect_type).await;
+        let (score, reasoning, service, dm_creator, dm_clipper, x_dm, email_script) = score_prospect_with_ai(
+            state,
+            &display_name,
+            sub_count,
+            &scoring_description,
+            &category,
+            &payload.prospect_type,
+        )
+        .await;
 
         sqlx::query(
             "INSERT INTO prospects (platform, channel_id, display_name, platform_url,
              subscriber_count, content_category, channel_description, prospect_type,
              ai_score, ai_reasoning, dm_script_creator, dm_script_clipper, twitter_handle,
-             service_type)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+             instagram_handle, business_email, external_url, service_type, x_dm_script,
+             email_script, contact_enrichment)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
              ON CONFLICT (platform, channel_id) DO UPDATE SET
                ai_score = EXCLUDED.ai_score,
                ai_reasoning = EXCLUDED.ai_reasoning,
                dm_script_creator = EXCLUDED.dm_script_creator,
                dm_script_clipper = EXCLUDED.dm_script_clipper,
+               x_dm_script = EXCLUDED.x_dm_script,
+               email_script = EXCLUDED.email_script,
                twitter_handle = COALESCE(EXCLUDED.twitter_handle, prospects.twitter_handle),
+               instagram_handle = COALESCE(EXCLUDED.instagram_handle, prospects.instagram_handle),
+               business_email = COALESCE(EXCLUDED.business_email, prospects.business_email),
+               external_url = COALESCE(EXCLUDED.external_url, prospects.external_url),
+               contact_enrichment = COALESCE(NULLIF(EXCLUDED.contact_enrichment, '{}'::jsonb), prospects.contact_enrichment),
                service_type = EXCLUDED.service_type,
-               updated_at = NOW()"
+               updated_at = NOW()",
         )
         .bind("youtube")
         .bind(&channel_id)
@@ -243,7 +607,13 @@ async fn search_youtube_prospects(
         .bind(&dm_creator)
         .bind(&dm_clipper)
         .bind(twitter_handle.as_deref())
+        .bind(instagram_handle.as_deref())
+        .bind(business_email.as_deref())
+        .bind(external_url.as_deref())
         .bind(&service)
+        .bind(&x_dm)
+        .bind(&email_script)
+        .bind(&contact_enrichment)
         .execute(&state.db_pool)
         .await
         .ok();
@@ -262,7 +632,13 @@ async fn search_twitch_prospects(
     let client_id = std::env::var("TWITCH_TV_CLIENT_ID").unwrap_or_default();
     let client_secret = std::env::var("TWITCH_TV_CLIENT_SECRET").unwrap_or_default();
     if client_id.is_empty() {
-        return Err((StatusCode::SERVICE_UNAVAILABLE, Json(ErrorResponse { success: false, message: "TWITCH_CLIENT_ID not configured".to_string() })));
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ErrorResponse {
+                success: false,
+                message: "TWITCH_CLIENT_ID not configured".to_string(),
+            }),
+        ));
     }
 
     // Get app access token
@@ -274,16 +650,44 @@ async fn search_twitch_prospects(
             ("client_secret", client_secret.as_str()),
             ("grant_type", "client_credentials"),
         ])
-        .send().await
-        .map_err(|e| (StatusCode::BAD_GATEWAY, Json(ErrorResponse { success: false, message: e.to_string() })))?
-        .json().await
-        .map_err(|e| (StatusCode::BAD_GATEWAY, Json(ErrorResponse { success: false, message: e.to_string() })))?;
+        .send()
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(ErrorResponse {
+                    success: false,
+                    message: e.to_string(),
+                }),
+            )
+        })?
+        .json()
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(ErrorResponse {
+                    success: false,
+                    message: e.to_string(),
+                }),
+            )
+        })?;
 
-    let access_token = token_resp["access_token"].as_str().unwrap_or("").to_string();
+    let access_token = token_resp["access_token"]
+        .as_str()
+        .unwrap_or("")
+        .to_string();
 
     // AI picks the best Twitch game/category to search for this prospect type
-    let game_name = ai_generate_twitch_category(state, &payload.prospect_type,
-        &payload.category.clone().unwrap_or_else(|| "general".to_string())).await;
+    let game_name = ai_generate_twitch_category(
+        state,
+        &payload.prospect_type,
+        &payload
+            .category
+            .clone()
+            .unwrap_or_else(|| "general".to_string()),
+    )
+    .await;
     tracing::info!("🎮 Twitch prospect category (AI): \"{}\"", game_name);
 
     // Look up the game ID on Twitch so we can filter streams by category
@@ -292,73 +696,187 @@ async fn search_twitch_prospects(
             "https://api.twitch.tv/helix/games?name={}",
             urlencoding::encode(&game_name)
         );
-        if let Ok(resp) = client.get(&game_url)
+        if let Ok(resp) = client
+            .get(&game_url)
             .header("Client-Id", &client_id)
             .header("Authorization", format!("Bearer {}", access_token))
-            .send().await
+            .send()
+            .await
         {
             if let Ok(val) = resp.json::<serde_json::Value>().await {
-                val["data"].as_array()
+                val["data"]
+                    .as_array()
                     .and_then(|arr| arr.first())
                     .and_then(|g| g["id"].as_str())
                     .map(String::from)
-            } else { None }
-        } else { None }
-    } else { None };
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
 
     // Build streams URL — filter by game_id if found, otherwise top streams
     let streams_url = if let Some(ref gid) = game_id {
-        format!("https://api.twitch.tv/helix/streams?first={}&game_id={}", limit.min(100), gid)
+        format!(
+            "https://api.twitch.tv/helix/streams?first={}&game_id={}",
+            limit.min(100),
+            gid
+        )
     } else {
-        format!("https://api.twitch.tv/helix/streams?first={}", limit.min(100))
+        format!(
+            "https://api.twitch.tv/helix/streams?first={}",
+            limit.min(100)
+        )
     };
 
-    let streams_resp: serde_json::Value = client.get(&streams_url)
+    let streams_resp: serde_json::Value = client
+        .get(&streams_url)
         .header("Client-Id", &client_id)
         .header("Authorization", format!("Bearer {}", access_token))
-        .send().await
-        .map_err(|e| (StatusCode::BAD_GATEWAY, Json(ErrorResponse { success: false, message: e.to_string() })))?
-        .json().await
-        .map_err(|e| (StatusCode::BAD_GATEWAY, Json(ErrorResponse { success: false, message: e.to_string() })))?;
+        .send()
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(ErrorResponse {
+                    success: false,
+                    message: e.to_string(),
+                }),
+            )
+        })?
+        .json()
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(ErrorResponse {
+                    success: false,
+                    message: e.to_string(),
+                }),
+            )
+        })?;
 
     let streams = streams_resp["data"].as_array().cloned().unwrap_or_default();
+    let stream_logins: Vec<String> = streams
+        .iter()
+        .filter_map(|stream| stream["user_login"].as_str().map(str::to_string))
+        .collect();
+
+    let mut twitch_users_by_login = std::collections::HashMap::<String, serde_json::Value>::new();
+    if !stream_logins.is_empty() {
+        let mut users_req = client
+            .get("https://api.twitch.tv/helix/users")
+            .header("Client-Id", &client_id)
+            .header("Authorization", format!("Bearer {}", access_token));
+
+        for login in &stream_logins {
+            users_req = users_req.query(&[("login", login)]);
+        }
+
+        if let Ok(resp) = users_req.send().await {
+            if let Ok(value) = resp.json::<serde_json::Value>().await {
+                if let Some(users) = value["data"].as_array() {
+                    for user in users {
+                        if let Some(login) = user["login"].as_str() {
+                            twitch_users_by_login.insert(login.to_lowercase(), user.clone());
+                        }
+                    }
+                }
+            }
+        }
+    }
     let mut count = 0;
 
     for stream in &streams {
         let channel_id = stream["user_id"].as_str().unwrap_or("").to_string();
+        let user_login = stream["user_login"].as_str().unwrap_or("").to_string();
         let display_name = stream["user_name"].as_str().unwrap_or("").to_string();
         let viewer_count: i64 = stream["viewer_count"].as_i64().unwrap_or(0);
         let game_name = stream["game_name"].as_str().unwrap_or("").to_string();
 
-        if display_name.is_empty() { continue; }
+        if display_name.is_empty() {
+            continue;
+        }
 
-        if let Some(min) = payload.min_viewers { if viewer_count < min { continue; } }
-        if let Some(max) = payload.max_viewers { if viewer_count > max { continue; } }
+        if let Some(min) = payload.min_viewers {
+            if viewer_count < min {
+                continue;
+            }
+        }
+        if let Some(max) = payload.max_viewers {
+            if viewer_count > max {
+                continue;
+            }
+        }
 
         let platform_url = format!("https://twitch.tv/{}", display_name.to_lowercase());
         let category = if game_name.is_empty() {
-            payload.category.clone().unwrap_or_else(|| "gaming".to_string())
+            payload
+                .category
+                .clone()
+                .unwrap_or_else(|| "gaming".to_string())
         } else {
             game_name.clone()
         };
+        let user_details = twitch_users_by_login
+            .get(&user_login.to_lowercase())
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        let description = user_details["description"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+        let mut twitter_handle = extract_best_twitter_handle(&description);
+        let mut instagram_handle = extract_best_instagram_handle(&description);
+        let mut business_email = extract_best_business_email(&description);
+        let mut external_url = extract_best_external_url(&description);
+        let enrichment_url = external_url.clone();
+        let contact_enrichment = enrich_public_contact_fields(
+            enrichment_url.as_deref(),
+            &mut twitter_handle,
+            &mut instagram_handle,
+            &mut business_email,
+            &mut external_url,
+        )
+        .await;
+        let scoring_description = build_scoring_description(&description);
 
-        let (score, reasoning, service, dm_creator, dm_clipper) =
-            score_prospect_with_ai(state, &display_name, viewer_count, "", &category, &payload.prospect_type).await;
+        let (score, reasoning, service, dm_creator, dm_clipper, x_dm, email_script) = score_prospect_with_ai(
+            state,
+            &display_name,
+            viewer_count,
+            &scoring_description,
+            &category,
+            &payload.prospect_type,
+        )
+        .await;
 
         sqlx::query(
             "INSERT INTO prospects (platform, channel_id, display_name, platform_url,
              avg_viewer_count, content_category, prospect_type,
              ai_score, ai_reasoning, dm_script_creator, dm_script_clipper,
-             service_type)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+             twitter_handle, instagram_handle, business_email, external_url, service_type,
+             x_dm_script, email_script, contact_enrichment)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
              ON CONFLICT (platform, channel_id) DO UPDATE SET
                avg_viewer_count = EXCLUDED.avg_viewer_count,
                ai_score = EXCLUDED.ai_score,
                ai_reasoning = EXCLUDED.ai_reasoning,
                dm_script_creator = EXCLUDED.dm_script_creator,
                dm_script_clipper = EXCLUDED.dm_script_clipper,
+               x_dm_script = EXCLUDED.x_dm_script,
+               email_script = EXCLUDED.email_script,
+               twitter_handle = COALESCE(EXCLUDED.twitter_handle, prospects.twitter_handle),
+               instagram_handle = COALESCE(EXCLUDED.instagram_handle, prospects.instagram_handle),
+               business_email = COALESCE(EXCLUDED.business_email, prospects.business_email),
+               external_url = COALESCE(EXCLUDED.external_url, prospects.external_url),
+               contact_enrichment = COALESCE(NULLIF(EXCLUDED.contact_enrichment, '{}'::jsonb), prospects.contact_enrichment),
                service_type = EXCLUDED.service_type,
-               updated_at = NOW()"
+               updated_at = NOW()",
         )
         .bind("twitch")
         .bind(&channel_id)
@@ -371,7 +889,14 @@ async fn search_twitch_prospects(
         .bind(&reasoning)
         .bind(&dm_creator)
         .bind(&dm_clipper)
+        .bind(twitter_handle.as_deref())
+        .bind(instagram_handle.as_deref())
+        .bind(business_email.as_deref())
+        .bind(external_url.as_deref())
         .bind(&service)
+        .bind(&x_dm)
+        .bind(&email_script)
+        .bind(&contact_enrichment)
         .execute(&state.db_pool)
         .await
         .ok();
@@ -388,7 +913,8 @@ fn extract_twitter_handle(description: &str) -> Option<String> {
     for pattern in &["twitter.com/", "x.com/"] {
         if let Some(pos) = description.to_lowercase().find(pattern) {
             let after = &description[pos + pattern.len()..];
-            let handle: String = after.chars()
+            let handle: String = after
+                .chars()
                 .take_while(|c| c.is_alphanumeric() || *c == '_')
                 .collect();
             if !handle.is_empty() && handle.len() <= 50 {
@@ -401,12 +927,359 @@ fn extract_twitter_handle(description: &str) -> Option<String> {
     None
 }
 
+fn extract_instagram_handle(description: &str) -> Option<String> {
+    for pattern in &["instagram.com/", "instagr.am/"] {
+        if let Some(pos) = description.to_lowercase().find(pattern) {
+            let after = &description[pos + pattern.len()..];
+            let handle: String = after
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '.')
+                .collect();
+            if !handle.is_empty() && handle.len() <= 50 {
+                return Some(format!("@{}", handle));
+            }
+        }
+    }
+    None
+}
+
+fn extract_business_email(description: &str) -> Option<String> {
+    let regex = Regex::new(r"(?i)\b[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}\b").ok()?;
+    regex.find(description).map(|m| {
+        m.as_str()
+            .trim_matches(|c: char| ",.;:()[]{}".contains(c))
+            .to_string()
+    })
+}
+
+fn extract_external_url(description: &str) -> Option<String> {
+    let regex = Regex::new(r#"https?://[^\s<>"']+"#).ok()?;
+    let mut fallback: Option<String> = None;
+
+    for matched in regex.find_iter(description) {
+        let candidate = matched
+            .as_str()
+            .trim_end_matches(|c: char| ",.;:()[]{}".contains(c))
+            .to_string();
+        let lower = candidate.to_lowercase();
+
+        if fallback.is_none() {
+            fallback = Some(candidate.clone());
+        }
+
+        let is_social = [
+            "youtube.com",
+            "youtu.be",
+            "twitter.com",
+            "x.com",
+            "instagram.com",
+            "instagr.am",
+            "twitch.tv",
+            "discord.gg",
+            "discord.com",
+            "t.me",
+        ]
+        .iter()
+        .any(|domain| lower.contains(domain));
+
+        if !is_social {
+            return Some(candidate);
+        }
+    }
+
+    fallback
+}
+
+fn extract_best_twitter_handle(description: &str) -> Option<String> {
+    extract_twitter_handle(description).or_else(|| {
+        extract_labeled_handle(
+            description,
+            &[
+                r"twitter",
+                r"x/twitter",
+                r"x profile",
+                r"x handle",
+                r"x\.com",
+            ],
+        )
+    })
+}
+
+fn extract_best_instagram_handle(description: &str) -> Option<String> {
+    extract_instagram_handle(description)
+        .or_else(|| extract_labeled_handle(description, &[r"instagram", r"insta", r"ig"]))
+}
+
+fn extract_best_business_email(description: &str) -> Option<String> {
+    extract_business_email(description).or_else(|| {
+        let normalized = normalize_obfuscated_contact_text(description);
+        let regex = Regex::new(r"(?i)\b[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}\b").ok()?;
+        regex.find(&normalized).map(|m| {
+            m.as_str()
+                .trim_matches(|c: char| ",.;:()[]{}".contains(c))
+                .to_string()
+        })
+    })
+}
+
+fn extract_best_external_url(description: &str) -> Option<String> {
+    extract_external_url(description).or_else(|| {
+        let bare_domain_regex =
+            Regex::new(r#"(?i)\b(?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)+(?:/[^\s<>"']*)?"#).ok()?;
+        let mut fallback: Option<String> = None;
+
+        for matched in bare_domain_regex.find_iter(description) {
+            let candidate = matched
+                .as_str()
+                .trim_end_matches(|c: char| ",.;:()[]{}".contains(c))
+                .to_string();
+            let lower = candidate.to_lowercase();
+            if candidate.contains('@') {
+                continue;
+            }
+
+            let url = if lower.starts_with("http://") || lower.starts_with("https://") {
+                candidate.clone()
+            } else {
+                format!("https://{}", candidate)
+            };
+
+            if fallback.is_none() {
+                fallback = Some(url.clone());
+            }
+
+            let is_social = [
+                "youtube.com",
+                "youtu.be",
+                "twitter.com",
+                "x.com",
+                "instagram.com",
+                "instagr.am",
+                "twitch.tv",
+                "discord.gg",
+                "discord.com",
+                "t.me",
+                "linktr.ee",
+                "beacons.ai",
+                "solo.to",
+            ]
+            .iter()
+            .any(|domain| lower.contains(domain));
+
+            if !is_social {
+                return Some(url);
+            }
+        }
+
+        fallback
+    })
+}
+
+async fn enrich_public_contact_fields(
+    url: Option<&str>,
+    twitter_handle: &mut Option<String>,
+    instagram_handle: &mut Option<String>,
+    business_email: &mut Option<String>,
+    external_url: &mut Option<String>,
+) -> serde_json::Value {
+    let Some(url) = url else {
+        return json!({});
+    };
+    if !url.starts_with("https://") && !url.starts_with("http://") {
+        return json!({});
+    }
+
+    let lower = url.to_lowercase();
+    let should_fetch = [
+        "linktr.ee",
+        "beacons.ai",
+        "solo.to",
+        "bio.site",
+        "carrd.co",
+        "lnk.bio",
+        "hoo.be",
+    ]
+    .iter()
+    .any(|domain| lower.contains(domain))
+        || ![
+            "youtube.com",
+            "youtu.be",
+            "twitch.tv",
+            "twitter.com",
+            "x.com",
+            "instagram.com",
+            "discord.gg",
+            "discord.com",
+            "t.me",
+        ]
+        .iter()
+        .any(|domain| lower.contains(domain));
+
+    if !should_fetch {
+        return json!({"source_url": url, "skipped": "social_or_unsupported_url"});
+    }
+
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .user_agent("Mozilla/5.0 (compatible; VideoSyncProspectBot/1.0)")
+        .redirect(reqwest::redirect::Policy::limited(4))
+        .build()
+    {
+        Ok(client) => client,
+        Err(_) => return json!({"source_url": url, "error": "client_build_failed"}),
+    };
+
+    let html = match client.get(url).send().await {
+        Ok(resp) if resp.status().is_success() => resp.text().await.unwrap_or_default(),
+        Ok(resp) => {
+            return json!({
+                "source_url": url,
+                "error": format!("http_{}", resp.status().as_u16())
+            })
+        }
+        Err(e) => return json!({"source_url": url, "error": e.to_string()}),
+    };
+
+    let found_twitter = extract_best_twitter_handle(&html);
+    let found_instagram = extract_best_instagram_handle(&html);
+    let found_email = extract_best_business_email(&html);
+    let found_external = extract_best_external_url(&html);
+
+    if twitter_handle.is_none() {
+        *twitter_handle = found_twitter.clone();
+    }
+    if instagram_handle.is_none() {
+        *instagram_handle = found_instagram.clone();
+    }
+    if business_email.is_none() {
+        *business_email = found_email.clone();
+    }
+    if external_url.as_deref() == Some(url) {
+        if let Some(found) = found_external.as_ref() {
+            let found_lower = found.to_lowercase();
+            let is_same_family = lower.contains("linktr.ee")
+                || lower.contains("beacons.ai")
+                || lower.contains("solo.to")
+                || lower.contains("bio.site")
+                || lower.contains("lnk.bio")
+                || lower.contains("hoo.be");
+            if is_same_family && !found_lower.contains("linktr.ee") && !found_lower.contains("beacons.ai") {
+                *external_url = Some(found.clone());
+            }
+        }
+    }
+
+    json!({
+        "source_url": url,
+        "fetched_public_page": true,
+        "twitter_handle": found_twitter,
+        "instagram_handle": found_instagram,
+        "business_email": found_email,
+        "external_url": found_external,
+    })
+}
+
+fn extract_labeled_handle(description: &str, labels: &[&str]) -> Option<String> {
+    let joined = labels.join("|");
+    let pattern = format!(
+        r"(?i)(?:^|[\s|,;/])(?:{})(?:\s*(?:[:\-|]|is|handle)?\s*)(@?[a-z0-9_.]{{2,50}})",
+        joined
+    );
+    let regex = Regex::new(&pattern).ok()?;
+    let capture = regex.captures(description)?;
+    let handle = capture.get(1)?.as_str().trim_start_matches('@');
+    if handle.is_empty() {
+        None
+    } else {
+        Some(format!("@{}", handle))
+    }
+}
+
+fn normalize_obfuscated_contact_text(description: &str) -> String {
+    let mut normalized = description.to_string();
+    for pattern in ["[at]", "(at)", "{at}", " at "] {
+        normalized = normalized.replace(pattern, "@");
+        normalized = normalized.replace(&pattern.to_uppercase(), "@");
+    }
+    for pattern in ["[dot]", "(dot)", "{dot}", " dot "] {
+        normalized = normalized.replace(pattern, ".");
+        normalized = normalized.replace(&pattern.to_uppercase(), ".");
+    }
+    normalized
+}
+
+fn extract_role_signals(description: &str) -> Vec<&'static str> {
+    let lower = description.to_lowercase();
+    let mut signals = Vec::new();
+
+    if [
+        "creator manager",
+        "talent manager",
+        "artist manager",
+        "management",
+        "bookings",
+        "partnerships",
+        "agency",
+        "creator ops",
+        "social media manager",
+    ]
+    .iter()
+    .any(|keyword| lower.contains(keyword))
+    {
+        signals.push("creator-manager");
+    }
+
+    if [
+        "video editor",
+        "short form editor",
+        "short-form editor",
+        "clipper",
+        "content repurposing",
+        "repurpose",
+        "podcast producer",
+        "reels editor",
+        "shorts editor",
+        "ugc editor",
+    ]
+    .iter()
+    .any(|keyword| lower.contains(keyword))
+    {
+        signals.push("clipper-operator");
+    }
+
+    if [
+        "youtube", "podcast", "streamer", "twitch", "host", "educator", "course", "founder",
+    ]
+    .iter()
+    .any(|keyword| lower.contains(keyword))
+    {
+        signals.push("direct-buyer");
+    }
+
+    signals
+}
+
+fn build_scoring_description(description: &str) -> String {
+    let signals = extract_role_signals(description);
+    if signals.is_empty() {
+        description.to_string()
+    } else if description.trim().is_empty() {
+        format!("Detected operator signals: {}", signals.join(", "))
+    } else {
+        format!(
+            "{}\nDetected operator signals: {}",
+            description,
+            signals.join(", ")
+        )
+    }
+}
+
 /// Use best available LLM to score a prospect and generate DM scripts.
 /// Priority: NVIDIA NIM → Gemma 4 → Gemini Flash.
 /// Returns (score, reasoning, dm_creator, dm_clipper).
 /// AI-scored prospect data — matches the IG lead pattern.
-/// Returns `(score_0_1, reasoning, service_type, dm_script, dm_clipper_fallback)`.
-/// `service_type` is one of: clipping | animations | thumbnails | ugc | full_stack.
+/// Returns `(score_0_1, reasoning, service_type, legacy_dm, dm_clipper_fallback, x_dm, email_script)`.
+/// `service_type` is one of the revenue service tags accepted by `is_valid_revenue_service`.
 async fn score_prospect_with_ai(
     state: &Arc<AppState>,
     name: &str,
@@ -414,10 +1287,23 @@ async fn score_prospect_with_ai(
     description: &str,
     category: &str,
     prospect_type: &str,
-) -> (f64, String, String, String, String) {
-    if state.nvidia_nim_client.is_none() && state.gemma_client.is_none() && state.gemini_client.is_none() {
-        return (0.5, "No LLM configured".to_string(), "clipping".to_string(),
-                default_dm_creator(name), default_dm_clipper(name));
+) -> (f64, String, String, String, String, String, String) {
+    if state.nvidia_nim_client.is_none()
+        && state.gemma_client.is_none()
+        && state.gemini_client.is_none()
+    {
+        let service = default_service_for_prospect(category, prospect_type);
+        let x_dm = default_x_dm(name, &service);
+        let email_script = default_email_script(name, &service);
+        return (
+            0.5,
+            "No LLM configured".to_string(),
+            service,
+            x_dm.clone(),
+            default_dm_clipper(name),
+            x_dm,
+            email_script,
+        );
     }
 
     // Same service-menu pattern as IG leads — AI picks the strongest-fit
@@ -432,13 +1318,23 @@ Description: {description}
 Prospect type (already tagged by us): {prospect_type}
 
 The studio offers these services — pick the ONE that fits best:
-- **clipping**       — long-form → Shorts/Reels. Best fit: podcasters, long-form YouTubers, Twitch streamers. $297-$899/mo.
-- **animations**     — Blender explainer/data-viz/LaTeX scenes. Best fit: educators, finance/crypto channels, news/data accounts. $50-$150 each.
-- **thumbnails**     — AI-generated YouTube thumbnails. Best fit: growing YouTubers (5k-100k subs), MrBeast aspirants. $25-$50 each.
-- **ugc**            — vertical product-demo ads. Best fit: Shopify/DTC founders, SaaS demos, brand accounts. $200-$500 each.
-- **product_mockup** — photorealistic product shot rendered on a device/scene (3D mockup). Best fit: ecommerce stores, hardware brands, app developers, Kickstarter creators. $100-$300 each.
-- **landing_page**   — animated hero mockup for a SaaS/startup landing page (we can pull the hero image from their live URL). Best fit: YC/indie-hacker SaaS founders, pre-launch startups, no-code builders. $200-$600 each.
-- **full_stack**     — bundle of the above. Best fit: 100k+ creators serious about scaling. $1500-$3000/mo.
+- **landing_page**   — SaaS/app demo pack: 30-90s promo/demo video + 3 short ad variants from their website/app. Best fit: SaaS founders, app owners, indie hackers, no-code builders. $99 starter, $199-$499 rush/custom, $500-$1500/mo retainer.
+- **clipping**       — long-form → Shorts/Reels with captions, hooks, thumbnails, and optional animated summaries. Best fit: podcasters, long-form YouTubers, Twitch streamers. $297-$899/mo.
+- **thumbnails**     — YouTube packaging kit: thumbnails, title cards, lower thirds, and a short motion preview. Best fit: growing YouTubers. $49-$249 per kit.
+- **product_mockup** — 3D/device product mockup, app walkthrough, or product reveal. Best fit: ecommerce stores, hardware brands, app developers, Kickstarter creators. $100-$600 each.
+- **education**      — Manim/LaTeX lesson/explainer with narration, diagrams, and reusable lesson clips. Best fit: educators, tutors, course creators, technical YouTubers. $150-$900 each.
+- **three_d_scene**  — Blender 2D/3D scene, animation, product scene, logo reveal, or cinematic visual. Best fit: brands, studios, game/dev/tool creators. $150-$1000 each.
+- **voice_audio**    — VibeVoice narration, audio summary, podcast intro, voiceover, or multilingual explainer track. Best fit: podcasters, course creators, SaaS docs, agencies. $49-$399 per pack.
+- **ugc**            — vertical product-demo ad variants. Best fit: ecommerce/DTC/SaaS teams testing hooks. $149-$699 per pack.
+- **agency_bundle**  — mixed package: demos, clips, thumbnails, product mockups, narration, delivery pages. Best fit: agencies, creator managers, marketers, white-label operators. $500-$3000/mo.
+- **full_stack**     — recurring AI production backend for high-volume creators/agencies, including all above lanes. $1000-$3000/mo.
+
+Prospect-type guidance:
+- If `prospect_type` is `clipper`, favor people or teams already selling clip editing, short-form growth, or creator post-production. Score higher if they would clearly benefit from tooling, faster fulfillment, or premium add-on renders.
+- If `prospect_type` is `creator_manager`, favor agencies, talent managers, creator ops teams, marketers, or media operators managing multiple channels. Score higher if they likely need scalable fulfillment, samples, or white-label production help. Prefer `agency_bundle` or `full_stack`.
+- If `prospect_type` is `content_creator`, `podcaster`, or `educator`, treat them as direct buyers of clipping / explainers / thumbnails / voice_audio.
+- If `prospect_type` is `business_owner`, favor product-demo, landing-page, or UGC-style services.
+- If the prospect looks like a founder, SaaS, app, startup, AI tool, agency, consultant, software channel, business operator, or has an external product/site URL, favor **landing_page** unless another service is obviously stronger.
 
 Score guidelines:
 - 0.8-1.0: clear paying client, monetised, has content we can act on now.
@@ -451,16 +1347,22 @@ Return ONLY valid JSON (no markdown):
   "score": 0.75,
   "reasoning": "<1-2 sentences explaining the score + why this service>",
   "service": "clipping",
-  "dm": "<personalized DM locked to the chosen service — 2-3 sentences, mention the name, reference something specific, state concrete price from the menu, end with an ask>",
+  "dm": "<legacy short DM locked to the chosen service>",
+  "x_dm": "<X/Twitter DM: short, casual, 280 chars max, mention I am verified so I can DM directly, name the concrete offer, end with a yes/no ask>",
+  "email_script": "<cold email: subject line + 4-6 sentence body, concrete offer, price range, asks permission to send a sample pack>",
   "dm_clipper": "<alt DM treating them as a clipper looking for tooling — 2-3 sentences>"
 }}
 
-`service` MUST be one of: clipping, animations, thumbnails, ugc, product_mockup, landing_page, full_stack."#,
-        name          = name,
-        audience      = audience_size,
-        category_word = if audience_size > 0 { "subs/viewers" } else { "unknown" },
-        category      = category,
-        description   = description,
+`service` MUST be one of: clipping, thumbnails, product_mockup, landing_page, education, three_d_scene, voice_audio, ugc, agency_bundle, full_stack."#,
+        name = name,
+        audience = audience_size,
+        category_word = if audience_size > 0 {
+            "subs/viewers"
+        } else {
+            "unknown"
+        },
+        category = category,
+        description = description,
         prospect_type = prospect_type,
     );
 
@@ -469,41 +1371,284 @@ Return ONLY valid JSON (no markdown):
         state.gemma_client.as_ref(),
         state.gemini_client.as_ref(),
         &prompt,
-    ).await {
+    )
+    .await
+    {
         Ok(text) => {
-            let cleaned = text.trim().trim_start_matches("```json").trim_start_matches("```").trim_end_matches("```").trim();
+            let cleaned = text
+                .trim()
+                .trim_start_matches("```json")
+                .trim_start_matches("```")
+                .trim_end_matches("```")
+                .trim();
             match serde_json::from_str::<serde_json::Value>(cleaned) {
                 Ok(v) => {
-                    let score      = v["score"].as_f64().unwrap_or(0.5).clamp(0.0, 1.0);
-                    let reasoning  = v["reasoning"].as_str().unwrap_or("").to_string();
-                    let dm_creator = v["dm"].as_str()
-                        .or_else(|| v["dm_creator"].as_str())  // legacy field name
+                    let score = v["score"].as_f64().unwrap_or(0.5).clamp(0.0, 1.0);
+                    let reasoning = v["reasoning"].as_str().unwrap_or("").to_string();
+                    let dm_creator = v["dm"]
+                        .as_str()
+                        .or_else(|| v["dm_creator"].as_str()) // legacy field name
                         .unwrap_or(&default_dm_creator(name))
                         .to_string();
-                    let dm_clipper = v["dm_clipper"].as_str().unwrap_or(&default_dm_clipper(name)).to_string();
+                    let x_dm = v["x_dm"]
+                        .as_str()
+                        .unwrap_or(&dm_creator)
+                        .to_string();
+                    let email_script = v["email_script"]
+                        .as_str()
+                        .map(str::to_string)
+                        .unwrap_or_else(|| {
+                            default_email_script(
+                                name,
+                                v["service"].as_str().unwrap_or("landing_page"),
+                            )
+                        });
+                    let dm_clipper = v["dm_clipper"]
+                        .as_str()
+                        .unwrap_or(&default_dm_clipper(name))
+                        .to_string();
                     // Coerce service to one of the 5 valid values.
                     let service_raw = v["service"].as_str().unwrap_or("clipping").to_lowercase();
-                    let service = match service_raw.as_str() {
-                        "clipping" | "animations" | "thumbnails" | "ugc" | "product_mockup" | "landing_page" | "full_stack" => service_raw,
-                        _ => "clipping".to_string(),
+                    let service = if is_valid_revenue_service(&service_raw) {
+                        normalize_revenue_service(&service_raw).to_string()
+                    } else {
+                        match service_raw.as_str() {
+                            "animations" => "education".to_string(),
+                            _ => default_service_for_prospect(category, prospect_type),
+                        }
                     };
-                    (score, reasoning, service, dm_creator, dm_clipper)
+                    (score, reasoning, service, dm_creator, dm_clipper, x_dm, email_script)
                 }
-                Err(_) => (0.5, "Parse error".to_string(), "clipping".to_string(),
-                           default_dm_creator(name), default_dm_clipper(name)),
+                Err(_) => (
+                    0.5,
+                    "Parse error".to_string(),
+                    default_service_for_prospect(category, prospect_type),
+                    default_x_dm(name, &default_service_for_prospect(category, prospect_type)),
+                    default_dm_clipper(name),
+                    default_x_dm(name, &default_service_for_prospect(category, prospect_type)),
+                    default_email_script(name, &default_service_for_prospect(category, prospect_type)),
+                ),
             }
         }
-        Err(_) => (0.5, "AI unavailable".to_string(), "clipping".to_string(),
-                   default_dm_creator(name), default_dm_clipper(name)),
+        Err(_) => (
+            0.5,
+            "AI unavailable".to_string(),
+            default_service_for_prospect(category, prospect_type),
+            default_x_dm(name, &default_service_for_prospect(category, prospect_type)),
+            default_dm_clipper(name),
+            default_x_dm(name, &default_service_for_prospect(category, prospect_type)),
+            default_email_script(name, &default_service_for_prospect(category, prospect_type)),
+        ),
     }
 }
 
 fn default_dm_creator(name: &str) -> String {
-    format!("Hey {}! I run an AI video studio that handles clipping, thumbnails, and Blender animations — happy to send a free sample so you can see which one fits your channel. Want me to send the link?", name)
+    default_x_dm(name, "landing_page")
 }
 
 fn default_dm_clipper(name: &str) -> String {
     format!("Hey {}! I built an AI clipping + rendering platform that processes YouTube and Twitch videos 10x faster — short-form clips, animations, and thumbnails in one pipeline. Want free access to try it?", name)
+}
+
+fn default_service_for_prospect(category: &str, prospect_type: &str) -> String {
+    let combined = format!("{} {}", category, prospect_type).to_lowercase();
+    if combined.contains("agency")
+        || combined.contains("manager")
+        || combined.contains("marketer")
+        || combined.contains("white label")
+    {
+        "agency_bundle".to_string()
+    } else if combined.contains("education")
+        || combined.contains("educator")
+        || combined.contains("course")
+        || combined.contains("math")
+        || combined.contains("finance")
+        || combined.contains("latex")
+        || combined.contains("manim")
+    {
+        "education".to_string()
+    } else if combined.contains("3d")
+        || combined.contains("blender")
+        || combined.contains("animation")
+        || combined.contains("motion")
+        || combined.contains("game")
+        || combined.contains("studio")
+    {
+        "three_d_scene".to_string()
+    } else if combined.contains("podcast")
+        || combined.contains("voice")
+        || combined.contains("audio")
+        || combined.contains("narration")
+    {
+        "voice_audio".to_string()
+    } else if combined.contains("thumbnail") || combined.contains("youtube") {
+        "thumbnails".to_string()
+    } else if combined.contains("business")
+        || combined.contains("saas")
+        || combined.contains("startup")
+        || combined.contains("app")
+        || combined.contains("founder")
+    {
+        "landing_page".to_string()
+    } else if combined.contains("podcast") || combined.contains("stream") || combined.contains("creator")
+    {
+        "clipping".to_string()
+    } else {
+        "landing_page".to_string()
+    }
+}
+
+fn normalize_revenue_service(service: &str) -> &str {
+    match service {
+        "animations" => "education",
+        "fullstack" => "full_stack",
+        "agency" | "agency_fulfillment" | "creator_manager_fulfillment" => "agency_bundle",
+        "3d" | "blender" | "scene" => "three_d_scene",
+        "voice" | "audio" | "narration" => "voice_audio",
+        other => other,
+    }
+}
+
+fn is_valid_revenue_service(service: &str) -> bool {
+    matches!(
+        normalize_revenue_service(service),
+        "clipping"
+            | "thumbnails"
+            | "product_mockup"
+            | "landing_page"
+            | "education"
+            | "three_d_scene"
+            | "voice_audio"
+            | "ugc"
+            | "agency_bundle"
+            | "full_stack"
+    )
+}
+
+fn service_offer_line(service: &str) -> &'static str {
+    match normalize_revenue_service(service) {
+        "ugc" => "5 ad creative variants for one product in 24h",
+        "product_mockup" => "a premium product/device mockup promo plus motion walkthrough",
+        "education" => "a narrated Manim/LaTeX lesson or technical explainer",
+        "three_d_scene" => "a Blender 2D/3D motion scene or cinematic product visual",
+        "voice_audio" => "a VibeVoice narration/audio summary pack",
+        "thumbnails" => "a YouTube packaging kit with thumbnails and motion preview assets",
+        "clipping" => "a long-form-to-Shorts repurposing pack with optional animated summary",
+        "agency_bundle" => "a mixed white-label production sample pack",
+        "full_stack" => "a recurring AI production backend for your content",
+        _ => "a 30-60s SaaS/app promo video plus 3 short ad variants",
+    }
+}
+
+fn service_price_line(service: &str) -> &'static str {
+    match normalize_revenue_service(service) {
+        "ugc" => "$149-$699",
+        "product_mockup" => "$100-$600",
+        "education" => "$150-$900",
+        "three_d_scene" => "$150-$1000",
+        "voice_audio" => "$49-$399",
+        "thumbnails" => "$49-$249",
+        "clipping" => "$297-$899/mo",
+        "agency_bundle" => "$500-$3,000/mo",
+        "full_stack" => "$500-$1,500/mo to start",
+        _ => "$99 starter, $199-$499 custom/rush",
+    }
+}
+
+fn service_target_duration_seconds(service: &str) -> f64 {
+    match normalize_revenue_service(service) {
+        "voice_audio" => 45.0,
+        "thumbnails" => 45.0,
+        "product_mockup" => 60.0,
+        "education" => 90.0,
+        "three_d_scene" => 60.0,
+        "clipping" => 60.0,
+        "agency_bundle" | "full_stack" => 90.0,
+        _ => 60.0,
+    }
+}
+
+fn service_long_form_style(service: &str) -> &'static str {
+    match normalize_revenue_service(service) {
+        "clipping" => "high-retention creator clip pack presentation, fast hooks, captions, motion graphics, YouTube Shorts energy",
+        "thumbnails" => "thumbnail packaging showcase, bold CTR-focused visual hierarchy, motion preview, title-card energy",
+        "product_mockup" => "premium product/device mockup promo, clean UI motion, app walkthrough, polished ecommerce/SaaS look",
+        "education" => "clear narrated educational explainer, Manim/LaTeX style diagrams, structured lesson pacing",
+        "three_d_scene" => "cinematic Blender 2D/3D motion scene, product reveal, branded motion graphics",
+        "voice_audio" => "voice-first narrated audio/video summary, waveform visuals, clean captions, podcast explainer style",
+        "ugc" => "vertical ad creative sample, direct-response hooks, product benefits, creator-ad pacing",
+        "agency_bundle" => "white-label agency production sample pack, mixed deliverables, client-ready proof of capability",
+        "full_stack" => "full-stack AI production backend showcase, mixed video, thumbnail, voice, mockup, and delivery outputs",
+        _ => "premium SaaS launch video, clean product motion, polished founder-outreach sample",
+    }
+}
+
+fn service_long_form_offer_type(service: &str) -> String {
+    match normalize_revenue_service(service) {
+        "clipping" => "clip_pack".to_string(),
+        "thumbnails" => "thumbnail_hero_pack".to_string(),
+        "product_mockup" => "product_mockup_pack".to_string(),
+        "education" => "education_explainer_pack".to_string(),
+        "three_d_scene" => "blender_scene_pack".to_string(),
+        "voice_audio" => "voice_audio_pack".to_string(),
+        "ugc" => "ugc_ad_pack".to_string(),
+        "agency_bundle" => "agency_bundle_pack".to_string(),
+        "full_stack" => "full_stack_production_pack".to_string(),
+        _ => "saas_demo_pack".to_string(),
+    }
+}
+
+fn service_page_for_revenue_service(service: &str) -> &'static str {
+    match normalize_revenue_service(service) {
+        "clipping" => "/services/clipper-enhancement-pack",
+        "thumbnails" => "/services/thumbnail-hero-pack",
+        "product_mockup" => "/services/product-mockup-pack",
+        "education" => "/services/education-explainer-pack",
+        "three_d_scene" => "/services/blender-scene-pack",
+        "voice_audio" => "/services/voice-audio-pack",
+        "ugc" => "/services/product-mockup-pack",
+        "agency_bundle" | "full_stack" => "/services/mixed-agency-bundle",
+        _ => "/services/saas-launch-pack",
+    }
+}
+
+fn should_use_long_form_for_revenue_sample(service: &str, has_reference_url: bool) -> bool {
+    matches!(
+        normalize_revenue_service(service),
+        "landing_page"
+            | "clipping"
+            | "thumbnails"
+            | "product_mockup"
+            | "education"
+            | "three_d_scene"
+            | "voice_audio"
+            | "ugc"
+            | "agency_bundle"
+            | "full_stack"
+    ) && (has_reference_url
+        || matches!(
+            normalize_revenue_service(service),
+            "education" | "three_d_scene" | "voice_audio" | "agency_bundle" | "full_stack"
+        ))
+}
+
+fn default_x_dm(name: &str, service: &str) -> String {
+    format!(
+        "Hey {} — I’m using my verified X to reach a few founders/creators directly. I can make {} for {}. Want me to send a quick sample link?",
+        name,
+        service_offer_line(service),
+        service_price_line(service)
+    )
+}
+
+fn default_email_script(name: &str, service: &str) -> String {
+    format!(
+        "Subject: quick VideoSync sample for {}\n\nHey {},\n\nI run VideoSync, an AI production system that can make {}. The starter range is {} and I can usually turn around a first sample within 24 hours.\n\nIf you send me your website/product link, I can create a short preview pack and send you a delivery page before you commit.\n\nWant me to make one for you?",
+        name,
+        name,
+        service_offer_line(service),
+        service_price_line(service)
+    )
 }
 
 // ============================================================================
@@ -517,57 +1662,111 @@ async fn list_prospects(
     // Build query with parameterized binds — collect active filters first so
     // we know which $N placeholders to emit.
     let mut conditions: Vec<&str> = vec![];
-    if q.prospect_type.is_some() { conditions.push("prospect_type"); }
-    if q.contact_status.is_some() { conditions.push("contact_status"); }
-    if q.platform.is_some()       { conditions.push("platform"); }
+    if q.prospect_type.is_some() {
+        conditions.push("prospect_type");
+    }
+    if q.contact_status.is_some() {
+        conditions.push("contact_status");
+    }
+    if q.platform.is_some() {
+        conditions.push("platform");
+    }
 
     let mut sql = "SELECT id, platform, channel_id, display_name, platform_url, \
                    subscriber_count, avg_viewer_count, content_category, prospect_type, \
                    ai_score, ai_reasoning, dm_script_creator, dm_script_clipper, \
-                   contact_status, notes, twitter_handle, service_type, created_at \
-                   FROM prospects WHERE 1=1".to_string();
+                   x_dm_script, email_script, contact_status, notes, twitter_handle, instagram_handle, \
+                   business_email, external_url, service_type, sample_delivery_id, contact_enrichment, created_at, \
+                   ((CASE WHEN business_email IS NOT NULL AND business_email <> '' THEN 60 ELSE 0 END) + \
+                    (CASE WHEN twitter_handle IS NOT NULL AND twitter_handle <> '' THEN 50 ELSE 0 END) + \
+                    (CASE WHEN external_url IS NOT NULL AND external_url <> '' THEN 25 ELSE 0 END) + \
+         (CASE \
+            WHEN service_type IN ('landing_page','agency_bundle','full_stack') THEN 30 \
+            WHEN service_type IN ('product_mockup','education','three_d_scene','ugc') THEN 25 \
+            WHEN service_type IN ('clipping','thumbnails','voice_audio') THEN 15 \
+            ELSE 0 \
+          END) + \
+                    COALESCE((ai_score * 100)::int, 0)) AS revenue_priority \
+                   FROM prospects WHERE 1=1"
+        .to_string();
 
     for (i, col) in conditions.iter().enumerate() {
         sql.push_str(&format!(" AND {} = ${}", col, i + 1));
     }
-    sql.push_str(" ORDER BY ai_score DESC NULLS LAST, created_at DESC LIMIT 200");
+    sql.push_str(
+        " ORDER BY revenue_priority DESC, ai_score DESC NULLS LAST, created_at DESC LIMIT 200",
+    );
 
     // Bind only the filter values that are present, in the same order.
     let mut query = sqlx::query(&sql);
-    if let Some(ref pt) = q.prospect_type { query = query.bind(pt); }
-    if let Some(ref cs) = q.contact_status { query = query.bind(cs); }
-    if let Some(ref pl) = q.platform       { query = query.bind(pl); }
+    if let Some(ref pt) = q.prospect_type {
+        query = query.bind(pt);
+    }
+    if let Some(ref cs) = q.contact_status {
+        query = query.bind(cs);
+    }
+    if let Some(ref pl) = q.platform {
+        query = query.bind(pl);
+    }
 
-    let rows = query
-        .fetch_all(&state.db_pool)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { success: false, message: e.to_string() })))?;
+    let rows = query.fetch_all(&state.db_pool).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                success: false,
+                message: e.to_string(),
+            }),
+        )
+    })?;
 
-    let prospects: Vec<serde_json::Value> = rows.iter().map(|r| json!({
-        "id": r.get::<Uuid, _>("id").to_string(),
-        "platform": r.get::<String, _>("platform"),
-        "channel_id": r.get::<String, _>("channel_id"),
-        "display_name": r.get::<String, _>("display_name"),
-        "platform_url": r.get::<String, _>("platform_url"),
-        "subscriber_count": r.get::<Option<i64>, _>("subscriber_count"),
-        "avg_viewer_count": r.get::<Option<i64>, _>("avg_viewer_count"),
-        "content_category": r.get::<Option<String>, _>("content_category"),
-        "prospect_type": r.get::<String, _>("prospect_type"),
-        "ai_score": r.get::<Option<f64>, _>("ai_score"),
-        "ai_reasoning": r.get::<Option<String>, _>("ai_reasoning"),
-        "dm_script_creator": r.get::<Option<String>, _>("dm_script_creator"),
-        "dm_script_clipper": r.get::<Option<String>, _>("dm_script_clipper"),
-        "contact_status": r.get::<String, _>("contact_status"),
-        "notes": r.get::<Option<String>, _>("notes"),
-        "twitter_handle": r.get::<Option<String>, _>("twitter_handle"),
-        "service_type": r.get::<Option<String>, _>("service_type"),
-        "created_at": r.get::<chrono::DateTime<chrono::Utc>, _>("created_at"),
-    })).collect();
+    let prospects: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| {
+            json!({
+                "id": r.get::<Uuid, _>("id").to_string(),
+                "platform": r.get::<String, _>("platform"),
+                "channel_id": r.get::<String, _>("channel_id"),
+                "display_name": r.get::<String, _>("display_name"),
+                "platform_url": r.get::<String, _>("platform_url"),
+                "subscriber_count": r.get::<Option<i64>, _>("subscriber_count"),
+                "avg_viewer_count": r.get::<Option<i64>, _>("avg_viewer_count"),
+                "content_category": r.get::<Option<String>, _>("content_category"),
+                "prospect_type": r.get::<String, _>("prospect_type"),
+                "ai_score": r.get::<Option<f64>, _>("ai_score"),
+                "ai_reasoning": r.get::<Option<String>, _>("ai_reasoning"),
+                "dm_script_creator": r.get::<Option<String>, _>("dm_script_creator"),
+                "dm_script_clipper": r.get::<Option<String>, _>("dm_script_clipper"),
+                "x_dm_script": r.get::<Option<String>, _>("x_dm_script"),
+                "email_script": r.get::<Option<String>, _>("email_script"),
+                "contact_status": r.get::<String, _>("contact_status"),
+                "notes": r.get::<Option<String>, _>("notes"),
+                "twitter_handle": r.get::<Option<String>, _>("twitter_handle"),
+                "instagram_handle": r.get::<Option<String>, _>("instagram_handle"),
+                "business_email": r.get::<Option<String>, _>("business_email"),
+                "external_url": r.get::<Option<String>, _>("external_url"),
+                "service_type": r.get::<Option<String>, _>("service_type"),
+                "service_page_url": r.get::<Option<String>, _>("service_type").as_deref().map(service_page_for_revenue_service),
+                "sample_delivery_id": r.get::<Option<Uuid>, _>("sample_delivery_id").map(|id| id.to_string()),
+                "sample_delivery_url": r.get::<Option<Uuid>, _>("sample_delivery_id").map(|id| format!("/delivery/{id}")),
+                "contact_enrichment": r.get::<serde_json::Value, _>("contact_enrichment"),
+                "revenue_priority": r.get::<i32, _>("revenue_priority"),
+                "created_at": r.get::<chrono::DateTime<chrono::Utc>, _>("created_at"),
+            })
+        })
+        .collect();
 
     Ok(Json(json!({ "success": true, "prospects": prospects })))
 }
 
-const VALID_CONTACT_STATUSES: &[&str] = &["new", "contacted", "interested", "deal", "rejected"];
+const VALID_CONTACT_STATUSES: &[&str] = &[
+    "new",
+    "contacted",
+    "replied",
+    "interested",
+    "deal",
+    "converted",
+    "rejected",
+];
 
 async fn update_prospect(
     Extension(state): Extension<Arc<AppState>>,
@@ -576,17 +1775,32 @@ async fn update_prospect(
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
     if let Some(ref status) = payload.contact_status {
         if !VALID_CONTACT_STATUSES.contains(&status.as_str()) {
-            return Err((StatusCode::BAD_REQUEST, Json(ErrorResponse {
-                success: false,
-                message: format!("Invalid contact_status '{}'. Must be one of: {}", status, VALID_CONTACT_STATUSES.join(", ")),
-            })));
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    success: false,
+                    message: format!(
+                        "Invalid contact_status '{}'. Must be one of: {}",
+                        status,
+                        VALID_CONTACT_STATUSES.join(", ")
+                    ),
+                }),
+            ));
         }
         sqlx::query("UPDATE prospects SET contact_status=$1, updated_at=NOW() WHERE id=$2")
-            .bind(status).bind(id).execute(&state.db_pool).await.ok();
+            .bind(status)
+            .bind(id)
+            .execute(&state.db_pool)
+            .await
+            .ok();
     }
     if let Some(ref notes) = payload.notes {
         sqlx::query("UPDATE prospects SET notes=$1, updated_at=NOW() WHERE id=$2")
-            .bind(notes).bind(id).execute(&state.db_pool).await.ok();
+            .bind(notes)
+            .bind(id)
+            .execute(&state.db_pool)
+            .await
+            .ok();
     }
     Ok(Json(json!({ "success": true })))
 }
@@ -608,22 +1822,35 @@ async fn regenerate_dm_script(
     let name: String = row.get("display_name");
     let subs: Option<i64> = row.get("subscriber_count");
     let viewers: Option<i64> = row.get("avg_viewer_count");
-    let category: String = row.get::<Option<String>, _>("content_category").unwrap_or_default();
-    let description: String = row.get::<Option<String>, _>("channel_description").unwrap_or_default();
+    let category: String = row
+        .get::<Option<String>, _>("content_category")
+        .unwrap_or_default();
+    let description: String = row
+        .get::<Option<String>, _>("channel_description")
+        .unwrap_or_default();
     let pt: String = row.get("prospect_type");
 
     let audience = subs.or(viewers).unwrap_or(0);
-    let (score, reasoning, service, dm_creator, dm_clipper) =
+    let (score, reasoning, service, dm_creator, dm_clipper, x_dm, email_script) =
         score_prospect_with_ai(&state, &name, audience, &description, &category, &pt).await;
 
     sqlx::query(
         "UPDATE prospects
          SET ai_score=$1, ai_reasoning=$2, dm_script_creator=$3, dm_script_clipper=$4,
-             service_type=$5, updated_at=NOW()
-         WHERE id=$6"
+             service_type=$5, x_dm_script=$6, email_script=$7, updated_at=NOW()
+         WHERE id=$8",
     )
-    .bind(score).bind(&reasoning).bind(&dm_creator).bind(&dm_clipper).bind(&service).bind(id)
-    .execute(&state.db_pool).await.ok();
+    .bind(score)
+    .bind(&reasoning)
+    .bind(&dm_creator)
+    .bind(&dm_clipper)
+    .bind(&service)
+    .bind(&x_dm)
+    .bind(&email_script)
+    .bind(id)
+    .execute(&state.db_pool)
+    .await
+    .ok();
 
     Ok(Json(json!({
         "success":     true,
@@ -631,6 +1858,8 @@ async fn regenerate_dm_script(
         "dm_clipper":  dm_clipper,
         "score":       score,
         "service":     service,
+        "x_dm":        x_dm,
+        "email_script": email_script,
     })))
 }
 
@@ -639,8 +1868,18 @@ async fn delete_prospect(
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
     sqlx::query("DELETE FROM prospects WHERE id=$1")
-        .bind(id).execute(&state.db_pool).await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { success: false, message: e.to_string() })))?;
+        .bind(id)
+        .execute(&state.db_pool)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    success: false,
+                    message: e.to_string(),
+                }),
+            )
+        })?;
     Ok(Json(json!({ "success": true })))
 }
 
@@ -652,25 +1891,64 @@ async fn generate_outreach_message(
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
     let row = sqlx::query(
         "SELECT display_name, subscriber_count, avg_viewer_count, content_category,
-                prospect_type, dm_script_creator
-         FROM prospects WHERE id=$1"
+                prospect_type, dm_script_creator, service_type, x_dm_script, email_script
+         FROM prospects WHERE id=$1",
     )
     .bind(id)
     .fetch_optional(&state.db_pool)
     .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { success: false, message: e.to_string() })))?
-    .ok_or_else(|| (StatusCode::NOT_FOUND, Json(ErrorResponse { success: false, message: "Prospect not found".to_string() })))?;
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                success: false,
+                message: e.to_string(),
+            }),
+        )
+    })?
+    .ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                success: false,
+                message: "Prospect not found".to_string(),
+            }),
+        )
+    })?;
 
     let name: String = row.get("display_name");
     let subs: Option<i64> = row.get("subscriber_count");
     let viewers: Option<i64> = row.get("avg_viewer_count");
-    let category: String = row.get::<Option<String>, _>("content_category").unwrap_or_else(|| "content".to_string());
+    let category: String = row
+        .get::<Option<String>, _>("content_category")
+        .unwrap_or_else(|| "content".to_string());
     let pt: String = row.get("prospect_type");
-    let existing_dm: String = row.get::<Option<String>, _>("dm_script_creator").unwrap_or_default();
+    let existing_dm: String = row
+        .get::<Option<String>, _>("dm_script_creator")
+        .unwrap_or_default();
+    let service: String = row
+        .get::<Option<String>, _>("service_type")
+        .unwrap_or_else(|| default_service_for_prospect(&category, &pt));
+    let existing_x_dm: String = row
+        .get::<Option<String>, _>("x_dm_script")
+        .unwrap_or_else(|| default_x_dm(&name, &service));
+    let existing_email: String = row
+        .get::<Option<String>, _>("email_script")
+        .unwrap_or_else(|| default_email_script(&name, &service));
     let audience = subs.or(viewers).unwrap_or(0);
 
-    if state.nvidia_nim_client.is_none() && state.gemma_client.is_none() && state.video_gemini_client.is_none() && state.gemini_client.is_none() {
-        return Err((StatusCode::SERVICE_UNAVAILABLE, Json(ErrorResponse { success: false, message: "No LLM configured".to_string() })));
+    if state.nvidia_nim_client.is_none()
+        && state.gemma_client.is_none()
+        && state.video_gemini_client.is_none()
+        && state.gemini_client.is_none()
+    {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ErrorResponse {
+                success: false,
+                message: "No LLM configured".to_string(),
+            }),
+        ));
     }
 
     let audience_label = if audience >= 1_000_000 {
@@ -681,41 +1959,317 @@ async fn generate_outreach_message(
         audience.to_string()
     };
 
-    let pitch_focus = match pt.as_str() {
-        "podcaster"      => "turning podcast episodes into viral short clips for social media",
-        "educator"       => "turning educational videos into animated highlight clips and Shorts",
-        "business_owner" => "creating a professional product demo video or explainer for their brand",
-        _                => "turning their long-form content into 30-50 viral Shorts per month",
-    };
+    let pitch_focus = service_offer_line(&service);
     let prompt = format!(
-        r#"Write a SHORT cold outreach DM (under 90 words) from a video AI agency to {name}, a {category} {pt} with {audience} audience.
+        r#"Write two outreach variants from VideoSync to {name}, a {category} {pt} with {audience} audience.
 
-Purpose: {pitch_focus}
+Offer: {pitch_focus}
+Price anchor: {price}
 Include this delivery link naturally: {delivery_url}
 Mention you already created a free sample for them.
+X DM must be under 280 characters and can mention "I'm verified on X so I can DM this directly."
+Email must include a subject and a concise body.
 Be conversational, specific to their niche, and end with a soft call-to-action.
 DO NOT use emojis excessively. Return only the message text, no preamble.
-Tone reference: {existing_dm}"#,
+Return ONLY valid JSON:
+{{"x_dm":"...","email_script":"Subject: ...\n\n..."}}
+
+Tone references:
+X DM: {existing_x_dm}
+Email: {existing_email}
+Legacy DM: {existing_dm}"#,
         name = name,
         category = category,
         pt = pt.replace('_', " "),
         audience = audience_label,
         pitch_focus = pitch_focus,
+        price = service_price_line(&service),
         delivery_url = payload.delivery_url,
-        existing_dm = if existing_dm.is_empty() { "professional and friendly".to_string() } else { existing_dm.chars().take(200).collect() },
+        existing_x_dm = existing_x_dm.chars().take(220).collect::<String>(),
+        existing_email = existing_email.chars().take(300).collect::<String>(),
+        existing_dm = if existing_dm.is_empty() {
+            "professional and friendly".to_string()
+        } else {
+            existing_dm.chars().take(200).collect()
+        },
     );
 
-    let message = match generate_text_best_effort(
+    let (x_dm, email_script) = match generate_text_best_effort(
         state.nvidia_nim_client.as_ref(),
         state.gemma_client.as_ref(),
-        state.video_gemini_client.as_ref().or(state.gemini_client.as_ref()),
+        state
+            .video_gemini_client
+            .as_ref()
+            .or(state.gemini_client.as_ref()),
         &prompt,
-    ).await {
-        Ok(text) => text.trim().to_string(),
-        Err(e) => return Err((StatusCode::BAD_GATEWAY, Json(ErrorResponse { success: false, message: format!("LLM error: {}", e) }))),
+    )
+    .await
+    {
+        Ok(text) => {
+            let cleaned = text
+                .trim()
+                .trim_start_matches("```json")
+                .trim_start_matches("```")
+                .trim_end_matches("```")
+                .trim();
+            match serde_json::from_str::<serde_json::Value>(cleaned) {
+                Ok(value) => (
+                    value["x_dm"]
+                        .as_str()
+                        .unwrap_or(&existing_x_dm)
+                        .trim()
+                        .to_string(),
+                    value["email_script"]
+                        .as_str()
+                        .unwrap_or(&existing_email)
+                        .trim()
+                        .to_string(),
+                ),
+                Err(_) => (text.trim().to_string(), existing_email),
+            }
+        }
+        Err(e) => {
+            return Err((
+                StatusCode::BAD_GATEWAY,
+                Json(ErrorResponse {
+                    success: false,
+                    message: format!("LLM error: {}", e),
+                }),
+            ))
+        }
     };
 
-    Ok(Json(json!({ "success": true, "outreach_message": message })))
+    let _ = sqlx::query(
+        "UPDATE prospects SET x_dm_script=$1, email_script=$2, updated_at=NOW() WHERE id=$3",
+    )
+    .bind(&x_dm)
+    .bind(&email_script)
+    .bind(id)
+    .execute(&state.db_pool)
+    .await;
+
+    Ok(Json(json!({
+        "success": true,
+        "outreach_message": x_dm,
+        "x_dm": x_dm,
+        "email_script": email_script,
+    })))
+}
+
+async fn generate_prospect_sample_pack(
+    Extension(state): Extension<Arc<AppState>>,
+    Path(id): Path<Uuid>,
+    Json(req): Json<Option<GenerateProspectSamplePackRequest>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    let row = sqlx::query(
+        "SELECT display_name, platform, platform_url, content_category, channel_description,
+                service_type, external_url, sample_delivery_id
+         FROM prospects WHERE id=$1",
+    )
+    .bind(id)
+    .fetch_optional(&state.db_pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                success: false,
+                message: e.to_string(),
+            }),
+        )
+    })?
+    .ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                success: false,
+                message: "Prospect not found".to_string(),
+            }),
+        )
+    })?;
+
+    if let Some(existing) = row.get::<Option<Uuid>, _>("sample_delivery_id") {
+        return Ok(Json(json!({
+            "success": true,
+            "delivery_id": existing.to_string(),
+            "delivery_url": format!("/delivery/{existing}"),
+            "message": "Sample pack already exists for this prospect."
+        })));
+    }
+
+    let request = req.unwrap_or(GenerateProspectSamplePackRequest {
+        source_url: None,
+        product_name: None,
+        offer_type: None,
+        notes: None,
+    });
+    let display_name: String = row.get("display_name");
+    let platform: String = row.get("platform");
+    let platform_url: String = row.get("platform_url");
+    let category: String = row
+        .get::<Option<String>, _>("content_category")
+        .unwrap_or_else(|| "SaaS / app".to_string());
+    let description: String = row
+        .get::<Option<String>, _>("channel_description")
+        .unwrap_or_default();
+    let service = request
+        .offer_type
+        .or_else(|| row.get::<Option<String>, _>("service_type"))
+        .unwrap_or_else(|| "landing_page".to_string());
+    let service = normalize_revenue_service(&service).to_string();
+    let product_name = request.product_name.unwrap_or_else(|| display_name.clone());
+    let source_url = request
+        .source_url
+        .or_else(|| row.get::<Option<String>, _>("external_url"))
+        .unwrap_or_else(|| platform_url.clone());
+    let has_product_url = source_url.starts_with("http://") || source_url.starts_with("https://");
+    let use_long_form_workflow =
+        should_use_long_form_for_revenue_sample(&service, has_product_url);
+    let target_duration = service_target_duration_seconds(&service);
+    let long_form_style = service_long_form_style(&service);
+    let offer_type = service_long_form_offer_type(&service);
+    let service_offer = service_offer_line(&service);
+
+    let prompt = format!(
+        "Revenue sample pack for {product_name}. Create {service_offer}: 1 polished buyer-facing video/sample, 3 short hooks/caption variants, and a visual packaging concept. Category: {category}. Notes: {notes}. Public source: {source_url}.",
+        notes = request.notes.unwrap_or_default(),
+    );
+    let mut extra = json!({
+        "service_offer": service.clone(),
+        "service_offer_line": service_offer,
+        "revenue_v1": true,
+        "prospect_id": id,
+        "prospect_platform": platform,
+        "source_url": source_url.clone(),
+        "product_name": product_name.clone(),
+        "offer_type": offer_type.clone(),
+        "short_ad_variants": [
+            "Problem-solution hook",
+            "Founder/product walkthrough hook",
+            "Before-after transformation hook"
+        ],
+        "thumbnail_concept": format!("{} hero visual with bold benefit headline", display_name),
+        "workflow_engine": if use_long_form_workflow { "long_form_video_assembly" } else { "direct_delivery_render" },
+        "target_duration_seconds": if use_long_form_workflow { target_duration } else { 15.0 },
+        "segment_duration_seconds": 15.0,
+    });
+
+    if let Some(hero) = fetch_landing_page_hero(&source_url).await {
+        extra["reference_image_url"] = json!(hero);
+    }
+
+    let gig_type = if use_long_form_workflow {
+        "long_form_video"
+    } else if matches!(service.as_str(), "product_mockup" | "ugc") {
+        "ui_mockup"
+    } else {
+        "scene"
+    };
+    let duration = if use_long_form_workflow {
+        target_duration
+    } else if has_product_url {
+        15.0
+    } else {
+        8.0
+    };
+    let unlock_price = unlock_price_for(Some(service.as_str()), has_product_url);
+
+    let delivery_id: Uuid = sqlx::query_scalar(
+        "INSERT INTO deliveries (client_ref, title, gig_type, prompt, style, duration, extra_args,
+                                  status, sourced_from_prospect_id, unlock_price_usdc, source_url)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,'pending',$8,$9,$10)
+         RETURNING id",
+    )
+    .bind(format!("prospect:{id}"))
+    .bind(format!("Revenue sample pack for {}", display_name))
+    .bind(gig_type)
+    .bind(&prompt)
+    .bind(if use_long_form_workflow {
+        long_form_style
+    } else {
+        "modern"
+    })
+    .bind(duration)
+    .bind(&extra)
+    .bind(id)
+    .bind(unlock_price)
+    .bind(if has_product_url { Some(source_url.as_str()) } else { None })
+    .fetch_one(&state.db_pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                success: false,
+                message: format!("Delivery insert failed: {e}"),
+            }),
+        )
+    })?;
+
+    let _ = sqlx::query(
+        "UPDATE prospects SET sample_delivery_id=$1, service_type=$2, updated_at=NOW() WHERE id=$3",
+    )
+    .bind(delivery_id)
+    .bind(&service)
+    .bind(id)
+    .execute(&state.db_pool)
+    .await;
+
+    let render_state = state.clone();
+    if use_long_form_workflow {
+        let workflow_id = crate::services::LongFormVideoWorkflow::start(
+            state.clone(),
+            crate::services::LongFormVideoRequest {
+                title: format!("Revenue sample pack for {}", display_name),
+                brief: format!(
+                    "{prompt}\n\nProspect description: {description}\n\nCreate a buyer-facing sample for this service: {service_offer}. It should be strong enough to send in an X DM or email, use the available public source/reference, include concise narration, and end with a clear CTA for the starter offer."
+                ),
+                target_duration_seconds: target_duration,
+                segment_duration_seconds: 15.0,
+                style: long_form_style.to_string(),
+                offer_type,
+                narration_speaker: "Emma".to_string(),
+                include_narration: true,
+                reference_url: Some(source_url.clone()),
+                session_uuid: None,
+                user_id: None,
+                source_table: Some("deliveries".to_string()),
+                source_record_id: Some(delivery_id),
+                idempotency_key: Some(format!("prospect-sample-long-form:{id}")),
+            },
+        )
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    success: false,
+                    message: format!("Failed to start long-form sample workflow: {e}"),
+                }),
+            )
+        })?;
+
+        let _ = sqlx::query("UPDATE deliveries SET workflow_id = $1 WHERE id = $2")
+            .bind(workflow_id)
+            .bind(delivery_id)
+            .execute(&state.db_pool)
+            .await;
+    } else {
+        let _ = crate::handlers::admin::ensure_delivery_workflow(&state, delivery_id).await;
+        tokio::spawn(async move {
+            crate::handlers::admin::run_delivery_job(delivery_id, render_state).await;
+        });
+    }
+
+    let delivery_url = format!("/delivery/{delivery_id}");
+    Ok(Json(json!({
+        "success": true,
+        "delivery_id": delivery_id.to_string(),
+        "delivery_url": delivery_url,
+        "service": service,
+        "unlock_price_usdc": unlock_price,
+        "message": "Revenue sample pack queued. The delivery link is shareable immediately and will update when rendering completes."
+    })))
 }
 
 // ============================================================================
@@ -912,6 +2466,35 @@ tr:hover td{background:rgba(92,84,112,0.12)}
 }
 .row-notes:focus{outline:none;border-color:var(--purple)}
 
+.contact-stack,.action-stack{
+  display:flex;
+  flex-direction:column;
+  gap:8px;
+}
+.contact-pill{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:8px;
+  padding:6px 8px;
+  background:rgba(42,36,56,0.45);
+  border:1px solid rgba(92,84,112,0.35);
+  border-radius:8px;
+}
+.contact-pill a{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.action-help{color:var(--dim);font-size:0.72rem;line-height:1.35;max-width:150px}
+.action-stack .btn{
+  width:100%;
+  display:flex;
+  justify-content:center;
+  align-items:center;
+  text-decoration:none;
+  white-space:nowrap;
+}
+.action-primary{background:rgba(122,76,255,0.25);color:#fff;border:1px solid rgba(122,76,255,0.55)}
+.action-success{background:rgba(74,222,128,0.13);color:var(--success);border:1px solid rgba(74,222,128,0.35)}
+.action-danger{background:rgba(248,113,113,0.14)!important;color:var(--danger)!important;border:1px solid rgba(248,113,113,0.35)!important}
+
 /* Stats strip */
 .stat-strip{
   display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));
@@ -1018,6 +2601,7 @@ tr:hover td{background:rgba(92,84,112,0.12)}
         <label>Prospect Type</label>
         <select id="prospect_type">
           <option value="content_creator">Content Creator</option>
+          <option value="creator_manager">Creator Manager / Agency</option>
           <option value="podcaster">Podcaster</option>
           <option value="educator">Educator / STEM</option>
           <option value="business_owner">Business / Brand</option>
@@ -1156,11 +2740,13 @@ tr:hover td{background:rgba(92,84,112,0.12)}
   <!-- View Switcher -->
   <div class="action-row" style="margin-bottom:16px">
     <button class="btn btn-primary" id="btn-prospects" onclick="showView('prospects')">📋 Prospects</button>
+    <button class="btn btn-ghost" id="btn-contacts" onclick="showView('contacts')">📇 Contact Queue</button>
     <button class="btn btn-ghost" id="btn-clipgen" onclick="showView('clipgen')">🎬 Clip Generator</button>
   </div>
 
   <!-- PROSPECTS VIEW -->
   <div id="view-prospects">
+    <div class="stat-strip" id="prospect-contact-summary"></div>
     <!-- Filter Tabs -->
     <div class="tabs">
       <div class="tab active" onclick="setFilter('all',this)">All</div>
@@ -1171,6 +2757,15 @@ tr:hover td{background:rgba(92,84,112,0.12)}
     </div>
     <div class="table-wrap">
       <div id="table-area"><div class="loading">Loading prospects…</div></div>
+    </div>
+  </div>
+
+  <!-- CONTACT QUEUE VIEW -->
+  <div id="view-contacts" style="display:none">
+    <div class="search-card">
+      <h2>📇 Outreach Contact Queue</h2>
+      <p>Revenue-first queue sorted by public contact quality and AI fit. Prioritize X + email leads, then email-only, then X-only. Leads without contact data stay visible so enrichment gaps are obvious.</p>
+      <div id="contact-queue-area"><div class="loading">Loading contacts…</div></div>
     </div>
   </div>
 
@@ -1518,6 +3113,82 @@ function formatNum(n){
   return n;
 }
 
+function contactTier(p){
+  const hasEmail = !!(p.business_email||'').trim();
+  const hasX = !!(p.twitter_handle||'').trim();
+  const hasUrl = !!(p.external_url||'').trim();
+  if(hasEmail && hasX) return {rank: 4, label: 'X + email', cls: 'score-high', guidance: 'Best lead: DM first, email follow-up, attach sample pack.'};
+  if(hasEmail) return {rank: 3, label: 'Email only', cls: 'score-mid', guidance: 'Send email with a concrete sample-pack CTA.'};
+  if(hasX) return {rank: 2, label: 'X only', cls: 'score-mid', guidance: 'Short verified-account DM; ask permission to send sample.'};
+  if(hasUrl) return {rank: 1, label: 'Site only', cls: 'score-low', guidance: 'Open site and enrich public contact/social links.'};
+  return {rank: 0, label: 'Needs enrichment', cls: 'score-low', guidance: 'No public contact found yet; refresh/enrich before outreach.'};
+}
+
+function renderProspectContactSummary(prospects){
+  const root = document.getElementById('prospect-contact-summary');
+  if(!root) return;
+  const stats = prospects.reduce((acc,p)=>{
+    const tier = contactTier(p);
+    acc.total++;
+    if(tier.rank === 4) acc.best++;
+    if((p.business_email||'').trim()) acc.email++;
+    if((p.twitter_handle||'').trim()) acc.x++;
+    if((p.sample_delivery_id||'').trim()) acc.samples++;
+    if(Number(p.revenue_priority||0) >= 120) acc.hot++;
+    return acc;
+  }, {total:0,best:0,email:0,x:0,samples:0,hot:0});
+  root.innerHTML = [
+    ['Total leads', stats.total],
+    ['X + email ready', stats.best],
+    ['Email contacts', stats.email],
+    ['X handles', stats.x],
+    ['Sample packs', stats.samples],
+    ['High-priority', stats.hot],
+  ].map(([label,value])=>`<div class="stat-card"><div class="stat-val">${value}</div><div class="stat-label">${label}</div></div>`).join('');
+}
+
+function renderContactQueue(prospects){
+  const root = document.getElementById('contact-queue-area');
+  if(!root) return;
+  const sorted = [...prospects].sort((a,b)=>{
+    const at = contactTier(a).rank;
+    const bt = contactTier(b).rank;
+    if(bt !== at) return bt - at;
+    return Number(b.revenue_priority||0) - Number(a.revenue_priority||0);
+  });
+  if(!sorted.length){
+    root.innerHTML = '<div class="empty"><span class="empty-icon">📭</span>No prospects yet.</div>';
+    return;
+  }
+  root.innerHTML = sorted.map(p=>{
+    const tier = contactTier(p);
+    const email = (p.business_email||'').trim();
+    const x = (p.twitter_handle||'').trim();
+    const url = (p.external_url||p.platform_url||'').trim();
+    const sampleUrl = p.sample_delivery_url ? `${window.location.origin}${p.sample_delivery_url}` : '';
+    const service = p.service_type || 'landing_page';
+    return `<div class="pb-job-row" style="grid-template-columns:minmax(220px,1fr) auto minmax(240px,1.2fr) auto">
+      <span>
+        <strong>${p.display_name}</strong>
+        <div style="font-size:0.78rem;color:var(--dim);margin-top:3px">${service.replaceAll('_',' ')} · priority ${p.revenue_priority||0}</div>
+      </span>
+      <span class="score-badge ${tier.cls}">${tier.label}</span>
+      <span style="font-size:0.82rem;color:var(--muted);line-height:1.5">
+        ${email?`Email: <a href="mailto:${email}" style="color:#86efac">${email}</a><br>`:''}
+        ${x?`X: <a href="https://x.com/${x.replace('@','')}" target="_blank" style="color:#93c5fd">${x}</a><br>`:''}
+        ${url?`URL: <a href="${url}" target="_blank" style="color:#c4b5fd">open</a><br>`:''}
+        <em>${tier.guidance}</em>
+      </span>
+      <span style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">
+        ${sampleUrl?`<a href="${sampleUrl}" target="_blank" class="btn btn-sm action-success">Sample</a>`:`<button class="btn btn-sm action-primary" onclick="generateSamplePack('${p.id}', '${encodeURIComponent(url)}', '${encodeURIComponent(service)}')">Generate Sample</button>`}
+        ${x?`<a class="btn btn-sm btn-copy" target="_blank" href="https://x.com/${x.replace('@','')}">Open X</a>`:''}
+        ${email?`<button class="btn btn-sm btn-copy" onclick="copyText('${encodeURIComponent(p.email_script||'')}')">Copy Email</button>`:''}
+        <button class="btn btn-sm btn-copy" onclick="copyText('${encodeURIComponent(p.x_dm_script||p.dm_script_creator||'')}')">Copy DM</button>
+      </span>
+    </div>`;
+  }).join('');
+}
+
 async function loadProspects(){
   let url = '/api/admin/prospects';
   const params = [];
@@ -1529,30 +3200,53 @@ async function loadProspects(){
   if(!data.success){ document.getElementById('table-area').innerHTML = '<div class="empty">Failed to load prospects</div>'; return; }
 
   const prospects = data.prospects||[];
+  renderProspectContactSummary(prospects);
+  renderContactQueue(prospects);
   if(!prospects.length){ document.getElementById('table-area').innerHTML = '<div class="empty">No prospects found. Run a search above.</div>'; return; }
 
   let html = `<table>
     <thead><tr>
       <th>Channel</th><th>Platform</th><th>Audience</th><th>Category</th>
-      <th>Twitter</th><th>AI Score</th><th>DM Scripts</th><th>Status</th><th>Actions</th>
+      <th>Contacts</th><th>AI Score</th><th>DM Scripts</th><th>Status</th><th>Actions</th>
     </tr></thead><tbody>`;
 
   for(const p of prospects){
     const dm = p.dm_script_creator||'';
     const dmClip = p.dm_script_clipper||'';
+    const xDm = p.x_dm_script||dm||'';
+    const emailScript = p.email_script||'';
     const tw = p.twitter_handle||'';
+    const ig = p.instagram_handle||'';
+    const email = p.business_email||'';
+    const ext = p.external_url||'';
+    const sampleUrl = p.sample_delivery_url ? `${window.location.origin}${p.sample_delivery_url}` : '';
+    const typeBadge = p.prospect_type ? `<span class="badge" style="background:rgba(59,130,246,0.15);color:#93c5fd;padding:2px 8px;border-radius:999px;font-size:0.72rem;margin-right:6px">${(p.prospect_type||'').replaceAll('_',' ')}</span>` : '';
+    const svcBadge = p.service_type ? `<span class="badge" style="background:rgba(122,76,255,0.15);color:var(--purple);padding:2px 8px;border-radius:999px;font-size:0.72rem">${p.service_type}</span>` : '';
+    const priorityBadge = p.revenue_priority ? `<span class="badge" style="background:rgba(34,197,94,0.13);color:#86efac;padding:2px 8px;border-radius:999px;font-size:0.72rem;margin-left:6px">rev ${p.revenue_priority}</span>` : '';
     html += `<tr id="row-${p.id}">
       <td><a href="${p.platform_url}" target="_blank" style="color:#dbd8e3;font-weight:500">${p.display_name}</a>
+        ${(typeBadge || svcBadge || priorityBadge) ? `<div style="margin-top:6px">${typeBadge}${svcBadge}${priorityBadge}</div>` : ''}
         ${p.ai_reasoning?`<div style="font-size:0.75rem;color:#9ca3af;margin-top:2px">${p.ai_reasoning}</div>`:''}
       </td>
       <td>${platformIcon(p.platform)}</td>
       <td>${formatNum(p.subscriber_count||p.avg_viewer_count)}</td>
       <td style="color:#9ca3af">${p.content_category||'—'}</td>
-      <td style="color:#1d9bf0;white-space:nowrap">${tw?`<a href="https://twitter.com/${tw.replace('@','')}" target="_blank" style="color:#1d9bf0">${tw}</a><button class="btn btn-sm btn-copy" style="margin-left:4px" onclick="copyText('${encodeURIComponent(tw)}')">📋</button>`:'—'}</td>
+      <td style="min-width:220px">
+        <div class="contact-stack">
+          ${email?`<div><a href="mailto:${email}" style="color:#86efac">${email}</a><button class="btn btn-sm btn-copy" style="margin-left:4px" onclick="copyText('${encodeURIComponent(email)}')">📋</button></div>`:''}
+          ${ig?`<div><a href="https://instagram.com/${ig.replace('@','')}" target="_blank" style="color:#f9a8d4">${ig}</a><button class="btn btn-sm btn-copy" style="margin-left:4px" onclick="copyText('${encodeURIComponent(ig)}')">📋</button></div>`:''}
+          ${tw?`<div><a href="https://twitter.com/${tw.replace('@','')}" target="_blank" style="color:#1d9bf0">${tw}</a><button class="btn btn-sm btn-copy" style="margin-left:4px" onclick="copyText('${encodeURIComponent(tw)}')">📋</button></div>`:''}
+          ${ext?`<div><a href="${ext}" target="_blank" style="color:#c4b5fd">site ↗</a><button class="btn btn-sm btn-copy" style="margin-left:4px" onclick="copyText('${encodeURIComponent(ext)}')">📋</button></div>`:''}
+          ${!email && !ig && !tw && !ext ? '—' : ''}
+        </div>
+      </td>
       <td>${scoreBadge(p.ai_score)}</td>
       <td style="min-width:220px">
-        <div class="dm-text">${dm||'—'}</div>
-        <button class="btn btn-sm btn-copy" onclick="copyText('${encodeURIComponent(dm)}')">📋 Copy Creator DM</button>
+        <div class="dm-text">${xDm||'—'}</div>
+        <button class="btn btn-sm btn-copy" onclick="copyText('${encodeURIComponent(xDm)}')">📋 Copy X DM</button>
+        ${tw?`<a class="btn btn-sm btn-copy" target="_blank" href="https://x.com/${tw.replace('@','')}">Open X</a>`:''}
+        <div class="dm-text" style="margin-top:6px">${emailScript||'—'}</div>
+        <button class="btn btn-sm btn-copy" onclick="copyText('${encodeURIComponent(emailScript)}')">📋 Copy Email</button>
         <div class="dm-text" style="margin-top:6px">${dmClip||'—'}</div>
         <button class="btn btn-sm btn-copy" onclick="copyText('${encodeURIComponent(dmClip)}')">📋 Copy Clipper DM</button>
         <button class="btn btn-sm btn-copy" style="margin-top:4px" onclick="regen('${p.id}')">🔄 Refresh</button>
@@ -1563,9 +3257,15 @@ async function loadProspects(){
         </select>
         <input class="row-notes" placeholder="Notes…" value="${(p.notes||'').replace(/"/g,'&quot;')}" onblur="saveNotes('${p.id}',this.value)">
       </td>
-      <td>
-        <a href="${p.platform_url}" target="_blank" class="btn btn-sm btn-copy">🔗 Open</a>
-        <button class="btn btn-sm" style="background:#7f1d1d;color:#fff;margin-top:4px" onclick="deleteProspect('${p.id}')">🗑</button>
+      <td style="min-width:170px">
+        <div class="action-stack">
+          <div class="action-help">Next best actions for this lead.</div>
+          <a href="${p.platform_url}" target="_blank" class="btn btn-sm btn-copy">Open Profile</a>
+          ${p.service_page_url?`<a href="${p.service_page_url}" target="_blank" class="btn btn-sm btn-copy">Open Service Page</a>`:''}
+          ${sampleUrl?`<a href="${sampleUrl}" target="_blank" class="btn btn-sm action-success">View Sample Pack</a>`:`<button class="btn btn-sm action-primary" onclick="generateSamplePack('${p.id}', '${encodeURIComponent(ext||p.platform_url||'')}', '${encodeURIComponent(p.service_type||'landing_page')}')">Generate Sample Pack</button>`}
+          ${sampleUrl?`<button class="btn btn-sm btn-copy" onclick="generateOutreachForProspect('${p.id}', '${encodeURIComponent(sampleUrl)}')">Write Outreach</button>`:''}
+          <button class="btn btn-sm action-danger" onclick="deleteProspect('${p.id}')">Delete Lead</button>
+        </div>
       </td>
     </tr>`;
   }
@@ -1628,6 +3328,45 @@ async function regen(id){
   else showMsg('Refresh failed', false);
 }
 
+async function generateSamplePack(id, encodedUrl, encodedService){
+  const sourceUrl = decodeURIComponent(encodedUrl||'').trim();
+  const serviceType = decodeURIComponent(encodedService||'landing_page').trim() || 'landing_page';
+  showMsg('Queueing revenue sample pack…');
+  const res = await fetch(`/api/admin/prospects/${id}/generate-sample-pack`, {
+    method:'POST',
+    headers:{'Authorization':'Bearer '+token,'Content-Type':'application/json'},
+    body: JSON.stringify({source_url: sourceUrl || null, offer_type: serviceType})
+  });
+  const data = await res.json();
+  if(data.success){
+    const fullUrl = `${window.location.origin}${data.delivery_url}`;
+    showMsg('Sample pack queued: '+fullUrl);
+    await generateOutreachForProspect(id, encodeURIComponent(fullUrl));
+    loadProspects();
+  } else {
+    showMsg(data.message||data.error||'Sample pack failed', false);
+  }
+}
+
+async function generateOutreachForProspect(id, encodedDeliveryUrl){
+  const deliveryUrl = decodeURIComponent(encodedDeliveryUrl||'');
+  if(!deliveryUrl) { showMsg('Missing delivery URL', false); return; }
+  const res = await fetch(`/api/admin/prospects/${id}/generate-outreach`, {
+    method:'POST',
+    headers:{'Authorization':'Bearer '+token,'Content-Type':'application/json'},
+    body: JSON.stringify({delivery_url: deliveryUrl})
+  });
+  const data = await res.json();
+  if(data.success){
+    const combined = `X DM:\n${data.x_dm||data.outreach_message||''}\n\nEMAIL:\n${data.email_script||''}`;
+    await navigator.clipboard.writeText(combined);
+    showMsg('Outreach copied with sample link');
+    loadProspects();
+  } else {
+    showMsg(data.message||'Outreach generation failed', false);
+  }
+}
+
 async function deleteProspect(id){
   if(!confirm('Remove this prospect?')) return;
   await fetch(`/api/admin/prospects/${id}`, {method:'DELETE', headers:{'Authorization':'Bearer '+token}});
@@ -1639,13 +3378,17 @@ loadProspects();
 // ── View switcher ──────────────────────────────────────────────
 function showView(v) {
   document.getElementById('view-prospects').style.display = v==='prospects'?'':'none';
+  document.getElementById('view-contacts').style.display  = v==='contacts'?'':'none';
   document.getElementById('view-clipgen').style.display   = v==='clipgen'?'':'none';
   // Toggle the active class instead of inline-style overrides — keeps the
   // ghost/primary palette consistent with the rest of the UI.
   const bp = document.getElementById('btn-prospects');
+  const bq = document.getElementById('btn-contacts');
   const bc = document.getElementById('btn-clipgen');
   bp.classList.toggle('btn-primary', v==='prospects');
   bp.classList.toggle('btn-ghost',   v!=='prospects');
+  bq.classList.toggle('btn-primary', v==='contacts');
+  bq.classList.toggle('btn-ghost',   v!=='contacts');
   bc.classList.toggle('btn-primary', v==='clipgen');
   bc.classList.toggle('btn-ghost',   v!=='clipgen');
   if(v==='clipgen') loadProspectsDropdown();
@@ -1794,10 +3537,10 @@ function copyEl(id) {
 
 #[derive(Debug, serde::Deserialize)]
 struct LinkedInLaunchRequest {
-    agent_id:       String,
-    search_url:     String,
+    agent_id: String,
+    search_url: String,
     session_cookie: String,
-    max_profiles:   Option<u32>,
+    max_profiles: Option<u32>,
 }
 
 /// GET /api/admin/prospects/linkedin/agents
@@ -1806,11 +3549,49 @@ async fn linkedin_list_agents(
     Extension(state): Extension<Arc<AppState>>,
 ) -> Json<serde_json::Value> {
     let Some(pb) = state.phantombuster_client.as_ref() else {
-        return Json(json!({"success": false, "error": "PhantomBuster not configured (PHANTOMBUSTER_API_KEY missing)"}));
+        return Json(
+            json!({"success": false, "error": "PhantomBuster not configured (PHANTOMBUSTER_API_KEY missing)"}),
+        );
     };
     match pb.list_agents().await {
-        Ok(agents) => Json(json!({"success": true, "agents": agents})),
-        Err(e)     => Json(json!({"success": false, "error": e})),
+        Ok(agents) => {
+            let agents = agents
+                .into_iter()
+                .map(|agent| {
+                    let kind =
+                        crate::phantombuster_client::PhantomBusterClient::classify_linkedin_phantom(
+                            &agent.name,
+                        );
+                    let kind_label = match kind {
+                        Some(crate::phantombuster_client::LinkedInPhantomKind::SalesNavSearch) => {
+                            "sales_nav_search"
+                        }
+                        Some(crate::phantombuster_client::LinkedInPhantomKind::LinkedInSearch) => {
+                            "linkedin_search"
+                        }
+                        Some(crate::phantombuster_client::LinkedInPhantomKind::LeadOutreach) => {
+                            "lead_outreach"
+                        }
+                        Some(crate::phantombuster_client::LinkedInPhantomKind::EventGuests) => {
+                            "event_guests"
+                        }
+                        Some(crate::phantombuster_client::LinkedInPhantomKind::ProfileScraper) => {
+                            "profile_scraper"
+                        }
+                        None => "unknown",
+                    };
+                    json!({
+                        "id": agent.id,
+                        "name": agent.name,
+                        "lastEndStatus": agent.last_end_status,
+                        "lastEndMessage": agent.last_end_message,
+                        "kind": kind_label
+                    })
+                })
+                .collect::<Vec<_>>();
+            Json(json!({"success": true, "agents": agents}))
+        }
+        Err(e) => Json(json!({"success": false, "error": e})),
     }
 }
 
@@ -1825,39 +3606,102 @@ async fn linkedin_launch_search(
     };
 
     let max = req.max_profiles.unwrap_or(100);
-    match pb.launch_agent(&req.agent_id, &req.search_url, &req.session_cookie, max).await {
+    let agents = match pb.list_agents().await {
+        Ok(agents) => agents,
+        Err(error) => {
+            return Json(json!({
+                "success": false,
+                "error": format!("Failed to list PhantomBuster agents: {}", error)
+            }))
+        }
+    };
+
+    let Some(agent) = agents.into_iter().find(|agent| agent.id == req.agent_id) else {
+        return Json(json!({
+            "success": false,
+            "error": "The selected PhantomBuster agent was not found in the workspace."
+        }));
+    };
+
+    let launch_result = match crate::phantombuster_client::PhantomBusterClient::classify_linkedin_phantom(&agent.name) {
+        Some(crate::phantombuster_client::LinkedInPhantomKind::SalesNavSearch) => {
+            if !crate::phantombuster_client::PhantomBusterClient::looks_like_sales_nav_search(&req.search_url) {
+                return Json(json!({
+                    "success": false,
+                    "error": "This phantom expects a Sales Navigator people-search URL. Paste a linkedin.com/sales/search/... URL or use the smart-search launcher instead."
+                }));
+            }
+            pb.launch_agent(&req.agent_id, &req.search_url, &req.session_cookie, max).await
+        }
+        Some(crate::phantombuster_client::LinkedInPhantomKind::LinkedInSearch) => {
+            if crate::phantombuster_client::PhantomBusterClient::looks_like_sales_nav_search(&req.search_url) {
+                return Json(json!({
+                    "success": false,
+                    "error": "This phantom is a regular LinkedIn Search Export, not a Sales Navigator phantom. Use a normal linkedin.com/search/results/... URL, plain keywords, or switch to a Sales Navigator Search Export phantom."
+                }));
+            }
+            pb.launch_linkedin_search(&req.agent_id, &req.search_url, &req.session_cookie, max).await
+        }
+        Some(crate::phantombuster_client::LinkedInPhantomKind::LeadOutreach) => {
+            return Json(json!({
+                "success": false,
+                "error": "The selected phantom is a LinkedIn Lead Outreach phantom. It expects messaging-specific inputs and cannot be used for scrape-only lead search launches."
+            }));
+        }
+        Some(crate::phantombuster_client::LinkedInPhantomKind::EventGuests) => {
+            return Json(json!({
+                "success": false,
+                "error": "The selected phantom is for LinkedIn Event Guests. Paste an event URL there instead, or choose a search-export phantom for lead search."
+            }));
+        }
+        Some(crate::phantombuster_client::LinkedInPhantomKind::ProfileScraper) => {
+            return Json(json!({
+                "success": false,
+                "error": "The selected phantom scrapes profile lists, not searches. Use a Search Export phantom for this workflow."
+            }));
+        }
+        None => {
+            return Json(json!({
+                "success": false,
+                "error": "The selected PhantomBuster agent is not recognized as a supported LinkedIn search phantom."
+            }));
+        }
+    };
+
+    match launch_result {
         Err(e) => return Json(json!({"success": false, "error": e})),
         Ok(container_id) => {
             // Record the job in DB
             let job_id = match sqlx::query_scalar::<_, uuid::Uuid>(
                 "INSERT INTO phantombuster_jobs (agent_id, search_url, status, launched_at)
-                 VALUES ($1, $2, 'running', NOW()) RETURNING id"
+                 VALUES ($1, $2, 'running', NOW()) RETURNING id",
             )
             .bind(&req.agent_id)
             .bind(&req.search_url)
             .fetch_one(&state.db_pool)
-            .await {
+            .await
+            {
                 Ok(id) => id,
-                Err(e) => return Json(json!({"success": false, "error": format!("DB error: {}", e)})),
+                Err(e) => {
+                    return Json(json!({"success": false, "error": format!("DB error: {}", e)}))
+                }
             };
 
             Json(json!({
                 "success": true,
                 "job_id": job_id.to_string(),
                 "container_id": container_id,
-                "message": format!("Phantom launched. Poll /api/admin/prospects/linkedin/jobs/{}/results to fetch leads when complete.", job_id)
+                "message": format!("Phantom launched with '{}' in the correct LinkedIn mode. Poll /api/admin/prospects/linkedin/jobs/{}/results to fetch leads when complete.", agent.name, job_id)
             }))
         }
     }
 }
 
 /// GET /api/admin/prospects/linkedin/jobs
-async fn linkedin_list_jobs(
-    Extension(state): Extension<Arc<AppState>>,
-) -> Json<serde_json::Value> {
+async fn linkedin_list_jobs(Extension(state): Extension<Arc<AppState>>) -> Json<serde_json::Value> {
     let rows = sqlx::query(
         "SELECT id, agent_id, search_url, status, leads_found, error, launched_at, completed_at
-         FROM phantombuster_jobs ORDER BY created_at DESC LIMIT 50"
+         FROM phantombuster_jobs ORDER BY created_at DESC LIMIT 50",
     )
     .fetch_all(&state.db_pool)
     .await
@@ -1888,15 +3732,15 @@ async fn linkedin_fetch_results(
     };
 
     // Get agent_id from DB
-    let agent_id: String = match sqlx::query_scalar(
-        "SELECT agent_id FROM phantombuster_jobs WHERE id = $1"
-    )
-    .bind(job_id)
-    .fetch_optional(&state.db_pool)
-    .await {
-        Ok(Some(id)) => id,
-        _ => return Json(json!({"success": false, "error": "Job not found"})),
-    };
+    let agent_id: String =
+        match sqlx::query_scalar("SELECT agent_id FROM phantombuster_jobs WHERE id = $1")
+            .bind(job_id)
+            .fetch_optional(&state.db_pool)
+            .await
+        {
+            Ok(Some(id)) => id,
+            _ => return Json(json!({"success": false, "error": "Job not found"})),
+        };
 
     // Fetch output
     let rows = match pb.fetch_output(&agent_id).await {
@@ -1910,7 +3754,8 @@ async fn linkedin_fetch_results(
     if rows.is_empty() {
         if let Ok((errored, log_tail)) = pb.fetch_run_error(&agent_id).await {
             if errored {
-                let err_msg = log_tail.unwrap_or_else(|| "PhantomBuster script exited with error".to_string());
+                let err_msg = log_tail
+                    .unwrap_or_else(|| "PhantomBuster script exited with error".to_string());
                 let _ = sqlx::query(
                     "UPDATE phantombuster_jobs SET status = 'failed', error = $1, completed_at = NOW() WHERE id = $2"
                 )
@@ -1933,7 +3778,9 @@ async fn linkedin_fetch_results(
     // Upsert into prospects table
     let mut imported = 0usize;
     for lead in &leads {
-        let linkedin_id = lead.linkedin_url.clone()
+        let linkedin_id = lead
+            .linkedin_url
+            .clone()
             .unwrap_or_else(|| format!("li_{}", lead.full_name.to_lowercase().replace(' ', "_")));
 
         let result = sqlx::query(
@@ -1958,7 +3805,9 @@ async fn linkedin_fetch_results(
         .execute(&state.db_pool)
         .await;
 
-        if result.is_ok() { imported += 1; }
+        if result.is_ok() {
+            imported += 1;
+        }
     }
 
     // Update job record
@@ -1994,21 +3843,21 @@ struct SmartSearchRequest {
     /// Plain-English description — AI will generate all filters from this.
     /// e.g. "YouTubers and podcasters in the US with 10k+ followers who make money from content"
     /// If provided, all filter fields below are IGNORED and AI generates them.
-    description:   Option<String>,
+    description: Option<String>,
     /// e.g. ["YouTuber", "Podcast Host", "Content Creator", "Marketing Manager"]
-    job_titles:    Option<Vec<String>>,
+    job_titles: Option<Vec<String>>,
     /// e.g. ["Online Media", "E-Learning", "Marketing and Advertising"]
-    industries:    Option<Vec<String>>,
+    industries: Option<Vec<String>>,
     /// e.g. ["1-10", "11-50"] or LinkedIn codes ["A", "B"]
     company_sizes: Option<Vec<String>>,
     /// e.g. ["United States", "United Kingdom"]
-    locations:     Option<Vec<String>>,
+    locations: Option<Vec<String>>,
     /// e.g. ["OWNER", "CXO", "VP", "DIRECTOR", "MANAGER"]
-    seniority:     Option<Vec<String>>,
+    seniority: Option<Vec<String>>,
     /// Max profiles to scrape (default 100)
-    max_profiles:  Option<u32>,
+    max_profiles: Option<u32>,
     /// Optional: use a saved Sales Navigator list URL instead of building a search URL.
-    list_url:      Option<String>,
+    list_url: Option<String>,
 }
 
 /// POST /api/admin/prospects/linkedin/search
@@ -2028,13 +3877,19 @@ async fn linkedin_smart_search(
     Json(req): Json<SmartSearchRequest>,
 ) -> Json<serde_json::Value> {
     let Some(pb) = state.phantombuster_client.as_ref() else {
-        return Json(json!({"success": false, "error": "PhantomBuster not configured (PHANTOMBUSTER_API_KEY missing)"}));
+        return Json(
+            json!({"success": false, "error": "PhantomBuster not configured (PHANTOMBUSTER_API_KEY missing)"}),
+        );
     };
 
     // Read session cookie from env
     let session_cookie = match std::env::var("LINKEDIN_SESSION_COOKIE") {
         Ok(c) if !c.is_empty() => c,
-        _ => return Json(json!({"success": false, "error": "LINKEDIN_SESSION_COOKIE not set in environment"})),
+        _ => {
+            return Json(
+                json!({"success": false, "error": "LINKEDIN_SESSION_COOKIE not set in environment"}),
+            )
+        }
     };
 
     let max = req.max_profiles.unwrap_or(100);
@@ -2043,12 +3898,20 @@ async fn linkedin_smart_search(
     let req = if let Some(ref desc) = req.description.clone() {
         match ai_generate_linkedin_filters(&state, desc).await {
             Ok(ai_req) => {
-                tracing::info!("🤖 LinkedIn AI filters for \"{}\": {:?} / {:?} / {:?}",
-                    desc, ai_req.job_titles, ai_req.industries, ai_req.locations);
+                tracing::info!(
+                    "🤖 LinkedIn AI filters for \"{}\": {:?} / {:?} / {:?}",
+                    desc,
+                    ai_req.job_titles,
+                    ai_req.industries,
+                    ai_req.locations
+                );
                 ai_req
             }
             Err(e) => {
-                tracing::warn!("LinkedIn AI filter generation failed: {} — using raw request", e);
+                tracing::warn!(
+                    "LinkedIn AI filter generation failed: {} — using raw request",
+                    e
+                );
                 req
             }
         }
@@ -2061,10 +3924,21 @@ async fn linkedin_smart_search(
         // Use saved Sales Navigator list
         let agent = match pb.find_list_export_agent().await {
             Ok(Some(a)) => a,
-            Ok(None)    => return Json(json!({"success": false, "error": "No Sales Navigator List Export phantom found. Add it from the PhantomBuster Phantom Store."})),
-            Err(e)      => return Json(json!({"success": false, "error": format!("Failed to list agents: {}", e)})),
+            Ok(None) => {
+                return Json(
+                    json!({"success": false, "error": "No Sales Navigator List Export phantom found. Add it from the PhantomBuster Phantom Store."}),
+                )
+            }
+            Err(e) => {
+                return Json(
+                    json!({"success": false, "error": format!("Failed to list agents: {}", e)}),
+                )
+            }
         };
-        let cid = match pb.launch_list_export(&agent.id, list_url, &session_cookie, max).await {
+        let cid = match pb
+            .launch_list_export(&agent.id, list_url, &session_cookie, max)
+            .await
+        {
             Ok(id) => id,
             Err(e) => return Json(json!({"success": false, "error": e})),
         };
@@ -2089,7 +3963,11 @@ async fn linkedin_smart_search(
                     "available_linkedin_phantoms": names,
                 }));
             }
-            Err(e) => return Json(json!({"success": false, "error": format!("Failed to list agents: {}", e)})),
+            Err(e) => {
+                return Json(
+                    json!({"success": false, "error": format!("Failed to list agents: {}", e)}),
+                )
+            }
         };
 
         let empty = vec![];
@@ -2130,7 +4008,10 @@ async fn linkedin_smart_search(
                     keywords.join(" OR ")
                 };
                 tracing::info!("LinkedIn smart search (regular) keywords: {}", search);
-                let c = match pb.launch_linkedin_search(&agent.id, &search, &session_cookie, max).await {
+                let c = match pb
+                    .launch_linkedin_search(&agent.id, &search, &session_cookie, max)
+                    .await
+                {
                     Ok(id) => id,
                     Err(e) => return Json(json!({"success": false, "error": e})),
                 };
@@ -2149,15 +4030,18 @@ async fn linkedin_smart_search(
     // Record in DB
     let job_id = match sqlx::query_scalar::<_, uuid::Uuid>(
         "INSERT INTO phantombuster_jobs (agent_id, agent_name, search_url, status, launched_at)
-         VALUES ($1, $2, $3, 'running', NOW()) RETURNING id"
+         VALUES ($1, $2, $3, 'running', NOW()) RETURNING id",
     )
     .bind(&agent.id)
     .bind(&agent.name)
     .bind(&search_url)
     .fetch_one(&state.db_pool)
-    .await {
+    .await
+    {
         Ok(id) => id,
-        Err(e) => return Json(json!({"success": false, "error": format!("DB insert failed: {}", e)})),
+        Err(e) => {
+            return Json(json!({"success": false, "error": format!("DB insert failed: {}", e)}))
+        }
     };
 
     Json(json!({
@@ -2183,9 +4067,9 @@ async fn linkedin_smart_search(
 
 #[derive(Debug, Deserialize)]
 struct InstagramSearchRequest {
-    hashtag:   String,           // e.g. "contentcreator" or "#videographer"
-    max_posts: Option<u32>,      // default 50, max 200
-    category:  Option<String>,   // label for this search (stored on leads)
+    hashtag: String,          // e.g. "contentcreator" or "#videographer"
+    max_posts: Option<u32>,   // default 50, max 200
+    category: Option<String>, // label for this search (stored on leads)
 }
 
 #[derive(Debug, Deserialize)]
@@ -2200,19 +4084,19 @@ struct InstagramContactStatusRequest {
 
 #[derive(Debug, Deserialize)]
 struct InstagramListQuery {
-    hashtag:        Option<String>,
+    hashtag: Option<String>,
     contact_status: Option<String>,
-    min_followers:  Option<i64>,
-    limit:          Option<i64>,
-    offset:         Option<i64>,
+    min_followers: Option<i64>,
+    limit: Option<i64>,
+    offset: Option<i64>,
 }
 
 /// POST /api/instagram/leads/search
 /// Launches a PhantomBuster Instagram Hashtag Search and records leads.
 async fn instagram_search_leads(
-    Extension(state):  Extension<Arc<AppState>>,
+    Extension(state): Extension<Arc<AppState>>,
     Extension(claims): Extension<Claims>,
-    Json(req):         Json<InstagramSearchRequest>,
+    Json(req): Json<InstagramSearchRequest>,
 ) -> Json<serde_json::Value> {
     let user_id: i32 = claims.sub.parse().unwrap_or(0);
     if user_id == 0 {
@@ -2220,28 +4104,50 @@ async fn instagram_search_leads(
     }
 
     let Some(pb) = state.phantombuster_client.as_ref() else {
-        return Json(json!({"success": false, "error": "PhantomBuster not configured (PHANTOMBUSTER_API_KEY missing)"}));
+        return Json(
+            json!({"success": false, "error": "PhantomBuster not configured (PHANTOMBUSTER_API_KEY missing)"}),
+        );
     };
 
     let session_cookie = match std::env::var("INSTAGRAM_SESSION_COOKIE") {
         Ok(c) if !c.is_empty() => c,
-        _ => return Json(json!({"success": false, "error": "INSTAGRAM_SESSION_COOKIE not set. Add your Instagram sessionid cookie to the server env vars."})),
+        _ => {
+            return Json(
+                json!({"success": false, "error": "INSTAGRAM_SESSION_COOKIE not set. Add your Instagram sessionid cookie to the server env vars."}),
+            )
+        }
     };
 
     let agent = match pb.find_instagram_hashtag_agent().await {
         Ok(Some(a)) => a,
-        Ok(None)    => return Json(json!({"success": false, "error": "No Instagram Hashtag phantom found. Add 'Instagram Hashtag Search Export' from the PhantomBuster Phantom Store."})),
-        Err(e)      => return Json(json!({"success": false, "error": format!("Failed to list PhantomBuster agents: {}", e)})),
+        Ok(None) => {
+            return Json(
+                json!({"success": false, "error": "No Instagram Hashtag phantom found. Add 'Instagram Hashtag Search Export' from the PhantomBuster Phantom Store."}),
+            )
+        }
+        Err(e) => {
+            return Json(
+                json!({"success": false, "error": format!("Failed to list PhantomBuster agents: {}", e)}),
+            )
+        }
     };
 
     let max_posts = req.max_posts.unwrap_or(50).min(200);
-    let hashtag   = req.hashtag.trim_start_matches('#').to_string();
-    let category  = req.category.clone().unwrap_or_else(|| hashtag.clone());
+    let hashtag = req.hashtag.trim_start_matches('#').to_string();
+    let category = req.category.clone().unwrap_or_else(|| hashtag.clone());
 
     let (job_id, status, container_id) = match try_launch_or_queue_ig_hashtag_job(
-        &state, pb, &agent, &session_cookie, &hashtag, max_posts, user_id,
-    ).await {
-        Ok(t)  => t,
+        &state,
+        pb,
+        &agent,
+        &session_cookie,
+        &hashtag,
+        max_posts,
+        user_id,
+    )
+    .await
+    {
+        Ok(t) => t,
         Err(e) => return Json(json!({"success": false, "error": e})),
     };
 
@@ -2272,16 +4178,16 @@ async fn instagram_search_leads(
 /// GET /api/instagram/leads
 /// List Instagram leads with optional filtering.
 async fn instagram_list_leads(
-    Extension(state):  Extension<Arc<AppState>>,
+    Extension(state): Extension<Arc<AppState>>,
     Extension(claims): Extension<Claims>,
-    Query(q):          Query<InstagramListQuery>,
+    Query(q): Query<InstagramListQuery>,
 ) -> Json<serde_json::Value> {
     let user_id: i32 = claims.sub.parse().unwrap_or(0);
     if user_id == 0 {
         return Json(json!({"success": false, "error": "Invalid user id in JWT"}));
     }
 
-    let limit  = q.limit.unwrap_or(50).min(200);
+    let limit = q.limit.unwrap_or(50).min(200);
     let offset = q.offset.unwrap_or(0);
 
     // Scope to the caller's own leads. The first bind is always user_id;
@@ -2291,7 +4197,7 @@ async fn instagram_list_leads(
                 profile_url, profile_pic_url, is_private, is_verified, category,
                 hashtag_source, email, external_url, dm_script, contact_status,
                 pb_job_id, score, score_reason, service_type, created_at
-         FROM instagram_leads WHERE user_id = $1"
+         FROM instagram_leads WHERE user_id = $1",
     );
     let mut binds: Vec<String> = Vec::new();
 
@@ -2305,7 +4211,10 @@ async fn instagram_list_leads(
     }
     if let Some(mf) = q.min_followers {
         binds.push(mf.to_string());
-        sql.push_str(&format!(" AND followers_count >= ${}::bigint", binds.len() + 1));
+        sql.push_str(&format!(
+            " AND followers_count >= ${}::bigint",
+            binds.len() + 1
+        ));
     }
     sql.push_str(" ORDER BY followers_count DESC NULLS LAST");
     sql.push_str(&format!(" LIMIT {} OFFSET {}", limit, offset));
@@ -2318,30 +4227,35 @@ async fn instagram_list_leads(
 
     let rows = match query.fetch_all(&state.db_pool).await {
         Ok(r) => r,
-        Err(e) => return Json(json!({"success": false, "error": format!("DB query failed: {}", e)})),
+        Err(e) => {
+            return Json(json!({"success": false, "error": format!("DB query failed: {}", e)}))
+        }
     };
 
-    let leads: Vec<serde_json::Value> = rows.iter().map(|r| {
-        json!({
-            "id":              r.get::<Option<uuid::Uuid>, _>("id").map(|u| u.to_string()),
-            "username":        r.get::<Option<String>, _>("username"),
-            "full_name":       r.get::<Option<String>, _>("full_name"),
-            "bio":             r.get::<Option<String>, _>("bio"),
-            "followers_count": r.get::<Option<i64>, _>("followers_count"),
-            "profile_url":     r.get::<Option<String>, _>("profile_url"),
-            "profile_pic_url": r.get::<Option<String>, _>("profile_pic_url"),
-            "is_verified":     r.get::<Option<bool>, _>("is_verified").unwrap_or(false),
-            "category":        r.get::<Option<String>, _>("category"),
-            "hashtag_source":  r.get::<Option<String>, _>("hashtag_source"),
-            "email":           r.get::<Option<String>, _>("email"),
-            "external_url":    r.get::<Option<String>, _>("external_url"),
-            "dm_script":       r.get::<Option<String>, _>("dm_script"),
-            "contact_status":  r.get::<Option<String>, _>("contact_status"),
-            "score":           r.get::<Option<i32>, _>("score"),
-            "score_reason":    r.get::<Option<String>, _>("score_reason"),
-            "service_type":    r.get::<Option<String>, _>("service_type"),
+    let leads: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| {
+            json!({
+                "id":              r.get::<Option<uuid::Uuid>, _>("id").map(|u| u.to_string()),
+                "username":        r.get::<Option<String>, _>("username"),
+                "full_name":       r.get::<Option<String>, _>("full_name"),
+                "bio":             r.get::<Option<String>, _>("bio"),
+                "followers_count": r.get::<Option<i64>, _>("followers_count"),
+                "profile_url":     r.get::<Option<String>, _>("profile_url"),
+                "profile_pic_url": r.get::<Option<String>, _>("profile_pic_url"),
+                "is_verified":     r.get::<Option<bool>, _>("is_verified").unwrap_or(false),
+                "category":        r.get::<Option<String>, _>("category"),
+                "hashtag_source":  r.get::<Option<String>, _>("hashtag_source"),
+                "email":           r.get::<Option<String>, _>("email"),
+                "external_url":    r.get::<Option<String>, _>("external_url"),
+                "dm_script":       r.get::<Option<String>, _>("dm_script"),
+                "contact_status":  r.get::<Option<String>, _>("contact_status"),
+                "score":           r.get::<Option<i32>, _>("score"),
+                "score_reason":    r.get::<Option<String>, _>("score_reason"),
+                "service_type":    r.get::<Option<String>, _>("service_type"),
+            })
         })
-    }).collect();
+        .collect();
 
     Json(json!({"success": true, "leads": leads, "count": leads.len()}))
 }
@@ -2349,10 +4263,10 @@ async fn instagram_list_leads(
 /// POST /api/instagram/leads/:id/generate-dm
 /// Generate a personalized Instagram cold DM script using AI.
 async fn instagram_generate_dm(
-    Extension(state):  Extension<Arc<AppState>>,
+    Extension(state): Extension<Arc<AppState>>,
     Extension(claims): Extension<Claims>,
-    Path(id):          Path<uuid::Uuid>,
-    Json(req):         Json<Option<InstagramDmRequest>>,
+    Path(id): Path<uuid::Uuid>,
+    Json(req): Json<Option<InstagramDmRequest>>,
 ) -> Json<serde_json::Value> {
     fn format_unlock_price_usd(price: f64) -> String {
         if (price.fract()).abs() < f64::EPSILON {
@@ -2369,30 +4283,38 @@ async fn instagram_generate_dm(
     let row = match sqlx::query(
         "SELECT username, full_name, bio, followers_count, category, hashtag_source,
                 external_url, service_type, sample_delivery_id
-         FROM instagram_leads WHERE id = $1 AND user_id = $2"
+         FROM instagram_leads WHERE id = $1 AND user_id = $2",
     )
     .bind(id)
     .bind(user_id)
     .fetch_optional(&state.db_pool)
-    .await {
+    .await
+    {
         Ok(Some(r)) => r,
-        Ok(None)    => return Json(json!({"success": false, "error": "Lead not found"})),
-        Err(e)      => return Json(json!({"success": false, "error": format!("DB error: {}", e)})),
+        Ok(None) => return Json(json!({"success": false, "error": "Lead not found"})),
+        Err(e) => return Json(json!({"success": false, "error": format!("DB error: {}", e)})),
     };
 
-    let username:  String = row.get::<Option<String>, _>("username").unwrap_or_default();
-    let full_name: String = row.get::<Option<String>, _>("full_name").unwrap_or_else(|| username.clone());
-    let bio:       String = row.get::<Option<String>, _>("bio").unwrap_or_default();
-    let followers: i64    = row.get::<Option<i64>, _>("followers_count").unwrap_or(0);
-    let category:  String          = row.get::<Option<String>, _>("category").unwrap_or_default();
-    let ext_url:   String          = row.get::<Option<String>, _>("external_url").unwrap_or_default();
-    let service:   Option<String>  = row.get::<Option<String>, _>("service_type");
+    let username: String = row.get::<Option<String>, _>("username").unwrap_or_default();
+    let full_name: String = row
+        .get::<Option<String>, _>("full_name")
+        .unwrap_or_else(|| username.clone());
+    let bio: String = row.get::<Option<String>, _>("bio").unwrap_or_default();
+    let followers: i64 = row.get::<Option<i64>, _>("followers_count").unwrap_or(0);
+    let category: String = row.get::<Option<String>, _>("category").unwrap_or_default();
+    let ext_url: String = row
+        .get::<Option<String>, _>("external_url")
+        .unwrap_or_default();
+    let service: Option<String> = row
+        .get::<Option<String>, _>("service_type")
+        .map(|s| normalize_revenue_service(&s).to_string());
     let sample_id: Option<uuid::Uuid> = row.try_get("sample_delivery_id").ok().flatten();
 
     // Build the sample-link block injected into the prompt. If a sample
     // exists, the LLM is instructed to work the URL in naturally; without
     // one, we tell the model not to invent a link.
-    let base_url = std::env::var("PUBLIC_BASE_URL").unwrap_or_else(|_| "https://www.videosync.video".to_string());
+    let base_url = std::env::var("PUBLIC_BASE_URL")
+        .unwrap_or_else(|_| "https://www.videosync.video".to_string());
     let sample_block =
         "NO sample exists yet — do NOT invent a URL. Offer to make one: \"want me to put together a quick sample?\"".to_string();
 
@@ -2400,7 +4322,7 @@ async fn instagram_generate_dm(
     let sample_block = match sample_id {
         Some(sid) => {
             let sample_unlock_price = sqlx::query_scalar::<_, sqlx::types::Decimal>(
-                "SELECT unlock_price_usdc FROM deliveries WHERE id = $1"
+                "SELECT unlock_price_usdc FROM deliveries WHERE id = $1",
             )
             .bind(sid)
             .fetch_optional(&state.db_pool)
@@ -2422,9 +4344,16 @@ async fn instagram_generate_dm(
         None => sample_block,
     };
 
-    let niche = req.as_ref().and_then(|r| r.niche.as_deref()).unwrap_or(&category);
+    let niche = req
+        .as_ref()
+        .and_then(|r| r.niche.as_deref())
+        .unwrap_or(&category);
 
-    let followers_str = if followers > 0 { followers.to_string() } else { "unknown".to_string() };
+    let followers_str = if followers > 0 {
+        followers.to_string()
+    } else {
+        "unknown".to_string()
+    };
 
     let service_block = service_offer_prompt(service.as_deref());
 
@@ -2452,14 +4381,14 @@ The DM must:
 - Adapt tone to follower size — micro creators (<10k) warm + helpful; mid creators (10k–100k) business-direct; big creators (>100k) concise with clear ROI angle.
 
 Output ONLY the DM body. No quotes, no labels, no preamble."#,
-        username      = username,
-        full_name     = full_name,
-        followers     = followers_str,
-        bio           = bio,
-        niche         = niche,
-        ext_url       = ext_url,
+        username = username,
+        full_name = full_name,
+        followers = followers_str,
+        bio = bio,
+        niche = niche,
+        ext_url = ext_url,
         service_block = service_block,
-        sample_block  = sample_block,
+        sample_block = sample_block,
     );
 
     let dm_text = match generate_text_best_effort(
@@ -2467,15 +4396,19 @@ Output ONLY the DM body. No quotes, no labels, no preamble."#,
         state.gemma_client.as_ref(),
         state.gemini_client.as_ref(),
         &prompt,
-    ).await {
-        Ok(t)  => t,
-        Err(e) => return Json(json!({"success": false, "error": format!("AI generation failed: {}", e)})),
+    )
+    .await
+    {
+        Ok(t) => t,
+        Err(e) => {
+            return Json(json!({"success": false, "error": format!("AI generation failed: {}", e)}))
+        }
     };
 
     // Save the DM script to the DB
     let _ = sqlx::query(
         "UPDATE instagram_leads SET dm_script = $1, updated_at = NOW()
-         WHERE id = $2 AND user_id = $3"
+         WHERE id = $2 AND user_id = $3",
     )
     .bind(&dm_text)
     .bind(id)
@@ -2507,25 +4440,26 @@ struct GenerateSampleRequest {
 }
 
 async fn instagram_generate_sample(
-    Extension(state):  Extension<Arc<AppState>>,
+    Extension(state): Extension<Arc<AppState>>,
     Extension(claims): Extension<Claims>,
-    Path(id):          Path<uuid::Uuid>,
-    Json(req):         Json<Option<GenerateSampleRequest>>,
+    Path(id): Path<uuid::Uuid>,
+    Json(req): Json<Option<GenerateSampleRequest>>,
 ) -> Json<serde_json::Value> {
     let user_id: i32 = claims.sub.parse().unwrap_or(0);
     let source_url = req.as_ref().and_then(|r| r.source_url.clone());
 
     let row = match sqlx::query(
         "SELECT username, full_name, bio, service_type, sample_delivery_id, external_url
-         FROM instagram_leads WHERE id = $1 AND user_id = $2"
+         FROM instagram_leads WHERE id = $1 AND user_id = $2",
     )
     .bind(id)
     .bind(user_id)
     .fetch_optional(&state.db_pool)
-    .await {
+    .await
+    {
         Ok(Some(r)) => r,
-        Ok(None)    => return Json(json!({"success": false, "error": "Lead not found"})),
-        Err(e)      => return Json(json!({"success": false, "error": format!("DB error: {}", e)})),
+        Ok(None) => return Json(json!({"success": false, "error": "Lead not found"})),
+        Err(e) => return Json(json!({"success": false, "error": format!("DB error: {}", e)})),
     };
 
     // If a sample is already attached, just return it — re-generating costs
@@ -2539,20 +4473,29 @@ async fn instagram_generate_sample(
         }));
     }
 
-    let username:     String         = row.get::<Option<String>, _>("username").unwrap_or_default();
-    let full_name:    String         = row.get::<Option<String>, _>("full_name").unwrap_or_else(|| username.clone());
-    let bio:          String         = row.get::<Option<String>, _>("bio").unwrap_or_default();
-    let service:      Option<String> = row.get::<Option<String>, _>("service_type");
+    let username: String = row.get::<Option<String>, _>("username").unwrap_or_default();
+    let full_name: String = row
+        .get::<Option<String>, _>("full_name")
+        .unwrap_or_else(|| username.clone());
+    let bio: String = row.get::<Option<String>, _>("bio").unwrap_or_default();
+    let service: Option<String> = row.get::<Option<String>, _>("service_type");
     let lead_ext_url: Option<String> = row.get::<Option<String>, _>("external_url");
 
     // Auto-detect the lead's website: prefer explicit source_url from request,
     // fall back to the lead's external_url from their profile (IG bio link, etc.)
     let source_url = source_url.or(lead_ext_url);
+    let service_key = service.as_deref().unwrap_or("thumbnails");
+    let has_reference_url = source_url
+        .as_deref()
+        .map(|u| u.starts_with("http://") || u.starts_with("https://"))
+        .unwrap_or(false);
+    let use_long_form_workflow =
+        should_use_long_form_for_revenue_sample(service_key, has_reference_url);
 
     // For clipping the lead, we'd need their actual video URL. Tell the
     // frontend so it can ask the user for one. Don't burn a render slot on
     // a placeholder for clipping — the value is in clipping THEIR content.
-    if matches!(service.as_deref(), Some("clipping")) {
+    if matches!(service.as_deref(), Some("clipping")) && !has_reference_url {
         return Json(json!({
             "success":              false,
             "requires_source_url":  true,
@@ -2567,7 +4510,29 @@ async fn instagram_generate_sample(
     // and landing_page), we generate the image via Gemini Nano Banana or
     // use a user-supplied source URL, then pass the resulting S3 URL to
     // the Blender tool.
-    let (gig_type, prompt, style, duration, extra) = match service.as_deref() {
+    let (gig_type, prompt, style, duration, mut extra) = if use_long_form_workflow {
+        let target_duration = service_target_duration_seconds(service_key);
+        (
+            "long_form_video",
+            format!("{} - {}", full_name, service_offer_line(service_key)),
+            service_long_form_style(service_key),
+            target_duration,
+            json!({
+                "workflow_engine": "long_form_video_assembly",
+                "revenue_v1": true,
+                "instagram_lead_id": id,
+                "instagram_username": username,
+                "service_offer": service_key,
+                "service_offer_line": service_offer_line(service_key),
+                "offer_type": service_long_form_offer_type(service_key),
+                "target_duration_seconds": target_duration,
+                "segment_duration_seconds": 15.0,
+                "source_url": source_url.clone(),
+                "bio": bio.clone(),
+            }),
+        )
+    } else {
+        match service.as_deref() {
         Some("animations") => (
             "title_card",
             format!("{} — channel intro", full_name),
@@ -2621,7 +4586,10 @@ async fn instagram_generate_sample(
                 Some(url) => match fetch_landing_page_hero(url).await {
                     Some(u) => u,
                     None => {
-                        let p = format!("Clean SaaS landing-page hero illustration: {}", bio.chars().take(150).collect::<String>());
+                        let p = format!(
+                            "Clean SaaS landing-page hero illustration: {}",
+                            bio.chars().take(150).collect::<String>()
+                        );
                         try_generate_image(&state, &p).await.unwrap_or_default()
                     }
                 },
@@ -2670,7 +4638,11 @@ async fn instagram_generate_sample(
                 } else {
                     (
                         "thumbnail",
-                        format!("Eye-catching thumbnail for @{} — {}", username, bio.chars().take(80).collect::<String>()),
+                        format!(
+                            "Eye-catching thumbnail for @{} — {}",
+                            username,
+                            bio.chars().take(80).collect::<String>()
+                        ),
                         "bold",
                         0.0,
                         json!({"title_text": full_name}),
@@ -2679,14 +4651,30 @@ async fn instagram_generate_sample(
             } else {
                 (
                     "thumbnail",
-                    format!("Eye-catching thumbnail for @{} — {}", username, bio.chars().take(80).collect::<String>()),
+                    format!(
+                        "Eye-catching thumbnail for @{} — {}",
+                        username,
+                        bio.chars().take(80).collect::<String>()
+                    ),
                     "bold",
                     0.0,
                     json!({"title_text": full_name}),
                 )
             }
         }
+        }
     };
+
+    if let Some(extra_obj) = extra.as_object_mut() {
+        extra_obj.insert(
+            "sample_owner_user_id".to_string(),
+            json!(user_id),
+        );
+        extra_obj.insert(
+            "sourced_from_lead_id".to_string(),
+            json!(id),
+        );
+    }
 
     let title = format!("Sample for @{}", username);
 
@@ -2721,7 +4709,7 @@ async fn instagram_generate_sample(
     // Attach the sample to the lead so re-clicking returns the same one.
     let _ = sqlx::query(
         "UPDATE instagram_leads SET sample_delivery_id = $1, updated_at = NOW()
-         WHERE id = $2 AND user_id = $3"
+         WHERE id = $2 AND user_id = $3",
     )
     .bind(delivery_id)
     .bind(id)
@@ -2729,22 +4717,71 @@ async fn instagram_generate_sample(
     .execute(&state.db_pool)
     .await;
 
-    // For high-value leads with a website, route through the full AI agent
-    // to generate a comprehensive video (script + Blender scenes + voiceover).
-    // For simpler cases, use the direct Blender render path.
-    let has_website = source_url.is_some();
     let render_state = state.clone();
-    if has_website && gig_type == "scene" {
+    if gig_type == "long_form_video" {
+        match crate::services::LongFormVideoWorkflow::start(
+            state.clone(),
+            crate::services::LongFormVideoRequest {
+                title: title.clone(),
+                brief: format!(
+                    "{prompt}\n\nInstagram lead: @{username}\nBio/context: {bio}\n\nCreate a buyer-facing sample for this service: {offer}. It should be useful as outreach proof for a whitelisted marketer and should demonstrate the relevant creative tools for the offer.",
+                    offer = service_offer_line(service_key)
+                ),
+                target_duration_seconds: duration,
+                segment_duration_seconds: 15.0,
+                style: style.to_string(),
+                offer_type: service_long_form_offer_type(service_key),
+                narration_speaker: "Emma".to_string(),
+                include_narration: true,
+                reference_url: source_url.clone(),
+                session_uuid: None,
+                user_id: Some(user_id),
+                source_table: Some("deliveries".to_string()),
+                source_record_id: Some(delivery_id),
+                idempotency_key: Some(format!("instagram-lead-long-form:{id}")),
+            },
+        )
+        .await
+        {
+            Ok(workflow_id) => {
+                let _ = sqlx::query("UPDATE deliveries SET workflow_id = $1 WHERE id = $2")
+                    .bind(workflow_id)
+                    .bind(delivery_id)
+                    .execute(&state.db_pool)
+                    .await;
+            }
+            Err(e) => {
+                return Json(json!({
+                    "success": false,
+                    "error": format!("Failed to start long-form workflow: {}", e)
+                }));
+            }
+        }
+    } else {
+        let _ = crate::handlers::admin::ensure_delivery_workflow(&state, delivery_id).await;
+        // For high-value leads with a website, route through the full AI agent
+        // to generate a comprehensive video (script + Blender scenes + voiceover).
+        // For simpler cases, use the direct Blender render path.
+        let has_website = source_url.is_some();
+        if has_website && gig_type == "scene" {
         let website_url = source_url.clone().unwrap_or_default();
         let lead_name = full_name.clone();
         let lead_bio = bio.clone();
         tokio::spawn(async move {
-            run_agent_video_for_lead(delivery_id, &website_url, &lead_name, &lead_bio, render_state).await;
+            run_agent_video_for_lead(
+                delivery_id,
+                &website_url,
+                &lead_name,
+                &lead_bio,
+                render_state,
+            )
+            .await;
         });
-    } else {
-        tokio::spawn(async move {
-            crate::handlers::admin::run_delivery_job(delivery_id, render_state).await;
-        });
+        } else {
+            tokio::spawn(async move {
+                crate::handlers::admin::run_delivery_job(delivery_id, render_state).await;
+            });
+        }
     }
 
     Json(json!({
@@ -2758,15 +4795,17 @@ async fn instagram_generate_sample(
 
 /// PATCH /api/instagram/leads/:id/contact-status
 async fn instagram_update_contact_status(
-    Extension(state):  Extension<Arc<AppState>>,
+    Extension(state): Extension<Arc<AppState>>,
     Extension(claims): Extension<Claims>,
-    Path(id):          Path<uuid::Uuid>,
-    Json(req):         Json<InstagramContactStatusRequest>,
+    Path(id): Path<uuid::Uuid>,
+    Json(req): Json<InstagramContactStatusRequest>,
 ) -> Json<serde_json::Value> {
     let user_id: i32 = claims.sub.parse().unwrap_or(0);
     let valid = ["new", "contacted", "replied", "converted", "skipped"];
     if !valid.contains(&req.contact_status.as_str()) {
-        return Json(json!({"success": false, "error": "contact_status must be one of: new, contacted, replied, converted, skipped"}));
+        return Json(
+            json!({"success": false, "error": "contact_status must be one of: new, contacted, replied, converted, skipped"}),
+        );
     }
 
     // Stamp funnel-stage timestamps as the lead moves through states —
@@ -2804,11 +4843,11 @@ async fn instagram_update_contact_status(
 #[derive(Debug, Deserialize)]
 struct AutoDiscoverRequest {
     /// e.g. "content_creator", "youtuber", "podcaster", "fitness", "gaming"
-    niche:                 Option<String>,
+    niche: Option<String>,
     /// Max profiles to pull per hashtag (default 30, max 100)
     max_posts_per_hashtag: Option<u32>,
     /// How many hashtags to search (default 3, max 6)
-    hashtag_count:         Option<usize>,
+    hashtag_count: Option<usize>,
 }
 
 /// POST /api/instagram/leads/auto-discover
@@ -2817,18 +4856,22 @@ struct AutoDiscoverRequest {
 /// search per hashtag. The background poller (`poll_instagram_jobs`) will
 /// auto-import results and score leads once PhantomBuster finishes (~5–10 min).
 async fn instagram_auto_discover(
-    Extension(state):  Extension<Arc<AppState>>,
+    Extension(state): Extension<Arc<AppState>>,
     Extension(claims): Extension<Claims>,
-    Json(req):         Json<Option<AutoDiscoverRequest>>,
+    Json(req): Json<Option<AutoDiscoverRequest>>,
 ) -> Json<serde_json::Value> {
     let user_id: i32 = claims.sub.parse().unwrap_or(0);
     if user_id == 0 {
         return Json(json!({"success": false, "error": "Invalid user id in JWT"}));
     }
 
-    let req          = req.unwrap_or(AutoDiscoverRequest { niche: None, max_posts_per_hashtag: None, hashtag_count: None });
-    let niche        = req.niche.as_deref().unwrap_or("content creator");
-    let max_posts    = req.max_posts_per_hashtag.unwrap_or(30).min(100);
+    let req = req.unwrap_or(AutoDiscoverRequest {
+        niche: None,
+        max_posts_per_hashtag: None,
+        hashtag_count: None,
+    });
+    let niche = req.niche.as_deref().unwrap_or("content creator");
+    let max_posts = req.max_posts_per_hashtag.unwrap_or(30).min(100);
     let hashtag_count = req.hashtag_count.unwrap_or(3).min(6).max(1);
 
     let Some(pb) = state.phantombuster_client.as_ref() else {
@@ -2842,8 +4885,14 @@ async fn instagram_auto_discover(
 
     let agent = match pb.find_instagram_hashtag_agent().await {
         Ok(Some(a)) => a,
-        Ok(None)    => return Json(json!({"success": false, "error": "No Instagram Hashtag phantom found in PhantomBuster. Add 'Instagram Hashtag Search Export' from the Phantom Store."})),
-        Err(e)      => return Json(json!({"success": false, "error": format!("Agent lookup failed: {}", e)})),
+        Ok(None) => {
+            return Json(
+                json!({"success": false, "error": "No Instagram Hashtag phantom found in PhantomBuster. Add 'Instagram Hashtag Search Export' from the Phantom Store."}),
+            )
+        }
+        Err(e) => {
+            return Json(json!({"success": false, "error": format!("Agent lookup failed: {}", e)}))
+        }
     };
 
     // ── Ask AI to pick the best hashtags for this niche ──────────────────────
@@ -2870,26 +4919,47 @@ Return ONLY a JSON array of strings. No explanation. Example: ["youtuber", "cont
         state.gemma_client.as_ref(),
         state.gemini_client.as_ref(),
         &prompt,
-    ).await {
+    )
+    .await
+    {
         Ok(t) => t,
-        Err(e) => return Json(json!({"success": false, "error": format!("AI hashtag selection failed: {}", e)})),
+        Err(e) => {
+            return Json(
+                json!({"success": false, "error": format!("AI hashtag selection failed: {}", e)}),
+            )
+        }
     };
 
     // Strip markdown fences and parse JSON array
-    let cleaned = hashtags_json.trim()
-        .trim_start_matches("```json").trim_start_matches("```")
-        .trim_end_matches("```").trim();
+    let cleaned = hashtags_json
+        .trim()
+        .trim_start_matches("```json")
+        .trim_start_matches("```")
+        .trim_end_matches("```")
+        .trim();
 
     let hashtags: Vec<String> = match serde_json::from_str(cleaned) {
         Ok(v) => v,
         Err(e) => {
-            tracing::warn!("Failed to parse AI hashtag response: {} | raw: {}", e, cleaned);
+            tracing::warn!(
+                "Failed to parse AI hashtag response: {} | raw: {}",
+                e,
+                cleaned
+            );
             // Fallback hashtags based on niche keyword
-            vec![niche.replace(' ', ""), "contentcreator".to_string(), "youtuber".to_string()]
+            vec![
+                niche.replace(' ', ""),
+                "contentcreator".to_string(),
+                "youtuber".to_string(),
+            ]
         }
     };
 
-    tracing::info!("🎯 Instagram auto-discover for niche '{}': hashtags = {:?}", niche, hashtags);
+    tracing::info!(
+        "🎯 Instagram auto-discover for niche '{}': hashtags = {:?}",
+        niche,
+        hashtags
+    );
 
     // ── Launch a PB search for each hashtag ──────────────────────────────────
     let mut launched_jobs: Vec<serde_json::Value> = Vec::new();
@@ -2901,8 +4971,16 @@ Return ONLY a JSON array of strings. No explanation. Example: ["youtuber", "cont
     for hashtag in &hashtags {
         let tag = hashtag.trim_start_matches('#').to_string();
         match try_launch_or_queue_ig_hashtag_job(
-            &state, pb, &agent, &session_cookie, &tag, max_posts, user_id,
-        ).await {
+            &state,
+            pb,
+            &agent,
+            &session_cookie,
+            &tag,
+            max_posts,
+            user_id,
+        )
+        .await
+        {
             Ok((job_id, status, container_id)) => {
                 launched_jobs.push(json!({
                     "job_id":       job_id.to_string(),
@@ -2933,7 +5011,7 @@ Return ONLY a JSON array of strings. No explanation. Example: ["youtuber", "cont
 /// GET /api/instagram/leads/top
 /// Returns the highest-scored leads (score >= 60), ready for outreach.
 async fn instagram_top_leads(
-    Extension(state):  Extension<Arc<AppState>>,
+    Extension(state): Extension<Arc<AppState>>,
     Extension(claims): Extension<Claims>,
 ) -> Json<serde_json::Value> {
     let user_id: i32 = claims.sub.parse().unwrap_or(0);
@@ -2947,35 +5025,39 @@ async fn instagram_top_leads(
            AND contact_status = 'new'
            AND is_private = FALSE
          ORDER BY score DESC, followers_count DESC NULLS LAST
-         LIMIT 50"
+         LIMIT 50",
     )
     .bind(user_id)
     .fetch_all(&state.db_pool)
-    .await {
+    .await
+    {
         Ok(r) => r,
         Err(e) => return Json(json!({"success": false, "error": format!("DB error: {}", e)})),
     };
 
-    let leads: Vec<serde_json::Value> = rows.iter().map(|r| {
-        json!({
-            "id":              r.get::<Option<uuid::Uuid>, _>("id").map(|u| u.to_string()),
-            "username":        r.get::<Option<String>, _>("username"),
-            "full_name":       r.get::<Option<String>, _>("full_name"),
-            "bio":             r.get::<Option<String>, _>("bio"),
-            "followers_count": r.get::<Option<i64>, _>("followers_count"),
-            "profile_url":     r.get::<Option<String>, _>("profile_url"),
-            "profile_pic_url": r.get::<Option<String>, _>("profile_pic_url"),
-            "is_verified":     r.get::<Option<bool>, _>("is_verified").unwrap_or(false),
-            "category":        r.get::<Option<String>, _>("category"),
-            "hashtag_source":  r.get::<Option<String>, _>("hashtag_source"),
-            "email":           r.get::<Option<String>, _>("email"),
-            "external_url":    r.get::<Option<String>, _>("external_url"),
-            "dm_script":       r.get::<Option<String>, _>("dm_script"),
-            "contact_status":  r.get::<Option<String>, _>("contact_status"),
-            "score":           r.get::<Option<i32>, _>("score"),
-            "score_reason":    r.get::<Option<String>, _>("score_reason"),
+    let leads: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| {
+            json!({
+                "id":              r.get::<Option<uuid::Uuid>, _>("id").map(|u| u.to_string()),
+                "username":        r.get::<Option<String>, _>("username"),
+                "full_name":       r.get::<Option<String>, _>("full_name"),
+                "bio":             r.get::<Option<String>, _>("bio"),
+                "followers_count": r.get::<Option<i64>, _>("followers_count"),
+                "profile_url":     r.get::<Option<String>, _>("profile_url"),
+                "profile_pic_url": r.get::<Option<String>, _>("profile_pic_url"),
+                "is_verified":     r.get::<Option<bool>, _>("is_verified").unwrap_or(false),
+                "category":        r.get::<Option<String>, _>("category"),
+                "hashtag_source":  r.get::<Option<String>, _>("hashtag_source"),
+                "email":           r.get::<Option<String>, _>("email"),
+                "external_url":    r.get::<Option<String>, _>("external_url"),
+                "dm_script":       r.get::<Option<String>, _>("dm_script"),
+                "contact_status":  r.get::<Option<String>, _>("contact_status"),
+                "score":           r.get::<Option<i32>, _>("score"),
+                "score_reason":    r.get::<Option<String>, _>("score_reason"),
+            })
         })
-    }).collect();
+        .collect();
 
     Json(json!({"success": true, "leads": leads, "count": leads.len()}))
 }
@@ -2989,7 +5071,7 @@ async fn instagram_top_leads(
 pub async fn poll_instagram_jobs(state: &Arc<AppState>) {
     let pb = match state.phantombuster_client.as_ref() {
         Some(pb) => pb,
-        None     => return,
+        None => return,
     };
 
     // Find running Instagram jobs older than 3 minutes (give PB time to finish)
@@ -3000,10 +5082,11 @@ pub async fn poll_instagram_jobs(state: &Arc<AppState>) {
            AND search_url LIKE 'instagram:%'
            AND launched_at < NOW() - INTERVAL '3 minutes'
          ORDER BY launched_at ASC
-         LIMIT 10"
+         LIMIT 10",
     )
     .fetch_all(&state.db_pool)
-    .await {
+    .await
+    {
         Ok(rows) => rows,
         Err(e) => {
             tracing::warn!("Instagram job poll: DB query failed: {}", e);
@@ -3011,15 +5094,20 @@ pub async fn poll_instagram_jobs(state: &Arc<AppState>) {
         }
     };
 
-    if running_jobs.is_empty() { return; }
+    if running_jobs.is_empty() {
+        return;
+    }
 
-    tracing::info!("🔄 Instagram job poller: checking {} running jobs", running_jobs.len());
+    tracing::info!(
+        "🔄 Instagram job poller: checking {} running jobs",
+        running_jobs.len()
+    );
 
     for row in running_jobs {
-        let job_id:   uuid::Uuid        = row.get("id");
-        let agent_id: String            = row.get("agent_id");
-        let search_url: String          = row.get("search_url");
-        let job_user_id: Option<i32>    = row.try_get("user_id").ok().flatten();
+        let job_id: uuid::Uuid = row.get("id");
+        let agent_id: String = row.get("agent_id");
+        let search_url: String = row.get("search_url");
+        let job_user_id: Option<i32> = row.try_get("user_id").ok().flatten();
 
         // Extract hashtag from search_url ("instagram:#contentcreator")
         let hashtag_source = search_url
@@ -3036,8 +5124,14 @@ pub async fn poll_instagram_jobs(state: &Arc<AppState>) {
                 // no rows produced". Ask PB directly before assuming still running.
                 if let Ok((errored, log_tail)) = pb.fetch_run_error(&agent_id).await {
                     if errored {
-                        let err_msg = log_tail.unwrap_or_else(|| "PhantomBuster script exited with error".to_string());
-                        tracing::warn!("Instagram job {}: PB reported error → marking failed: {}", job_id, err_msg);
+                        let err_msg = log_tail.unwrap_or_else(|| {
+                            "PhantomBuster script exited with error".to_string()
+                        });
+                        tracing::warn!(
+                            "Instagram job {}: PB reported error → marking failed: {}",
+                            job_id,
+                            err_msg
+                        );
                         let _ = sqlx::query(
                             "UPDATE phantombuster_jobs SET status = 'failed', error = $1, completed_at = NOW() WHERE id = $2"
                         )
@@ -3056,7 +5150,7 @@ pub async fn poll_instagram_jobs(state: &Arc<AppState>) {
                 // Mark as failed if we've been trying for > 30 minutes
                 let _ = sqlx::query(
                     "UPDATE phantombuster_jobs SET status = 'failed', error = $1
-                     WHERE id = $2 AND launched_at < NOW() - INTERVAL '30 minutes'"
+                     WHERE id = $2 AND launched_at < NOW() - INTERVAL '30 minutes'",
                 )
                 .bind(e)
                 .bind(job_id)
@@ -3067,12 +5161,14 @@ pub async fn poll_instagram_jobs(state: &Arc<AppState>) {
         };
 
         let leads = crate::phantombuster_client::PhantomBusterClient::parse_instagram_leads(rows);
-        let total  = leads.len();
+        let total = leads.len();
         let mut imported = 0usize;
 
         for lead in &leads {
             // Skip private accounts — they can't receive DMs from non-followers.
-            if lead.is_private { continue; }
+            if lead.is_private {
+                continue;
+            }
             // NOTE: do NOT filter by followers_count here. The Instagram
             // Hashtag Search Export returns post schema (no follower count), so
             // gating on >=1000 would drop every lead. Hashtag relevance is
@@ -3088,7 +5184,7 @@ pub async fn poll_instagram_jobs(state: &Arc<AppState>) {
                  ON CONFLICT (user_id, username) DO UPDATE
                    SET followers_count = EXCLUDED.followers_count,
                        bio = COALESCE(EXCLUDED.bio, instagram_leads.bio),
-                       updated_at = NOW()"
+                       updated_at = NOW()",
             )
             .bind(&lead.username)
             .bind(&lead.full_name)
@@ -3108,12 +5204,17 @@ pub async fn poll_instagram_jobs(state: &Arc<AppState>) {
             .execute(&state.db_pool)
             .await;
 
-            if result.is_ok() { imported += 1; }
+            if result.is_ok() {
+                imported += 1;
+            }
         }
 
         tracing::info!(
             "✅ Instagram job {}: {} total / {} imported (hashtag: #{})",
-            job_id, total, imported, hashtag_source
+            job_id,
+            total,
+            imported,
+            hashtag_source
         );
 
         // Mark job completed
@@ -3150,7 +5251,7 @@ pub async fn poll_instagram_jobs(state: &Arc<AppState>) {
 async fn agent_has_running_job(pool: &sqlx::PgPool, agent_id: &str) -> bool {
     let n: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM phantombuster_jobs
-         WHERE agent_id = $1 AND status = 'running'"
+         WHERE agent_id = $1 AND status = 'running'",
     )
     .bind(agent_id)
     .fetch_one(pool)
@@ -3165,8 +5266,10 @@ async fn agent_has_running_job(pool: &sqlx::PgPool, agent_id: &str) -> bool {
 /// user-facing phrase.
 fn is_pb_parallel_limit_error(err: &str) -> bool {
     let lc = err.to_lowercase();
-    lc.contains("parallel") || lc.contains("maximum number")
-        || lc.contains("concurrency limit") || lc.contains("too many")
+    lc.contains("parallel")
+        || lc.contains("maximum number")
+        || lc.contains("concurrency limit")
+        || lc.contains("too many")
 }
 
 /// Try to launch an Instagram Hashtag Search — or enqueue it if the agent
@@ -3176,13 +5279,13 @@ fn is_pb_parallel_limit_error(err: &str) -> bool {
 /// `"running"` (launched immediately) or `"queued"` (will be launched by the
 /// dispatcher when a slot frees up).
 async fn try_launch_or_queue_ig_hashtag_job(
-    state:          &Arc<AppState>,
-    pb:             &crate::phantombuster_client::PhantomBusterClient,
-    agent:          &crate::phantombuster_client::PbAgent,
+    state: &Arc<AppState>,
+    pb: &crate::phantombuster_client::PhantomBusterClient,
+    agent: &crate::phantombuster_client::PbAgent,
     session_cookie: &str,
-    hashtag:        &str,
-    max_posts:      u32,
-    user_id:        i32,
+    hashtag: &str,
+    max_posts: u32,
+    user_id: i32,
 ) -> Result<(uuid::Uuid, &'static str, Option<String>), String> {
     let tag = hashtag.trim_start_matches('#').to_string();
     let search_url = format!("instagram:#{}", tag);
@@ -3192,12 +5295,15 @@ async fn try_launch_or_queue_ig_hashtag_job(
     let occupied = agent_has_running_job(&state.db_pool, &agent.id).await;
 
     if !occupied {
-        match pb.launch_instagram_hashtag_search(&agent.id, session_cookie, &tag, max_posts).await {
+        match pb
+            .launch_instagram_hashtag_search(&agent.id, session_cookie, &tag, max_posts)
+            .await
+        {
             Ok(container_id) => {
                 let job_id = sqlx::query_scalar::<_, uuid::Uuid>(
                     "INSERT INTO phantombuster_jobs
                         (agent_id, agent_name, search_url, status, launched_at, user_id)
-                     VALUES ($1, $2, $3, 'running', NOW(), $4) RETURNING id"
+                     VALUES ($1, $2, $3, 'running', NOW(), $4) RETURNING id",
                 )
                 .bind(&agent.id)
                 .bind(&agent.name)
@@ -3220,7 +5326,7 @@ async fn try_launch_or_queue_ig_hashtag_job(
     let job_id = sqlx::query_scalar::<_, uuid::Uuid>(
         "INSERT INTO phantombuster_jobs
             (agent_id, agent_name, search_url, status, created_at, user_id)
-         VALUES ($1, $2, $3, 'queued', NOW(), $4) RETURNING id"
+         VALUES ($1, $2, $3, 'queued', NOW(), $4) RETURNING id",
     )
     .bind(&agent.id)
     .bind(&agent.name)
@@ -3230,7 +5336,12 @@ async fn try_launch_or_queue_ig_hashtag_job(
     .await
     .map_err(|e| format!("DB insert failed: {}", e))?;
 
-    tracing::info!("📥 Queued Instagram job {} for #{} (agent busy, user={})", job_id, tag, user_id);
+    tracing::info!(
+        "📥 Queued Instagram job {} for #{} (agent busy, user={})",
+        job_id,
+        tag,
+        user_id
+    );
     Ok((job_id, "queued", None))
 }
 
@@ -3239,9 +5350,15 @@ async fn try_launch_or_queue_ig_hashtag_job(
 /// per tick per agent keeps PB well under the parallel limit even across
 /// different phantom types.
 pub async fn dispatch_queued_pb_jobs(state: &Arc<AppState>) {
-    let Some(pb) = state.phantombuster_client.as_ref() else { return; };
-    let Ok(session_cookie) = std::env::var("INSTAGRAM_SESSION_COOKIE") else { return; };
-    if session_cookie.is_empty() { return; }
+    let Some(pb) = state.phantombuster_client.as_ref() else {
+        return;
+    };
+    let Ok(session_cookie) = std::env::var("INSTAGRAM_SESSION_COOKIE") else {
+        return;
+    };
+    if session_cookie.is_empty() {
+        return;
+    }
 
     // Pick agents that have queued work AND no currently-running job.
     let rows = match sqlx::query(
@@ -3251,10 +5368,11 @@ pub async fn dispatch_queued_pb_jobs(state: &Arc<AppState>) {
            AND NOT EXISTS (
              SELECT 1 FROM phantombuster_jobs r
              WHERE r.agent_id = q.agent_id AND r.status = 'running'
-           )"
+           )",
     )
     .fetch_all(&state.db_pool)
-    .await {
+    .await
+    {
         Ok(rs) => rs,
         Err(e) => {
             tracing::warn!("PB dispatcher DB query failed: {}", e);
@@ -3262,7 +5380,9 @@ pub async fn dispatch_queued_pb_jobs(state: &Arc<AppState>) {
         }
     };
 
-    if rows.is_empty() { return; }
+    if rows.is_empty() {
+        return;
+    }
 
     for row in rows {
         let agent_id: String = row.get("agent_id");
@@ -3271,39 +5391,48 @@ pub async fn dispatch_queued_pb_jobs(state: &Arc<AppState>) {
         let job = match sqlx::query(
             "SELECT id, search_url FROM phantombuster_jobs
              WHERE agent_id = $1 AND status = 'queued'
-             ORDER BY created_at ASC LIMIT 1"
+             ORDER BY created_at ASC LIMIT 1",
         )
         .bind(&agent_id)
         .fetch_optional(&state.db_pool)
-        .await {
+        .await
+        {
             Ok(Some(r)) => r,
-            Ok(None)    => continue,
-            Err(e)      => {
+            Ok(None) => continue,
+            Err(e) => {
                 tracing::warn!("PB dispatcher oldest-job query failed: {}", e);
                 continue;
             }
         };
 
-        let job_id:     uuid::Uuid = job.get("id");
-        let search_url: String     = job.get("search_url");
+        let job_id: uuid::Uuid = job.get("id");
+        let search_url: String = job.get("search_url");
 
         // Only Instagram hashtag jobs are auto-dispatched today. LinkedIn
         // launches require rebuilding the Sales Navigator URL, which is a
         // bigger retrofit — leave those to manual retry for now.
-        let Some(tag) = search_url.strip_prefix("instagram:#")
+        let Some(tag) = search_url
+            .strip_prefix("instagram:#")
             .or_else(|| search_url.strip_prefix("instagram:"))
             .map(|s| s.trim_start_matches('#').to_string())
         else {
-            tracing::debug!("Skipping dispatch for non-IG queued job {} ({})", job_id, search_url);
+            tracing::debug!(
+                "Skipping dispatch for non-IG queued job {} ({})",
+                job_id,
+                search_url
+            );
             continue;
         };
 
-        match pb.launch_instagram_hashtag_search(&agent_id, &session_cookie, &tag, 50).await {
+        match pb
+            .launch_instagram_hashtag_search(&agent_id, &session_cookie, &tag, 50)
+            .await
+        {
             Ok(_container_id) => {
                 let _ = sqlx::query(
                     "UPDATE phantombuster_jobs
                      SET status = 'running', launched_at = NOW()
-                     WHERE id = $1"
+                     WHERE id = $1",
                 )
                 .bind(job_id)
                 .execute(&state.db_pool)
@@ -3311,15 +5440,22 @@ pub async fn dispatch_queued_pb_jobs(state: &Arc<AppState>) {
                 tracing::info!("🚀 Dispatched queued PB job {} for #{}", job_id, tag);
             }
             Err(e) if is_pb_parallel_limit_error(&e) => {
-                tracing::debug!("PB still at parallel limit on agent {}; will retry next tick", agent_id);
+                tracing::debug!(
+                    "PB still at parallel limit on agent {}; will retry next tick",
+                    agent_id
+                );
                 // leave status='queued' and try again next tick
             }
             Err(e) => {
-                tracing::warn!("PB launch failed for queued job {}: {} — marking failed", job_id, e);
+                tracing::warn!(
+                    "PB launch failed for queued job {}: {} — marking failed",
+                    job_id,
+                    e
+                );
                 let _ = sqlx::query(
                     "UPDATE phantombuster_jobs
                      SET status = 'failed', error = $1, completed_at = NOW()
-                     WHERE id = $2"
+                     WHERE id = $2",
                 )
                 .bind(e)
                 .bind(job_id)
@@ -3346,26 +5482,29 @@ async fn score_instagram_leads(state: &Arc<AppState>, hashtag: &str, user_id: i3
            AND user_id = $2
            AND is_private = FALSE
          ORDER BY COALESCE(followers_count, 0) DESC, created_at DESC
-         LIMIT 20"
+         LIMIT 20",
     )
     .bind(hashtag)
     .bind(user_id)
     .fetch_all(&state.db_pool)
-    .await {
+    .await
+    {
         Ok(r) => r,
         Err(_) => return,
     };
 
     for row in &unscored {
-        let id:        uuid::Uuid    = row.get("id");
-        let username:  String        = row.get::<Option<String>, _>("username").unwrap_or_default();
-        let bio:       String        = row.get::<Option<String>, _>("bio").unwrap_or_default();
-        let followers: Option<i64>   = row.get::<Option<i64>, _>("followers_count");
-        let ext_url:   String        = row.get::<Option<String>, _>("external_url").unwrap_or_default();
+        let id: uuid::Uuid = row.get("id");
+        let username: String = row.get::<Option<String>, _>("username").unwrap_or_default();
+        let bio: String = row.get::<Option<String>, _>("bio").unwrap_or_default();
+        let followers: Option<i64> = row.get::<Option<i64>, _>("followers_count");
+        let ext_url: String = row
+            .get::<Option<String>, _>("external_url")
+            .unwrap_or_default();
 
         let followers_str = match followers {
             Some(n) if n > 0 => n.to_string(),
-            _                => "unknown (came from hashtag search — judge by bio + handle)".to_string(),
+            _ => "unknown (came from hashtag search — judge by bio + handle)".to_string(),
         };
 
         let prompt = format!(
@@ -3395,11 +5534,13 @@ Score guidelines:
 Return ONLY valid JSON (no markdown, no code fence):
 {{"score": 75, "service": "clipping", "reason": "podcaster with podcast link in bio, posts long-form clips"}}
 
-`service` MUST be one of: clipping, animations, thumbnails, ugc, product_mockup, landing_page, full_stack."#,
-            username  = username,
+`service` MUST be one of: clipping, thumbnails, product_mockup, landing_page, education, three_d_scene, voice_audio, ugc, agency_bundle, full_stack.
+
+Use education instead of animations for Manim/LaTeX/teaching content. Use three_d_scene for Blender/3D/product-scene/logo-reveal leads. Use voice_audio for narration, podcast intro, audiobook, or summary leads. Use agency_bundle for agencies, creator managers, and marketers."#,
+            username = username,
             followers = followers_str,
-            bio       = bio,
-            ext_url   = ext_url,
+            bio = bio,
+            ext_url = ext_url,
         );
 
         let result = generate_text_best_effort(
@@ -3407,29 +5548,42 @@ Return ONLY valid JSON (no markdown, no code fence):
             state.gemma_client.as_ref(),
             state.gemini_client.as_ref(),
             &prompt,
-        ).await;
+        )
+        .await;
 
         if let Ok(text) = result {
-            let cleaned = text.trim()
-                .trim_start_matches("```json").trim_start_matches("```")
-                .trim_end_matches("```").trim();
+            let cleaned = text
+                .trim()
+                .trim_start_matches("```json")
+                .trim_start_matches("```")
+                .trim_end_matches("```")
+                .trim();
 
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(cleaned) {
-                let score   = v.get("score").and_then(|s| s.as_i64()).unwrap_or(0) as i32;
-                let reason  = v.get("reason").and_then(|r| r.as_str()).unwrap_or("").to_string();
+                let score = v.get("score").and_then(|s| s.as_i64()).unwrap_or(0) as i32;
+                let reason = v
+                    .get("reason")
+                    .and_then(|r| r.as_str())
+                    .unwrap_or("")
+                    .to_string();
                 // Service tag — coerced to one of the 5 known values; anything
                 // else gets stored as NULL so the DM generator falls back to
                 // "all services, AI picks one inline".
-                let service_raw = v.get("service").and_then(|s| s.as_str()).unwrap_or("").to_lowercase();
-                let service = match service_raw.as_str() {
-                    "clipping" | "animations" | "thumbnails" | "ugc" | "product_mockup" | "landing_page" | "full_stack" => Some(service_raw),
-                    _ => None,
+                let service_raw = v
+                    .get("service")
+                    .and_then(|s| s.as_str())
+                    .unwrap_or("")
+                    .to_lowercase();
+                let service = if is_valid_revenue_service(&service_raw) {
+                    Some(normalize_revenue_service(&service_raw).to_string())
+                } else {
+                    None
                 };
 
                 let _ = sqlx::query(
                     "UPDATE instagram_leads
                      SET score = $1, score_reason = $2, service_type = $3
-                     WHERE id = $4"
+                     WHERE id = $4",
                 )
                 .bind(score)
                 .bind(&reason)
@@ -3444,7 +5598,11 @@ Return ONLY valid JSON (no markdown, no code fence):
         tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
     }
 
-    tracing::info!("📊 Scored {} Instagram leads for hashtag #{}", unscored.len(), hashtag);
+    tracing::info!(
+        "📊 Scored {} Instagram leads for hashtag #{}",
+        unscored.len(),
+        hashtag
+    );
 }
 
 // ============================================================================
@@ -3453,7 +5611,11 @@ Return ONLY valid JSON (no markdown, no code fence):
 
 /// Ask the AI to generate the most effective YouTube search query for a prospect type + category.
 /// Replaces all hardcoded search strings.
-async fn ai_generate_youtube_query(state: &Arc<AppState>, prospect_type: &str, category: &str) -> String {
+async fn ai_generate_youtube_query(
+    state: &Arc<AppState>,
+    prospect_type: &str,
+    category: &str,
+) -> String {
     let prompt = format!(
         r#"You are helping a video clipping agency find potential clients on YouTube.
 
@@ -3461,10 +5623,13 @@ Prospect type: {prospect_type}
 Content category/niche: {category}
 
 Generate ONE concise YouTube search query (5–10 words max) that will find active YouTube CHANNELS
-in this niche who are likely to be content creators with regular uploads.
+matching the stated prospect type in this niche.
 
 The query should:
-- Target the channel owners/creators themselves (not tutorials about them)
+- Target the right operator for the prospect type:
+  - content_creator / podcaster / educator / business_owner: the channel owners themselves
+  - clipper: editors, clipping agencies, short-form operators, repost channels offering clipping services
+  - creator_manager: creator agencies, creator managers, talent managers, media operators managing channels
 - Be specific enough to find real people, not brands or media companies
 - Work as a YouTube channel search
 
@@ -3476,17 +5641,27 @@ Return ONLY the raw search query string, nothing else."#
         state.gemma_client.as_ref(),
         state.gemini_client.as_ref(),
         &prompt,
-    ).await {
+    )
+    .await
+    {
         Ok(t) => {
             let q = t.trim().trim_matches('"').trim_matches('\'').to_string();
-            if q.is_empty() || q.len() > 100 { category.to_string() } else { q }
+            if q.is_empty() || q.len() > 100 {
+                category.to_string()
+            } else {
+                q
+            }
         }
         Err(_) => category.to_string(), // graceful fallback
     }
 }
 
 /// Ask the AI to pick the best Twitch game/category to find streamers matching the prospect type.
-async fn ai_generate_twitch_category(state: &Arc<AppState>, prospect_type: &str, category: &str) -> String {
+async fn ai_generate_twitch_category(
+    state: &Arc<AppState>,
+    prospect_type: &str,
+    category: &str,
+) -> String {
     let prompt = format!(
         r#"You are helping a video clipping agency find Twitch streamers as potential clients.
 
@@ -3494,8 +5669,13 @@ Prospect type: {prospect_type}
 Niche: {category}
 
 Return ONE Twitch game or category name (exactly as it appears on Twitch) that best matches
-this niche. The streamers in this category are likely to be content creators who'd pay for
-short-form clip editing ($300/month).
+this niche and the stated prospect type.
+
+Use this lens:
+- for content_creator / podcaster / educator: categories where creators likely need clipping or explainers
+- for clipper: categories where editors and clip operators often scout source creators
+- for creator_manager: broad creator-economy categories where managers scout or oversee creator output
+- for business_owner: brand-adjacent or product-demo-friendly categories
 
 If the niche is not gaming, pick the closest non-gaming Twitch category (e.g. "Just Chatting",
 "Science & Technology", "Music", "Art", "Fitness & Health", "Podcasts", "Software and Game Dev").
@@ -3508,7 +5688,9 @@ Return ONLY the category name, nothing else."#
         state.gemma_client.as_ref(),
         state.gemini_client.as_ref(),
         &prompt,
-    ).await {
+    )
+    .await
+    {
         Ok(t) => t.trim().trim_matches('"').trim_matches('\'').to_string(),
         Err(_) => category.to_string(),
     }
@@ -3523,7 +5705,17 @@ async fn ai_generate_linkedin_filters(
     let prompt = format!(
         r#"You are generating LinkedIn Sales Navigator search filters for a video clipping agency.
 
-The agency creates short-form clips (YouTube Shorts, Reels, TikTok) for content creators.
+The agency sells a broader production stack:
+- short-form clipping and repurposing
+- thumbnail production
+- Blender / Manim / LaTeX explainer scenes
+- narration and premium video add-ons
+
+The best short-term buyers are often:
+- clippers / short-form editors
+- creator managers / talent managers / agencies
+- small-to-mid creators who need clipping help
+
 They are looking for potential clients based on this description:
 
 "{description}"
@@ -3538,11 +5730,14 @@ Generate Sales Navigator filters that will find these people. Return ONLY valid 
 }}
 
 Rules:
-- job_titles: 3–6 titles. Use real LinkedIn job titles (e.g. "YouTuber", "Podcast Host", "Content Creator", "Online Course Creator", "Social Media Influencer")
-- industries: 2–4 industries from LinkedIn's list (e.g. "Online Media", "E-Learning", "Entertainment", "Broadcast Media", "Marketing and Advertising")
-- locations: 1–3 countries/regions (e.g. "United States", "United Kingdom", "Canada")
-- seniority: always ["OWNER", "PARTNER", "CXO"] for independent creators
-- company_sizes: always ["A", "B"] (1–50 employees — solo creators and small teams)
+- job_titles: 3–6 titles. Use real LinkedIn job titles.
+- If the description sounds like clippers/editors, prefer titles like "Video Editor", "Short Form Video Editor", "Content Repurposing Strategist", "Podcast Producer", "Creative Director", "Founder".
+- If the description sounds like creator managers/agencies, prefer titles like "Creator Manager", "Talent Manager", "Influencer Manager", "Partnerships Manager", "Social Media Manager", "Founder".
+- If the description sounds like direct creators, prefer titles like "YouTuber", "Podcast Host", "Content Creator", "Online Course Creator", "Streamer".
+- industries: 2–4 industries from LinkedIn's list, leaning toward media / creator economy / marketing / education when relevant.
+- locations: 1–3 countries/regions.
+- seniority: prefer ["OWNER", "PARTNER", "CXO", "DIRECTOR"] when the description implies agency owners or operators; otherwise keep it founder/operator-heavy.
+- company_sizes: default to ["A", "B"] (1–50 employees) unless the description clearly implies slightly larger agencies, then ["A", "B", "C"] is acceptable.
 
 Return ONLY the JSON, no explanation."#
     );
@@ -3552,18 +5747,23 @@ Return ONLY the JSON, no explanation."#
         state.gemma_client.as_ref(),
         state.gemini_client.as_ref(),
         &prompt,
-    ).await.map_err(|e| format!("LLM error: {}", e))?;
+    )
+    .await
+    .map_err(|e| format!("LLM error: {}", e))?;
 
-    let cleaned = text.trim()
-        .trim_start_matches("```json").trim_start_matches("```")
-        .trim_end_matches("```").trim();
+    let cleaned = text
+        .trim()
+        .trim_start_matches("```json")
+        .trim_start_matches("```")
+        .trim_end_matches("```")
+        .trim();
 
     #[derive(serde::Deserialize)]
     struct AiFilters {
-        job_titles:    Option<Vec<String>>,
-        industries:    Option<Vec<String>>,
-        locations:     Option<Vec<String>>,
-        seniority:     Option<Vec<String>>,
+        job_titles: Option<Vec<String>>,
+        industries: Option<Vec<String>>,
+        locations: Option<Vec<String>>,
+        seniority: Option<Vec<String>>,
         company_sizes: Option<Vec<String>>,
     }
 
@@ -3571,14 +5771,14 @@ Return ONLY the JSON, no explanation."#
         .map_err(|e| format!("JSON parse error: {} | raw: {}", e, cleaned))?;
 
     Ok(SmartSearchRequest {
-        description:   None, // already consumed
-        job_titles:    filters.job_titles,
-        industries:    filters.industries,
+        description: None, // already consumed
+        job_titles: filters.job_titles,
+        industries: filters.industries,
         company_sizes: filters.company_sizes,
-        locations:     filters.locations,
-        seniority:     filters.seniority,
-        max_profiles:  None,
-        list_url:      None,
+        locations: filters.locations,
+        seniority: filters.seniority,
+        max_profiles: None,
+        list_url: None,
     })
 }
 
@@ -3593,26 +5793,46 @@ async fn ai_score_linkedin_leads(state: &Arc<AppState>, job_id: uuid::Uuid) {
          WHERE platform = 'linkedin'
            AND (ai_score IS NULL OR ai_score = 0.5)
            AND phantombuster_job_id = $1
-         LIMIT 30"
+         LIMIT 30",
     )
     .bind(job_id)
     .fetch_all(&state.db_pool)
-    .await {
+    .await
+    {
         Ok(r) => r,
-        Err(e) => { tracing::warn!("LinkedIn scoring: DB error: {}", e); return; }
+        Err(e) => {
+            tracing::warn!("LinkedIn scoring: DB error: {}", e);
+            return;
+        }
     };
 
-    tracing::info!("📊 AI-scoring {} LinkedIn leads for job {}", rows.len(), job_id);
+    tracing::info!(
+        "📊 AI-scoring {} LinkedIn leads for job {}",
+        rows.len(),
+        job_id
+    );
 
     for row in &rows {
-        let id:          uuid::Uuid = row.get("id");
-        let name:        String     = row.get::<Option<String>, _>("display_name").unwrap_or_default();
-        let description: String     = row.get::<Option<String>, _>("channel_description").unwrap_or_default();
-        let audience:    i64        = row.get::<Option<i64>, _>("subscriber_count").unwrap_or(0);
-        let category:    String     = row.get::<Option<String>, _>("content_category").unwrap_or_default();
-        let job_title:   String     = row.get::<Option<String>, _>("job_title").unwrap_or_default();
-        let company:     String     = row.get::<Option<String>, _>("company_name").unwrap_or_default();
-        let seniority:   String     = row.get::<Option<String>, _>("seniority_level").unwrap_or_default();
+        let id: uuid::Uuid = row.get("id");
+        let name: String = row
+            .get::<Option<String>, _>("display_name")
+            .unwrap_or_default();
+        let description: String = row
+            .get::<Option<String>, _>("channel_description")
+            .unwrap_or_default();
+        let audience: i64 = row.get::<Option<i64>, _>("subscriber_count").unwrap_or(0);
+        let category: String = row
+            .get::<Option<String>, _>("content_category")
+            .unwrap_or_default();
+        let job_title: String = row
+            .get::<Option<String>, _>("job_title")
+            .unwrap_or_default();
+        let company: String = row
+            .get::<Option<String>, _>("company_name")
+            .unwrap_or_default();
+        let seniority: String = row
+            .get::<Option<String>, _>("seniority_level")
+            .unwrap_or_default();
 
         // Build a richer description from LinkedIn fields
         let enriched_desc = format!(
@@ -3620,19 +5840,28 @@ async fn ai_score_linkedin_leads(state: &Arc<AppState>, job_id: uuid::Uuid) {
             job_title, company, seniority, description
         );
 
-        let (score, reasoning, service, dm_creator, _) =
-            score_prospect_with_ai(state, &name, audience, &enriched_desc, &category, "linkedin_lead").await;
+        let (score, reasoning, service, dm_creator, _, x_dm, email_script) = score_prospect_with_ai(
+            state,
+            &name,
+            audience,
+            &enriched_desc,
+            &category,
+            "linkedin_lead",
+        )
+        .await;
 
         let _ = sqlx::query(
             "UPDATE prospects
              SET ai_score = $1, ai_reasoning = $2, dm_script_creator = $3,
-                 service_type = $4, updated_at = NOW()
-             WHERE id = $5"
+                 service_type = $4, x_dm_script = $5, email_script = $6, updated_at = NOW()
+             WHERE id = $7",
         )
         .bind(score)
         .bind(&reasoning)
         .bind(&dm_creator)
         .bind(&service)
+        .bind(&x_dm)
+        .bind(&email_script)
         .bind(id)
         .execute(&state.db_pool)
         .await;
@@ -3654,7 +5883,7 @@ async fn ai_score_linkedin_leads(state: &Arc<AppState>, job_id: uuid::Uuid) {
 
 #[derive(Debug, Deserialize)]
 struct AddChannelReq {
-    channel:    String,
+    channel: String,
     keyword_re: Option<String>,
 }
 
@@ -3663,25 +5892,31 @@ async fn telegram_list_channels(
 ) -> Json<serde_json::Value> {
     let rows = match sqlx::query(
         "SELECT id, channel, keyword_re, enabled, created_at
-         FROM telegram_watch_channels ORDER BY created_at ASC"
+         FROM telegram_watch_channels ORDER BY created_at ASC",
     )
     .fetch_all(&state.db_pool)
-    .await {
+    .await
+    {
         Ok(r) => r,
         Err(e) => return Json(json!({"success": false, "error": format!("DB error: {}", e)})),
     };
-    let channels: Vec<serde_json::Value> = rows.iter().map(|r| json!({
-        "id":         r.get::<i32, _>("id"),
-        "channel":    r.get::<String, _>("channel"),
-        "keyword_re": r.try_get::<Option<String>, _>("keyword_re").ok().flatten(),
-        "enabled":    r.get::<bool, _>("enabled"),
-    })).collect();
+    let channels: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| {
+            json!({
+                "id":         r.get::<i32, _>("id"),
+                "channel":    r.get::<String, _>("channel"),
+                "keyword_re": r.try_get::<Option<String>, _>("keyword_re").ok().flatten(),
+                "enabled":    r.get::<bool, _>("enabled"),
+            })
+        })
+        .collect();
     Json(json!({"success": true, "channels": channels}))
 }
 
 async fn telegram_add_channel(
     Extension(state): Extension<Arc<AppState>>,
-    Json(req):        Json<AddChannelReq>,
+    Json(req): Json<AddChannelReq>,
 ) -> Json<serde_json::Value> {
     let channel = req.channel.trim().trim_start_matches('@').to_string();
     if channel.is_empty() {
@@ -3691,23 +5926,27 @@ async fn telegram_add_channel(
         "INSERT INTO telegram_watch_channels (channel, keyword_re)
          VALUES ($1, $2)
          ON CONFLICT (channel) DO UPDATE SET keyword_re = EXCLUDED.keyword_re, enabled = TRUE
-         RETURNING id"
+         RETURNING id",
     )
     .bind(&channel)
     .bind(req.keyword_re.as_deref())
     .fetch_one(&state.db_pool)
-    .await {
+    .await
+    {
         Ok(_) => Json(json!({"success": true, "channel": channel})),
         Err(e) => Json(json!({"success": false, "error": format!("DB error: {}", e)})),
     }
 }
 
 async fn telegram_delete_channel(
-    Extension(state):   Extension<Arc<AppState>>,
-    Path(id):           Path<i32>,
+    Extension(state): Extension<Arc<AppState>>,
+    Path(id): Path<i32>,
 ) -> Json<serde_json::Value> {
     match sqlx::query("DELETE FROM telegram_watch_channels WHERE id = $1")
-        .bind(id).execute(&state.db_pool).await {
+        .bind(id)
+        .execute(&state.db_pool)
+        .await
+    {
         Ok(_) => Json(json!({"success": true})),
         Err(e) => Json(json!({"success": false, "error": format!("DB error: {}", e)})),
     }
@@ -3716,13 +5955,13 @@ async fn telegram_delete_channel(
 #[derive(Debug, Deserialize)]
 struct ListOpportunitiesQuery {
     status: Option<String>,
-    limit:  Option<i64>,
+    limit: Option<i64>,
 }
 
 async fn telegram_list_opportunities(
-    Extension(state):  Extension<Arc<AppState>>,
+    Extension(state): Extension<Arc<AppState>>,
     Extension(claims): Extension<Claims>,
-    Query(q):          Query<ListOpportunitiesQuery>,
+    Query(q): Query<ListOpportunitiesQuery>,
 ) -> Json<serde_json::Value> {
     let user_id: i32 = claims.sub.parse().unwrap_or(0);
     let limit = q.limit.unwrap_or(50).clamp(1, 200);
@@ -3731,7 +5970,7 @@ async fn telegram_list_opportunities(
         "SELECT id, channel, message_id, sender, message, matched_kw, link,
                 score, score_reason, service_type, status, source, created_at
          FROM telegram_opportunities
-         WHERE user_id = $1"
+         WHERE user_id = $1",
     );
     if q.status.is_some() {
         sql.push_str(" AND status = $2");
@@ -3740,27 +5979,39 @@ async fn telegram_list_opportunities(
     sql.push_str(&format!(" LIMIT {}", limit));
 
     let rows = if let Some(s) = q.status.as_deref() {
-        sqlx::query(&sql).bind(user_id).bind(s).fetch_all(&state.db_pool).await
+        sqlx::query(&sql)
+            .bind(user_id)
+            .bind(s)
+            .fetch_all(&state.db_pool)
+            .await
     } else {
-        sqlx::query(&sql).bind(user_id).fetch_all(&state.db_pool).await
+        sqlx::query(&sql)
+            .bind(user_id)
+            .fetch_all(&state.db_pool)
+            .await
     };
     let rows = match rows {
         Ok(r) => r,
         Err(e) => return Json(json!({"success": false, "error": format!("DB error: {}", e)})),
     };
 
-    let items: Vec<serde_json::Value> = rows.iter().map(|r| json!({
-        "id":           r.get::<uuid::Uuid, _>("id").to_string(),
-        "channel":      r.get::<String, _>("channel"),
-        "message":      r.get::<String, _>("message"),
-        "sender":       r.try_get::<Option<String>, _>("sender").ok().flatten(),
-        "link":         r.try_get::<Option<String>, _>("link").ok().flatten(),
-        "score":        r.try_get::<Option<i32>, _>("score").ok().flatten(),
-        "score_reason": r.try_get::<Option<String>, _>("score_reason").ok().flatten(),
-        "service_type": r.try_get::<Option<String>, _>("service_type").ok().flatten(),
-        "status":       r.get::<String, _>("status"),
-        "source":       r.get::<String, _>("source"),
-    })).collect();
+    let items: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| {
+            json!({
+                "id":           r.get::<uuid::Uuid, _>("id").to_string(),
+                "channel":      r.get::<String, _>("channel"),
+                "message":      r.get::<String, _>("message"),
+                "sender":       r.try_get::<Option<String>, _>("sender").ok().flatten(),
+                "link":         r.try_get::<Option<String>, _>("link").ok().flatten(),
+                "score":        r.try_get::<Option<i32>, _>("score").ok().flatten(),
+                "score_reason": r.try_get::<Option<String>, _>("score_reason").ok().flatten(),
+                "service_type": r.try_get::<Option<String>, _>("service_type").ok().flatten(),
+                "status":       r.get::<String, _>("status"),
+                "source":       r.get::<String, _>("source"),
+            })
+        })
+        .collect();
     Json(json!({"success": true, "opportunities": items, "count": items.len()}))
 }
 
@@ -3768,14 +6019,14 @@ async fn telegram_list_opportunities(
 struct AddOpportunityReq {
     channel: String,
     message: String,
-    sender:  Option<String>,
-    link:    Option<String>,
+    sender: Option<String>,
+    link: Option<String>,
 }
 
 async fn telegram_add_opportunity_manual(
-    Extension(state):  Extension<Arc<AppState>>,
+    Extension(state): Extension<Arc<AppState>>,
     Extension(claims): Extension<Claims>,
-    Json(req):         Json<AddOpportunityReq>,
+    Json(req): Json<AddOpportunityReq>,
 ) -> Json<serde_json::Value> {
     let user_id: i32 = claims.sub.parse().unwrap_or(0);
     let channel = req.channel.trim().trim_start_matches('@').to_string();
@@ -3792,7 +6043,7 @@ async fn telegram_add_opportunity_manual(
            (channel, message, sender, link, score, score_reason, service_type,
             status, source, user_id)
          VALUES ($1, $2, $3, $4, $5, $6, $7, 'new', 'manual', $8)
-         RETURNING id"
+         RETURNING id",
     )
     .bind(&channel)
     .bind(&req.message)
@@ -3803,7 +6054,8 @@ async fn telegram_add_opportunity_manual(
     .bind(service.as_deref())
     .bind(user_id)
     .fetch_one(&state.db_pool)
-    .await {
+    .await
+    {
         Ok(id) => id,
         Err(e) => return Json(json!({"success": false, "error": format!("DB error: {}", e)})),
     };
@@ -3823,10 +6075,10 @@ struct UpdateOpportunityReq {
 }
 
 async fn telegram_update_opportunity(
-    Extension(state):  Extension<Arc<AppState>>,
+    Extension(state): Extension<Arc<AppState>>,
     Extension(claims): Extension<Claims>,
-    Path(id):          Path<uuid::Uuid>,
-    Json(req):         Json<UpdateOpportunityReq>,
+    Path(id): Path<uuid::Uuid>,
+    Json(req): Json<UpdateOpportunityReq>,
 ) -> Json<serde_json::Value> {
     let user_id: i32 = claims.sub.parse().unwrap_or(0);
     let valid = ["new", "contacted", "won", "lost", "ignored"];
@@ -3834,19 +6086,22 @@ async fn telegram_update_opportunity(
         return Json(json!({"success": false, "error": "status is required"}));
     };
     if !valid.contains(&status.as_str()) {
-        return Json(json!({"success": false, "error": format!("status must be one of: {}", valid.join(", "))}));
+        return Json(
+            json!({"success": false, "error": format!("status must be one of: {}", valid.join(", "))}),
+        );
     }
     match sqlx::query(
         "UPDATE telegram_opportunities
          SET status = $1, updated_at = NOW()
-         WHERE id = $2 AND user_id = $3"
+         WHERE id = $2 AND user_id = $3",
     )
     .bind(&status)
     .bind(id)
     .bind(user_id)
     .execute(&state.db_pool)
-    .await {
-        Ok(_)  => Json(json!({"success": true})),
+    .await
+    {
+        Ok(_) => Json(json!({"success": true})),
         Err(e) => Json(json!({"success": false, "error": format!("DB error: {}", e)})),
     }
 }
@@ -3854,7 +6109,7 @@ async fn telegram_update_opportunity(
 /// AI-score a pasted Telegram message as a potential paid gig.
 /// Mirrors the IG lead scorer — same service menu, same 0-100 scale.
 async fn score_telegram_opportunity(
-    state:   &Arc<AppState>,
+    state: &Arc<AppState>,
     channel: &str,
     message: &str,
 ) -> (i32, String, Option<String>) {
@@ -3884,7 +6139,7 @@ Score guidelines:
 Return ONLY valid JSON (no markdown):
 {{"score": 75, "service": "clipping", "reason": "Podcaster says 'need someone to cut my 2hr episodes into TikToks, DM for budget'"}}
 
-`service` MUST be one of: clipping, animations, thumbnails, ugc, full_stack — or null if score < 40."#,
+`service` MUST be one of: clipping, thumbnails, product_mockup, landing_page, education, three_d_scene, voice_audio, ugc, agency_bundle, full_stack — or null if score < 40."#,
         channel = channel,
         message = message,
     );
@@ -3894,25 +6149,40 @@ Return ONLY valid JSON (no markdown):
         state.gemma_client.as_ref(),
         state.gemini_client.as_ref(),
         &prompt,
-    ).await {
+    )
+    .await
+    {
         Ok(text) => text,
-        Err(_)   => return (0, "scoring failed".to_string(), None),
+        Err(_) => return (0, "scoring failed".to_string(), None),
     };
 
-    let cleaned = response.trim()
-        .trim_start_matches("```json").trim_start_matches("```")
-        .trim_end_matches("```").trim();
+    let cleaned = response
+        .trim()
+        .trim_start_matches("```json")
+        .trim_start_matches("```")
+        .trim_end_matches("```")
+        .trim();
 
     let v: serde_json::Value = match serde_json::from_str(cleaned) {
         Ok(v) => v,
         Err(_) => return (0, "parse failed".to_string(), None),
     };
-    let score  = v.get("score").and_then(|s| s.as_i64()).unwrap_or(0) as i32;
-    let reason = v.get("reason").and_then(|r| r.as_str()).unwrap_or("").to_string();
-    let svc    = v.get("service").and_then(|s| s.as_str()).map(|s| s.to_lowercase());
-    let service = svc.and_then(|s| match s.as_str() {
-        "clipping" | "animations" | "thumbnails" | "ugc" | "product_mockup" | "landing_page" | "full_stack" => Some(s),
-        _ => None,
+    let score = v.get("score").and_then(|s| s.as_i64()).unwrap_or(0) as i32;
+    let reason = v
+        .get("reason")
+        .and_then(|r| r.as_str())
+        .unwrap_or("")
+        .to_string();
+    let svc = v
+        .get("service")
+        .and_then(|s| s.as_str())
+        .map(|s| s.to_lowercase());
+    let service = svc.and_then(|s| {
+        if is_valid_revenue_service(&s) {
+            Some(normalize_revenue_service(&s).to_string())
+        } else {
+            None
+        }
     });
     (score, reason, service)
 }
@@ -3932,26 +6202,32 @@ Return ONLY valid JSON (no markdown):
 //   Thumbnails / basic Blender:             $9-$29
 
 pub fn unlock_price_for(service: Option<&str>, has_website: bool) -> f64 {
+    let service = service.map(normalize_revenue_service);
     if has_website {
         // Agent-generated comprehensive video (script + scenes + voiceover).
         // Full production value justifies mid-market pricing.
         match service {
-            Some("full_stack")       => 497.00, // Most ambitious: long-form brand video
-            Some("landing_page")     => 297.00, // Animated landing page presentation
-            Some("product_mockup")   => 197.00, // Product showcase video
-            Some("ugc")              => 197.00, // UGC-style promo video
-            Some("animations")       => 147.00, // Branded animation package
-            _                        => 197.00, // Default: scene-based branded video
+            Some("full_stack") | Some("agency_bundle") => 497.00, // Most ambitious: mixed production pack
+            Some("landing_page") => 297.00, // Animated landing page presentation
+            Some("product_mockup") => 197.00, // Product showcase video
+            Some("ugc") => 197.00,          // UGC-style promo video
+            Some("education") => 197.00,    // Manim/LaTeX explainer package
+            Some("three_d_scene") => 247.00, // Blender scene / product reveal
+            Some("voice_audio") => 97.00,   // Narrated audio/video summary
+            Some("clipping") => 147.00,     // Clip-pack sample
+            _ => 197.00,                    // Default: scene-based branded video
         }
     } else {
         // Single-shot Blender render (faster, cheaper to produce).
         match service {
-            Some("landing_page")     => 97.00,
-            Some("product_mockup")   => 97.00,
-            Some("animations")       => 49.00,
-            Some("ugc") | Some("full_stack") => 49.00,
-            Some("thumbnails")       => 19.00,
-            _                        => 29.00,
+            Some("landing_page") => 97.00,
+            Some("product_mockup") => 97.00,
+            Some("education") | Some("three_d_scene") => 97.00,
+            Some("voice_audio") => 49.00,
+            Some("clipping") => 49.00,
+            Some("ugc") | Some("agency_bundle") | Some("full_stack") => 49.00,
+            Some("thumbnails") => 19.00,
+            _ => 29.00,
         }
     }
 }
@@ -3972,7 +6248,31 @@ async fn run_agent_video_for_lead(
     lead_bio: &str,
     state: Arc<AppState>,
 ) {
-    tracing::info!("🎬 Agent video gen for lead delivery {} — URL: {}", delivery_id, website_url);
+    let workflow_id = crate::handlers::admin::ensure_delivery_workflow(&state, delivery_id)
+        .await
+        .ok();
+    let workflow_runtime = crate::services::WorkflowRuntime::new(state.db_pool.clone());
+
+    tracing::info!(
+        "🎬 Agent video gen for lead delivery {} — URL: {}",
+        delivery_id,
+        website_url
+    );
+
+    if let Some(workflow_id) = workflow_id {
+        let _ = workflow_runtime
+            .heartbeat(
+                workflow_id,
+                crate::services::WorkflowStatus::Planning,
+                Some("lead_agent_video_started"),
+                "Lead sample video workflow started and is preparing the first agent attempt.",
+                json!({
+                    "delivery_id": delivery_id,
+                    "website_url": website_url,
+                }),
+            )
+            .await;
+    }
 
     let full_path = format!("outputs/lead_full_{}.mp4", delivery_id);
     let preview_path = format!("outputs/lead_preview_{}.mp4", delivery_id);
@@ -4014,21 +6314,35 @@ Deliverables (MUST produce both files):
 
 Make it professional — this is pitched to a paying client. No placeholder content.
 Output file paths clearly in your final response so the delivery pipeline can find them."#,
-        website_url  = website_url,
-        lead_name    = lead_name,
-        lead_bio     = lead_bio.chars().take(200).collect::<String>(),
-        full_path    = full_path,
+        website_url = website_url,
+        lead_name = lead_name,
+        lead_bio = lead_bio.chars().take(200).collect::<String>(),
+        full_path = full_path,
         preview_path = preview_path,
-        delivery_id  = delivery_id,
+        delivery_id = delivery_id,
     );
     let prompt = base_prompt.clone();
 
-    let gemini_client = match state.video_gemini_client.as_ref().or(state.gemini_client.as_ref()) {
+    let gemini_client = match state
+        .video_gemini_client
+        .as_ref()
+        .or(state.gemini_client.as_ref())
+    {
         Some(c) => Arc::new(c.clone()),
         None => {
             tracing::error!("No Gemini client available for agent video gen");
             let _ = sqlx::query("UPDATE deliveries SET status = 'failed', error_message = 'No LLM client available' WHERE id = $1")
                 .bind(delivery_id).execute(&state.db_pool).await;
+            if let Some(workflow_id) = workflow_id {
+                let _ = workflow_runtime
+                    .mark_failed(
+                        workflow_id,
+                        Some("lead_agent_video_started"),
+                        "No LLM client available for the lead sample workflow.",
+                        None,
+                    )
+                    .await;
+            }
             return;
         }
     };
@@ -4040,31 +6354,60 @@ Output file paths clearly in your final response so the delivery pipeline can fi
     // Each retry prepends the QA hint to the prompt so the agent can
     // adjust specifically for what the reviewer flagged.
     let mut current_prompt = prompt.clone();
-    let mut best_full: Option<String>    = None;
+    let mut best_full: Option<String> = None;
     let mut best_preview: Option<String> = None;
-    let mut best_score: i32              = -1;
-    let mut best_feedback: String        = String::new();
-    let mut retries_used: i32            = 0;
+    let mut best_score: i32 = -1;
+    let mut best_feedback: String = String::new();
+    let mut retries_used: i32 = 0;
 
     for attempt in 0..AGENT_VIDEO_MAX_RETRIES {
         let session_id = format!("lead-sample-{}-try{}", delivery_id, attempt);
-        tracing::info!("🎬 Agent attempt {}/{} for delivery {}", attempt + 1, AGENT_VIDEO_MAX_RETRIES, delivery_id);
+        tracing::info!(
+            "🎬 Agent attempt {}/{} for delivery {}",
+            attempt + 1,
+            AGENT_VIDEO_MAX_RETRIES,
+            delivery_id
+        );
 
-        let agent_result = agent.chat(
-            &current_prompt,
-            &session_id,
-            String::new(),
+        if let Some(workflow_id) = workflow_id {
+            let _ = workflow_runtime
+                .heartbeat(
+                    workflow_id,
+                    crate::services::WorkflowStatus::Running,
+                    Some("lead_agent_attempt"),
+                    &format!(
+                        "Lead sample workflow is running agent attempt {} of {}.",
+                        attempt + 1,
+                        AGENT_VIDEO_MAX_RETRIES
+                    ),
+                    json!({
+                        "delivery_id": delivery_id,
+                        "attempt": attempt + 1,
+                        "max_attempts": AGENT_VIDEO_MAX_RETRIES,
+                    }),
+                )
+                .await;
+        }
+
+        let agent_result = agent
+            .chat(
+                &current_prompt,
+                &session_id,
+                String::new(),
             state.clone(),
             state.job_manager.clone(),
             None,
-        ).await;
+            None,
+        )
+            .await;
 
         // Collect the actual output paths the agent produced
         let (full_produced, preview_produced) = locate_agent_outputs(
             &agent_result.as_deref().unwrap_or(""),
             &full_path,
             &preview_path,
-        ).await;
+        )
+        .await;
 
         // Review the full video against the original brief
         let review = if let Some(ref full) = full_produced {
@@ -4074,13 +6417,16 @@ Output file paths clearly in your final response so the delivery pipeline can fi
                 &base_prompt,
                 "agent_lead_video",
                 Some(delivery_id),
-            ).await
+            )
+            .await
         } else {
             crate::render_review::ReviewResult {
                 pass: false,
                 score: 0,
                 feedback: "Agent did not produce expected full video output".to_string(),
-                retry_hint: Some("Produce the full video at the exact path specified in the prompt".to_string()),
+                retry_hint: Some(
+                    "Produce the full video at the exact path specified in the prompt".to_string(),
+                ),
             }
         };
 
@@ -4088,20 +6434,46 @@ Output file paths clearly in your final response so the delivery pipeline can fi
 
         // Track the best attempt so we always ship SOMETHING even if no attempt passes
         if review.score > best_score {
-            best_score    = review.score;
-            best_full     = full_produced.clone();
-            best_preview  = preview_produced.clone();
+            best_score = review.score;
+            best_full = full_produced.clone();
+            best_preview = preview_produced.clone();
             best_feedback = review.feedback.clone();
         }
 
         if review.pass {
-            tracing::info!("✅ Agent video PASSED review on attempt {} (score {})", attempt + 1, review.score);
+            tracing::info!(
+                "✅ Agent video PASSED review on attempt {} (score {})",
+                attempt + 1,
+                review.score
+            );
+            if let Some(workflow_id) = workflow_id {
+                let _ = workflow_runtime
+                    .heartbeat(
+                        workflow_id,
+                        crate::services::WorkflowStatus::Running,
+                        Some("lead_agent_review_passed"),
+                        &format!(
+                            "Lead sample workflow passed QA review on attempt {} with score {}.",
+                            attempt + 1,
+                            review.score
+                        ),
+                        json!({
+                            "delivery_id": delivery_id,
+                            "attempt": attempt + 1,
+                            "score": review.score,
+                        }),
+                    )
+                    .await;
+            }
             break;
         }
 
         // Not passing — prepare the next attempt with accumulated feedback
         if attempt + 1 < AGENT_VIDEO_MAX_RETRIES {
-            let hint = review.retry_hint.clone().unwrap_or_else(|| review.feedback.clone());
+            let hint = review
+                .retry_hint
+                .clone()
+                .unwrap_or_else(|| review.feedback.clone());
             tracing::warn!("🔄 Retrying (score {}): {}", review.score, hint);
             current_prompt = format!(
                 "PREVIOUS ATTEMPT FAILED QA REVIEW (score {}/10).\n\
@@ -4111,15 +6483,54 @@ Output file paths clearly in your final response so the delivery pipeline can fi
                 review.score, review.feedback, hint, base_prompt,
             );
         } else {
-            tracing::warn!("⚠️ Hit max retries ({}) for delivery {} — shipping best attempt (score {})",
-                AGENT_VIDEO_MAX_RETRIES, delivery_id, best_score);
+            tracing::warn!(
+                "⚠️ Hit max retries ({}) for delivery {} — shipping best attempt (score {})",
+                AGENT_VIDEO_MAX_RETRIES,
+                delivery_id,
+                best_score
+            );
+            if let Some(workflow_id) = workflow_id {
+                let _ = workflow_runtime
+                    .heartbeat(
+                        workflow_id,
+                        crate::services::WorkflowStatus::Retrying,
+                        Some("lead_agent_retry_cap_reached"),
+                        &format!(
+                            "Lead sample workflow reached the retry cap and is shipping the best reviewed attempt with score {}.",
+                            best_score
+                        ),
+                        json!({
+                            "delivery_id": delivery_id,
+                            "score": best_score,
+                            "retries_used": attempt + 1,
+                        }),
+                    )
+                    .await;
+            }
         }
     }
 
     // Upload whatever we ended up with. If even the best attempt produced
     // no file, fall back to the direct Blender render path.
     let Some(full_path_final) = best_full else {
-        tracing::warn!("No usable output from {} attempts — falling back to direct Blender", retries_used + 1);
+        tracing::warn!(
+            "No usable output from {} attempts — falling back to direct Blender",
+            retries_used + 1
+        );
+        if let Some(workflow_id) = workflow_id {
+            let _ = workflow_runtime
+                .heartbeat(
+                    workflow_id,
+                    crate::services::WorkflowStatus::Retrying,
+                    Some("lead_agent_fallback_to_render"),
+                    "Lead sample workflow did not produce a usable full video, so it is falling back to the direct delivery render path.",
+                    json!({
+                        "delivery_id": delivery_id,
+                        "retries_used": retries_used + 1,
+                    }),
+                )
+                .await;
+        }
         crate::handlers::admin::run_delivery_job(delivery_id, state).await;
         return;
     };
@@ -4131,28 +6542,63 @@ Output file paths clearly in your final response so the delivery pipeline can fi
             let _ = sqlx::query(
                 "UPDATE deliveries SET status = 'failed', error_message = 'R2 not configured' WHERE id = $1"
             ).bind(delivery_id).execute(&state.db_pool).await;
+            if let Some(workflow_id) = workflow_id {
+                let _ = workflow_runtime
+                    .mark_failed(
+                        workflow_id,
+                        Some("lead_agent_upload"),
+                        "R2 is not configured for lead sample uploads.",
+                        None,
+                    )
+                    .await;
+            }
             return;
         }
     };
 
     // Upload full clean HD video
-    let full_url = match r2.upload_file(&full_path_final, &format!("deliveries/{}/full.mp4", delivery_id)).await {
+    let full_url = match r2
+        .upload_file(
+            &full_path_final,
+            &format!("deliveries/{}/full.mp4", delivery_id),
+        )
+        .await
+    {
         Ok(u) => u,
         Err(e) => {
             tracing::error!("Failed to upload full video: {e}");
             let _ = sqlx::query(
-                "UPDATE deliveries SET status = 'failed', error_message = $1 WHERE id = $2"
-            ).bind(format!("R2 upload failed: {e}")).bind(delivery_id).execute(&state.db_pool).await;
+                "UPDATE deliveries SET status = 'failed', error_message = $1 WHERE id = $2",
+            )
+            .bind(format!("R2 upload failed: {e}"))
+            .bind(delivery_id)
+            .execute(&state.db_pool)
+            .await;
+            if let Some(workflow_id) = workflow_id {
+                let _ = workflow_runtime
+                    .mark_failed(
+                        workflow_id,
+                        Some("lead_agent_upload"),
+                        &format!("Lead sample full-video upload failed: {e}"),
+                        None,
+                    )
+                    .await;
+            }
             return;
         }
     };
 
     // Upload preview (watermarked) — fall back to full video if preview wasn't produced
     let preview_url = if let Some(pp) = best_preview.as_ref() {
-        match r2.upload_file(pp, &format!("deliveries/{}/preview.mp4", delivery_id)).await {
+        match r2
+            .upload_file(pp, &format!("deliveries/{}/preview.mp4", delivery_id))
+            .await
+        {
             Ok(u) => Some(u),
             Err(e) => {
-                tracing::warn!("Preview upload failed: {e} — clients will see full video as preview");
+                tracing::warn!(
+                    "Preview upload failed: {e} — clients will see full video as preview"
+                );
                 None
             }
         }
@@ -4161,7 +6607,12 @@ Output file paths clearly in your final response so the delivery pipeline can fi
     };
 
     let qa_note: Option<String> = if best_score < 6 {
-        Some(format!("QA final score {} after {} retries: {}", best_score, retries_used + 1, best_feedback))
+        Some(format!(
+            "QA final score {} after {} retries: {}",
+            best_score,
+            retries_used + 1,
+            best_feedback
+        ))
     } else {
         None
     };
@@ -4169,7 +6620,7 @@ Output file paths clearly in your final response so the delivery pipeline can fi
     let _ = sqlx::query(
         "UPDATE deliveries SET status='completed', output_r2_url=$1, preview_r2_url=$2,
          qa_retry_count=$3, final_qa_score=$4, error_message=$5, completed_at=NOW()
-         WHERE id=$6"
+         WHERE id=$6",
     )
     .bind(&full_url)
     .bind(preview_url.as_deref())
@@ -4180,8 +6631,31 @@ Output file paths clearly in your final response so the delivery pipeline can fi
     .execute(&state.db_pool)
     .await;
 
-    tracing::info!("📦 Delivery {} complete — full={}, preview={:?}, score={}, retries={}",
-        delivery_id, full_url, preview_url, best_score, retries_used + 1);
+    if let Some(workflow_id) = workflow_id {
+        let _ = workflow_runtime
+            .mark_completed(
+                workflow_id,
+                Some("lead_agent_delivery_uploaded"),
+                "Lead sample workflow completed with uploaded delivery artifacts.",
+                json!({
+                    "delivery_id": delivery_id,
+                    "output_r2_url": full_url,
+                    "preview_r2_url": preview_url,
+                    "qa_retry_count": retries_used + 1,
+                    "final_qa_score": best_score,
+                }),
+            )
+            .await;
+    }
+
+    tracing::info!(
+        "📦 Delivery {} complete — full={}, preview={:?}, score={}, retries={}",
+        delivery_id,
+        full_url,
+        preview_url,
+        best_score,
+        retries_used + 1
+    );
 }
 
 /// Find the full + preview output files the agent produced. Tries the
@@ -4207,19 +6681,10 @@ async fn locate_agent_outputs(
 
 fn find_mp4_in_response(response: &str, filter: impl Fn(&str) -> bool) -> Option<String> {
     for word in response.split_whitespace() {
-        let clean = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '/' && c != '.' && c != '_' && c != '-');
+        let clean = word.trim_matches(|c: char| {
+            !c.is_alphanumeric() && c != '/' && c != '.' && c != '_' && c != '-'
+        });
         if clean.ends_with(".mp4") && clean.contains('/') && filter(clean) {
-            return Some(clean.to_string());
-        }
-    }
-    None
-}
-
-fn extract_output_path_from_response(response: &str) -> Option<String> {
-    // Look for file paths in the agent's response
-    for word in response.split_whitespace() {
-        let clean = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '/' && c != '.' && c != '_' && c != '-');
-        if clean.ends_with(".mp4") && clean.contains('/') {
             return Some(clean.to_string());
         }
     }
@@ -4236,7 +6701,10 @@ fn extract_output_path_from_response(response: &str) -> Option<String> {
 async fn try_generate_image(state: &Arc<AppState>, prompt: &str) -> Option<String> {
     let gemini = state.gemini_client.as_ref()?;
 
-    let bytes = match gemini.generate_image(prompt, Some("16:9"), None, None).await {
+    let bytes = match gemini
+        .generate_image(prompt, Some("16:9"), None, None)
+        .await
+    {
         Ok(b) => b,
         Err(e) => {
             tracing::warn!("try_generate_image: Gemini call failed: {}", e);
@@ -4246,7 +6714,10 @@ async fn try_generate_image(state: &Arc<AppState>, prompt: &str) -> Option<Strin
 
     // Persist locally long enough to hand to R2's file-based upload API.
     // outputs/ is gitignored + auto-cleaned.
-    let local_path = format!("outputs/sample_gen_{}.png", chrono::Utc::now().timestamp_millis());
+    let local_path = format!(
+        "outputs/sample_gen_{}.png",
+        chrono::Utc::now().timestamp_millis()
+    );
     if let Err(e) = tokio::fs::write(&local_path, &bytes).await {
         tracing::warn!("try_generate_image: local write failed: {}", e);
         return None;
@@ -4291,7 +6762,9 @@ pub async fn fetch_landing_page_hero(url: &str) -> Option<String> {
         .ok()?;
 
     let resp = client.get(url).send().await.ok()?;
-    if !resp.status().is_success() { return None; }
+    if !resp.status().is_success() {
+        return None;
+    }
     let html = resp.text().await.ok()?;
 
     // Priority 1: og:image meta tag.
@@ -4327,7 +6800,9 @@ fn extract_meta_content(html: &str, key: &str) -> Option<String> {
     let start = window.to_lowercase().find("content=")?;
     let after = &window[start + "content=".len()..];
     let quote = after.chars().next()?;
-    if quote != '"' && quote != '\'' { return None; }
+    if quote != '"' && quote != '\'' {
+        return None;
+    }
     let rest = &after[1..];
     let end = rest.find(quote)?;
     Some(rest[..end].to_string())
@@ -4366,10 +6841,10 @@ struct UpdateServiceTypeRequest {
 }
 
 async fn instagram_update_service_type(
-    Extension(state):  Extension<Arc<AppState>>,
+    Extension(state): Extension<Arc<AppState>>,
     Extension(claims): Extension<Claims>,
-    Path(id):          Path<uuid::Uuid>,
-    Json(req):         Json<UpdateServiceTypeRequest>,
+    Path(id): Path<uuid::Uuid>,
+    Json(req): Json<UpdateServiceTypeRequest>,
 ) -> Json<serde_json::Value> {
     let user_id: i32 = claims.sub.parse().unwrap_or(0);
 
@@ -4377,26 +6852,30 @@ async fn instagram_update_service_type(
     // AI's default. Anything else must be one of the known service tags.
     let service: Option<String> = match req.service_type.as_deref() {
         None | Some("") => None,
-        Some(s) => match s {
-            "clipping" | "animations" | "thumbnails" | "ugc"
-            | "product_mockup" | "landing_page" | "full_stack" => Some(s.to_string()),
-            _ => return Json(json!({
-                "success": false,
-                "error":   format!("service_type must be one of: clipping, animations, thumbnails, ugc, product_mockup, landing_page, full_stack (got: {})", s),
-            })),
-        },
+        Some(s) => {
+            let normalized = normalize_revenue_service(s);
+            if is_valid_revenue_service(normalized) {
+                Some(normalized.to_string())
+            } else {
+                return Json(json!({
+                    "success": false,
+                    "error":   format!("service_type must be one of: clipping, thumbnails, product_mockup, landing_page, education, three_d_scene, voice_audio, ugc, agency_bundle, full_stack (got: {})", s),
+                }))
+            }
+        }
     };
 
     match sqlx::query(
         "UPDATE instagram_leads SET service_type = $1, updated_at = NOW()
-         WHERE id = $2 AND user_id = $3"
+         WHERE id = $2 AND user_id = $3",
     )
     .bind(service.as_deref())
     .bind(id)
     .bind(user_id)
     .execute(&state.db_pool)
-    .await {
-        Ok(_)  => Json(json!({"success": true, "service_type": service})),
+    .await
+    {
+        Ok(_) => Json(json!({"success": true, "service_type": service})),
         Err(e) => Json(json!({"success": false, "error": format!("DB error: {}", e)})),
     }
 }
@@ -4409,7 +6888,7 @@ async fn instagram_update_service_type(
 /// MTProto watcher in src/telegram_client.rs can score inbound messages
 /// with the same AI pass as the manual-entry form.
 pub async fn score_telegram_opportunity_public(
-    state:   &Arc<AppState>,
+    state: &Arc<AppState>,
     channel: &str,
     message: &str,
 ) -> (i32, String, Option<String>) {
@@ -4421,13 +6900,257 @@ struct TelegramLoginStartReq {
     phone: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct TelegramDiscoverReq {
+    queries: Vec<String>,
+    limit_per_query: Option<i32>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TelegramDiscoveredQuery {
+    status: Option<String>,
+    limit: Option<i64>,
+}
+
+async fn telegram_discover_channels(
+    Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
+    Json(req): Json<TelegramDiscoverReq>,
+) -> Json<serde_json::Value> {
+    let user_id = claims.sub.parse::<i32>().ok();
+    let queries: Vec<String> = req
+        .queries
+        .into_iter()
+        .map(|q| q.trim().to_string())
+        .filter(|q| !q.is_empty())
+        .take(12)
+        .collect();
+
+    if queries.is_empty() {
+        return Json(json!({"success": false, "error": "Provide at least one Telegram search query."}));
+    }
+
+    let limit_per_query = req.limit_per_query.unwrap_or(15).clamp(1, 50);
+    let run_id = create_prospect_agent_run(
+        &state,
+        user_id,
+        "telegram_public_discovery",
+        "Use the authorized MTProto user session to discover public Telegram channels/groups, score revenue fit, and create watch-channel candidates.",
+        json!({"queries": queries, "limit_per_query": limit_per_query}),
+    )
+    .await;
+
+    checkpoint_prospect_agent_run(
+        &state,
+        run_id,
+        "planned",
+        json!({
+            "queries": queries,
+            "next_steps": ["mtproto_contacts_search", "score_channels", "persist_candidates", "suggest_watch_channels"]
+        }),
+        Some("Telegram public discovery requires a logged-in MTProto user session; Bot API cannot do global public search."),
+    )
+    .await;
+
+    let discovered = match crate::telegram_client::discover_public_channels(
+        &state,
+        queries.clone(),
+        limit_per_query,
+    )
+    .await
+    {
+        Ok(channels) => channels,
+        Err(e) => {
+            complete_prospect_agent_run(
+                &state,
+                run_id,
+                "failed",
+                json!({"error": e}),
+                Some("Telegram MTProto discovery failed."),
+            )
+            .await;
+            return Json(json!({"success": false, "error": e}));
+        }
+    };
+
+    checkpoint_prospect_agent_run(
+        &state,
+        run_id,
+        "mtproto_contacts_search",
+        json!({"raw_candidates": discovered.len()}),
+        Some("Telegram contacts.search returned public channel/group candidates."),
+    )
+    .await;
+
+    let mut saved = 0usize;
+    for candidate in discovered {
+        let category = if candidate.is_megagroup {
+            "telegram group"
+        } else {
+            "telegram channel"
+        };
+        let description = format!(
+            "Telegram {} @{} {} participants. Discovered from query '{}'.",
+            category,
+            candidate.username.as_deref().unwrap_or("unknown"),
+            candidate.participants_count.unwrap_or(0),
+            candidate.query
+        );
+        let (score, reason, service, _, _, _, _) = score_prospect_with_ai(
+            &state,
+            &candidate.title,
+            candidate.participants_count.unwrap_or(0) as i64,
+            &description,
+            category,
+            "business_owner",
+        )
+        .await;
+        let score_i = (score * 100.0).round() as i32;
+        let link = candidate
+            .username
+            .as_ref()
+            .map(|u| format!("https://t.me/{}", u.trim_start_matches('@')));
+
+        let result = sqlx::query(
+            "INSERT INTO telegram_discovered_channels
+               (run_id, query, channel_id, username, title, is_broadcast, is_megagroup,
+                participants_count, score, score_reason, service_type, raw)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+             ON CONFLICT DO UPDATE
+                SET run_id = COALESCE(EXCLUDED.run_id, telegram_discovered_channels.run_id),
+                    query = EXCLUDED.query,
+                    title = EXCLUDED.title,
+                    is_broadcast = EXCLUDED.is_broadcast,
+                    is_megagroup = EXCLUDED.is_megagroup,
+                    participants_count = COALESCE(EXCLUDED.participants_count, telegram_discovered_channels.participants_count),
+                    score = EXCLUDED.score,
+                    score_reason = EXCLUDED.score_reason,
+                    service_type = EXCLUDED.service_type,
+                    raw = EXCLUDED.raw,
+                    updated_at = NOW()",
+        )
+        .bind(run_id)
+        .bind(&candidate.query)
+        .bind(candidate.channel_id)
+        .bind(candidate.username.as_deref())
+        .bind(&candidate.title)
+        .bind(candidate.is_broadcast)
+        .bind(candidate.is_megagroup)
+        .bind(candidate.participants_count)
+        .bind(score_i)
+        .bind(&reason)
+        .bind(&service)
+        .bind(json!({
+            "link": link,
+            "source": "mtproto_contacts_search"
+        }))
+        .execute(&state.db_pool)
+        .await;
+
+        if result.is_ok() {
+            saved += 1;
+        }
+    }
+
+    checkpoint_prospect_agent_run(
+        &state,
+        run_id,
+        "completed",
+        json!({"saved_candidates": saved}),
+        Some("Candidates scored and persisted for review or watch-channel activation."),
+    )
+    .await;
+    complete_prospect_agent_run(
+        &state,
+        run_id,
+        "completed",
+        json!({"saved_candidates": saved}),
+        None,
+    )
+    .await;
+
+    Json(json!({
+        "success": true,
+        "agent_run_id": run_id.map(|id| id.to_string()),
+        "saved": saved,
+        "message": format!("Discovered and scored {} Telegram channel/group candidates.", saved)
+    }))
+}
+
+async fn telegram_list_discovered_channels(
+    Extension(state): Extension<Arc<AppState>>,
+    Query(q): Query<TelegramDiscoveredQuery>,
+) -> Json<serde_json::Value> {
+    let limit = q.limit.unwrap_or(100).clamp(1, 300);
+    let rows = if let Some(status) = q.status.as_deref() {
+        sqlx::query(
+            "SELECT id, run_id, query, channel_id, username, title, is_broadcast, is_megagroup,
+                    participants_count, score, score_reason, service_type, status, raw, created_at, updated_at
+             FROM telegram_discovered_channels
+             WHERE status = $1
+             ORDER BY COALESCE(score, 0) DESC, updated_at DESC
+             LIMIT $2",
+        )
+        .bind(status)
+        .bind(limit)
+        .fetch_all(&state.db_pool)
+        .await
+    } else {
+        sqlx::query(
+            "SELECT id, run_id, query, channel_id, username, title, is_broadcast, is_megagroup,
+                    participants_count, score, score_reason, service_type, status, raw, created_at, updated_at
+             FROM telegram_discovered_channels
+             ORDER BY COALESCE(score, 0) DESC, updated_at DESC
+             LIMIT $1",
+        )
+        .bind(limit)
+        .fetch_all(&state.db_pool)
+        .await
+    };
+
+    let rows = match rows {
+        Ok(rows) => rows,
+        Err(e) => return Json(json!({"success": false, "error": format!("DB error: {e}")})),
+    };
+
+    let channels: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|row| {
+            let username = row.get::<Option<String>, _>("username");
+            json!({
+                "id": row.get::<Uuid, _>("id").to_string(),
+                "run_id": row.get::<Option<Uuid>, _>("run_id").map(|id| id.to_string()),
+                "query": row.get::<String, _>("query"),
+                "channel_id": row.get::<Option<i64>, _>("channel_id"),
+                "username": username,
+                "title": row.get::<String, _>("title"),
+                "link": username.as_ref().map(|u| format!("https://t.me/{}", u.trim_start_matches('@'))),
+                "is_broadcast": row.get::<bool, _>("is_broadcast"),
+                "is_megagroup": row.get::<bool, _>("is_megagroup"),
+                "participants_count": row.get::<Option<i32>, _>("participants_count"),
+                "score": row.get::<Option<i32>, _>("score"),
+                "score_reason": row.get::<Option<String>, _>("score_reason"),
+                "service_type": row.get::<Option<String>, _>("service_type"),
+                "status": row.get::<String, _>("status"),
+                "raw": row.get::<serde_json::Value, _>("raw"),
+                "created_at": row.get::<chrono::DateTime<chrono::Utc>, _>("created_at"),
+                "updated_at": row.get::<chrono::DateTime<chrono::Utc>, _>("updated_at"),
+            })
+        })
+        .collect();
+
+    Json(json!({"success": true, "channels": channels, "count": channels.len()}))
+}
+
 async fn telegram_login_start(
     Extension(state): Extension<Arc<AppState>>,
-    Json(req):        Json<TelegramLoginStartReq>,
+    Json(req): Json<TelegramLoginStartReq>,
 ) -> Json<serde_json::Value> {
     let phone = req.phone.trim().to_string();
     if phone.is_empty() {
-        return Json(json!({"success": false, "error": "phone is required (include country code, e.g. +14155551234)"}));
+        return Json(
+            json!({"success": false, "error": "phone is required (include country code, e.g. +14155551234)"}),
+        );
     }
     match crate::telegram_client::login_start(&state, &phone).await {
         Ok(()) => Json(json!({
@@ -4441,12 +7164,12 @@ async fn telegram_login_start(
 #[derive(Debug, Deserialize)]
 struct TelegramLoginVerifyReq {
     phone: String,
-    code:  String,
+    code: String,
 }
 
 async fn telegram_login_verify(
     Extension(state): Extension<Arc<AppState>>,
-    Json(req):        Json<TelegramLoginVerifyReq>,
+    Json(req): Json<TelegramLoginVerifyReq>,
 ) -> Json<serde_json::Value> {
     match crate::telegram_client::login_verify(&state, req.phone.trim(), req.code.trim()).await {
         Ok(()) => Json(json!({

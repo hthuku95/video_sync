@@ -1,8 +1,8 @@
 use crate::models::youtube::ConnectedYouTubeChannel;
 use crate::youtube_client::YouTubeClient;
+use backoff::{backoff::Backoff, ExponentialBackoff};
 use chrono::{Duration, Utc};
 use sqlx::PgPool;
-use backoff::{ExponentialBackoff, backoff::Backoff};
 use std::time::Duration as StdDuration;
 
 /// Token manager for centralized YouTube OAuth token refresh
@@ -34,7 +34,8 @@ impl TokenManager {
         if error_str.contains("REFRESH_TOKEN_EXPIRED")
             || error_str.contains("invalid_grant")
             || error_str.contains("INVALID_CREDENTIALS")
-            || error_str.contains("invalid_client") {
+            || error_str.contains("invalid_client")
+        {
             return false;
         }
 
@@ -53,7 +54,8 @@ impl TokenManager {
         &self,
         refresh_token: &str,
         channel_name: &str,
-    ) -> Result<crate::youtube_client::TokenRefreshResponse, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<crate::youtube_client::TokenRefreshResponse, Box<dyn std::error::Error + Send + Sync>>
+    {
         let mut backoff = ExponentialBackoff {
             max_elapsed_time: Some(StdDuration::from_secs(30)),
             ..Default::default()
@@ -61,14 +63,22 @@ impl TokenManager {
 
         let mut attempt = 1;
         loop {
-            match self.youtube_client.refresh_access_token(
-                refresh_token,
-                &self.oauth_client_id,
-                &self.oauth_client_secret,
-            ).await {
+            match self
+                .youtube_client
+                .refresh_access_token(
+                    refresh_token,
+                    &self.oauth_client_id,
+                    &self.oauth_client_secret,
+                )
+                .await
+            {
                 Ok(response) => {
                     if attempt > 1 {
-                        tracing::info!("✅ Token refresh succeeded on attempt {} for channel: {}", attempt, channel_name);
+                        tracing::info!(
+                            "✅ Token refresh succeeded on attempt {} for channel: {}",
+                            attempt,
+                            channel_name
+                        );
                     }
                     return Ok(response);
                 }
@@ -77,7 +87,11 @@ impl TokenManager {
 
                     // Check if error is retryable
                     if !Self::is_retryable_error(&error_str) {
-                        tracing::error!("🔴 TokenManager: Non-retryable error for channel {}: {}", channel_name, error_str);
+                        tracing::error!(
+                            "🔴 TokenManager: Non-retryable error for channel {}: {}",
+                            channel_name,
+                            error_str
+                        );
                         return Err(e);
                     }
 
@@ -120,10 +134,9 @@ impl TokenManager {
             );
 
             // Use retry wrapper for token refresh
-            let token_response = self.refresh_with_retry(
-                &channel.refresh_token,
-                &channel.channel_name,
-            ).await?;
+            let token_response = self
+                .refresh_with_retry(&channel.refresh_token, &channel.channel_name)
+                .await?;
 
             // Update in-memory channel
             channel.access_token = token_response.access_token.clone();
@@ -157,7 +170,10 @@ impl TokenManager {
             .execute(&self.db_pool)
             .await?;
 
-            tracing::info!("✅ Token refreshed successfully for channel: {}", channel.channel_name);
+            tracing::info!(
+                "✅ Token refreshed successfully for channel: {}",
+                channel.channel_name
+            );
             return Ok(true);
         }
 
@@ -170,7 +186,7 @@ impl TokenManager {
         channel_id: i32,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         let mut channel = sqlx::query_as::<_, ConnectedYouTubeChannel>(
-            "SELECT * FROM connected_youtube_channels WHERE id = $1"
+            "SELECT * FROM connected_youtube_channels WHERE id = $1",
         )
         .bind(channel_id)
         .fetch_one(&self.db_pool)
@@ -191,7 +207,7 @@ impl TokenManager {
             "SELECT * FROM connected_youtube_channels
              WHERE is_active = true
              AND token_expiry < $1
-             ORDER BY token_expiry ASC"
+             ORDER BY token_expiry ASC",
         )
         .bind(threshold)
         .fetch_all(&self.db_pool)
@@ -202,7 +218,10 @@ impl TokenManager {
             return Ok(0);
         }
 
-        tracing::info!("🔄 Found {} channels with tokens expiring within 1 hour", channels.len());
+        tracing::info!(
+            "🔄 Found {} channels with tokens expiring within 1 hour",
+            channels.len()
+        );
 
         let mut refreshed_count = 0;
 

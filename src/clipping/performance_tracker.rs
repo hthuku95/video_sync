@@ -2,7 +2,9 @@
 // Implements Recommendation 5: Feedback Loop for Continuous Learning
 // This system learns from clip performance data to optimize future clip selection
 
-use crate::youtube_analytics_client::{YouTubeAnalyticsClient, ClipPerformanceMetrics, ShortsTrafficSources};
+use crate::youtube_analytics_client::{
+    ClipPerformanceMetrics, ShortsTrafficSources, YouTubeAnalyticsClient,
+};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
@@ -96,8 +98,7 @@ impl PerformanceTracker {
                 ec.id as clip_id,
                 ec.youtube_video_id,
                 ec.destination_channel_id,
-                ec.published_at,
-                cah.data_fetched_at as last_synced_at
+                ec.published_at
             FROM extracted_clips ec
             LEFT JOIN LATERAL (
                 SELECT data_fetched_at
@@ -152,10 +153,7 @@ impl PerformanceTracker {
         let access_token = self.get_channel_access_token(channel_id).await?;
 
         // Batch fetch analytics (much more efficient than individual calls)
-        let video_ids: Vec<String> = clips
-            .iter()
-            .map(|c| c.youtube_video_id.clone())
-            .collect();
+        let video_ids: Vec<String> = clips.iter().map(|c| c.youtube_video_id.clone()).collect();
 
         // Calculate date range (from earliest publish date to today)
         let start_date = clips
@@ -401,7 +399,10 @@ impl PerformanceTracker {
             self.store_recommendation(&rec).await?;
         }
 
-        tracing::info!("✅ Generated {} learning recommendations", recommendations_count);
+        tracing::info!(
+            "✅ Generated {} learning recommendations",
+            recommendations_count
+        );
         Ok(())
     }
 
@@ -484,56 +485,6 @@ impl PerformanceTracker {
         Ok(())
     }
 
-    /// Get learned recommendations for clip selection
-    /// This is called by the AI clipper to optimize clip selection
-    pub async fn get_optimized_viral_factors(&self) -> Result<Vec<String>, String> {
-        let query = "
-            SELECT viral_factor
-            FROM viral_factor_performance
-            WHERE total_clips >= 3
-            ORDER BY performance_score DESC
-            LIMIT 10
-        ";
-
-        sqlx::query_scalar::<_, String>(query)
-            .fetch_all(&self.db_pool)
-            .await
-            .map_err(|e| format!("Failed to fetch optimized factors: {}", e))
-    }
-
-    /// Get optimal clip duration range
-    pub async fn get_optimal_duration_range(&self) -> Result<(i32, i32), String> {
-        let query = "
-            SELECT duration_min, duration_max
-            FROM duration_performance_analysis
-            WHERE total_clips >= 5
-            ORDER BY performance_score DESC
-            LIMIT 1
-        ";
-
-        sqlx::query_as::<_, (i32, i32)>(query)
-            .fetch_optional(&self.db_pool)
-            .await
-            .map_err(|e| format!("Failed to fetch duration range: {}", e))?
-            .ok_or_else(|| "No duration data available yet".to_string())
-    }
-
-    /// Get performance score for a specific viral factor
-    /// Used during clip selection to prioritize high-performing factors
-    pub async fn get_viral_factor_score(&self, factor: &str) -> Result<f64, String> {
-        let query = "
-            SELECT performance_score
-            FROM viral_factor_performance
-            WHERE viral_factor = $1
-        ";
-
-        sqlx::query_scalar::<_, f64>(query)
-            .bind(factor)
-            .fetch_optional(&self.db_pool)
-            .await
-            .map_err(|e| format!("Failed to fetch factor score: {}", e))?
-            .ok_or_else(|| format!("No score data for factor: {}", factor))
-    }
 }
 
 // Supporting structs
@@ -544,7 +495,6 @@ struct ClipToSync {
     youtube_video_id: String,
     destination_channel_id: i32,
     published_at: DateTime<Utc>,
-    last_synced_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]

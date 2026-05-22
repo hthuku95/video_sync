@@ -1,8 +1,8 @@
+use backoff::{future::retry, ExponentialBackoff};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
-use backoff::{future::retry, ExponentialBackoff};
 use std::time::Duration;
 
 #[derive(Debug, Clone)]
@@ -155,7 +155,7 @@ impl ClaudeClient {
         // This allows natural conversation for greetings/questions
         // Claude will call tools when needed for video editing tasks
         let tool_choice = if tools.is_some() {
-            Some(ToolChoice::Auto)  // Auto allows Claude to respond normally or call tools as needed
+            Some(ToolChoice::Auto) // Auto allows Claude to respond normally or call tools as needed
         } else {
             None
         };
@@ -170,8 +170,14 @@ impl ClaudeClient {
             tool_choice,
         };
 
-        tracing::debug!("Claude API Request: {} tools provided", request.tools.as_ref().map(|t| t.len()).unwrap_or(0));
-        tracing::debug!("Claude API Request messages count: {}", request.messages.len());
+        tracing::debug!(
+            "Claude API Request: {} tools provided",
+            request.tools.as_ref().map(|t| t.len()).unwrap_or(0)
+        );
+        tracing::debug!(
+            "Claude API Request messages count: {}",
+            request.messages.len()
+        );
 
         // Configure exponential backoff for retries
         let backoff_config = ExponentialBackoff {
@@ -190,7 +196,7 @@ impl ClaudeClient {
                 .header("x-api-key", &self.api_key)
                 .header("anthropic-version", "2023-06-01")
                 .header("content-type", "application/json")
-                .timeout(Duration::from_secs(120))  // 2-minute timeout per request
+                .timeout(Duration::from_secs(120)) // 2-minute timeout per request
                 .json(&request)
                 .send()
                 .await
@@ -206,24 +212,43 @@ impl ClaudeClient {
                 })?;
 
             let status = response.status();
-            let response_text = response.text().await
-                .map_err(|e| backoff::Error::permanent(format!("Failed to read response: {}", e)))?;
+            let response_text = response.text().await.map_err(|e| {
+                backoff::Error::permanent(format!("Failed to read response: {}", e))
+            })?;
 
             tracing::debug!("Claude API Response (status {}): {}", status, response_text);
 
             // Retry on 503, 502, 429 (rate limit), 500 errors
-            if status.as_u16() == 503 || status.as_u16() == 502 || status.as_u16() == 429 || status.as_u16() == 500 {
-                tracing::warn!("Claude API returned {} (retrying): {}", status, response_text);
-                return Err(backoff::Error::transient(format!("API error ({}): {}", status, response_text)));
+            if status.as_u16() == 503
+                || status.as_u16() == 502
+                || status.as_u16() == 429
+                || status.as_u16() == 500
+            {
+                tracing::warn!(
+                    "Claude API returned {} (retrying): {}",
+                    status,
+                    response_text
+                );
+                return Err(backoff::Error::transient(format!(
+                    "API error ({}): {}",
+                    status, response_text
+                )));
             }
 
             if !status.is_success() {
                 tracing::error!("Claude API permanent error ({}): {}", status, response_text);
-                return Err(backoff::Error::permanent(format!("API error ({}): {}", status, response_text)));
+                return Err(backoff::Error::permanent(format!(
+                    "API error ({}): {}",
+                    status, response_text
+                )));
             }
 
-            serde_json::from_str(&response_text)
-                .map_err(|e| backoff::Error::permanent(format!("Failed to parse response: {}. Response: {}", e, response_text)))
+            serde_json::from_str(&response_text).map_err(|e| {
+                backoff::Error::permanent(format!(
+                    "Failed to parse response: {}. Response: {}",
+                    e, response_text
+                ))
+            })
         };
 
         // Execute with retry
@@ -7397,8 +7422,8 @@ impl ClaudeClient {
                     properties: HashMap::from([
                         ("description".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Natural language description of the animation to generate".to_string(), items: None }),
                         ("duration".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Clip length in seconds (default: 10)".to_string(), items: None }),
-                        ("background".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Background: 'dark' (default) | 'light' | 'transparent'".to_string(), items: None }),
-                        ("quality".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Render quality: 'l' (480p fast) | 'm' (720p, default) | 'h' (1080p slow)".to_string(), items: None }),
+                        ("background_style".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Background: 'dark' (default) | 'light' | 'gradient'".to_string(), items: None }),
+                        ("composite_over_scene".to_string(), PropertyDefinition { prop_type: "boolean".to_string(), description: "If true, composite the Manim animation over a Blender 3D background scene".to_string(), items: None }),
                         ("include_narration".to_string(), PropertyDefinition { prop_type: "boolean".to_string(), description: "Optional. If true, generate narration audio and a narrated video variant for this animation".to_string(), items: None }),
                         ("narration_text".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Optional narration script to speak during the animation".to_string(), items: None }),
                         ("narration_speaker".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Optional VibeVoice speaker preset name, e.g. 'Emma' or 'Carter'".to_string(), items: None }),
@@ -7428,10 +7453,9 @@ impl ClaudeClient {
     /// Filter tools by name (for dynamic tool selection)
     /// Returns only the tools whose names are in the provided list
     pub fn filter_tools_by_name(tool_names: &[String]) -> Vec<ClaudeTool> {
-        let all_tools = Self::create_video_editing_tools();
-        all_tools
-            .into_iter()
-            .filter(|tool| tool_names.contains(&tool.name))
-            .collect()
+        crate::tool_registry::ToolRegistry::filter_claude_tools_for_profile(
+            crate::tool_registry::AgentExecutionProfile::FullProduction,
+            tool_names,
+        )
     }
 }

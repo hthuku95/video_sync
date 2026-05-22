@@ -56,7 +56,8 @@ pub async fn assert_job_claimed(
         .await?;
 
     let claimed_by: Option<String> = result.try_get("claimed_by").ok().flatten();
-    let claimed_at: Option<chrono::DateTime<chrono::Utc>> = result.try_get("claimed_at").ok().flatten();
+    let claimed_at: Option<chrono::DateTime<chrono::Utc>> =
+        result.try_get("claimed_at").ok().flatten();
 
     assert!(claimed_by.is_some(), "Job should be claimed");
     assert_eq!(
@@ -92,12 +93,11 @@ pub async fn assert_clips_extracted(
     job_id: i32,
     min_clips: usize,
 ) -> Result<usize, Box<dyn std::error::Error>> {
-    let result = sqlx::query(
-        "SELECT COUNT(*) as count FROM extracted_clips WHERE clipping_job_id = $1"
-    )
-    .bind(job_id)
-    .fetch_one(pool)
-    .await?;
+    let result =
+        sqlx::query("SELECT COUNT(*) as count FROM extracted_clips WHERE clipping_job_id = $1")
+            .bind(job_id)
+            .fetch_one(pool)
+            .await?;
 
     let count: i64 = result.get("count");
 
@@ -134,17 +134,19 @@ pub async fn assert_completed_within(
     job_id: i32,
     max_duration_secs: i64,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let result = sqlx::query(
-        "SELECT created_at, completed_at FROM clipping_jobs WHERE id = $1"
-    )
-    .bind(job_id)
-    .fetch_one(pool)
-    .await?;
+    let result = sqlx::query("SELECT created_at, completed_at FROM clipping_jobs WHERE id = $1")
+        .bind(job_id)
+        .fetch_one(pool)
+        .await?;
 
     let created_at: chrono::DateTime<chrono::Utc> = result.get("created_at");
-    let completed_at: Option<chrono::DateTime<chrono::Utc>> = result.try_get("completed_at").ok().flatten();
+    let completed_at: Option<chrono::DateTime<chrono::Utc>> =
+        result.try_get("completed_at").ok().flatten();
 
-    assert!(completed_at.is_some(), "Job should have a completed_at timestamp");
+    assert!(
+        completed_at.is_some(),
+        "Job should have a completed_at timestamp"
+    );
 
     let duration = (completed_at.unwrap() - created_at).num_seconds();
 
@@ -164,12 +166,10 @@ pub async fn assert_analysis_phase_reached(
     pool: &PgPool,
     job_id: i32,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let result = sqlx::query(
-        "SELECT status, progress_percent FROM clipping_jobs WHERE id = $1"
-    )
-    .bind(job_id)
-    .fetch_one(pool)
-    .await?;
+    let result = sqlx::query("SELECT status, progress_percent FROM clipping_jobs WHERE id = $1")
+        .bind(job_id)
+        .fetch_one(pool)
+        .await?;
 
     let status: String = result.get("status");
     let progress: i32 = result.try_get("progress_percent").unwrap_or(0);

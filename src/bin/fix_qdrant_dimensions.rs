@@ -1,15 +1,17 @@
 // Utility to fix Qdrant collection dimension mismatch
+use qdrant_client::qdrant::{CreateCollectionBuilder, Distance, VectorParamsBuilder};
 use qdrant_client::Qdrant;
-use qdrant_client::qdrant::{CreateCollectionBuilder, VectorParamsBuilder, Distance};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🔧 Fixing Qdrant dimension mismatch...");
 
-    let qdrant_url = std::env::var("QDRANT_URL")
-        .unwrap_or_else(|_| "https://18635ac0-f6b3-43b3-9255-54a553f6c2fb.us-west-1-0.aws.cloud.qdrant.io:6334".to_string());
-    let qdrant_api_key = std::env::var("QDRANT_API_KEY")
-        .expect("QDRANT_API_KEY environment variable not set");
+    let qdrant_url = std::env::var("QDRANT_URL").unwrap_or_else(|_| {
+        "https://18635ac0-f6b3-43b3-9255-54a553f6c2fb.us-west-1-0.aws.cloud.qdrant.io:6334"
+            .to_string()
+    });
+    let qdrant_api_key =
+        std::env::var("QDRANT_API_KEY").expect("QDRANT_API_KEY environment variable not set");
 
     let client = Qdrant::from_url(&qdrant_url)
         .api_key(qdrant_api_key)
@@ -35,7 +37,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match client
         .create_collection(
             CreateCollectionBuilder::new("chat_memory")
-                .vectors_config(VectorParamsBuilder::new(1024, Distance::Cosine))
+                .vectors_config(VectorParamsBuilder::new(1024, Distance::Cosine)),
         )
         .await
     {

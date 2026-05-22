@@ -6,10 +6,10 @@ use crate::AppState;
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
-        Extension, Query,
+        Extension, Path, Query,
     },
     response::IntoResponse,
-    routing::get,
+    routing::{get, post},
     Router,
 };
 use futures::{sink::SinkExt, stream::StreamExt};
@@ -50,32 +50,40 @@ fn format_relative_time(timestamp: &chrono::DateTime<chrono::Utc>) -> String {
     }
 }
 
-#[derive(Serialize)]
-#[serde(tag = "type")]
-enum WebSocketMessage {
-    #[serde(rename = "progress")]
-    Progress {
-        percentage: f32,
-        message: String,
-        operation_id: String,
-    },
-    #[serde(rename = "result")]
-    Result {
-        content: String,
-        operation_id: String,
-    },
-    #[serde(rename = "error")]
-    Error {
-        message: String,
-        operation_id: String,
-    },
-}
-
 #[derive(Deserialize)]
 struct WebSocketQuery {
     session: Option<String>,
     model: Option<String>,
     token: Option<String>,
+    workflow_id: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct ActiveWorkflowSnapshot {
+    workflow_id: String,
+    workflow_type: String,
+    status: String,
+    current_step: Option<String>,
+    request_summary: String,
+    created_at: String,
+    started_ago: String,
+    last_heartbeat_at: String,
+    last_heartbeat_ago: String,
+    completed_at: Option<String>,
+    completed_ago: Option<String>,
+    latest_progress_message: Option<String>,
+    user_message: Option<String>,
+    error_message: Option<String>,
+    result_summary: Option<String>,
+    artifact_status: serde_json::Value,
+    retry_count: i32,
+    recent_events: Vec<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorkflowFollowupDecision {
+    mode: String,
+    reply: Option<String>,
 }
 
 pub fn chat_routes() -> Router {
@@ -90,6 +98,10 @@ pub fn chat_routes() -> Router {
         .route("/api/chat/history/:session_id", get(get_chat_history))
         .route("/api/chat/recent", get(get_recent_chats))
         .route("/api/chat/all", get(get_all_chats))
+        .route(
+            "/api/chat/sessions/:session_uuid/title",
+            post(update_chat_title),
+        )
         .route(
             "/api/chat/sessions/:session_uuid/jobs",
             get(get_session_jobs),
@@ -109,6 +121,28 @@ async fn websocket_handler(
     Query(params): Query<WebSocketQuery>,
     Extension(state): Extension<Arc<AppState>>,
 ) -> axum::response::Response {
+    let target_workflow_id = match params
+        .workflow_id
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        Some(raw_workflow_id) => match uuid::Uuid::parse_str(raw_workflow_id.trim()) {
+            Ok(parsed) => Some(parsed),
+            Err(_) => {
+                return (
+                    axum::http::StatusCode::BAD_REQUEST,
+                    axum::Json(serde_json::json!({
+                        "success": false,
+                        "error": "invalid_workflow_id",
+                        "message": "The requested workflow id is not valid.",
+                    })),
+                )
+                    .into_response();
+            }
+        },
+        None => None,
+    };
+
     // Validate JWT before upgrading — WebSocket upgrades are HTTP so we can
     // extract the user_id here and pass it in. The token travels as a query
     // param because WS clients cannot set Authorization headers.
@@ -121,34 +155,132 @@ async fn websocket_handler(
                 Err(_) => None,
             });
 
-    // Subscription gate — the WS route doesn't flow through the standard
-    // axum middleware stack for the upgrade handshake, so we check here.
-    // trial / active / grandfathered / staff / superuser pass; expired
-    // users hit 402 with the upgrade link.
-    if let Some(uid) = user_id {
-        use axum::http::StatusCode;
-        match subscription_ok(&state, uid).await {
-            Ok(true) => {}
-            Ok(false) => {
+    let Some(user_id) = user_id else {
+        return (
+            axum::http::StatusCode::UNAUTHORIZED,
+            axum::Json(serde_json::json!({
+                "success": false,
+                "error": "authentication_required",
+                "message": "Chat websocket requires a valid signed-in user session.",
+            })),
+        )
+            .into_response();
+    };
+
+    if let Some(session_uuid) = params.session.as_deref() {
+        let owner = sqlx::query_scalar::<_, i32>(
+            "SELECT user_id FROM chat_sessions WHERE session_uuid = $1",
+        )
+        .bind(session_uuid)
+        .fetch_optional(&state.db_pool)
+        .await;
+
+        match owner {
+            Ok(Some(existing_owner)) if existing_owner != user_id && existing_owner != 1 => {
+                tracing::warn!(
+                    "Rejecting websocket session {} for user {} because it belongs to user {}",
+                    session_uuid,
+                    user_id,
+                    existing_owner
+                );
                 return (
-                    StatusCode::PAYMENT_REQUIRED,
+                    axum::http::StatusCode::FORBIDDEN,
                     axum::Json(serde_json::json!({
-                        "success":     false,
-                        "error":       "subscription_required",
-                        "message":     "Your free trial has ended. Subscribe for $15/mo USDC to keep the chat running.",
-                        "upgrade_url": "/subscribe",
+                        "success": false,
+                        "error": "forbidden_session",
+                        "message": "This chat session belongs to another user.",
                     })),
-                ).into_response();
+                )
+                    .into_response();
             }
-            Err(e) => {
-                tracing::warn!("WS subscription check failed for user {}: {}", uid, e);
-                // fail-open rather than blocking legit users on DB hiccup;
-                // paywalled compute routes will still gate properly.
+            Ok(_) => {}
+            Err(error) => {
+                tracing::error!(
+                    "Failed to verify websocket session ownership for {}: {}",
+                    session_uuid,
+                    error
+                );
+                return (
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    axum::Json(serde_json::json!({
+                        "success": false,
+                        "error": "session_verification_failed",
+                        "message": "Unable to verify chat session ownership right now.",
+                    })),
+                )
+                    .into_response();
             }
         }
     }
 
-    ws.on_upgrade(move |socket| websocket(socket, state, params.session, params.model, user_id))
+    if let Some(workflow_id) = target_workflow_id {
+        match workflow_is_accessible_to_user(&state, workflow_id, user_id).await {
+            Ok(true) => {}
+            Ok(false) => {
+                return (
+                    axum::http::StatusCode::FORBIDDEN,
+                    axum::Json(serde_json::json!({
+                        "success": false,
+                        "error": "forbidden_workflow",
+                        "message": "This workflow does not belong to the signed-in user.",
+                    })),
+                )
+                    .into_response();
+            }
+            Err(error) => {
+                tracing::error!(
+                    "Failed to verify websocket workflow ownership for {}: {}",
+                    workflow_id,
+                    error
+                );
+                return (
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    axum::Json(serde_json::json!({
+                        "success": false,
+                        "error": "workflow_verification_failed",
+                        "message": "Unable to verify workflow ownership right now.",
+                    })),
+                )
+                    .into_response();
+            }
+        }
+    }
+
+    // Subscription gate — the WS route doesn't flow through the standard
+    // axum middleware stack for the upgrade handshake, so we check here.
+    // trial / active / grandfathered / staff / superuser pass; expired
+    // users hit 402 with the upgrade link.
+    use axum::http::StatusCode;
+    match subscription_ok(&state, user_id).await {
+        Ok(true) => {}
+        Ok(false) => {
+            return (
+                StatusCode::PAYMENT_REQUIRED,
+                axum::Json(serde_json::json!({
+                    "success":     false,
+                    "error":       "subscription_required",
+                    "message":     "Your free trial has ended. Subscribe for $15/mo USDC to keep the chat running.",
+                    "upgrade_url": "/subscribe",
+                })),
+            ).into_response();
+        }
+        Err(e) => {
+            tracing::warn!("WS subscription check failed for user {}: {}", user_id, e);
+            // fail-open rather than blocking legit users on DB hiccup;
+            // paywalled compute routes will still gate properly.
+        }
+    }
+
+    ws.on_upgrade(move |socket| {
+        websocket(
+            socket,
+            state,
+            params.session,
+            params.model,
+            Some(user_id),
+            target_workflow_id,
+        )
+    })
         .into_response()
 }
 
@@ -205,6 +337,7 @@ async fn websocket(
     session_uuid: Option<String>,
     _model_preference: Option<String>,
     user_id: Option<i32>,
+    target_workflow_id: Option<uuid::Uuid>,
 ) {
     let (mut sender, mut receiver) = stream.split();
 
@@ -232,7 +365,13 @@ async fn websocket(
 
     // On reconnect: check if there's a running background agent job for this session
     // and immediately inform the user so they know work is still happening
-    if let Some(running_msg) = get_running_agent_job_status(&state, &session_id).await {
+    let reconnect_message = if let Some(workflow_id) = target_workflow_id.clone() {
+        get_workflow_reconnect_status(&state, workflow_id).await
+    } else {
+        get_running_agent_job_status(&state, &session_id).await
+    };
+
+    if let Some(running_msg) = reconnect_message {
         let json_response = serde_json::json!({
             "type": "background_job_status",
             "content": running_msg,
@@ -391,15 +530,48 @@ async fn websocket(
                 query_parts.join("\n\n")
             };
 
+            let workflow_snapshot = if let Some(workflow_id) = target_workflow_id.clone() {
+                get_workflow_snapshot_by_id(&state, workflow_id).await
+            } else {
+                get_active_workflow_snapshot(&state, &session_id).await
+            };
+
+            if let Some(active_workflow_snapshot) = workflow_snapshot
+            {
+                if let Some(followup_reply) = try_answer_active_workflow_followup(
+                    &state,
+                    &session_id,
+                    &text,
+                    &active_workflow_snapshot,
+                    use_claude,
+                )
+                .await
+                {
+                    let json_response = serde_json::json!({
+                        "type": "result",
+                        "content": followup_reply.clone(),
+                        "timestamp": chrono::Utc::now().to_rfc3339(),
+                    });
+
+                    if let Ok(json_str) = serde_json::to_string(&json_response) {
+                        if sender.send(Message::Text(json_str)).await.is_err() {
+                            tracing::error!("Failed to send active-workflow follow-up response");
+                            break;
+                        }
+                    }
+                    continue;
+                }
+            }
+
             // 🤖 AI-POWERED ROUTING: Spawn agent as background task so it survives
             // WebSocket disconnects. User can close the page and come back — the task
             // keeps running and the result will be delivered on reconnect via job_manager.
-            use crate::agent::stateful_agent::{StatefulClaudeAgent, StatefulGeminiAgent};
 
             tracing::info!("🤖 Spawning AI agent as background task for session: {}", session_id);
 
             // Create a DB record for this job so we can replay it on reconnect
-            let job_id = create_agent_job(&state, &session_id, &text).await;
+            let job_id =
+                create_agent_job(&state, &session_id, &text, target_workflow_id.clone()).await;
 
             // Clone everything the background task needs (state is Arc, cheap clone)
             let state_bg = state.clone();
@@ -665,7 +837,7 @@ fn build_file_context(
 
     if !files.is_empty() || !output_videos.is_empty() {
         context.push_str("CRITICAL INSTRUCTION: When using ANY video editing tool, you MUST use the PATH shown above (the path after 'USE THIS PATH:'). NEVER use just the filename like 'GothamChess.mp4' - always use the full path like 'uploads/uuid_files.mp4'. The tools will FAIL if you use only the filename!\n");
-        context.push_str("CRITICAL USER-FACING INSTRUCTION: Internal server paths are for tool execution only. When telling the user where to watch or download a completed output video, prefer the Watch link or Download link shown above instead of exposing the raw internal path.\n\n");
+        context.push_str("CRITICAL USER-FACING INSTRUCTION: Internal server paths are for tool execution only. NEVER expose, quote, or recommend raw internal paths like 'outputs/...', 'uploads/...', or filesystem paths in user-facing responses. When telling the user where to watch or download a completed output video, use the Watch link or Download link shown above instead.\n\n");
     }
 
     context
@@ -697,30 +869,6 @@ async fn get_default_model(pool: &sqlx::PgPool) -> String {
             "gemini".to_string()
         }
     }
-}
-
-// Extract file references from user message
-async fn extract_file_references(
-    _message: &str,
-    session_id: &str,
-    state: &AppState,
-) -> Vec<String> {
-    let mut file_references = Vec::new();
-
-    // Get all files for this session
-    if let Ok(files) = sqlx::query_scalar::<_, String>(
-        "SELECT uf.id FROM uploaded_files uf JOIN chat_sessions cs ON uf.session_id = cs.id WHERE cs.session_uuid = $1"
-    )
-    .bind(session_id)
-    .fetch_all(&state.db_pool)
-    .await
-    {
-        // For now, just return the file IDs as potential references
-        // In a full implementation, we'd check if the message mentions specific files
-        file_references = files;
-    }
-
-    file_references
 }
 
 async fn get_chat_history(
@@ -992,24 +1140,36 @@ async fn get_recent_chats(
 ) -> Result<axum::response::Json<serde_json::Value>, axum::http::StatusCode> {
     // Get recent chat sessions for the user from the database
     match sqlx::query_as::<_, (i32, String, String, chrono::DateTime<chrono::Utc>)>(
-        "SELECT id, session_uuid, title, created_at FROM chat_sessions WHERE user_id = $1 ORDER BY created_at DESC LIMIT 10"
+        "SELECT cs.id, cs.session_uuid, cs.title, cs.created_at
+         FROM chat_sessions cs
+         WHERE cs.user_id = $1
+           AND EXISTS (
+             SELECT 1
+             FROM conversation_messages cm
+             WHERE cm.session_id = cs.id
+               AND cm.role IN ('user', 'human', 'assistant', 'model')
+               AND LENGTH(BTRIM(COALESCE(cm.content, ''))) > 0
+           )
+         ORDER BY cs.created_at DESC
+         LIMIT 10"
     )
     .bind(claims.sub.parse::<i32>().unwrap_or(0))
     .fetch_all(&state.db_pool)
     .await
     {
         Ok(rows) => {
-            let chats: Vec<serde_json::Value> = rows
-                .into_iter()
-                .map(|(id, session_uuid, title, created_at)| {
+            let mut chats = Vec::new();
+            for (id, session_uuid, title, created_at) in rows {
+                let display_title = resolve_chat_display_title(&state.db_pool, id, &title).await;
+                chats.push(
                     serde_json::json!({
                         "id": id,
                         "session_id": session_uuid,
-                        "title": title,
+                        "title": display_title,
                         "created_at": created_at.format("%Y-%m-%d %H:%M:%S").to_string()
-                    })
-                })
-                .collect();
+                    }),
+                );
+            }
 
             Ok(axum::response::Json(serde_json::json!({
                 "success": true,
@@ -1042,7 +1202,18 @@ async fn get_all_chats(
 
     // Get total count
     let total_count: (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM chat_sessions WHERE user_id = $1")
+        sqlx::query_as(
+            "SELECT COUNT(*)
+             FROM chat_sessions cs
+             WHERE cs.user_id = $1
+               AND EXISTS (
+                 SELECT 1
+                 FROM conversation_messages cm
+                 WHERE cm.session_id = cs.id
+                   AND cm.role IN ('user', 'human', 'assistant', 'model')
+                   AND LENGTH(BTRIM(COALESCE(cm.content, ''))) > 0
+               )",
+        )
             .bind(user_id)
             .fetch_one(&state.db_pool)
             .await
@@ -1056,6 +1227,13 @@ async fn get_all_chats(
         "SELECT cs.id, cs.session_uuid, cs.title, cs.created_at
          FROM chat_sessions cs
          WHERE cs.user_id = $1
+           AND EXISTS (
+             SELECT 1
+             FROM conversation_messages cm
+             WHERE cm.session_id = cs.id
+               AND cm.role IN ('user', 'human', 'assistant', 'model')
+               AND LENGTH(BTRIM(COALESCE(cm.content, ''))) > 0
+           )
          ORDER BY cs.created_at DESC
          LIMIT $2 OFFSET $3",
     )
@@ -1079,10 +1257,12 @@ async fn get_all_chats(
                 .await
                 .unwrap_or((0,));
 
+        let display_title = resolve_chat_display_title(&state.db_pool, id, &title).await;
+
         chats.push(serde_json::json!({
             "id": id,
             "session_id": session_uuid,
-            "title": title,
+            "title": display_title,
             "created_at": created_at.format("%Y-%m-%d %H:%M:%S").to_string(),
             "message_count": message_count.0
         }));
@@ -1100,28 +1280,432 @@ async fn get_all_chats(
     })))
 }
 
+#[derive(Deserialize)]
+struct UpdateChatTitleRequest {
+    title: String,
+}
+
+async fn update_chat_title(
+    Path(session_uuid): Path<String>,
+    Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<crate::models::auth::Claims>,
+    axum::Json(payload): axum::Json<UpdateChatTitleRequest>,
+) -> Result<axum::response::Json<serde_json::Value>, axum::http::StatusCode> {
+    let user_id = claims.sub.parse::<i32>().unwrap_or(0);
+    let title = payload.title.trim();
+
+    if title.is_empty() {
+        return Ok(axum::response::Json(serde_json::json!({
+            "success": false,
+            "message": "Title cannot be empty."
+        })));
+    }
+
+    if title.len() > 100 {
+        return Ok(axum::response::Json(serde_json::json!({
+            "success": false,
+            "message": "Title must be 100 characters or less."
+        })));
+    }
+
+    let updated = sqlx::query(
+        "UPDATE chat_sessions
+         SET title = $1, updated_at = NOW()
+         WHERE session_uuid = $2 AND user_id = $3",
+    )
+    .bind(title)
+    .bind(&session_uuid)
+    .bind(user_id)
+    .execute(&state.db_pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("Failed to update chat title for {}: {}", session_uuid, e);
+        axum::http::StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    if updated.rows_affected() == 0 {
+        return Err(axum::http::StatusCode::NOT_FOUND);
+    }
+
+    Ok(axum::response::Json(serde_json::json!({
+        "success": true,
+        "title": title
+    })))
+}
+
+async fn resolve_chat_display_title(
+    pool: &sqlx::PgPool,
+    session_id: i32,
+    current_title: &str,
+) -> String {
+    let trimmed = current_title.trim();
+    if !trimmed.is_empty() && trimmed != "New Chat Session" {
+        return trimmed.to_string();
+    }
+
+    let first_user_message = sqlx::query_scalar::<_, String>(
+        "SELECT content
+         FROM conversation_messages
+         WHERE session_id = $1
+           AND role IN ('user', 'human')
+           AND LENGTH(BTRIM(COALESCE(content, ''))) > 0
+         ORDER BY created_at ASC
+         LIMIT 1",
+    )
+    .bind(session_id)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
+
+    if let Some(message) = first_user_message {
+        let generated = generate_chat_title_from_message(&message);
+        let _ = sqlx::query(
+            "UPDATE chat_sessions
+             SET title = $1, updated_at = NOW()
+             WHERE id = $2 AND (title IS NULL OR title = '' OR title = 'New Chat Session')",
+        )
+        .bind(&generated)
+        .bind(session_id)
+        .execute(pool)
+        .await;
+        return generated;
+    }
+
+    let first_assistant_message = sqlx::query_scalar::<_, String>(
+        "SELECT content
+         FROM conversation_messages
+         WHERE session_id = $1
+           AND role IN ('assistant', 'model')
+           AND LENGTH(BTRIM(COALESCE(content, ''))) > 0
+         ORDER BY created_at ASC
+         LIMIT 1",
+    )
+    .bind(session_id)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
+
+    if let Some(message) = first_assistant_message {
+        let generated = generate_chat_title_from_message(&message);
+        let _ = sqlx::query(
+            "UPDATE chat_sessions
+             SET title = $1, updated_at = NOW()
+             WHERE id = $2 AND (title IS NULL OR title = '' OR title = 'New Chat Session')",
+        )
+        .bind(&generated)
+        .bind(session_id)
+        .execute(pool)
+        .await;
+        return generated;
+    }
+
+    "New Chat Session".to_string()
+}
+
+fn generate_chat_title_from_message(message: &str) -> String {
+    let normalized = message.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.is_empty() {
+        return "New Chat Session".to_string();
+    }
+
+    if let Some(service_line) = normalized
+        .strip_prefix("Service page sample request for ")
+        .or_else(|| normalized.strip_prefix("Service page request for "))
+        .and_then(|rest| rest.split('.').next())
+    {
+        if let Some(brief_idx) = message.find("Sample brief:") {
+            let brief = message[brief_idx + "Sample brief:".len()..]
+                .lines()
+                .next()
+                .unwrap_or("")
+                .trim();
+            if !brief.is_empty() {
+                return truncate_title(&format!("{service_line}: {brief}"), 90);
+            }
+        }
+        return truncate_title(service_line, 90);
+    }
+
+    truncate_title(&normalized, 90)
+}
+
+fn truncate_title(input: &str, max_chars: usize) -> String {
+    let trimmed = input.trim();
+    if trimmed.chars().count() <= max_chars {
+        return trimmed.to_string();
+    }
+
+    let shortened: String = trimmed.chars().take(max_chars).collect();
+    match shortened.rfind(' ') {
+        Some(idx) if idx > 24 => format!("{}...", shortened[..idx].trim_end()),
+        _ => format!("{}...", shortened.trim_end()),
+    }
+}
+
 // ─── Background agent job helpers ────────────────────────────────────────────
+
+fn request_expects_generated_artifact(user_message: &str) -> bool {
+    let normalized = user_message.to_lowercase();
+    let generation_intent = [
+        "create",
+        "generate",
+        "render",
+        "produce",
+        "make",
+        "build",
+        "edit",
+        "deliver",
+    ]
+    .iter()
+    .any(|needle| normalized.contains(needle));
+
+    let media_intent = [
+        "video",
+        "thumbnail",
+        "clip",
+        "scene",
+        "animation",
+        "ad ",
+        "advert",
+        "demo",
+        "landing page",
+        "hero video",
+        "narration",
+        "youtube",
+        "sample",
+        "delivery",
+    ]
+    .iter()
+    .any(|needle| normalized.contains(needle));
+
+    generation_intent && media_intent
+}
+
+fn response_output_links(response: &str) -> Vec<String> {
+    fn extract_link(line: &str, needle: &str) -> Option<String> {
+        let idx = line.find(needle)?;
+        let candidate = &line[idx..];
+        let token = candidate.split_whitespace().next().unwrap_or(candidate);
+        let cleaned = token.trim_matches(|ch: char| {
+            matches!(ch, '`' | '"' | '\'' | ')' | ']' | '}' | ',' | '.')
+        });
+        if cleaned.starts_with(needle) {
+            Some(cleaned.to_string())
+        } else {
+            None
+        }
+    }
+
+    response
+        .lines()
+        .flat_map(|line| {
+            ["/api/outputs/stream/", "/api/outputs/download/", "/delivery/"]
+                .into_iter()
+                .filter_map(move |needle| extract_link(line, needle))
+        })
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn background_workflow_idempotency_key(
+    session_uuid: &str,
+    user_message: &str,
+    existing_workflow_id: Option<uuid::Uuid>,
+) -> String {
+    let message_hash = crate::services::GeneratedArtifactService::legacy_file_id(user_message);
+    match existing_workflow_id {
+        Some(workflow_id) => format!("background-agent:{session_uuid}:{workflow_id}:{message_hash}"),
+        None => format!("background-agent:{session_uuid}:{message_hash}"),
+    }
+}
 
 /// Create a DB record for a background agent job. Returns the UUID if successful.
 async fn create_agent_job(
     state: &Arc<AppState>,
     session_uuid: &str,
     user_message: &str,
+    existing_workflow_id: Option<uuid::Uuid>,
 ) -> Option<uuid::Uuid> {
-    sqlx::query_scalar::<_, uuid::Uuid>(
-        "INSERT INTO agent_background_jobs (session_uuid, session_id, user_message, status)
-         VALUES ($1, (SELECT id FROM chat_sessions WHERE session_uuid = $1 LIMIT 1), $2, 'running')
-         RETURNING id",
+    let session_context = sqlx::query_as::<_, (Option<i32>, Option<i32>)>(
+        "SELECT id, user_id FROM chat_sessions WHERE session_uuid = $1 LIMIT 1",
     )
     .bind(session_uuid)
-    .bind(user_message)
     .fetch_optional(&state.db_pool)
     .await
     .ok()
-    .flatten()
+    .flatten();
+
+    let (session_id, user_id) = match session_context {
+        Some((session_id, user_id)) => (session_id, user_id),
+        None => (None, None),
+    };
+
+    let is_service_sample_request = user_message.starts_with("Service page request for")
+        || user_message.starts_with("Service page sample request for");
+    let expects_generated_artifact = request_expects_generated_artifact(user_message);
+    let workflow_type = if is_service_sample_request {
+        "service_sample_generation"
+    } else {
+        "background_agent_generation"
+    };
+    let artifact_requirements = if expects_generated_artifact {
+        serde_json::json!([
+            {
+                "kind": if is_service_sample_request { "buyer_facing_sample" } else { "generated_media_response" },
+                "required": true,
+                "must_include_delivery_or_output_link": true
+            }
+        ])
+    } else {
+        serde_json::json!([])
+    };
+
+    let workflow_runtime = crate::services::WorkflowRuntime::new(state.db_pool.clone());
+    let workflow_id = if let Some(existing_workflow_id) = existing_workflow_id {
+        let _ = workflow_runtime
+            .heartbeat(
+                existing_workflow_id,
+                crate::services::WorkflowStatus::Queued,
+                Some("job_created"),
+                "Background agent job attached to the existing service-page workflow.",
+                serde_json::json!({
+                    "session_uuid": session_uuid,
+                    "user_message": user_message,
+                    "service_sample_request": is_service_sample_request,
+                    "expects_generated_artifact": expects_generated_artifact,
+                }),
+            )
+            .await;
+        existing_workflow_id
+    } else {
+        let workflow_id = workflow_runtime
+            .create_or_reuse_workflow(crate::services::NewWorkflow {
+                idempotency_key: Some(background_workflow_idempotency_key(
+                    session_uuid,
+                    user_message,
+                    existing_workflow_id,
+                )),
+                workflow_type: workflow_type.to_string(),
+                status: crate::services::WorkflowStatus::Queued,
+                session_uuid: Some(session_uuid.to_string()),
+                user_id,
+                source_table: Some("agent_background_jobs".to_string()),
+                source_record_id: None,
+                request_summary: user_message.chars().take(200).collect::<String>(),
+                current_step: Some("job_created".to_string()),
+                metadata: serde_json::json!({
+                    "session_uuid": session_uuid,
+                    "user_message": user_message,
+                    "service_sample_request": is_service_sample_request,
+                    "expects_generated_artifact": expects_generated_artifact,
+                }),
+                artifact_requirements,
+            })
+            .await
+            .ok()?;
+
+        let _ = workflow_runtime
+            .append_event(
+                workflow_id,
+                "queued",
+                Some("job_created"),
+                "Background agent job created and waiting for the agent runtime to begin execution.",
+                serde_json::json!({
+                    "session_uuid": session_uuid,
+                }),
+            )
+            .await;
+        workflow_id
+    };
+
+    let job_id = sqlx::query_scalar::<_, uuid::Uuid>(
+        "INSERT INTO agent_background_jobs (session_uuid, session_id, user_message, status, workflow_id)
+         VALUES ($1, $2, $3, 'running', $4)
+         RETURNING id",
+    )
+    .bind(session_uuid)
+    .bind(session_id)
+    .bind(user_message)
+    .bind(workflow_id)
+    .fetch_optional(&state.db_pool)
+    .await
+    .ok()
+    .flatten()?;
+
+    let _ = sqlx::query(
+        "UPDATE app_workflows
+         SET source_record_id = $2, updated_at = NOW()
+         WHERE id = $1",
+    )
+    .bind(workflow_id)
+    .bind(job_id)
+    .execute(&state.db_pool)
+    .await;
+
+    Some(job_id)
 }
 
-async fn complete_agent_job(state: &Arc<AppState>, job_id: uuid::Uuid, result: &str) {
+async fn complete_agent_job(state: &Arc<AppState>, job_id: uuid::Uuid, result: &str) -> bool {
+    let workflow_row = sqlx::query_as::<_, (Option<uuid::Uuid>, String)>(
+        "SELECT workflow_id, user_message FROM agent_background_jobs WHERE id = $1",
+    )
+    .bind(job_id)
+    .fetch_optional(&state.db_pool)
+    .await
+    .ok()
+    .flatten();
+
+    let (workflow_id, user_message) = match workflow_row {
+        Some((workflow_id, user_message)) => (workflow_id, user_message),
+        None => (None, String::new()),
+    };
+
+    let is_service_sample_request = user_message.starts_with("Service page request for")
+        || user_message.starts_with("Service page sample request for");
+    let expects_generated_artifact = request_expects_generated_artifact(&user_message);
+    let output_links = response_output_links(result);
+    let has_delivery_or_output_link = !output_links.is_empty();
+
+    if expects_generated_artifact && !has_delivery_or_output_link {
+        fail_agent_job(
+            state,
+            job_id,
+            if is_service_sample_request {
+                "The sample workflow finished without returning a delivery or output link, so it was not accepted as a valid buyer-facing sample."
+            } else {
+                "The workflow finished without returning a delivery or output link, so it was not accepted as a completed generated-media result."
+            },
+        )
+        .await;
+        return false;
+    }
+
+    let artifact_verification = if expects_generated_artifact {
+        crate::services::ArtifactVerifier::verify_links(&state.db_pool, &output_links).await
+    } else {
+        crate::services::ArtifactVerificationResult {
+            verified: true,
+            details: serde_json::json!({
+                "verified": true,
+                "reason": "No generated artifact was required for this workflow",
+                "links": [],
+            }),
+        }
+    };
+
+    if expects_generated_artifact && !artifact_verification.verified {
+        fail_agent_job(
+            state,
+            job_id,
+            "The workflow returned delivery/output links, but the linked artifacts could not be verified from storage or the database.",
+        )
+        .await;
+        return false;
+    }
+
     let _ = sqlx::query(
         "UPDATE agent_background_jobs SET status = 'completed', result = $2, updated_at = NOW() WHERE id = $1"
     )
@@ -1129,9 +1713,39 @@ async fn complete_agent_job(state: &Arc<AppState>, job_id: uuid::Uuid, result: &
     .bind(result)
     .execute(&state.db_pool)
     .await;
+
+    if let Some(workflow_id) = workflow_id {
+        let workflow_runtime = crate::services::WorkflowRuntime::new(state.db_pool.clone());
+        let _ = workflow_runtime
+            .mark_completed(
+                workflow_id,
+                Some("response_delivered"),
+                "Background agent execution completed and returned a terminal assistant response.",
+                serde_json::json!({
+                    "artifact_verification": artifact_verification.details,
+                    "service_sample_request": is_service_sample_request,
+                    "expects_generated_artifact": expects_generated_artifact,
+                    "output_links": output_links,
+                    "response_preview": result.chars().take(240).collect::<String>(),
+                }),
+            )
+            .await;
+    }
+
+    true
 }
 
 async fn fail_agent_job(state: &Arc<AppState>, job_id: uuid::Uuid, error: &str) {
+    let workflow_id = sqlx::query_scalar::<_, Option<uuid::Uuid>>(
+        "SELECT workflow_id FROM agent_background_jobs WHERE id = $1",
+    )
+    .bind(job_id)
+    .fetch_optional(&state.db_pool)
+    .await
+    .ok()
+    .flatten()
+    .flatten();
+
     let _ = sqlx::query(
         "UPDATE agent_background_jobs SET status = 'failed', error = $2, updated_at = NOW() WHERE id = $1"
     )
@@ -1139,9 +1753,31 @@ async fn fail_agent_job(state: &Arc<AppState>, job_id: uuid::Uuid, error: &str) 
     .bind(error)
     .execute(&state.db_pool)
     .await;
+
+    if let Some(workflow_id) = workflow_id {
+        let workflow_runtime = crate::services::WorkflowRuntime::new(state.db_pool.clone());
+        let _ = workflow_runtime
+            .mark_failed(
+                workflow_id,
+                Some("background_agent"),
+                error,
+                None,
+            )
+            .await;
+    }
 }
 
 async fn append_job_progress(state: &Arc<AppState>, job_id: uuid::Uuid, message: &str) {
+    let workflow_id = sqlx::query_scalar::<_, Option<uuid::Uuid>>(
+        "SELECT workflow_id FROM agent_background_jobs WHERE id = $1",
+    )
+    .bind(job_id)
+    .fetch_optional(&state.db_pool)
+    .await
+    .ok()
+    .flatten()
+    .flatten();
+
     let entry = serde_json::json!({
         "ts": chrono::Utc::now().to_rfc3339(),
         "msg": message
@@ -1155,16 +1791,465 @@ async fn append_job_progress(state: &Arc<AppState>, job_id: uuid::Uuid, message:
     .bind(serde_json::json!([entry]))
     .execute(&state.db_pool)
     .await;
+
+    if let Some(workflow_id) = workflow_id {
+        let workflow_runtime = crate::services::WorkflowRuntime::new(state.db_pool.clone());
+        let _ = workflow_runtime
+            .heartbeat(
+                workflow_id,
+                crate::services::WorkflowStatus::Running,
+                Some("agent_progress"),
+                message,
+                serde_json::json!({
+                    "job_id": job_id,
+                    "ts": chrono::Utc::now().to_rfc3339(),
+                }),
+            )
+            .await;
+    }
 }
 
-/// Returns a human-readable status string if there's a running agent job for this session,
-/// or None if there's no in-progress work.
+async fn get_agent_job_workflow_id(
+    state: &Arc<AppState>,
+    job_id: uuid::Uuid,
+) -> Option<uuid::Uuid> {
+    sqlx::query_scalar::<_, Option<uuid::Uuid>>(
+        "SELECT workflow_id FROM agent_background_jobs WHERE id = $1",
+    )
+    .bind(job_id)
+    .fetch_optional(&state.db_pool)
+    .await
+    .ok()
+    .flatten()
+    .flatten()
+}
+
+fn latest_progress_message(progress_log: &serde_json::Value) -> Option<String> {
+    progress_log
+        .as_array()
+        .and_then(|entries| entries.last())
+        .and_then(|entry| entry.get("msg"))
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|msg| !msg.is_empty())
+        .map(str::to_string)
+}
+
+fn parse_json_object<T: serde::de::DeserializeOwned>(raw: &str) -> Option<T> {
+    serde_json::from_str(raw).ok().or_else(|| {
+        let trimmed = raw.trim();
+        let fenced = trimmed
+            .strip_prefix("```json")
+            .or_else(|| trimmed.strip_prefix("```"))
+            .and_then(|value| value.strip_suffix("```"))
+            .map(str::trim)?;
+        serde_json::from_str(fenced).ok()
+    })
+}
+
+async fn workflow_is_accessible_to_user(
+    state: &Arc<AppState>,
+    workflow_id: uuid::Uuid,
+    user_id: i32,
+) -> Result<bool, sqlx::Error> {
+    let row = sqlx::query_as::<_, (Option<i32>, Option<String>)>(
+        "SELECT user_id, session_uuid
+         FROM app_workflows
+         WHERE id = $1",
+    )
+    .bind(workflow_id)
+    .fetch_optional(&state.db_pool)
+    .await?;
+
+    let Some((workflow_user_id, workflow_session_uuid)) = row else {
+        return Ok(false);
+    };
+
+    if user_id == 1 {
+        return Ok(true);
+    }
+
+    if let Some(owner_id) = workflow_user_id {
+        return Ok(owner_id == user_id || owner_id == 1);
+    }
+
+    if let Some(session_uuid) = workflow_session_uuid {
+        let session_owner = sqlx::query_scalar::<_, i32>(
+            "SELECT user_id FROM chat_sessions WHERE session_uuid = $1",
+        )
+        .bind(session_uuid)
+        .fetch_optional(&state.db_pool)
+        .await?;
+
+        return Ok(matches!(
+            session_owner,
+            Some(existing_owner) if existing_owner == user_id || existing_owner == 1
+        ));
+    }
+
+    Ok(false)
+}
+
+fn build_workflow_snapshot(
+    workflow_id: uuid::Uuid,
+    workflow_type: String,
+    status: String,
+    current_step: Option<String>,
+    request_summary: String,
+    created_at: chrono::DateTime<chrono::Utc>,
+    last_heartbeat_at: chrono::DateTime<chrono::Utc>,
+    completed_at: Option<chrono::DateTime<chrono::Utc>>,
+    progress_log: Option<serde_json::Value>,
+    user_message: Option<String>,
+    error_message: Option<String>,
+    result_summary: Option<String>,
+    artifact_status: Option<serde_json::Value>,
+    retry_count: i32,
+    recent_events: Vec<serde_json::Value>,
+) -> ActiveWorkflowSnapshot {
+    let progress_log = progress_log.unwrap_or_else(|| serde_json::json!([]));
+
+    ActiveWorkflowSnapshot {
+        workflow_id: workflow_id.to_string(),
+        workflow_type,
+        status,
+        current_step,
+        request_summary,
+        created_at: created_at.to_rfc3339(),
+        started_ago: format_relative_time(&created_at),
+        last_heartbeat_at: last_heartbeat_at.to_rfc3339(),
+        last_heartbeat_ago: format_relative_time(&last_heartbeat_at),
+        completed_at: completed_at.map(|value| value.to_rfc3339()),
+        completed_ago: completed_at.as_ref().map(format_relative_time),
+        latest_progress_message: latest_progress_message(&progress_log),
+        user_message,
+        error_message,
+        result_summary,
+        artifact_status: artifact_status.unwrap_or_else(|| serde_json::json!({})),
+        retry_count,
+        recent_events,
+    }
+}
+
+async fn get_active_workflow_snapshot(
+    state: &Arc<AppState>,
+    session_uuid: &str,
+) -> Option<ActiveWorkflowSnapshot> {
+    let row = sqlx::query_as::<
+        _,
+        (
+            uuid::Uuid,
+            String,
+            String,
+            Option<String>,
+            String,
+            chrono::DateTime<chrono::Utc>,
+            chrono::DateTime<chrono::Utc>,
+            Option<chrono::DateTime<chrono::Utc>>,
+            Option<serde_json::Value>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<serde_json::Value>,
+            i32,
+        ),
+    >(
+        "SELECT aw.id, aw.workflow_type, aw.status, aw.current_step, aw.request_summary,
+                aw.created_at, aw.last_heartbeat_at, aw.completed_at, abj.progress_log,
+                abj.user_message, aw.error_message, aw.result_summary, aw.artifact_status,
+                aw.retry_count
+         FROM app_workflows aw
+         LEFT JOIN agent_background_jobs abj ON abj.workflow_id = aw.id
+         WHERE aw.session_uuid = $1
+           AND aw.status IN ('queued','planning','running','waiting_for_input','waiting_for_external_service','retrying')
+         ORDER BY aw.created_at DESC
+         LIMIT 1",
+    )
+    .bind(session_uuid)
+    .fetch_optional(&state.db_pool)
+    .await
+    .ok()
+    .flatten()?;
+
+    let (
+        workflow_id,
+        workflow_type,
+        status,
+        current_step,
+        request_summary,
+        created_at,
+        last_heartbeat_at,
+        completed_at,
+        progress_log,
+        user_message,
+        error_message,
+        result_summary,
+        artifact_status,
+        retry_count,
+    ) = row;
+
+    let recent_events = workflow_recent_events(state, workflow_id).await;
+
+    Some(build_workflow_snapshot(
+        workflow_id,
+        workflow_type,
+        status,
+        current_step,
+        request_summary,
+        created_at,
+        last_heartbeat_at,
+        completed_at,
+        progress_log,
+        user_message,
+        error_message,
+        result_summary,
+        artifact_status,
+        retry_count,
+        recent_events,
+    ))
+}
+
+async fn workflow_recent_events(
+    state: &Arc<AppState>,
+    workflow_id: uuid::Uuid,
+) -> Vec<serde_json::Value> {
+    sqlx::query_as::<_, (String, Option<String>, String, chrono::DateTime<chrono::Utc>)>(
+        "SELECT event_type, node_name, message, created_at
+         FROM app_workflow_events
+         WHERE workflow_id = $1
+         ORDER BY created_at DESC
+         LIMIT 8",
+    )
+    .bind(workflow_id)
+    .fetch_all(&state.db_pool)
+    .await
+    .ok()
+    .unwrap_or_default()
+    .into_iter()
+    .map(|(event_type, node_name, message, created_at)| {
+        serde_json::json!({
+            "event_type": event_type,
+            "node_name": node_name,
+            "message": message,
+            "created_at": created_at.to_rfc3339(),
+            "created_ago": format_relative_time(&created_at),
+        })
+    })
+    .collect::<Vec<_>>()
+}
+
+async fn get_workflow_snapshot_by_id(
+    state: &Arc<AppState>,
+    workflow_id: uuid::Uuid,
+) -> Option<ActiveWorkflowSnapshot> {
+    let row = sqlx::query_as::<
+        _,
+        (
+            uuid::Uuid,
+            String,
+            String,
+            Option<String>,
+            String,
+            chrono::DateTime<chrono::Utc>,
+            chrono::DateTime<chrono::Utc>,
+            Option<chrono::DateTime<chrono::Utc>>,
+            Option<serde_json::Value>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<serde_json::Value>,
+            i32,
+        ),
+    >(
+        "SELECT aw.id, aw.workflow_type, aw.status, aw.current_step, aw.request_summary,
+                aw.created_at, aw.last_heartbeat_at, aw.completed_at, abj.progress_log,
+                abj.user_message, aw.error_message, aw.result_summary, aw.artifact_status,
+                aw.retry_count
+         FROM app_workflows aw
+         LEFT JOIN agent_background_jobs abj ON abj.workflow_id = aw.id
+         WHERE aw.id = $1
+         LIMIT 1",
+    )
+    .bind(workflow_id)
+    .fetch_optional(&state.db_pool)
+    .await
+    .ok()
+    .flatten()?;
+
+    let (
+        workflow_id,
+        workflow_type,
+        status,
+        current_step,
+        request_summary,
+        created_at,
+        last_heartbeat_at,
+        completed_at,
+        progress_log,
+        user_message,
+        error_message,
+        result_summary,
+        artifact_status,
+        retry_count,
+    ) = row;
+
+    let recent_events = workflow_recent_events(state, workflow_id).await;
+
+    Some(build_workflow_snapshot(
+        workflow_id,
+        workflow_type,
+        status,
+        current_step,
+        request_summary,
+        created_at,
+        last_heartbeat_at,
+        completed_at,
+        progress_log,
+        user_message,
+        error_message,
+        result_summary,
+        artifact_status,
+        retry_count,
+        recent_events,
+    ))
+}
+
+async fn get_workflow_reconnect_status(
+    state: &Arc<AppState>,
+    workflow_id: uuid::Uuid,
+) -> Option<String> {
+    let snapshot = get_workflow_snapshot_by_id(state, workflow_id).await?;
+
+    snapshot
+        .latest_progress_message
+        .clone()
+        .or_else(|| {
+            snapshot
+                .recent_events
+                .first()
+                .and_then(|event| event.get("message"))
+                .and_then(|value| value.as_str())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+        })
+        .or_else(|| snapshot.current_step.clone())
+        .or_else(|| snapshot.result_summary.clone())
+        .or_else(|| snapshot.error_message.clone())
+}
+
+async fn persist_direct_followup_exchange(
+    state: &Arc<AppState>,
+    session_id: &str,
+    user_message: &str,
+    assistant_reply: &str,
+) {
+    let conversation_manager =
+        crate::agent::conversation_manager::ConversationManager::new(state.db_pool.clone());
+    let _ = conversation_manager.initialize_schema().await;
+
+    let user_msg = crate::agent::conversation_manager::ConversationMessage::new_human(
+        session_id.to_string(),
+        user_message.to_string(),
+    );
+    let assistant_msg = crate::agent::conversation_manager::ConversationMessage::new_assistant(
+        session_id.to_string(),
+        assistant_reply.to_string(),
+    );
+
+    let _ = conversation_manager.save_message(&user_msg).await;
+    let _ = conversation_manager.save_message(&assistant_msg).await;
+}
+
+async fn try_answer_active_workflow_followup(
+    state: &Arc<AppState>,
+    session_id: &str,
+    user_message: &str,
+    snapshot: &ActiveWorkflowSnapshot,
+    prefer_claude: bool,
+) -> Option<String> {
+    let prompt = format!(
+        r#"You are VideoSync's AI assistant. The user is referencing a workflow in the system.
+
+Your job is to read the user's latest message and the live workflow snapshot below, then decide whether:
+1. the user is asking about the status/progress/blockers/timing/result/cancellation of the referenced workflow, or
+2. the user is making a net-new request that should continue through the normal background task pipeline.
+
+Rules:
+- If the user is asking about progress, timing, blockers, what step the workflow is on, whether it is almost done, what happened, whether it finished, or why it failed, answer directly from the workflow state.
+- Use the workflow state truthfully. Do not invent progress, hidden work, or estimated completion times you cannot justify.
+- If there is no exact step, say that plainly and mention the latest persisted heartbeat/event.
+- If the workflow is completed, failed, or cancelled, answer from that terminal state instead of pretending it is still running.
+- If the user is clearly asking for a different task, a major change, or new production work, do not answer directly.
+- Return JSON only.
+
+JSON schema:
+{{"mode":"reply"|"continue_background_task","reply":"string"}}
+
+Active workflow snapshot:
+{}
+
+User message:
+{}
+"#,
+        serde_json::to_string_pretty(snapshot).ok()?,
+        serde_json::to_string(user_message).ok()?
+    );
+
+    let raw = if prefer_claude {
+        if let Some(ref claude_client) = state.claude_client {
+            claude_client.generate_text(&prompt).await.ok()
+        } else if let Some(gemini_client) = state
+            .video_gemini_client
+            .as_ref()
+            .or(state.gemini_client.as_ref())
+        {
+            gemini_client.generate_text(&prompt).await.ok()
+        } else {
+            None
+        }
+    } else if let Some(gemini_client) = state
+        .video_gemini_client
+        .as_ref()
+        .or(state.gemini_client.as_ref())
+    {
+        gemini_client.generate_text(&prompt).await.ok()
+    } else if let Some(ref claude_client) = state.claude_client {
+        claude_client.generate_text(&prompt).await.ok()
+    } else {
+        None
+    }?;
+
+    let decision: WorkflowFollowupDecision = parse_json_object(&raw)?;
+    if decision.mode != "reply" {
+        return None;
+    }
+
+    let reply = decision.reply?.trim().to_string();
+    if reply.is_empty() {
+        return None;
+    }
+
+    persist_direct_followup_exchange(state, session_id, user_message, &reply).await;
+    Some(reply)
+}
+
+/// Returns the latest persisted progress step for a running agent job in this session,
+/// or None if there's no in-progress work or no persisted step yet.
 async fn get_running_agent_job_status(state: &Arc<AppState>, session_uuid: &str) -> Option<String> {
-    let row = sqlx::query_as::<_, (uuid::Uuid, String, chrono::DateTime<chrono::Utc>)>(
-        "SELECT id, user_message, created_at
-         FROM agent_background_jobs
-         WHERE session_uuid = $1 AND status = 'running'
-         ORDER BY created_at DESC LIMIT 1",
+    let row = sqlx::query_as::<_, (uuid::Uuid, String, chrono::DateTime<chrono::Utc>, serde_json::Value, Option<String>, Option<String>)>(
+        "SELECT abj.id, abj.user_message, abj.created_at, abj.progress_log, aw.current_step,
+                (
+                    SELECT awe.message
+                    FROM app_workflow_events awe
+                    WHERE awe.workflow_id = aw.id
+                    ORDER BY awe.created_at DESC
+                    LIMIT 1
+                ) AS latest_event_message
+         FROM agent_background_jobs abj
+         LEFT JOIN app_workflows aw ON aw.id = abj.workflow_id
+         WHERE abj.session_uuid = $1 AND abj.status = 'running'
+         ORDER BY abj.created_at DESC LIMIT 1",
     )
     .bind(session_uuid)
     .fetch_optional(&state.db_pool)
@@ -1172,15 +2257,26 @@ async fn get_running_agent_job_status(state: &Arc<AppState>, session_uuid: &str)
     .ok()
     .flatten();
 
-    row.map(|(_, user_msg, created_at)| {
-        let elapsed = chrono::Utc::now().signed_duration_since(created_at);
-        let mins = elapsed.num_minutes();
-        let elapsed_str = if mins < 1 { "just now".to_string() } else { format!("{} min ago", mins) };
-        format!(
-            "⏳ Your task is still running in the background (started {}): \"{}\"\n\nI'll send you the result as soon as it's done. You can also check back later.",
-            elapsed_str,
-            user_msg.chars().take(120).collect::<String>()
-        )
+    row.and_then(
+        |(_, _user_msg, _created_at, progress_log, workflow_current_step, latest_event_message)| {
+            latest_progress_message(&progress_log)
+                .or(latest_event_message)
+                .or(workflow_current_step)
+        },
+    )
+}
+
+fn workflow_status_payload(
+    workflow_id: Option<uuid::Uuid>,
+    workflow_current_step: Option<String>,
+    workflow_last_heartbeat_at: Option<chrono::DateTime<chrono::Utc>>,
+    workflow_latest_event_message: Option<String>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "id": workflow_id,
+        "current_step": workflow_current_step,
+        "last_heartbeat_at": workflow_last_heartbeat_at.map(|ts| ts.to_rfc3339()),
+        "latest_event_message": workflow_latest_event_message,
     })
 }
 
@@ -1219,78 +2315,170 @@ async fn run_agent_background(
         }
     });
 
-    let response = if use_claude {
-        if let Some(ref claude_client) = state.claude_client {
-            let agent = StatefulClaudeAgent::new(Arc::new(claude_client.clone()));
-            match agent
-                .chat(
-                    &text,
-                    &session_id,
-                    enhanced_query,
-                    state.clone(),
-                    job_manager.clone(),
-                    Some(proxy_tx),
-                )
-                .await
-            {
-                Ok(resp) => resp,
-                Err(e) => format!("Sorry, I encountered an error: {}", e),
-            }
-        } else {
-            "Claude client not configured".to_string()
-        }
+    let agent_workflow_id = if let Some(jid) = job_id {
+        get_agent_job_workflow_id(&state, jid).await
     } else {
-        if let Some(gemini_client) = state
-            .video_gemini_client
-            .as_ref()
-            .or(state.gemini_client.as_ref())
-        {
-            let agent = StatefulGeminiAgent::new(Arc::new(gemini_client.clone()));
-            match agent
-                .chat(
-                    &text,
-                    &session_id,
-                    enhanced_query,
-                    state.clone(),
-                    job_manager.clone(),
-                    Some(proxy_tx),
-                )
-                .await
-            {
-                Ok(resp) => resp,
-                Err(e) => format!("Sorry, I encountered an error: {}", e),
-            }
-        } else {
-            "Gemini client not configured".to_string()
-        }
+        None
     };
-
-    tracing::info!(
-        "✅ Background agent task completed for session: {}",
-        session_id
-    );
-
-    // Mark job as completed in DB (also saves result so polling works after reconnect)
-    if let Some(jid) = job_id {
-        complete_agent_job(&state, jid, &response).await;
+    if let (Some(jid), Some(workflow_id)) = (job_id, agent_workflow_id) {
+        let workflow_runtime = crate::services::WorkflowRuntime::new(state.db_pool.clone());
+        let _ = workflow_runtime
+            .heartbeat(
+                workflow_id,
+                crate::services::WorkflowStatus::Planning,
+                Some("agent_runtime_started"),
+                "The background agent runtime has started and is preparing the first execution step.",
+                serde_json::json!({
+                    "session_id": session_id,
+                    "job_id": jid,
+                }),
+            )
+            .await;
     }
 
-    // Route result back to the WebSocket via job_manager — works even if the user
-    // reconnected with a new WebSocket after navigating away.
-    // The WebSocket loop handles JobStatus::Completed by sending `result` as a chat message.
-    if !response.is_empty() {
-        let update = crate::jobs::ProgressUpdate::new(
-            job_id
-                .map(|j| j.to_string())
-                .unwrap_or_else(|| session_id.clone()),
-            "Agent task complete".to_string(),
-            crate::jobs::JobStatus::Completed {
-                result: response,
-                output_files: vec![],
-                duration_seconds: 0.0,
-            },
-        );
-        job_manager.send_progress(&session_id, update).await;
+    let timeout_secs = std::env::var("AGENT_BACKGROUND_TIMEOUT_SECONDS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(1200);
+
+    let response = tokio::time::timeout(
+        std::time::Duration::from_secs(timeout_secs),
+        async {
+            if use_claude {
+                if let Some(ref claude_client) = state.claude_client {
+                    let agent = StatefulClaudeAgent::new(Arc::new(claude_client.clone()));
+                    agent
+                        .chat(
+                            &text,
+                            &session_id,
+                            enhanced_query,
+                            state.clone(),
+                            job_manager.clone(),
+                            Some(proxy_tx),
+                            agent_workflow_id,
+                        )
+                        .await
+                } else {
+                    Err("Claude client not configured".to_string())
+                }
+            } else if let Some(gemini_client) = state
+                .video_gemini_client
+                .as_ref()
+                .or(state.gemini_client.as_ref())
+            {
+                let agent = StatefulGeminiAgent::new(Arc::new(gemini_client.clone()));
+                agent
+                    .chat(
+                        &text,
+                        &session_id,
+                        enhanced_query,
+                        state.clone(),
+                        job_manager.clone(),
+                        Some(proxy_tx),
+                        agent_workflow_id,
+                    )
+                    .await
+            } else {
+                Err("Gemini client not configured".to_string())
+            }
+        },
+    )
+    .await;
+
+    match response {
+        Ok(Ok(response)) => {
+            tracing::info!(
+                "✅ Background agent task completed for session: {}",
+                session_id
+            );
+
+            let output_links = response_output_links(&response);
+
+            let completion_accepted = if let Some(jid) = job_id {
+                complete_agent_job(&state, jid, &response).await
+            } else {
+                true
+            };
+
+            if !completion_accepted {
+                let update = crate::jobs::ProgressUpdate::new(
+                    job_id
+                        .map(|j| j.to_string())
+                        .unwrap_or_else(|| session_id.clone()),
+                    "The background workflow was rejected because it did not return a required output artifact.".to_string(),
+                    crate::jobs::JobStatus::Failed {
+                        error: "The workflow finished without returning a required delivery or output link.".to_string(),
+                        failed_at_step: "artifact_verification".to_string(),
+                    },
+                );
+                job_manager.send_progress(&session_id, update).await;
+                return;
+            }
+
+            if !response.is_empty() {
+                let update = crate::jobs::ProgressUpdate::new(
+                    job_id
+                        .map(|j| j.to_string())
+                        .unwrap_or_else(|| session_id.clone()),
+                    "The background workflow reached a completed state.".to_string(),
+                    crate::jobs::JobStatus::Completed {
+                        result: response,
+                        output_files: output_links,
+                        duration_seconds: 0.0,
+                    },
+                );
+                job_manager.send_progress(&session_id, update).await;
+            }
+        }
+        Ok(Err(error)) => {
+            tracing::error!(
+                "❌ Background agent task failed for session {}: {}",
+                session_id,
+                error
+            );
+
+            if let Some(jid) = job_id {
+                fail_agent_job(&state, jid, &error).await;
+            }
+
+            let update = crate::jobs::ProgressUpdate::new(
+                job_id
+                    .map(|j| j.to_string())
+                    .unwrap_or_else(|| session_id.clone()),
+                "The background workflow reached a failed state.".to_string(),
+                crate::jobs::JobStatus::Failed {
+                    error,
+                    failed_at_step: "background_agent".to_string(),
+                },
+            );
+            job_manager.send_progress(&session_id, update).await;
+        }
+        Err(_) => {
+            let error = format!(
+                "The background agent exceeded the {} second execution limit and was stopped.",
+                timeout_secs
+            );
+            tracing::error!(
+                "⏱️ Background agent task timed out for session {}",
+                session_id
+            );
+
+            if let Some(jid) = job_id {
+                fail_agent_job(&state, jid, &error).await;
+            }
+
+            let update = crate::jobs::ProgressUpdate::new(
+                job_id
+                    .map(|j| j.to_string())
+                    .unwrap_or_else(|| session_id.clone()),
+                "The background workflow reached a failed timeout state.".to_string(),
+                crate::jobs::JobStatus::Failed {
+                    error,
+                    failed_at_step: "background_agent_timeout".to_string(),
+                },
+            );
+            job_manager.send_progress(&session_id, update).await;
+        }
     }
 }
 
@@ -1298,22 +2486,39 @@ async fn run_agent_background(
 async fn get_session_jobs(
     axum::extract::Path(session_uuid): axum::extract::Path<String>,
     Extension(state): Extension<Arc<AppState>>,
-    Extension(_claims): Extension<crate::models::auth::Claims>,
+    Extension(claims): Extension<crate::models::auth::Claims>,
 ) -> Result<axum::response::Json<serde_json::Value>, axum::http::StatusCode> {
-    // Security model: the session UUID is itself an unguessable token (UUID v4).
-    // WebSocket sessions are always created with user_id = 1 (anonymous default in
-    // get_or_create_session) so a strict owner == JWT user_id check always fails.
-    // Any authenticated user who holds the correct UUID can poll it — this matches
-    // how most UUID-keyed APIs work (UUID is the unforgeable capability).
-    let exists: bool =
-        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM chat_sessions WHERE session_uuid = $1)")
-            .bind(&session_uuid)
-            .fetch_one(&state.db_pool)
-            .await
-            .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
+    let user_id = claims.sub.parse::<i32>().unwrap_or(0);
+    let session_row = sqlx::query_as::<_, (i32, i32)>(
+        "SELECT id, user_id FROM chat_sessions WHERE session_uuid = $1",
+    )
+    .bind(&session_uuid)
+    .fetch_optional(&state.db_pool)
+    .await
+    .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    if !exists {
-        return Err(axum::http::StatusCode::NOT_FOUND);
+    let Some((session_id, session_owner)) = session_row else {
+        return Ok(axum::response::Json(serde_json::json!({
+            "success": true,
+            "session_uuid": session_uuid,
+            "jobs": []
+        })));
+    };
+
+    if session_owner == 1 {
+        let _ = sqlx::query("UPDATE chat_sessions SET user_id = $1 WHERE id = $2")
+            .bind(user_id)
+            .bind(session_id)
+            .execute(&state.db_pool)
+            .await;
+    } else if session_owner != user_id {
+        tracing::warn!(
+            "User {} attempted to read jobs for session {} owned by {}",
+            user_id,
+            session_uuid,
+            session_owner
+        );
+        return Err(axum::http::StatusCode::FORBIDDEN);
     }
 
     let rows = sqlx::query_as::<
@@ -1327,12 +2532,25 @@ async fn get_session_jobs(
             serde_json::Value,
             chrono::DateTime<chrono::Utc>,
             chrono::DateTime<chrono::Utc>,
+            Option<uuid::Uuid>,
+            Option<String>,
+            Option<chrono::DateTime<chrono::Utc>>,
+            Option<String>,
         ),
     >(
-        "SELECT id, user_message, status, result, error, progress_log, created_at, updated_at
-         FROM agent_background_jobs
-         WHERE session_uuid = $1
-         ORDER BY created_at DESC
+        "SELECT abj.id, abj.user_message, abj.status, abj.result, abj.error, abj.progress_log, abj.created_at, abj.updated_at,
+                aw.id AS workflow_id, aw.current_step, aw.last_heartbeat_at,
+                (
+                    SELECT awe.message
+                    FROM app_workflow_events awe
+                    WHERE awe.workflow_id = aw.id
+                    ORDER BY awe.created_at DESC
+                    LIMIT 1
+                ) AS latest_event_message
+         FROM agent_background_jobs abj
+         LEFT JOIN app_workflows aw ON aw.id = abj.workflow_id
+         WHERE abj.session_uuid = $1
+         ORDER BY abj.created_at DESC
          LIMIT 20",
     )
     .bind(&session_uuid)
@@ -1343,7 +2561,7 @@ async fn get_session_jobs(
     let jobs: Vec<serde_json::Value> = rows
         .into_iter()
         .map(
-            |(id, msg, status, result, error, progress_log, created_at, updated_at)| {
+            |(id, msg, status, result, error, progress_log, created_at, updated_at, workflow_id, workflow_current_step, workflow_last_heartbeat_at, workflow_latest_event_message)| {
                 serde_json::json!({
                     "id": id,
                     "user_message": msg,
@@ -1353,6 +2571,12 @@ async fn get_session_jobs(
                     "progress_log": progress_log,
                     "created_at": created_at.to_rfc3339(),
                     "updated_at": updated_at.to_rfc3339(),
+                    "workflow": workflow_status_payload(
+                        workflow_id,
+                        workflow_current_step,
+                        workflow_last_heartbeat_at,
+                        workflow_latest_event_message,
+                    )
                 })
             },
         )

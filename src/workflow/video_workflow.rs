@@ -2,12 +2,12 @@
 // Video editing workflow - Simplified example using existing agent system
 // This demonstrates how to use LangGraph-style workflow orchestration
 
-use super::state::{WorkflowState, StateUpdate, WorkflowStatus};
-use super::graph::{StateGraph, NodeType, NodeFunction, StateGraphBuilder};
-use super::executor::{WorkflowExecutor, ExecutorBuilder, ExecutorConfig};
 use super::checkpoint::WorkflowCheckpointer;
-use crate::claude_client::ClaudeClient;
+use super::executor::{ExecutorBuilder, ExecutorConfig, WorkflowExecutor};
+use super::graph::{NodeFunction, NodeType, StateGraph, StateGraphBuilder};
+use super::state::{StateUpdate, WorkflowState, WorkflowStatus};
 use crate::agent::simple_claude_agent::SimpleClaudeAgent;
+use crate::claude_client::ClaudeClient;
 use async_trait::async_trait;
 use std::sync::Arc;
 
@@ -33,15 +33,25 @@ impl NodeFunction for AgentNode {
         tracing::info!("🤖 Executing agent node...");
 
         // Get last user message
-        let user_input = state.get_last_user_message()
+        let user_input = state
+            .get_last_user_message()
             .map(|m| m.content.clone())
             .unwrap_or_else(|| "Continue processing".to_string());
 
         // Execute agent (this handles tool calling internally)
-        match self.agent.execute(&user_input, "workflow-session", None, self.app_state.clone(), None).await {
+        match self
+            .agent
+            .execute(
+                &user_input,
+                "workflow-session",
+                None,
+                self.app_state.clone(),
+                None,
+            )
+            .await
+        {
             Ok(result) => {
-                let mut update = StateUpdate::new()
-                    .with_message("assistant", result.clone());
+                let mut update = StateUpdate::new().with_message("assistant", result.clone());
 
                 // Check if workflow complete
                 if result.contains("✅") || result.contains("submit_final_answer") {
@@ -79,13 +89,13 @@ pub fn build_video_workflow(
             "agent",
             NodeType::Agent,
             agent_node,
-            "AI agent for video editing reasoning"
+            "AI agent for video editing reasoning",
         )
         .add_node(
             "complete",
             NodeType::End,
             complete_node,
-            "Complete the workflow"
+            "Complete the workflow",
         )
         .set_entry_point("agent")
         // Agent continues until workflow marked as complete

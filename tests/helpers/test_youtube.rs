@@ -58,9 +58,7 @@ impl TestYouTubeClient {
         }
 
         let body: serde_json::Value = response.json().await?;
-        let items = body["items"]
-            .as_array()
-            .ok_or("No items in response")?;
+        let items = body["items"].as_array().ok_or("No items in response")?;
 
         if items.is_empty() {
             return Err("Video not found".into());
@@ -72,7 +70,10 @@ impl TestYouTubeClient {
 
     /// Delete a test video from YouTube (cleanup)
     pub async fn delete_video(&self, video_id: &str) -> Result<(), Box<dyn std::error::Error>> {
-        let url = format!("https://www.googleapis.com/youtube/v3/videos?id={}", video_id);
+        let url = format!(
+            "https://www.googleapis.com/youtube/v3/videos?id={}",
+            video_id
+        );
 
         let response = reqwest::Client::new()
             .delete(&url)
@@ -88,7 +89,10 @@ impl TestYouTubeClient {
     }
 
     /// Verify video is unlisted (for test safety)
-    pub async fn verify_unlisted(&self, video_id: &str) -> Result<bool, Box<dyn std::error::Error>> {
+    pub async fn verify_unlisted(
+        &self,
+        video_id: &str,
+    ) -> Result<bool, Box<dyn std::error::Error>> {
         let details = self.get_video_details(video_id).await?;
         Ok(details.status.privacy_status == "unlisted")
     }

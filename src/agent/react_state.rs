@@ -2,8 +2,8 @@
 // ReAct Agent State Management (LangGraph-inspired)
 // Implements Thought → Action → Observation → Reflection cycle
 
-use serde::{Serialize, Deserialize};
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Agent execution state following ReAct pattern
@@ -73,8 +73,15 @@ impl AgentState {
 
     pub fn to_user_message(&self) -> String {
         match self {
-            AgentState::Planning { user_request, analysis, identified_steps } => {
-                let mut msg = format!("🧠 **Planning Phase**\n\nAnalyzing: \"{}\"\n\n", user_request);
+            AgentState::Planning {
+                user_request,
+                analysis,
+                identified_steps,
+            } => {
+                let mut msg = format!(
+                    "🧠 **Planning Phase**\n\nAnalyzing: \"{}\"\n\n",
+                    user_request
+                );
                 if !analysis.is_empty() {
                     msg.push_str(&format!("**Analysis**: {}\n\n", analysis));
                 }
@@ -86,38 +93,69 @@ impl AgentState {
                 }
                 msg
             }
-            AgentState::Thinking { thought, reasoning, step_number, total_steps } => {
+            AgentState::Thinking {
+                thought,
+                reasoning,
+                step_number,
+                total_steps,
+            } => {
                 format!(
                     "💭 **Thinking** (Step {}/{})\n\n**Thought**: {}\n\n**Reasoning**: {}",
                     step_number, total_steps, thought, reasoning
                 )
             }
-            AgentState::Executing { action, tool_name, tool_args, step_number } => {
+            AgentState::Executing {
+                action,
+                tool_name,
+                tool_args,
+                step_number,
+            } => {
                 format!(
                     "🔧 **Executing Action** (Step {})\n\n**Action**: {}\n**Tool**: {}\n**Parameters**: {}",
                     step_number, action, tool_name, serde_json::to_string_pretty(tool_args).unwrap_or_default()
                 )
             }
-            AgentState::Observing { observation, tool_output, step_number } => {
+            AgentState::Observing {
+                observation,
+                tool_output,
+                step_number,
+            } => {
                 format!(
                     "👁️ **Observation** (Step {})\n\n**Result**: {}\n\n**Output**: {}",
                     step_number, observation, tool_output
                 )
             }
-            AgentState::Reflecting { reflection, progress_evaluation, next_action_decision, step_number } => {
+            AgentState::Reflecting {
+                reflection,
+                progress_evaluation,
+                next_action_decision,
+                step_number,
+            } => {
                 format!(
                     "🤔 **Reflection** (Step {})\n\n**Evaluation**: {}\n\n**Progress**: {}\n\n**Next**: {}",
                     step_number, reflection, progress_evaluation, next_action_decision
                 )
             }
-            AgentState::Interrupted { user_message, timestamp, .. } => {
+            AgentState::Interrupted {
+                user_message,
+                timestamp,
+                ..
+            } => {
                 format!(
                     "⏸️ **Interrupted by User** at {}\n\n**New Instruction**: {}",
-                    timestamp.format("%H:%M:%S"), user_message
+                    timestamp.format("%H:%M:%S"),
+                    user_message
                 )
             }
-            AgentState::Completed { summary, outputs, total_steps_executed } => {
-                let mut msg = format!("✅ **Completed** ({} steps executed)\n\n{}\n\n", total_steps_executed, summary);
+            AgentState::Completed {
+                summary,
+                outputs,
+                total_steps_executed,
+            } => {
+                let mut msg = format!(
+                    "✅ **Completed** ({} steps executed)\n\n{}\n\n",
+                    total_steps_executed, summary
+                );
                 if !outputs.is_empty() {
                     msg.push_str("**Output Files**:\n");
                     for output in outputs {
@@ -172,10 +210,10 @@ impl AgentContext {
 
     pub fn get_current_step(&self) -> usize {
         match &self.current_state {
-            AgentState::Thinking { step_number, .. } |
-            AgentState::Executing { step_number, .. } |
-            AgentState::Observing { step_number, .. } |
-            AgentState::Reflecting { step_number, .. } => *step_number,
+            AgentState::Thinking { step_number, .. }
+            | AgentState::Executing { step_number, .. }
+            | AgentState::Observing { step_number, .. }
+            | AgentState::Reflecting { step_number, .. } => *step_number,
             _ => 0,
         }
     }

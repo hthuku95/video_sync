@@ -58,7 +58,11 @@ impl YouTubeAnalyticsClient {
 
         if !response.status().is_success() {
             let error_text = response.text().await?;
-            tracing::error!("YouTube Analytics API error for video {}: {}", video_id, error_text);
+            tracing::error!(
+                "YouTube Analytics API error for video {}: {}",
+                video_id,
+                error_text
+            );
             return Err(format!("Failed to fetch video analytics: {}", error_text).into());
         }
 
@@ -125,20 +129,14 @@ impl YouTubeAnalyticsClient {
         end_date: &str,
     ) -> Result<DemographicsApiResponse, Box<dyn std::error::Error + Send + Sync>> {
         // Age and Gender Demographics
-        let age_gender_data = self.fetch_demographics_dimension(
-            access_token,
-            start_date,
-            end_date,
-            "ageGroup,gender",
-        ).await?;
+        let age_gender_data = self
+            .fetch_demographics_dimension(access_token, start_date, end_date, "ageGroup,gender")
+            .await?;
 
         // Geographic Demographics
-        let geography_data = self.fetch_demographics_dimension(
-            access_token,
-            start_date,
-            end_date,
-            "country",
-        ).await?;
+        let geography_data = self
+            .fetch_demographics_dimension(access_token, start_date, end_date, "country")
+            .await?;
 
         Ok(DemographicsApiResponse {
             age_gender: age_gender_data,
@@ -252,7 +250,11 @@ impl YouTubeAnalyticsClient {
 
         if !response.status().is_success() {
             let error_text = response.text().await?;
-            return Err(format!("Failed to fetch demographics dimension {}: {}", dimensions, error_text).into());
+            return Err(format!(
+                "Failed to fetch demographics dimension {}: {}",
+                dimensions, error_text
+            )
+            .into());
         }
 
         let data: AnalyticsApiResponse = response.json().await?;
@@ -284,7 +286,10 @@ impl YouTubeAnalyticsClient {
                 ("ids", "channel==MINE".to_string()),
                 ("startDate", start_date.to_string()),
                 ("endDate", end_date.to_string()),
-                ("metrics", "views,likes,dislikes,comments,shares,averageViewPercentage".to_string()),
+                (
+                    "metrics",
+                    "views,likes,dislikes,comments,shares,averageViewPercentage".to_string(),
+                ),
                 ("dimensions", "video".to_string()),
                 ("filters", video_filter),
             ])
@@ -302,7 +307,11 @@ impl YouTubeAnalyticsClient {
         // Parse each row as a separate clip's metrics
         let mut results = Vec::new();
         for row in analytics_response.rows {
-            let video_id = row.get(0).and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
+            let video_id = row
+                .get(0)
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+                .to_string();
             let views = row.get(1).and_then(|v| v.as_i64()).unwrap_or(0) as i32;
             let likes = row.get(2).and_then(|v| v.as_i64()).unwrap_or(0) as i32;
             let dislikes = row.get(3).and_then(|v| v.as_i64()).unwrap_or(0) as i32;
@@ -311,8 +320,16 @@ impl YouTubeAnalyticsClient {
             let avg_watch_pct = row.get(6).and_then(|v| v.as_f64()).unwrap_or(0.0);
 
             // Calculate engagement rates
-            let like_rate = if views > 0 { likes as f64 / views as f64 } else { 0.0 };
-            let comment_rate = if views > 0 { comments as f64 / views as f64 } else { 0.0 };
+            let like_rate = if views > 0 {
+                likes as f64 / views as f64
+            } else {
+                0.0
+            };
+            let comment_rate = if views > 0 {
+                comments as f64 / views as f64
+            } else {
+                0.0
+            };
 
             results.push(ClipPerformanceMetrics {
                 video_id,
@@ -540,9 +557,9 @@ pub struct ClipPerformanceMetrics {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ShortsTrafficSources {
-    pub shorts_feed_pct: f64,      // % from Shorts feed (most important for Shorts)
-    pub suggested_videos_pct: f64,  // % from suggested/related
-    pub browse_features_pct: f64,   // % from browse/homepage
-    pub search_pct: f64,            // % from search
-    pub external_pct: f64,          // % from external sites
+    pub shorts_feed_pct: f64, // % from Shorts feed (most important for Shorts)
+    pub suggested_videos_pct: f64, // % from suggested/related
+    pub browse_features_pct: f64, // % from browse/homepage
+    pub search_pct: f64,      // % from search
+    pub external_pct: f64,    // % from external sites
 }

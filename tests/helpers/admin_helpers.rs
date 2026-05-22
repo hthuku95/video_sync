@@ -100,7 +100,7 @@ pub async fn create_test_admin(
     sqlx::query(
         "INSERT INTO whitelist_emails (email, created_at)
          VALUES ($1, NOW())
-         ON CONFLICT (email) DO NOTHING"
+         ON CONFLICT (email) DO NOTHING",
     )
     .bind(email)
     .execute(pool)
@@ -218,7 +218,10 @@ pub async fn get_jobs(
             if e.is_timeout() {
                 format!("Request timed out after 30s")
             } else if e.is_connect() {
-                format!("Connection failed: {} (is server running on 127.0.0.1:3000?)", e)
+                format!(
+                    "Connection failed: {} (is server running on 127.0.0.1:3000?)",
+                    e
+                )
             } else if e.is_request() {
                 format!("Request error: {}", e)
             } else {
@@ -259,7 +262,10 @@ pub async fn get_job_details(token: &str, job_id: i32) -> Result<JobDetail, Stri
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(format!("Get job details failed with status {}: {}", status, body));
+        return Err(format!(
+            "Get job details failed with status {}: {}",
+            status, body
+        ));
     }
 
     let detail_response: JobDetailResponse = response
@@ -277,7 +283,10 @@ pub async fn cancel_job(token: &str, job_id: i32) -> Result<(), String> {
         .build()
         .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
 
-    let url = format!("http://127.0.0.1:3000/api/admin/clipping/jobs/{}/cancel", job_id);
+    let url = format!(
+        "http://127.0.0.1:3000/api/admin/clipping/jobs/{}/cancel",
+        job_id
+    );
 
     let response = client
         .post(&url)
@@ -289,7 +298,10 @@ pub async fn cancel_job(token: &str, job_id: i32) -> Result<(), String> {
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(format!("Cancel job failed with status {}: {}", status, body));
+        return Err(format!(
+            "Cancel job failed with status {}: {}",
+            status, body
+        ));
     }
 
     let api_response: ApiResponse = response
@@ -311,7 +323,10 @@ pub async fn retry_job(token: &str, job_id: i32) -> Result<(), String> {
         .build()
         .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
 
-    let url = format!("http://127.0.0.1:3000/api/admin/clipping/jobs/{}/retry", job_id);
+    let url = format!(
+        "http://127.0.0.1:3000/api/admin/clipping/jobs/{}/retry",
+        job_id
+    );
 
     let response = client
         .post(&url)

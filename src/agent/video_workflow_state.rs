@@ -1,9 +1,9 @@
 // LangGraph-inspired state management for video editing workflows
 // Replaces hardcoded iteration limits with flexible graph-based execution
 
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use chrono::{DateTime, Utc};
 
 /// Workflow state that persists across agent interactions
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -166,7 +166,11 @@ impl VideoWorkflowState {
         self.updated_at = Utc::now();
     }
 
-    pub fn add_input_file(&mut self, file_path: &str, metadata: HashMap<String, serde_json::Value>) {
+    pub fn add_input_file(
+        &mut self,
+        file_path: &str,
+        metadata: HashMap<String, serde_json::Value>,
+    ) {
         self.input_files.push(FileReference {
             file_id: uuid::Uuid::new_v4().to_string(),
             file_path: file_path.to_string(),
@@ -176,7 +180,11 @@ impl VideoWorkflowState {
         self.updated_at = Utc::now();
     }
 
-    pub fn add_output_file(&mut self, file_path: &str, metadata: HashMap<String, serde_json::Value>) {
+    pub fn add_output_file(
+        &mut self,
+        file_path: &str,
+        metadata: HashMap<String, serde_json::Value>,
+    ) {
         self.output_files.push(FileReference {
             file_id: uuid::Uuid::new_v4().to_string(),
             file_path: file_path.to_string(),
@@ -215,7 +223,8 @@ impl VideoWorkflowState {
             let mut parallel_groups = Vec::new();
 
             for group_indices in &plan.parallel_groups {
-                let steps: Vec<PlanStep> = group_indices.iter()
+                let steps: Vec<PlanStep> = group_indices
+                    .iter()
                     .filter_map(|&idx| plan.steps.get(idx).cloned())
                     .filter(|step| step.status == StepStatus::Pending)
                     .collect();
@@ -233,7 +242,8 @@ impl VideoWorkflowState {
 
     pub fn get_next_step(&self) -> Option<PlanStep> {
         if let Some(plan) = &self.execution_plan {
-            plan.steps.iter()
+            plan.steps
+                .iter()
                 .find(|step| step.status == StepStatus::Pending)
                 .cloned()
         } else {
@@ -275,7 +285,9 @@ impl VideoWorkflowState {
     /// Get progress percentage
     pub fn progress_percentage(&self) -> f32 {
         if let Some(plan) = &self.execution_plan {
-            let completed = plan.steps.iter()
+            let completed = plan
+                .steps
+                .iter()
                 .filter(|s| s.status == StepStatus::Completed || s.status == StepStatus::Skipped)
                 .count();
             (completed as f32 / plan.total_steps as f32) * 100.0
@@ -298,7 +310,11 @@ impl VideoWorkflowManager {
         }
     }
 
-    pub async fn create_workflow(&self, session_id: String, user_request: String) -> VideoWorkflowState {
+    pub async fn create_workflow(
+        &self,
+        session_id: String,
+        user_request: String,
+    ) -> VideoWorkflowState {
         let state = VideoWorkflowState::new(session_id.clone(), user_request);
         let mut workflows = self.workflows.write().await;
         workflows.insert(session_id, state.clone());

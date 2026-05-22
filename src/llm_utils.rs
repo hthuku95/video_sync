@@ -39,7 +39,10 @@ pub async fn generate_text_best_effort(
                 return Ok(result);
             }
             Err(e) => {
-                tracing::warn!("⚠️ Gemma client failed, trying Gemini Flash fallback: {}", e);
+                tracing::warn!(
+                    "⚠️ Gemma client failed, trying Gemini Flash fallback: {}",
+                    e
+                );
             }
         }
     }

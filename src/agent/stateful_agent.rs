@@ -1,25 +1,22 @@
 // Stateful agent that manages conversations and decides when to spawn background jobs
 // The AI has a special tool to start background jobs for complex video editing tasks
 
-use crate::claude_client::{ClaudeClient, ClaudeMessage, ClaudeContent, ClaudeTool, InputSchema, PropertyDefinition};
-use crate::agent::video_workflow_state::VideoWorkflowManager;
 use crate::agent::conversation_manager::{ConversationManager, ConversationMessage};
+use crate::claude_client::{
+    ClaudeClient, ClaudeContent, ClaudeMessage, ClaudeTool, InputSchema, PropertyDefinition,
+};
 use crate::jobs::video_job;
 use crate::AppState;
-use std::sync::Arc;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 pub struct StatefulClaudeAgent {
     client: Arc<ClaudeClient>,
-    workflow_manager: Arc<VideoWorkflowManager>,
 }
 
 impl StatefulClaudeAgent {
     pub fn new(client: Arc<ClaudeClient>) -> Self {
-        Self {
-            client,
-            workflow_manager: Arc::new(VideoWorkflowManager::new()),
-        }
+        Self { client }
     }
 
     /// Main conversational interface - AI decides when to use background jobs
@@ -31,6 +28,7 @@ impl StatefulClaudeAgent {
         app_state: Arc<AppState>,
         job_manager: Arc<crate::jobs::JobManager>,
         progress_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
+        _workflow_id: Option<uuid::Uuid>,
     ) -> Result<String, String> {
         // Helper to send progress updates
         let send_progress = |msg: &str| {
@@ -40,7 +38,7 @@ impl StatefulClaudeAgent {
             tracing::info!("{}", msg);
         };
 
-        send_progress("🔧 Initializing Claude agent (3 control tools + 40+ video editing tools in background job system)...");
+        send_progress("🔧 Initializing Claude agent with durable workflow control and the full VideoSync creative toolbelt...");
         let control_tools = Self::create_control_tools();
 
         // Initialize ConversationManager to retrieve and save conversation history
@@ -65,7 +63,9 @@ impl StatefulClaudeAgent {
             messages.push(ClaudeMessage {
                 role: match msg.role {
                     crate::agent::conversation_manager::MessageRole::Human => "user".to_string(),
-                    crate::agent::conversation_manager::MessageRole::Assistant => "assistant".to_string(),
+                    crate::agent::conversation_manager::MessageRole::Assistant => {
+                        "assistant".to_string()
+                    }
                     _ => continue, // Skip system and function messages
                 },
                 content: ClaudeContent::Text(msg.content.clone()),
@@ -92,7 +92,7 @@ You engage in natural conversation with users while coordinating video editing t
 ## Available Tools
 
 ### start_background_job
-Launches a dedicated video editing agent with 39 specialized tools (trim, merge, filter, overlay, color adjustment, audio processing, etc.) that executes in the background. Use this when the user requests video processing work.
+Launches a dedicated video editing agent with the full VideoSync tool registry: FFmpeg editing tools, long-form generation, Blender/Manim/LaTeX rendering, VibeVoice/audio tools, thumbnails, QA/review, uploads, and delivery packaging. Use this when the user requests video processing or generation work, especially long-running tasks.
 
 ### check_job_status
 Queries the status of background jobs. Use this when the user asks about progress, completion, or wants updates on running tasks. Can check specific jobs by ID or list all jobs in the current session.
@@ -110,12 +110,17 @@ Trust your understanding of natural language to determine user intent:
 ## Important Principles
 
 - You can chat naturally while background jobs execute - these are parallel operations
+- Long videos are allowed. The background system can break long-form work into durable, resumable workflow nodes and report progress while it renders.
+- Use the broader creative stack when helpful: clipping/enhancement, thumbnails, product mockups, education visuals, 3D scenes, voice/audio, mixed bundles, and delivery pages.
 - When a job is running, you remain available for conversation and can check its status
 - Only start new jobs for new work requests, not for status inquiries about existing work
-- Be helpful, conversational, and context-aware in all interactions"#;
+- Be helpful, conversational, and context-aware in all interactions
+- If the user's task is clearly defined, call `set_chat_title` early with a concise descriptive title
+- If tools created output files, finish with `submit_final_answer` so the user gets delivery/output links instead of internal file paths"#;
 
         // Save user message to conversation history
-        let user_msg = ConversationMessage::new_human(session_id.to_string(), user_input.to_string());
+        let user_msg =
+            ConversationMessage::new_human(session_id.to_string(), user_input.to_string());
         match conversation_manager.save_message(&user_msg).await {
             Ok(_) => tracing::debug!("✅ Saved user message to DB for session {}", session_id),
             Err(e) => tracing::error!("❌ Failed to save user message: {}", e),
@@ -134,11 +139,15 @@ Trust your understanding of natural language to determine user intent:
                 is_first_call = false;
             }
 
-            let response = self.client.generate_content(
-                conversation_messages.clone(),
-                Some(control_tools.clone()),
-                Some(system_prompt.to_string()),
-            ).await.map_err(|e| format!("Claude API Error: {}", e))?;
+            let response = self
+                .client
+                .generate_content(
+                    conversation_messages.clone(),
+                    Some(control_tools.clone()),
+                    Some(system_prompt.to_string()),
+                )
+                .await
+                .map_err(|e| format!("Claude API Error: {}", e))?;
 
             let mut has_tool_calls = false;
             let mut tool_results = Vec::new();
@@ -157,7 +166,8 @@ Trust your understanding of natural language to determine user intent:
                             send_progress("🚀 Starting background video editing job...");
                             tracing::info!("🚀 AI decided to start background job");
 
-                            let task_description = input.get("task_description")
+                            let task_description = input
+                                .get("task_description")
                                 .and_then(|v| v.as_str())
                                 .unwrap_or(user_input);
 
@@ -170,11 +180,15 @@ Trust your understanding of natural language to determine user intent:
                                 agent_type,
                                 app_state.clone(),
                                 job_manager.clone(),
-                            ).await;
+                            )
+                            .await;
 
                             let tool_result = match job_result {
                                 Ok(job_id) => {
-                                    send_progress(&format!("✅ Background job started: {}", job_id));
+                                    send_progress(&format!(
+                                        "✅ Background job started: {}",
+                                        job_id
+                                    ));
                                     tracing::info!("✅ Background job started: {}", job_id);
                                     format!("Successfully started background video editing job with ID: {}. The job is now processing in the background and will send progress updates.", job_id)
                                 }
@@ -187,7 +201,8 @@ Trust your understanding of natural language to determine user intent:
                             tool_results.push((tool_use_id.clone(), tool_result));
                         } else if name == "check_job_status" {
                             send_progress("📊 Checking job status...");
-                            let job_id = input.get("job_id")
+                            let job_id = input
+                                .get("job_id")
                                 .and_then(|v| v.as_str())
                                 .filter(|s| !s.trim().is_empty());
 
@@ -195,42 +210,73 @@ Trust your understanding of natural language to determine user intent:
                                 // Check specific job with enhanced details
                                 if let Some(job) = job_manager.get_job(jid).await {
                                     let elapsed = if let Some(started) = job.started_at {
-                                        let duration = chrono::Utc::now().signed_duration_since(started);
-                                        format!("{}m {}s", duration.num_minutes(), duration.num_seconds() % 60)
+                                        let duration =
+                                            chrono::Utc::now().signed_duration_since(started);
+                                        format!(
+                                            "{}m {}s",
+                                            duration.num_minutes(),
+                                            duration.num_seconds() % 60
+                                        )
                                     } else {
                                         "Not started yet".to_string()
                                     };
 
                                     let status_detail = match &job.status {
-                                        crate::jobs::JobStatus::Running { current_step, progress_percent, steps_completed, total_steps, completed_actions, current_action_detail } => {
-                                            let mut status_str = format!("RUNNING\n  Current Step: {}\n  Steps: {}/{}", current_step, steps_completed, total_steps);
+                                        crate::jobs::JobStatus::Running {
+                                            current_step,
+                                            progress_percent,
+                                            steps_completed,
+                                            total_steps,
+                                            completed_actions,
+                                            current_action_detail,
+                                        } => {
+                                            let mut status_str = format!(
+                                                "RUNNING\n  Current Step: {}\n  Steps: {}/{}",
+                                                current_step, steps_completed, total_steps
+                                            );
 
                                             if let Some(pct) = progress_percent {
-                                                status_str.push_str(&format!("\n  Progress: {:.1}%", pct));
+                                                status_str.push_str(&format!(
+                                                    "\n  Progress: {:.1}%",
+                                                    pct
+                                                ));
                                             }
 
                                             if let Some(actions) = completed_actions {
                                                 if !actions.is_empty() {
-                                                    status_str.push_str(&format!("\n\n  Completed Actions:\n"));
+                                                    status_str.push_str(&format!(
+                                                        "\n\n  Completed Actions:\n"
+                                                    ));
                                                     for action in actions {
-                                                        status_str.push_str(&format!("    ✅ {}\n", action));
+                                                        status_str.push_str(&format!(
+                                                            "    ✅ {}\n",
+                                                            action
+                                                        ));
                                                     }
                                                 }
                                             }
 
                                             if let Some(detail) = current_action_detail {
-                                                status_str.push_str(&format!("\n  Detail: {}", detail));
+                                                status_str
+                                                    .push_str(&format!("\n  Detail: {}", detail));
                                             }
 
                                             status_str
                                         }
-                                        crate::jobs::JobStatus::Completed { result, output_files, duration_seconds } => {
+                                        crate::jobs::JobStatus::Completed {
+                                            result,
+                                            output_files,
+                                            duration_seconds,
+                                        } => {
                                             format!(
                                                 "COMPLETED\n  Duration: {:.1}s\n  Files: {}\n  Result: {}",
                                                 duration_seconds, output_files.len(), result
                                             )
                                         }
-                                        crate::jobs::JobStatus::Failed { error, failed_at_step } => {
+                                        crate::jobs::JobStatus::Failed {
+                                            error,
+                                            failed_at_step,
+                                        } => {
                                             format!(
                                                 "FAILED\n  Failed at: {}\n  Error: {}",
                                                 failed_at_step, error
@@ -239,7 +285,7 @@ Trust your understanding of natural language to determine user intent:
                                         crate::jobs::JobStatus::Queued { position } => {
                                             format!("QUEUED (position: {})", position)
                                         }
-                                        _ => format!("{:?}", job.status)
+                                        _ => format!("{:?}", job.status),
                                     };
 
                                     // Check if job appears stuck
@@ -260,7 +306,11 @@ Trust your understanding of natural language to determine user intent:
                                         Status: {}\n\
                                         Time Elapsed: {}\n\
                                         Created: {}{}",
-                                        jid, status_detail, elapsed, job.created_at.format("%H:%M:%S"), stuck_warning
+                                        jid,
+                                        status_detail,
+                                        elapsed,
+                                        job.created_at.format("%H:%M:%S"),
+                                        stuck_warning
                                     )
                                 } else {
                                     format!("❌ Job {} not found. It may have completed and been cleaned up, or the ID is incorrect.", jid)
@@ -268,30 +318,41 @@ Trust your understanding of natural language to determine user intent:
                             } else {
                                 // Get all jobs for this session
                                 let session_jobs = job_manager.get_session_jobs(session_id).await;
-                                let jobs_data: Vec<_> = session_jobs.iter().map(|job| {
-                                    serde_json::json!({
-                                        "job_id": job.id,
-                                        "status": format!("{:?}", job.status),
-                                        "created_at": job.created_at.to_rfc3339()
+                                let jobs_data: Vec<_> = session_jobs
+                                    .iter()
+                                    .map(|job| {
+                                        serde_json::json!({
+                                            "job_id": job.id,
+                                            "status": format!("{:?}", job.status),
+                                            "created_at": job.created_at.to_rfc3339()
+                                        })
                                     })
-                                }).collect();
+                                    .collect();
 
                                 serde_json::to_string_pretty(&serde_json::json!({
                                     "jobs": jobs_data,
                                     "total_count": jobs_data.len()
-                                })).unwrap_or_else(|_| "Error formatting jobs".to_string())
+                                }))
+                                .unwrap_or_else(|_| "Error formatting jobs".to_string())
                             };
 
                             tool_results.push((tool_use_id.clone(), tool_result));
                         } else if name == "search_memory" {
                             send_progress("🔍 Searching memory for relevant context...");
-                            let query = input.get("query")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("");
+                            let query = input.get("query").and_then(|v| v.as_str()).unwrap_or("");
 
-                            let tool_result = if let Some(ref qdrant_client) = app_state.qdrant_client {
+                            let tool_result = if let Some(ref qdrant_client) =
+                                app_state.qdrant_client
+                            {
                                 if let Some(ref voyage_embeddings) = app_state.voyage_embeddings {
-                                    match qdrant_client.build_context_for_query_with_voyage(query, session_id, voyage_embeddings).await {
+                                    match qdrant_client
+                                        .build_context_for_query_with_voyage(
+                                            query,
+                                            session_id,
+                                            voyage_embeddings,
+                                        )
+                                        .await
+                                    {
                                         Ok(context) => {
                                             if context.is_empty() {
                                                 "No relevant memories found".to_string()
@@ -299,10 +360,21 @@ Trust your understanding of natural language to determine user intent:
                                                 context
                                             }
                                         }
-                                        Err(e) => format!("Error searching memory: {}", e)
+                                        Err(e) => format!("Error searching memory: {}", e),
                                     }
-                                } else if let Some(ref gemini_client) = app_state.video_gemini_client.as_ref().or(app_state.gemini_client.as_ref()) {
-                                    match qdrant_client.build_context_for_query_with_gemini(query, session_id, gemini_client).await {
+                                } else if let Some(ref gemini_client) = app_state
+                                    .video_gemini_client
+                                    .as_ref()
+                                    .or(app_state.gemini_client.as_ref())
+                                {
+                                    match qdrant_client
+                                        .build_context_for_query_with_gemini(
+                                            query,
+                                            session_id,
+                                            gemini_client,
+                                        )
+                                        .await
+                                    {
                                         Ok(context) => {
                                             if context.is_empty() {
                                                 "No relevant memories found".to_string()
@@ -310,7 +382,7 @@ Trust your understanding of natural language to determine user intent:
                                                 context
                                             }
                                         }
-                                        Err(e) => format!("Error searching memory: {}", e)
+                                        Err(e) => format!("Error searching memory: {}", e),
                                     }
                                 } else {
                                     "Memory search unavailable - no embedding client".to_string()
@@ -332,8 +404,10 @@ Trust your understanding of natural language to determine user intent:
 
             // Add assistant's tool uses and tool results to conversation
             // Convert ResponseContent to ContentBlock
-            let content_blocks: Vec<crate::claude_client::ContentBlock> = response.content.iter().map(|rc| {
-                match rc {
+            let content_blocks: Vec<crate::claude_client::ContentBlock> = response
+                .content
+                .iter()
+                .map(|rc| match rc {
                     crate::claude_client::ResponseContent::Text { text } => {
                         crate::claude_client::ContentBlock::Text { text: text.clone() }
                     }
@@ -344,8 +418,8 @@ Trust your understanding of natural language to determine user intent:
                             input: input.clone(),
                         }
                     }
-                }
-            }).collect();
+                })
+                .collect();
 
             conversation_messages.push(ClaudeMessage {
                 role: "assistant".to_string(),
@@ -353,13 +427,16 @@ Trust your understanding of natural language to determine user intent:
             });
 
             // Add tool results
-            let tool_result_blocks: Vec<_> = tool_results.iter().map(|(id, result)| {
-                crate::claude_client::ContentBlock::ToolResult {
-                    tool_use_id: id.clone(),
-                    content: result.clone(),
-                    is_error: None,
-                }
-            }).collect();
+            let tool_result_blocks: Vec<_> = tool_results
+                .iter()
+                .map(
+                    |(id, result)| crate::claude_client::ContentBlock::ToolResult {
+                        tool_use_id: id.clone(),
+                        content: result.clone(),
+                        is_error: None,
+                    },
+                )
+                .collect();
 
             conversation_messages.push(ClaudeMessage {
                 role: "user".to_string(),
@@ -371,14 +448,25 @@ Trust your understanding of natural language to determine user intent:
 
         // Save assistant's final conversational response to history
         if !final_response.is_empty() {
-            tracing::info!("💾 Attempting to save assistant response (length: {}) for session {}", final_response.len(), session_id);
-            let assistant_msg = ConversationMessage::new_assistant(session_id.to_string(), final_response.clone());
+            tracing::info!(
+                "💾 Attempting to save assistant response (length: {}) for session {}",
+                final_response.len(),
+                session_id
+            );
+            let assistant_msg =
+                ConversationMessage::new_assistant(session_id.to_string(), final_response.clone());
             match conversation_manager.save_message(&assistant_msg).await {
-                Ok(_) => tracing::info!("✅ Successfully saved assistant message to DB for session {}", session_id),
+                Ok(_) => tracing::info!(
+                    "✅ Successfully saved assistant message to DB for session {}",
+                    session_id
+                ),
                 Err(e) => tracing::error!("❌ Failed to save assistant message: {}", e),
             }
         } else {
-            tracing::warn!("⚠️ final_response is empty, not saving assistant message for session {}", session_id);
+            tracing::warn!(
+                "⚠️ final_response is empty, not saving assistant message for session {}",
+                session_id
+            );
         }
 
         Ok(final_response)
@@ -454,15 +542,11 @@ Trust your understanding of natural language to determine user intent:
 /// Gemini version of stateful agent
 pub struct StatefulGeminiAgent {
     client: Arc<crate::gemini_client::GeminiClient>,
-    workflow_manager: Arc<VideoWorkflowManager>,
 }
 
 impl StatefulGeminiAgent {
     pub fn new(client: Arc<crate::gemini_client::GeminiClient>) -> Self {
-        Self {
-            client,
-            workflow_manager: Arc::new(VideoWorkflowManager::new()),
-        }
+        Self { client }
     }
 
     pub async fn chat(
@@ -473,6 +557,7 @@ impl StatefulGeminiAgent {
         app_state: Arc<AppState>,
         job_manager: Arc<crate::jobs::JobManager>,
         progress_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
+        workflow_id: Option<uuid::Uuid>,
     ) -> Result<String, String> {
         // Helper to send progress updates
         let send_progress = |msg: &str| {
@@ -482,18 +567,26 @@ impl StatefulGeminiAgent {
             tracing::info!("{}", msg);
         };
 
-        send_progress("🧠 Selecting the right tools for your request...");
-        // AI-powered tool selection: Gemma 4 reads the full tool catalog and picks
-        // the most relevant tools for THIS specific request — no keyword lists needed.
+        send_progress("🧠 Loading the full production toolbelt for your request...");
+        // Full-toolbelt mode: agents receive the full allowed video tool catalog by
+        // default and choose the right tools themselves at runtime.
         let selected_video_tools = crate::ai_tool_selector::select_tools_for_request(
             user_input,
             app_state.nvidia_nim_client.as_ref(),
-            app_state.video_gemini_client.as_ref().or(app_state.gemini_client.as_ref()),
-        ).await;
+            app_state
+                .video_gemini_client
+                .as_ref()
+                .or(app_state.gemini_client.as_ref()),
+        )
+        .await;
         // Prepend the 3 control tools (always needed for agent self-management)
         let mut all_tools = Self::create_control_tools_gemini();
         all_tools.extend(selected_video_tools);
-        tracing::info!("🔧 Agent loaded {} tools for session {}", all_tools.len(), session_id);
+        tracing::info!(
+            "🔧 Agent loaded {} tools for session {}",
+            all_tools.len(),
+            session_id
+        );
 
         // Initialize ConversationManager to retrieve and save conversation history
         let conversation_manager = ConversationManager::new(app_state.db_pool.clone());
@@ -509,12 +602,12 @@ impl StatefulGeminiAgent {
             .await
             .unwrap_or_default();
 
-        let system_instruction = r#"You are an intelligent video editing assistant with DIRECT access to 53+ video editing tools.
+        let system_instruction = r#"You are an intelligent video editing assistant with DIRECT access to the full VideoSync creative tool registry.
 
 ## Your Capabilities
 
 ### Direct Tool Access (You Can Use These Immediately!)
-You now have immediate access to ALL video editing tools in conversations:
+You now have immediate access to the production toolbelt in conversations, including the 320+ FFmpeg/editing capabilities and the newer generation/review/delivery workflows:
 
 **Core Editing:** trim_video, merge_videos, split_video, crop_video, rotate_video, flip_video, resize_video, scale_video, stabilize_video
 
@@ -522,7 +615,9 @@ You now have immediate access to ALL video editing tools in conversations:
 
 **Audio:** add_audio, extract_audio, adjust_volume, fade_audio
 
-**AI Generation:** generate_text_to_speech, generate_sound_effect, generate_music, generate_image, generate_video_script, auto_generate_video
+**AI Generation:** generate_text_to_speech, generate_sound_effect, generate_music, generate_image, generate_video_script, auto_generate_video, generate_long_form_video
+
+**Creative Rendering:** Blender scene generation, Manim/LaTeX educational visuals, product mockups, thumbnails, VibeVoice narration, and mixed delivery bundles.
 
 **Stock Media:** pexels_search, pexels_download_video, pexels_download_photo, pexels_get_trending, pexels_get_curated
 
@@ -532,10 +627,13 @@ You now have immediate access to ALL video editing tools in conversations:
 
 **Export:** optimize_for_platform (YouTube, Instagram, TikTok, etc.)
 
+**Session & Completion:** set_chat_title, submit_final_answer
+
 ### Background Job System (Still Available)
 For complex multi-step workflows that benefit from parallel execution:
 - Use `start_background_job` to spawn a dedicated agent for complex operations
 - Monitor with `check_job_status`
+- Long-form videos are valid requests. Use durable segmented workflows for long videos so the system can checkpoint, retry, assemble, review, and expose delivery/download links.
 
 ### Memory
 - Use `search_memory` to find relevant past discussions and video editing tasks
@@ -563,7 +661,10 @@ For complex multi-step workflows that benefit from parallel execution:
 - Direct tool execution is FASTER for simple operations
 - Background jobs are still useful for complex workflows
 - Be helpful, conversational, and context-aware
-- When users ask "Can you generate a video?" the answer is YES - you have auto_generate_video and all the stock media tools!"#;
+- When users ask "Can you generate a video?" the answer is YES - you have auto_generate_video and all the stock media tools!
+- When the request is clearly defined, call `set_chat_title` early with a concise descriptive title
+- When you create or modify output files, end with `submit_final_answer` and include every generated output file path
+- Do not stop at a plan when the user requested an actual generated deliverable."#;
 
         // Build contents array with conversation history
         let mut contents = Vec::new();
@@ -607,7 +708,8 @@ For complex multi-step workflows that benefit from parallel execution:
         });
 
         // Save user message to conversation history
-        let user_msg = ConversationMessage::new_human(session_id.to_string(), user_input.to_string());
+        let user_msg =
+            ConversationMessage::new_human(session_id.to_string(), user_input.to_string());
         match conversation_manager.save_message(&user_msg).await {
             Ok(_) => tracing::debug!("✅ Saved user message to DB for session {}", session_id),
             Err(e) => tracing::error!("❌ Failed to save user message: {}", e),
@@ -622,9 +724,8 @@ For complex multi-step workflows that benefit from parallel execution:
             send_progress("🤖 Processing your message with Gemma 4...");
 
             // Build OpenAI-format messages from the same conversation data
-            let mut nim_messages: Vec<serde_json::Value> = vec![
-                serde_json::json!({"role": "system", "content": system_instruction}),
-            ];
+            let mut nim_messages: Vec<serde_json::Value> =
+                vec![serde_json::json!({"role": "system", "content": system_instruction})];
             for msg in &conversation_history {
                 let role = match msg.role {
                     crate::agent::conversation_manager::MessageRole::Human => "user",
@@ -645,6 +746,7 @@ For complex multi-step workflows that benefit from parallel execution:
                 session_id: session_id.to_string(),
                 user_id: None,
                 app_state: app_state.clone(),
+                workflow_id,
             };
 
             let nim_result = run_nim_tool_loop(
@@ -653,20 +755,24 @@ For complex multi-step workflows that benefit from parallel execution:
                 &all_tools,
                 &exec_context,
                 &send_progress,
-            ).await;
+            )
+            .await;
 
             match nim_result {
                 Ok(response) if !response.is_empty() => {
                     // Save assistant response and return
                     let assistant_msg = ConversationMessage::new_assistant(
-                        session_id.to_string(), response.clone()
+                        session_id.to_string(),
+                        response.clone(),
                     );
                     let _ = conversation_manager.save_message(&assistant_msg).await;
                     tracing::info!("✅ Gemma 4 (NIM) completed task for session {}", session_id);
                     return Ok(response);
                 }
                 Ok(_) => {
-                    tracing::warn!("⚠️ Gemma 4 (NIM) returned empty response — falling back to Gemini");
+                    tracing::warn!(
+                        "⚠️ Gemma 4 (NIM) returned empty response — falling back to Gemini"
+                    );
                 }
                 Err(e) => {
                     tracing::warn!("⚠️ Gemma 4 (NIM) failed: {} — falling back to Gemini", e);
@@ -699,13 +805,16 @@ For complex multi-step workflows that benefit from parallel execution:
                 }),
                 tool_config: Some(crate::gemini_client::ToolConfig {
                     function_calling_config: crate::gemini_client::FunctionCallingConfig {
-                        mode: crate::gemini_client::FunctionCallingMode::Auto,  // Auto: Let Gemini decide - respond naturally OR call tools
+                        mode: crate::gemini_client::FunctionCallingMode::Auto, // Auto: Let Gemini decide - respond naturally OR call tools
                     },
                 }),
                 system_instruction: None,
             };
 
-            let response = self.client.generate_content(request).await
+            let response = self
+                .client
+                .generate_content(request)
+                .await
                 .map_err(|e| format!("Gemini API Error: {}", e))?;
 
             let mut has_function_calls = false;
@@ -728,16 +837,25 @@ For complex multi-step workflows that benefit from parallel execution:
                                 // NEW: Check if this is a video editing tool (not a control tool)
                                 if function_name != "start_background_job"
                                     && function_name != "check_job_status"
-                                    && function_name != "search_memory" {
+                                    && function_name != "search_memory"
+                                {
                                     // Execute video editing tool directly using tool_executor
-                                    send_progress(&format!("🎬 Executing {} directly...", function_name));
-                                    tracing::info!("🎬 Executing video tool directly: {}", function_name);
+                                    send_progress(&format!(
+                                        "🎬 Executing {} directly...",
+                                        function_name
+                                    ));
+                                    tracing::info!(
+                                        "🎬 Executing video tool directly: {}",
+                                        function_name
+                                    );
 
-                                    let exec_context = crate::agent::tool_executor::ToolExecutionContext {
-                                        session_id: session_id.to_string(),
-                                        user_id: None, // StatefulAgent doesn't have user_id
-                                        app_state: app_state.clone(),
-                                    };
+                                    let exec_context =
+                                        crate::agent::tool_executor::ToolExecutionContext {
+                                            session_id: session_id.to_string(),
+                                            user_id: None, // StatefulAgent doesn't have user_id
+                                            app_state: app_state.clone(),
+                                            workflow_id,
+                                        };
 
                                     let tool_result = crate::agent::tool_executor::execute_tool_gemini_with_context(
                                         &function_name,
@@ -748,19 +866,24 @@ For complex multi-step workflows that benefit from parallel execution:
                                     send_progress(&format!("✅ {} completed", function_name));
 
                                     // Parse the result string as JSON
-                                    let result_value = serde_json::from_str::<serde_json::Value>(&tool_result)
-                                        .unwrap_or_else(|_| serde_json::json!({"result": tool_result}));
+                                    let result_value =
+                                        serde_json::from_str::<serde_json::Value>(&tool_result)
+                                            .unwrap_or_else(
+                                                |_| serde_json::json!({"result": tool_result}),
+                                            );
 
                                     function_results.push((
                                         function_name.clone(),
                                         result_value,
-                                        function_call.thought_signature.clone()
+                                        function_call.thought_signature.clone(),
                                     ));
                                 } else if function_name == "start_background_job" {
                                     send_progress("🚀 Starting background video editing job...");
                                     tracing::info!("🚀 Gemini decided to start background job");
 
-                                    let task_description = function_call.args.get("task_description")
+                                    let task_description = function_call
+                                        .args
+                                        .get("task_description")
                                         .and_then(|v| v.as_str())
                                         .unwrap_or(user_input);
 
@@ -773,11 +896,15 @@ For complex multi-step workflows that benefit from parallel execution:
                                         agent_type,
                                         app_state.clone(),
                                         job_manager.clone(),
-                                    ).await;
+                                    )
+                                    .await;
 
                                     let tool_result = match job_result {
                                         Ok(job_id) => {
-                                            send_progress(&format!("✅ Background job started: {}", job_id));
+                                            send_progress(&format!(
+                                                "✅ Background job started: {}",
+                                                job_id
+                                            ));
                                             tracing::info!("✅ Background job started: {}", job_id);
                                             serde_json::json!({
                                                 "success": true,
@@ -786,7 +913,10 @@ For complex multi-step workflows that benefit from parallel execution:
                                             })
                                         }
                                         Err(e) => {
-                                            send_progress(&format!("❌ Failed to start job: {}", e));
+                                            send_progress(&format!(
+                                                "❌ Failed to start job: {}",
+                                                e
+                                            ));
                                             serde_json::json!({
                                                 "success": false,
                                                 "error": format!("Failed to start background job: {}", e)
@@ -794,10 +924,16 @@ For complex multi-step workflows that benefit from parallel execution:
                                         }
                                     };
 
-                                    function_results.push((function_name.clone(), tool_result, function_call.thought_signature.clone()));
+                                    function_results.push((
+                                        function_name.clone(),
+                                        tool_result,
+                                        function_call.thought_signature.clone(),
+                                    ));
                                 } else if function_name == "check_job_status" {
                                     send_progress("📊 Checking job status...");
-                                    let job_id = function_call.args.get("job_id")
+                                    let job_id = function_call
+                                        .args
+                                        .get("job_id")
                                         .and_then(|v| v.as_str())
                                         .filter(|s| !s.trim().is_empty());
 
@@ -805,42 +941,72 @@ For complex multi-step workflows that benefit from parallel execution:
                                         // Check specific job with enhanced details
                                         if let Some(job) = job_manager.get_job(jid).await {
                                             let elapsed = if let Some(started) = job.started_at {
-                                                let duration = chrono::Utc::now().signed_duration_since(started);
-                                                format!("{}m {}s", duration.num_minutes(), duration.num_seconds() % 60)
+                                                let duration = chrono::Utc::now()
+                                                    .signed_duration_since(started);
+                                                format!(
+                                                    "{}m {}s",
+                                                    duration.num_minutes(),
+                                                    duration.num_seconds() % 60
+                                                )
                                             } else {
                                                 "Not started yet".to_string()
                                             };
 
                                             let status_detail = match &job.status {
-                                                crate::jobs::JobStatus::Running { current_step, progress_percent, steps_completed, total_steps, completed_actions, current_action_detail } => {
+                                                crate::jobs::JobStatus::Running {
+                                                    current_step,
+                                                    progress_percent,
+                                                    steps_completed,
+                                                    total_steps,
+                                                    completed_actions,
+                                                    current_action_detail,
+                                                } => {
                                                     let mut status_str = format!("RUNNING\n  Current Step: {}\n  Steps: {}/{}", current_step, steps_completed, total_steps);
 
                                                     if let Some(pct) = progress_percent {
-                                                        status_str.push_str(&format!("\n  Progress: {:.1}%", pct));
+                                                        status_str.push_str(&format!(
+                                                            "\n  Progress: {:.1}%",
+                                                            pct
+                                                        ));
                                                     }
 
                                                     if let Some(actions) = completed_actions {
                                                         if !actions.is_empty() {
-                                                            status_str.push_str(&format!("\n\n  Completed Actions:\n"));
+                                                            status_str.push_str(&format!(
+                                                                "\n\n  Completed Actions:\n"
+                                                            ));
                                                             for action in actions {
-                                                                status_str.push_str(&format!("    ✅ {}\n", action));
+                                                                status_str.push_str(&format!(
+                                                                    "    ✅ {}\n",
+                                                                    action
+                                                                ));
                                                             }
                                                         }
                                                     }
 
                                                     if let Some(detail) = current_action_detail {
-                                                        status_str.push_str(&format!("\n  Detail: {}", detail));
+                                                        status_str.push_str(&format!(
+                                                            "\n  Detail: {}",
+                                                            detail
+                                                        ));
                                                     }
 
                                                     status_str
                                                 }
-                                                crate::jobs::JobStatus::Completed { result, output_files, duration_seconds } => {
+                                                crate::jobs::JobStatus::Completed {
+                                                    result,
+                                                    output_files,
+                                                    duration_seconds,
+                                                } => {
                                                     format!(
                                                         "COMPLETED\n  Duration: {:.1}s\n  Files: {}\n  Result: {}",
                                                         duration_seconds, output_files.len(), result
                                                     )
                                                 }
-                                                crate::jobs::JobStatus::Failed { error, failed_at_step } => {
+                                                crate::jobs::JobStatus::Failed {
+                                                    error,
+                                                    failed_at_step,
+                                                } => {
                                                     format!(
                                                         "FAILED\n  Failed at: {}\n  Error: {}",
                                                         failed_at_step, error
@@ -849,7 +1015,7 @@ For complex multi-step workflows that benefit from parallel execution:
                                                 crate::jobs::JobStatus::Queued { position } => {
                                                     format!("QUEUED (position: {})", position)
                                                 }
-                                                _ => format!("{:?}", job.status)
+                                                _ => format!("{:?}", job.status),
                                             };
 
                                             // Check if job appears stuck
@@ -870,7 +1036,11 @@ For complex multi-step workflows that benefit from parallel execution:
                                                 Status: {}\n\
                                                 Time Elapsed: {}\n\
                                                 Created: {}{}",
-                                                jid, status_detail, elapsed, job.created_at.format("%H:%M:%S"), stuck_warning
+                                                jid,
+                                                status_detail,
+                                                elapsed,
+                                                job.created_at.format("%H:%M:%S"),
+                                                stuck_warning
                                             );
                                             serde_json::json!({ "report": report })
                                         } else {
@@ -880,14 +1050,18 @@ For complex multi-step workflows that benefit from parallel execution:
                                         }
                                     } else {
                                         // Get all jobs for this session
-                                        let session_jobs = job_manager.get_session_jobs(session_id).await;
-                                        let jobs_data: Vec<_> = session_jobs.iter().map(|job| {
-                                            serde_json::json!({
-                                                "job_id": job.id,
-                                                "status": format!("{:?}", job.status),
-                                                "created_at": job.created_at.to_rfc3339()
+                                        let session_jobs =
+                                            job_manager.get_session_jobs(session_id).await;
+                                        let jobs_data: Vec<_> = session_jobs
+                                            .iter()
+                                            .map(|job| {
+                                                serde_json::json!({
+                                                    "job_id": job.id,
+                                                    "status": format!("{:?}", job.status),
+                                                    "created_at": job.created_at.to_rfc3339()
+                                                })
                                             })
-                                        }).collect();
+                                            .collect();
 
                                         serde_json::json!({
                                             "jobs": jobs_data,
@@ -895,16 +1069,33 @@ For complex multi-step workflows that benefit from parallel execution:
                                         })
                                     };
 
-                                    function_results.push((function_name.clone(), tool_result, function_call.thought_signature.clone()));
+                                    function_results.push((
+                                        function_name.clone(),
+                                        tool_result,
+                                        function_call.thought_signature.clone(),
+                                    ));
                                 } else if function_name == "search_memory" {
                                     send_progress("🔍 Searching memory for relevant context...");
-                                    let query = function_call.args.get("query")
+                                    let query = function_call
+                                        .args
+                                        .get("query")
                                         .and_then(|v| v.as_str())
                                         .unwrap_or("");
 
-                                    let tool_result = if let Some(ref qdrant_client) = app_state.qdrant_client {
-                                        if let Some(ref voyage_embeddings) = app_state.voyage_embeddings {
-                                            match qdrant_client.build_context_for_query_with_voyage(query, session_id, voyage_embeddings).await {
+                                    let tool_result = if let Some(ref qdrant_client) =
+                                        app_state.qdrant_client
+                                    {
+                                        if let Some(ref voyage_embeddings) =
+                                            app_state.voyage_embeddings
+                                        {
+                                            match qdrant_client
+                                                .build_context_for_query_with_voyage(
+                                                    query,
+                                                    session_id,
+                                                    voyage_embeddings,
+                                                )
+                                                .await
+                                            {
                                                 Ok(context) => {
                                                     if context.is_empty() {
                                                         serde_json::json!({
@@ -920,10 +1111,19 @@ For complex multi-step workflows that benefit from parallel execution:
                                                 }
                                                 Err(e) => serde_json::json!({
                                                     "error": format!("Error searching memory: {}", e)
-                                                })
+                                                }),
                                             }
-                                        } else if let Some(ref gemini_client) = app_state.gemini_client {
-                                            match qdrant_client.build_context_for_query_with_gemini(query, session_id, gemini_client).await {
+                                        } else if let Some(ref gemini_client) =
+                                            app_state.gemini_client
+                                        {
+                                            match qdrant_client
+                                                .build_context_for_query_with_gemini(
+                                                    query,
+                                                    session_id,
+                                                    gemini_client,
+                                                )
+                                                .await
+                                            {
                                                 Ok(context) => {
                                                     if context.is_empty() {
                                                         serde_json::json!({
@@ -939,7 +1139,7 @@ For complex multi-step workflows that benefit from parallel execution:
                                                 }
                                                 Err(e) => serde_json::json!({
                                                     "error": format!("Error searching memory: {}", e)
-                                                })
+                                                }),
                                             }
                                         } else {
                                             serde_json::json!({
@@ -952,7 +1152,11 @@ For complex multi-step workflows that benefit from parallel execution:
                                         })
                                     };
 
-                                    function_results.push((function_name.clone(), tool_result, function_call.thought_signature.clone()));
+                                    function_results.push((
+                                        function_name.clone(),
+                                        tool_result,
+                                        function_call.thought_signature.clone(),
+                                    ));
                                 }
                             }
                             _ => {}
@@ -960,15 +1164,25 @@ For complex multi-step workflows that benefit from parallel execution:
                     }
                 } else {
                     // Content was blocked or missing
-                    if let Some(block_reason) = response.prompt_feedback.as_ref().and_then(|f| f.block_reason.as_ref()) {
+                    if let Some(block_reason) = response
+                        .prompt_feedback
+                        .as_ref()
+                        .and_then(|f| f.block_reason.as_ref())
+                    {
                         tracing::warn!("Gemini content blocked: {}", block_reason);
-                        final_response = format!("I cannot process this request due to content safety filters: {}", block_reason);
+                        final_response = format!(
+                            "I cannot process this request due to content safety filters: {}",
+                            block_reason
+                        );
                     } else if let Some(finish_reason) = &candidate.finish_reason {
                         tracing::warn!("Gemini response finished with reason: {}", finish_reason);
-                        final_response = format!("Response could not be generated: {}", finish_reason);
+                        final_response =
+                            format!("Response could not be generated: {}", finish_reason);
                     } else {
                         tracing::warn!("Gemini response has no content");
-                        final_response = "I apologize, but I couldn't generate a response for that request.".to_string();
+                        final_response =
+                            "I apologize, but I couldn't generate a response for that request."
+                                .to_string();
                     }
                     break;
                 }
@@ -990,18 +1204,21 @@ For complex multi-step workflows that benefit from parallel execution:
             }
 
             // Add function responses to conversation (with thought signatures)
-            let function_response_parts: Vec<_> = function_results.iter().map(|(name, result, thought_sig)| {
-                let mut response_map = HashMap::new();
-                response_map.insert("result".to_string(), result.clone());
+            let function_response_parts: Vec<_> = function_results
+                .iter()
+                .map(|(name, result, thought_sig)| {
+                    let mut response_map = HashMap::new();
+                    response_map.insert("result".to_string(), result.clone());
 
-                crate::gemini_client::Part::FunctionResponse {
-                    function_response: crate::gemini_client::FunctionResponse {
-                        name: name.clone(),
-                        response: response_map,
-                        thought_signature: thought_sig.clone(),
+                    crate::gemini_client::Part::FunctionResponse {
+                        function_response: crate::gemini_client::FunctionResponse {
+                            name: name.clone(),
+                            response: response_map,
+                            thought_signature: thought_sig.clone(),
+                        },
                     }
-                }
-            }).collect();
+                })
+                .collect();
 
             conversation_contents.push(crate::gemini_client::Content {
                 parts: function_response_parts,
@@ -1013,22 +1230,33 @@ For complex multi-step workflows that benefit from parallel execution:
 
         // Save assistant's final conversational response to history
         if !final_response.is_empty() {
-            tracing::info!("💾 Attempting to save assistant response (length: {}) for session {}", final_response.len(), session_id);
-            let assistant_msg = ConversationMessage::new_assistant(session_id.to_string(), final_response.clone());
+            tracing::info!(
+                "💾 Attempting to save assistant response (length: {}) for session {}",
+                final_response.len(),
+                session_id
+            );
+            let assistant_msg =
+                ConversationMessage::new_assistant(session_id.to_string(), final_response.clone());
             match conversation_manager.save_message(&assistant_msg).await {
-                Ok(_) => tracing::info!("✅ Successfully saved assistant message to DB for session {}", session_id),
+                Ok(_) => tracing::info!(
+                    "✅ Successfully saved assistant message to DB for session {}",
+                    session_id
+                ),
                 Err(e) => tracing::error!("❌ Failed to save assistant message: {}", e),
             }
         } else {
-            tracing::warn!("⚠️ final_response is empty, not saving assistant message for session {}", session_id);
+            tracing::warn!(
+                "⚠️ final_response is empty, not saving assistant message for session {}",
+                session_id
+            );
         }
 
         Ok(final_response)
     }
 
-    fn create_all_tools(user_input: &str) -> Vec<crate::gemini_client::FunctionDeclaration> {
+    fn create_all_tools(_user_input: &str) -> Vec<crate::gemini_client::FunctionDeclaration> {
         // Start with the 3 control tools
-        let mut all_tools = vec![
+        let all_tools = vec![
             crate::gemini_client::FunctionDeclaration {
                 name: "start_background_job".to_string(),
                 description: "Start a background video editing job for complex multi-step workflows that benefit from parallel execution. Use this when the user requests complex operations like 'create a full ad from scratch with 5 scenes' or 'process all videos in this folder'. For simple single operations, use the direct tools instead.".to_string(),
@@ -1101,10 +1329,12 @@ For complex multi-step workflows that benefit from parallel execution:
         // create_all_tools builds the 3 control tools first then extends with video tools.
         // Filter to only the control tool names.
         all.into_iter()
-            .filter(|t| matches!(
-                t.name.as_str(),
-                "start_background_job" | "check_job_status" | "search_memory"
-            ))
+            .filter(|t| {
+                matches!(
+                    t.name.as_str(),
+                    "start_background_job" | "check_job_status" | "search_memory"
+                )
+            })
             .collect()
     }
 }
@@ -1145,16 +1375,19 @@ where
 
             crate::nvidia_nim_client::NimResponse::ToolCalls(tool_calls) => {
                 // Add Gemma's tool-call message to history
-                let assistant_tool_calls: Vec<serde_json::Value> = tool_calls.iter().map(|tc| {
-                    serde_json::json!({
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {
-                            "name": tc.name,
-                            "arguments": tc.arguments.to_string(),
-                        }
+                let assistant_tool_calls: Vec<serde_json::Value> = tool_calls
+                    .iter()
+                    .map(|tc| {
+                        serde_json::json!({
+                            "id": tc.id,
+                            "type": "function",
+                            "function": {
+                                "name": tc.name,
+                                "arguments": tc.arguments.to_string(),
+                            }
+                        })
                     })
-                }).collect();
+                    .collect();
 
                 messages.push(serde_json::json!({
                     "role": "assistant",
@@ -1168,16 +1401,18 @@ where
                     tracing::info!("🎬 Gemma 4 tool call: {}", tc.name);
 
                     // Convert JSON args to the HashMap format tool_executor expects
-                    let args_map: std::collections::HashMap<String, serde_json::Value> =
-                        tc.arguments.as_object()
-                            .map(|o| o.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
-                            .unwrap_or_default();
+                    let args_map: std::collections::HashMap<String, serde_json::Value> = tc
+                        .arguments
+                        .as_object()
+                        .map(|o| o.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+                        .unwrap_or_default();
 
                     let result = crate::agent::tool_executor::execute_tool_gemini_with_context(
                         &tc.name,
                         &args_map,
                         exec_context,
-                    ).await;
+                    )
+                    .await;
 
                     send_progress(&format!("✅ {} done", tc.name));
 

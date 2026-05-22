@@ -12,7 +12,7 @@
 //
 // If no such linkage exists, TestContext::new() panics with a helpful message.
 
-use sqlx::{PgPool, Row, postgres::PgPoolOptions};
+use sqlx::{postgres::PgPoolOptions, PgPool, Row};
 use std::env;
 
 /// Test context that wraps a real production channel linkage.
@@ -34,8 +34,8 @@ impl TestContext {
     /// Panics with a clear message if no suitable linkage exists — the user
     /// must create one via the app UI before running integration tests.
     pub async fn new() -> Result<Self, Box<dyn std::error::Error>> {
-        let database_url = env::var("DATABASE_URL")
-            .expect("DATABASE_URL must be set for integration tests");
+        let database_url =
+            env::var("DATABASE_URL").expect("DATABASE_URL must be set for integration tests");
 
         let pool = PgPoolOptions::new()
             .max_connections(5)
@@ -54,7 +54,7 @@ impl TestContext {
                AND d.requires_reauth = false
                AND d.token_expiry > NOW() + INTERVAL '5 minutes'
              ORDER BY l.id
-             LIMIT 1"
+             LIMIT 1",
         )
         .fetch_one(&pool)
         .await
@@ -83,7 +83,7 @@ impl TestContext {
                  claimed_by = NULL,
                  updated_at = NOW()
              WHERE linkage_id = $1
-               AND status NOT IN ('completed', 'cancelled')"
+               AND status NOT IN ('completed', 'cancelled')",
         )
         .bind(self.linkage_id)
         .execute(&self.pool)
@@ -111,7 +111,7 @@ impl TestContext {
             "INSERT INTO clipping_jobs
              (linkage_id, source_video_id, status, created_at, updated_at)
              VALUES ($1, $2, 'pending', NOW(), NOW())
-             RETURNING id"
+             RETURNING id",
         )
         .bind(self.linkage_id)
         .bind(youtube_video_id)
@@ -122,10 +122,7 @@ impl TestContext {
     }
 
     /// Create a clipping job for the test linkage, cancelling any stale jobs first.
-    pub async fn create_test_job(
-        &self,
-        video_id: &str,
-    ) -> Result<i32, Box<dyn std::error::Error>> {
+    pub async fn create_test_job(&self, video_id: &str) -> Result<i32, Box<dyn std::error::Error>> {
         self.cancel_stale_pending_test_jobs().await?;
 
         let youtube_video_id = extract_video_id(video_id);
@@ -134,7 +131,7 @@ impl TestContext {
             "INSERT INTO clipping_jobs
              (linkage_id, source_video_id, status, created_at, updated_at)
              VALUES ($1, $2, 'pending', NOW(), NOW())
-             RETURNING id"
+             RETURNING id",
         )
         .bind(self.linkage_id)
         .bind(youtube_video_id)
@@ -181,7 +178,10 @@ impl TestContext {
                         );
                         return Ok(false);
                     }
-                    eprintln!("Job {} status: {} (waiting for {})", job_id, status, target_status);
+                    eprintln!(
+                        "Job {} status: {} (waiting for {})",
+                        job_id, status, target_status
+                    );
                 }
                 Err(e) => {
                     consecutive_errors += 1;
@@ -215,7 +215,7 @@ impl TestContext {
                  claimed_by = NULL,
                  updated_at = NOW()
              WHERE linkage_id = $1
-               AND status NOT IN ('completed', 'cancelled')"
+               AND status NOT IN ('completed', 'cancelled')",
         )
         .bind(self.linkage_id)
         .execute(&self.pool)
@@ -225,14 +225,17 @@ impl TestContext {
     }
 
     /// Cancel specific jobs by ID (for tests that track which jobs they created).
-    pub async fn cleanup_test_jobs(&self, job_ids: &[i32]) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn cleanup_test_jobs(
+        &self,
+        job_ids: &[i32],
+    ) -> Result<(), Box<dyn std::error::Error>> {
         if job_ids.is_empty() {
             return Ok(());
         }
         sqlx::query(
             "UPDATE clipping_jobs
              SET status = 'cancelled', updated_at = NOW()
-             WHERE id = ANY($1) AND status NOT IN ('completed', 'cancelled')"
+             WHERE id = ANY($1) AND status NOT IN ('completed', 'cancelled')",
         )
         .bind(job_ids)
         .execute(&self.pool)
@@ -257,7 +260,7 @@ impl Drop for TestContext {
                      claimed_by = NULL,
                      updated_at = NOW()
                  WHERE linkage_id = $1
-                   AND status NOT IN ('completed', 'cancelled')"
+                   AND status NOT IN ('completed', 'cancelled')",
             )
             .bind(linkage_id)
             .execute(&pool)
@@ -288,9 +291,7 @@ pub async fn ensure_migrations() -> Result<(), Box<dyn std::error::Error>> {
         .connect(&database_url)
         .await?;
 
-    sqlx::migrate!("./migrations")
-        .run(&pool)
-        .await?;
+    sqlx::migrate!("./migrations").run(&pool).await?;
 
     Ok(())
 }

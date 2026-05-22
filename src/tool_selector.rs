@@ -1659,6 +1659,8 @@ impl ToolSelector {
             "blender_generate_animation".into(),
             "blender_generate_latex".into(),
             "blender_generate_ui_mockup".into(),
+            "set_chat_title".into(),
+            "submit_final_answer".into(),
             // Stock media
             "search_pexels_videos".into(),
             "download_pexels_video".into(),

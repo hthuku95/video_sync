@@ -1,5 +1,5 @@
 use crate::handlers::auth::verify_jwt_token;
-use crate::models::auth::{Claims, ErrorResponse};
+use crate::models::auth::ErrorResponse;
 use axum::{
     extract::Request,
     http::{HeaderMap, StatusCode},
@@ -36,7 +36,8 @@ pub async fn auth_middleware(
                 StatusCode::UNAUTHORIZED,
                 Json(ErrorResponse {
                     success: false,
-                    message: "Invalid Authorization header format. Expected 'Bearer <token>'".to_string(),
+                    message: "Invalid Authorization header format. Expected 'Bearer <token>'"
+                        .to_string(),
                 }),
             ));
         }
@@ -61,7 +62,8 @@ pub async fn auth_middleware(
                     StatusCode::UNAUTHORIZED,
                     Json(ErrorResponse {
                         success: false,
-                        message: "Missing Authorization header or token query parameter".to_string(),
+                        message: "Missing Authorization header or token query parameter"
+                            .to_string(),
                     }),
                 ));
             }
@@ -88,15 +90,4 @@ pub async fn auth_middleware(
 
     // Continue to the next handler
     Ok(next.run(request).await)
-}
-
-// Extension trait to easily extract claims from request extensions
-pub trait ClaimsExtractor {
-    fn claims(&self) -> Option<&Claims>;
-}
-
-impl ClaimsExtractor for Request {
-    fn claims(&self) -> Option<&Claims> {
-        self.extensions().get::<Claims>()
-    }
 }

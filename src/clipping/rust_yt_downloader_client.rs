@@ -22,7 +22,10 @@ impl RustYtDownloaderClient {
                 .map_err(|e| format!("Failed to create output directory: {}", e))?;
         }
 
-        tracing::info!("📥 Downloading video using rust-yt-downloader: {}", video_url);
+        tracing::info!(
+            "📥 Downloading video using rust-yt-downloader: {}",
+            video_url
+        );
 
         // Use rust_yt_downloader crate (requires yt-dlp installed)
         use rust_yt_downloader::YtDlpClient;
@@ -73,13 +76,16 @@ impl RustYtDownloaderClient {
         // Validate downloaded file
         Self::validate_download(output_path).await?;
 
-        tracing::info!("✅ Video downloaded successfully with rust-yt-downloader: {}", output_path);
+        tracing::info!(
+            "✅ Video downloaded successfully with rust-yt-downloader: {}",
+            output_path
+        );
 
         Ok(VideoDownloadResult {
             file_path: output_path.to_string(),
             title,
             duration_seconds: duration_secs,
-            width: None,  // rust-yt-downloader doesn't expose dimensions easily
+            width: None, // rust-yt-downloader doesn't expose dimensions easily
             height: None,
         })
     }

@@ -6,7 +6,7 @@ use std::path::Path;
 use tokio::fs;
 
 // Use shared types from apify_client to ensure compatibility
-use crate::clipping::apify_client::{VideoDownloadResult, VideoInfo};
+use crate::clipping::apify_client::VideoDownloadResult;
 
 pub struct RustubeClient;
 
@@ -23,7 +23,10 @@ impl RustubeClient {
                 .map_err(|e| format!("Failed to create output directory: {}", e))?;
         }
 
-        tracing::info!("📥 Downloading video from YouTube using Rustube: {}", video_url);
+        tracing::info!(
+            "📥 Downloading video from YouTube using Rustube: {}",
+            video_url
+        );
 
         // Extract video ID from URL
         let video_id = Self::extract_video_id(video_url)?;
@@ -31,8 +34,8 @@ impl RustubeClient {
         tracing::info!("🔍 Fetching video metadata for ID: {}", video_id);
 
         // Fetch video using rustube
-        let id = Id::from_raw(&video_id)
-            .map_err(|e| format!("Invalid video ID {}: {}", video_id, e))?;
+        let id =
+            Id::from_raw(&video_id).map_err(|e| format!("Invalid video ID {}: {}", video_id, e))?;
 
         let video = Video::from_id(id.into_owned())
             .await
@@ -54,7 +57,9 @@ impl RustubeClient {
             .max_by_key(|s| s.width.unwrap_or(0))
             .or_else(|| {
                 // Fallback: get best video stream
-                tracing::warn!("⚠️ No combined video+audio stream found, using best video-only stream");
+                tracing::warn!(
+                    "⚠️ No combined video+audio stream found, using best video-only stream"
+                );
                 streams
                     .iter()
                     .filter(|s| s.includes_video_track)
@@ -122,31 +127,6 @@ impl RustubeClient {
         })
     }
 
-    /// Get video metadata without downloading
-    pub async fn get_video_info(video_url: &str) -> Result<VideoInfo, String> {
-        tracing::info!("ℹ️ Fetching video metadata: {}", video_url);
-
-        let video_id = Self::extract_video_id(video_url)?;
-
-        let id = Id::from_raw(&video_id)
-            .map_err(|e| format!("Invalid video ID: {}", e))?;
-
-        let video = Video::from_id(id.into_owned())
-            .await
-            .map_err(|e| format!("Failed to fetch video metadata: {}", e))?;
-
-        let details = video.video_details();
-
-        Ok(VideoInfo {
-            video_id: details.video_id.to_string(),
-            title: details.title.clone(),
-            duration_seconds: Some(details.length_seconds as f64),
-            channel_id: Some(details.channel_id.clone()),
-            channel_name: Some(details.author.clone()),
-            upload_date: None, // rustube doesn't provide this easily
-        })
-    }
-
     /// Extract video ID from various YouTube URL formats
     fn extract_video_id(url: &str) -> Result<String, String> {
         // Handle different YouTube URL formats:
@@ -176,7 +156,11 @@ impl RustubeClient {
         }
 
         // If it doesn't match any pattern, assume it's a raw video ID
-        if url.len() == 11 && url.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') {
+        if url.len() == 11
+            && url
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
+        {
             return Ok(url.to_string());
         }
 
@@ -250,7 +234,8 @@ mod tests {
         );
 
         assert_eq!(
-            RustubeClient::extract_video_id("https://youtube.com/watch?v=dQw4w9WgXcQ&t=10s").unwrap(),
+            RustubeClient::extract_video_id("https://youtube.com/watch?v=dQw4w9WgXcQ&t=10s")
+                .unwrap(),
             "dQw4w9WgXcQ"
         );
 

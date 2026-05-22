@@ -1,11 +1,11 @@
 use axum::{
     http::{header, StatusCode},
-    response::{IntoResponse, Response, Json},
+    response::{IntoResponse, Json, Response},
 };
+use chrono::{DateTime, Utc};
 use serde_json::json;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use chrono::{DateTime, Utc};
 
 use crate::gemini_client::GeminiClient;
 
@@ -32,15 +32,20 @@ pub async fn get_background_image(gemini_client: Arc<GeminiClient>) -> Response 
                 // Return cached image with appropriate content type
                 let content_type = if std::str::from_utf8(&cache.image_data)
                     .map(|s| s.starts_with("<svg"))
-                    .unwrap_or(false) {
+                    .unwrap_or(false)
+                {
                     "image/svg+xml"
-                } else if cache.image_data.starts_with(&[0x89, 0x50, 0x4E, 0x47]) { // PNG signature
+                } else if cache.image_data.starts_with(&[0x89, 0x50, 0x4E, 0x47]) {
+                    // PNG signature
                     "image/png"
-                } else if cache.image_data.starts_with(&[0xFF, 0xD8, 0xFF]) { // JPEG signature
+                } else if cache.image_data.starts_with(&[0xFF, 0xD8, 0xFF]) {
+                    // JPEG signature
                     "image/jpeg"
-                } else if cache.image_data.starts_with(&[0x47, 0x49, 0x46]) { // GIF signature
+                } else if cache.image_data.starts_with(&[0x47, 0x49, 0x46]) {
+                    // GIF signature
                     "image/gif"
-                } else if cache.image_data.starts_with(&[0x52, 0x49, 0x46, 0x46]) { // WebP signature (RIFF)
+                } else if cache.image_data.starts_with(&[0x52, 0x49, 0x46, 0x46]) {
+                    // WebP signature (RIFF)
                     "image/webp"
                 } else {
                     "image/png" // Default fallback
@@ -50,7 +55,8 @@ pub async fn get_background_image(gemini_client: Arc<GeminiClient>) -> Response 
                     StatusCode::OK,
                     [(header::CONTENT_TYPE, content_type)],
                     cache.image_data.clone(),
-                ).into_response();
+                )
+                    .into_response();
             }
         }
     }
@@ -64,7 +70,7 @@ pub async fn get_background_image(gemini_client: Arc<GeminiClient>) -> Response 
                 generated_at: Utc::now(),
                 theme: "dynamic".to_string(),
             };
-            
+
             {
                 let mut cache_guard = BACKGROUND_CACHE.write().await;
                 *cache_guard = Some(new_cache);
@@ -73,15 +79,20 @@ pub async fn get_background_image(gemini_client: Arc<GeminiClient>) -> Response 
             // Determine content type based on data
             let content_type = if std::str::from_utf8(&image_data)
                 .map(|s| s.starts_with("<svg"))
-                .unwrap_or(false) {
+                .unwrap_or(false)
+            {
                 "image/svg+xml"
-            } else if image_data.starts_with(&[0x89, 0x50, 0x4E, 0x47]) { // PNG signature
+            } else if image_data.starts_with(&[0x89, 0x50, 0x4E, 0x47]) {
+                // PNG signature
                 "image/png"
-            } else if image_data.starts_with(&[0xFF, 0xD8, 0xFF]) { // JPEG signature
+            } else if image_data.starts_with(&[0xFF, 0xD8, 0xFF]) {
+                // JPEG signature
                 "image/jpeg"
-            } else if image_data.starts_with(&[0x47, 0x49, 0x46]) { // GIF signature
+            } else if image_data.starts_with(&[0x47, 0x49, 0x46]) {
+                // GIF signature
                 "image/gif"
-            } else if image_data.starts_with(&[0x52, 0x49, 0x46, 0x46]) { // WebP signature (RIFF)
+            } else if image_data.starts_with(&[0x52, 0x49, 0x46, 0x46]) {
+                // WebP signature (RIFF)
                 "image/webp"
             } else {
                 "image/png" // Default fallback
@@ -91,11 +102,12 @@ pub async fn get_background_image(gemini_client: Arc<GeminiClient>) -> Response 
                 StatusCode::OK,
                 [(header::CONTENT_TYPE, content_type)],
                 image_data,
-            ).into_response()
+            )
+                .into_response()
         }
         Err(e) => {
             tracing::error!("Failed to generate background image: {}", e);
-            
+
             // Return a fallback CSS gradient as JSON
             (
                 StatusCode::OK,
@@ -103,38 +115,48 @@ pub async fn get_background_image(gemini_client: Arc<GeminiClient>) -> Response 
                 Json(json!({
                     "fallback": true,
                     "gradient": "linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f1419 100%)"
-                }))
-            ).into_response()
+                })),
+            )
+                .into_response()
         }
     }
 }
 
-async fn generate_new_background(gemini_client: &GeminiClient) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
+async fn generate_new_background(
+    gemini_client: &GeminiClient,
+) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
     let prompt = GeminiClient::create_background_image_prompt("dynamic");
 
     tracing::info!("Generating new background image with prompt: {}", prompt);
 
     // Use 16:9 aspect ratio for widescreen displays (better for UI backgrounds)
     // Use 2K resolution for good quality without being too large
-    let image_data = gemini_client.generate_image(&prompt, Some("16:9"), Some("2K"), None).await?;
-    
+    let image_data = gemini_client
+        .generate_image(&prompt, Some("16:9"), Some("2K"), None)
+        .await?;
+
     // Validate that we got actual image data
     if image_data.len() < 100 {
         return Err("Generated image data too small".into());
     }
-    
-    tracing::info!("Successfully generated background image ({} bytes)", image_data.len());
-    
+
+    tracing::info!(
+        "Successfully generated background image ({} bytes)",
+        image_data.len()
+    );
+
     Ok(image_data)
 }
 
 pub async fn get_background_info() -> Json<serde_json::Value> {
     let cache_guard = BACKGROUND_CACHE.read().await;
-    
+
     if let Some(cache) = cache_guard.as_ref() {
-        let age_minutes = Utc::now().signed_duration_since(cache.generated_at).num_minutes();
+        let age_minutes = Utc::now()
+            .signed_duration_since(cache.generated_at)
+            .num_minutes();
         let next_refresh_minutes = 5 - age_minutes;
-        
+
         Json(json!({
             "cached": true,
             "generated_at": cache.generated_at,

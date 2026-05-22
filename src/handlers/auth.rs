@@ -1,5 +1,5 @@
-use crate::models::{admin::SystemSetting, auth::*};
 use crate::middleware::rate_limit::strict_rate_limit_middleware;
+use crate::models::{admin::SystemSetting, auth::*};
 use crate::youtube_client;
 use crate::AppState;
 use axum::{
@@ -45,8 +45,12 @@ fn is_allowed_redirect_url(url: &str) -> bool {
                 "localhost:5173,localhost:3000,cmachine.devthuku.io,www.videosync.video,videosync.video".to_string()
             });
 
-        tracing::debug!("🔍 Validating redirect URL - host: {}, host_with_port: {}, allowed_origins: {}",
-                       host, host_with_port, allowed_origins);
+        tracing::debug!(
+            "🔍 Validating redirect URL - host: {}, host_with_port: {}, allowed_origins: {}",
+            host,
+            host_with_port,
+            allowed_origins
+        );
 
         // Check if host:port or just host matches any allowed origin
         for allowed in allowed_origins.split(',') {
@@ -57,8 +61,12 @@ fn is_allowed_redirect_url(url: &str) -> bool {
             }
         }
 
-        tracing::warn!("🚫 Rejected redirect to disallowed domain: {} ({}). Allowed origins: {}",
-                      host, host_with_port, allowed_origins);
+        tracing::warn!(
+            "🚫 Rejected redirect to disallowed domain: {} ({}). Allowed origins: {}",
+            host,
+            host_with_port,
+            allowed_origins
+        );
         return false;
     }
 
@@ -79,17 +87,21 @@ pub fn auth_routes() -> Router {
 }
 
 pub fn clipper_invite_routes() -> Router {
-    use crate::middleware::auth::auth_middleware;
     use crate::middleware::admin::admin_middleware;
+    use crate::middleware::auth::auth_middleware;
     Router::new()
         .route("/api/admin/clipper-invites", post(create_clipper_invite))
         .route("/api/admin/clipper-invites", get(list_clipper_invites))
-        .route("/api/admin/clipper-invites/:token", axum::routing::delete(revoke_clipper_invite))
+        .route(
+            "/api/admin/clipper-invites/:token",
+            axum::routing::delete(revoke_clipper_invite),
+        )
         .layer(axum::middleware::from_fn(admin_middleware))
         .layer(axum::middleware::from_fn(auth_middleware))
 }
 
 async fn register(
+    headers: HeaderMap,
     Extension(state): Extension<Arc<AppState>>,
     Json(payload): Json<RegisterRequest>,
 ) -> Result<Json<AuthResponse>, (StatusCode, Json<ErrorResponse>)> {
@@ -125,9 +137,11 @@ async fn register(
         ));
     }
 
-    // Check whitelist if enabled
-    if let Err(e) = check_whitelist_enabled(&state, &payload.email).await {
-        return Err(e);
+    // Only Content Machine signups are whitelist-restricted.
+    if request_requires_content_machine_whitelist(&headers) {
+        if let Err(e) = check_whitelist_enabled(&state, &payload.email).await {
+            return Err(e);
+        }
     }
 
     // Check if user already exists
@@ -206,7 +220,7 @@ async fn register(
                 )
             })?;
             user.password_hash = String::new(); // Don't include password hash in response
-            // Audit-log the trial start. Best-effort — non-fatal if it fails.
+                                                // Audit-log the trial start. Best-effort — non-fatal if it fails.
             let _ = sqlx::query(
                 "INSERT INTO user_payment_events (user_id, event_type) VALUES ($1, 'trial_started')"
             )
@@ -214,7 +228,7 @@ async fn register(
             .execute(&state.db_pool)
             .await;
             user
-        },
+        }
         Err(e) => {
             tracing::error!("Error creating user: {}", e);
             return Err((
@@ -239,6 +253,7 @@ async fn register(
 }
 
 async fn login(
+    headers: HeaderMap,
     Extension(state): Extension<Arc<AppState>>,
     Json(payload): Json<LoginRequest>,
 ) -> Result<Json<AuthResponse>, (StatusCode, Json<ErrorResponse>)> {
@@ -253,14 +268,16 @@ async fn login(
         ));
     }
 
-    // Check whitelist if enabled
-    if let Err(e) = check_whitelist_enabled(&state, &payload.email).await {
-        return Err(e);
+    // Only Content Machine logins are whitelist-restricted.
+    if request_requires_content_machine_whitelist(&headers) {
+        if let Err(e) = check_whitelist_for_existing_user_login(&state, &payload.email).await {
+            return Err(e);
+        }
     }
 
     // Find user by email
     let user_row = sqlx::query(
-        "SELECT id, email, username, password_hash, is_active, is_superuser, is_staff, is_clipper, created_at, updated_at
+        "SELECT id, email, username, password_hash, google_id, is_active, is_superuser, is_staff, is_clipper, created_at, updated_at
          FROM users WHERE email = $1 AND is_active = true"
     )
     .bind(&payload.email)
@@ -269,6 +286,28 @@ async fn login(
 
     let user = match user_row {
         Ok(Some(row)) => {
+            let has_google_id = row
+                .try_get::<Option<String>, _>("google_id")
+                .ok()
+                .flatten()
+                .map(|value| !value.trim().is_empty())
+                .unwrap_or(false);
+            let password_hash = row
+                .try_get::<String, _>("password_hash")
+                .unwrap_or_default();
+
+            if password_hash.trim().is_empty() && has_google_id {
+                return Err((
+                    StatusCode::UNAUTHORIZED,
+                    Json(ErrorResponse {
+                        success: false,
+                        message:
+                            "This account uses Google sign-in. Please continue with Google."
+                                .to_string(),
+                    }),
+                ));
+            }
+
             // Use try_into to convert the row to User struct
             User::from_row(&row).map_err(|e| {
                 tracing::error!("Error converting row to User: {}", e);
@@ -280,7 +319,7 @@ async fn login(
                     }),
                 )
             })?
-        },
+        }
         Ok(None) => {
             return Err((
                 StatusCode::UNAUTHORIZED,
@@ -339,7 +378,7 @@ async fn login(
 
 fn generate_jwt_token(user: &User) -> Result<String, (StatusCode, Json<ErrorResponse>)> {
     let jwt_secret = std::env::var("JWT_SECRET").unwrap_or_else(|_| "default_secret".to_string());
-    
+
     let expiration = Utc::now()
         .checked_add_signed(Duration::hours(24))
         .expect("valid timestamp")
@@ -415,7 +454,8 @@ async fn verify_token(
             StatusCode::UNAUTHORIZED,
             Json(ErrorResponse {
                 success: false,
-                message: "Invalid Authorization header format. Expected 'Bearer <token>'".to_string(),
+                message: "Invalid Authorization header format. Expected 'Bearer <token>'"
+                    .to_string(),
             }),
         ));
     };
@@ -458,7 +498,7 @@ async fn verify_token(
             })?;
             user.password_hash = String::new(); // Don't include password hash
             user
-        },
+        }
         Ok(None) => {
             return Err((
                 StatusCode::UNAUTHORIZED,
@@ -488,7 +528,7 @@ async fn verify_token(
 
 pub fn verify_jwt_token(token: &str) -> Result<Claims, jsonwebtoken::errors::Error> {
     let jwt_secret = std::env::var("JWT_SECRET").unwrap_or_else(|_| "default_secret".to_string());
-    
+
     let token_data = decode::<Claims>(
         token,
         &DecodingKey::from_secret(jwt_secret.as_ref()),
@@ -504,7 +544,7 @@ async fn check_whitelist_enabled(
 ) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
     // Get whitelist enabled status
     let setting = sqlx::query_as::<_, SystemSetting>(
-        "SELECT * FROM system_settings WHERE setting_key = 'whitelist_enabled'"
+        "SELECT * FROM system_settings WHERE setting_key = 'whitelist_enabled'",
     )
     .fetch_optional(&state.db_pool)
     .await
@@ -557,6 +597,72 @@ async fn check_whitelist_enabled(
     Ok(())
 }
 
+async fn has_existing_active_user_with_email(
+    state: &Arc<AppState>,
+    email: &str,
+) -> Result<bool, (StatusCode, Json<ErrorResponse>)> {
+    sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users WHERE email = $1 AND is_active = true")
+        .bind(email)
+        .fetch_one(&state.db_pool)
+        .await
+        .map(|count| count > 0)
+        .map_err(|e| {
+            tracing::error!(
+                "Database error checking existing active user for whitelist login bypass: {}",
+                e
+            );
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    success: false,
+                    message: "Internal server error".to_string(),
+                }),
+            )
+        })
+}
+
+async fn check_whitelist_for_existing_user_login(
+    state: &Arc<AppState>,
+    email: &str,
+) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
+    match check_whitelist_enabled(state, email).await {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            if has_existing_active_user_with_email(state, email).await? {
+                tracing::info!(
+                    email = %email,
+                    "Allowing existing active user through whitelist login gate"
+                );
+                Ok(())
+            } else {
+                Err(err)
+            }
+        }
+    }
+}
+
+fn request_requires_content_machine_whitelist(headers: &HeaderMap) -> bool {
+    let origin = headers
+        .get("origin")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_lowercase();
+    let referer = headers
+        .get("referer")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_lowercase();
+
+    let matches_content_machine = |value: &str| {
+        value.contains("content-machine-pbjp.vercel.app")
+            || value.contains("cmachine.devthuku.io")
+            || value.contains("localhost:5173")
+            || value.contains("localhost:4173")
+    };
+
+    matches_content_machine(&origin) || matches_content_machine(&referer)
+}
+
 // ============================================================================
 // Google OAuth Login/Signup
 // ============================================================================
@@ -585,14 +691,17 @@ pub async fn initiate_google_oauth(
             Json(json!({
                 "success": false,
                 "message": "Google OAuth not configured"
-            }))
+            })),
         )
     })?;
 
     // Validate and get redirect URL
     let redirect_to = params.redirect_to.unwrap_or("/dashboard".to_string());
 
-    tracing::info!("🔐 Initiating Google OAuth login with redirect_to: {}", redirect_to);
+    tracing::info!(
+        "🔐 Initiating Google OAuth login with redirect_to: {}",
+        redirect_to
+    );
 
     if !is_allowed_redirect_url(&redirect_to) {
         tracing::error!("🚫 Rejected invalid redirect URL: {}", redirect_to);
@@ -601,7 +710,7 @@ pub async fn initiate_google_oauth(
             Json(json!({
                 "success": false,
                 "message": "Invalid redirect URL"
-            }))
+            })),
         ));
     }
 
@@ -632,12 +741,8 @@ pub async fn initiate_google_oauth(
     let redirect_uri = std::env::var("GOOGLE_OAUTH_REDIRECT_URI_AUTH")
         .unwrap_or_else(|_| "http://localhost:3000/api/auth/google/callback".to_string());
 
-    let auth_url = youtube_client::build_google_oauth_url(
-        client_id,
-        &redirect_uri,
-        &scopes,
-        &state_param,
-    );
+    let auth_url =
+        youtube_client::build_google_oauth_url(client_id, &redirect_uri, &scopes, &state_param);
 
     Ok(Redirect::to(&auth_url))
 }
@@ -664,7 +769,7 @@ pub async fn google_oauth_callback(
     let code = params.code.ok_or_else(|| {
         (
             StatusCode::BAD_REQUEST,
-            Html("<h1>Missing authorization code</h1>".to_string())
+            Html("<h1>Missing authorization code</h1>".to_string()),
         )
     })?;
 
@@ -672,29 +777,45 @@ pub async fn google_oauth_callback(
     let state_json = params.state.ok_or_else(|| {
         (
             StatusCode::BAD_REQUEST,
-            Html("<h1>Missing state parameter</h1>".to_string())
+            Html("<h1>Missing state parameter</h1>".to_string()),
         )
     })?;
 
-    let state_bytes = base64::prelude::BASE64_URL_SAFE_NO_PAD.decode(&state_json)
-        .map_err(|_| (StatusCode::BAD_REQUEST, Html("<h1>Invalid state</h1>".to_string())))?;
+    let state_bytes = base64::prelude::BASE64_URL_SAFE_NO_PAD
+        .decode(&state_json)
+        .map_err(|_| {
+            (
+                StatusCode::BAD_REQUEST,
+                Html("<h1>Invalid state</h1>".to_string()),
+            )
+        })?;
 
-    let state_str = String::from_utf8(state_bytes)
-        .map_err(|_| (StatusCode::BAD_REQUEST, Html("<h1>Invalid state</h1>".to_string())))?;
+    let state_str = String::from_utf8(state_bytes).map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            Html("<h1>Invalid state</h1>".to_string()),
+        )
+    })?;
 
-    let state_data: serde_json::Value = serde_json::from_str(&state_str)
-        .map_err(|_| (StatusCode::BAD_REQUEST, Html("<h1>Invalid state</h1>".to_string())))?;
+    let state_data: serde_json::Value = serde_json::from_str(&state_str).map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            Html("<h1>Invalid state</h1>".to_string()),
+        )
+    })?;
 
     let redirect_to = state_data["redirect_to"]
         .as_str()
         .unwrap_or("/dashboard")
         .to_string();
 
-    let source_app = state_data["source_app"]
-        .as_str()
-        .unwrap_or("videosync");
+    let source_app = state_data["source_app"].as_str().unwrap_or("videosync");
 
-    tracing::info!("🔄 OAuth callback received - redirect_to: {}, source_app: {}", redirect_to, source_app);
+    tracing::info!(
+        "🔄 OAuth callback received - redirect_to: {}, source_app: {}",
+        redirect_to,
+        source_app
+    );
 
     // Validate redirect URL for security
     let redirect_to = if is_allowed_redirect_url(&redirect_to) {
@@ -705,10 +826,14 @@ pub async fn google_oauth_callback(
         let fallback = match source_app {
             "content_machine" => "https://cmachine.devthuku.io/",
             "content_machine_local" => "http://localhost:5173/",
-            _ => "/dashboard"
+            _ => "/dashboard",
         };
-        tracing::warn!("🚫 Invalid redirect URL in callback, falling back to {} for app {}: {}",
-                      fallback, source_app, redirect_to);
+        tracing::warn!(
+            "🚫 Invalid redirect URL in callback, falling back to {} for app {}: {}",
+            fallback,
+            source_app,
+            redirect_to
+        );
         fallback.to_string()
     };
 
@@ -729,7 +854,10 @@ pub async fn google_oauth_callback(
     .await
     .map_err(|e| {
         tracing::error!("Failed to exchange code: {}", e);
-        (StatusCode::INTERNAL_SERVER_ERROR, Html(format!("<h1>Failed to exchange code: {}</h1>", e)))
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Html(format!("<h1>Failed to exchange code: {}</h1>", e)),
+        )
     })?;
 
     // Get user info from Google
@@ -737,12 +865,16 @@ pub async fn google_oauth_callback(
         .await
         .map_err(|e| {
             tracing::error!("Failed to get user info: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, Html(format!("<h1>Failed to get user info: {}</h1>", e)))
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Html(format!("<h1>Failed to get user info: {}</h1>", e)),
+            )
         })?;
 
-    // Check whitelist if enabled
-    if let Err(_e) = check_whitelist_enabled(&state, &user_info.email).await {
-        return Ok(Html(r#"
+    // Only Content Machine Google sign-ins should be whitelist-restricted.
+    if source_app == "content_machine" {
+        if let Err(_e) = check_whitelist_for_existing_user_login(&state, &user_info.email).await {
+            return Ok(Html(r#"
 <!DOCTYPE html><html><head><title>Access Restricted</title>
 <style>body { font-family: Arial; max-width: 600px; margin: 100px auto; text-align: center; }</style>
 </head><body>
@@ -751,22 +883,24 @@ pub async fn google_oauth_callback(
 <a href="/login">Back to Login</a>
 </body></html>
         "#.to_string()));
+        }
     }
 
     // Calculate token expiry
     let token_expiry = chrono::Utc::now() + chrono::Duration::seconds(token_response.expires_in);
 
     // Check if user exists with this Google ID
-    let existing_user = sqlx::query_as::<_, User>(
-        "SELECT * FROM users WHERE google_id = $1"
-    )
-    .bind(&user_info.id)
-    .fetch_optional(&state.db_pool)
-    .await
-    .map_err(|e| {
-        tracing::error!("Database error: {}", e);
-        (StatusCode::INTERNAL_SERVER_ERROR, Html("<h1>Database error</h1>".to_string()))
-    })?;
+    let existing_user = sqlx::query_as::<_, User>("SELECT * FROM users WHERE google_id = $1")
+        .bind(&user_info.id)
+        .fetch_optional(&state.db_pool)
+        .await
+        .map_err(|e| {
+            tracing::error!("Database error: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Html("<h1>Database error</h1>".to_string()),
+            )
+        })?;
 
     let user = if let Some(user) = existing_user {
         // Update existing user's Google tokens
@@ -774,7 +908,7 @@ pub async fn google_oauth_callback(
             "UPDATE users
              SET google_access_token = $1, google_refresh_token = $2, google_token_expiry = $3,
                  google_email = $4, google_picture = $5, updated_at = NOW()
-             WHERE id = $6"
+             WHERE id = $6",
         )
         .bind(&token_response.access_token)
         .bind(&token_response.refresh_token)
@@ -790,13 +924,16 @@ pub async fn google_oauth_callback(
         user
     } else {
         // Check if email already exists (link accounts)
-        let email_user = sqlx::query_as::<_, User>(
-            "SELECT * FROM users WHERE email = $1"
-        )
-        .bind(&user_info.email)
-        .fetch_optional(&state.db_pool)
-        .await
-        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, Html("<h1>Database error</h1>".to_string())))?;
+        let email_user = sqlx::query_as::<_, User>("SELECT * FROM users WHERE email = $1")
+            .bind(&user_info.email)
+            .fetch_optional(&state.db_pool)
+            .await
+            .map_err(|_| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Html("<h1>Database error</h1>".to_string()),
+                )
+            })?;
 
         if let Some(user) = email_user {
             // Link Google account to existing user
@@ -888,7 +1025,10 @@ pub async fn google_oauth_callback(
     )
     .map_err(|e| {
         tracing::error!("Failed to generate token: {}", e);
-        (StatusCode::INTERNAL_SERVER_ERROR, Html("<h1>Failed to generate token</h1>".to_string()))
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Html("<h1>Failed to generate token</h1>".to_string()),
+        )
     })?;
 
     // Pass token and user data via URL hash to frontend
@@ -899,14 +1039,18 @@ pub async fn google_oauth_callback(
         "is_staff": user.is_staff,
         "is_superuser": user.is_superuser,
         "is_clipper": user.is_clipper
-    }).to_string();
+    })
+    .to_string();
 
     // URL encode the token and user data for the hash fragment
     let encoded_token = urlencoding::encode(&token);
     let encoded_user = urlencoding::encode(&user_json);
 
     // Construct redirect URL with hash parameters
-    let final_redirect = format!("{}#token={}&user={}", redirect_to, encoded_token, encoded_user);
+    let final_redirect = format!(
+        "{}#token={}&user={}",
+        redirect_to, encoded_token, encoded_user
+    );
 
     // Return HTML that redirects with token in URL hash
     Ok(Html(format!(
@@ -959,7 +1103,7 @@ async fn create_clipper_invite(
 
     sqlx::query(
         "INSERT INTO clipper_invite_tokens (token, label, created_by_admin_id, expires_at)
-         VALUES ($1, $2, $3, NOW() + $4 * INTERVAL '1 day')"
+         VALUES ($1, $2, $3, NOW() + $4 * INTERVAL '1 day')",
     )
     .bind(&token)
     .bind(&payload.label)
@@ -969,7 +1113,13 @@ async fn create_clipper_invite(
     .await
     .map_err(|e| {
         tracing::error!("Failed to create invite token: {}", e);
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { success: false, message: "Failed to create token".to_string() }))
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                success: false,
+                message: "Failed to create token".to_string(),
+            }),
+        )
     })?;
 
     Ok(Json(serde_json::json!({
@@ -988,50 +1138,76 @@ async fn list_clipper_invites(
                 u.email AS used_by_email
          FROM clipper_invite_tokens t
          LEFT JOIN users u ON u.id = t.used_by_user_id
-         ORDER BY t.created_at DESC"
+         ORDER BY t.created_at DESC",
     )
     .fetch_all(&state.db_pool)
     .await
     .map_err(|e| {
         tracing::error!("Failed to list invites: {}", e);
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { success: false, message: "Failed to fetch tokens".to_string() }))
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                success: false,
+                message: "Failed to fetch tokens".to_string(),
+            }),
+        )
     })?;
 
-    let invites: Vec<serde_json::Value> = rows.iter().map(|r| {
-        let used_at: Option<chrono::DateTime<chrono::Utc>> = r.get("used_at");
-        serde_json::json!({
-            "id": r.get::<uuid::Uuid, _>("id").to_string(),
-            "token": r.get::<String, _>("token"),
-            "label": r.get::<Option<String>, _>("label"),
-            "expires_at": r.get::<chrono::DateTime<chrono::Utc>, _>("expires_at"),
-            "used": used_at.is_some(),
-            "used_at": used_at,
-            "used_by_email": r.get::<Option<String>, _>("used_by_email"),
-            "created_at": r.get::<chrono::DateTime<chrono::Utc>, _>("created_at"),
+    let invites: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| {
+            let used_at: Option<chrono::DateTime<chrono::Utc>> = r.get("used_at");
+            serde_json::json!({
+                "id": r.get::<uuid::Uuid, _>("id").to_string(),
+                "token": r.get::<String, _>("token"),
+                "label": r.get::<Option<String>, _>("label"),
+                "expires_at": r.get::<chrono::DateTime<chrono::Utc>, _>("expires_at"),
+                "used": used_at.is_some(),
+                "used_at": used_at,
+                "used_by_email": r.get::<Option<String>, _>("used_by_email"),
+                "created_at": r.get::<chrono::DateTime<chrono::Utc>, _>("created_at"),
+            })
         })
-    }).collect();
+        .collect();
 
-    Ok(Json(serde_json::json!({ "success": true, "invites": invites })))
+    Ok(Json(
+        serde_json::json!({ "success": true, "invites": invites }),
+    ))
 }
 
 async fn revoke_clipper_invite(
     Extension(state): Extension<Arc<AppState>>,
     axum::extract::Path(token): axum::extract::Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
-    let result = sqlx::query("DELETE FROM clipper_invite_tokens WHERE token = $1 AND used_at IS NULL")
-        .bind(&token)
-        .execute(&state.db_pool)
-        .await
-        .map_err(|e| {
-            tracing::error!("Failed to revoke invite: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { success: false, message: "Failed to revoke token".to_string() }))
-        })?;
+    let result =
+        sqlx::query("DELETE FROM clipper_invite_tokens WHERE token = $1 AND used_at IS NULL")
+            .bind(&token)
+            .execute(&state.db_pool)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to revoke invite: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        success: false,
+                        message: "Failed to revoke token".to_string(),
+                    }),
+                )
+            })?;
 
     if result.rows_affected() == 0 {
-        return Err((StatusCode::NOT_FOUND, Json(ErrorResponse { success: false, message: "Token not found or already used".to_string() })));
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                success: false,
+                message: "Token not found or already used".to_string(),
+            }),
+        ));
     }
 
-    Ok(Json(serde_json::json!({ "success": true, "message": "Token revoked" })))
+    Ok(Json(
+        serde_json::json!({ "success": true, "message": "Token revoked" }),
+    ))
 }
 
 async fn register_clipper(
@@ -1040,38 +1216,79 @@ async fn register_clipper(
 ) -> Result<Json<AuthResponse>, (StatusCode, Json<ErrorResponse>)> {
     // Validate inputs
     if payload.email.is_empty() || payload.username.is_empty() || payload.password.is_empty() {
-        return Err((StatusCode::BAD_REQUEST, Json(ErrorResponse { success: false, message: "Email, username, and password are required".to_string() })));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                success: false,
+                message: "Email, username, and password are required".to_string(),
+            }),
+        ));
     }
     if payload.password.len() < 6 {
-        return Err((StatusCode::BAD_REQUEST, Json(ErrorResponse { success: false, message: "Password must be at least 6 characters".to_string() })));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                success: false,
+                message: "Password must be at least 6 characters".to_string(),
+            }),
+        ));
     }
     if payload.password != payload.confirm_password {
-        return Err((StatusCode::BAD_REQUEST, Json(ErrorResponse { success: false, message: "Passwords do not match".to_string() })));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                success: false,
+                message: "Passwords do not match".to_string(),
+            }),
+        ));
     }
 
     // Validate invite token
-    let token_row = sqlx::query(
-        "SELECT id, expires_at, used_at FROM clipper_invite_tokens WHERE token = $1"
-    )
-    .bind(&payload.token)
-    .fetch_optional(&state.db_pool)
-    .await
-    .map_err(|e| {
-        tracing::error!("DB error checking invite token: {}", e);
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { success: false, message: "Internal server error".to_string() }))
-    })?;
+    let token_row =
+        sqlx::query("SELECT id, expires_at, used_at FROM clipper_invite_tokens WHERE token = $1")
+            .bind(&payload.token)
+            .fetch_optional(&state.db_pool)
+            .await
+            .map_err(|e| {
+                tracing::error!("DB error checking invite token: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        success: false,
+                        message: "Internal server error".to_string(),
+                    }),
+                )
+            })?;
 
     let token_row = token_row.ok_or_else(|| {
-        (StatusCode::BAD_REQUEST, Json(ErrorResponse { success: false, message: "Invalid invite token".to_string() }))
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                success: false,
+                message: "Invalid invite token".to_string(),
+            }),
+        )
     })?;
 
     let used_at: Option<chrono::DateTime<chrono::Utc>> = token_row.get("used_at");
     if used_at.is_some() {
-        return Err((StatusCode::BAD_REQUEST, Json(ErrorResponse { success: false, message: "Invite token has already been used".to_string() })));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                success: false,
+                message: "Invite token has already been used".to_string(),
+            }),
+        ));
     }
     let expires_at: chrono::DateTime<chrono::Utc> = token_row.get("expires_at");
     if expires_at < chrono::Utc::now() {
-        return Err((StatusCode::BAD_REQUEST, Json(ErrorResponse { success: false, message: "Invite token has expired".to_string() })));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                success: false,
+                message: "Invite token has expired".to_string(),
+            }),
+        ));
     }
     let token_id: uuid::Uuid = token_row.get("id");
 
@@ -1083,16 +1300,34 @@ async fn register_clipper(
         .await
         .map_err(|e| {
             tracing::error!("DB error: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { success: false, message: "Internal server error".to_string() }))
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    success: false,
+                    message: "Internal server error".to_string(),
+                }),
+            )
         })?;
 
     if existing.is_some() {
-        return Err((StatusCode::CONFLICT, Json(ErrorResponse { success: false, message: "Email or username already taken".to_string() })));
+        return Err((
+            StatusCode::CONFLICT,
+            Json(ErrorResponse {
+                success: false,
+                message: "Email or username already taken".to_string(),
+            }),
+        ));
     }
 
     let password_hash = hash(&payload.password, DEFAULT_COST).map_err(|e| {
         tracing::error!("Hash error: {}", e);
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { success: false, message: "Internal server error".to_string() }))
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                success: false,
+                message: "Internal server error".to_string(),
+            }),
+        )
     })?;
 
     // Create clipper user
@@ -1113,19 +1348,27 @@ async fn register_clipper(
 
     let mut user = User::from_row(&user_row).map_err(|e| {
         tracing::error!("Row conversion error: {}", e);
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { success: false, message: "Internal server error".to_string() }))
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                success: false,
+                message: "Internal server error".to_string(),
+            }),
+        )
     })?;
     user.password_hash = String::new();
 
     let user_id = user.id;
 
     // Mark token as used
-    sqlx::query("UPDATE clipper_invite_tokens SET used_by_user_id = $1, used_at = NOW() WHERE id = $2")
-        .bind(user_id)
-        .bind(token_id)
-        .execute(&state.db_pool)
-        .await
-        .ok();
+    sqlx::query(
+        "UPDATE clipper_invite_tokens SET used_by_user_id = $1, used_at = NOW() WHERE id = $2",
+    )
+    .bind(user_id)
+    .bind(token_id)
+    .execute(&state.db_pool)
+    .await
+    .ok();
 
     let token = generate_jwt_token(&user)?;
     tracing::info!("✅ Clipper registered: {}", user.email);

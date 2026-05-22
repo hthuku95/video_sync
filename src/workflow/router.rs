@@ -6,7 +6,9 @@ use std::sync::Arc;
 /// Common routing functions for workflows
 
 /// Route to retry node if errors exist and under retry limit
-pub fn retry_router(max_retries: usize) -> Arc<dyn Fn(&WorkflowState) -> Option<String> + Send + Sync> {
+pub fn retry_router(
+    max_retries: usize,
+) -> Arc<dyn Fn(&WorkflowState) -> Option<String> + Send + Sync> {
     Arc::new(move |state: &WorkflowState| {
         if state.error_count > 0 && state.error_count < max_retries {
             Some("retry".to_string())
@@ -20,14 +22,12 @@ pub fn retry_router(max_retries: usize) -> Arc<dyn Fn(&WorkflowState) -> Option<
 
 /// Route based on workflow status
 pub fn status_router() -> Arc<dyn Fn(&WorkflowState) -> Option<String> + Send + Sync> {
-    Arc::new(|state: &WorkflowState| {
-        match state.status {
-            WorkflowStatus::Completed => Some("end".to_string()),
-            WorkflowStatus::Failed => Some("error_handler".to_string()),
-            WorkflowStatus::AwaitingInput => Some("human_input".to_string()),
-            WorkflowStatus::Retrying => Some("retry".to_string()),
-            _ => Some("continue".to_string()),
-        }
+    Arc::new(|state: &WorkflowState| match state.status {
+        WorkflowStatus::Completed => Some("end".to_string()),
+        WorkflowStatus::Failed => Some("error_handler".to_string()),
+        WorkflowStatus::AwaitingInput => Some("human_input".to_string()),
+        WorkflowStatus::Retrying => Some("retry".to_string()),
+        _ => Some("continue".to_string()),
     })
 }
 
@@ -48,9 +48,7 @@ pub fn tool_success_router() -> Arc<dyn Fn(&WorkflowState) -> Option<String> + S
 
 /// Route based on next field in state (agent decision)
 pub fn agent_decision_router() -> Arc<dyn Fn(&WorkflowState) -> Option<String> + Send + Sync> {
-    Arc::new(|state: &WorkflowState| {
-        state.next.clone()
-    })
+    Arc::new(|state: &WorkflowState| state.next.clone())
 }
 
 /// Custom router builder
@@ -72,7 +70,8 @@ impl RouterBuilder {
     where
         F: Fn(&WorkflowState) -> bool + Send + Sync + 'static,
     {
-        self.conditions.push((Box::new(condition), target.to_string()));
+        self.conditions
+            .push((Box::new(condition), target.to_string()));
         self
     }
 
@@ -127,7 +126,10 @@ pub mod conditions {
 
     pub fn tool_succeeded(tool_name: String) -> Box<dyn Fn(&WorkflowState) -> bool + Send + Sync> {
         Box::new(move |state: &WorkflowState| {
-            state.tool_calls.iter().any(|tc| tc.tool_name == tool_name && tc.success)
+            state
+                .tool_calls
+                .iter()
+                .any(|tc| tc.tool_name == tool_name && tc.success)
         })
     }
 }

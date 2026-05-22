@@ -8,7 +8,6 @@ pub struct AstraDBClient {
     client: Client,
     api_endpoint: String,
     application_token: String,
-    keyspace: String,
     collection: String,
 }
 
@@ -52,12 +51,11 @@ pub struct AstraDBError {
 }
 
 impl AstraDBClient {
-    pub fn new(api_endpoint: String, application_token: String, keyspace: String) -> Self {
+    pub fn new(api_endpoint: String, application_token: String, _keyspace: String) -> Self {
         Self {
             client: Client::new(),
             api_endpoint,
             application_token,
-            keyspace,
             collection: "agent_memory".to_string(),
         }
     }
@@ -72,7 +70,7 @@ impl AstraDBClient {
         context: HashMap<String, serde_json::Value>,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         let vector = self.generate_embedding(user_message).await?;
-        
+
         let document = ChatMemoryDocument {
             id: Uuid::new_v4().to_string(),
             session_id: session_id.to_string(),
@@ -85,11 +83,7 @@ impl AstraDBClient {
             vector,
         };
 
-        let url = format!(
-            "{}/v1/{}",
-            self.api_endpoint,
-            self.collection
-        );
+        let url = format!("{}/v1/{}", self.api_endpoint, self.collection);
 
         let response = self
             .client
@@ -118,8 +112,10 @@ impl AstraDBClient {
         context: HashMap<String, serde_json::Value>,
         gemini_client: &crate::gemini_client::GeminiClient,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        let vector = self.generate_embedding_with_client(user_message, gemini_client).await?;
-        
+        let vector = self
+            .generate_embedding_with_client(user_message, gemini_client)
+            .await?;
+
         let document = ChatMemoryDocument {
             id: Uuid::new_v4().to_string(),
             session_id: session_id.to_string(),
@@ -132,11 +128,7 @@ impl AstraDBClient {
             vector,
         };
 
-        let url = format!(
-            "{}/v1/{}",
-            self.api_endpoint,
-            self.collection
-        );
+        let url = format!("{}/v1/{}", self.api_endpoint, self.collection);
 
         let response = self
             .client
@@ -162,9 +154,12 @@ impl AstraDBClient {
         limit: u32,
     ) -> Result<Vec<ChatMemoryDocument>, Box<dyn std::error::Error + Send + Sync>> {
         let query_vector = self.generate_embedding(query).await?;
-        
+
         let mut filter = HashMap::new();
-        filter.insert("session_id".to_string(), serde_json::Value::String(session_id.to_string()));
+        filter.insert(
+            "session_id".to_string(),
+            serde_json::Value::String(session_id.to_string()),
+        );
 
         let search_query = VectorSearchQuery {
             vector: query_vector,
@@ -172,11 +167,7 @@ impl AstraDBClient {
             filter: Some(filter),
         };
 
-        let url = format!(
-            "{}/v1/{}/vector-search",
-            self.api_endpoint,
-            self.collection
-        );
+        let url = format!("{}/v1/{}/vector-search", self.api_endpoint, self.collection);
 
         let response = self
             .client
@@ -203,10 +194,15 @@ impl AstraDBClient {
         limit: u32,
         gemini_client: &crate::gemini_client::GeminiClient,
     ) -> Result<Vec<ChatMemoryDocument>, Box<dyn std::error::Error + Send + Sync>> {
-        let query_vector = self.generate_embedding_with_client(query, gemini_client).await?;
-        
+        let query_vector = self
+            .generate_embedding_with_client(query, gemini_client)
+            .await?;
+
         let mut filter = HashMap::new();
-        filter.insert("session_id".to_string(), serde_json::Value::String(session_id.to_string()));
+        filter.insert(
+            "session_id".to_string(),
+            serde_json::Value::String(session_id.to_string()),
+        );
 
         let search_query = VectorSearchQuery {
             vector: query_vector,
@@ -214,11 +210,7 @@ impl AstraDBClient {
             filter: Some(filter),
         };
 
-        let url = format!(
-            "{}/v1/{}/vector-search",
-            self.api_endpoint,
-            self.collection
-        );
+        let url = format!("{}/v1/{}/vector-search", self.api_endpoint, self.collection);
 
         let response = self
             .client
@@ -244,13 +236,12 @@ impl AstraDBClient {
         limit: u32,
     ) -> Result<Vec<ChatMemoryDocument>, Box<dyn std::error::Error + Send + Sync>> {
         let mut filter = HashMap::new();
-        filter.insert("session_id".to_string(), serde_json::Value::String(session_id.to_string()));
-
-        let url = format!(
-            "{}/v1/{}",
-            self.api_endpoint,
-            self.collection
+        filter.insert(
+            "session_id".to_string(),
+            serde_json::Value::String(session_id.to_string()),
         );
+
+        let url = format!("{}/v1/{}", self.api_endpoint, self.collection);
 
         let query = serde_json::json!({
             "filter": filter,
@@ -278,7 +269,7 @@ impl AstraDBClient {
 
     pub async fn create_collection(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let url = format!("{}/v1/{}", self.api_endpoint, self.collection);
-        
+
         let collection_config = serde_json::json!({
             "name": self.collection,
             "options": {
@@ -299,33 +290,42 @@ impl AstraDBClient {
             .await?;
 
         if response.status().is_success() {
-            tracing::info!("Successfully created Astra DB collection: {}", self.collection);
+            tracing::info!(
+                "Successfully created Astra DB collection: {}",
+                self.collection
+            );
             Ok(())
         } else {
             let error_text = response.text().await?;
-            tracing::warn!("Failed to create collection (may already exist): {}", error_text);
+            tracing::warn!(
+                "Failed to create collection (may already exist): {}",
+                error_text
+            );
             Ok(()) // Collection might already exist, which is fine
         }
     }
 
     // Generate real embeddings using external Gemini client
     async fn generate_embedding_with_client(
-        &self, 
-        text: &str, 
-        gemini_client: &crate::gemini_client::GeminiClient
+        &self,
+        text: &str,
+        gemini_client: &crate::gemini_client::GeminiClient,
     ) -> Result<Vec<f32>, Box<dyn std::error::Error + Send + Sync>> {
         gemini_client.embed_content(text).await
     }
 
     // Fallback method using text hashing for when Gemini client is not available
-    async fn generate_embedding(&self, text: &str) -> Result<Vec<f32>, Box<dyn std::error::Error + Send + Sync>> {
+    async fn generate_embedding(
+        &self,
+        text: &str,
+    ) -> Result<Vec<f32>, Box<dyn std::error::Error + Send + Sync>> {
         use sha2::{Digest, Sha256};
-        
+
         // Create a simple deterministic embedding from text hash
         let mut hasher = Sha256::new();
         hasher.update(text.as_bytes());
         let hash = hasher.finalize();
-        
+
         // Convert hash to 768-dimensional vector (to match Gemini embedding dimensions)
         let mut vector = Vec::with_capacity(768);
         for i in 0..768 {
@@ -333,7 +333,7 @@ impl AstraDBClient {
             let value = (hash[byte_index] as f32 - 128.0) / 128.0; // Normalize to [-1, 1]
             vector.push(value);
         }
-        
+
         Ok(vector)
     }
 
@@ -344,34 +344,35 @@ impl AstraDBClient {
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         // Get recent conversation history
         let recent_history = self.get_session_history(session_id, 5).await?;
-        
+
         // Get similar past conversations
-        let similar_conversations = self.search_similar_conversations(query, session_id, 3).await?;
-        
+        let similar_conversations = self
+            .search_similar_conversations(query, session_id, 3)
+            .await?;
+
         let mut context = String::new();
-        
+
         if !recent_history.is_empty() {
             context.push_str("Recent conversation history:\n");
-            for memory in recent_history.iter().rev() { // Reverse to show chronologically
+            for memory in recent_history.iter().rev() {
+                // Reverse to show chronologically
                 context.push_str(&format!(
                     "User: {}\nAssistant: {}\n\n",
-                    memory.user_message,
-                    memory.agent_response
+                    memory.user_message, memory.agent_response
                 ));
             }
         }
-        
+
         if !similar_conversations.is_empty() {
             context.push_str("Similar past conversations:\n");
             for memory in &similar_conversations {
                 context.push_str(&format!(
                     "User: {}\nAssistant: {}\n\n",
-                    memory.user_message,
-                    memory.agent_response
+                    memory.user_message, memory.agent_response
                 ));
             }
         }
-        
+
         Ok(context)
     }
 
@@ -383,34 +384,35 @@ impl AstraDBClient {
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         // Get recent conversation history
         let recent_history = self.get_session_history(session_id, 5).await?;
-        
+
         // Get similar past conversations using Gemini embeddings
-        let similar_conversations = self.search_similar_conversations_with_gemini(query, session_id, 3, gemini_client).await?;
-        
+        let similar_conversations = self
+            .search_similar_conversations_with_gemini(query, session_id, 3, gemini_client)
+            .await?;
+
         let mut context = String::new();
-        
+
         if !recent_history.is_empty() {
             context.push_str("Recent conversation history:\n");
-            for memory in recent_history.iter().rev() { // Reverse to show chronologically
+            for memory in recent_history.iter().rev() {
+                // Reverse to show chronologically
                 context.push_str(&format!(
                     "User: {}\nAssistant: {}\n\n",
-                    memory.user_message,
-                    memory.agent_response
+                    memory.user_message, memory.agent_response
                 ));
             }
         }
-        
+
         if !similar_conversations.is_empty() {
             context.push_str("Similar past conversations:\n");
             for memory in &similar_conversations {
                 context.push_str(&format!(
                     "User: {}\nAssistant: {}\n\n",
-                    memory.user_message,
-                    memory.agent_response
+                    memory.user_message, memory.agent_response
                 ));
             }
         }
-        
+
         Ok(context)
     }
 }

@@ -120,10 +120,6 @@ pub fn enrich_scene_prompt_with_context(
     )
 }
 
-pub fn enrich_animation_description(description: &str, quality: &str) -> String {
-    enrich_animation_description_with_context(description, quality, None, None)
-}
-
 pub fn enrich_animation_description_with_context(
     description: &str,
     quality: &str,

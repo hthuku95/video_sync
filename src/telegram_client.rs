@@ -16,9 +16,9 @@ use crate::AppState;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use grammers_client::client::{LoginToken, UpdatesConfiguration};
+use grammers_client::client::UpdatesConfiguration;
 use grammers_client::update::Update;
-use grammers_client::{Client, SenderPool, SignInError};
+use grammers_client::{tl, Client, SenderPool, SignInError};
 use grammers_session::storages::SqliteSession;
 use regex::Regex;
 
@@ -27,11 +27,21 @@ use regex::Regex;
 // ---------------------------------------------------------------------------
 
 /// Default keywords that indicate a paid-gig opportunity.
-const DEFAULT_KEYWORD_REGEX: &str =
-    r"(?i)(need\s+(a\s+)?(video|editor|clipping|clips|thumbnail|animation|ugc|content\s+creator)|hiring\s+(video|editor|freelanc)|looking\s+for\s+(a\s+)?(video|editor|freelanc)|pay(ing)?\s+(in\s+)?(usdc|usd|crypto|\$)|budget\s*[:=]\s*\$?\d|dm\s+me\s+(for|your)\s+(rate|portfolio)|freelance\s+(video|editor|gig))";
+const DEFAULT_KEYWORD_REGEX: &str = r"(?i)(need\s+(a\s+)?(video|editor|clipping|clips|thumbnail|animation|ugc|content\s+creator)|hiring\s+(video|editor|freelanc)|looking\s+for\s+(a\s+)?(video|editor|freelanc)|pay(ing)?\s+(in\s+)?(usdc|usd|crypto|\$)|budget\s*[:=]\s*\$?\d|dm\s+me\s+(for|your)\s+(rate|portfolio)|freelance\s+(video|editor|gig))";
 
 /// Minimum AI score to notify admin.
 const NOTIFY_SCORE_THRESHOLD: i32 = 60;
+
+#[derive(Debug, Clone)]
+pub struct TelegramDiscoveredChannel {
+    pub query: String,
+    pub channel_id: Option<i64>,
+    pub username: Option<String>,
+    pub title: String,
+    pub is_broadcast: bool,
+    pub is_megagroup: bool,
+    pub participants_count: Option<i32>,
+}
 
 // ---------------------------------------------------------------------------
 // Pending login state (held between start and verify)
@@ -39,8 +49,6 @@ const NOTIFY_SCORE_THRESHOLD: i32 = 60;
 
 /// Stashed between login_start and login_verify.
 struct PendingLogin {
-    session_path: String,
-    phone: String,
     created_at: std::time::Instant,
 }
 
@@ -64,8 +72,7 @@ fn api_id() -> Result<i32, String> {
 }
 
 fn api_hash() -> Result<String, String> {
-    std::env::var("TELEGRAM_API_HASH")
-        .map_err(|_| "TELEGRAM_API_HASH env var not set".to_string())
+    std::env::var("TELEGRAM_API_HASH").map_err(|_| "TELEGRAM_API_HASH env var not set".to_string())
 }
 
 /// Derive a stable session file path from the phone number.
@@ -172,7 +179,10 @@ pub async fn login_start(state: &Arc<AppState>, phone: &str) -> Result<(), Strin
                         }
                     }
                     Err(SignInError::PasswordRequired(_pwd_token)) => {
-                        tracing::warn!("Telegram 2FA password required for {}", mask_phone(&phone_owned));
+                        tracing::warn!(
+                            "Telegram 2FA password required for {}",
+                            mask_phone(&phone_owned)
+                        );
                         let _ = sqlx::query(
                             "UPDATE telegram_sessions SET last_error = '2FA password required — not yet supported', updated_at = NOW() WHERE phone = $1",
                         )
@@ -190,7 +200,10 @@ pub async fn login_start(state: &Arc<AppState>, phone: &str) -> Result<(), Strin
                         .await;
                     }
                     Err(e) => {
-                        tracing::error!("Telegram sign_in error for {}: {e:?}", mask_phone(&phone_owned));
+                        tracing::error!(
+                            "Telegram sign_in error for {}: {e:?}",
+                            mask_phone(&phone_owned)
+                        );
                         let _ = sqlx::query(
                             "UPDATE telegram_sessions SET last_error = $1, updated_at = NOW() WHERE phone = $2",
                         )
@@ -203,7 +216,10 @@ pub async fn login_start(state: &Arc<AppState>, phone: &str) -> Result<(), Strin
             }
             Err(_) => {
                 // Sender was dropped — login_verify was never called within timeout.
-                tracing::warn!("Telegram login code channel dropped for {}", mask_phone(&phone_owned));
+                tracing::warn!(
+                    "Telegram login code channel dropped for {}",
+                    mask_phone(&phone_owned)
+                );
             }
         }
     });
@@ -216,8 +232,6 @@ pub async fn login_start(state: &Arc<AppState>, phone: &str) -> Result<(), Strin
         map.insert(
             phone.to_string(),
             PendingLogin {
-                session_path: path,
-                phone: phone.to_string(),
                 created_at: std::time::Instant::now(),
             },
         );
@@ -249,7 +263,9 @@ pub async fn login_verify(_state: &Arc<AppState>, phone: &str, code: &str) -> Re
         })?;
         // Check timeout (10 minutes).
         if pending.created_at.elapsed() > std::time::Duration::from_secs(600) {
-            return Err("Login code expired (>10 minutes). Please restart the login flow.".to_string());
+            return Err(
+                "Login code expired (>10 minutes). Please restart the login flow.".to_string(),
+            );
         }
     }
 
@@ -261,8 +277,9 @@ pub async fn login_verify(_state: &Arc<AppState>, phone: &str, code: &str) -> Re
         })?
     };
 
-    tx.send(code.to_string())
-        .map_err(|_| "Login task is no longer running. Please restart the login flow.".to_string())?;
+    tx.send(code.to_string()).map_err(|_| {
+        "Login task is no longer running. Please restart the login flow.".to_string()
+    })?;
 
     // The spawned task will sign in and update the DB.  We return success
     // immediately — the UI can poll /status to see when authorized flips to
@@ -275,7 +292,16 @@ pub async fn login_verify(_state: &Arc<AppState>, phone: &str, code: &str) -> Re
 // ---------------------------------------------------------------------------
 
 pub async fn status(state: &Arc<AppState>) -> serde_json::Value {
-    let row = sqlx::query_as::<_, (i32, String, bool, Option<chrono::DateTime<chrono::Utc>>, Option<String>)>(
+    let row = sqlx::query_as::<
+        _,
+        (
+            i32,
+            String,
+            bool,
+            Option<chrono::DateTime<chrono::Utc>>,
+            Option<String>,
+        ),
+    >(
         "SELECT id, phone, authorized, last_poll_at, last_error
          FROM telegram_sessions
          ORDER BY created_at DESC LIMIT 1",
@@ -332,6 +358,100 @@ pub async fn start_watcher(state: Arc<AppState>) {
     }
 }
 
+/// Use the logged-in MTProto user session to search Telegram's public
+/// directory. Bot API cannot do this; it must run as an authorized user.
+pub async fn discover_public_channels(
+    state: &Arc<AppState>,
+    queries: Vec<String>,
+    limit_per_query: i32,
+) -> Result<Vec<TelegramDiscoveredChannel>, String> {
+    let row = sqlx::query_as::<_, (i32, String, Vec<u8>)>(
+        "SELECT id, phone, session_blob
+         FROM telegram_sessions
+         WHERE authorized = TRUE AND session_blob IS NOT NULL
+         ORDER BY created_at DESC LIMIT 1",
+    )
+    .fetch_optional(&state.db_pool)
+    .await
+    .map_err(|e| format!("db query: {e}"))?;
+
+    let (session_id, phone, blob) = row
+        .ok_or_else(|| "No authorized Telegram MTProto user session. Log in from Prospect Finder first.".to_string())?;
+
+    let path = session_path(&phone);
+    tokio::fs::write(&path, &blob)
+        .await
+        .map_err(|e| format!("write session file: {e}"))?;
+
+    let session = Arc::new(
+        SqliteSession::open(&path)
+            .await
+            .map_err(|e| format!("session open: {e}"))?,
+    );
+
+    let pool = SenderPool::new(session, api_id()?);
+    let runner = pool.runner;
+    tokio::spawn(async move { runner.run().await });
+    let client = Client::new(pool.handle);
+
+    let mut discovered = Vec::new();
+    for query in queries {
+        let q = query.trim();
+        if q.is_empty() {
+            continue;
+        }
+
+        let result = client
+            .invoke(&tl::functions::contacts::Search {
+                q: q.to_string(),
+                limit: limit_per_query,
+            })
+            .await
+            .map_err(|e| format!("contacts.search({q}): {e}"))?;
+
+        let tl::enums::contacts::Found::Found(found) = result;
+        for chat in found.chats {
+            match chat {
+                tl::enums::Chat::Channel(channel) => {
+                    if channel.scam || channel.fake || channel.restricted {
+                        continue;
+                    }
+                    discovered.push(TelegramDiscoveredChannel {
+                        query: q.to_string(),
+                        channel_id: Some(channel.id),
+                        username: channel.username.clone(),
+                        title: channel.title.clone(),
+                        is_broadcast: channel.broadcast,
+                        is_megagroup: channel.megagroup,
+                        participants_count: channel.participants_count,
+                    });
+                }
+                tl::enums::Chat::Chat(chat) => {
+                    discovered.push(TelegramDiscoveredChannel {
+                        query: q.to_string(),
+                        channel_id: Some(chat.id),
+                        username: None,
+                        title: chat.title.clone(),
+                        is_broadcast: false,
+                        is_megagroup: true,
+                        participants_count: Some(chat.participants_count),
+                    });
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let _ = sqlx::query(
+        "UPDATE telegram_sessions SET last_poll_at = NOW(), last_error = NULL, updated_at = NOW() WHERE id = $1",
+    )
+    .bind(session_id)
+    .execute(&state.db_pool)
+    .await;
+
+    Ok(discovered)
+}
+
 async fn try_run_watcher(state: &Arc<AppState>) -> Result<(), String> {
     // 1. Fetch the latest authorized session blob from DB.
     let row = sqlx::query_as::<_, (i32, String, Vec<u8>)>(
@@ -381,23 +501,18 @@ async fn try_run_watcher(state: &Arc<AppState>) -> Result<(), String> {
 
     // 3. Load watch channels and keyword regexes.
     let channels = load_watch_channels(state).await;
-    tracing::info!(
-        "Telegram watcher: monitoring {} channels",
-        channels.len()
-    );
+    tracing::info!("Telegram watcher: monitoring {} channels", channels.len());
 
     // Build a combined regex from channel-specific overrides + default.
-    let default_re = Regex::new(DEFAULT_KEYWORD_REGEX)
-        .map_err(|e| format!("bad default regex: {e}"))?;
+    let default_re =
+        Regex::new(DEFAULT_KEYWORD_REGEX).map_err(|e| format!("bad default regex: {e}"))?;
 
     // 4. Stream updates.
     let config = UpdatesConfiguration {
         catch_up: true,
         ..Default::default()
     };
-    let mut stream = client
-        .stream_updates(updates_rx, config)
-        .await;
+    let mut stream = client.stream_updates(updates_rx, config).await;
 
     // Mark last_poll_at on connect.
     let _ = sqlx::query(
@@ -410,17 +525,19 @@ async fn try_run_watcher(state: &Arc<AppState>) -> Result<(), String> {
     tracing::info!("Telegram watcher: streaming updates");
 
     loop {
-        let update = stream.next().await.map_err(|e| format!("stream error: {e}"))?;
+        let update = stream
+            .next()
+            .await
+            .map_err(|e| format!("stream error: {e}"))?;
 
         match update {
             Update::NewMessage(msg) => {
                 // Update last_poll_at periodically (every message).
-                let _ = sqlx::query(
-                    "UPDATE telegram_sessions SET last_poll_at = NOW() WHERE id = $1",
-                )
-                .bind(session_id)
-                .execute(&state.db_pool)
-                .await;
+                let _ =
+                    sqlx::query("UPDATE telegram_sessions SET last_poll_at = NOW() WHERE id = $1")
+                        .bind(session_id)
+                        .execute(&state.db_pool)
+                        .await;
 
                 let text = msg.text();
                 if text.is_empty() {
@@ -484,7 +601,10 @@ async fn try_run_watcher(state: &Arc<AppState>) -> Result<(), String> {
 
                 // AI scoring.
                 let (score, reason, service) =
-                    crate::handlers::prospects::score_telegram_opportunity_public(state, &chat_name, text).await;
+                    crate::handlers::prospects::score_telegram_opportunity_public(
+                        state, &chat_name, text,
+                    )
+                    .await;
 
                 // Insert.
                 let _ = sqlx::query(

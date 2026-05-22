@@ -13,8 +13,8 @@
 //! When a trial's timestamp has passed we flip the status to `expired`
 //! inline so the admin dashboard sees it without a separate sweeper.
 
-use crate::AppState;
 use crate::models::auth::Claims;
+use crate::AppState;
 use axum::{
     extract::Request,
     http::StatusCode,
@@ -34,18 +34,22 @@ pub async fn subscription_middleware(
     // is malformed — bail out rather than crash.
     let claims = match request.extensions().get::<Claims>() {
         Some(c) => c.clone(),
-        None => return Err((
-            StatusCode::UNAUTHORIZED,
-            Json(json!({"success": false, "error": "auth_required"})),
-        )),
+        None => {
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                Json(json!({"success": false, "error": "auth_required"})),
+            ))
+        }
     };
 
     let state = match request.extensions().get::<Arc<AppState>>() {
         Some(s) => s.clone(),
-        None => return Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"success": false, "error": "app_state_missing"})),
-        )),
+        None => {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"success": false, "error": "app_state_missing"})),
+            ))
+        }
     };
 
     // Staff + superusers bypass the paywall entirely — they're running ops.
@@ -55,25 +59,30 @@ pub async fn subscription_middleware(
 
     let user_id: i32 = match claims.sub.parse() {
         Ok(id) => id,
-        Err(_) => return Err((
-            StatusCode::UNAUTHORIZED,
-            Json(json!({"success": false, "error": "invalid_user_id"})),
-        )),
+        Err(_) => {
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                Json(json!({"success": false, "error": "invalid_user_id"})),
+            ))
+        }
     };
 
     let row = match sqlx::query(
         "SELECT subscription_status, trial_ends_at, subscription_active_until
-         FROM users WHERE id = $1"
+         FROM users WHERE id = $1",
     )
     .bind(user_id)
     .fetch_optional(&state.db_pool)
-    .await {
+    .await
+    {
         Ok(Some(r)) => r,
-        Ok(None)    => return Err((
-            StatusCode::UNAUTHORIZED,
-            Json(json!({"success": false, "error": "user_not_found"})),
-        )),
-        Err(e)      => {
+        Ok(None) => {
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                Json(json!({"success": false, "error": "user_not_found"})),
+            ))
+        }
+        Err(e) => {
             tracing::warn!("subscription_middleware DB error: {}", e);
             return Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -86,7 +95,9 @@ pub async fn subscription_middleware(
     // race with a fresh signup before the register handler runs is safe
     // to treat as grandfathered).
     let status: String = row
-        .try_get::<Option<String>, _>("subscription_status").ok().flatten()
+        .try_get::<Option<String>, _>("subscription_status")
+        .ok()
+        .flatten()
         .unwrap_or_else(|| "grandfathered".to_string());
 
     let now = chrono::Utc::now();
@@ -97,7 +108,8 @@ pub async fn subscription_middleware(
         "trial" => {
             let trial_end = row
                 .try_get::<Option<chrono::DateTime<chrono::Utc>>, _>("trial_ends_at")
-                .ok().flatten();
+                .ok()
+                .flatten();
             match trial_end {
                 Some(t) if t > now => Ok(next.run(request).await),
                 _ => {
@@ -106,14 +118,14 @@ pub async fn subscription_middleware(
                     // running an overnight sweeper.
                     let _ = sqlx::query(
                         "UPDATE users SET subscription_status = 'expired'
-                         WHERE id = $1 AND subscription_status = 'trial'"
+                         WHERE id = $1 AND subscription_status = 'trial'",
                     )
                     .bind(user_id)
                     .execute(&state.db_pool)
                     .await;
                     let _ = sqlx::query(
                         "INSERT INTO user_payment_events (user_id, event_type)
-                         VALUES ($1, 'expired')"
+                         VALUES ($1, 'expired')",
                     )
                     .bind(user_id)
                     .execute(&state.db_pool)
@@ -126,21 +138,22 @@ pub async fn subscription_middleware(
         "active" => {
             let until = row
                 .try_get::<Option<chrono::DateTime<chrono::Utc>>, _>("subscription_active_until")
-                .ok().flatten();
+                .ok()
+                .flatten();
             match until {
                 Some(t) if t > now => Ok(next.run(request).await),
                 _ => {
                     // Subscription lapsed — demote to expired.
                     let _ = sqlx::query(
                         "UPDATE users SET subscription_status = 'expired'
-                         WHERE id = $1 AND subscription_status = 'active'"
+                         WHERE id = $1 AND subscription_status = 'active'",
                     )
                     .bind(user_id)
                     .execute(&state.db_pool)
                     .await;
                     let _ = sqlx::query(
                         "INSERT INTO user_payment_events (user_id, event_type)
-                         VALUES ($1, 'expired')"
+                         VALUES ($1, 'expired')",
                     )
                     .bind(user_id)
                     .execute(&state.db_pool)

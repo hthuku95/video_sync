@@ -1,20 +1,20 @@
 #![allow(dead_code, unused_imports)]
 // Apify YouTube downloader with rusty_ytdl fallback (pure Rust, no Python)
-use std::path::Path;
-use std::sync::{Arc, Mutex};
-use tokio::fs;
-use tokio::time::{sleep, Duration, Instant};
-use tokio::io::AsyncWriteExt;
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::json;
-
+use std::path::Path;
+use std::sync::{Arc, Mutex};
+use tokio::fs;
+use tokio::io::AsyncWriteExt;
+use tokio::time::{sleep, Duration, Instant};
 
 // Import all downloader clients for 5-tier fallback system
-use crate::clipping::rusty_ytdl_client::RustyYtdlClient;
-use crate::clipping::rustube_client::RustubeClient;
-use crate::clipping::ytdlp_api_client::YtdlpApiClient;
 use crate::clipping::rust_yt_downloader_client::RustYtDownloaderClient;
+use crate::clipping::rustube_client::RustubeClient;
+use crate::clipping::rusty_ytdl_client::RustyYtdlClient;
+use crate::clipping::ytdlp_api_client::YtdlpApiClient;
+use crate::clipping::ytdlp_client::YtDlpClient;
 use tokio::process::Command as TokioCommand;
 
 #[derive(Debug)]
@@ -262,12 +262,18 @@ impl ApifyClient {
                         continue;
                     }
 
-                    return Err(format!("Network error after {} retries: {}", max_retries, e));
+                    return Err(format!(
+                        "Network error after {} retries: {}",
+                        max_retries, e
+                    ));
                 }
             }
         }
 
-        Err(format!("{} failed after {} retries", operation_name, max_retries))
+        Err(format!(
+            "{} failed after {} retries",
+            operation_name, max_retries
+        ))
     }
 
     /// Validate API token on startup
@@ -275,10 +281,7 @@ impl ApifyClient {
     /// Tests API token by making a simple GET request to the actor endpoint.
     /// Returns Ok(()) if token is valid, Err(message) if invalid or other error.
     pub async fn validate_token(&self) -> Result<(), String> {
-        let url = format!(
-            "https://api.apify.com/v2/acts/{}/runs/last",
-            self.actor_id
-        );
+        let url = format!("https://api.apify.com/v2/acts/{}/runs/last", self.actor_id);
 
         let response = self
             .http_client
@@ -292,14 +295,23 @@ impl ApifyClient {
             // 404 means actor exists but no runs yet - token is valid
             Ok(())
         } else if response.status() == 401 || response.status() == 403 {
-            Err(format!("Invalid Apify API token (status: {})", response.status()))
+            Err(format!(
+                "Invalid Apify API token (status: {})",
+                response.status()
+            ))
         } else {
             Err(format!("Unexpected API response: {}", response.status()))
         }
     }
 
-    /// Download video using 5-tier fallback system
-    /// Strategy order: FastAPI yt-dlp → Apify → rustube → rust-yt-downloader → rusty_ytdl
+    /// Download video using 6-tier fallback system
+    /// Strategy order:
+    ///   1. FastAPI yt-dlp
+    ///   2. Local yt-dlp CLI (supports browser cookies / auth-required videos)
+    ///   3. Apify
+    ///   4. rustube
+    ///   5. rust-yt-downloader
+    ///   6. rusty_ytdl
     /// YTDLPAPI (yt-dlp android) is tried first as it proved most reliable in Feb 2026 testing.
     ///
     /// Twitch VOD URLs are routed to a dedicated Twitch path (yt-dlp → GQL+HLS),
@@ -322,7 +334,10 @@ impl ApifyClient {
                 .map_err(|e| format!("Failed to create output directory: {}", e))?;
         }
 
-        tracing::info!("📥 Attempting video download with 5-tier fallback system: {}", video_url);
+        tracing::info!(
+            "📥 Attempting video download with 6-tier fallback system: {}",
+            video_url
+        );
 
         // STRATEGY 1: FastAPI yt-dlp microservice (yt-dlp android - proven most reliable)
         tracing::info!("🔄 Trying Strategy 1 (FastAPI yt-dlp microservice - android client)...");
@@ -342,65 +357,83 @@ impl ApifyClient {
             }
         }
 
-        // STRATEGY 2: Apify (with circuit breaker)
+        // STRATEGY 2: local yt-dlp CLI with optional browser cookies / auth
+        tracing::info!("🔄 Trying Strategy 2 (local yt-dlp CLI with auth support)...");
+        match YtDlpClient::download_video(video_url, output_path).await {
+            Ok(result) => {
+                tracing::info!("✅ Strategy 2 (local yt-dlp CLI) succeeded");
+                return Ok(VideoDownloadResult {
+                    file_path: result.file_path,
+                    title: result.title,
+                    duration_seconds: result.duration_seconds,
+                    width: result.width.map(|w| w as i32),
+                    height: result.height.map(|h| h as i32),
+                });
+            }
+            Err(e) => {
+                tracing::warn!("⚠️ Strategy 2 (local yt-dlp CLI) failed: {}", e);
+            }
+        }
+
+        // STRATEGY 3: Apify (with circuit breaker)
         let should_try_apify = {
             let mut breaker = self.circuit_breaker.lock().unwrap();
             breaker.should_allow_request()
         };
 
         if should_try_apify {
-            tracing::info!("🔄 Trying Strategy 2 (Apify - paid service)...");
+            tracing::info!("🔄 Trying Strategy 3 (Apify - paid service)...");
             match self.download_via_apify(video_url, output_path).await {
                 Ok(result) => {
-                    tracing::info!("✅ Strategy 2 (Apify) succeeded");
+                    tracing::info!("✅ Strategy 3 (Apify) succeeded");
                     let mut breaker = self.circuit_breaker.lock().unwrap();
                     breaker.record_success();
                     return Ok(result);
                 }
                 Err(e) => {
-                    tracing::warn!("⚠️ Strategy 2 (Apify) failed: {}", e);
+                    tracing::warn!("⚠️ Strategy 3 (Apify) failed: {}", e);
                     let is_auth_error = e.contains("403") || e.contains("401");
                     let mut breaker = self.circuit_breaker.lock().unwrap();
                     breaker.record_failure(is_auth_error);
                 }
             }
         } else {
-            tracing::info!("⏭️ Skipping Strategy 2 (Apify) - circuit breaker open");
+            tracing::info!("⏭️ Skipping Strategy 3 (Apify) - circuit breaker open");
         }
 
-        // STRATEGY 3: rustube (pure Rust, no external deps)
-        tracing::info!("🔄 Trying Strategy 3 (rustube - pure Rust)...");
+        // STRATEGY 4: rustube (pure Rust, no external deps)
+        tracing::info!("🔄 Trying Strategy 4 (rustube - pure Rust)...");
         match RustubeClient::download_video(video_url, output_path).await {
             Ok(result) => {
-                tracing::info!("✅ Strategy 3 (rustube) succeeded");
+                tracing::info!("✅ Strategy 4 (rustube) succeeded");
                 return Ok(result);
             }
             Err(e) => {
-                tracing::warn!("⚠️ Strategy 3 (rustube) failed: {}", e);
+                tracing::warn!("⚠️ Strategy 4 (rustube) failed: {}", e);
             }
         }
 
-        // STRATEGY 4: rust-yt-downloader (feature-rich yt-dlp wrapper)
-        tracing::info!("🔄 Trying Strategy 4 (rust-yt-downloader)...");
+        // STRATEGY 5: rust-yt-downloader (feature-rich yt-dlp wrapper)
+        tracing::info!("🔄 Trying Strategy 5 (rust-yt-downloader)...");
         match RustYtDownloaderClient::download_video(video_url, output_path).await {
             Ok(result) => {
-                tracing::info!("✅ Strategy 4 (rust-yt-downloader) succeeded");
+                tracing::info!("✅ Strategy 5 (rust-yt-downloader) succeeded");
                 return Ok(result);
             }
             Err(e) => {
-                tracing::warn!("⚠️ Strategy 4 (rust-yt-downloader) failed: {}", e);
+                tracing::warn!("⚠️ Strategy 5 (rust-yt-downloader) failed: {}", e);
             }
         }
 
-        // STRATEGY 5: rusty_ytdl (last resort, pure Rust)
-        tracing::info!("🔄 Trying Strategy 5 (rusty_ytdl - last resort)...");
+        // STRATEGY 6: rusty_ytdl (last resort, pure Rust)
+        tracing::info!("🔄 Trying Strategy 6 (rusty_ytdl - last resort)...");
         match RustyYtdlClient::download_video(video_url, output_path).await {
             Ok(result) => {
-                tracing::info!("✅ Strategy 5 (rusty_ytdl) succeeded");
+                tracing::info!("✅ Strategy 6 (rusty_ytdl) succeeded");
                 return Ok(result);
             }
             Err(e) => {
-                tracing::error!("❌ All 5 download strategies failed!");
+                tracing::error!("❌ All 6 download strategies failed!");
                 return Err(format!(
                     "All download strategies exhausted. Last error (rusty_ytdl): {}",
                     e
@@ -455,11 +488,7 @@ impl ApifyClient {
                 .await
                 .unwrap_or_else(|_| "Could not read error body".to_string());
 
-            tracing::error!(
-                "❌ Apify API error: status={}, body={}",
-                status,
-                error_body
-            );
+            tracing::error!("❌ Apify API error: status={}, body={}", status, error_body);
 
             return Err(format!("Apify API error: {} - {}", status, error_body));
         }
@@ -503,7 +532,12 @@ impl ApifyClient {
                 .await
                 .map_err(|e| format!("Failed to parse status: {}", e))?;
 
-            tracing::info!("⏳ Apify run status: {} (poll {}/{})", status_data.data.status, i+1, max_polls);
+            tracing::info!(
+                "⏳ Apify run status: {} (poll {}/{})",
+                status_data.data.status,
+                i + 1,
+                max_polls
+            );
 
             match status_data.data.status.as_str() {
                 "SUCCEEDED" => {
@@ -649,7 +683,10 @@ impl ApifyClient {
 /// YouTube-only strategies (Apify, rustube, rust-yt-downloader, rusty_ytdl) are
 /// intentionally skipped; they all fail silently on twitch.tv URLs and rusty_ytdl
 /// returns a misleading "The video not found" error for any non-YouTube URL.
-async fn download_twitch_vod(video_url: &str, output_path: &str) -> Result<VideoDownloadResult, String> {
+async fn download_twitch_vod(
+    video_url: &str,
+    output_path: &str,
+) -> Result<VideoDownloadResult, String> {
     tracing::info!("🎮 Twitch VOD detected — using Twitch-specific download strategies");
 
     // Ensure parent directory exists
@@ -688,7 +725,10 @@ async fn download_twitch_vod(video_url: &str, output_path: &str) -> Result<Video
 /// Uses TWITCH_TV_CLIENT_ID from env (the registered Twitch app credential).
 /// The GQL `PlaybackAccessToken` operation is the same approach used by yt-dlp
 /// and TwitchDownloaderCLI internally.
-async fn download_twitch_hls(video_url: &str, output_path: &str) -> Result<VideoDownloadResult, String> {
+async fn download_twitch_hls(
+    video_url: &str,
+    output_path: &str,
+) -> Result<VideoDownloadResult, String> {
     // Extract numeric VOD ID from URL: https://www.twitch.tv/videos/2025985859
     let vod_id = video_url
         .trim_end_matches('/')
@@ -696,7 +736,12 @@ async fn download_twitch_hls(video_url: &str, output_path: &str) -> Result<Video
         .last()
         .and_then(|s| s.split('?').next())
         .filter(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit()))
-        .ok_or_else(|| format!("Cannot extract numeric VOD ID from Twitch URL: {}", video_url))?;
+        .ok_or_else(|| {
+            format!(
+                "Cannot extract numeric VOD ID from Twitch URL: {}",
+                video_url
+            )
+        })?;
 
     // Use Twitch's web player client ID (same one used by yt-dlp and the embedded player).
     // TWITCH_TV_CLIENT_ID is a registered app credential — different from the web player ID.
@@ -740,7 +785,10 @@ async fn download_twitch_hls(video_url: &str, output_path: &str) -> Result<Video
     if !gql_resp.status().is_success() {
         let status = gql_resp.status();
         let body = gql_resp.text().await.unwrap_or_default();
-        return Err(format!("Twitch GQL returned HTTP {} Bad Request — {}", status, body));
+        return Err(format!(
+            "Twitch GQL returned HTTP {} Bad Request — {}",
+            status, body
+        ));
     }
 
     let gql_json: serde_json::Value = gql_resp
@@ -779,9 +827,12 @@ async fn download_twitch_hls(video_url: &str, output_path: &str) -> Result<Video
     let status = TokioCommand::new("ffmpeg")
         .args([
             "-y",
-            "-i", &m3u8_url,
-            "-c", "copy",
-            "-bsf:a", "aac_adtstoasc",
+            "-i",
+            &m3u8_url,
+            "-c",
+            "copy",
+            "-bsf:a",
+            "aac_adtstoasc",
             output_path,
         ])
         .status()
@@ -796,7 +847,10 @@ async fn download_twitch_hls(video_url: &str, output_path: &str) -> Result<Video
         ));
     }
 
-    tracing::info!("✅ Twitch S2 (GQL + FFmpeg HLS) succeeded for VOD {}", vod_id);
+    tracing::info!(
+        "✅ Twitch S2 (GQL + FFmpeg HLS) succeeded for VOD {}",
+        vod_id
+    );
 
     // Metadata is populated by the caller's validate_video_file → analyze_video; skip double ffprobe.
     Ok(VideoDownloadResult {

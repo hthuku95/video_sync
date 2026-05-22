@@ -16,17 +16,15 @@ use helpers::admin_helpers;
 /// Load admin credentials from environment.
 /// Panics with a clear message if not set — the user must create a superuser first.
 fn get_admin_credentials() -> (String, String) {
-    let email = std::env::var("TEST_ADMIN_EMAIL")
-        .expect(
-            "TEST_ADMIN_EMAIL not set. \
+    let email = std::env::var("TEST_ADMIN_EMAIL").expect(
+        "TEST_ADMIN_EMAIL not set. \
              Run `cargo run --bin createsuperuser` to create an admin account, \
-             then add TEST_ADMIN_EMAIL=<email> to .env.test"
-        );
-    let password = std::env::var("TEST_ADMIN_PASSWORD")
-        .expect(
-            "TEST_ADMIN_PASSWORD not set. \
-             Add TEST_ADMIN_PASSWORD=<password> to .env.test"
-        );
+             then add TEST_ADMIN_EMAIL=<email> to .env.test",
+    );
+    let password = std::env::var("TEST_ADMIN_PASSWORD").expect(
+        "TEST_ADMIN_PASSWORD not set. \
+             Add TEST_ADMIN_PASSWORD=<password> to .env.test",
+    );
     (email, password)
 }
 
@@ -80,9 +78,21 @@ async fn test_admin_view_production_jobs() {
     println!("📈 All jobs: {}", all_jobs.pagination.total);
 
     // Count by status
-    let failed_count = all_jobs.jobs.iter().filter(|j| j.status == "failed").count();
-    let pending_count = all_jobs.jobs.iter().filter(|j| j.status == "pending").count();
-    let completed_count = all_jobs.jobs.iter().filter(|j| j.status == "completed").count();
+    let failed_count = all_jobs
+        .jobs
+        .iter()
+        .filter(|j| j.status == "failed")
+        .count();
+    let pending_count = all_jobs
+        .jobs
+        .iter()
+        .filter(|j| j.status == "pending")
+        .count();
+    let completed_count = all_jobs
+        .jobs
+        .iter()
+        .filter(|j| j.status == "completed")
+        .count();
 
     println!("   - Failed: {}", failed_count);
     println!("   - Pending: {}", pending_count);
@@ -174,7 +184,10 @@ async fn test_admin_analyze_failed_jobs() {
     println!("\n📊 Failure Analysis:");
     println!("   🔒 Private videos: {} jobs", private_video_jobs.len());
     println!("   🆔 Qdrant UUID errors: {} jobs", qdrant_uuid_jobs.len());
-    println!("   📥 Download failures: {} jobs", download_failed_jobs.len());
+    println!(
+        "   📥 Download failures: {} jobs",
+        download_failed_jobs.len()
+    );
     println!("   ❓ Other failures: {} jobs", other_failures.len());
 
     if !private_video_jobs.is_empty() {
@@ -215,7 +228,10 @@ async fn test_admin_analyze_failed_jobs() {
         .collect();
 
     if !high_retry_jobs.is_empty() {
-        println!("\n⚠️  WARNING: {} jobs with >100 retry attempts!", high_retry_jobs.len());
+        println!(
+            "\n⚠️  WARNING: {} jobs with >100 retry attempts!",
+            high_retry_jobs.len()
+        );
         println!("   These jobs are wasting significant compute resources!");
         for job in high_retry_jobs.iter().take(3) {
             println!(
@@ -263,15 +279,20 @@ async fn test_admin_cancel_jobs() {
         return;
     }
 
-    println!("🔒 Found {} private video jobs with >50 retries", private_video_jobs.len());
+    println!(
+        "🔒 Found {} private video jobs with >50 retries",
+        private_video_jobs.len()
+    );
     println!("   These jobs should be cancelled to save resources\n");
 
     // Cancel first 3 jobs as demonstration
     let jobs_to_cancel: Vec<_> = private_video_jobs.iter().take(3).collect();
 
     for job in &jobs_to_cancel {
-        println!("🚫 Cancelling Job #{}: {} (retries: {})",
-                 job.id, job.source_video_id, job.retry_count);
+        println!(
+            "🚫 Cancelling Job #{}: {} (retries: {})",
+            job.id, job.source_video_id, job.retry_count
+        );
 
         let result = admin_helpers::cancel_job(&token, job.id).await;
 
@@ -295,7 +316,10 @@ async fn test_admin_cancel_jobs() {
         }
     }
 
-    println!("\n💡 Recommendation: Use SQL to cancel all {} private video jobs:", private_video_jobs.len());
+    println!(
+        "\n💡 Recommendation: Use SQL to cancel all {} private video jobs:",
+        private_video_jobs.len()
+    );
     println!("   UPDATE clipping_jobs SET status='cancelled'");
     println!("   WHERE error_message LIKE '%Video is private%' AND retry_count > 50;");
 
@@ -329,7 +353,10 @@ async fn test_admin_retry_jobs() {
         println!("🆔 Found Qdrant UUID error job: #{}", job.id);
         println!("   Video: {}", job.source_video_id);
         println!("   Current retry count: {}", job.retry_count);
-        println!("   Error: {}", job.error_message.as_deref().unwrap_or("None"));
+        println!(
+            "   Error: {}",
+            job.error_message.as_deref().unwrap_or("None")
+        );
 
         println!("\n⚠️  NOTE: This job will fail again unless the Qdrant UUID fix is deployed!");
         println!("   After deploying the fix, run this test to retry the job.\n");
@@ -349,8 +376,10 @@ async fn test_admin_retry_jobs() {
                     .expect("Failed to get updated job");
 
                 println!("   Status: {} (should be 'pending')", updated.status);
-                println!("   Retry count: {} (incremented from {})",
-                         updated.retry_count, job.retry_count);
+                println!(
+                    "   Retry count: {} (incremented from {})",
+                    updated.retry_count, job.retry_count
+                );
 
                 assert_eq!(
                     updated.status, "pending",
@@ -426,7 +455,10 @@ async fn test_admin_job_statistics() {
 
     if very_high_retry > 0 {
         println!("\n⚠️  WARNING: High retry count indicates systematic issues!");
-        println!("   Estimated wasted compute: ~{} hours", very_high_retry * 100 / 12);
+        println!(
+            "   Estimated wasted compute: ~{} hours",
+            very_high_retry * 100 / 12
+        );
     }
 
     // User distribution

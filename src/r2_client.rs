@@ -14,8 +14,8 @@
 use aws_config::BehaviorVersion;
 use aws_credential_types::Credentials;
 use aws_sdk_s3::config::Builder as S3ConfigBuilder;
-use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::presigning::PresigningConfig;
+use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::types::{CompletedMultipartUpload, CompletedPart};
 use aws_sdk_s3::Client;
 use std::path::Path;
@@ -24,7 +24,7 @@ use tokio::fs::File;
 use tokio::io::AsyncReadExt;
 
 const MULTIPART_THRESHOLD: u64 = 50 * 1024 * 1024; // 50 MB — use multipart above this
-const PART_SIZE: usize = 50 * 1024 * 1024;          // 50 MB parts
+const PART_SIZE: usize = 50 * 1024 * 1024; // 50 MB parts
 
 #[derive(Clone)]
 pub struct R2Client {
@@ -58,7 +58,7 @@ impl R2Client {
 
         let s3_config = S3ConfigBuilder::from(&sdk_config)
             .endpoint_url(&endpoint)
-            .force_path_style(false)
+            .force_path_style(true)
             .build();
 
         let client = Client::from_conf(s3_config);
@@ -79,11 +79,30 @@ impl R2Client {
             .await
             .map_err(|e| format!("Cannot stat {local_path}: {e}"))?;
 
-        if metadata.len() > MULTIPART_THRESHOLD {
-            self.upload_multipart(local_path, key).await
-        } else {
-            self.upload_simple(local_path, key).await
+        let mut last_error = None;
+        for attempt in 1..=3 {
+            let result = if metadata.len() > MULTIPART_THRESHOLD {
+                self.upload_multipart(local_path, key).await
+            } else {
+                self.upload_simple(local_path, key).await
+            };
+
+            match result {
+                Ok(()) => return Ok(()),
+                Err(error) => {
+                    tracing::warn!(
+                        key = %key,
+                        attempt,
+                        error = %error,
+                        "R2 upload attempt failed"
+                    );
+                    last_error = Some(error);
+                    tokio::time::sleep(Duration::from_secs(attempt * 2)).await;
+                }
+            }
         }
+
+        Err(last_error.unwrap_or_else(|| format!("R2 upload failed for {key}")))
     }
 
     /// Legacy compatibility helper for call sites that expect upload to
@@ -154,9 +173,7 @@ impl R2Client {
                 .body(ByteStream::from(buf))
                 .send()
                 .await
-                .map_err(|e| {
-                    format!("upload_part {part_number} failed: {e}")
-                })?;
+                .map_err(|e| format!("upload_part {part_number} failed: {e}"))?;
 
             let etag = part
                 .e_tag()
@@ -236,16 +253,27 @@ impl R2Client {
             .build()
             .map_err(|e| format!("PresigningConfig error: {e}"))?;
 
-        let req = self
-            .client
-            .get_object()
-            .bucket(&self.bucket)
-            .key(key)
-            .presigned(config)
-            .await
-            .map_err(|e| format!("presign_get failed for {key}: {e}"))?;
+        let mut last_error = None;
+        for attempt in 1..=3 {
+            match self
+                .client
+                .get_object()
+                .bucket(&self.bucket)
+                .key(key)
+                .presigned(config.clone())
+                .await
+            {
+                Ok(req) => return Ok(req.uri().to_string()),
+                Err(error) => {
+                    let message = format!("presign_get failed for {key}: {error}");
+                    tracing::warn!(key = %key, attempt, error = %message, "R2 presign attempt failed");
+                    last_error = Some(message);
+                    tokio::time::sleep(Duration::from_secs(attempt * 2)).await;
+                }
+            }
+        }
 
-        Ok(req.uri().to_string())
+        Err(last_error.unwrap_or_else(|| format!("presign_get failed for {key}")))
     }
 
     // -------------------------------------------------------------------------
@@ -313,5 +341,27 @@ impl R2Client {
             .send()
             .await
             .is_ok()
+    }
+
+    pub async fn list_keys(
+        &self,
+        prefix: Option<&str>,
+        max_keys: i32,
+    ) -> Result<Vec<String>, String> {
+        let mut req = self.client.list_objects_v2().bucket(&self.bucket).max_keys(max_keys);
+        if let Some(prefix) = prefix {
+            req = req.prefix(prefix);
+        }
+
+        let resp = req
+            .send()
+            .await
+            .map_err(|e| format!("R2 list_objects_v2 failed: {e}"))?;
+
+        Ok(resp
+            .contents()
+            .iter()
+            .filter_map(|obj| obj.key().map(str::to_string))
+            .collect())
     }
 }

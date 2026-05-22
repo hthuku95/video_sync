@@ -16,13 +16,13 @@ const PB_BASE: &str = "https://api.phantombuster.com/api/v2";
 #[derive(Clone)]
 pub struct PhantomBusterClient {
     api_key: String,
-    http:    Client,
+    http: Client,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct PbAgent {
-    pub id:             String,
-    pub name:           String,
+    pub id: String,
+    pub name: String,
     #[serde(rename = "lastEndStatus")]
     pub last_end_status: Option<String>,
     #[serde(rename = "lastEndMessage")]
@@ -51,27 +51,20 @@ pub enum LinkedInPhantomKind {
     ProfileScraper,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct PbLaunchResponse {
-    pub status:       String,
-    #[serde(rename = "containerId")]
-    pub container_id: Option<String>,
-}
-
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct LinkedInLead {
-    pub full_name:    String,
-    pub job_title:    Option<String>,
+    pub full_name: String,
+    pub job_title: Option<String>,
     pub company_name: Option<String>,
     pub company_size: Option<String>,
     pub linkedin_url: Option<String>,
-    pub email:        Option<String>,
-    pub location:     Option<String>,
-    pub seniority:    Option<String>,
+    pub email: Option<String>,
+    pub location: Option<String>,
+    pub seniority: Option<String>,
 }
 
 impl PhantomBusterClient {
-    fn classify_linkedin_phantom(name: &str) -> Option<LinkedInPhantomKind> {
+    pub fn classify_linkedin_phantom(name: &str) -> Option<LinkedInPhantomKind> {
         let n = name.to_lowercase();
 
         if n.contains("sales navigator") && n.contains("search") {
@@ -99,6 +92,19 @@ impl PhantomBusterClient {
         None
     }
 
+    pub fn looks_like_sales_nav_search(input: &str) -> bool {
+        let value = input.to_lowercase();
+        value.contains("linkedin.com/sales/search")
+            || value.contains("linkedin.com/sales/search/people")
+            || value.contains("sales/search/people")
+    }
+
+    pub fn looks_like_regular_linkedin_search(input: &str) -> bool {
+        let value = input.to_lowercase();
+        value.contains("linkedin.com/search/results")
+            || value.contains("linkedin.com/search/results/people")
+    }
+
     pub fn new(api_key: String) -> Self {
         Self {
             api_key,
@@ -108,14 +114,17 @@ impl PhantomBusterClient {
 
     /// List all agents in the account
     pub async fn list_agents(&self) -> Result<Vec<PbAgent>, String> {
-        let resp = self.http
+        let resp = self
+            .http
             .get(format!("{}/agents/fetch-all", PB_BASE))
             .header("X-Phantombuster-Key", &self.api_key)
             .send()
             .await
             .map_err(|e| format!("PhantomBuster request failed: {}", e))?;
 
-        let agents: Vec<PbAgent> = resp.json().await
+        let agents: Vec<PbAgent> = resp
+            .json()
+            .await
             .map_err(|e| format!("Failed to parse agents: {}", e))?;
         Ok(agents)
     }
@@ -125,11 +134,16 @@ impl PhantomBusterClient {
     pub async fn find_sales_nav_agent(&self) -> Result<Option<PbAgent>, String> {
         let agents = self.list_agents().await?;
         // Prefer Search Export (accepts salesNavigatorUrl)
-        let search_export = agents.iter().find(|a| {
-            let n = a.name.to_lowercase();
-            n.contains("sales navigator") && n.contains("search")
-        }).cloned();
-        if search_export.is_some() { return Ok(search_export); }
+        let search_export = agents
+            .iter()
+            .find(|a| {
+                let n = a.name.to_lowercase();
+                n.contains("sales navigator") && n.contains("search")
+            })
+            .cloned();
+        if search_export.is_some() {
+            return Ok(search_export);
+        }
         // Fall back to any Sales Nav agent
         let any = agents.into_iter().find(|a| {
             let n = a.name.to_lowercase();
@@ -158,37 +172,53 @@ impl PhantomBusterClient {
         // If the user explicitly prefers non-SN (e.g. their cookie isn't SN),
         // put regular search first; otherwise SN first.
         if prefer_non_salesnav {
-            if let Some(a) = agents.iter().find(|a| {
-                matches!(
-                    Self::classify_linkedin_phantom(&a.name),
-                    Some(LinkedInPhantomKind::LinkedInSearch)
-                )
-            }).cloned() {
+            if let Some(a) = agents
+                .iter()
+                .find(|a| {
+                    matches!(
+                        Self::classify_linkedin_phantom(&a.name),
+                        Some(LinkedInPhantomKind::LinkedInSearch)
+                    )
+                })
+                .cloned()
+            {
                 picks.push((a, LinkedInPhantomKind::LinkedInSearch));
             }
-            if let Some(a) = agents.iter().find(|a| {
-                matches!(
-                    Self::classify_linkedin_phantom(&a.name),
-                    Some(LinkedInPhantomKind::SalesNavSearch)
-                )
-            }).cloned() {
+            if let Some(a) = agents
+                .iter()
+                .find(|a| {
+                    matches!(
+                        Self::classify_linkedin_phantom(&a.name),
+                        Some(LinkedInPhantomKind::SalesNavSearch)
+                    )
+                })
+                .cloned()
+            {
                 picks.push((a, LinkedInPhantomKind::SalesNavSearch));
             }
         } else {
-            if let Some(a) = agents.iter().find(|a| {
-                matches!(
-                    Self::classify_linkedin_phantom(&a.name),
-                    Some(LinkedInPhantomKind::SalesNavSearch)
-                )
-            }).cloned() {
+            if let Some(a) = agents
+                .iter()
+                .find(|a| {
+                    matches!(
+                        Self::classify_linkedin_phantom(&a.name),
+                        Some(LinkedInPhantomKind::SalesNavSearch)
+                    )
+                })
+                .cloned()
+            {
                 picks.push((a, LinkedInPhantomKind::SalesNavSearch));
             }
-            if let Some(a) = agents.iter().find(|a| {
-                matches!(
-                    Self::classify_linkedin_phantom(&a.name),
-                    Some(LinkedInPhantomKind::LinkedInSearch)
-                )
-            }).cloned() {
+            if let Some(a) = agents
+                .iter()
+                .find(|a| {
+                    matches!(
+                        Self::classify_linkedin_phantom(&a.name),
+                        Some(LinkedInPhantomKind::LinkedInSearch)
+                    )
+                })
+                .cloned()
+            {
                 picks.push((a, LinkedInPhantomKind::LinkedInSearch));
             }
         }
@@ -199,7 +229,9 @@ impl PhantomBusterClient {
     /// Enumerate every LinkedIn phantom in the workspace, classified. Used
     /// by the admin UI so the user can see which phantoms are available
     /// and which ones they need to add.
-    pub async fn list_linkedin_phantoms(&self) -> Result<Vec<(PbAgent, LinkedInPhantomKind)>, String> {
+    pub async fn list_linkedin_phantoms(
+        &self,
+    ) -> Result<Vec<(PbAgent, LinkedInPhantomKind)>, String> {
         let agents = self.list_agents().await?;
         let mut out = Vec::new();
         for a in agents {
@@ -233,7 +265,8 @@ impl PhantomBusterClient {
             "argument": argument.to_string(),
         });
 
-        let resp = self.http
+        let resp = self
+            .http
             .post(format!("{}/agents/launch", PB_BASE))
             .header("X-Phantombuster-Key", &self.api_key)
             .json(&body)
@@ -241,17 +274,23 @@ impl PhantomBusterClient {
             .await
             .map_err(|e| format!("LinkedIn Search launch failed: {}", e))?;
 
-        let result: serde_json::Value = resp.json().await
+        let result: serde_json::Value = resp
+            .json()
+            .await
             .map_err(|e| format!("Failed to parse LinkedIn Search response: {}", e))?;
 
         if result.get("status").and_then(|s| s.as_str()) == Some("error") {
             return Err(format!(
                 "PhantomBuster launch error: {}",
-                result.get("error").and_then(|e| e.as_str()).unwrap_or("unknown"),
+                result
+                    .get("error")
+                    .and_then(|e| e.as_str())
+                    .unwrap_or("unknown"),
             ));
         }
 
-        let container_id = result.get("containerId")
+        let container_id = result
+            .get("containerId")
             .and_then(|c| c.as_str())
             .unwrap_or(agent_id)
             .to_string();
@@ -289,7 +328,8 @@ impl PhantomBusterClient {
             "argument": argument.to_string()
         });
 
-        let resp = self.http
+        let resp = self
+            .http
             .post(format!("{}/agents/launch", PB_BASE))
             .header("X-Phantombuster-Key", &self.api_key)
             .json(&body)
@@ -297,14 +337,23 @@ impl PhantomBusterClient {
             .await
             .map_err(|e| format!("Launch failed: {}", e))?;
 
-        let result: serde_json::Value = resp.json().await
+        let result: serde_json::Value = resp
+            .json()
+            .await
             .map_err(|e| format!("Failed to parse launch response: {}", e))?;
 
         if result.get("status").and_then(|s| s.as_str()) == Some("error") {
-            return Err(format!("PhantomBuster launch error: {}", result.get("error").and_then(|e| e.as_str()).unwrap_or("unknown")));
+            return Err(format!(
+                "PhantomBuster launch error: {}",
+                result
+                    .get("error")
+                    .and_then(|e| e.as_str())
+                    .unwrap_or("unknown")
+            ));
         }
 
-        let container_id = result.get("containerId")
+        let container_id = result
+            .get("containerId")
             .and_then(|c| c.as_str())
             .unwrap_or(agent_id)
             .to_string();
@@ -332,7 +381,8 @@ impl PhantomBusterClient {
             "argument": argument.to_string()
         });
 
-        let resp = self.http
+        let resp = self
+            .http
             .post(format!("{}/agents/launch", PB_BASE))
             .header("X-Phantombuster-Key", &self.api_key)
             .json(&body)
@@ -340,14 +390,23 @@ impl PhantomBusterClient {
             .await
             .map_err(|e| format!("Launch failed: {}", e))?;
 
-        let result: serde_json::Value = resp.json().await
+        let result: serde_json::Value = resp
+            .json()
+            .await
             .map_err(|e| format!("Failed to parse launch response: {}", e))?;
 
         if result.get("status").and_then(|s| s.as_str()) == Some("error") {
-            return Err(format!("PhantomBuster launch error: {}", result.get("error").and_then(|e| e.as_str()).unwrap_or("unknown")));
+            return Err(format!(
+                "PhantomBuster launch error: {}",
+                result
+                    .get("error")
+                    .and_then(|e| e.as_str())
+                    .unwrap_or("unknown")
+            ));
         }
 
-        let container_id = result.get("containerId")
+        let container_id = result
+            .get("containerId")
             .and_then(|c| c.as_str())
             .unwrap_or(agent_id)
             .to_string();
@@ -355,19 +414,27 @@ impl PhantomBusterClient {
     }
 
     /// Check if the agent has finished running
-    pub async fn get_agent_status(&self, agent_id: &str) -> Result<(String, Option<String>), String> {
-        let resp = self.http
+    pub async fn get_agent_status(
+        &self,
+        agent_id: &str,
+    ) -> Result<(String, Option<String>), String> {
+        let resp = self
+            .http
             .get(format!("{}/agents/fetch?id={}", PB_BASE, agent_id))
             .header("X-Phantombuster-Key", &self.api_key)
             .send()
             .await
             .map_err(|e| format!("Status check failed: {}", e))?;
 
-        let agent: PbAgent = resp.json().await
+        let agent: PbAgent = resp
+            .json()
+            .await
             .map_err(|e| format!("Failed to parse agent status: {}", e))?;
 
         Ok((
-            agent.last_end_status.unwrap_or_else(|| "running".to_string()),
+            agent
+                .last_end_status
+                .unwrap_or_else(|| "running".to_string()),
             agent.last_end_message,
         ))
     }
@@ -380,14 +447,17 @@ impl PhantomBusterClient {
     /// `✅ JSON saved at https://phantombuster.s3.amazonaws.com/.../result.json`.
     /// We parse that URL out and fetch the rows directly.
     pub async fn fetch_output(&self, agent_id: &str) -> Result<Vec<serde_json::Value>, String> {
-        let resp = self.http
+        let resp = self
+            .http
             .get(format!("{}/agents/fetch-output?id={}", PB_BASE, agent_id))
             .header("X-Phantombuster-Key", &self.api_key)
             .send()
             .await
             .map_err(|e| format!("Output fetch failed: {}", e))?;
 
-        let body: serde_json::Value = resp.json().await
+        let body: serde_json::Value = resp
+            .json()
+            .await
             .map_err(|e| format!("Failed to parse output: {}", e))?;
 
         // Fast path: inline resultObject (small payloads, some phantoms).
@@ -409,13 +479,16 @@ impl PhantomBusterClient {
             return Ok(vec![]);
         };
 
-        let data_resp = self.http
+        let data_resp = self
+            .http
             .get(&url)
             .send()
             .await
             .map_err(|e| format!("S3 result.json fetch failed: {}", e))?;
 
-        let parsed: serde_json::Value = data_resp.json().await
+        let parsed: serde_json::Value = data_resp
+            .json()
+            .await
             .map_err(|e| format!("S3 result.json parse failed: {}", e))?;
 
         Ok(parsed.as_array().cloned().unwrap_or_default())
@@ -427,7 +500,9 @@ impl PhantomBusterClient {
         let needle = "https://phantombuster.s3.amazonaws.com/";
         let start = log.find(needle)?;
         let tail = &log[start..];
-        let end = tail.find(|c: char| c.is_whitespace() || c == '"' || c == '\\').unwrap_or(tail.len());
+        let end = tail
+            .find(|c: char| c.is_whitespace() || c == '"' || c == '\\')
+            .unwrap_or(tail.len());
         let url = &tail[..end];
         if url.ends_with(".json") {
             Some(url.to_string())
@@ -436,9 +511,15 @@ impl PhantomBusterClient {
             let after = &log[start + end..];
             let next = after.find(needle)?;
             let tail2 = &after[next..];
-            let end2 = tail2.find(|c: char| c.is_whitespace() || c == '"' || c == '\\').unwrap_or(tail2.len());
+            let end2 = tail2
+                .find(|c: char| c.is_whitespace() || c == '"' || c == '\\')
+                .unwrap_or(tail2.len());
             let url2 = &tail2[..end2];
-            if url2.ends_with(".json") { Some(url2.to_string()) } else { None }
+            if url2.ends_with(".json") {
+                Some(url2.to_string())
+            } else {
+                None
+            }
         }
     }
 
@@ -452,14 +533,17 @@ impl PhantomBusterClient {
     ///   with a non-zero `exitCode`, OR when the log contains `[error]`.
     /// * `log_tail_opt` is the last ~800 chars of the log when errored.
     pub async fn fetch_run_error(&self, agent_id: &str) -> Result<(bool, Option<String>), String> {
-        let resp = self.http
+        let resp = self
+            .http
             .get(format!("{}/agents/fetch-output?id={}", PB_BASE, agent_id))
             .header("X-Phantombuster-Key", &self.api_key)
             .send()
             .await
             .map_err(|e| format!("fetch_run_error request failed: {}", e))?;
 
-        let body: serde_json::Value = resp.json().await
+        let body: serde_json::Value = resp
+            .json()
+            .await
             .map_err(|e| format!("fetch_run_error parse failed: {}", e))?;
 
         // PB wraps the real payload under `data` in some responses.
@@ -470,14 +554,11 @@ impl PhantomBusterClient {
             .get("containerStatus")
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        let log = payload
-            .get("output")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let log = payload.get("output").and_then(|v| v.as_str()).unwrap_or("");
 
-        let finished_with_error =
-            (container_status == "not running" && exit_code.unwrap_or(0) != 0)
-                || log.contains("[error]");
+        let finished_with_error = (container_status == "not running"
+            && exit_code.unwrap_or(0) != 0)
+            || log.contains("[error]");
 
         if finished_with_error {
             // Walk back to a valid UTF-8 boundary before slicing — PB logs can
@@ -502,23 +583,28 @@ impl PhantomBusterClient {
     ///   - locations    : LinkedIn geo IDs or plain text names (text-only, no geo ID lookup)
     ///   - seniority    : e.g. ["OWNER", "PARTNER", "CXO", "VP", "DIRECTOR", "MANAGER"]
     pub fn build_search_url(
-        job_titles:    &[String],
-        industries:    &[String],
+        job_titles: &[String],
+        industries: &[String],
         company_sizes: &[String],
-        locations:     &[String],
-        seniority:     &[String],
+        locations: &[String],
+        seniority: &[String],
     ) -> String {
         let mut filters: Vec<String> = vec![];
 
         if !job_titles.is_empty() {
-            let vals: Vec<String> = job_titles.iter()
+            let vals: Vec<String> = job_titles
+                .iter()
                 .map(|t| format!("(text:{},selectionType:INCLUDED)", Self::encode_lurn(t)))
                 .collect();
-            filters.push(format!("(type:CURRENT_TITLE,values:List({}))", vals.join(",")));
+            filters.push(format!(
+                "(type:CURRENT_TITLE,values:List({}))",
+                vals.join(",")
+            ));
         }
 
         if !industries.is_empty() {
-            let vals: Vec<String> = industries.iter()
+            let vals: Vec<String> = industries
+                .iter()
                 .map(|i| format!("(text:{},selectionType:INCLUDED)", Self::encode_lurn(i)))
                 .collect();
             filters.push(format!("(type:INDUSTRY,values:List({}))", vals.join(",")));
@@ -526,33 +612,44 @@ impl PhantomBusterClient {
 
         if !company_sizes.is_empty() {
             // Map human-readable sizes to LinkedIn codes
-            let vals: Vec<String> = company_sizes.iter().map(|s| {
-                let upper = s.to_uppercase();
-                let code = match upper.as_str() {
-                    "1-10"    | "A" => "A",
-                    "11-50"   | "B" => "B",
-                    "51-200"  | "C" => "C",
-                    "201-500" | "D" => "D",
-                    "501-1000"| "E" => "E",
-                    other           => other,
-                };
-                format!("(id:{},selectionType:INCLUDED)", code)
-            }).collect();
-            filters.push(format!("(type:COMPANY_HEADCOUNT,values:List({}))", vals.join(",")));
+            let vals: Vec<String> = company_sizes
+                .iter()
+                .map(|s| {
+                    let upper = s.to_uppercase();
+                    let code = match upper.as_str() {
+                        "1-10" | "A" => "A",
+                        "11-50" | "B" => "B",
+                        "51-200" | "C" => "C",
+                        "201-500" | "D" => "D",
+                        "501-1000" | "E" => "E",
+                        other => other,
+                    };
+                    format!("(id:{},selectionType:INCLUDED)", code)
+                })
+                .collect();
+            filters.push(format!(
+                "(type:COMPANY_HEADCOUNT,values:List({}))",
+                vals.join(",")
+            ));
         }
 
         if !locations.is_empty() {
-            let vals: Vec<String> = locations.iter()
+            let vals: Vec<String> = locations
+                .iter()
                 .map(|l| format!("(text:{},selectionType:INCLUDED)", Self::encode_lurn(l)))
                 .collect();
             filters.push(format!("(type:GEOGRAPHY,values:List({}))", vals.join(",")));
         }
 
         if !seniority.is_empty() {
-            let vals: Vec<String> = seniority.iter()
+            let vals: Vec<String> = seniority
+                .iter()
                 .map(|s| format!("(id:{},selectionType:INCLUDED)", s.to_uppercase()))
                 .collect();
-            filters.push(format!("(type:SENIORITY_LEVEL,values:List({}))", vals.join(",")));
+            filters.push(format!(
+                "(type:SENIORITY_LEVEL,values:List({}))",
+                vals.join(",")
+            ));
         }
 
         if filters.is_empty() {
@@ -577,39 +674,47 @@ impl PhantomBusterClient {
     /// Parse raw PhantomBuster output rows into LinkedInLead structs.
     /// Handles both Sales Navigator Search Export and List Export field names.
     pub fn parse_leads(rows: Vec<serde_json::Value>) -> Vec<LinkedInLead> {
-        rows.into_iter().filter_map(|row| {
-            let get = |key: &str| row.get(key).and_then(|v| v.as_str()).map(|s| s.to_string());
+        rows.into_iter()
+            .filter_map(|row| {
+                let get = |key: &str| row.get(key).and_then(|v| v.as_str()).map(|s| s.to_string());
 
-            // fullName is set by both export types; fall back to first+last
-            let full_name = get("fullName")
-                .or_else(|| {
-                    let f = get("firstName").unwrap_or_default();
-                    let l = get("lastName").unwrap_or_default();
-                    let combined = format!("{} {}", f, l).trim().to_string();
-                    if combined.is_empty() { None } else { Some(combined) }
+                // fullName is set by both export types; fall back to first+last
+                let full_name = get("fullName")
+                    .or_else(|| {
+                        let f = get("firstName").unwrap_or_default();
+                        let l = get("lastName").unwrap_or_default();
+                        let combined = format!("{} {}", f, l).trim().to_string();
+                        if combined.is_empty() {
+                            None
+                        } else {
+                            Some(combined)
+                        }
+                    })
+                    .or_else(|| get("name"))
+                    .unwrap_or_default();
+
+                if full_name.is_empty() {
+                    return None;
+                }
+
+                // Profile URL — Sales Nav export uses "profileUrl" and "linkedInProfileUrl"
+                let linkedin_url = get("linkedInProfileUrl")
+                    .or_else(|| get("profileUrl"))
+                    .or_else(|| get("defaultProfileUrl"))
+                    .or_else(|| get("linkedinUrl"));
+
+                Some(LinkedInLead {
+                    full_name,
+                    job_title: get("title").or_else(|| get("jobTitle")),
+                    company_name: get("companyName").or_else(|| get("company")),
+                    company_size: get("companySize"),
+                    linkedin_url,
+                    email: get("email"),
+                    location: get("location"),
+                    seniority: get("seniorityLevel").or_else(|| get("seniority")),
                 })
-                .or_else(|| get("name"))
-                .unwrap_or_default();
-
-            if full_name.is_empty() { return None; }
-
-            // Profile URL — Sales Nav export uses "profileUrl" and "linkedInProfileUrl"
-            let linkedin_url = get("linkedInProfileUrl")
-                .or_else(|| get("profileUrl"))
-                .or_else(|| get("defaultProfileUrl"))
-                .or_else(|| get("linkedinUrl"));
-
-            Some(LinkedInLead {
-                full_name,
-                job_title:    get("title").or_else(|| get("jobTitle")),
-                company_name: get("companyName").or_else(|| get("company")),
-                company_size: get("companySize"),
-                linkedin_url,
-                email:        get("email"),
-                location:     get("location"),
-                seniority:    get("seniorityLevel").or_else(|| get("seniority")),
             })
-        }).collect()
+            .collect()
     }
 }
 
@@ -618,18 +723,18 @@ impl PhantomBusterClient {
 /// An Instagram profile/creator discovered via PhantomBuster.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct InstagramLead {
-    pub username:        String,
-    pub full_name:       Option<String>,
-    pub bio:             Option<String>,
+    pub username: String,
+    pub full_name: Option<String>,
+    pub bio: Option<String>,
     pub followers_count: Option<i64>,
     pub following_count: Option<i64>,
-    pub posts_count:     Option<i32>,
-    pub profile_url:     Option<String>,
+    pub posts_count: Option<i32>,
+    pub profile_url: Option<String>,
     pub profile_pic_url: Option<String>,
-    pub is_private:      bool,
-    pub is_verified:     bool,
-    pub external_url:    Option<String>,
-    pub email:           Option<String>,
+    pub is_private: bool,
+    pub is_verified: bool,
+    pub external_url: Option<String>,
+    pub email: Option<String>,
 }
 
 impl PhantomBusterClient {
@@ -638,8 +743,8 @@ impl PhantomBusterClient {
         let agents = self.list_agents().await?;
         let found = agents.into_iter().find(|a| {
             let n = a.name.to_lowercase();
-            (n.contains("instagram") && n.contains("hashtag")) ||
-            (n.contains("instagram") && n.contains("search"))
+            (n.contains("instagram") && n.contains("hashtag"))
+                || (n.contains("instagram") && n.contains("search"))
         });
         Ok(found)
     }
@@ -662,10 +767,10 @@ impl PhantomBusterClient {
     /// * `max_posts`      — number of posts to scrape (each post → one lead candidate)
     pub async fn launch_instagram_hashtag_search(
         &self,
-        agent_id:       &str,
+        agent_id: &str,
         session_cookie: &str,
-        hashtag:        &str,
-        max_posts:      u32,
+        hashtag: &str,
+        max_posts: u32,
     ) -> Result<String, String> {
         let tag = hashtag.trim_start_matches('#');
 
@@ -681,7 +786,8 @@ impl PhantomBusterClient {
             "argument": argument.to_string()
         });
 
-        let resp = self.http
+        let resp = self
+            .http
             .post(format!("{}/agents/launch", PB_BASE))
             .header("X-Phantombuster-Key", &self.api_key)
             .json(&body)
@@ -689,14 +795,23 @@ impl PhantomBusterClient {
             .await
             .map_err(|e| format!("Instagram launch failed: {}", e))?;
 
-        let result: serde_json::Value = resp.json().await
+        let result: serde_json::Value = resp
+            .json()
+            .await
             .map_err(|e| format!("Failed to parse Instagram launch response: {}", e))?;
 
         if result.get("status").and_then(|s| s.as_str()) == Some("error") {
-            return Err(format!("PhantomBuster launch error: {}", result.get("error").and_then(|e| e.as_str()).unwrap_or("unknown")));
+            return Err(format!(
+                "PhantomBuster launch error: {}",
+                result
+                    .get("error")
+                    .and_then(|e| e.as_str())
+                    .unwrap_or("unknown")
+            ));
         }
 
-        let container_id = result.get("containerId")
+        let container_id = result
+            .get("containerId")
             .and_then(|c| c.as_str())
             .unwrap_or(agent_id)
             .to_string();
@@ -709,19 +824,23 @@ impl PhantomBusterClient {
         let mut out = Vec::<InstagramLead>::new();
 
         for row in rows.into_iter() {
-            let get_str  = |key: &str| row.get(key).and_then(|v| v.as_str()).map(|s| s.to_string());
-            let get_i64  = |key: &str| row.get(key).and_then(|v| v.as_i64());
-            let get_i32  = |key: &str| row.get(key).and_then(|v| v.as_i64()).map(|v| v as i32);
+            let get_str = |key: &str| row.get(key).and_then(|v| v.as_str()).map(|s| s.to_string());
+            let get_i64 = |key: &str| row.get(key).and_then(|v| v.as_i64());
+            let get_i32 = |key: &str| row.get(key).and_then(|v| v.as_i64()).map(|v| v as i32);
             let get_bool = |key: &str| row.get(key).and_then(|v| v.as_bool()).unwrap_or(false);
 
             let username = get_str("username")
                 .or_else(|| get_str("handle"))
                 .unwrap_or_default();
-            if username.is_empty() { continue; }
+            if username.is_empty() {
+                continue;
+            }
 
             // Hashtag search returns multiple posts per user — dedupe so we
             // don't waste LLM scoring credits on the same account 5x.
-            if !seen.insert(username.clone()) { continue; }
+            if !seen.insert(username.clone()) {
+                continue;
+            }
 
             let profile_url = get_str("profileUrl")
                 .or_else(|| get_str("url"))
@@ -734,22 +853,21 @@ impl PhantomBusterClient {
             let bio = get_str("biography")
                 .or_else(|| get_str("bio"))
                 .or_else(|| description.clone());
-            let email = get_str("email").or_else(|| {
-                description.as_deref().and_then(Self::extract_email)
-            });
+            let email =
+                get_str("email").or_else(|| description.as_deref().and_then(Self::extract_email));
 
             out.push(InstagramLead {
                 username,
-                full_name:       get_str("fullName").or_else(|| get_str("name")),
+                full_name: get_str("fullName").or_else(|| get_str("name")),
                 bio,
                 followers_count: get_i64("followersCount").or_else(|| get_i64("followers")),
                 following_count: get_i64("followingCount").or_else(|| get_i64("following")),
-                posts_count:     get_i32("postsCount").or_else(|| get_i32("posts")),
+                posts_count: get_i32("postsCount").or_else(|| get_i32("posts")),
                 profile_url,
                 profile_pic_url: get_str("profilePictureUrl").or_else(|| get_str("imgUrl")),
-                is_private:      get_bool("isPrivate"),
-                is_verified:     get_bool("isVerified") || get_bool("verified"),
-                external_url:    get_str("externalUrl").or_else(|| get_str("website")),
+                is_private: get_bool("isPrivate"),
+                is_verified: get_bool("isVerified") || get_bool("verified"),
+                external_url: get_str("externalUrl").or_else(|| get_str("website")),
                 email,
             });
         }
@@ -764,7 +882,9 @@ impl PhantomBusterClient {
         let before: String = text[..at]
             .chars()
             .rev()
-            .take_while(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '_' || *c == '-' || *c == '+')
+            .take_while(|c| {
+                c.is_ascii_alphanumeric() || *c == '.' || *c == '_' || *c == '-' || *c == '+'
+            })
             .collect::<Vec<_>>()
             .into_iter()
             .rev()

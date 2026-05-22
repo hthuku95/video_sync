@@ -1,8 +1,8 @@
 // Checkpointing - Persist and resume workflows (LangGraph-inspired)
 use super::state::WorkflowState;
-use sqlx::PgPool;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use sqlx::PgPool;
 use tracing::{error, info};
 
 /// Checkpoint - Snapshot of workflow state
@@ -92,7 +92,7 @@ impl WorkflowCheckpointer {
 
         // Get current version
         let current_version: Option<i32> = sqlx::query_scalar(
-            "SELECT MAX(version) FROM workflow_checkpoints WHERE workflow_id = $1"
+            "SELECT MAX(version) FROM workflow_checkpoints WHERE workflow_id = $1",
         )
         .bind(workflow_id)
         .fetch_one(&self.pool)
@@ -101,8 +101,8 @@ impl WorkflowCheckpointer {
 
         let version: i32 = current_version.unwrap_or(0) + 1;
 
-        let state_json = serde_json::to_value(state)
-            .map_err(|e| format!("Failed to serialize state: {}", e))?;
+        let state_json =
+            serde_json::to_value(state).map_err(|e| format!("Failed to serialize state: {}", e))?;
 
         sqlx::query(
             r#"
@@ -124,15 +124,15 @@ impl WorkflowCheckpointer {
             format!("Failed to save checkpoint: {}", e)
         })?;
 
-        info!("💾 Checkpoint saved: {} (version: {})", checkpoint_id, version);
+        info!(
+            "💾 Checkpoint saved: {} (version: {})",
+            checkpoint_id, version
+        );
         Ok(checkpoint_id)
     }
 
     /// Load latest checkpoint for workflow
-    pub async fn load_latest(
-        &self,
-        workflow_id: &str,
-    ) -> Result<Option<Checkpoint>, String> {
+    pub async fn load_latest(&self, workflow_id: &str) -> Result<Option<Checkpoint>, String> {
         let result = sqlx::query_as::<_, CheckpointRow>(
             r#"
             SELECT checkpoint_id, workflow_id, thread_id, state, version, created_at
@@ -165,10 +165,7 @@ impl WorkflowCheckpointer {
     }
 
     /// Load specific checkpoint by ID
-    pub async fn load_by_id(
-        &self,
-        checkpoint_id: &str,
-    ) -> Result<Option<Checkpoint>, String> {
+    pub async fn load_by_id(&self, checkpoint_id: &str) -> Result<Option<Checkpoint>, String> {
         let result = sqlx::query_as::<_, CheckpointRow>(
             r#"
             SELECT checkpoint_id, workflow_id, thread_id, state, version, created_at
@@ -199,10 +196,7 @@ impl WorkflowCheckpointer {
     }
 
     /// Load checkpoint by thread_id (for session-based workflows)
-    pub async fn load_by_thread(
-        &self,
-        thread_id: &str,
-    ) -> Result<Option<Checkpoint>, String> {
+    pub async fn load_by_thread(&self, thread_id: &str) -> Result<Option<Checkpoint>, String> {
         let result = sqlx::query_as::<_, CheckpointRow>(
             r#"
             SELECT checkpoint_id, workflow_id, thread_id, state, version, created_at
@@ -235,10 +229,7 @@ impl WorkflowCheckpointer {
     }
 
     /// List all checkpoints for a workflow (time-travel debugging)
-    pub async fn list_checkpoints(
-        &self,
-        workflow_id: &str,
-    ) -> Result<Vec<Checkpoint>, String> {
+    pub async fn list_checkpoints(&self, workflow_id: &str) -> Result<Vec<Checkpoint>, String> {
         let rows = sqlx::query_as::<_, CheckpointRow>(
             r#"
             SELECT checkpoint_id, workflow_id, thread_id, state, version, created_at
@@ -270,19 +261,14 @@ impl WorkflowCheckpointer {
     }
 
     /// Delete old checkpoints (cleanup)
-    pub async fn cleanup_old_checkpoints(
-        &self,
-        older_than_days: i64,
-    ) -> Result<u64, String> {
+    pub async fn cleanup_old_checkpoints(&self, older_than_days: i64) -> Result<u64, String> {
         let cutoff_date = Utc::now() - chrono::Duration::days(older_than_days);
 
-        let result = sqlx::query(
-            "DELETE FROM workflow_checkpoints WHERE created_at < $1"
-        )
-        .bind(cutoff_date)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| format!("Failed to cleanup checkpoints: {}", e))?;
+        let result = sqlx::query("DELETE FROM workflow_checkpoints WHERE created_at < $1")
+            .bind(cutoff_date)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| format!("Failed to cleanup checkpoints: {}", e))?;
 
         info!("🧹 Cleaned up {} old checkpoints", result.rows_affected());
         Ok(result.rows_affected())

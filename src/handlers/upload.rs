@@ -1,15 +1,16 @@
-use crate::models::file::{FileUploadResponse, MultipleFileUploadResponse};
 use crate::middleware::auth::auth_middleware;
+use crate::models::auth::Claims;
+use crate::models::file::{FileUploadResponse, MultipleFileUploadResponse};
 use crate::AppState;
-use sqlx::Row;
 use axum::{
-    extract::{multipart::Multipart, Extension, DefaultBodyLimit},
+    extract::{multipart::Multipart, DefaultBodyLimit, Extension},
     http::StatusCode,
     response::Json,
     routing::post,
     Router,
 };
 use serde_json::{json, Value};
+use sqlx::Row;
 use std::path::Path;
 use std::sync::Arc;
 use tokio::fs;
@@ -20,8 +21,10 @@ pub fn upload_routes() -> Router {
     let public_routes = Router::new()
         .route("/upload", post(upload_files))
         .route("/upload/form", axum::routing::get(upload_form))
-        .route("/upload/status/:file_id", axum::routing::get(get_upload_status))
-        .route("/upload/session/:session_uuid", post(upload_files_for_session))
+        .route(
+            "/upload/status/:file_id",
+            axum::routing::get(get_upload_status),
+        )
         .layer(DefaultBodyLimit::max({
             let limit_mb: usize = std::env::var("UPLOAD_LIMIT_MB")
                 .ok()
@@ -29,11 +32,18 @@ pub fn upload_routes() -> Router {
                 .unwrap_or(100);
             limit_mb * 1024 * 1024
         }));
-    
+
     let protected_routes = Router::new()
-        .route("/files/session/:session_uuid", axum::routing::get(get_session_files))
+        .route(
+            "/upload/session/:session_uuid",
+            post(upload_files_for_session),
+        )
+        .route(
+            "/files/session/:session_uuid",
+            axum::routing::get(get_session_files),
+        )
         .layer(axum::middleware::from_fn(auth_middleware));
-    
+
     public_routes.merge(protected_routes)
 }
 
@@ -154,7 +164,7 @@ pub async fn upload_form() -> axum::response::Html<String> {
     </body>
     </html>
     "#;
-    
+
     axum::response::Html(html.to_string())
 }
 
@@ -164,16 +174,20 @@ pub async fn upload_files(
 ) -> Result<Json<MultipleFileUploadResponse>, StatusCode> {
     let mut uploaded_files = Vec::new();
     let upload_dir = "uploads";
-    
+
     // Ensure upload directory exists
     if let Err(_) = fs::create_dir_all(&upload_dir).await {
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
 
-    while let Some(field) = multipart.next_field().await.map_err(|_| StatusCode::BAD_REQUEST)? {
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|_| StatusCode::BAD_REQUEST)?
+    {
         let name = field.name().unwrap_or("unknown").to_string();
         let filename = field.file_name().unwrap_or("unknown").to_string();
-        
+
         // Generate unique filename
         let file_extension = Path::new(&filename)
             .extension()
@@ -181,16 +195,20 @@ pub async fn upload_files(
             .unwrap_or("");
         let unique_filename = format!("{}_{}.{}", Uuid::new_v4(), name, file_extension);
         let file_path = format!("{}/{}", upload_dir, unique_filename);
-        
+
         let data = field.bytes().await.map_err(|_| StatusCode::BAD_REQUEST)?;
-        
+
         // Validate file type
         let file_type = detect_file_type(&filename, &data);
         if !is_supported_file_type(&file_type) {
-            tracing::warn!("Rejected file '{}' with unsupported file type: {}", filename, file_type);
+            tracing::warn!(
+                "Rejected file '{}' with unsupported file type: {}",
+                filename,
+                file_type
+            );
             continue;
         }
-        
+
         // Write file to disk
         match fs::File::create(&file_path).await {
             Ok(mut file) => {
@@ -200,10 +218,10 @@ pub async fn upload_files(
             }
             Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR),
         }
-        
+
         let file_id = Uuid::new_v4().to_string();
         let mime_type = detect_mime_type(&filename);
-        
+
         // Save to database (simplified query to avoid compile-time checks)
         let insert_result = sqlx::query(
             "INSERT INTO uploaded_files (id, original_name, stored_name, file_path, file_size, file_type, mime_type, upload_status) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)"
@@ -218,7 +236,7 @@ pub async fn upload_files(
         .bind("uploaded")
         .execute(&state.db_pool)
         .await;
-        
+
         match insert_result {
             Ok(_) => {
                 uploaded_files.push(FileUploadResponse {
@@ -230,7 +248,7 @@ pub async fn upload_files(
                     file_type,
                     status: "uploaded".to_string(),
                 });
-                
+
                 tracing::info!("Uploaded and stored file: {} -> {}", filename, file_path);
             }
             Err(e) => {
@@ -284,11 +302,11 @@ fn detect_file_type(filename: &str, _data: &[u8]) -> String {
         .and_then(|ext| ext.to_str())
         .unwrap_or("")
         .to_lowercase();
-    
+
     match extension.as_str() {
         // Video formats
         "mp4" | "avi" | "mov" | "wmv" | "flv" | "webm" | "mkv" => "video".to_string(),
-        // Audio formats  
+        // Audio formats
         "mp3" | "wav" | "aac" | "flac" | "ogg" | "m4a" => "audio".to_string(),
         // Image formats
         "jpg" | "jpeg" | "png" | "gif" | "bmp" | "tiff" | "webp" => "image".to_string(),
@@ -308,7 +326,7 @@ fn detect_mime_type(filename: &str) -> Option<String> {
         .and_then(|ext| ext.to_str())
         .unwrap_or("")
         .to_lowercase();
-    
+
     let mime_type = match extension.as_str() {
         // Video MIME types
         "mp4" => "video/mp4",
@@ -318,7 +336,7 @@ fn detect_mime_type(filename: &str) -> Option<String> {
         "flv" => "video/x-flv",
         "webm" => "video/webm",
         "mkv" => "video/x-matroska",
-        
+
         // Audio MIME types
         "mp3" => "audio/mpeg",
         "wav" => "audio/wav",
@@ -326,7 +344,7 @@ fn detect_mime_type(filename: &str) -> Option<String> {
         "flac" => "audio/flac",
         "ogg" => "audio/ogg",
         "m4a" => "audio/mp4",
-        
+
         // Image MIME types
         "jpg" | "jpeg" => "image/jpeg",
         "png" => "image/png",
@@ -334,17 +352,17 @@ fn detect_mime_type(filename: &str) -> Option<String> {
         "bmp" => "image/bmp",
         "tiff" => "image/tiff",
         "webp" => "image/webp",
-        
+
         // Document MIME types
         "pdf" => "application/pdf",
         "doc" => "application/msword",
         "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         "txt" => "text/plain",
         "rtf" => "application/rtf",
-        
+
         _ => return None,
     };
-    
+
     Some(mime_type.to_string())
 }
 
@@ -352,12 +370,13 @@ fn detect_mime_type(filename: &str) -> Option<String> {
 pub async fn upload_files_for_session(
     axum::extract::Path(session_uuid): axum::extract::Path<String>,
     Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
     mut multipart: Multipart,
 ) -> Result<Json<MultipleFileUploadResponse>, StatusCode> {
     tracing::info!("Starting file upload for session: {}", session_uuid);
     let mut uploaded_files = Vec::new();
     let upload_dir = "uploads";
-    
+
     // Ensure upload directory exists
     if let Err(_) = fs::create_dir_all(&upload_dir).await {
         tracing::error!("Failed to create upload directory: {}", upload_dir);
@@ -365,7 +384,8 @@ pub async fn upload_files_for_session(
     }
 
     // Get or create chat session
-    let session_id = match get_or_create_session(&state, &session_uuid, None).await {
+    let user_id = claims.sub.parse::<i32>().ok();
+    let session_id = match get_or_create_session(&state, &session_uuid, user_id).await {
         Ok(id) => Some(id),
         Err(e) => {
             tracing::warn!("Failed to get/create session {}: {}", session_uuid, e);
@@ -382,16 +402,16 @@ pub async fn upload_files_for_session(
             tracing::warn!("Skipping field with no name");
             continue;
         }
-        
+
         let name = field.name().unwrap().to_string();
         tracing::debug!("Processing field: {}", name);
-        
+
         // Only process fields named 'files'
         if name != "files" {
             tracing::debug!("Skipping non-file field: {}", name);
             continue;
         }
-        
+
         let filename = match field.file_name() {
             Some(name) => name.to_string(),
             None => {
@@ -399,9 +419,13 @@ pub async fn upload_files_for_session(
                 continue;
             }
         };
-        
-        tracing::info!("Processing file upload: {} for session {}", filename, session_uuid);
-        
+
+        tracing::info!(
+            "Processing file upload: {} for session {}",
+            filename,
+            session_uuid
+        );
+
         // Generate unique filename
         let file_extension = Path::new(&filename)
             .extension()
@@ -409,19 +433,24 @@ pub async fn upload_files_for_session(
             .unwrap_or("");
         let unique_filename = format!("{}_{}.{}", Uuid::new_v4(), name, file_extension);
         let file_path = format!("{}/{}", upload_dir, unique_filename);
-        
+
         let data = field.bytes().await.map_err(|e| {
             tracing::error!("Failed to read field bytes for file '{}': {}", filename, e);
             StatusCode::BAD_REQUEST
         })?;
-        
+
         // Validate file type
         let file_type = detect_file_type(&filename, &data);
         if !is_supported_file_type(&file_type) {
-            tracing::warn!("Rejected file '{}' with unsupported file type: {} for session {}", filename, file_type, session_uuid);
+            tracing::warn!(
+                "Rejected file '{}' with unsupported file type: {} for session {}",
+                filename,
+                file_type,
+                session_uuid
+            );
             continue;
         }
-        
+
         // Write file to disk
         match fs::File::create(&file_path).await {
             Ok(mut file) => {
@@ -431,10 +460,10 @@ pub async fn upload_files_for_session(
             }
             Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR),
         }
-        
+
         let file_id = Uuid::new_v4().to_string();
         let mime_type = detect_mime_type(&filename);
-        
+
         // Save to database with session association
         let insert_result = sqlx::query(
             "INSERT INTO uploaded_files (id, session_id, original_name, stored_name, file_path, file_size, file_type, mime_type, upload_status) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"
@@ -450,7 +479,7 @@ pub async fn upload_files_for_session(
         .bind("uploaded")
         .execute(&state.db_pool)
         .await;
-        
+
         match insert_result {
             Ok(_) => {
                 uploaded_files.push(FileUploadResponse {
@@ -462,9 +491,14 @@ pub async fn upload_files_for_session(
                     file_type: file_type.clone(),
                     status: "uploaded".to_string(),
                 });
-                
-                tracing::info!("Uploaded file for session {}: {} -> {}", session_uuid, filename, file_path);
-                
+
+                tracing::info!(
+                    "Uploaded file for session {}: {} -> {}",
+                    session_uuid,
+                    filename,
+                    file_path
+                );
+
                 // Process video files for vectorization
                 if file_type == "video" {
                     // Background vectorization temporarily disabled due to lifetime constraints
@@ -482,15 +516,18 @@ pub async fn upload_files_for_session(
     }
 
     let file_count = uploaded_files.len();
-    
+
     if file_count == 0 {
         return Err(StatusCode::BAD_REQUEST);
     }
-    
+
     Ok(Json(MultipleFileUploadResponse {
         success: true,
         files: uploaded_files,
-        message: format!("Successfully uploaded {} files for session {}", file_count, session_uuid),
+        message: format!(
+            "Successfully uploaded {} files for session {}",
+            file_count, session_uuid
+        ),
     }))
 }
 
@@ -538,15 +575,34 @@ pub async fn get_session_files(
 // Helper function to get or create a chat session.
 // `user_id` should be the authenticated user's id when known, or None for anonymous
 // connections (which fall back to user_id=1, the system anonymous user).
-pub async fn get_or_create_session(state: &AppState, session_uuid: &str, user_id: Option<i32>) -> Result<i32, sqlx::Error> {
+pub async fn get_or_create_session(
+    state: &AppState,
+    session_uuid: &str,
+    user_id: Option<i32>,
+) -> Result<i32, sqlx::Error> {
     // First try to find existing session
-    let session_row = sqlx::query("SELECT id FROM chat_sessions WHERE session_uuid = $1")
+    let session_row = sqlx::query("SELECT id, user_id FROM chat_sessions WHERE session_uuid = $1")
         .bind(session_uuid)
         .fetch_optional(&state.db_pool)
         .await?;
 
     if let Some(session) = session_row {
         let id: i32 = session.get("id");
+        let owner_id: i32 = session.get("user_id");
+        if let Some(authenticated_user_id) = user_id {
+            if owner_id == 1 && owner_id != authenticated_user_id {
+                sqlx::query("UPDATE chat_sessions SET user_id = $1 WHERE id = $2")
+                    .bind(authenticated_user_id)
+                    .bind(id)
+                    .execute(&state.db_pool)
+                    .await?;
+                tracing::info!(
+                    "Reassigned anonymous session {} to authenticated user {}",
+                    session_uuid,
+                    authenticated_user_id
+                );
+            }
+        }
         return Ok(id);
     }
 
@@ -554,14 +610,21 @@ pub async fn get_or_create_session(state: &AppState, session_uuid: &str, user_id
     // user_id=1 is the system anonymous user; the NOT NULL constraint is satisfied.
     let resolved_user_id = user_id.unwrap_or(1);
 
-    let new_session = sqlx::query("INSERT INTO chat_sessions (user_id, session_uuid, title) VALUES ($1, $2, $3) RETURNING id")
-        .bind(resolved_user_id)
-        .bind(session_uuid)
-        .bind("New Chat Session")
-        .fetch_one(&state.db_pool)
-        .await?;
+    let new_session = sqlx::query(
+        "INSERT INTO chat_sessions (user_id, session_uuid, title) VALUES ($1, $2, $3) RETURNING id",
+    )
+    .bind(resolved_user_id)
+    .bind(session_uuid)
+    .bind("New Chat Session")
+    .fetch_one(&state.db_pool)
+    .await?;
 
     let new_id: i32 = new_session.get("id");
-    tracing::info!("Created new chat session: {} (id: {}, user_id: {})", session_uuid, new_id, resolved_user_id);
+    tracing::info!(
+        "Created new chat session: {} (id: {}, user_id: {})",
+        session_uuid,
+        new_id,
+        resolved_user_id
+    );
     Ok(new_id)
 }

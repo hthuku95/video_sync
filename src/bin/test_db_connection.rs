@@ -8,8 +8,7 @@ async fn main() -> Result<(), sqlx::Error> {
     // Load environment variables
     dotenvy::dotenv().ok();
 
-    let database_url = env::var("DATABASE_URL")
-        .expect("DATABASE_URL must be set");
+    let database_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
 
     println!("Connecting to database...");
     let pool = PgPool::connect(&database_url).await?;
@@ -27,7 +26,7 @@ async fn main() -> Result<(), sqlx::Error> {
             // Check what tables DO exist
             println!("Checking what tables exist...");
             let tables = sqlx::query_as::<_, (String,)>(
-                "SELECT tablename FROM pg_tables WHERE schemaname = 'public'"
+                "SELECT tablename FROM pg_tables WHERE schemaname = 'public'",
             )
             .fetch_all(&pool)
             .await?;

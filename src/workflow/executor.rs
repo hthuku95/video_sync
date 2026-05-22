@@ -1,11 +1,11 @@
 #![allow(dead_code, unused_imports)]
 // Executor - Runs the workflow graph with checkpointing and retries
-use super::state::{WorkflowState, StateUpdate, WorkflowStatus, WorkflowError};
-use super::graph::StateGraph;
 use super::checkpoint::WorkflowCheckpointer;
-use tokio::time::{timeout, Duration};
-use tracing::{info, warn, error};
+use super::graph::StateGraph;
+use super::state::{StateUpdate, WorkflowError, WorkflowState, WorkflowStatus};
 use chrono::Utc;
+use tokio::time::{timeout, Duration};
+use tracing::{error, info, warn};
 
 /// Workflow executor config.
 /// Note: Multi-node execution is always sequential — Axum handler state cannot
@@ -58,7 +58,8 @@ impl WorkflowExecutor {
 
         // Start from entry point or resume from checkpoint
         let mut current_node = if state.current_node == "start" {
-            self.graph.get_entry_point()
+            self.graph
+                .get_entry_point()
                 .ok_or("No entry point")?
                 .clone()
         } else {
@@ -72,7 +73,10 @@ impl WorkflowExecutor {
 
             // Check iteration limit
             if iteration > self.config.max_iterations {
-                warn!("⚠️ Workflow hit iteration limit: {}", self.config.max_iterations);
+                warn!(
+                    "⚠️ Workflow hit iteration limit: {}",
+                    self.config.max_iterations
+                );
                 state.status = WorkflowStatus::Failed;
                 state.errors.push(WorkflowError {
                     node: current_node.clone(),
@@ -87,7 +91,9 @@ impl WorkflowExecutor {
             info!("📍 Step {}: Executing node '{}'", iteration, current_node);
 
             // Get node
-            let node = self.graph.get_node(&current_node)
+            let node = self
+                .graph
+                .get_node(&current_node)
                 .ok_or(format!("Node '{}' not found", current_node))?;
 
             // Update state with current node
@@ -110,8 +116,10 @@ impl WorkflowExecutor {
                     // Check if should retry
                     if state.should_retry(node.max_retries) {
                         state.status = WorkflowStatus::Retrying;
-                        warn!("🔄 Retrying node '{}' (attempt {}/{})",
-                            current_node, state.error_count, node.max_retries);
+                        warn!(
+                            "🔄 Retrying node '{}' (attempt {}/{})",
+                            current_node, state.error_count, node.max_retries
+                        );
                         continue;
                     } else {
                         state.status = WorkflowStatus::Failed;
@@ -126,9 +134,15 @@ impl WorkflowExecutor {
             // Checkpoint periodically
             if iteration % self.config.checkpoint_every_n_steps == 0 {
                 if let Some(ref checkpointer) = self.checkpointer {
-                    match checkpointer.save(&state.workflow_id, &state.thread_id, &state).await {
+                    match checkpointer
+                        .save(&state.workflow_id, &state.thread_id, &state)
+                        .await
+                    {
                         Ok(checkpoint_id) => {
-                            info!("💾 Checkpoint saved at step {}: {}", iteration, checkpoint_id);
+                            info!(
+                                "💾 Checkpoint saved at step {}: {}",
+                                iteration, checkpoint_id
+                            );
                         }
                         Err(e) => {
                             warn!("⚠️ Failed to save checkpoint: {}", e);
@@ -180,11 +194,15 @@ impl WorkflowExecutor {
 
         // Final checkpoint
         if let Some(ref checkpointer) = self.checkpointer {
-            let _ = checkpointer.save(&state.workflow_id, &state.thread_id, &state).await;
+            let _ = checkpointer
+                .save(&state.workflow_id, &state.thread_id, &state)
+                .await;
         }
 
-        info!("🎬 Workflow execution finished: {} (iterations: {})",
-            state.workflow_id, iteration);
+        info!(
+            "🎬 Workflow execution finished: {} (iterations: {})",
+            state.workflow_id, iteration
+        );
 
         Ok(state)
     }
@@ -194,10 +212,14 @@ impl WorkflowExecutor {
         &self,
         checkpoint_id: &str,
     ) -> Result<WorkflowState, String> {
-        let checkpointer = self.checkpointer.as_ref()
+        let checkpointer = self
+            .checkpointer
+            .as_ref()
             .ok_or("No checkpointer configured")?;
 
-        let checkpoint = checkpointer.load_by_id(checkpoint_id).await?
+        let checkpoint = checkpointer
+            .load_by_id(checkpoint_id)
+            .await?
             .ok_or(format!("Checkpoint '{}' not found", checkpoint_id))?;
 
         info!("🔄 Resuming workflow from checkpoint: {}", checkpoint_id);
@@ -215,8 +237,10 @@ impl WorkflowExecutor {
         match timeout(node_timeout, node.function.execute(state)).await {
             Ok(Ok(update)) => Ok(update),
             Ok(Err(e)) => Err(e),
-            Err(_) => Err(format!("Node '{}' timed out after {}s",
-                node.id, node.timeout_seconds)),
+            Err(_) => Err(format!(
+                "Node '{}' timed out after {}s",
+                node.id, node.timeout_seconds
+            )),
         }
     }
 
@@ -228,12 +252,17 @@ impl WorkflowExecutor {
         node_ids: &[String],
         mut state: WorkflowState,
     ) -> Result<WorkflowState, String> {
-        info!("⚡ Executing {} nodes sequentially (parallel disabled for safety)", node_ids.len());
+        info!(
+            "⚡ Executing {} nodes sequentially (parallel disabled for safety)",
+            node_ids.len()
+        );
 
         // Execute sequentially for now - proper parallel execution requires
         // more complex lifetime and state cloning management
         for node_id in node_ids {
-            let node = self.graph.get_node(node_id)
+            let node = self
+                .graph
+                .get_node(node_id)
                 .ok_or(format!("Parallel node '{}' not found", node_id))?;
 
             match node.function.execute(&state).await {
@@ -271,8 +300,12 @@ impl WorkflowExecutor {
 
         loop {
             // Get next node to execute
-            let current_node_name = current_state.get_current_node()
-                .unwrap_or_else(|| self.graph.get_entry_point().map(|s| s.clone()).unwrap_or_default());
+            let current_node_name = current_state.get_current_node().unwrap_or_else(|| {
+                self.graph
+                    .get_entry_point()
+                    .map(|s| s.clone())
+                    .unwrap_or_default()
+            });
 
             let node = match self.graph.get_node(&current_node_name) {
                 Some(n) => n,
@@ -283,7 +316,10 @@ impl WorkflowExecutor {
             };
 
             // Stream update
-            callback(&current_state, &format!("Executing node: {}", current_node_name));
+            callback(
+                &current_state,
+                &format!("Executing node: {}", current_node_name),
+            );
 
             // Execute node
             let result = node.function.execute(&current_state).await;
@@ -299,7 +335,9 @@ impl WorkflowExecutor {
                     }
 
                     // Get next node
-                    if let Some(next_node) = self.graph.get_next_node(&current_node_name, &current_state) {
+                    if let Some(next_node) =
+                        self.graph.get_next_node(&current_node_name, &current_state)
+                    {
                         current_state.set_current_node(&next_node);
                     } else {
                         callback(&current_state, "No next node found");

@@ -361,13 +361,11 @@ impl PortfolioTestRunner {
     /// Create a new test_run row and spawn a background task that runs all scenarios.
     /// Returns the new run's UUID.
     pub async fn create_and_spawn(app_state: Arc<AppState>, name: String) -> Result<Uuid, String> {
-        let row = sqlx::query(
-            "INSERT INTO test_runs (name) VALUES ($1) RETURNING id",
-        )
-        .bind(&name)
-        .fetch_one(&app_state.db_pool)
-        .await
-        .map_err(|e| format!("Failed to create test run: {e}"))?;
+        let row = sqlx::query("INSERT INTO test_runs (name) VALUES ($1) RETURNING id")
+            .bind(&name)
+            .fetch_one(&app_state.db_pool)
+            .await
+            .map_err(|e| format!("Failed to create test run: {e}"))?;
 
         let run_id: Uuid = row.get("id");
 
@@ -493,11 +491,10 @@ impl PortfolioTestRunner {
         &self,
         scenario: &Scenario,
     ) -> Result<(String, String, String, String), String> {
-        let client = self
-            .app_state
-            .blender_mcp_client
-            .as_ref()
-            .ok_or_else(|| "BlenderMCPClient not configured — set BLENDER_MCP_URL".to_string())?;
+        let client =
+            self.app_state.blender_mcp_client.as_ref().ok_or_else(|| {
+                "BlenderMCPClient not configured — set BLENDER_MCP_URL".to_string()
+            })?;
 
         let local_path = client
             .render_async(
@@ -508,11 +505,7 @@ impl PortfolioTestRunner {
             )
             .await?;
 
-        let filename = local_path
-            .split('/')
-            .last()
-            .unwrap_or("output")
-            .to_string();
+        let filename = local_path.split('/').last().unwrap_or("output").to_string();
 
         let r2_key = format!("portfolio-tests/{filename}");
 
@@ -533,7 +526,12 @@ impl PortfolioTestRunner {
     }
 
     async fn review(&self, r2_url: &str, local_path: &str, scenario: &Scenario) -> LLMReview {
-        let gemini = match self.app_state.video_gemini_client.as_ref().or(self.app_state.gemini_client.as_ref()) {
+        let gemini = match self
+            .app_state
+            .video_gemini_client
+            .as_ref()
+            .or(self.app_state.gemini_client.as_ref())
+        {
             Some(g) => g,
             None => {
                 return LLMReview {

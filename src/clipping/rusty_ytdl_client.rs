@@ -24,7 +24,10 @@ impl RustyYtdlClient {
                 .map_err(|e| format!("Failed to create output directory: {}", e))?;
         }
 
-        tracing::info!("📥 Downloading video from YouTube using rusty_ytdl: {}", video_url);
+        tracing::info!(
+            "📥 Downloading video from YouTube using rusty_ytdl: {}",
+            video_url
+        );
 
         // Configure video options for best quality MP4
         let video_options = VideoOptions {
@@ -131,7 +134,7 @@ impl RustyYtdlClient {
             file_path: output_path.to_string(),
             title,
             duration_seconds: duration_secs,
-            width: None,  // rusty_ytdl doesn't expose dimensions easily
+            width: None, // rusty_ytdl doesn't expose dimensions easily
             height: None,
         })
     }
@@ -140,8 +143,8 @@ impl RustyYtdlClient {
     pub async fn get_video_info(video_url: &str) -> Result<VideoInfo, String> {
         tracing::info!("ℹ️ Fetching video metadata: {}", video_url);
 
-        let video = Video::new(video_url)
-            .map_err(|e| format!("Failed to create video instance: {}", e))?;
+        let video =
+            Video::new(video_url).map_err(|e| format!("Failed to create video instance: {}", e))?;
 
         let info = video
             .get_info()
@@ -217,7 +220,8 @@ mod tests {
     #[tokio::test]
     async fn test_get_video_info() {
         // Test with a known stable video (change to a real test video ID)
-        let result = RustyYtdlClient::get_video_info("https://www.youtube.com/watch?v=dQw4w9WgXcQ").await;
+        let result =
+            RustyYtdlClient::get_video_info("https://www.youtube.com/watch?v=dQw4w9WgXcQ").await;
         assert!(result.is_ok(), "Should fetch video info successfully");
     }
 }

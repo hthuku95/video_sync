@@ -15,56 +15,56 @@ pub const SERVICE_OFFERS: [ServiceOffer; 7] = [
     ServiceOffer {
         key: "clipping",
         title: "SHORT-FORM CLIPPING",
-        what_you_offer: "turn their long videos / podcasts / streams into 20-40 vertical Shorts/Reels/TikToks per month.",
-        pricing_tiers: "$297 (30 clips/mo) -> $497 (50 clips/mo) -> $899 (unlimited + 48h SLA).",
-        best_fit: "podcasters, long-form YouTubers, streamers.",
+        what_you_offer: "turn long-form videos, podcasts, or streams into a managed short-form package when the workflow is actively supervised.",
+        pricing_tiers: "$297-$899/month depending on clip count, review level, and turnaround.",
+        best_fit: "podcasters, long-form YouTubers, and streamers with enough source material to justify an ongoing package.",
     },
     ServiceOffer {
         key: "animations",
         title: "AI-DRIVEN BLENDER ANIMATIONS",
-        what_you_offer: "explainer scenes, data visualisations, LaTeX equations, lower-thirds, title cards.",
-        pricing_tiers: "$50-$150 per 15-60s animation, or $400/month for 5 animations.",
-        best_fit: "educators, finance/crypto channels.",
+        what_you_offer: "explainer scenes, data visualizations, title cards, lower thirds, motion graphics, and visual support assets.",
+        pricing_tiers: "$75-$400 per asset, or custom monthly retainers for recurring production.",
+        best_fit: "educators, finance/crypto creators, product marketers, and agencies that need premium visual support.",
     },
     ServiceOffer {
         key: "thumbnails",
         title: "AI-OPTIMISED YOUTUBE THUMBNAILS",
-        what_you_offer: "3-frame extract -> AI picks the strongest -> branded title overlay -> CTR-tested.",
-        pricing_tiers: "$25-$50 per thumbnail, or $300/month for 30 thumbnails.",
-        best_fit: "growing YouTubers (5k-100k).",
+        what_you_offer: "click-focused thumbnail concepts, branded title treatments, and premium packaging around YouTube content or launch media.",
+        pricing_tiers: "$25-$75 per thumbnail, or recurring monthly packaging retainers.",
+        best_fit: "growing channels, creators, and teams that want stronger presentation before a viewer clicks play.",
     },
     ServiceOffer {
         key: "ugc",
         title: "UGC / PRODUCT-DEMO VIDEOS",
-        what_you_offer: "vertical-first ad-style demo videos for ecommerce / SaaS founders.",
-        pricing_tiers: "$200-$500 per 30-60s UGC video.",
-        best_fit: "Shopify and SaaS founders.",
+        what_you_offer: "vertical-first product videos, demo edits, and ad-ready promo assets for ecommerce and software brands.",
+        pricing_tiers: "$200-$900 per video depending on scope, voiceover, and asset complexity.",
+        best_fit: "Shopify operators, SaaS founders, and marketers testing paid acquisition.",
     },
     ServiceOffer {
         key: "product_mockup",
         title: "3D PRODUCT MOCKUPS",
-        what_you_offer: "photorealistic Blender renders of their product on a device or lifestyle scene - Gemini-generated product shot + cinematic camera move.",
-        pricing_tiers: "$100-$300 per mockup, or $600 for a pack of 4 with variations.",
-        best_fit: "ecommerce, hardware, app launches.",
+        what_you_offer: "rendered product visuals, device mockups, and motion-enhanced presentation assets for launches, promos, and demos.",
+        pricing_tiers: "$100-$600 per asset or multi-asset package.",
+        best_fit: "ecommerce, hardware, app launches, and product marketing teams.",
     },
     ServiceOffer {
         key: "landing_page",
         title: "ANIMATED LANDING PAGE HERO",
-        what_you_offer: "cinematic 10-15s animated hero mockup for their SaaS/startup - if they have a live site, we scrape the hero image; otherwise we generate one with Gemini and animate it in Blender.",
-        pricing_tiers: "$200-$600 per hero video. Ideal for Product Hunt launches / YC demos.",
-        best_fit: "indie founders and pre-launch SaaS teams.",
+        what_you_offer: "homepage hero videos, narrated product demos, launch cutdowns, and landing-page motion built from a real product site or app flow.",
+        pricing_tiers: "$299-$1,500+ depending on whether the buyer needs a hero loop, a narrated demo, or a fuller launch package.",
+        best_fit: "indie founders, SaaS teams, launch marketers, and agencies selling product video.",
     },
     ServiceOffer {
         key: "full_stack",
         title: "FULL-STACK PRODUCTION BUNDLE",
-        what_you_offer: "clipping + thumbnails + animations + mockups + landing-page heroes + delivery, all in one retainer.",
-        pricing_tiers: "$1,500-$3,000/month.",
-        best_fit: "teams that want a full content production partner.",
+        what_you_offer: "a private production backend covering product demos, thumbnails, motion graphics, mockups, and recurring delivery under the buyer's own brand.",
+        pricing_tiers: "$1,000-$3,000+/month depending on output mix, review load, and turnaround.",
+        best_fit: "boutique agencies, creator managers, and operators who want backend production support instead of a one-off asset.",
     },
 ];
 
 pub fn delivery_unlock_price_summary() -> &'static str {
-    "$19-$97 for lightweight Blender samples; $197+ for website-driven presentation videos."
+    "$19-$97 for lightweight sample assets; $197+ for stronger website-driven presentation videos and higher-value delivery unlocks."
 }
 
 pub fn service_offer_prompt(service: Option<&str>) -> String {
@@ -77,7 +77,9 @@ pub fn service_offer_prompt(service: Option<&str>) -> String {
         }
     }
 
-    let mut menu = String::from("Pick the strongest-fit service from this menu (mention only ONE in the DM):\n");
+    let mut menu = String::from(
+        "Pick the strongest-fit service from this menu (mention only ONE in the DM):\n",
+    );
     for offer in SERVICE_OFFERS.iter() {
         menu.push_str(&format!(
             "  - {} - Best fit: {} Pricing: {}\n",

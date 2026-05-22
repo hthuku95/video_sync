@@ -1,8 +1,8 @@
 #![allow(dead_code, unused_imports)]
 // utils.rs - Pure FFmpeg utility functions (ZERO GStreamer!)
 use std::process::Command;
-use tokio::process::Command as TokioCommand;
 use std::time::Duration;
+use tokio::process::Command as TokioCommand;
 
 /// Format duration in HH:MM:SS.mmm format
 pub fn format_duration(seconds: f64) -> String {
@@ -59,29 +59,40 @@ pub fn execute_ffmpeg_command_with_sync_timeout(
         .spawn()
         .map_err(|e| format!("Failed to spawn FFmpeg ({}): {}", program, e))?;
 
+    let stderr_reader = child.stderr.take().map(|mut stderr| {
+        std::thread::spawn(move || {
+            let mut stderr_buf = Vec::new();
+            use std::io::Read;
+            let _ = stderr.read_to_end(&mut stderr_buf);
+            stderr_buf
+        })
+    });
+
     let deadline = std::time::Instant::now() + timeout;
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
+                let stderr_buf = stderr_reader
+                    .map(|reader| reader.join().unwrap_or_default())
+                    .unwrap_or_default();
                 if status.success() {
                     return Ok(String::new());
                 }
-                // Read stderr for the error message
-                let mut stderr_buf = Vec::new();
-                if let Some(mut stderr) = child.stderr.take() {
-                    use std::io::Read;
-                    let _ = stderr.read_to_end(&mut stderr_buf);
-                }
                 let stderr = String::from_utf8_lossy(&stderr_buf);
-                return Err(format!("FFmpeg error (exit {}): {}",
+                return Err(format!(
+                    "FFmpeg error (exit {}): {}",
                     status.code().unwrap_or(-1),
-                    &stderr[..stderr.len().min(600)]));
+                    &stderr[..stderr.len().min(600)]
+                ));
             }
             Ok(None) => {
                 // Still running — check deadline
                 if std::time::Instant::now() >= deadline {
                     let _ = child.kill();
                     let _ = child.wait();
+                    if let Some(reader) = stderr_reader {
+                        let _ = reader.join();
+                    }
                     return Err(format!(
                         "FFmpeg operation timed out after {} seconds. \
                          Process has been terminated.",
@@ -92,6 +103,9 @@ pub fn execute_ffmpeg_command_with_sync_timeout(
             }
             Err(e) => {
                 let _ = child.kill();
+                if let Some(reader) = stderr_reader {
+                    let _ = reader.join();
+                }
                 return Err(format!("FFmpeg wait error: {}", e));
             }
         }
@@ -106,7 +120,11 @@ pub async fn execute_ffmpeg_command_with_timeout(
 ) -> Result<String, String> {
     let timeout_duration = Duration::from_secs(timeout_secs.unwrap_or(300));
 
-    tracing::debug!("Executing FFmpeg with {}s timeout: {:?}", timeout_duration.as_secs(), command);
+    tracing::debug!(
+        "Executing FFmpeg with {}s timeout: {:?}",
+        timeout_duration.as_secs(),
+        command
+    );
 
     // Spawn the FFmpeg process
     let child = command
@@ -121,7 +139,10 @@ pub async fn execute_ffmpeg_command_with_timeout(
             return Err(format!("FFmpeg process failed: {}", e));
         }
         Err(_) => {
-            tracing::error!("❌ FFmpeg command timed out after {}s - process killed", timeout_duration.as_secs());
+            tracing::error!(
+                "❌ FFmpeg command timed out after {}s - process killed",
+                timeout_duration.as_secs()
+            );
             return Err(format!(
                 "FFmpeg operation timed out after {} seconds. This usually happens when:\n\
                 - System went to sleep/wake cycle\n\
@@ -162,24 +183,22 @@ pub fn check_ffmpeg_available() -> Result<(), String> {
         .args(&["-version"])
         .output()
         .map_err(|_| "FFmpeg not found. Please install FFmpeg.")?;
-    
+
     Command::new("ffprobe")
         .args(&["-version"])
         .output()
         .map_err(|_| "FFprobe not found. Please install FFmpeg with FFprobe.")?;
-    
+
     println!("✓ FFmpeg and FFprobe are available");
     Ok(())
 }
-
-
 
 /// Build FFmpeg video filter string
 pub fn build_video_filter(filters: &[(&str, f64)]) -> String {
     if filters.is_empty() {
         return String::new();
     }
-    
+
     let filter_strings: Vec<String> = filters.iter()
         .map(|(filter, intensity)| {
             match *filter {
@@ -196,7 +215,7 @@ pub fn build_video_filter(filters: &[(&str, f64)]) -> String {
             }
         })
         .collect();
-    
+
     filter_strings.join(",")
 }
 
@@ -205,21 +224,20 @@ pub fn build_audio_filter(filters: &[(&str, f64)]) -> String {
     if filters.is_empty() {
         return String::new();
     }
-    
-    let filter_strings: Vec<String> = filters.iter()
-        .map(|(filter, intensity)| {
-            match *filter {
-                "volume" => format!("volume={:.2}", intensity),
-                "echo" => format!("aecho=0.8:0.9:{}:0.3", (intensity * 1000.0) as u32),
-                "reverb" => "aecho=0.8:0.88:60:0.4".to_string(),
-                "chorus" => "chorus=0.5:0.9:50:0.4:0.25:2".to_string(),
-                "lowpass" => format!("lowpass=f={:.0}", 1000.0 + intensity * 10000.0),
-                "highpass" => format!("highpass=f={:.0}", intensity * 1000.0),
-                _ => filter.to_string(),
-            }
+
+    let filter_strings: Vec<String> = filters
+        .iter()
+        .map(|(filter, intensity)| match *filter {
+            "volume" => format!("volume={:.2}", intensity),
+            "echo" => format!("aecho=0.8:0.9:{}:0.3", (intensity * 1000.0) as u32),
+            "reverb" => "aecho=0.8:0.88:60:0.4".to_string(),
+            "chorus" => "chorus=0.5:0.9:50:0.4:0.25:2".to_string(),
+            "lowpass" => format!("lowpass=f={:.0}", 1000.0 + intensity * 10000.0),
+            "highpass" => format!("highpass=f={:.0}", intensity * 1000.0),
+            _ => filter.to_string(),
         })
         .collect();
-    
+
     filter_strings.join(",")
 }
 
@@ -364,7 +382,10 @@ pub fn get_file_extension(path: &str) -> Option<String> {
 /// Check if file is a supported video format
 pub fn is_supported_video_format(path: &str) -> bool {
     match get_file_extension(path) {
-        Some(ext) => matches!(ext.as_str(), "mp4" | "avi" | "mov" | "mkv" | "webm" | "flv" | "wmv" | "m4v" | "3gp" | "ogv"),
+        Some(ext) => matches!(
+            ext.as_str(),
+            "mp4" | "avi" | "mov" | "mkv" | "webm" | "flv" | "wmv" | "m4v" | "3gp" | "ogv"
+        ),
         None => false,
     }
 }
@@ -372,7 +393,10 @@ pub fn is_supported_video_format(path: &str) -> bool {
 /// Check if file is a supported audio format
 pub fn is_supported_audio_format(path: &str) -> bool {
     match get_file_extension(path) {
-        Some(ext) => matches!(ext.as_str(), "mp3" | "wav" | "aac" | "ogg" | "flac" | "m4a" | "wma" | "opus"),
+        Some(ext) => matches!(
+            ext.as_str(),
+            "mp3" | "wav" | "aac" | "ogg" | "flac" | "m4a" | "wma" | "opus"
+        ),
         None => false,
     }
 }
@@ -380,13 +404,19 @@ pub fn is_supported_audio_format(path: &str) -> bool {
 /// Create a temporary file path for intermediate processing
 pub fn create_temp_file(prefix: &str, extension: &str) -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
-    
+
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_millis();
-    
-    format!("/tmp/{}_{}_{}.{}", prefix, std::process::id(), timestamp, extension)
+
+    format!(
+        "/tmp/{}_{}_{}.{}",
+        prefix,
+        std::process::id(),
+        timestamp,
+        extension
+    )
 }
 
 /// Clean up temporary files
@@ -402,21 +432,32 @@ pub fn cleanup_temp_files(files: &[String]) {
 /// Gemini's `thumbnail_sec` field in the viral moment analysis.
 ///
 /// Returns the path to the extracted frame image (JPEG).
-pub fn extract_frame_at_timestamp(video_path: &str, timestamp_sec: f64, output_path: &str) -> Result<String, String> {
+pub fn extract_frame_at_timestamp(
+    video_path: &str,
+    timestamp_sec: f64,
+    output_path: &str,
+) -> Result<String, String> {
     let timestamp_str = format!("{:.3}", timestamp_sec);
     let mut command = Command::new("ffmpeg");
     command
-        .arg("-ss").arg(&timestamp_str)
-        .arg("-i").arg(video_path)
-        .arg("-vframes").arg("1")
-        .arg("-q:v").arg("2")  // High quality JPEG
+        .arg("-ss")
+        .arg(&timestamp_str)
+        .arg("-i")
+        .arg(video_path)
+        .arg("-vframes")
+        .arg("1")
+        .arg("-q:v")
+        .arg("2") // High quality JPEG
         .arg("-y")
         .arg(output_path);
 
     execute_ffmpeg_command(command)?;
 
     if !std::path::Path::new(output_path).exists() {
-        return Err(format!("Frame extraction failed: output file not found at {}", output_path));
+        return Err(format!(
+            "Frame extraction failed: output file not found at {}",
+            output_path
+        ));
     }
 
     Ok(output_path.to_string())
@@ -435,31 +476,46 @@ pub fn seconds_to_ffmpeg_time(seconds: f64) -> String {
 pub fn get_media_info(file_path: &str, info_type: &str) -> Result<String, String> {
     let args = match info_type {
         "duration" => vec![
-            "-v", "quiet",
-            "-show_entries", "format=duration",
-            "-of", "csv=p=0",
-            file_path
+            "-v",
+            "quiet",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "csv=p=0",
+            file_path,
         ],
         "width" => vec![
-            "-v", "quiet",
-            "-select_streams", "v:0",
-            "-show_entries", "stream=width",
-            "-of", "csv=p=0",
-            file_path
+            "-v",
+            "quiet",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=width",
+            "-of",
+            "csv=p=0",
+            file_path,
         ],
         "height" => vec![
-            "-v", "quiet",
-            "-select_streams", "v:0",
-            "-show_entries", "stream=height",
-            "-of", "csv=p=0",
-            file_path
+            "-v",
+            "quiet",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=height",
+            "-of",
+            "csv=p=0",
+            file_path,
         ],
         "fps" => vec![
-            "-v", "quiet",
-            "-select_streams", "v:0",
-            "-show_entries", "stream=r_frame_rate",
-            "-of", "csv=p=0",
-            file_path
+            "-v",
+            "quiet",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=r_frame_rate",
+            "-of",
+            "csv=p=0",
+            file_path,
         ],
         _ => return Err("Unknown info type".to_string()),
     };
@@ -496,7 +552,10 @@ pub fn execute_ffmpeg_complex_filter(
 /// Build FFmpeg resize filter with aspect ratio handling
 pub fn build_resize_filter(width: u32, height: u32, maintain_aspect: bool) -> String {
     if maintain_aspect {
-        format!("scale={}:{}:force_original_aspect_ratio=decrease", width, height)
+        format!(
+            "scale={}:{}:force_original_aspect_ratio=decrease",
+            width, height
+        )
     } else {
         format!("scale={}:{}", width, height)
     }
@@ -510,7 +569,10 @@ pub fn build_crop_filter(x: u32, y: u32, width: u32, height: u32) -> String {
 /// Build FFmpeg overlay filter for picture-in-picture
 pub fn build_overlay_filter(x: u32, y: u32, opacity: f64) -> String {
     if opacity < 1.0 {
-        format!("overlay={}:{}:format=auto,colorchannelmixer=aa={:.2}", x, y, opacity)
+        format!(
+            "overlay={}:{}:format=auto,colorchannelmixer=aa={:.2}",
+            x, y, opacity
+        )
     } else {
         format!("overlay={}:{}", x, y)
     }
@@ -529,7 +591,10 @@ pub fn create_blank_video(
         .arg("-f")
         .arg("lavfi")
         .arg("-i")
-        .arg(format!("color=c={}:s={}x{}:d={}", color, width, height, duration))
+        .arg(format!(
+            "color=c={}:s={}x{}:d={}",
+            color, width, height, duration
+        ))
         .arg("-c:v")
         .arg("libx264")
         .arg("-y")

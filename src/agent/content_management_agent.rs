@@ -9,20 +9,19 @@
 // Architecture mirrors GeminiClippingAgent (see clipping_agent.rs) but uses
 // FunctionCallingMode::Auto so Gemini can ask clarifying questions.
 
+use crate::gemini_client::{FunctionDeclaration, Parameters, PropertyDefinition};
+use crate::agent::simple_gemini_agent::{GeminiToolExecutor, SimpleGeminiAgent};
 use crate::AppState;
-use crate::gemini_client::{
-    Content, FunctionCallingConfig, FunctionCallingMode, FunctionDeclaration, GenerateContentRequest,
-    GenerationConfig, Parameters, Part, PropertyDefinition, Tool, ToolConfig,
-};
 use chrono::Utc;
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::pin::Pin;
 use std::sync::Arc;
 
-const MAX_ITERATIONS: usize = 10;
 const CONFIRMATION_POLL_INTERVAL_MS: u64 = 2_000;
 const CONFIRMATION_TIMEOUT_SECS: i64 = 300; // 5 minutes
 
+#[derive(Clone)]
 pub struct ContentManagementAgent {
     app_state: Arc<AppState>,
 }
@@ -86,146 +85,43 @@ impl ContentManagementAgent {
             .app_state
             .video_gemini_client
             .as_ref()
-            .or(self.app_state.gemini_client.as_ref())
+            .cloned()
+            .or(self.app_state.gemini_client.as_ref().cloned())
             .ok_or("Gemini client not configured")?;
 
-        let tools = vec![Tool {
-            function_declarations: self.build_tool_declarations(),
-        }];
+        let system_instruction = "You are a YouTube content management assistant. You help users manage published YouTube Shorts clips using the same canonical VideoSync Gemini agent runtime as the rest of the system. You can fetch published clips, inspect metadata, update metadata, delete videos with human confirmation, and repost clips. Always call get_published_clips first to understand what exists before making changes. Before ANY destructive action, you MUST call request_confirmation and wait for a granted response. When you are finished, respond with a concise plain-language summary of exactly what you changed or what blocked the action.";
 
-        let system_instruction = Content {
-            parts: vec![Part::Text {
-                text: "You are a YouTube content management assistant. You help users manage \
-                       their published YouTube Shorts clips. You can fetch published clips, \
-                       update video metadata, delete videos (always confirm first), and repost \
-                       clips. Before ANY destructive action (delete, repost over existing video) \
-                       you MUST call request_confirmation. Always call get_published_clips first \
-                       to understand what exists before making changes."
-                    .to_string(),
-            }],
-            role: Some("user".to_string()),
-        };
-
-        let mut history: Vec<Content> = vec![Content {
-            parts: vec![Part::Text {
-                text: instruction.to_string(),
-            }],
-            role: Some("user".to_string()),
-        }];
-
-        let mut iteration = 0;
-
-        while iteration < MAX_ITERATIONS {
-            iteration += 1;
-
-            let request = GenerateContentRequest {
-                contents: history.clone(),
-                tools: Some(tools.clone()),
-                generation_config: Some(GenerationConfig {
-                    temperature: 0.3,
-                    top_k: 40,
-                    top_p: 0.95,
-                    max_output_tokens: 4096,
-                }),
-                tool_config: Some(ToolConfig {
-                    function_calling_config: FunctionCallingConfig {
-                        mode: FunctionCallingMode::Auto,
-                    },
-                }),
-                system_instruction: Some(system_instruction.clone()),
-            };
-
-            let response = gemini
-                .generate_content(request)
-                .await
-                .map_err(|e| format!("Gemini call failed: {}", e))?;
-
-            let candidate = response
-                .candidates
-                .into_iter()
-                .next()
-                .ok_or("No candidate from Gemini")?;
-
-            let content = candidate.content.ok_or("Candidate has no content")?;
-
-            // Add model response to history
-            history.push(content.clone());
-
-            // Check finish reason
-            if let Some(ref finish) = candidate.finish_reason {
-                if finish == "STOP" {
-                    // Check if it's a text response (natural language answer)
-                    let has_text = content.parts.iter().any(|p| matches!(p, Part::Text { .. }));
-                    let has_fn_call = content
-                        .parts
-                        .iter()
-                        .any(|p| matches!(p, Part::FunctionCall { .. }));
-
-                    if has_text && !has_fn_call {
-                        // Natural language conclusion
-                        let summary = content
-                            .parts
-                            .iter()
-                            .filter_map(|p| {
-                                if let Part::Text { text } = p {
-                                    Some(text.clone())
-                                } else {
-                                    None
-                                }
-                            })
-                            .collect::<Vec<_>>()
-                            .join("\n");
-                        return Ok(summary);
-                    }
+        let domain_agent = self.clone();
+        let tool_executor: GeminiToolExecutor = Arc::new(move |name, args, _ctx| {
+            let domain_agent = domain_agent.clone();
+            let name = name.to_string();
+            let args = args.clone();
+            Box::pin(async move {
+                match domain_agent
+                    .dispatch_tool(&name, &args, session_id, destination_channel_id)
+                    .await
+                {
+                    Ok(value) => value,
+                    Err(error) => json!({ "error": error }),
                 }
-            }
+            }) as Pin<Box<dyn std::future::Future<Output = Value> + Send>>
+        });
 
-            // Process function calls
-            let mut fn_responses: Vec<Part> = vec![];
-            for part in &content.parts {
-                if let Part::FunctionCall { function_call } = part {
-                    let result = self
-                        .dispatch_tool(
-                            &function_call.name,
-                            &function_call.args,
-                            session_id,
-                            destination_channel_id,
-                        )
-                        .await;
-
-                    let response_value: Value = match result {
-                        Ok(v) => v,
-                        Err(e) => json!({"error": e}),
-                    };
-
-                    let mut response_map = HashMap::new();
-                    response_map.insert("result".to_string(), response_value);
-
-                    fn_responses.push(Part::FunctionResponse {
-                        function_response: crate::gemini_client::FunctionResponse {
-                            name: function_call.name.clone(),
-                            response: response_map,
-                            thought_signature: None,
-                        },
-                    });
-                }
-            }
-
-            if fn_responses.is_empty() {
-                // No function calls — Gemini is done
-                break;
-            }
-
-            history.push(Content {
-                parts: fn_responses,
-                role: Some("tool".to_string()),
-            });
-        }
-
-        Ok(format!(
-            "Content management session {} completed after {} iterations",
-            session_id, iteration
-        ))
+        let runtime = SimpleGeminiAgent::new(Arc::new(gemini));
+        runtime
+            .execute_with_custom_tools(
+                instruction,
+                &format!("content-management:{session_id}"),
+                None,
+                self.app_state.clone(),
+                None,
+                system_instruction,
+                self.build_tool_declarations(),
+                None,
+                tool_executor,
+                None,
+            )
+            .await
     }
 
     fn build_tool_declarations(&self) -> Vec<FunctionDeclaration> {
@@ -243,7 +139,8 @@ impl ContentManagementAgent {
                             "limit".to_string(),
                             PropertyDefinition {
                                 prop_type: "integer".to_string(),
-                                description: "Max number of clips to return (default 20)".to_string(),
+                                description: "Max number of clips to return (default 20)"
+                                    .to_string(),
                                 items: None,
                             },
                         );
@@ -251,7 +148,8 @@ impl ContentManagementAgent {
                             "status_filter".to_string(),
                             PropertyDefinition {
                                 prop_type: "string".to_string(),
-                                description: "Filter by upload_status, e.g. 'published'".to_string(),
+                                description: "Filter by upload_status, e.g. 'published'"
+                                    .to_string(),
                                 items: None,
                             },
                         );
@@ -329,9 +227,10 @@ impl ContentManagementAgent {
             },
             FunctionDeclaration {
                 name: "delete_video".to_string(),
-                description: "Delete a YouTube video. Sets it to private first, then hard-deletes. \
+                description:
+                    "Delete a YouTube video. Sets it to private first, then hard-deletes. \
                               REQUIRES confirmed=true (call request_confirmation first)."
-                    .to_string(),
+                        .to_string(),
                 parameters: Parameters {
                     param_type: "object".to_string(),
                     properties: {
@@ -364,7 +263,8 @@ impl ContentManagementAgent {
                             "confirmed".to_string(),
                             PropertyDefinition {
                                 prop_type: "boolean".to_string(),
-                                description: "Must be true — obtained via request_confirmation".to_string(),
+                                description: "Must be true — obtained via request_confirmation"
+                                    .to_string(),
                                 items: None,
                             },
                         );
@@ -407,7 +307,8 @@ impl ContentManagementAgent {
                             "new_description".to_string(),
                             PropertyDefinition {
                                 prop_type: "string".to_string(),
-                                description: "New description for the repost (optional)".to_string(),
+                                description: "New description for the repost (optional)"
+                                    .to_string(),
                                 items: None,
                             },
                         );
@@ -415,7 +316,8 @@ impl ContentManagementAgent {
                             "confirmed".to_string(),
                             PropertyDefinition {
                                 prop_type: "boolean".to_string(),
-                                description: "Must be true — obtained via request_confirmation".to_string(),
+                                description: "Must be true — obtained via request_confirmation"
+                                    .to_string(),
                                 items: None,
                             },
                         );
@@ -438,7 +340,8 @@ impl ContentManagementAgent {
                             "action_summary".to_string(),
                             PropertyDefinition {
                                 prop_type: "string".to_string(),
-                                description: "Human-readable summary of the action to confirm".to_string(),
+                                description: "Human-readable summary of the action to confirm"
+                                    .to_string(),
                                 items: None,
                             },
                         );
@@ -470,17 +373,11 @@ impl ContentManagementAgent {
                 self.tool_get_published_clips(args, destination_channel_id)
                     .await
             }
-            "get_youtube_video_metadata" => {
-                self.tool_get_youtube_video_metadata(args).await
-            }
-            "update_video_metadata" => {
-                self.tool_update_video_metadata(args, session_id).await
-            }
+            "get_youtube_video_metadata" => self.tool_get_youtube_video_metadata(args).await,
+            "update_video_metadata" => self.tool_update_video_metadata(args, session_id).await,
             "delete_video" => self.tool_delete_video(args, session_id).await,
             "repost_clip" => self.tool_repost_clip(args, session_id).await,
-            "request_confirmation" => {
-                self.tool_request_confirmation(args, session_id).await
-            }
+            "request_confirmation" => self.tool_request_confirmation(args, session_id).await,
             _ => Err(format!("Unknown tool: {}", name)),
         }
     }
@@ -492,10 +389,7 @@ impl ContentManagementAgent {
         args: &HashMap<String, Value>,
         destination_channel_id: i32,
     ) -> Result<Value, String> {
-        let limit = args
-            .get("limit")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(20) as i32;
+        let limit = args.get("limit").and_then(|v| v.as_i64()).unwrap_or(20) as i32;
 
         let status_filter = args
             .get("status_filter")
@@ -820,13 +714,19 @@ impl ContentManagementAgent {
             ai_confidence_score: 1.0,
             viral_factors: vec![],
             custom_thumbnail_path: custom_thumbnail_path.clone(),
-            thumbnail_generation_method: custom_thumbnail_path.as_ref().map(|_| "manual".to_string()),
+            thumbnail_generation_method: custom_thumbnail_path
+                .as_ref()
+                .map(|_| "manual".to_string()),
             enhancement_applied: false,
             enhancement_tools: Vec::new(),
             enhancement_reasoning: None,
             r2_clip_key: None,
             r2_thumb_key: None,
             r2_clip_url: None,
+            qa_status: None,
+            qa_score: None,
+            qa_feedback: None,
+            qa_retry_hint: None,
         };
 
         match uploader

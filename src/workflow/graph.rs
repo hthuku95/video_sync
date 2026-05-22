@@ -1,10 +1,10 @@
 #![allow(dead_code, unused_imports)]
 // StateGraph - Node and edge management (LangGraph-inspired)
-use super::state::{WorkflowState, StateUpdate};
-use std::collections::HashMap;
-use std::sync::Arc;
+use super::state::{StateUpdate, WorkflowState};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Node function type - async function that processes state
 #[async_trait]
@@ -38,7 +38,7 @@ pub enum NodeType {
 #[derive(Clone)]
 pub enum EdgeType {
     /// Fixed edge (always follows this path)
-    Fixed(String),  // target node
+    Fixed(String), // target node
     /// Conditional edge (router function decides)
     Conditional(RouterFunction),
     /// Parallel edges (fork to multiple nodes)
@@ -126,11 +126,7 @@ impl StateGraph {
     }
 
     /// Add conditional edge with router
-    pub fn add_conditional_edge(
-        &mut self,
-        from: String,
-        router: RouterFunction,
-    ) -> &mut Self {
+    pub fn add_conditional_edge(&mut self, from: String, router: RouterFunction) -> &mut Self {
         if self.compiled {
             panic!("Cannot modify compiled graph");
         }
@@ -199,8 +195,11 @@ impl StateGraph {
         }
 
         self.compiled = true;
-        tracing::info!("✅ StateGraph compiled successfully: {} nodes, {} edges",
-            self.nodes.len(), self.edges.len());
+        tracing::info!(
+            "✅ StateGraph compiled successfully: {} nodes, {} edges",
+            self.nodes.len(),
+            self.edges.len()
+        );
 
         Ok(())
     }
@@ -317,12 +316,8 @@ impl StateGraphBuilder {
         function: Arc<dyn NodeFunction>,
         description: &str,
     ) -> Self {
-        self.graph.add_node(
-            id.to_string(),
-            node_type,
-            function,
-            description.to_string(),
-        );
+        self.graph
+            .add_node(id.to_string(), node_type, function, description.to_string());
         self
     }
 

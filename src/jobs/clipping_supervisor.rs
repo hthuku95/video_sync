@@ -1,6 +1,8 @@
 use crate::clipping::gemini_video_analyzer::VideoAnalysis;
 use crate::clipping::models::{ChannelLinkage, ClippingJob};
-use crate::jobs::clipping_job::handle_download_failure_fallback;
+use crate::jobs::clipping_job::{
+    handle_download_failure_fallback, infer_clipping_resume_from_nodes,
+};
 use crate::services::{WorkflowRuntime, WorkflowStatus};
 use crate::AppState;
 use serde_json::json;
@@ -42,18 +44,91 @@ pub async fn run_clipping_supervisor_once(app_state: &Arc<AppState>) -> Result<(
     let quota_waits = annotate_quota_pressure(app_state).await?;
     let pending_waits = annotate_long_pending_jobs(app_state).await?;
     let fallback_escalations = escalate_download_failure_fallbacks(app_state).await?;
+    let node_recoveries = recover_stale_node_backed_jobs(app_state).await?;
+    let diagnostics = diagnose_problem_jobs(app_state).await?;
+    let upload_recoveries = requeue_completed_unpublished_clip_jobs(app_state).await?;
 
-    if duplicate_actions > 0 || quota_waits > 0 || pending_waits > 0 || fallback_escalations > 0 {
+    if duplicate_actions > 0
+        || quota_waits > 0
+        || pending_waits > 0
+        || fallback_escalations > 0
+        || node_recoveries > 0
+        || diagnostics > 0
+        || upload_recoveries > 0
+    {
         tracing::info!(
-            "🧠 Clipping supervisor remediations: {} duplicate actions, {} quota waits, {} pending annotations, {} fallback escalations",
+            "🧠 Clipping supervisor remediations: {} duplicate actions, {} quota waits, {} pending annotations, {} fallback escalations, {} node recoveries, {} diagnostics",
             duplicate_actions,
             quota_waits,
             pending_waits,
-            fallback_escalations
+            fallback_escalations,
+            node_recoveries,
+            diagnostics
+        );
+    }
+    if upload_recoveries > 0 {
+        tracing::info!(
+            "Clipping supervisor requeued {} completed job(s) with unpublished clips for upload-only recovery.",
+            upload_recoveries
         );
     }
 
     Ok(())
+}
+
+async fn requeue_completed_unpublished_clip_jobs(app_state: &Arc<AppState>) -> Result<usize, String> {
+    let reason = "Supervisor found a completed job with unpublished extracted clips; requeued upload-only Phase E so YouTube posting can recover without re-downloading or re-extracting.";
+    let job_ids: Vec<i32> = sqlx::query_scalar(
+        "UPDATE clipping_jobs cj
+         SET status = 'pending',
+             resume_from = 'clips_extracted',
+             current_step = 'queued_for_upload_recovery',
+             progress_percent = 90,
+             error_message = NULL,
+             completed_at = NULL,
+             claimed_by = NULL,
+             claimed_at = NULL,
+             worker_heartbeat_at = NULL,
+             supervisor_status = 'upload_recovery_requeued',
+             supervisor_reason = $1,
+             supervisor_last_action = 'requeued_completed_unpublished_clips',
+             supervisor_last_run_at = NOW(),
+             blocked_by_job_id = NULL,
+             updated_at = NOW(),
+             retry_count = COALESCE(retry_count, 0) + 1
+         WHERE cj.status = 'completed'
+           AND cj.fallback_delivery_id IS NULL
+           AND COALESCE(cj.supervisor_status, '') = 'completed_with_unpublished_clips'
+           AND COALESCE(cj.retry_count, 0) < 5
+           AND EXISTS (
+               SELECT 1
+               FROM extracted_clips ec
+               WHERE ec.clipping_job_id = cj.id
+                 AND COALESCE(ec.upload_status, '') <> 'published'
+           )
+         RETURNING cj.id",
+    )
+    .bind(reason)
+    .fetch_all(&app_state.db_pool)
+    .await
+    .map_err(|e| format!("Failed to requeue completed jobs with unpublished clips: {}", e))?;
+
+    for job_id in &job_ids {
+        record_supervisor_event(
+            app_state,
+            *job_id,
+            "upload_recovery_requeued",
+            reason,
+            json!({
+                "resume_from": "clips_extracted",
+                "target_phase": "post_to_youtube",
+                "recovery": "completed_job_unpublished_clips",
+            }),
+        )
+        .await?;
+    }
+
+    Ok(job_ids.len())
 }
 
 async fn suppress_duplicate_active_jobs(app_state: &Arc<AppState>) -> Result<usize, String> {
@@ -382,6 +457,273 @@ async fn escalate_download_failure_fallbacks(app_state: &Arc<AppState>) -> Resul
     }
 
     Ok(escalated)
+}
+
+async fn recover_stale_node_backed_jobs(app_state: &Arc<AppState>) -> Result<usize, String> {
+    let stale_jobs: Vec<(i32, uuid::Uuid, String, String)> = sqlx::query_as(
+        "SELECT cj.id,
+                cj.workflow_id,
+                cj.status,
+                awn.node_key
+         FROM clipping_jobs cj
+         JOIN app_workflow_nodes awn ON awn.workflow_id = cj.workflow_id
+         WHERE cj.workflow_id IS NOT NULL
+           AND cj.status = ANY($1)
+           AND awn.status = 'running'
+           AND COALESCE(awn.last_heartbeat_at, awn.started_at, awn.updated_at) < NOW() - INTERVAL '15 minutes'
+         ORDER BY COALESCE(awn.last_heartbeat_at, awn.started_at, awn.updated_at) ASC
+         LIMIT 10",
+    )
+    .bind(ACTIVE_CLIPPING_JOB_STATUSES)
+    .fetch_all(&app_state.db_pool)
+    .await
+    .map_err(|e| format!("Failed to fetch stale node-backed clipping jobs: {}", e))?;
+
+    if stale_jobs.is_empty() {
+        return Ok(0);
+    }
+
+    let workflow_runtime = WorkflowRuntime::new(app_state.db_pool.clone());
+    let mut recovered = 0usize;
+
+    for (job_id, workflow_id, job_status, node_key) in stale_jobs {
+        let resume_from = infer_clipping_resume_from_nodes(&app_state.db_pool, Some(workflow_id))
+            .await?
+            .or_else(|| {
+                crate::jobs::JobPhase::from_step(&job_status)
+                    .resume_from()
+                    .map(str::to_string)
+            })
+            .unwrap_or_else(|| "analyzed".to_string());
+
+        let reason = format!(
+            "Supervisor detected stale node '{}' for more than 15 minutes and requeued the job to resume from '{}'.",
+            node_key, resume_from
+        );
+
+        let result = sqlx::query(
+            "UPDATE clipping_jobs
+             SET status = 'pending',
+                 resume_from = $1,
+                 error_message = $2,
+                 progress_percent = 0,
+                 current_step = 'queued_after_node_recovery',
+                 completed_at = NULL,
+                 claimed_by = NULL,
+                 claimed_at = NULL,
+                 worker_heartbeat_at = NULL,
+                 supervisor_status = 'node_recovery_requeued',
+                 supervisor_reason = $2,
+                 supervisor_last_action = 'node_backed_recovery_requeued',
+                 supervisor_last_run_at = NOW(),
+                 blocked_by_job_id = NULL,
+                 updated_at = NOW(),
+                 retry_count = COALESCE(retry_count, 0) + 1,
+                 last_retry_at = NOW()
+             WHERE id = $3
+               AND status = ANY($4)",
+        )
+        .bind(&resume_from)
+        .bind(&reason)
+        .bind(job_id)
+        .bind(ACTIVE_CLIPPING_JOB_STATUSES)
+        .execute(&app_state.db_pool)
+        .await
+        .map_err(|e| format!("Failed to requeue stale node-backed job {}: {}", job_id, e))?;
+
+        if result.rows_affected() == 0 {
+            continue;
+        }
+
+        let _ = workflow_runtime
+            .mark_retrying(workflow_id, Some("node_recovery"), 1, &reason)
+            .await;
+        let _ = workflow_runtime
+            .fail_node(
+                workflow_id,
+                &node_key,
+                "Node heartbeat became stale; supervisor requeued the clipping job.",
+                json!({
+                    "job_id": job_id,
+                    "resume_from": resume_from,
+                    "recovery": "node_backed_recovery_requeued"
+                }),
+            )
+            .await;
+
+        record_supervisor_event(
+            app_state,
+            job_id,
+            "node_backed_recovery_requeued",
+            &reason,
+            json!({
+                "workflow_id": workflow_id,
+                "node_key": node_key,
+                "resume_from": resume_from,
+                "status_before": job_status,
+            }),
+        )
+        .await?;
+
+        recovered += 1;
+    }
+
+    Ok(recovered)
+}
+
+async fn diagnose_problem_jobs(app_state: &Arc<AppState>) -> Result<usize, String> {
+    let mut diagnosed = 0usize;
+
+    let stuck_active = sqlx::query(
+        "UPDATE clipping_jobs
+         SET supervisor_status = 'stuck_active_job',
+             supervisor_reason = CASE
+                 WHEN worker_heartbeat_at IS NULL THEN 'Job is active but has no worker heartbeat; supervisor will requeue if the durable node heartbeat also becomes stale.'
+                 ELSE 'Job is active but worker heartbeat is stale; supervisor will requeue if the durable node heartbeat also becomes stale.'
+             END,
+             supervisor_last_action = 'diagnosed_stuck_active_job',
+             supervisor_last_run_at = NOW(),
+             updated_at = NOW()
+         WHERE status IN ('downloading', 'analyzing', 'extracting_clips', 'posting')
+           AND COALESCE(supervisor_status, 'healthy') NOT IN ('node_recovery_requeued', 'duplicate_active_job')
+           AND COALESCE(worker_heartbeat_at, updated_at) < NOW() - INTERVAL '20 minutes'",
+    )
+    .execute(&app_state.db_pool)
+    .await
+    .map_err(|e| format!("Failed to diagnose stuck active clipping jobs: {}", e))?;
+    diagnosed += stuck_active.rows_affected() as usize;
+
+    let completed_without_output = sqlx::query(
+        "UPDATE clipping_jobs cj
+         SET supervisor_status = 'completed_without_output',
+             supervisor_reason = 'Job is marked completed but has neither extracted clips nor a generated fallback delivery attached.',
+             supervisor_last_action = 'diagnosed_completed_without_output',
+             supervisor_last_run_at = NOW(),
+             updated_at = NOW()
+         WHERE cj.status = 'completed'
+           AND cj.fallback_delivery_id IS NULL
+           AND NOT EXISTS (
+               SELECT 1 FROM extracted_clips ec WHERE ec.clipping_job_id = cj.id
+           )",
+    )
+    .execute(&app_state.db_pool)
+    .await
+    .map_err(|e| format!("Failed to diagnose completed jobs without output: {}", e))?;
+    diagnosed += completed_without_output.rows_affected() as usize;
+
+    let completed_with_unpublished_clips = sqlx::query(
+        "UPDATE clipping_jobs cj
+         SET supervisor_status = 'completed_with_unpublished_clips',
+             supervisor_reason = 'Job is completed but at least one extracted clip has not been published to YouTube; upload recovery should requeue Phase E.',
+             supervisor_last_action = 'diagnosed_completed_with_unpublished_clips',
+             supervisor_last_run_at = NOW(),
+             updated_at = NOW()
+         WHERE cj.status = 'completed'
+           AND cj.fallback_delivery_id IS NULL
+           AND EXISTS (
+               SELECT 1
+               FROM extracted_clips ec
+               WHERE ec.clipping_job_id = cj.id
+                 AND COALESCE(ec.upload_status, '') <> 'published'
+           )",
+    )
+    .execute(&app_state.db_pool)
+    .await
+    .map_err(|e| format!("Failed to diagnose completed jobs with unpublished clips: {}", e))?;
+    diagnosed += completed_with_unpublished_clips.rows_affected() as usize;
+
+    let failed_jobs: Vec<(i32, Option<String>)> = sqlx::query_as(
+        "SELECT id, error_message
+         FROM clipping_jobs
+         WHERE status = 'failed'
+           AND completed_at > NOW() - INTERVAL '7 days'
+           AND COALESCE(supervisor_last_action, '') NOT LIKE 'diagnosed_failed_%'
+         ORDER BY completed_at DESC
+         LIMIT 50",
+    )
+    .fetch_all(&app_state.db_pool)
+    .await
+    .map_err(|e| format!("Failed to fetch failed jobs for diagnosis: {}", e))?;
+
+    for (job_id, error_message) in failed_jobs {
+        let (diagnosis, action) = classify_clipping_failure(error_message.as_deref());
+        let result = sqlx::query(
+            "UPDATE clipping_jobs
+             SET supervisor_status = $1,
+                 supervisor_reason = $2,
+                 supervisor_last_action = $3,
+                 supervisor_last_run_at = NOW(),
+                 updated_at = NOW()
+             WHERE id = $4
+               AND status = 'failed'",
+        )
+        .bind(diagnosis)
+        .bind(action)
+        .bind(format!("diagnosed_failed_{diagnosis}"))
+        .bind(job_id)
+        .execute(&app_state.db_pool)
+        .await
+        .map_err(|e| format!("Failed to store failure diagnosis for job {}: {}", job_id, e))?;
+
+        if result.rows_affected() > 0 {
+            record_supervisor_event(
+                app_state,
+                job_id,
+                "failure_diagnosed",
+                action,
+                json!({
+                    "diagnosis": diagnosis,
+                    "error_message": error_message,
+                }),
+            )
+            .await?;
+            diagnosed += 1;
+        }
+    }
+
+    Ok(diagnosed)
+}
+
+fn classify_clipping_failure(error_message: Option<&str>) -> (&'static str, &'static str) {
+    let lower = error_message.unwrap_or("").to_ascii_lowercase();
+    if lower.contains("resource_exhausted")
+        || lower.contains("429")
+        || lower.contains("too many requests")
+        || lower.contains("quota")
+    {
+        (
+            "quota_blocked",
+            "Gemini/provider quota pressure detected; retry should wait for quota window or use configured fallback model.",
+        )
+    } else if lower.contains("download")
+        || lower.contains("youtube")
+        || lower.contains("twitch")
+        || lower.contains("hls")
+    {
+        (
+            "download_path_failed",
+            "Source download path failed; supervisor should try Twitch mapping if available, then generated fallback summary delivery.",
+        )
+    } else if lower.contains("upload")
+        || lower.contains("youtube_video")
+        || lower.contains("reauth")
+        || lower.contains("token")
+    {
+        (
+            "youtube_upload_blocked",
+            "YouTube upload appears blocked; check destination channel auth and requeue Phase E after auth is healthy.",
+        )
+    } else if lower.contains("timeout") || lower.contains("timed out") {
+        (
+            "external_timeout",
+            "An external call timed out; durable node retry should resume from the last completed node instead of restarting the whole job.",
+        )
+    } else {
+        (
+            "unknown_failure",
+            "Failure needs inspection; durable node state and supervisor events should be checked before retry.",
+        )
+    }
 }
 
 async fn record_supervisor_event(

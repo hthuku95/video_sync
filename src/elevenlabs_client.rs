@@ -117,7 +117,8 @@ impl ElevenLabsClient {
             voice_settings,
         };
 
-        let mut request = self.client
+        let mut request = self
+            .client
             .post(&url)
             .header("xi-api-key", &self.api_key)
             .header("Content-Type", "application/json")
@@ -132,7 +133,10 @@ impl ElevenLabsClient {
 
         if !response.status().is_success() {
             let status = response.status();
-            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
             return Err(format!("Eleven Labs TTS API error ({}): {}", status, error_text).into());
         }
 
@@ -156,7 +160,8 @@ impl ElevenLabsClient {
             model_id: Some("eleven_text_to_sound_v2".to_string()),
         };
 
-        let response = self.client
+        let response = self
+            .client
             .post(&url)
             .header("xi-api-key", &self.api_key)
             .header("Content-Type", "application/json")
@@ -166,8 +171,15 @@ impl ElevenLabsClient {
 
         if !response.status().is_success() {
             let status = response.status();
-            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(format!("Eleven Labs Sound Effects API error ({}): {}", status, error_text).into());
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            return Err(format!(
+                "Eleven Labs Sound Effects API error ({}): {}",
+                status, error_text
+            )
+            .into());
         }
 
         let audio_bytes = response.bytes().await?;
@@ -188,7 +200,8 @@ impl ElevenLabsClient {
             model_id: Some("eleven_music_v1".to_string()),
         };
 
-        let response = self.client
+        let response = self
+            .client
             .post(&url)
             .header("xi-api-key", &self.api_key)
             .header("Content-Type", "application/json")
@@ -198,7 +211,10 @@ impl ElevenLabsClient {
 
         if !response.status().is_success() {
             let status = response.status();
-            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
             return Err(format!("Eleven Labs Music API error ({}): {}", status, error_text).into());
         }
 
@@ -213,7 +229,8 @@ impl ElevenLabsClient {
     ) -> Result<MusicStatusResponse, Box<dyn std::error::Error + Send + Sync>> {
         let url = format!("{}/music-generation/{}", self.base_url, generation_id);
 
-        let response = self.client
+        let response = self
+            .client
             .get(&url)
             .header("xi-api-key", &self.api_key)
             .send()
@@ -221,8 +238,15 @@ impl ElevenLabsClient {
 
         if !response.status().is_success() {
             let status = response.status();
-            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(format!("Eleven Labs Music Status API error ({}): {}", status, error_text).into());
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            return Err(format!(
+                "Eleven Labs Music Status API error ({}): {}",
+                status, error_text
+            )
+            .into());
         }
 
         let status_data: MusicStatusResponse = response.json().await?;
@@ -234,10 +258,7 @@ impl ElevenLabsClient {
         &self,
         audio_url: &str,
     ) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
-        let response = self.client
-            .get(audio_url)
-            .send()
-            .await?;
+        let response = self.client.get(audio_url).send().await?;
 
         if !response.status().is_success() {
             return Err("Failed to download music audio".into());
@@ -248,10 +269,13 @@ impl ElevenLabsClient {
     }
 
     /// List all available voices
-    pub async fn list_voices(&self) -> Result<Vec<Voice>, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn list_voices(
+        &self,
+    ) -> Result<Vec<Voice>, Box<dyn std::error::Error + Send + Sync>> {
         let url = format!("{}/voices", self.base_url);
 
-        let response = self.client
+        let response = self
+            .client
             .get(&url)
             .header("xi-api-key", &self.api_key)
             .send()
@@ -259,8 +283,13 @@ impl ElevenLabsClient {
 
         if !response.status().is_success() {
             let status = response.status();
-            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(format!("Eleven Labs Voices API error ({}): {}", status, error_text).into());
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            return Err(
+                format!("Eleven Labs Voices API error ({}): {}", status, error_text).into(),
+            );
         }
 
         let voices_data: VoicesResponse = response.json().await?;
@@ -268,10 +297,14 @@ impl ElevenLabsClient {
     }
 
     /// Get a specific voice by ID
-    pub async fn get_voice(&self, voice_id: &str) -> Result<Voice, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn get_voice(
+        &self,
+        voice_id: &str,
+    ) -> Result<Voice, Box<dyn std::error::Error + Send + Sync>> {
         let url = format!("{}/voices/{}", self.base_url, voice_id);
 
-        let response = self.client
+        let response = self
+            .client
             .get(&url)
             .header("xi-api-key", &self.api_key)
             .send()
@@ -279,8 +312,15 @@ impl ElevenLabsClient {
 
         if !response.status().is_success() {
             let status = response.status();
-            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(format!("Eleven Labs Get Voice API error ({}): {}", status, error_text).into());
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            return Err(format!(
+                "Eleven Labs Get Voice API error ({}): {}",
+                status, error_text
+            )
+            .into());
         }
 
         let voice: Voice = response.json().await?;
@@ -316,29 +356,6 @@ impl DefaultVoices {
     pub const LIAM: &'static str = "TX3LPaxmHKxFdv7VOQHJ"; // Male, articulate
     pub const THOMAS: &'static str = "GBv7mTt0atIp3Br8iCZE"; // Male, calm
 
-    pub fn get_voice_name(voice_id: &str) -> &'static str {
-        match voice_id {
-            Self::RACHEL => "Rachel (Female, Young, Calm)",
-            Self::DOMI => "Domi (Female, Strong)",
-            Self::BELLA => "Bella (Female, Soft)",
-            Self::ELLI => "Elli (Female, Emotional)",
-            Self::EMILY => "Emily (Female, Calm)",
-            Self::GRACE => "Grace (Female, Young)",
-            Self::MATILDA => "Matilda (Female, Warm)",
-            Self::DREW => "Drew (Male, Middle-aged)",
-            Self::CLYDE => "Clyde (Male, War Veteran)",
-            Self::PAUL => "Paul (Male, Reporter)",
-            Self::ADAM => "Adam (Male, Deep)",
-            Self::ARNOLD => "Arnold (Male, Crisp)",
-            Self::CALLUM => "Callum (Male, Hoarse)",
-            Self::DANIEL => "Daniel (Male, Deep)",
-            Self::ETHAN => "Ethan (Male, Young)",
-            Self::LIAM => "Liam (Male, Articulate)",
-            Self::THOMAS => "Thomas (Male, Calm)",
-            _ => "Unknown Voice",
-        }
-    }
-
     pub fn get_voice_id_by_name(name: &str) -> Option<&'static str> {
         match name.to_lowercase().as_str() {
             "rachel" => Some(Self::RACHEL),
@@ -361,29 +378,4 @@ impl DefaultVoices {
             _ => None,
         }
     }
-
-    pub fn get_default_female_voice() -> &'static str {
-        Self::RACHEL
-    }
-
-    pub fn get_default_male_voice() -> &'static str {
-        Self::DREW
-    }
-
-    pub fn get_default_voice() -> &'static str {
-        Self::RACHEL
-    }
-}
-
-// ============================================================================
-// MODELS
-// ============================================================================
-
-pub struct ElevenLabsModels;
-
-impl ElevenLabsModels {
-    pub const FLASH_V2_5: &'static str = "eleven_flash_v2_5"; // 75ms latency - ultra-fast
-    pub const MULTILINGUAL_V2: &'static str = "eleven_multilingual_v2"; // Highest quality
-    pub const TURBO_V2_5: &'static str = "eleven_turbo_v2_5"; // Fast with good quality
-    pub const MONOLINGUAL_V1: &'static str = "eleven_monolingual_v1"; // English only
 }

@@ -6,13 +6,10 @@ use axum::{
     response::{IntoResponse, Json, Response},
 };
 
-pub async fn admin_middleware(
-    request: Request,
-    next: Next,
-) -> Result<Response, impl IntoResponse> {
+pub async fn admin_middleware(request: Request, next: Next) -> Result<Response, impl IntoResponse> {
     // Get the claims from request extensions (set by auth middleware)
     let claims = request.extensions().get::<Claims>();
-    
+
     match claims {
         Some(claims) => {
             if claims.is_superuser || claims.is_staff {
@@ -22,20 +19,19 @@ pub async fn admin_middleware(
                     StatusCode::FORBIDDEN,
                     Json(ErrorResponse {
                         success: false,
-                        message: "Admin access required. You must be staff or superuser.".to_string(),
+                        message: "Admin access required. You must be staff or superuser."
+                            .to_string(),
                     }),
                 ))
             }
         }
-        None => {
-            Err((
-                StatusCode::UNAUTHORIZED,
-                Json(ErrorResponse {
-                    success: false,
-                    message: "Authentication required for admin access.".to_string(),
-                }),
-            ))
-        }
+        None => Err((
+            StatusCode::UNAUTHORIZED,
+            Json(ErrorResponse {
+                success: false,
+                message: "Authentication required for admin access.".to_string(),
+            }),
+        )),
     }
 }
 
@@ -45,7 +41,7 @@ pub async fn superuser_middleware(
 ) -> Result<Response, impl IntoResponse> {
     // Get the claims from request extensions (set by auth middleware)
     let claims = request.extensions().get::<Claims>();
-    
+
     match claims {
         Some(claims) => {
             if claims.is_superuser {
@@ -60,14 +56,12 @@ pub async fn superuser_middleware(
                 ))
             }
         }
-        None => {
-            Err((
-                StatusCode::UNAUTHORIZED,
-                Json(ErrorResponse {
-                    success: false,
-                    message: "Authentication required for superuser access.".to_string(),
-                }),
-            ))
-        }
+        None => Err((
+            StatusCode::UNAUTHORIZED,
+            Json(ErrorResponse {
+                success: false,
+                message: "Authentication required for superuser access.".to_string(),
+            }),
+        )),
     }
 }

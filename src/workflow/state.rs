@@ -1,8 +1,8 @@
 #![allow(dead_code, unused_imports)]
 // WorkflowState - Persistent state with reducers (LangGraph-inspired)
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use chrono::{DateTime, Utc};
 
 /// State reducer strategy for merging state updates
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -65,7 +65,7 @@ pub struct WorkflowState {
 pub enum WorkflowStatus {
     Initializing,
     Running,
-    AwaitingInput,  // Human-in-the-loop
+    AwaitingInput, // Human-in-the-loop
     Retrying,
     Completed,
     Failed,
@@ -74,7 +74,7 @@ pub enum WorkflowStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StateMessage {
-    pub role: String,  // user, assistant, system
+    pub role: String, // user, assistant, system
     pub content: String,
     pub timestamp: DateTime<Utc>,
     pub metadata: HashMap<String, String>,
@@ -220,7 +220,10 @@ impl WorkflowState {
 
     /// Check if workflow is completed
     pub fn is_completed(&self) -> bool {
-        matches!(self.status, WorkflowStatus::Completed | WorkflowStatus::Failed | WorkflowStatus::Cancelled)
+        matches!(
+            self.status,
+            WorkflowStatus::Completed | WorkflowStatus::Failed | WorkflowStatus::Cancelled
+        )
     }
 }
 

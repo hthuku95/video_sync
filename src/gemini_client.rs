@@ -1,10 +1,10 @@
+use base64::prelude::*;
+use rand::Rng;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
-use rand::Rng;
-use base64::prelude::*;
 
 /// Maximum number of concurrent Gemini API calls across the entire process.
 /// At 600 jobs/day target (25/hr), 5 permits allows Phase A to process ~5 jobs simultaneously
@@ -79,22 +79,24 @@ pub struct Content {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(untagged)]
 pub enum Part {
-    Text { text: String },
-    FunctionCall { 
+    Text {
+        text: String,
+    },
+    FunctionCall {
         #[serde(rename = "functionCall")]
-        function_call: FunctionCall 
+        function_call: FunctionCall,
     },
-    FunctionResponse { 
+    FunctionResponse {
         #[serde(rename = "functionResponse")]
-        function_response: FunctionResponse 
+        function_response: FunctionResponse,
     },
-    InlineData { 
+    InlineData {
         #[serde(rename = "inlineData")]
-        inline_data: InlineData 
+        inline_data: InlineData,
     },
-    FileData { 
+    FileData {
         #[serde(rename = "fileData")]
-        file_data: FileData 
+        file_data: FileData,
     },
 }
 
@@ -117,7 +119,11 @@ pub struct FileData {
 pub struct FunctionCall {
     pub name: String,
     pub args: HashMap<String, Value>,
-    #[serde(rename = "thoughtSignature", skip_serializing_if = "Option::is_none", default)]
+    #[serde(
+        rename = "thoughtSignature",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
     pub thought_signature: Option<String>,
 }
 
@@ -125,7 +131,11 @@ pub struct FunctionCall {
 pub struct FunctionResponse {
     pub name: String,
     pub response: HashMap<String, Value>,
-    #[serde(rename = "thoughtSignature", skip_serializing_if = "Option::is_none", default)]
+    #[serde(
+        rename = "thoughtSignature",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
     pub thought_signature: Option<String>,
 }
 
@@ -257,6 +267,16 @@ pub struct Embedding {
     pub values: Vec<f32>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UploadedFile {
+    pub name: String,
+    pub uri: String,
+    #[serde(rename = "mimeType")]
+    pub mime_type: String,
+    #[serde(default)]
+    pub state: Option<String>,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[allow(dead_code)]
 pub struct ImageGenerationRequest {
@@ -307,7 +327,10 @@ impl GeminiClient {
         request: GenerateContentRequest,
     ) -> Result<GenerateContentResponse, Box<dyn std::error::Error + Send + Sync>> {
         // Acquire concurrency permit — released automatically when _permit is dropped.
-        let _permit = self.semaphore.acquire().await
+        let _permit = self
+            .semaphore
+            .acquire()
+            .await
             .map_err(|e| format!("Gemini semaphore error: {}", e))?;
 
         let url = format!(
@@ -317,18 +340,36 @@ impl GeminiClient {
 
         // Debug: Log the request to see if thought signatures are present
         if let Ok(_request_json) = serde_json::to_string_pretty(&request) {
-            tracing::debug!("Gemini API Request contents count: {}", request.contents.len());
+            tracing::debug!(
+                "Gemini API Request contents count: {}",
+                request.contents.len()
+            );
             for (i, content) in request.contents.iter().enumerate() {
-                tracing::debug!("Content[{}]: role={:?}, parts_count={}", i, content.role, content.parts.len());
+                tracing::debug!(
+                    "Content[{}]: role={:?}, parts_count={}",
+                    i,
+                    content.role,
+                    content.parts.len()
+                );
                 for (j, part) in content.parts.iter().enumerate() {
                     match part {
                         Part::FunctionCall { function_call } => {
-                            tracing::warn!("Content[{}].Part[{}]: FunctionCall name={}, has_signature={}",
-                                i, j, function_call.name, function_call.thought_signature.is_some());
+                            tracing::warn!(
+                                "Content[{}].Part[{}]: FunctionCall name={}, has_signature={}",
+                                i,
+                                j,
+                                function_call.name,
+                                function_call.thought_signature.is_some()
+                            );
                         }
                         Part::FunctionResponse { function_response } => {
-                            tracing::debug!("Content[{}].Part[{}]: FunctionResponse name={}, has_signature={}",
-                                i, j, function_response.name, function_response.thought_signature.is_some());
+                            tracing::debug!(
+                                "Content[{}].Part[{}]: FunctionResponse name={}, has_signature={}",
+                                i,
+                                j,
+                                function_response.name,
+                                function_response.thought_signature.is_some()
+                            );
                         }
                         _ => {}
                     }
@@ -338,8 +379,7 @@ impl GeminiClient {
 
         // Retry loop: up to 4 attempts, respecting Gemini rate-limit (429) responses.
         let max_attempts = 4u32;
-        let mut last_error: Box<dyn std::error::Error + Send + Sync> =
-            "No attempts made".into();
+        let mut last_error: Box<dyn std::error::Error + Send + Sync> = "No attempts made".into();
 
         for attempt in 0..max_attempts {
             let response = self
@@ -354,7 +394,10 @@ impl GeminiClient {
 
             if status.is_success() {
                 let response_text = response.text().await?;
-                tracing::debug!("Gemini API response (truncated): {}...", &response_text[..response_text.len().min(500)]);
+                tracing::debug!(
+                    "Gemini API response (truncated): {}...",
+                    &response_text[..response_text.len().min(500)]
+                );
 
                 // Log thought signature in raw response
                 if response_text.contains("thoughtSignature") {
@@ -377,7 +420,7 @@ impl GeminiClient {
                             }
                         }
                         return Ok(result);
-                    },
+                    }
                     Err(parse_error) => {
                         tracing::error!("Failed to parse Gemini response: {}", parse_error);
                         tracing::error!("Response body: {}", response_text);
@@ -395,7 +438,9 @@ impl GeminiClient {
                 tracing::warn!(
                     "⏳ Gemini rate limited (429, attempt {}/{}). \
                      Waiting {}s before retry…",
-                    attempt + 1, max_attempts, wait_secs
+                    attempt + 1,
+                    max_attempts,
+                    wait_secs
                 );
                 tokio::time::sleep(tokio::time::Duration::from_secs(wait_secs)).await;
                 last_error = format!("Gemini API error (rate limited): {}", error_text).into();
@@ -413,19 +458,41 @@ impl GeminiClient {
         &self,
         text: &str,
     ) -> Result<Vec<f32>, Box<dyn std::error::Error + Send + Sync>> {
+        self.embed_content_with_model(text, "models/text-embedding-004", Some(768))
+            .await
+    }
+
+    pub async fn embed_content_with_model(
+        &self,
+        text: &str,
+        model: &str,
+        output_dimensionality: Option<u32>,
+    ) -> Result<Vec<f32>, Box<dyn std::error::Error + Send + Sync>> {
+        self.embed_parts_with_model(
+            vec![Part::Text {
+                text: text.to_string(),
+            }],
+            model,
+            output_dimensionality,
+        )
+        .await
+    }
+
+    pub async fn embed_parts_with_model(
+        &self,
+        parts: Vec<Part>,
+        model: &str,
+        output_dimensionality: Option<u32>,
+    ) -> Result<Vec<f32>, Box<dyn std::error::Error + Send + Sync>> {
         let url = format!(
-            "{}/models/text-embedding-004:embedContent?key={}",
-            self.base_url, self.api_key
+            "{}/{}:embedContent?key={}",
+            self.base_url, model, self.api_key
         );
 
         let request = EmbedContentRequest {
-            model: "models/text-embedding-004".to_string(),
-            content: EmbedContent {
-                parts: vec![Part::Text {
-                    text: text.to_string(),
-                }],
-            },
-            output_dimensionality: Some(768), // Using smaller dimension for efficiency
+            model: model.to_string(),
+            content: EmbedContent { parts },
+            output_dimensionality,
         };
 
         let response = self
@@ -443,6 +510,148 @@ impl GeminiClient {
             let error_text = response.text().await?;
             Err(format!("Gemini Embedding API error: {}", error_text).into())
         }
+    }
+
+    fn api_root(&self) -> &str {
+        self.base_url.trim_end_matches("/v1beta")
+    }
+
+    pub async fn upload_file(
+        &self,
+        file_path: &str,
+        mime_type: &str,
+        display_name: Option<&str>,
+    ) -> Result<UploadedFile, Box<dyn std::error::Error + Send + Sync>> {
+        let path = std::path::Path::new(file_path);
+        let file_name = display_name
+            .map(|value| value.to_string())
+            .or_else(|| {
+                path.file_name()
+                    .and_then(|value| value.to_str())
+                    .map(|value| value.to_string())
+            })
+            .unwrap_or_else(|| "uploaded-media".to_string());
+
+        let start_url = format!("{}/upload/v1beta/files?key={}", self.api_root(), self.api_key);
+        let file_bytes = tokio::fs::read(path).await?;
+        let start_response = self
+            .client
+            .post(&start_url)
+            .header("X-Goog-Upload-Protocol", "resumable")
+            .header("X-Goog-Upload-Command", "start")
+            .header("X-Goog-Upload-Header-Content-Length", file_bytes.len())
+            .header("X-Goog-Upload-Header-Content-Type", mime_type)
+            .header("Content-Type", "application/json")
+            .json(&serde_json::json!({
+                "file": {
+                    "display_name": file_name,
+                }
+            }))
+            .send()
+            .await?;
+
+        if !start_response.status().is_success() {
+            let error_text = start_response.text().await?;
+            return Err(format!("Gemini file upload start error: {}", error_text).into());
+        }
+
+        let upload_url = start_response
+            .headers()
+            .get("x-goog-upload-url")
+            .and_then(|value| value.to_str().ok())
+            .map(|value| value.to_string())
+            .ok_or("Gemini file upload start response missing upload URL")?;
+
+        let finalize_response = self
+            .client
+            .post(&upload_url)
+            .header("X-Goog-Upload-Offset", "0")
+            .header("X-Goog-Upload-Command", "upload, finalize")
+            .body(file_bytes)
+            .send()
+            .await?;
+
+        if !finalize_response.status().is_success() {
+            let error_text = finalize_response.text().await?;
+            return Err(format!("Gemini file upload finalize error: {}", error_text).into());
+        }
+
+        let response_json: serde_json::Value = finalize_response.json().await?;
+        let file = response_json
+            .get("file")
+            .cloned()
+            .ok_or("Gemini file upload finalize response missing file object")?;
+
+        let uploaded: UploadedFile = serde_json::from_value(file)?;
+        self.wait_for_file_active(&uploaded.name).await
+    }
+
+    async fn wait_for_file_active(
+        &self,
+        file_name: &str,
+    ) -> Result<UploadedFile, Box<dyn std::error::Error + Send + Sync>> {
+        let status_url = format!("{}/v1beta/{}?key={}", self.api_root(), file_name, self.api_key);
+
+        for attempt in 0..30u32 {
+            let response = self.client.get(&status_url).send().await?;
+            if !response.status().is_success() {
+                let error_text = response.text().await?;
+                return Err(format!("Gemini file status error: {}", error_text).into());
+            }
+
+            let file: UploadedFile = response.json().await?;
+            match file.state.as_deref() {
+                Some("ACTIVE") | None => return Ok(file),
+                Some("FAILED") => {
+                    return Err(format!("Gemini file processing failed for {}", file_name).into())
+                }
+                _ => {
+                    if attempt < 29 {
+                        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                    } else {
+                        return Err(format!(
+                            "Timed out waiting for Gemini file to become ACTIVE: {}",
+                            file_name
+                        )
+                        .into());
+                    }
+                }
+            }
+        }
+
+        Err(format!(
+            "Timed out waiting for Gemini file to become ACTIVE: {}",
+            file_name
+        )
+        .into())
+    }
+
+    pub async fn embed_uploaded_file_with_model(
+        &self,
+        file_path: &str,
+        mime_type: &str,
+        model: &str,
+        output_dimensionality: Option<u32>,
+        prompt_text: Option<&str>,
+    ) -> Result<Vec<f32>, Box<dyn std::error::Error + Send + Sync>> {
+        let uploaded = self.upload_file(file_path, mime_type, None).await?;
+        let mut parts = Vec::new();
+        if let Some(text) = prompt_text {
+            if !text.trim().is_empty() {
+                parts.push(Part::Text {
+                    text: text.to_string(),
+                });
+            }
+        }
+        parts.push(Part::FileData {
+            file_data: FileData {
+                mime_type: uploaded.mime_type,
+                file_uri: uploaded.uri,
+            },
+        });
+
+        self.embed_parts_with_model(parts, model, output_dimensionality)
+            .await
     }
 
     /// Resolve a user-supplied model alias to a concrete Gemini model ID.
@@ -464,7 +673,10 @@ impl GeminiClient {
         image_size: Option<&str>,
         model: Option<&str>,
     ) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
-        let _permit = self.semaphore.acquire().await
+        let _permit = self
+            .semaphore
+            .acquire()
+            .await
             .map_err(|e| format!("Gemini semaphore error: {}", e))?;
 
         let model_id = Self::resolve_image_model(model);
@@ -480,13 +692,14 @@ impl GeminiClient {
             "imageSize".to_string(),
             serde_json::Value::String(image_size.unwrap_or("2K").to_string()),
         );
-        config_map.insert("imageConfig".to_string(), serde_json::Value::Object(image_config));
+        config_map.insert(
+            "imageConfig".to_string(),
+            serde_json::Value::Object(image_config),
+        );
 
         config_map.insert(
             "responseModalities".to_string(),
-            serde_json::Value::Array(vec![
-                serde_json::Value::String("IMAGE".to_string()),
-            ]),
+            serde_json::Value::Array(vec![serde_json::Value::String("IMAGE".to_string())]),
         );
 
         let request = serde_json::json!({
@@ -502,7 +715,11 @@ impl GeminiClient {
             self.base_url, model_id, self.api_key
         );
 
-        tracing::debug!("generate_image ({}) request: {}", model_id, serde_json::to_string_pretty(&request)?);
+        tracing::debug!(
+            "generate_image ({}) request: {}",
+            model_id,
+            serde_json::to_string_pretty(&request)?
+        );
 
         let response = self
             .client
@@ -525,8 +742,10 @@ impl GeminiClient {
                             for part in parts {
                                 if let Some(inline_data) = part.get("inlineData") {
                                     if let Some(data) = inline_data["data"].as_str() {
-                                        let image_bytes = BASE64_STANDARD.decode(data)
-                                            .map_err(|e| format!("Failed to decode base64 image: {}", e))?;
+                                        let image_bytes =
+                                            BASE64_STANDARD.decode(data).map_err(|e| {
+                                                format!("Failed to decode base64 image: {}", e)
+                                            })?;
                                         return Ok(image_bytes);
                                     }
                                 }
@@ -539,7 +758,11 @@ impl GeminiClient {
             Err("No image data found in response".into())
         } else {
             let error_text = response.text().await?;
-            Err(format!("Gemini image generation API error ({}): {}", model_id, error_text).into())
+            Err(format!(
+                "Gemini image generation API error ({}): {}",
+                model_id, error_text
+            )
+            .into())
         }
     }
 
@@ -554,7 +777,10 @@ impl GeminiClient {
         aspect_ratio: Option<&str>,
         model: Option<&str>,
     ) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
-        let _permit = self.semaphore.acquire().await
+        let _permit = self
+            .semaphore
+            .acquire()
+            .await
             .map_err(|e| format!("Gemini semaphore error: {}", e))?;
 
         let model_id = Self::resolve_image_model(model);
@@ -645,7 +871,8 @@ impl GeminiClient {
         image_bytes: &[u8],
         aspect_ratio: Option<&str>,
     ) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
-        self.edit_image(prompt, image_bytes, aspect_ratio, None).await
+        self.edit_image(prompt, image_bytes, aspect_ratio, None)
+            .await
     }
 
     pub fn create_video_editing_tools() -> Vec<FunctionDeclaration> {
@@ -2483,14 +2710,14 @@ impl GeminiClient {
                             description: "Clip length in seconds (default: 10)".to_string(),
                             items: None,
                         });
-                        props.insert("background".to_string(), PropertyDefinition {
+                        props.insert("background_style".to_string(), PropertyDefinition {
                             prop_type: "string".to_string(),
-                            description: "Background style: 'dark' (default), 'light', or 'transparent'".to_string(),
+                            description: "Background style: 'dark' (default), 'light', or 'gradient'".to_string(),
                             items: None,
                         });
-                        props.insert("quality".to_string(), PropertyDefinition {
-                            prop_type: "string".to_string(),
-                            description: "Render quality: 'l' (480p fast), 'm' (720p, default), 'h' (1080p slow)".to_string(),
+                        props.insert("composite_over_scene".to_string(), PropertyDefinition {
+                            prop_type: "boolean".to_string(),
+                            description: "If true, composite the Manim animation over a Blender 3D background scene".to_string(),
                             items: None,
                         });
                         props.insert("include_narration".to_string(), PropertyDefinition {
@@ -7531,11 +7758,10 @@ impl GeminiClient {
     /// Filter tools by name (for dynamic tool selection)
     /// Returns only the tools whose names are in the provided list
     pub fn filter_tools_by_name(tool_names: &[String]) -> Vec<FunctionDeclaration> {
-        let all_tools = Self::create_video_editing_tools();
-        all_tools
-            .into_iter()
-            .filter(|tool| tool_names.contains(&tool.name))
-            .collect()
+        crate::tool_registry::ToolRegistry::filter_gemini_tools_for_profile(
+            crate::tool_registry::AgentExecutionProfile::FullProduction,
+            tool_names,
+        )
     }
 
     /// Analyze an image from bytes using Gemini's vision capabilities
@@ -7562,7 +7788,9 @@ impl GeminiClient {
         let request = GenerateContentRequest {
             contents: vec![Content {
                 parts: vec![
-                    Part::Text { text: analysis_prompt.to_string() },
+                    Part::Text {
+                        text: analysis_prompt.to_string(),
+                    },
                     Part::InlineData {
                         inline_data: InlineData {
                             mime_type: mime_type.to_string(),
@@ -7599,6 +7827,55 @@ impl GeminiClient {
         Err("No valid response received from image analysis".into())
     }
 
+    /// Analyze an audio file from bytes using Gemini multimodal capabilities.
+    pub async fn analyze_audio_bytes(
+        &self,
+        audio_bytes: &[u8],
+        mime_type: &str,
+        analysis_prompt: &str,
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        let encoded_data = BASE64_STANDARD.encode(audio_bytes);
+
+        let request = GenerateContentRequest {
+            contents: vec![Content {
+                parts: vec![
+                    Part::Text {
+                        text: analysis_prompt.to_string(),
+                    },
+                    Part::InlineData {
+                        inline_data: InlineData {
+                            mime_type: mime_type.to_string(),
+                            data: encoded_data,
+                        },
+                    },
+                ],
+                role: Some("user".to_string()),
+            }],
+            tools: None,
+            generation_config: Some(GenerationConfig {
+                temperature: 0.2,
+                top_k: 40,
+                top_p: 0.9,
+                max_output_tokens: 2048,
+            }),
+            tool_config: None,
+            system_instruction: None,
+        };
+
+        let response = self.generate_content(request).await?;
+
+        if let Some(candidate) = response.candidates.first() {
+            if let Some(ref content) = candidate.content {
+                for part in &content.parts {
+                    if let Part::Text { text } = part {
+                        return Ok(text.clone());
+                    }
+                }
+            }
+        }
+
+        Err("No valid response received from audio analysis".into())
+    }
 
     #[allow(dead_code)]
     async fn generate_image_with_gemini(
@@ -7651,19 +7928,21 @@ impl GeminiClient {
         if response.status().is_success() {
             let response_text = response.text().await?;
             tracing::debug!("Gemini image response: {}", response_text);
-            
+
             // Parse the response to extract image data
             let response_json: serde_json::Value = serde_json::from_str(&response_text)?;
-            
+
             if let Some(candidates) = response_json.get("candidates").and_then(|c| c.as_array()) {
                 for candidate in candidates {
                     if let Some(content) = candidate.get("content") {
                         if let Some(parts) = content.get("parts").and_then(|p| p.as_array()) {
                             for part in parts {
                                 if let Some(inline_data) = part.get("inlineData") {
-                                    if let Some(data) = inline_data.get("data").and_then(|d| d.as_str()) {
+                                    if let Some(data) =
+                                        inline_data.get("data").and_then(|d| d.as_str())
+                                    {
                                         // Decode base64 image data
-                                        use base64::{Engine as _, engine::general_purpose};
+                                        use base64::{engine::general_purpose, Engine as _};
                                         let image_bytes = general_purpose::STANDARD.decode(data)?;
                                         tracing::info!("Successfully decoded Gemini-generated image ({} bytes)", image_bytes.len());
                                         return Ok(image_bytes);
@@ -7674,15 +7953,19 @@ impl GeminiClient {
                     }
                 }
             }
-            
+
             Err("No image data found in Gemini response".into())
         } else {
             let status = response.status();
-            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
             Err(format!("Gemini Image API error ({}): {}", status, error_text).into())
         }
     }
 
+    #[allow(dead_code)]
     async fn generate_svg_placeholder(
         &self,
         prompt: &str,
@@ -7743,7 +8026,10 @@ impl GeminiClient {
             }
         } else {
             let status = response.status();
-            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
             tracing::error!("Gemini API error ({}): {}", status, error_text);
         }
 
@@ -7752,30 +8038,36 @@ impl GeminiClient {
         Ok(self.create_default_svg())
     }
 
+    #[allow(dead_code)]
     fn create_svg_from_description(&self, description: &str) -> String {
         let mut rng = rand::thread_rng();
-        
+
         // Extract colors from description or use defaults
         let colors = if description.contains("#") {
             vec!["#667eea", "#764ba2", "#3498db", "#2980b9"]
         } else {
-            vec!["#667eea", "#764ba2", "#3498db", "#2980b9", "#8e44ad", "#2c3e50"]
+            vec![
+                "#667eea", "#764ba2", "#3498db", "#2980b9", "#8e44ad", "#2c3e50",
+            ]
         };
 
         let primary_color = colors[rng.gen_range(0..colors.len())];
         let secondary_color = colors[rng.gen_range(0..colors.len())];
-        
+
         // Generate random shapes and positions
-        let circles = (0..5).map(|_| {
-            format!(
-                r#"<circle cx="{}" cy="{}" r="{}" fill="{}" opacity="0.{}"/>"#,
-                rng.gen_range(0..1920),
-                rng.gen_range(0..1080),
-                rng.gen_range(50..200),
-                colors[rng.gen_range(0..colors.len())],
-                rng.gen_range(1..4)
-            )
-        }).collect::<Vec<_>>().join("\n        ");
+        let circles = (0..5)
+            .map(|_| {
+                format!(
+                    r#"<circle cx="{}" cy="{}" r="{}" fill="{}" opacity="0.{}"/>"#,
+                    rng.gen_range(0..1920),
+                    rng.gen_range(0..1080),
+                    rng.gen_range(50..200),
+                    colors[rng.gen_range(0..colors.len())],
+                    rng.gen_range(1..4)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n        ");
 
         let rectangles = (0..3).map(|_| {
             format!(
@@ -7820,9 +8112,10 @@ impl GeminiClient {
         )
     }
 
+    #[allow(dead_code)]
     fn create_random_svg(&self) -> String {
         let mut rng = rand::thread_rng();
-        
+
         // Predefined dark color palettes for video editing theme
         let color_palettes = vec![
             vec!["#1a1a2e", "#16213e", "#3b82f6", "#1d4ed8"],
@@ -7831,22 +8124,25 @@ impl GeminiClient {
             vec!["#111827", "#1f2937", "#3730a3", "#312e81"],
             vec!["#0c0e16", "#1a1a2e", "#4338ca", "#3730a3"],
         ];
-        
+
         let palette = &color_palettes[rng.gen_range(0..color_palettes.len())];
         let primary_color = palette[0];
         let secondary_color = palette[1];
-        
+
         // Generate varied shapes
-        let circles = (0..rng.gen_range(3..7)).map(|_| {
-            format!(
-                r#"<circle cx="{}" cy="{}" r="{}" fill="{}" opacity="0.{}"/>"#,
-                rng.gen_range(100..1820),
-                rng.gen_range(100..980),
-                rng.gen_range(40..150),
-                palette[rng.gen_range(0..palette.len())],
-                rng.gen_range(1..4)
-            )
-        }).collect::<Vec<_>>().join("\n        ");
+        let circles = (0..rng.gen_range(3..7))
+            .map(|_| {
+                format!(
+                    r#"<circle cx="{}" cy="{}" r="{}" fill="{}" opacity="0.{}"/>"#,
+                    rng.gen_range(100..1820),
+                    rng.gen_range(100..980),
+                    rng.gen_range(40..150),
+                    palette[rng.gen_range(0..palette.len())],
+                    rng.gen_range(1..4)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n        ");
 
         let rectangles = (0..rng.gen_range(2..5)).map(|_| {
             format!(
@@ -7893,31 +8189,48 @@ impl GeminiClient {
     <rect x="{}" y="{}" width="4" height="{}" fill="white" opacity="0.1"/>
     <rect x="{}" y="{}" width="4" height="{}" fill="white" opacity="0.1"/>
 </svg>"#,
-            rng.gen_range(0..30), rng.gen_range(0..30), // gradient start
-            rng.gen_range(70..100), rng.gen_range(70..100), // gradient end
+            rng.gen_range(0..30),
+            rng.gen_range(0..30), // gradient start
+            rng.gen_range(70..100),
+            rng.gen_range(70..100), // gradient end
             primary_color,
             rng.gen_range(40..60), // middle stop
             palette[rng.gen_range(0..palette.len())],
             secondary_color,
             rng.gen_range(2..5), // blur amount
-            circles, rectangles,
+            circles,
+            rectangles,
             // Timeline elements
-            rng.gen_range(80..200), rng.gen_range(80..200),
-            rng.gen_range(80..200), rng.gen_range(110..230),
-            rng.gen_range(80..200), rng.gen_range(140..260),
+            rng.gen_range(80..200),
+            rng.gen_range(80..200),
+            rng.gen_range(80..200),
+            rng.gen_range(110..230),
+            rng.gen_range(80..200),
+            rng.gen_range(140..260),
             // Play button
-            rng.gen_range(1600..1800), rng.gen_range(150..300),
+            rng.gen_range(1600..1800),
+            rng.gen_range(150..300),
             // Play triangle
-            rng.gen_range(1590..1790), rng.gen_range(140..290),
-            rng.gen_range(1610..1810), rng.gen_range(150..300),
-            rng.gen_range(1590..1790), rng.gen_range(160..310),
+            rng.gen_range(1590..1790),
+            rng.gen_range(140..290),
+            rng.gen_range(1610..1810),
+            rng.gen_range(150..300),
+            rng.gen_range(1590..1790),
+            rng.gen_range(160..310),
             // Waveform
-            rng.gen_range(1400..1500), rng.gen_range(800..900), rng.gen_range(20..60),
-            rng.gen_range(1410..1510), rng.gen_range(820..920), rng.gen_range(15..45),
-            rng.gen_range(1420..1520), rng.gen_range(810..910), rng.gen_range(25..65),
+            rng.gen_range(1400..1500),
+            rng.gen_range(800..900),
+            rng.gen_range(20..60),
+            rng.gen_range(1410..1510),
+            rng.gen_range(820..920),
+            rng.gen_range(15..45),
+            rng.gen_range(1420..1520),
+            rng.gen_range(810..910),
+            rng.gen_range(25..65),
         )
     }
 
+    #[allow(dead_code)]
     fn create_default_svg(&self) -> String {
         r#"<svg width="1920" height="1080" xmlns="http://www.w3.org/2000/svg">
     <defs>
@@ -7933,7 +8246,8 @@ impl GeminiClient {
     <rect x="100" y="100" width="200" height="20" fill="white" opacity="0.08" rx="10"/>
     <rect x="100" y="130" width="150" height="20" fill="white" opacity="0.08" rx="10"/>
     <rect x="100" y="160" width="180" height="20" fill="white" opacity="0.08" rx="10"/>
-</svg>"#.to_string()
+</svg>"#
+            .to_string()
     }
 
     pub fn create_background_image_prompt(theme: &str) -> String {
@@ -7945,14 +8259,22 @@ impl GeminiClient {
         ];
 
         let themes = vec![
-            "cinematic", "creative", "professional", "artistic", "modern", 
-            "tech-focused", "minimalist", "dynamic", "elegant", "innovative"
+            "cinematic",
+            "creative",
+            "professional",
+            "artistic",
+            "modern",
+            "tech-focused",
+            "minimalist",
+            "dynamic",
+            "elegant",
+            "innovative",
         ];
 
         let mut rng = rand::thread_rng();
         let selected_theme = themes[rng.gen_range(0..themes.len())];
         let selected_prompt = &prompts[rng.gen_range(0..prompts.len())];
-        
+
         selected_prompt.replace("{}", selected_theme)
     }
 
@@ -7976,10 +8298,10 @@ impl GeminiClient {
             .extension()
             .and_then(|ext| ext.to_str())
             .map(|s| s.to_lowercase())
-            .as_deref() 
+            .as_deref()
         {
             Some("mp4") => "video/mp4",
-            Some("avi") => "video/avi", 
+            Some("avi") => "video/avi",
             Some("mov") => "video/quicktime",
             Some("mkv") => "video/x-matroska",
             Some("webm") => "video/webm",
@@ -7999,7 +8321,8 @@ impl GeminiClient {
             7. Timestamps: If possible, provide key moments with approximate timestamps\n\
             8. Editing opportunities: Suggest what editing operations might improve this video\n\
             \n\
-            Be specific and detailed in your analysis as if you're truly watching the video.".to_string()
+            Be specific and detailed in your analysis as if you're truly watching the video."
+                .to_string()
         });
 
         let request = GenerateContentRequest {
@@ -8050,7 +8373,9 @@ impl GeminiClient {
             if let Some(ref content) = candidate.content {
                 if let Some(part) = content.parts.first() {
                     if let Part::Text { text } = part {
-                        tracing::info!("Successfully analyzed video content using Gemini 2.5 Flash");
+                        tracing::info!(
+                            "Successfully analyzed video content using Gemini 2.5 Flash"
+                        );
                         return Ok(text.clone());
                     }
                 }
@@ -8100,11 +8425,11 @@ impl GeminiClient {
         text: &str,
         voice: Option<&str>,
         language: Option<&str>,
-        style_prompt: Option<&str>
+        style_prompt: Option<&str>,
     ) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
         let voice = voice.unwrap_or("Zephyr"); // Default professional voice
         let language_code = language.unwrap_or("en");
-        
+
         // Build the TTS request
         let mut request_body = serde_json::json!({
             "contents": [{
@@ -8126,7 +8451,8 @@ impl GeminiClient {
 
         // Add language if specified
         if language_code != "en" {
-            request_body["generationConfig"]["speechConfig"]["languageCode"] = serde_json::Value::String(language_code.to_string());
+            request_body["generationConfig"]["speechConfig"]["languageCode"] =
+                serde_json::Value::String(language_code.to_string());
         }
 
         // Add style prompt if provided
@@ -8138,11 +8464,18 @@ impl GeminiClient {
             });
         }
 
-        tracing::info!("🎵 Generating speech audio for text: '{}' with voice: {}", 
-                      &text[..text.len().min(100)], voice);
+        tracing::info!(
+            "🎵 Generating speech audio for text: '{}' with voice: {}",
+            &text[..text.len().min(100)],
+            voice
+        );
 
-        let response = self.client
-            .post(&format!("{}/v1beta/models/gemini-2.5-flash:generateContent", self.base_url))
+        let response = self
+            .client
+            .post(&format!(
+                "{}/v1beta/models/gemini-2.5-flash:generateContent",
+                self.base_url
+            ))
             .header("Authorization", format!("Bearer {}", self.api_key))
             .header("Content-Type", "application/json")
             .json(&request_body)
@@ -8156,7 +8489,10 @@ impl GeminiClient {
         }
 
         let response_json: serde_json::Value = response.json().await?;
-        tracing::debug!("Gemini TTS response: {}", serde_json::to_string_pretty(&response_json)?);
+        tracing::debug!(
+            "Gemini TTS response: {}",
+            serde_json::to_string_pretty(&response_json)?
+        );
 
         // Extract audio data from response
         if let Some(candidates) = response_json["candidates"].as_array() {
@@ -8167,11 +8503,15 @@ impl GeminiClient {
                             if let Some(inline_data) = part.get("inlineData") {
                                 if let Some(data) = inline_data["data"].as_str() {
                                     // Decode base64 audio data
-                                    let audio_data = base64::prelude::BASE64_STANDARD
-                                        .decode(data)
-                                        .map_err(|e| format!("Failed to decode audio data: {}", e))?;
-                                    
-                                    tracing::info!("✅ Generated {} bytes of audio data", audio_data.len());
+                                    let audio_data =
+                                        base64::prelude::BASE64_STANDARD.decode(data).map_err(
+                                            |e| format!("Failed to decode audio data: {}", e),
+                                        )?;
+
+                                    tracing::info!(
+                                        "✅ Generated {} bytes of audio data",
+                                        audio_data.len()
+                                    );
                                     return Ok(audio_data);
                                 }
                             }
@@ -8191,11 +8531,11 @@ impl GeminiClient {
         product_description: &str,
         duration_seconds: u32,
         target_audience: Option<&str>,
-        style: Option<&str>
+        style: Option<&str>,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         let audience = target_audience.unwrap_or("general consumers");
         let ad_style = style.unwrap_or("professional and engaging");
-        
+
         let prompt = format!(
             "Create a {}-second advertisement script for {}, a company that specializes in {}. 
 
@@ -8213,9 +8553,18 @@ Target Audience: {}
 Style: {}
 
 Generate ONLY the script text that will be spoken, no stage directions or formatting.",
-            duration_seconds, company_name, product_description,
-            audience, ad_style, duration_seconds, duration_seconds * 3, // ~3 words per second
-            company_name, product_description, duration_seconds, audience, ad_style
+            duration_seconds,
+            company_name,
+            product_description,
+            audience,
+            ad_style,
+            duration_seconds,
+            duration_seconds * 3, // ~3 words per second
+            company_name,
+            product_description,
+            duration_seconds,
+            audience,
+            ad_style
         );
 
         let request = GenerateContentRequest {
@@ -8234,16 +8583,24 @@ Generate ONLY the script text that will be spoken, no stage directions or format
             system_instruction: None,
         };
 
-        tracing::info!("🎬 Generating advertisement script for {} ({}s duration)", company_name, duration_seconds);
+        tracing::info!(
+            "🎬 Generating advertisement script for {} ({}s duration)",
+            company_name,
+            duration_seconds
+        );
 
         let response = self.generate_content(request).await?;
-        
+
         // Extract the script text from response
         if let Some(candidate) = response.candidates.first() {
             if let Some(ref content) = candidate.content {
                 if let Some(part) = content.parts.first() {
                     if let Part::Text { text } = part {
-                        tracing::info!("✅ Generated {}-word script for {} second ad", text.split_whitespace().count(), duration_seconds);
+                        tracing::info!(
+                            "✅ Generated {}-word script for {} second ad",
+                            text.split_whitespace().count(),
+                            duration_seconds
+                        );
                         return Ok(text.clone());
                     }
                 }
@@ -8261,11 +8618,11 @@ Generate ONLY the script text that will be spoken, no stage directions or format
         description: &str,
         duration_seconds: u32,
         target_audience: Option<&str>,
-        style: Option<&str>
+        style: Option<&str>,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         let audience = target_audience.unwrap_or("general audience");
         let video_style = style.unwrap_or("professional and engaging");
-        
+
         let prompt = match video_type.to_lowercase().as_str() {
             "music_video" | "music video" => {
                 format!(
@@ -8290,11 +8647,20 @@ Target Audience: {}
 Style: {}
 
 Generate a creative music video script with scene descriptions and any narrative elements.",
-                    duration_seconds, subject, description,
-                    audience, video_style, duration_seconds, duration_seconds * 2,
-                    subject, description, duration_seconds, audience, video_style
+                    duration_seconds,
+                    subject,
+                    description,
+                    audience,
+                    video_style,
+                    duration_seconds,
+                    duration_seconds * 2,
+                    subject,
+                    description,
+                    duration_seconds,
+                    audience,
+                    video_style
                 )
-            },
+            }
             "documentary" => {
                 format!(
                     "Create a {}-second documentary script about '{}'. 
@@ -8319,11 +8685,20 @@ Target Audience: {}
 Style: {}
 
 Generate a documentary script with narration and scene direction.",
-                    duration_seconds, subject, description,
-                    audience, video_style, duration_seconds, duration_seconds * 3,
-                    subject, description, duration_seconds, audience, video_style
+                    duration_seconds,
+                    subject,
+                    description,
+                    audience,
+                    video_style,
+                    duration_seconds,
+                    duration_seconds * 3,
+                    subject,
+                    description,
+                    duration_seconds,
+                    audience,
+                    video_style
                 )
-            },
+            }
             "tutorial" | "educational" => {
                 format!(
                     "Create a {}-second tutorial script for '{}'. 
@@ -8348,11 +8723,20 @@ Target Audience: {}
 Style: {}
 
 Generate a clear, educational tutorial script.",
-                    duration_seconds, subject, description,
-                    audience, video_style, duration_seconds, duration_seconds * 3,
-                    subject, description, duration_seconds, audience, video_style
+                    duration_seconds,
+                    subject,
+                    description,
+                    audience,
+                    video_style,
+                    duration_seconds,
+                    duration_seconds * 3,
+                    subject,
+                    description,
+                    duration_seconds,
+                    audience,
+                    video_style
                 )
-            },
+            }
             "promotional" | "promo" => {
                 format!(
                     "Create a {}-second promotional video script for '{}'. 
@@ -8377,11 +8761,20 @@ Target Audience: {}
 Style: {}
 
 Generate an engaging promotional script.",
-                    duration_seconds, subject, description,
-                    audience, video_style, duration_seconds, duration_seconds * 3,
-                    subject, description, duration_seconds, audience, video_style
+                    duration_seconds,
+                    subject,
+                    description,
+                    audience,
+                    video_style,
+                    duration_seconds,
+                    duration_seconds * 3,
+                    subject,
+                    description,
+                    duration_seconds,
+                    audience,
+                    video_style
                 )
-            },
+            }
             _ => {
                 // Generic video script
                 format!(
@@ -8408,9 +8801,20 @@ Target Audience: {}
 Style: {}
 
 Generate a well-structured script appropriate for this type of video.",
-                    duration_seconds, video_type, subject, description,
-                    audience, video_style, duration_seconds, duration_seconds * 3,
-                    subject, description, video_type, duration_seconds, audience, video_style
+                    duration_seconds,
+                    video_type,
+                    subject,
+                    description,
+                    audience,
+                    video_style,
+                    duration_seconds,
+                    duration_seconds * 3,
+                    subject,
+                    description,
+                    video_type,
+                    duration_seconds,
+                    audience,
+                    video_style
                 )
             }
         };
@@ -8431,17 +8835,26 @@ Generate a well-structured script appropriate for this type of video.",
             system_instruction: None,
         };
 
-        tracing::info!("🎬 Generating {} video script for '{}' ({}s duration)", video_type, subject, duration_seconds);
+        tracing::info!(
+            "🎬 Generating {} video script for '{}' ({}s duration)",
+            video_type,
+            subject,
+            duration_seconds
+        );
 
         let response = self.generate_content(request).await?;
-        
+
         // Extract the script text from response
         if let Some(candidate) = response.candidates.first() {
             if let Some(ref content) = candidate.content {
                 if let Some(part) = content.parts.first() {
                     if let Part::Text { text } = part {
-                        tracing::info!("✅ Generated {}-word {} script for {} second video",
-                                      text.split_whitespace().count(), video_type, duration_seconds);
+                        tracing::info!(
+                            "✅ Generated {}-word {} script for {} second video",
+                            text.split_whitespace().count(),
+                            video_type,
+                            duration_seconds
+                        );
                         return Ok(text.clone());
                     }
                 }
@@ -8467,9 +8880,15 @@ Generate a well-structured script appropriate for this type of video.",
         min_duration_secs: f64,
         max_duration_secs: f64,
         high_performing_factors: &[String],
-    ) -> Result<crate::clipping::gemini_video_analyzer::VideoAnalysis, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<
+        crate::clipping::gemini_video_analyzer::VideoAnalysis,
+        Box<dyn std::error::Error + Send + Sync>,
+    > {
         // Acquire concurrency permit for this expensive video analysis call.
-        let _permit = self.semaphore.acquire().await
+        let _permit = self
+            .semaphore
+            .acquire()
+            .await
             .map_err(|e| format!("Gemini semaphore error: {}", e))?;
 
         tracing::info!(
@@ -8573,11 +8992,20 @@ Provide ONLY the JSON object, no markdown, no code blocks, no other text."#,
 
             if status.is_success() {
                 let response_text = response.text().await?;
-                tracing::debug!("Gemini video analysis response (first 1000 chars): {}", &response_text[..response_text.len().min(1000)]);
+                tracing::debug!(
+                    "Gemini video analysis response (first 1000 chars): {}",
+                    &response_text[..response_text.len().min(1000)]
+                );
 
                 // Parse Gemini response wrapper
                 let response_json: serde_json::Value = serde_json::from_str(&response_text)
-                    .map_err(|e| format!("Failed to parse Gemini response: {} — body: {}", e, &response_text[..response_text.len().min(500)]))?;
+                    .map_err(|e| {
+                        format!(
+                            "Failed to parse Gemini response: {} — body: {}",
+                            e,
+                            &response_text[..response_text.len().min(500)]
+                        )
+                    })?;
 
                 // Extract text from candidates[0].content.parts[0].text
                 let text = response_json["candidates"][0]["content"]["parts"][0]["text"]
@@ -8586,8 +9014,13 @@ Provide ONLY the JSON object, no markdown, no code blocks, no other text."#,
 
                 // Parse the JSON text content as VideoAnalysis
                 let analysis: crate::clipping::gemini_video_analyzer::VideoAnalysis =
-                    serde_json::from_str(text)
-                        .map_err(|e| format!("Failed to parse VideoAnalysis JSON: {} — text: {}", e, &text[..text.len().min(1000)]))?;
+                    serde_json::from_str(text).map_err(|e| {
+                        format!(
+                            "Failed to parse VideoAnalysis JSON: {} — text: {}",
+                            e,
+                            &text[..text.len().min(1000)]
+                        )
+                    })?;
 
                 tracing::info!(
                     "✅ Video analysis complete: {} viral moments identified (overall quality: {:.2})",
@@ -8598,13 +9031,21 @@ Provide ONLY the JSON object, no markdown, no code blocks, no other text."#,
                 return Ok(analysis);
             }
 
-            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
 
             // On 429 rate limit, back off and retry
             if status.as_u16() == 429 && attempt < max_attempts - 1 {
                 let retry_secs = parse_gemini_retry_delay(&error_text, 30.0);
                 let wait_secs = (retry_secs + 5.0) as u64;
-                tracing::warn!("⏳ Gemini rate limited (429, attempt {}/{}). Waiting {}s…", attempt + 1, max_attempts, wait_secs);
+                tracing::warn!(
+                    "⏳ Gemini rate limited (429, attempt {}/{}). Waiting {}s…",
+                    attempt + 1,
+                    max_attempts,
+                    wait_secs
+                );
                 tokio::time::sleep(tokio::time::Duration::from_secs(wait_secs)).await;
                 last_error = format!("Gemini rate limited: {}", error_text).into();
                 continue;
@@ -8613,7 +9054,12 @@ Provide ONLY the JSON object, no markdown, no code blocks, no other text."#,
             last_error = format!("Gemini API error (HTTP {}): {}", status, error_text).into();
 
             if attempt < max_attempts - 1 {
-                tracing::warn!("Gemini attempt {}/{} failed, retrying: {}", attempt + 1, max_attempts, last_error);
+                tracing::warn!(
+                    "Gemini attempt {}/{} failed, retrying: {}",
+                    attempt + 1,
+                    max_attempts,
+                    last_error
+                );
                 tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
             }
         }
@@ -8637,7 +9083,10 @@ Provide ONLY the JSON object, no markdown, no code blocks, no other text."#,
         min_duration_secs: f64,
         max_duration_secs: f64,
         high_performing_factors: &[String],
-    ) -> Result<crate::clipping::gemini_video_analyzer::VideoAnalysis, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<
+        crate::clipping::gemini_video_analyzer::VideoAnalysis,
+        Box<dyn std::error::Error + Send + Sync>,
+    > {
         let _permit = self
             .semaphore
             .acquire()
@@ -8856,7 +9305,9 @@ Provide ONLY the JSON object, no markdown, no code blocks, no other text."#,
                 let wait_secs = (parse_gemini_retry_delay(&error_text, 30.0) + 5.0) as u64;
                 tracing::warn!(
                     "⏳ Gemini rate limited (local-file analysis, attempt {}/{}). Waiting {}s…",
-                    attempt + 1, max_attempts, wait_secs
+                    attempt + 1,
+                    max_attempts,
+                    wait_secs
                 );
                 tokio::time::sleep(tokio::time::Duration::from_secs(wait_secs)).await;
                 last_error = format!("Rate limited: {}", error_text).into();
@@ -8868,7 +9319,9 @@ Provide ONLY the JSON object, no markdown, no code blocks, no other text."#,
             if attempt < max_attempts - 1 {
                 tracing::warn!(
                     "Local-file analysis attempt {}/{} failed, retrying: {}",
-                    attempt + 1, max_attempts, last_error
+                    attempt + 1,
+                    max_attempts,
+                    last_error
                 );
                 tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
             }
@@ -8884,7 +9337,10 @@ Provide ONLY the JSON object, no markdown, no code blocks, no other text."#,
         &self,
         prompt: &str,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        let _permit = self.semaphore.acquire().await
+        let _permit = self
+            .semaphore
+            .acquire()
+            .await
             .map_err(|e| format!("Gemini semaphore error: {}", e))?;
 
         let url = format!(
@@ -8931,7 +9387,9 @@ Provide ONLY the JSON object, no markdown, no code blocks, no other text."#,
                 let wait = (parse_gemini_retry_delay(&err_body, 60.0) + 5.0) as u64;
                 tracing::warn!(
                     "⏳ generate_text: Gemini 429 (attempt {}/{}). Waiting {}s…",
-                    attempt + 1, max_attempts, wait
+                    attempt + 1,
+                    max_attempts,
+                    wait
                 );
                 tokio::time::sleep(tokio::time::Duration::from_secs(wait)).await;
                 last_err = format!("Gemini API error: {}", err_body).into();

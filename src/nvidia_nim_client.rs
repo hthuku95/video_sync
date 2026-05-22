@@ -92,7 +92,9 @@ impl NvidiaNimClient {
                 let wait = 15u64; // NVIDIA's 40 RPM = retry after ~15s
                 tracing::warn!(
                     "⏳ NVIDIA NIM 429 (attempt {}/{}). Waiting {}s…",
-                    attempt + 1, max_attempts, wait
+                    attempt + 1,
+                    max_attempts,
+                    wait
                 );
                 tokio::time::sleep(tokio::time::Duration::from_secs(wait)).await;
                 last_err = format!("NVIDIA NIM 429: {}", err_body).into();
@@ -112,35 +114,40 @@ impl NvidiaNimClient {
 
     /// Convert Gemini-format FunctionDeclarations to OpenAI-format tools array.
     fn to_openai_tools(decls: &[crate::gemini_client::FunctionDeclaration]) -> serde_json::Value {
-        let tools: Vec<serde_json::Value> = decls.iter().map(|d| {
-            let props: serde_json::Map<String, serde_json::Value> = d.parameters.properties
-                .iter()
-                .map(|(k, v)| {
-                    let mut prop = serde_json::json!({
-                        "type": v.prop_type,
-                        "description": v.description,
-                    });
-                    // Preserve array item types if present
-                    if let Some(ref items) = v.items {
-                        prop["items"] = serde_json::json!({ "type": items });
-                    }
-                    (k.clone(), prop)
-                })
-                .collect();
+        let tools: Vec<serde_json::Value> = decls
+            .iter()
+            .map(|d| {
+                let props: serde_json::Map<String, serde_json::Value> = d
+                    .parameters
+                    .properties
+                    .iter()
+                    .map(|(k, v)| {
+                        let mut prop = serde_json::json!({
+                            "type": v.prop_type,
+                            "description": v.description,
+                        });
+                        // Preserve array item types if present
+                        if let Some(ref items) = v.items {
+                            prop["items"] = serde_json::json!({ "type": items });
+                        }
+                        (k.clone(), prop)
+                    })
+                    .collect();
 
-            serde_json::json!({
-                "type": "function",
-                "function": {
-                    "name": d.name,
-                    "description": d.description,
-                    "parameters": {
-                        "type": "object",
-                        "properties": props,
-                        "required": d.parameters.required,
+                serde_json::json!({
+                    "type": "function",
+                    "function": {
+                        "name": d.name,
+                        "description": d.description,
+                        "parameters": {
+                            "type": "object",
+                            "properties": props,
+                            "required": d.parameters.required,
+                        }
                     }
-                }
+                })
             })
-        }).collect();
+            .collect();
 
         serde_json::Value::Array(tools)
     }
@@ -194,9 +201,13 @@ impl NvidiaNimClient {
                             let id = tc["id"].as_str()?.to_string();
                             let name = tc["function"]["name"].as_str()?.to_string();
                             let args_str = tc["function"]["arguments"].as_str().unwrap_or("{}");
-                            let arguments = serde_json::from_str(args_str)
-                                .unwrap_or(serde_json::json!({}));
-                            Some(NimToolCall { id, name, arguments })
+                            let arguments =
+                                serde_json::from_str(args_str).unwrap_or(serde_json::json!({}));
+                            Some(NimToolCall {
+                                id,
+                                name,
+                                arguments,
+                            })
                         })
                         .collect();
                     return Ok(NimResponse::ToolCalls(tool_calls));
@@ -214,7 +225,8 @@ impl NvidiaNimClient {
             if status.as_u16() == 429 && attempt < max_attempts - 1 {
                 tracing::warn!(
                     "⏳ NVIDIA NIM tool call 429 (attempt {}/{}). Waiting 15s…",
-                    attempt + 1, max_attempts
+                    attempt + 1,
+                    max_attempts
                 );
                 tokio::time::sleep(tokio::time::Duration::from_secs(15)).await;
                 last_err = format!("NVIDIA NIM 429: {}", err_body).into();

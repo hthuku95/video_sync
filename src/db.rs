@@ -1,8 +1,10 @@
 // src/db.rs
-use sqlx::postgres::PgPoolOptions;
+use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::PgPool;
 use std::env;
+use std::str::FromStr;
 use std::time::Duration;
+use tokio::time::timeout;
 
 pub async fn create_pool() -> Result<PgPool, sqlx::Error> {
     let db_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
@@ -11,26 +13,36 @@ pub async fn create_pool() -> Result<PgPool, sqlx::Error> {
     // Formula: 5 (API endpoints) + worker_concurrency + 2 (buffer)
     // Allow manual override via DATABASE_MAX_CONNECTIONS env var
     let max_connections = if let Ok(max_conn_str) = env::var("DATABASE_MAX_CONNECTIONS") {
-        max_conn_str
-            .parse::<u32>()
-            .unwrap_or_else(|_| {
-                tracing::warn!("Invalid DATABASE_MAX_CONNECTIONS value, using default");
-                calculate_recommended_pool_size()
-            })
+        max_conn_str.parse::<u32>().unwrap_or_else(|_| {
+            tracing::warn!("Invalid DATABASE_MAX_CONNECTIONS value, using default");
+            calculate_recommended_pool_size()
+        })
     } else {
         calculate_recommended_pool_size()
     };
 
-    tracing::info!("📊 Database connection pool size: {} connections", max_connections);
+    tracing::info!(
+        "📊 Database connection pool size: {} connections",
+        max_connections
+    );
+
+    let connect_options = PgConnectOptions::from_str(&db_url)?
+        // Our production DB uses a pooled Neon endpoint. Disabling SQLx's
+        // prepared-statement cache avoids "cached plan must not change result
+        // type" failures after schema changes when the pooler reuses backend
+        // sessions with stale prepared plans.
+        .statement_cache_capacity(0);
 
     let pool = PgPoolOptions::new()
         .max_connections(max_connections)
         .acquire_timeout(Duration::from_secs(60))
-        .connect(&db_url)
+        .connect_with(connect_options)
         .await?;
 
-    // Run migrations on startup
-    run_migrations(&pool).await?;
+    // Run migrations on startup, but do not let a migration lock wait prevent
+    // Cloud Run from ever seeing the HTTP port. Real migration SQL errors still
+    // fail startup; only a long wait is treated as a deploy-health risk.
+    run_startup_migrations_with_timeout(&pool).await?;
 
     Ok(pool)
 }
@@ -62,6 +74,20 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     // sqlx::migrate!() is a proc macro — Cargo only re-runs it when THIS file
     // changes. Touching this file forces the macro to re-scan ./migrations and
     // embed all current migration files.
+    // Last touched: 2026-05-19 to force sqlx::migrate!() to re-embed the
+    // current migration set, including:
+    //   20260519190000 - app_workflow_nodes durable node execution
+    //   20260517020000 - fallback_rendering clipping status
+    //   20260517010000 - delivery YouTube upload recovery tracking
+    //   20260516070000 - agentic prospect discovery state
+    //   20260516060000 - Revenue V1 prospect fields
+    // Previous touch: 2026-05-11 for:
+    //   20260413000000 — scope_instagram_leads_per_user
+    //   20260510000000 — app_workflows
+    //   20260510010000 — workflow links on clipping_jobs/manual_clipping_jobs
+    //   20260510020000 — workflow link on deliveries
+    //   20260510030000 — workflow link on gig_sample_videos
+    // Earlier touch notes:
     // Last touched: 2026-04-17 to pick up:
     //   20260417000000 — preview_r2_url + qa_retry_count + source_url
     //                    on deliveries (iterative QA + free/paid split)
@@ -79,47 +105,25 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     // prospects + IG leads service/sample) after the 20260413000000
     // checksum-mismatch fix.
     sqlx::migrate!("./migrations").run(pool).await?;
-    
+
     tracing::info!("Database migrations completed successfully");
     Ok(())
 }
 
-fn split_sql_statements(sql: &str) -> Vec<String> {
-    let mut statements = Vec::new();
-    let mut current_statement = String::new();
-    let mut in_single_quote = false;
-    let mut in_double_quote = false;
-    let mut chars = sql.chars().peekable();
-    
-    while let Some(ch) = chars.next() {
-        match ch {
-            '\'' if !in_double_quote => {
-                in_single_quote = !in_single_quote;
-                current_statement.push(ch);
-            }
-            '"' if !in_single_quote => {
-                in_double_quote = !in_double_quote;
-                current_statement.push(ch);
-            }
-            ';' if !in_single_quote && !in_double_quote => {
-                current_statement.push(ch);
-                let trimmed = current_statement.trim().to_string();
-                if !trimmed.is_empty() && !trimmed.starts_with("--") {
-                    statements.push(trimmed);
-                }
-                current_statement.clear();
-            }
-            _ => {
-                current_statement.push(ch);
-            }
+async fn run_startup_migrations_with_timeout(pool: &PgPool) -> Result<(), sqlx::Error> {
+    let timeout_secs = env::var("VIDEO_SYNC_MIGRATION_TIMEOUT_SECONDS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(45);
+
+    match timeout(Duration::from_secs(timeout_secs), run_migrations(pool)).await {
+        Ok(result) => result,
+        Err(_) => {
+            tracing::warn!(
+                "Database migrations did not finish within {}s; continuing startup so Cloud Run can bind. Run migrations out-of-band if a new schema change is pending.",
+                timeout_secs
+            );
+            Ok(())
         }
     }
-    
-    // Add the last statement if it doesn't end with semicolon
-    let trimmed = current_statement.trim().to_string();
-    if !trimmed.is_empty() && !trimmed.starts_with("--") {
-        statements.push(trimmed);
-    }
-    
-    statements
 }

@@ -12,9 +12,8 @@
 
 mod helpers;
 use helpers::prospect_helpers::{
-    http_client, ensure_and_login, create_test_run, start_test_result,
-    pass_test_result, fail_test_result, finalize_run,
-    poll_phantombuster_job, poll_phantombuster_jobs_for_run,
+    create_test_run, ensure_and_login, fail_test_result, finalize_run, http_client,
+    pass_test_result, poll_phantombuster_job, poll_phantombuster_jobs_for_run, start_test_result,
 };
 use sqlx::postgres::PgPoolOptions;
 use uuid::Uuid;
@@ -22,8 +21,7 @@ use uuid::Uuid;
 // ─── Shared setup ──────────────────────────────────────────────────────────
 
 fn base_url() -> String {
-    std::env::var("TEST_BASE_URL")
-        .unwrap_or_else(|_| "https://www.videosync.video".to_string())
+    std::env::var("TEST_BASE_URL").unwrap_or_else(|_| "https://www.videosync.video".to_string())
 }
 
 async fn db_pool() -> sqlx::PgPool {
@@ -38,9 +36,9 @@ async fn db_pool() -> sqlx::PgPool {
 
 async fn auth_token(pool: &sqlx::PgPool) -> String {
     dotenvy::dotenv().ok();
-    let base  = base_url();
+    let base = base_url();
     let email = std::env::var("TEST_ADMIN_EMAIL").expect("TEST_ADMIN_EMAIL not set");
-    let pw    = std::env::var("TEST_ADMIN_PASSWORD").expect("TEST_ADMIN_PASSWORD not set");
+    let pw = std::env::var("TEST_ADMIN_PASSWORD").expect("TEST_ADMIN_PASSWORD not set");
     ensure_and_login(pool, &base, &email, &pw)
         .await
         .expect("Login failed — check TEST_ADMIN_EMAIL / TEST_ADMIN_PASSWORD")
@@ -53,14 +51,20 @@ async fn auth_token(pool: &sqlx::PgPool) -> String {
 #[ignore]
 async fn test_instagram_hashtag_search() {
     dotenvy::dotenv().ok();
-    let pool    = db_pool().await;
-    let base    = base_url();
-    let token   = auth_token(&pool).await;
-    let run_id  = create_test_run(&pool, "prospect_finder_instagram_hashtag_search")
-        .await.expect("create_test_run failed");
-    let result_id = start_test_result(&pool, run_id, "instagram_hashtag_search",
-        "POST /api/instagram/leads/search with hashtag=contentcreator")
-        .await.expect("start_test_result failed");
+    let pool = db_pool().await;
+    let base = base_url();
+    let token = auth_token(&pool).await;
+    let run_id = create_test_run(&pool, "prospect_finder_instagram_hashtag_search")
+        .await
+        .expect("create_test_run failed");
+    let result_id = start_test_result(
+        &pool,
+        run_id,
+        "instagram_hashtag_search",
+        "POST /api/instagram/leads/search with hashtag=contentcreator",
+    )
+    .await
+    .expect("start_test_result failed");
 
     let client = http_client(30).unwrap();
 
@@ -107,7 +111,10 @@ async fn test_instagram_hashtag_search() {
     }
 
     let job_id_str = body["job_id"].as_str().unwrap_or("").to_string();
-    println!("✅ Instagram hashtag search launched — job_id: {}", job_id_str);
+    println!(
+        "✅ Instagram hashtag search launched — job_id: {}",
+        job_id_str
+    );
 
     // ── Poll PhantomBuster job (5 min timeout) ─────────────────────────────
     if let Ok(job_id) = job_id_str.parse::<Uuid>() {
@@ -127,13 +134,12 @@ async fn test_instagram_hashtag_search() {
     }
 
     // ── Verify leads landed in DB ──────────────────────────────────────────
-    let lead_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM instagram_leads WHERE hashtag_source = $1",
-    )
-    .bind(hashtag)
-    .fetch_one(&pool)
-    .await
-    .unwrap_or(0);
+    let lead_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM instagram_leads WHERE hashtag_source = $1")
+            .bind(hashtag)
+            .fetch_one(&pool)
+            .await
+            .unwrap_or(0);
 
     let has_followers: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM instagram_leads WHERE hashtag_source = $1 AND followers_count IS NOT NULL",
@@ -143,18 +149,31 @@ async fn test_instagram_hashtag_search() {
     .await
     .unwrap_or(0);
 
-    println!("Instagram leads for #{}: {} total, {} with followers_count", hashtag, lead_count, has_followers);
+    println!(
+        "Instagram leads for #{}: {} total, {} with followers_count",
+        hashtag, lead_count, has_followers
+    );
 
     if lead_count == 0 {
-        let err = format!("No instagram_leads found for hashtag_source='{}' after job completed", hashtag);
+        let err = format!(
+            "No instagram_leads found for hashtag_source='{}' after job completed",
+            hashtag
+        );
         fail_test_result(&pool, result_id, run_id, &err).await;
     } else {
-        let detail = format!("{} leads found for #{}, {} with followers_count populated", lead_count, hashtag, has_followers);
+        let detail = format!(
+            "{} leads found for #{}, {} with followers_count populated",
+            lead_count, hashtag, has_followers
+        );
         pass_test_result(&pool, result_id, run_id, &detail).await;
     }
 
     finalize_run(&pool, run_id).await;
-    assert!(lead_count > 0, "Expected >0 Instagram leads for #{}", hashtag);
+    assert!(
+        lead_count > 0,
+        "Expected >0 Instagram leads for #{}",
+        hashtag
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -164,14 +183,20 @@ async fn test_instagram_hashtag_search() {
 #[ignore]
 async fn test_instagram_auto_discover() {
     dotenvy::dotenv().ok();
-    let pool   = db_pool().await;
-    let base   = base_url();
-    let token  = auth_token(&pool).await;
+    let pool = db_pool().await;
+    let base = base_url();
+    let token = auth_token(&pool).await;
     let run_id = create_test_run(&pool, "prospect_finder_instagram_auto_discover")
-        .await.expect("create_test_run failed");
-    let result_id = start_test_result(&pool, run_id, "instagram_auto_discover",
-        "POST /api/instagram/leads/auto-discover niche=youtuber hashtag_count=2")
-        .await.expect("start_test_result failed");
+        .await
+        .expect("create_test_run failed");
+    let result_id = start_test_result(
+        &pool,
+        run_id,
+        "instagram_auto_discover",
+        "POST /api/instagram/leads/auto-discover niche=youtuber hashtag_count=2",
+    )
+    .await
+    .expect("start_test_result failed");
 
     let client = http_client(30).unwrap();
     let before: chrono::DateTime<chrono::Utc> = chrono::Utc::now();
@@ -216,7 +241,10 @@ async fn test_instagram_auto_discover() {
         panic!("{}", err);
     }
 
-    println!("✅ auto-discover launched: {}", body["message"].as_str().unwrap_or(""));
+    println!(
+        "✅ auto-discover launched: {}",
+        body["message"].as_str().unwrap_or("")
+    );
 
     // Extract all job IDs returned
     let mut pb_job_ids: Vec<Uuid> = Vec::new();
@@ -234,7 +262,10 @@ async fn test_instagram_auto_discover() {
         }
     }
 
-    println!("Polling {} PhantomBuster job(s) (up to 8 min)...", pb_job_ids.len());
+    println!(
+        "Polling {} PhantomBuster job(s) (up to 8 min)...",
+        pb_job_ids.len()
+    );
     if !pb_job_ids.is_empty() {
         let done = poll_phantombuster_jobs_for_run(&pool, &pb_job_ids, 480).await;
         if !done {
@@ -262,8 +293,13 @@ async fn test_instagram_auto_discover() {
         let msg = format!("auto-discover launched successfully. {} youtuber leads found after polling (may still be ingesting).", lead_count);
         pass_test_result(&pool, result_id, run_id, &msg).await;
     } else {
-        pass_test_result(&pool, result_id, run_id,
-            &format!("{} youtuber leads ingested after auto-discover", lead_count)).await;
+        pass_test_result(
+            &pool,
+            result_id,
+            run_id,
+            &format!("{} youtuber leads ingested after auto-discover", lead_count),
+        )
+        .await;
     }
 
     finalize_run(&pool, run_id).await;
@@ -276,14 +312,20 @@ async fn test_instagram_auto_discover() {
 #[ignore]
 async fn test_instagram_list_and_structure() {
     dotenvy::dotenv().ok();
-    let pool   = db_pool().await;
-    let base   = base_url();
-    let token  = auth_token(&pool).await;
+    let pool = db_pool().await;
+    let base = base_url();
+    let token = auth_token(&pool).await;
     let run_id = create_test_run(&pool, "prospect_finder_instagram_list")
-        .await.expect("create_test_run failed");
-    let result_id = start_test_result(&pool, run_id, "instagram_list_and_structure",
-        "GET /api/instagram/leads?limit=20&min_followers=1000")
-        .await.expect("start_test_result failed");
+        .await
+        .expect("create_test_run failed");
+    let result_id = start_test_result(
+        &pool,
+        run_id,
+        "instagram_list_and_structure",
+        "GET /api/instagram/leads?limit=20&min_followers=1000",
+    )
+    .await
+    .expect("start_test_result failed");
 
     let client = http_client(30).unwrap();
 
@@ -377,14 +419,20 @@ async fn test_instagram_list_and_structure() {
 #[ignore]
 async fn test_instagram_generate_dm() {
     dotenvy::dotenv().ok();
-    let pool   = db_pool().await;
-    let base   = base_url();
-    let token  = auth_token(&pool).await;
+    let pool = db_pool().await;
+    let base = base_url();
+    let token = auth_token(&pool).await;
     let run_id = create_test_run(&pool, "prospect_finder_instagram_generate_dm")
-        .await.expect("create_test_run failed");
-    let result_id = start_test_result(&pool, run_id, "instagram_generate_dm",
-        "POST /api/instagram/leads/:id/generate-dm for top-scored lead")
-        .await.expect("start_test_result failed");
+        .await
+        .expect("create_test_run failed");
+    let result_id = start_test_result(
+        &pool,
+        run_id,
+        "instagram_generate_dm",
+        "POST /api/instagram/leads/:id/generate-dm for top-scored lead",
+    )
+    .await
+    .expect("start_test_result failed");
 
     // Pick the top lead by score (or first with followers > 1000)
     let lead_id: Option<Uuid> = sqlx::query_scalar(
@@ -413,7 +461,10 @@ async fn test_instagram_generate_dm() {
 
     let client = http_client(60).unwrap();
     let res = client
-        .post(format!("{}/api/instagram/leads/{}/generate-dm", base, lead_id))
+        .post(format!(
+            "{}/api/instagram/leads/{}/generate-dm",
+            base, lead_id
+        ))
         .bearer_auth(&token)
         .json(&serde_json::json!({}))
         .send()
@@ -459,14 +510,13 @@ async fn test_instagram_generate_dm() {
     println!("DM generated ({} chars)", dm_script.len());
 
     // Verify DB was updated
-    let saved: Option<String> = sqlx::query_scalar(
-        "SELECT dm_script FROM instagram_leads WHERE id = $1",
-    )
-    .bind(lead_id)
-    .fetch_optional(&pool)
-    .await
-    .ok()
-    .flatten();
+    let saved: Option<String> =
+        sqlx::query_scalar("SELECT dm_script FROM instagram_leads WHERE id = $1")
+            .bind(lead_id)
+            .fetch_optional(&pool)
+            .await
+            .ok()
+            .flatten();
 
     if saved.as_deref().unwrap_or("").is_empty() {
         let err = format!("dm_script was not persisted to DB for lead {}", lead_id);
@@ -491,14 +541,20 @@ async fn test_instagram_generate_dm() {
 #[ignore]
 async fn test_linkedin_list_agents() {
     dotenvy::dotenv().ok();
-    let pool   = db_pool().await;
-    let base   = base_url();
-    let token  = auth_token(&pool).await;
+    let pool = db_pool().await;
+    let base = base_url();
+    let token = auth_token(&pool).await;
     let run_id = create_test_run(&pool, "prospect_finder_linkedin_list_agents")
-        .await.expect("create_test_run failed");
-    let result_id = start_test_result(&pool, run_id, "linkedin_list_agents",
-        "GET /api/admin/prospects/linkedin/agents")
-        .await.expect("start_test_result failed");
+        .await
+        .expect("create_test_run failed");
+    let result_id = start_test_result(
+        &pool,
+        run_id,
+        "linkedin_list_agents",
+        "GET /api/admin/prospects/linkedin/agents",
+    )
+    .await
+    .expect("start_test_result failed");
 
     let client = http_client(30).unwrap();
 
@@ -548,10 +604,17 @@ async fn test_linkedin_list_agents() {
             finalize_run(&pool, run_id).await;
             panic!("{}", err);
         }
-        println!("  Agent: {} — {}", agent["id"].as_str().unwrap_or(""), agent["name"].as_str().unwrap_or(""));
+        println!(
+            "  Agent: {} — {}",
+            agent["id"].as_str().unwrap_or(""),
+            agent["name"].as_str().unwrap_or("")
+        );
     }
 
-    let detail = format!("{} PhantomBuster agents found, all have id + name", agents.len());
+    let detail = format!(
+        "{} PhantomBuster agents found, all have id + name",
+        agents.len()
+    );
     pass_test_result(&pool, result_id, run_id, &detail).await;
     finalize_run(&pool, run_id).await;
 }
@@ -565,26 +628,34 @@ async fn test_linkedin_smart_search() {
     dotenvy::dotenv().ok();
 
     // Skip gracefully if LinkedIn cookie not configured
-    if std::env::var("LINKEDIN_SESSION_COOKIE").map(|v| v.is_empty()).unwrap_or(true) {
+    if std::env::var("LINKEDIN_SESSION_COOKIE")
+        .map(|v| v.is_empty())
+        .unwrap_or(true)
+    {
         eprintln!("⏭  Skipping test_linkedin_smart_search: LINKEDIN_SESSION_COOKIE not set in env");
         return;
     }
 
-    let pool   = db_pool().await;
-    let base   = base_url();
-    let token  = auth_token(&pool).await;
+    let pool = db_pool().await;
+    let base = base_url();
+    let token = auth_token(&pool).await;
     let run_id = create_test_run(&pool, "prospect_finder_linkedin_smart_search")
-        .await.expect("create_test_run failed");
-    let result_id = start_test_result(&pool, run_id, "linkedin_smart_search",
-        "POST /api/admin/prospects/linkedin/search — YouTubers and podcast hosts in US")
-        .await.expect("start_test_result failed");
-
-    let before_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM prospects WHERE platform = 'linkedin'",
+        .await
+        .expect("create_test_run failed");
+    let result_id = start_test_result(
+        &pool,
+        run_id,
+        "linkedin_smart_search",
+        "POST /api/admin/prospects/linkedin/search — YouTubers and podcast hosts in US",
     )
-    .fetch_one(&pool)
     .await
-    .unwrap_or(0);
+    .expect("start_test_result failed");
+
+    let before_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM prospects WHERE platform = 'linkedin'")
+            .fetch_one(&pool)
+            .await
+            .unwrap_or(0);
 
     let client = http_client(30).unwrap();
 
@@ -634,7 +705,10 @@ async fn test_linkedin_smart_search() {
     if let Ok(job_id) = job_id_str.parse::<Uuid>() {
         let done = poll_phantombuster_job(&pool, job_id, 300).await;
         if !done {
-            let msg = format!("PB job {} did not complete within 5 min; launch succeeded", job_id);
+            let msg = format!(
+                "PB job {} did not complete within 5 min; launch succeeded",
+                job_id
+            );
             eprintln!("⚠️  {}", msg);
             pass_test_result(&pool, result_id, run_id, &msg).await;
             finalize_run(&pool, run_id).await;
@@ -643,7 +717,10 @@ async fn test_linkedin_smart_search() {
 
         // Fetch results via the dedicated endpoint
         let fetch_res = client
-            .get(format!("{}/api/admin/prospects/linkedin/jobs/{}/results", base, job_id))
+            .get(format!(
+                "{}/api/admin/prospects/linkedin/jobs/{}/results",
+                base, job_id
+            ))
             .bearer_auth(&token)
             .send()
             .await;
@@ -658,14 +735,16 @@ async fn test_linkedin_smart_search() {
     }
 
     // Verify prospects count increased
-    let after_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM prospects WHERE platform = 'linkedin'",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap_or(0);
+    let after_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM prospects WHERE platform = 'linkedin'")
+            .fetch_one(&pool)
+            .await
+            .unwrap_or(0);
 
-    println!("LinkedIn prospects: {} before → {} after", before_count, after_count);
+    println!(
+        "LinkedIn prospects: {} before → {} after",
+        before_count, after_count
+    );
     let new_leads = after_count - before_count;
 
     let detail = format!("{} new LinkedIn prospects imported", new_leads);

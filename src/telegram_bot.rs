@@ -28,11 +28,15 @@ use std::sync::Arc;
 const TELEGRAM_API_BASE: &str = "https://api.telegram.org";
 
 fn bot_token() -> Option<String> {
-    std::env::var("TELEGRAM_BOT_TOKEN").ok().filter(|s| !s.is_empty())
+    std::env::var("TELEGRAM_BOT_TOKEN")
+        .ok()
+        .filter(|s| !s.is_empty())
 }
 
 fn admin_chat_id() -> Option<i64> {
-    std::env::var("TELEGRAM_ADMIN_USER_ID").ok().and_then(|s| s.parse().ok())
+    std::env::var("TELEGRAM_ADMIN_USER_ID")
+        .ok()
+        .and_then(|s| s.parse().ok())
 }
 
 fn bot_enabled() -> bool {
@@ -42,11 +46,14 @@ fn bot_enabled() -> bool {
 /// Send a Markdown-formatted message to the configured admin. No-op if
 /// the bot env vars aren't set — safe to call from any payment handler.
 pub async fn notify_admin(text: &str) {
-    let (Some(token), Some(chat_id)) = (bot_token(), admin_chat_id()) else { return; };
+    let (Some(token), Some(chat_id)) = (bot_token(), admin_chat_id()) else {
+        return;
+    };
 
     let client = match reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
-        .build() {
+        .build()
+    {
         Ok(c) => c,
         Err(_) => return,
     };
@@ -72,29 +79,29 @@ pub async fn notify_admin(text: &str) {
 
 #[derive(Debug, Deserialize)]
 struct GetUpdatesResponse {
-    ok:     bool,
+    ok: bool,
     result: Option<Vec<Update>>,
 }
 
 #[derive(Debug, Deserialize)]
 struct Update {
     update_id: i64,
-    message:   Option<Message>,
+    message: Option<Message>,
 }
 
 #[derive(Debug, Deserialize)]
 struct Message {
     message_id: i64,
-    from:       Option<User>,
-    chat:       Chat,
-    text:       Option<String>,
+    from: Option<User>,
+    chat: Chat,
+    text: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 struct User {
-    id:         i64,
+    id: i64,
     first_name: Option<String>,
-    username:   Option<String>,
+    username: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -119,7 +126,8 @@ pub async fn start_worker(state: Arc<AppState>) {
 
     let client = match reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(45)) // > long-poll timeout
-        .build() {
+        .build()
+    {
         Ok(c) => c,
         Err(e) => {
             tracing::error!("Telegram bot: HTTP client init failed: {}", e);
@@ -128,7 +136,7 @@ pub async fn start_worker(state: Arc<AppState>) {
     };
 
     let token = bot_token().unwrap();
-    let url   = format!("{}/bot{}/getUpdates", TELEGRAM_API_BASE, token);
+    let url = format!("{}/bot{}/getUpdates", TELEGRAM_API_BASE, token);
 
     // Offset persists across iterations so Telegram only returns updates
     // we haven't acked yet. Reset to 0 on startup — Telegram will replay
@@ -171,20 +179,30 @@ pub async fn start_worker(state: Arc<AppState>) {
             // Always advance offset so a single bad message doesn't loop us.
             offset = u.update_id + 1;
 
-            let Some(msg) = u.message else { continue; };
-            let Some(text) = msg.text.as_deref() else { continue; };
+            let Some(msg) = u.message else {
+                continue;
+            };
+            let Some(text) = msg.text.as_deref() else {
+                continue;
+            };
             let user_id = msg.from.as_ref().map(|u| u.id).unwrap_or(0);
 
             // Only DMs, not groups. Groups have negative chat ids.
-            if msg.chat.id < 0 { continue; }
+            if msg.chat.id < 0 {
+                continue;
+            }
 
             // Spawn per-message handling so one slow LLM call doesn't
             // block the long-poll.
             let state_clone = state.clone();
-            let text_owned  = text.to_string();
-            let chat_id     = msg.chat.id;
-            let msg_id      = msg.message_id;
-            let username    = msg.from.as_ref().and_then(|u| u.username.clone()).unwrap_or_default();
+            let text_owned = text.to_string();
+            let chat_id = msg.chat.id;
+            let msg_id = msg.message_id;
+            let username = msg
+                .from
+                .as_ref()
+                .and_then(|u| u.username.clone())
+                .unwrap_or_default();
             tokio::spawn(async move {
                 handle_dm(state_clone, chat_id, msg_id, user_id, username, text_owned).await;
             });
@@ -193,12 +211,12 @@ pub async fn start_worker(state: Arc<AppState>) {
 }
 
 async fn handle_dm(
-    state:      Arc<AppState>,
-    chat_id:    i64,
-    reply_to:   i64,
-    _user_id:   i64,
-    username:   String,
-    text:       String,
+    state: Arc<AppState>,
+    chat_id: i64,
+    reply_to: i64,
+    _user_id: i64,
+    username: String,
+    text: String,
 ) {
     // First ping admin so they know someone DM'd the bot — helpful when
     // the AI response isn't good enough and they want to jump in.
@@ -206,20 +224,32 @@ async fn handle_dm(
         "📨 *New Telegram DM to @videosync\\_sales\\_bot*\n\
         From: {user}\n\
         Message: `{msg}`",
-        user = if username.is_empty() { format!("user {}", chat_id) } else { format!("@{}", username) },
-        msg  = text.chars().take(200).collect::<String>(),
+        user = if username.is_empty() {
+            format!("user {}", chat_id)
+        } else {
+            format!("@{}", username)
+        },
+        msg = text.chars().take(200).collect::<String>(),
     );
     // Fire-and-forget — don't block the reply on the admin ping.
-    tokio::spawn(async move { notify_admin(&admin_blurb).await; });
+    tokio::spawn(async move {
+        notify_admin(&admin_blurb).await;
+    });
 
     // Generate an AI reply using our LLM stack.
-    let prompt = format!("{}\n\nIncoming message from user:\n\"\"\"\n{}\n\"\"\"\n\nYour reply:", telegram_system_pitch(), text);
+    let prompt = format!(
+        "{}\n\nIncoming message from user:\n\"\"\"\n{}\n\"\"\"\n\nYour reply:",
+        telegram_system_pitch(),
+        text
+    );
     let reply = match generate_text_best_effort(
         state.nvidia_nim_client.as_ref(),
         state.gemma_client.as_ref(),
         state.gemini_client.as_ref(),
         &prompt,
-    ).await {
+    )
+    .await
+    {
         Ok(r) => r.trim().to_string(),
         Err(e) => {
             tracing::warn!("Telegram bot AI reply failed: {}", e);
@@ -233,10 +263,13 @@ async fn handle_dm(
 }
 
 async fn send_text_reply(chat_id: i64, reply_to: i64, text: &str) {
-    let Some(token) = bot_token() else { return; };
+    let Some(token) = bot_token() else {
+        return;
+    };
     let client = match reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
-        .build() {
+        .build()
+    {
         Ok(c) => c,
         Err(_) => return,
     };

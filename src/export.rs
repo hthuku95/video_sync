@@ -1,14 +1,9 @@
 // src/export.rs
 
-
 use crate::utils::execute_ffmpeg_command;
 use std::process::Command;
 
-pub fn convert_format(
-    input_file: &str,
-    output_file: &str,
-    format: &str,
-) -> Result<String, String> {
+pub fn convert_format(input_file: &str, output_file: &str, format: &str) -> Result<String, String> {
     // Map common extensions to FFmpeg muxer names
     let ffmpeg_format = match format {
         "mkv" => "matroska",
@@ -44,7 +39,9 @@ pub fn export_custom_quality(
     command.arg("-i").arg(input_file);
 
     if let Some((width, height)) = resolution {
-        command.arg("-vf").arg(format!("scale={}:{}", width, height));
+        command
+            .arg("-vf")
+            .arg(format!("scale={}:{}", width, height));
     }
 
     if let Some(b) = bitrate {
@@ -101,11 +98,7 @@ pub fn export_for_platform(
     execute_ffmpeg_command(command)
 }
 
-pub fn compress_video(
-    input_file: &str,
-    output_file: &str,
-    preset: &str,
-) -> Result<String, String> {
+pub fn compress_video(input_file: &str, output_file: &str, preset: &str) -> Result<String, String> {
     let crf = match preset {
         "light" => "24",
         "medium" => "28",

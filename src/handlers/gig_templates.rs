@@ -7,8 +7,10 @@
 //   POST /api/gig-templates/:id/generate-sample — spawn sample render    (auth)
 //   DELETE /api/gig-samples/:id                — delete a sample         (auth)
 
-use crate::AppState;
 use crate::middleware::auth::auth_middleware;
+use crate::middleware::clipping_access::clipping_access_middleware;
+use crate::models::auth::Claims;
+use crate::AppState;
 use axum::{
     extract::{Extension, Path},
     http::StatusCode,
@@ -22,13 +24,16 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 pub fn gig_template_routes() -> Router {
-    let public = Router::new()
-        .route("/gig-templates", get(gig_templates_page));
+    let public = Router::new().route("/gig-templates", get(gig_templates_page));
 
     let protected = Router::new()
         .route("/api/gig-templates", get(api_list_gig_templates))
-        .route("/api/gig-templates/:id/generate-sample", post(api_generate_sample))
+        .route(
+            "/api/gig-templates/:id/generate-sample",
+            post(api_generate_sample),
+        )
         .route("/api/gig-samples/:id", delete(api_delete_sample))
+        .layer(axum::middleware::from_fn(clipping_access_middleware))
         .layer(axum::middleware::from_fn(auth_middleware));
 
     public.merge(protected)
@@ -42,9 +47,7 @@ pub async fn gig_templates_page() -> Html<String> {
 
 // ─── API: list templates + samples ───────────────────────────────────────────
 
-pub async fn api_list_gig_templates(
-    Extension(state): Extension<Arc<AppState>>,
-) -> Json<Value> {
+pub async fn api_list_gig_templates(Extension(state): Extension<Arc<AppState>>) -> Json<Value> {
     let templates = sqlx::query(
         "SELECT id, service_type, display_name, tagline, description,
                 basic_price, basic_delivery_days, basic_includes,
@@ -66,7 +69,7 @@ pub async fn api_list_gig_templates(
         let tid: Uuid = t.get("id");
 
         let samples = sqlx::query(
-            "SELECT id, title, prompt_used, status, output_r2_url, output_filename, error_message, created_at
+            "SELECT id, title, prompt_used, status, output_r2_url, output_filename, error_message, created_at, workflow_id
              FROM gig_sample_videos WHERE template_id = $1 ORDER BY created_at",
         )
         .bind(tid)
@@ -74,16 +77,26 @@ pub async fn api_list_gig_templates(
         .await
         .unwrap_or_default();
 
-        let samples_json: Vec<Value> = samples.iter().map(|s| json!({
-            "id":           s.get::<Uuid, _>("id").to_string(),
-            "title":        s.get::<String, _>("title"),
-            "prompt_used":  s.get::<String, _>("prompt_used"),
-            "status":       s.get::<String, _>("status"),
-            "r2_url":       s.try_get::<String, _>("output_r2_url").ok(),
-            "filename":     s.try_get::<String, _>("output_filename").ok(),
-            "error":        s.try_get::<String, _>("error_message").ok(),
-            "created_at":   s.get::<chrono::DateTime<chrono::Utc>, _>("created_at").to_rfc3339(),
-        })).collect();
+        let mut samples_json = Vec::new();
+        for s in &samples {
+            let refreshed_url = refresh_gig_sample_media_value(
+                &state,
+                s.try_get::<String, _>("output_r2_url").ok(),
+            )
+            .await;
+
+            samples_json.push(json!({
+                "id":           s.get::<Uuid, _>("id").to_string(),
+                "title":        s.get::<String, _>("title"),
+                "prompt_used":  s.get::<String, _>("prompt_used"),
+                "status":       s.get::<String, _>("status"),
+                "r2_url":       refreshed_url,
+                "filename":     s.try_get::<String, _>("output_filename").ok(),
+                "error":        s.try_get::<String, _>("error_message").ok(),
+                "workflow_id":  s.try_get::<Uuid, _>("workflow_id").ok().map(|id| id.to_string()),
+                "created_at":   s.get::<chrono::DateTime<chrono::Utc>, _>("created_at").to_rfc3339(),
+            }));
+        }
 
         result.push(json!({
             "id":                    tid.to_string(),
@@ -115,68 +128,164 @@ pub async fn api_list_gig_templates(
 pub async fn api_generate_sample(
     Path(template_id): Path<Uuid>,
     Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
 ) -> (StatusCode, Json<Value>) {
     // Load template to get service_type and sample_prompts
-    let row = sqlx::query(
-        "SELECT service_type, sample_prompts FROM gig_templates WHERE id = $1",
-    )
-    .bind(template_id)
-    .fetch_optional(&state.db_pool)
-    .await;
+    let row = sqlx::query("SELECT service_type, sample_prompts FROM gig_templates WHERE id = $1")
+        .bind(template_id)
+        .fetch_optional(&state.db_pool)
+        .await;
 
     let row = match row {
         Ok(Some(r)) => r,
-        Ok(None) => return (StatusCode::NOT_FOUND, Json(json!({"error": "Template not found"}))),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("DB error: {e}")}))),
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": "Template not found"})),
+            )
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": format!("DB error: {e}")})),
+            )
+        }
     };
 
     let service_type: String = row.get("service_type");
     let prompts: Value = row.get("sample_prompts");
 
     // Count existing samples to pick next prompt (rotate through 5)
-    let count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM gig_sample_videos WHERE template_id = $1",
-    )
-    .bind(template_id)
-    .fetch_one(&state.db_pool)
-    .await
-    .unwrap_or(0);
+    let count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM gig_sample_videos WHERE template_id = $1")
+            .bind(template_id)
+            .fetch_one(&state.db_pool)
+            .await
+            .unwrap_or(0);
 
     if count >= 5 {
-        return (StatusCode::BAD_REQUEST, Json(json!({"error": "Maximum 5 samples per template. Delete one to generate more."})));
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "Maximum 5 samples per template. Delete one to generate more."})),
+        );
     }
 
     let empty_prompts = vec![];
     let prompts_arr = prompts.as_array().unwrap_or(&empty_prompts);
     let idx = (count as usize) % prompts_arr.len().max(1);
-    let prompt = prompts_arr.get(idx)
+    let prompt = prompts_arr
+        .get(idx)
         .and_then(|v| v.as_str())
         .unwrap_or("Professional 3D animation sample")
         .to_string();
 
     let title = format!("Sample {} — {}", count + 1, &service_type);
+    let user_id = claims.sub.parse::<i32>().unwrap_or(0);
+    let sample_id = Uuid::new_v4();
 
-    // Insert sample record
-    let sample_id: Uuid = sqlx::query_scalar(
-        "INSERT INTO gig_sample_videos (template_id, title, prompt_used, status)
-         VALUES ($1, $2, $3, 'pending') RETURNING id",
+    let workflow_runtime = crate::services::WorkflowRuntime::new(state.db_pool.clone());
+    let workflow_id = match workflow_runtime
+        .create_workflow(crate::services::NewWorkflow {
+            idempotency_key: Some(format!("gig-template-sample:{sample_id}")),
+            workflow_type: "gig_template_sample_generation".to_string(),
+            status: crate::services::WorkflowStatus::Queued,
+            session_uuid: None,
+            user_id: Some(user_id),
+            source_table: Some("gig_sample_videos".to_string()),
+            source_record_id: Some(sample_id),
+            request_summary: format!("Gig template sample generation for {}", service_type)
+                .chars()
+                .take(200)
+                .collect::<String>(),
+            current_step: Some("job_created".to_string()),
+            metadata: json!({
+                "template_id": template_id,
+                "sample_id": sample_id,
+                "service_type": service_type.clone(),
+                "prompt_preview": prompt.chars().take(240).collect::<String>(),
+            }),
+            artifact_requirements: json!([
+                {
+                    "kind": "gig_template_sample",
+                    "required": true,
+                    "must_be_playable": true
+                }
+            ]),
+        })
+        .await
+    {
+        Ok(id) => id,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": format!("Workflow initialization failed: {e}")})),
+            )
+        }
+    };
+
+    let _ = workflow_runtime
+        .append_event(
+            workflow_id,
+            "queued",
+            Some("job_created"),
+            "Gig template sample request created and waiting for render execution.",
+            json!({
+                "template_id": template_id,
+                "sample_id": sample_id,
+            }),
+        )
+        .await;
+
+    let inserted = sqlx::query(
+        "INSERT INTO gig_sample_videos (id, template_id, title, prompt_used, status, workflow_id)
+         VALUES ($1, $2, $3, $4, 'pending', $5)",
     )
+    .bind(sample_id)
     .bind(template_id)
     .bind(&title)
     .bind(&prompt)
-    .fetch_one(&state.db_pool)
-    .await
-    .unwrap_or_else(|_| Uuid::new_v4());
+    .bind(workflow_id)
+    .execute(&state.db_pool)
+    .await;
+
+    if let Err(e) = inserted {
+        let _ = workflow_runtime
+            .mark_failed(
+                workflow_id,
+                Some("sample_persistence"),
+                &format!("Failed to create gig sample record: {e}"),
+                None,
+            )
+            .await;
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": format!("DB error: {e}")})),
+        );
+    }
 
     // Spawn background render
     let state_clone = state.clone();
     let service_type_clone = service_type.clone();
     let prompt_clone = prompt.clone();
     tokio::spawn(async move {
-        run_sample_generation(sample_id, template_id, service_type_clone, prompt_clone, state_clone).await;
+        run_sample_generation(
+            sample_id,
+            template_id,
+            service_type_clone,
+            prompt_clone,
+            state_clone,
+        )
+        .await;
     });
 
-    (StatusCode::OK, Json(json!({"sample_id": sample_id.to_string(), "prompt": prompt})))
+    (
+        StatusCode::OK,
+        Json(json!({
+            "sample_id": sample_id.to_string(),
+            "workflow_id": workflow_id.to_string(),
+            "prompt": prompt
+        })),
+    )
 }
 
 // ─── API: delete sample ───────────────────────────────────────────────────────
@@ -185,6 +294,28 @@ pub async fn api_delete_sample(
     Path(sample_id): Path<Uuid>,
     Extension(state): Extension<Arc<AppState>>,
 ) -> (StatusCode, Json<Value>) {
+    let sample_workflow = sqlx::query_as::<_, (Option<Uuid>, String)>(
+        "SELECT workflow_id, status FROM gig_sample_videos WHERE id = $1",
+    )
+    .bind(sample_id)
+    .fetch_optional(&state.db_pool)
+    .await
+    .ok()
+    .flatten();
+
+    if let Some((Some(workflow_id), status)) = sample_workflow {
+        if status != "completed" && status != "failed" && status != "cancelled" {
+            let workflow_runtime = crate::services::WorkflowRuntime::new(state.db_pool.clone());
+            let _ = workflow_runtime
+                .mark_cancelled(
+                    workflow_id,
+                    Some("cancelled"),
+                    "Gig template sample workflow was cancelled by the user.",
+                )
+                .await;
+        }
+    }
+
     let result = sqlx::query("DELETE FROM gig_sample_videos WHERE id = $1")
         .bind(sample_id)
         .execute(&state.db_pool)
@@ -192,9 +323,114 @@ pub async fn api_delete_sample(
 
     match result {
         Ok(r) if r.rows_affected() > 0 => (StatusCode::OK, Json(json!({"deleted": true}))),
-        Ok(_) => (StatusCode::NOT_FOUND, Json(json!({"error": "Sample not found"}))),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("DB error: {e}")}))),
+        Ok(_) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "Sample not found"})),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": format!("DB error: {e}")})),
+        ),
     }
+}
+
+async fn refresh_gig_sample_media_value(
+    state: &Arc<AppState>,
+    existing_url: Option<String>,
+) -> Value {
+    let Some(existing_url) = existing_url else {
+        return Value::Null;
+    };
+
+    let refreshed = refresh_gig_sample_presigned_url_from_existing(state, &existing_url)
+        .await
+        .unwrap_or(existing_url);
+
+    Value::String(refreshed)
+}
+
+async fn refresh_gig_sample_presigned_url_from_existing(
+    state: &Arc<AppState>,
+    existing_url: &str,
+) -> Option<String> {
+    let r2 = state.r2_client.as_ref()?;
+    let key = extract_r2_object_key_from_url(existing_url, &r2.bucket)?;
+
+    if !r2.exists(&key).await {
+        tracing::warn!(
+            key = %key,
+            "R2 object referenced by gig sample media URL does not exist"
+        );
+        return None;
+    }
+
+    match r2.presign_get(&key, 7 * 24 * 3600).await {
+        Ok(url) => Some(url),
+        Err(error) => {
+            tracing::warn!(
+                key = %key,
+                "Failed to refresh gig sample media URL from existing R2 URL: {}",
+                error
+            );
+            None
+        }
+    }
+}
+
+fn extract_r2_object_key_from_url(existing_url: &str, bucket: &str) -> Option<String> {
+    let parsed = reqwest::Url::parse(existing_url).ok()?;
+    let host = parsed.host_str().unwrap_or_default();
+    let segments = parsed
+        .path_segments()?
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+
+    if segments.is_empty() {
+        return None;
+    }
+
+    if host.starts_with(&format!("{bucket}.")) {
+        return Some(segments.join("/"));
+    }
+
+    if segments.first().copied() == Some(bucket) {
+        if segments.len() < 2 {
+            return None;
+        }
+        return Some(segments[1..].join("/"));
+    }
+
+    Some(segments.join("/"))
+}
+
+async fn gig_sample_workflow_id(
+    sample_id: Uuid,
+    pool: &sqlx::PgPool,
+) -> Result<Option<Uuid>, String> {
+    sqlx::query_scalar::<_, Option<Uuid>>(
+        "SELECT workflow_id FROM gig_sample_videos WHERE id = $1",
+    )
+    .bind(sample_id)
+    .fetch_optional(pool)
+    .await
+    .map(|row| row.flatten())
+    .map_err(|e| format!("Failed to fetch gig sample workflow id: {}", e))
+}
+
+async fn verify_gig_sample_output(state: &Arc<AppState>, output_url: &str) -> bool {
+    if output_url.trim().is_empty() {
+        return false;
+    }
+
+    let Some(r2) = state.r2_client.as_ref() else {
+        return true;
+    };
+
+    let Some(key) = extract_r2_object_key_from_url(output_url, &r2.bucket) else {
+        return true;
+    };
+
+    r2.exists(&key).await
 }
 
 // ─── Background task ──────────────────────────────────────────────────────────
@@ -206,9 +442,22 @@ async fn run_sample_generation(
     prompt: String,
     state: Arc<AppState>,
 ) {
+    let workflow_id = gig_sample_workflow_id(sample_id, &state.db_pool).await.ok().flatten();
+
     let blender = match state.blender_mcp_client.as_ref() {
         Some(c) => c.clone(),
         None => {
+            if let Some(workflow_id) = workflow_id {
+                let workflow_runtime = crate::services::WorkflowRuntime::new(state.db_pool.clone());
+                let _ = workflow_runtime
+                    .mark_failed(
+                        workflow_id,
+                        Some("blender_client_check"),
+                        "BlenderMCPServer not configured (BLENDER_MCP_URL not set)",
+                        None,
+                    )
+                    .await;
+            }
             let _ = sqlx::query(
                 "UPDATE gig_sample_videos SET status='failed', error_message=$1, completed_at=NOW() WHERE id=$2",
             )
@@ -224,6 +473,22 @@ async fn run_sample_generation(
         .bind(sample_id)
         .execute(&state.db_pool)
         .await;
+    if let Some(workflow_id) = workflow_id {
+        let workflow_runtime = crate::services::WorkflowRuntime::new(state.db_pool.clone());
+        let _ = workflow_runtime
+            .heartbeat(
+                workflow_id,
+                crate::services::WorkflowStatus::Running,
+                Some("render_queued"),
+                "Gig template sample render started and is preparing tool arguments.",
+                json!({
+                    "sample_id": sample_id,
+                    "template_id": template_id,
+                    "service_type": service_type.clone(),
+                }),
+            )
+            .await;
+    }
 
     // Map service_type → (tool, args, url_key, ext, duration)
     let (tool, args, url_key, ext) = build_sample_tool_args(&service_type, &prompt);
@@ -231,6 +496,12 @@ async fn run_sample_generation(
     let job_id = match blender.submit_job(&tool, args).await {
         Ok(id) => id,
         Err(e) => {
+            if let Some(workflow_id) = workflow_id {
+                let workflow_runtime = crate::services::WorkflowRuntime::new(state.db_pool.clone());
+                let _ = workflow_runtime
+                    .mark_failed(workflow_id, Some("submit_render_job"), &e, None)
+                    .await;
+            }
             let _ = sqlx::query(
                 "UPDATE gig_sample_videos SET status='failed', error_message=$1, completed_at=NOW() WHERE id=$2",
             )
@@ -245,6 +516,12 @@ async fn run_sample_generation(
         let status = match blender.poll_job(&job_id).await {
             Ok(s) => s,
             Err(e) => {
+                if let Some(workflow_id) = workflow_id {
+                    let workflow_runtime = crate::services::WorkflowRuntime::new(state.db_pool.clone());
+                    let _ = workflow_runtime
+                        .mark_failed(workflow_id, Some("poll_render_job"), &e, None)
+                        .await;
+                }
                 let _ = sqlx::query(
                     "UPDATE gig_sample_videos SET status='failed', error_message=$1, completed_at=NOW() WHERE id=$2",
                 )
@@ -261,33 +538,161 @@ async fn run_sample_generation(
                 break;
             }
             Some("failed") | Some("error") => {
-                let msg = status.get("error").and_then(|v| v.as_str()).unwrap_or("render failed");
+                let msg = status
+                    .get("error")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("render failed");
+                if let Some(workflow_id) = workflow_id {
+                    let workflow_runtime = crate::services::WorkflowRuntime::new(state.db_pool.clone());
+                    let _ = workflow_runtime
+                        .mark_failed(workflow_id, Some("render_failed"), msg, None)
+                        .await;
+                }
                 let _ = sqlx::query(
                     "UPDATE gig_sample_videos SET status='failed', error_message=$1, completed_at=NOW() WHERE id=$2",
                 )
                 .bind(msg).bind(sample_id).execute(&state.db_pool).await;
                 return;
             }
-            _ => {}
+            _ => {
+                if let Some(workflow_id) = workflow_id {
+                    let workflow_runtime = crate::services::WorkflowRuntime::new(state.db_pool.clone());
+                    let render_state = status
+                        .get("state")
+                        .and_then(|s| s.as_str())
+                        .unwrap_or("running");
+                    let _ = workflow_runtime
+                        .heartbeat(
+                            workflow_id,
+                            crate::services::WorkflowStatus::WaitingForExternalService,
+                            Some(render_state),
+                            "Gig template sample render is still running on the render backend.",
+                            json!({
+                                "sample_id": sample_id,
+                                "render_job_id": job_id,
+                                "render_state": render_state,
+                            }),
+                        )
+                        .await;
+                }
+            }
         }
     }
 
     match final_url {
         Some(url) => {
-            let filename = format!("sample_{}_{}.{}", template_id.to_string().split('-').next().unwrap_or("x"), sample_id.to_string().split('-').next().unwrap_or("y"), ext);
+            if !verify_gig_sample_output(&state, &url).await {
+                if let Some(workflow_id) = workflow_id {
+                    let workflow_runtime = crate::services::WorkflowRuntime::new(state.db_pool.clone());
+                    let _ = workflow_runtime
+                        .mark_failed(
+                            workflow_id,
+                            Some("artifact_verification"),
+                            "Gig sample render completed without a verifiable storage artifact.",
+                            None,
+                        )
+                        .await;
+                }
+                let _ = sqlx::query(
+                    "UPDATE gig_sample_videos SET status='failed', error_message=$1, completed_at=NOW() WHERE id=$2",
+                )
+                .bind("Render completed without a verifiable sample artifact")
+                .bind(sample_id)
+                .execute(&state.db_pool)
+                .await;
+                return;
+            }
+
+            let filename = format!(
+                "sample_{}_{}.{}",
+                template_id.to_string().split('-').next().unwrap_or("x"),
+                sample_id.to_string().split('-').next().unwrap_or("y"),
+                ext
+            );
             let _ = sqlx::query(
                 "UPDATE gig_sample_videos SET status='completed', output_r2_url=$1, output_filename=$2, completed_at=NOW() WHERE id=$3",
             )
             .bind(&url).bind(&filename).bind(sample_id)
             .execute(&state.db_pool).await;
+            if let Some(workflow_id) = workflow_id {
+                let workflow_runtime = crate::services::WorkflowRuntime::new(state.db_pool.clone());
+                let _ = workflow_runtime
+                    .mark_completed(
+                        workflow_id,
+                        Some("completed"),
+                        "Gig template sample render completed with a verifiable output artifact.",
+                        json!({
+                            "output_r2_url_present": true,
+                            "output_filename": filename,
+                            "service_type": service_type.clone(),
+                        }),
+                    )
+                    .await;
+            }
+
+            let artifact = crate::services::media_review::MediaReviewArtifact {
+                review_id: format!("gig-sample-{}", sample_id),
+                asset_kind: "gig_template_sample".to_string(),
+                source_type: "gig_templates".to_string(),
+                service_slug: Some(service_type.clone()),
+                owner_user_id: None,
+                output_url: Some(url.clone()),
+                source_url: None,
+                prompt: Some(prompt.clone()),
+                title: Some(title_from_service_type(&service_type)),
+                company: None,
+                review_status: "completed".to_string(),
+                qa_score: None,
+                qa_feedback: None,
+                narration_text: None,
+                visual_direction: None,
+                transcript_excerpt: None,
+                tags: vec![service_type.clone(), "gig-template".to_string()],
+            };
+
+            if let Err(error) =
+                crate::services::media_review::MediaReviewService::store_artifact(&state, artifact)
+                    .await
+            {
+                tracing::warn!(
+                    "Failed to store media review artifact for gig sample {}: {}",
+                    sample_id,
+                    error
+                );
+            }
         }
         None => {
+            if let Some(workflow_id) = workflow_id {
+                let workflow_runtime = crate::services::WorkflowRuntime::new(state.db_pool.clone());
+                let _ = workflow_runtime
+                    .mark_failed(
+                        workflow_id,
+                        Some("render_timeout"),
+                        "Gig template sample render timed out without producing an output URL.",
+                        None,
+                    )
+                    .await;
+            }
             let _ = sqlx::query(
                 "UPDATE gig_sample_videos SET status='failed', error_message='Timed out after 900s', completed_at=NOW() WHERE id=$1",
             )
             .bind(sample_id).execute(&state.db_pool).await;
         }
     }
+}
+
+fn title_from_service_type(service_type: &str) -> String {
+    service_type
+        .split('_')
+        .map(|part| {
+            let mut chars = part.chars();
+            match chars.next() {
+                Some(first) => format!("{}{}", first.to_uppercase(), chars.as_str()),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn sample_result_media_url(result: Option<&Value>, url_key: &str) -> Option<String> {
@@ -307,32 +712,39 @@ fn sample_result_media_url(result: Option<&Value>, url_key: &str) -> Option<Stri
     }
 }
 
-fn build_sample_tool_args(service_type: &str, prompt: &str) -> (String, Value, &'static str, &'static str) {
+fn build_sample_tool_args(
+    service_type: &str,
+    prompt: &str,
+) -> (String, Value, &'static str, &'static str) {
     match service_type {
         "thumbnail" => (
             "blender_generate_thumbnail".to_string(),
             json!({"prompt": prompt, "title_text": prompt.split("—").next().unwrap_or(prompt).trim(), "style": "cinematic"}),
-            "image_url", "png",
+            "image_url",
+            "png",
         ),
         "title_card" => (
             "blender_generate_title_card".to_string(),
             json!({"title": prompt.split("—").next().unwrap_or(prompt).trim(),
                    "subtitle": prompt.split("—").nth(1).unwrap_or("").trim(),
                    "duration": 5.0, "style": "professional"}),
-            "video_url", "mp4",
+            "video_url",
+            "mp4",
         ),
         "data_viz" => (
             "blender_generate_data_viz".to_string(),
             json!({"data_json": "[{\"label\":\"Q1\",\"value\":120},{\"label\":\"Q2\",\"value\":185},{\"label\":\"Q3\",\"value\":230},{\"label\":\"Q4\",\"value\":310}]",
                    "chart_type": "bar", "title": prompt.split("—").next().unwrap_or(prompt).trim(), "duration": 10.0}),
-            "video_url", "mp4",
+            "video_url",
+            "mp4",
         ),
         "lower_third" => (
             "blender_generate_lower_third".to_string(),
             json!({"name_text": prompt.split("—").next().unwrap_or(prompt).trim(),
                    "subtitle_text": prompt.split("—").nth(1).unwrap_or("").trim(),
                    "style": "professional", "duration": 5.0}),
-            "video_url", "mp4",
+            "video_url",
+            "mp4",
         ),
         "latex" => (
             "blender_generate_latex".to_string(),
@@ -340,19 +752,23 @@ fn build_sample_tool_args(service_type: &str, prompt: &str) -> (String, Value, &
                    "animation_type": "step_by_step", "duration": 10.0, "background_style": "dark",
                    "include_narration": true,
                    "narration_text": format!("Animated formula breakdown for {prompt}.")}),
-            "video_url", "mp4",
+            "video_url",
+            "mp4",
         ),
         "ui_mockup" => (
             "blender_generate_ui_mockup".to_string(),
             json!({"device": "iPhone", "animation": "reveal", "duration": 8.0, "screenshot_url": ""}),
-            "video_url", "mp4",
+            "video_url",
+            "mp4",
         ),
-        _ => ( // "scene" / "auto_video" / default → generate_scene
+        _ => (
+            // "scene" / "auto_video" / default → generate_scene
             "blender_generate_scene".to_string(),
             json!({"prompt": prompt, "duration": 12.0, "style": "cinematic",
                    "include_narration": true,
                    "narration_text": format!("Speculative promo sample for {prompt}.")}),
-            "video_url", "mp4",
+            "video_url",
+            "mp4",
         ),
     }
 }
@@ -444,7 +860,7 @@ const GIG_TEMPLATES_HTML: &str = r###"<!DOCTYPE html>
 <div id="root"><div class="loading">Loading gig templates…</div></div>
 
 <script>
-const token = localStorage.getItem('auth_token') || localStorage.getItem('authToken') || localStorage.getItem('auth_token') || localStorage.getItem('admin_token');
+const token = localStorage.getItem('authToken') || localStorage.getItem('admin_token') || localStorage.getItem('auth_token');
 if (!token) { window.location.href = '/admin'; }
 
 let templates = [];
@@ -558,8 +974,19 @@ function escHtml(s) {
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
+async function ensureGigTemplateAccess() {
+  const r = await fetch('/api/clipping/access-check', {
+    headers: { 'Authorization': `Bearer ${token}` }
+  });
+  if (!r.ok) {
+    window.location.href = '/dashboard';
+    throw new Error('Gig Templates are currently limited to admins and whitelisted users.');
+  }
+}
+
 async function loadTemplates() {
   try {
+    await ensureGigTemplateAccess();
     const r = await fetch('/api/gig-templates', {
       headers: { 'Authorization': `Bearer ${token}` }
     });

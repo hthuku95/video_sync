@@ -115,29 +115,78 @@ impl ClipUploader {
 
         // Step 3: Upload custom thumbnail if available (ENHANCEMENT)
         if let Some(ref thumbnail_path) = clip.custom_thumbnail_path {
-            match self.upload_custom_thumbnail(&access_token, &upload_result.id, thumbnail_path).await {
+            match self
+                .upload_custom_thumbnail(&access_token, &upload_result.id, thumbnail_path)
+                .await
+            {
                 Ok(_) => {
-                    tracing::info!("✅ Custom thumbnail uploaded for video {}", upload_result.id);
+                    tracing::info!(
+                        "✅ Custom thumbnail uploaded for video {}",
+                        upload_result.id
+                    );
 
                     // Update database to mark thumbnail as uploaded
                     self.mark_thumbnail_uploaded(clip_db_id).await?;
                 }
                 Err(e) => {
-                    tracing::warn!("⚠️ Failed to upload thumbnail for video {}: {}", upload_result.id, e);
+                    tracing::warn!(
+                        "⚠️ Failed to upload thumbnail for video {}: {}",
+                        upload_result.id,
+                        e
+                    );
                     // Continue anyway - video is uploaded successfully
                 }
             }
         } else {
-            tracing::info!("ℹ️ No custom thumbnail available, YouTube will use auto-generated thumbnail");
+            tracing::info!(
+                "ℹ️ No custom thumbnail available, YouTube will use auto-generated thumbnail"
+            );
         }
 
         // Step 4: Update database with YouTube video ID and URL
-        self.update_clip_upload_status(
-            clip_db_id,
-            &upload_result.id,
-            &youtube_url,
-        )
-        .await?;
+        self.update_clip_upload_status(clip_db_id, &upload_result.id, &youtube_url)
+            .await?;
+
+        Ok(YouTubeUploadResult {
+            video_id: upload_result.id,
+            url: youtube_url,
+        })
+    }
+
+    /// Upload a non-Short longform video to YouTube.
+    pub async fn upload_longform_video(
+        &self,
+        local_video_path: &str,
+        title: &str,
+        description: &str,
+        tags: &[String],
+        destination_channel: &ConnectedYouTubeChannel,
+    ) -> Result<YouTubeUploadResult, String> {
+        tracing::info!(
+            "📤 Uploading longform fallback '{}' to YouTube channel {}",
+            title,
+            destination_channel.channel_name
+        );
+
+        let access_token = self.ensure_valid_token(destination_channel).await?;
+        let title = self.optimize_longform_title(title);
+        let description = self.format_longform_description(description, tags);
+
+        let upload_result = self
+            .youtube_client
+            .upload_video_resumable(
+                &access_token,
+                local_video_path,
+                &title,
+                &description,
+                "public",
+                Some("27"),
+                Some(tags.to_vec()),
+            )
+            .await
+            .map_err(|e| format!("YouTube longform upload failed: {}", e))?;
+
+        let youtube_url = format!("https://youtube.com/watch?v={}", upload_result.id);
 
         Ok(YouTubeUploadResult {
             video_id: upload_result.id,
@@ -171,9 +220,15 @@ impl ClipUploader {
                 Ok(t) => t,
                 Err(e) => {
                     let error_str = e.to_string();
-                    tracing::error!("🔴 ClipUploader: Token refresh failed for channel {}: {}", channel.channel_name, error_str);
+                    tracing::error!(
+                        "🔴 ClipUploader: Token refresh failed for channel {}: {}",
+                        channel.channel_name,
+                        error_str
+                    );
 
-                    if error_str.contains("REFRESH_TOKEN_EXPIRED") || error_str.contains("invalid_grant") {
+                    if error_str.contains("REFRESH_TOKEN_EXPIRED")
+                        || error_str.contains("invalid_grant")
+                    {
                         // Mark channel as requiring re-authorization so users see the prompt in the UI
                         let _ = sqlx::query(
                             "UPDATE connected_youtube_channels
@@ -187,7 +242,8 @@ impl ClipUploader {
 
                         tracing::warn!(
                             "⚠️ Marked channel {} (id={}) as requires_reauth=true",
-                            channel.channel_name, channel.id
+                            channel.channel_name,
+                            channel.id
                         );
                         return Err("Token refresh failed: YouTube authorization expired. Channel needs reconnection.".to_string());
                     } else {
@@ -233,6 +289,15 @@ impl ClipUploader {
         optimized
     }
 
+    fn optimize_longform_title(&self, title: &str) -> String {
+        let mut optimized = title.trim().to_string();
+        if optimized.len() > 100 {
+            optimized = optimized[..97].to_string();
+            optimized.push_str("...");
+        }
+        optimized
+    }
+
     /// Format description with hashtags
     fn format_description(&self, description: &str, tags: &[String]) -> String {
         let mut formatted = description.trim().to_string();
@@ -253,6 +318,20 @@ impl ClipUploader {
         }
 
         formatted
+    }
+
+    fn format_longform_description(&self, description: &str, tags: &[String]) -> String {
+        let mut formatted = description.trim().to_string();
+        formatted.push_str("\n\n");
+
+        for tag in tags.iter().take(12) {
+            let tag_clean = tag.replace(" ", "").replace("#", "");
+            if !tag_clean.is_empty() {
+                formatted.push_str(&format!("#{} ", tag_clean));
+            }
+        }
+
+        formatted.trim().to_string()
     }
 
     /// Update clip record in database with upload result

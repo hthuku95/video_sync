@@ -65,7 +65,11 @@ impl VideoAnalysis {
     /// Return top-N moments by quality score
     pub fn top_moments(&self, n: usize) -> Vec<&ViralMoment> {
         let mut sorted: Vec<&ViralMoment> = self.viral_moments.iter().collect();
-        sorted.sort_by(|a, b| b.quality_score.partial_cmp(&a.quality_score).unwrap_or(std::cmp::Ordering::Equal));
+        sorted.sort_by(|a, b| {
+            b.quality_score
+                .partial_cmp(&a.quality_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         sorted.truncate(n);
         sorted
     }

@@ -1,7 +1,10 @@
 // Background worker that polls for pending clipping jobs and executes them
 
 use crate::agent::clipping_agent::GeminiClippingAgent;
-use crate::jobs::clipping_job::execute_clipping_job;
+use crate::clipping::uploader::ClipUploader;
+use crate::jobs::clipping_job::{
+    execute_clipping_job, fetch_destination_channel, infer_clipping_resume_from_nodes,
+};
 use crate::jobs::error_classifier::{classify, ErrorClass};
 use crate::jobs::job_claimer::JobClaimer;
 use crate::jobs::worker_config::WorkerConfig;
@@ -9,6 +12,7 @@ use crate::AppState;
 use std::sync::Arc;
 use tokio::task::JoinSet;
 use tokio::time::{sleep, Duration};
+use uuid::Uuid;
 
 const ACTIVE_CLIPPING_JOB_STATUSES: &[&str] = &[
     "pending",
@@ -16,6 +20,7 @@ const ACTIVE_CLIPPING_JOB_STATUSES: &[&str] = &[
     "analyzing",
     "extracting_clips",
     "posting",
+    "fallback_rendering",
 ];
 
 /// Run the clipping worker in a background loop (spawnable)
@@ -88,6 +93,9 @@ async fn process_clipping_jobs_parallel(
     crate::jobs::clipping_supervisor::run_clipping_supervisor_once(app_state).await?;
     detect_stuck_jobs(app_state).await?;
     auto_retry_failed_jobs(app_state).await?;
+    recover_completed_jobs_with_unpublished_clips(app_state).await?;
+    reconcile_fallback_delivery_job_statuses(app_state).await?;
+    recover_completed_fallback_deliveries_to_youtube(app_state).await?;
     cleanup_stale_pending_jobs(app_state).await?;
     check_pending_too_long(app_state).await;
 
@@ -211,7 +219,26 @@ async fn execute_claimed_job(app_state: Arc<AppState>, job_id: i32) -> Result<i3
         .and_then(|v| v.parse().ok())
         .unwrap_or(7200); // 2 hours
 
-    let execution_result = if app_state.gemini_client.is_some() {
+    let use_node_step_executor = std::env::var("CLIPPING_NODE_STEP_MODE")
+        .map(|value| {
+            !matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "0" | "false" | "no" | "off" | "disabled"
+            )
+        })
+        .unwrap_or(true);
+
+    let execution_result = if use_node_step_executor {
+        tracing::info!(
+            "Durable clipping node-step executor enabled — executing job {} through checkpointed nodes",
+            job_id
+        );
+        tokio::time::timeout(
+            tokio::time::Duration::from_secs(job_timeout_secs),
+            execute_clipping_job(job_id, app_state.clone()),
+        )
+        .await
+    } else if app_state.gemini_client.is_some() {
         let agent = GeminiClippingAgent::new(app_state.clone());
         tokio::time::timeout(
             tokio::time::Duration::from_secs(job_timeout_secs),
@@ -693,8 +720,8 @@ async fn auto_retry_failed_jobs(app_state: &Arc<AppState>) -> Result<(), String>
     // re-queued once the destination channel has been reconnected (requires_reauth=false).
     // Without this gate, a disconnected channel burns through all 10 retries in hours,
     // gets discarded, and can never be retried automatically even after reconnection.
-    let retry_jobs: Vec<(i32, Option<String>)> = sqlx::query_as(
-        "SELECT cj.id, cj.current_step \
+    let retry_jobs: Vec<(i32, Option<String>, Option<uuid::Uuid>)> = sqlx::query_as(
+        "SELECT cj.id, cj.current_step, cj.workflow_id \
          FROM clipping_jobs cj \
          LEFT JOIN youtube_channel_linkages ycl ON ycl.id = cj.linkage_id \
          LEFT JOIN connected_youtube_channels cyc ON cyc.id = ycl.destination_channel_id \
@@ -735,9 +762,16 @@ async fn auto_retry_failed_jobs(app_state: &Arc<AppState>) -> Result<(), String>
         retry_jobs.len()
     );
 
-    for (job_id, current_step) in retry_jobs {
-        let resume_from: Option<&str> =
-            crate::jobs::JobPhase::from_step(current_step.as_deref().unwrap_or("")).resume_from();
+    for (job_id, current_step, workflow_id) in retry_jobs {
+        let node_resume_from = infer_clipping_resume_from_nodes(&app_state.db_pool, workflow_id)
+            .await
+            .unwrap_or(None);
+        let resume_from_owned = node_resume_from.or_else(|| {
+            crate::jobs::JobPhase::from_step(current_step.as_deref().unwrap_or(""))
+                .resume_from()
+                .map(str::to_string)
+        });
+        let resume_from = resume_from_owned.as_deref();
 
         if let Some(phase) = resume_from {
             tracing::info!(
@@ -806,6 +840,516 @@ async fn auto_retry_failed_jobs(app_state: &Arc<AppState>) -> Result<(), String>
     }
 
     Ok(())
+}
+
+/// Recover jobs that were incorrectly left as completed even though YouTube
+/// upload did not publish every extracted clip.
+///
+/// This intentionally excludes fallback deliveries: those are completed because
+/// a generated summary workflow was created, not because clips should be posted.
+async fn recover_completed_jobs_with_unpublished_clips(
+    app_state: &Arc<AppState>,
+) -> Result<(), String> {
+    let jobs: Vec<(i32, i64, i64)> = sqlx::query_as(
+        "SELECT cj.id,
+                COUNT(ec.id) AS total_clips,
+                COUNT(ec.id) FILTER (WHERE ec.upload_status = 'published') AS published_clips
+         FROM clipping_jobs cj
+         JOIN extracted_clips ec ON ec.clipping_job_id = cj.id
+         LEFT JOIN youtube_channel_linkages ycl ON ycl.id = cj.linkage_id
+         LEFT JOIN connected_youtube_channels cyc ON cyc.id = ycl.destination_channel_id
+         WHERE cj.status = 'completed'
+           AND cj.fallback_delivery_id IS NULL
+           AND cj.updated_at > NOW() - INTERVAL '7 days'
+           AND COALESCE(cyc.requires_reauth, false) = false
+         GROUP BY cj.id
+         HAVING COUNT(ec.id) > 0
+            AND COUNT(ec.id) FILTER (WHERE ec.upload_status = 'published') < COUNT(ec.id)
+         ORDER BY cj.updated_at ASC
+         LIMIT 10",
+    )
+    .fetch_all(&app_state.db_pool)
+    .await
+    .map_err(|e| format!("Failed to fetch completed upload-recovery jobs: {}", e))?;
+
+    if jobs.is_empty() {
+        return Ok(());
+    }
+
+    tracing::warn!(
+        "Found {} completed clipping jobs with unpublished saved clips; requeueing Phase E upload",
+        jobs.len()
+    );
+
+    for (job_id, total_clips, published_clips) in jobs {
+        let result = sqlx::query(
+            "UPDATE clipping_jobs
+             SET status = 'pending',
+                 resume_from = 'clips_extracted',
+                 error_message = NULL,
+                 progress_percent = 60,
+                 current_step = 'queued_for_upload_recovery',
+                 completed_at = NULL,
+                 claimed_by = NULL,
+                 claimed_at = NULL,
+                 worker_heartbeat_at = NULL,
+                 supervisor_status = 'healthy',
+                 supervisor_reason = NULL,
+                 supervisor_last_action = 'completed_upload_recovery_requeued',
+                 supervisor_last_run_at = NOW(),
+                 updated_at = NOW(),
+                 retry_count = COALESCE(retry_count, 0) + 1,
+                 last_retry_at = NOW()
+             WHERE id = $1
+               AND status = 'completed'
+               AND fallback_delivery_id IS NULL
+               AND NOT EXISTS (
+                   SELECT 1
+                   FROM clipping_jobs sibling
+                   WHERE sibling.linkage_id = clipping_jobs.linkage_id
+                     AND sibling.source_video_id = clipping_jobs.source_video_id
+                     AND sibling.id <> clipping_jobs.id
+                     AND sibling.status = ANY($2)
+               )",
+        )
+        .bind(job_id)
+        .bind(ACTIVE_CLIPPING_JOB_STATUSES)
+        .execute(&app_state.db_pool)
+        .await
+        .map_err(|e| format!("Failed to requeue completed upload-recovery job {job_id}: {e}"))?;
+
+        if result.rows_affected() > 0 {
+            tracing::warn!(
+                "Requeued completed job {} for upload recovery ({}/{} clips already published)",
+                job_id,
+                published_clips,
+                total_clips
+            );
+        }
+    }
+
+    Ok(())
+}
+
+async fn reconcile_fallback_delivery_job_statuses(
+    app_state: &Arc<AppState>,
+) -> Result<(), String> {
+    let failed = sqlx::query(
+        "UPDATE clipping_jobs cj
+         SET status = 'failed',
+             progress_percent = 0,
+             current_step = 'fallback_delivery_failed',
+             error_message = CONCAT(
+                 COALESCE(cj.error_message, 'Fallback delivery failed.'),
+                 CASE
+                   WHEN d.error_message IS NULL OR d.error_message = '' THEN ''
+                   ELSE CONCAT(' Delivery error: ', d.error_message)
+                 END
+             ),
+             completed_at = NULL,
+             updated_at = NOW()
+         FROM deliveries d
+         WHERE d.id = cj.fallback_delivery_id
+           AND cj.fallback_strategy = 'generated_summary_delivery'
+           AND cj.status IN ('completed', 'fallback_rendering')
+           AND d.status = 'failed'
+           AND d.output_r2_url IS NULL",
+    )
+    .execute(&app_state.db_pool)
+    .await
+    .map_err(|e| format!("Failed to reconcile failed fallback deliveries: {e}"))?;
+
+    if failed.rows_affected() > 0 {
+        tracing::warn!(
+            "Reconciled {} falsely-completed clipping jobs whose fallback deliveries failed",
+            failed.rows_affected()
+        );
+    }
+
+    let still_rendering = sqlx::query(
+        "UPDATE clipping_jobs cj
+         SET status = 'fallback_rendering',
+             progress_percent = 85,
+             current_step = 'fallback_delivery_rendering',
+             completed_at = NULL,
+             updated_at = NOW()
+         FROM deliveries d
+         WHERE d.id = cj.fallback_delivery_id
+           AND cj.fallback_strategy = 'generated_summary_delivery'
+           AND cj.status = 'completed'
+           AND d.status IN ('pending', 'running')
+           AND d.output_r2_url IS NULL",
+    )
+    .execute(&app_state.db_pool)
+    .await
+    .map_err(|e| format!("Failed to reconcile running fallback deliveries: {e}"))?;
+
+    if still_rendering.rows_affected() > 0 {
+        tracing::warn!(
+            "Reconciled {} falsely-completed clipping jobs whose fallback deliveries are still rendering",
+            still_rendering.rows_affected()
+        );
+    }
+
+    let completed = sqlx::query(
+        "UPDATE clipping_jobs cj
+         SET status = 'completed',
+             progress_percent = 100,
+             current_step = 'fallback_delivery_completed',
+             completed_at = COALESCE(cj.completed_at, NOW()),
+             updated_at = NOW()
+         FROM deliveries d
+         WHERE d.id = cj.fallback_delivery_id
+           AND cj.fallback_strategy = 'generated_summary_delivery'
+           AND cj.status IN ('fallback_rendering', 'pending')
+           AND d.status = 'completed'
+           AND d.output_r2_url IS NOT NULL",
+    )
+    .execute(&app_state.db_pool)
+    .await
+    .map_err(|e| format!("Failed to reconcile completed fallback deliveries: {e}"))?;
+
+    if completed.rows_affected() > 0 {
+        tracing::warn!(
+            "Reconciled {} fallback delivery jobs with generated media",
+            completed.rows_affected()
+        );
+    }
+
+    Ok(())
+}
+
+async fn recover_completed_fallback_deliveries_to_youtube(
+    app_state: &Arc<AppState>,
+) -> Result<(), String> {
+    let Some(youtube_client) = app_state.youtube_client.as_ref() else {
+        return Ok(());
+    };
+    let Some(oauth_client_id) = app_state.google_oauth_client_id.clone() else {
+        return Ok(());
+    };
+    let Some(oauth_client_secret) = app_state.google_oauth_client_secret.clone() else {
+        return Ok(());
+    };
+
+    let fallback_jobs: Vec<(
+        i32,
+        Uuid,
+        i32,
+        i32,
+        String,
+        String,
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+    )> = sqlx::query_as(
+        "SELECT cj.id,
+                d.id,
+                ycl.user_id,
+                ycl.destination_channel_id,
+                COALESCE(cj.source_video_title, 'Generated fallback summary')::TEXT,
+                d.title,
+                d.prompt,
+                d.output_r2_url,
+                d.output_filename,
+                d.source_url
+         FROM clipping_jobs cj
+         JOIN youtube_channel_linkages ycl ON ycl.id = cj.linkage_id
+         JOIN connected_youtube_channels cyc ON cyc.id = ycl.destination_channel_id
+         JOIN deliveries d ON d.id = cj.fallback_delivery_id
+         WHERE cj.status = 'completed'
+           AND cj.fallback_delivery_id IS NOT NULL
+           AND cj.fallback_strategy = 'generated_summary_delivery'
+           AND d.status = 'completed'
+           AND d.output_r2_url IS NOT NULL
+           AND d.youtube_video_id IS NULL
+           AND COALESCE(cyc.requires_reauth, false) = false
+           AND (
+                d.youtube_upload_attempted_at IS NULL
+                OR d.youtube_upload_attempted_at < NOW() - INTERVAL '30 minutes'
+           )
+         ORDER BY cj.updated_at ASC
+         LIMIT 3",
+    )
+    .fetch_all(&app_state.db_pool)
+    .await
+    .map_err(|e| format!("Failed to fetch fallback delivery upload recovery jobs: {e}"))?;
+
+    if fallback_jobs.is_empty() {
+        return Ok(());
+    }
+
+    tracing::warn!(
+        "Found {} completed fallback summary deliveries that still need YouTube upload",
+        fallback_jobs.len()
+    );
+
+    let uploader = ClipUploader::new(
+        Arc::new(youtube_client.clone()),
+        app_state.db_pool.clone(),
+        oauth_client_id,
+        oauth_client_secret,
+    );
+
+    for (
+        job_id,
+        delivery_id,
+        user_id,
+        destination_channel_id,
+        source_video_title,
+        delivery_title,
+        delivery_prompt,
+        output_url,
+        output_filename,
+        source_url,
+    ) in fallback_jobs
+    {
+        if let Err(error) = sqlx::query(
+            "UPDATE deliveries
+             SET youtube_upload_attempted_at = NOW(),
+                 youtube_upload_error = NULL
+             WHERE id = $1
+               AND youtube_video_id IS NULL",
+        )
+        .bind(delivery_id)
+        .execute(&app_state.db_pool)
+        .await
+        {
+            tracing::warn!(
+                "Failed to mark fallback delivery {} upload attempt: {}",
+                delivery_id,
+                error
+            );
+            continue;
+        }
+
+        let upload_result = async {
+            let destination_channel =
+                fetch_destination_channel(destination_channel_id, &app_state.db_pool).await?;
+            let local_path =
+                download_fallback_delivery_output(
+                    app_state,
+                    delivery_id,
+                    &output_url,
+                    output_filename.as_deref(),
+                )
+                .await?;
+            let title = fallback_delivery_youtube_title(&source_video_title, &delivery_title);
+            let description =
+                fallback_delivery_youtube_description(&source_video_title, &delivery_prompt, source_url.as_deref());
+            let tags = vec![
+                "VideoSync".to_string(),
+                "summary".to_string(),
+                "animated summary".to_string(),
+                "AI video".to_string(),
+            ];
+
+            let result = uploader
+                .upload_longform_video(&local_path, &title, &description, &tags, &destination_channel)
+                .await?;
+
+            let _ = tokio::fs::remove_file(&local_path).await;
+
+            Ok::<_, String>((result.video_id, result.url, title, description, local_path))
+        }
+        .await;
+
+        match upload_result {
+            Ok((youtube_video_id, youtube_url, title, description, local_path)) => {
+                sqlx::query(
+                    "UPDATE deliveries
+                     SET youtube_video_id = $1,
+                         youtube_url = $2,
+                         youtube_uploaded_at = NOW(),
+                         youtube_upload_error = NULL
+                     WHERE id = $3",
+                )
+                .bind(&youtube_video_id)
+                .bind(&youtube_url)
+                .bind(delivery_id)
+                .execute(&app_state.db_pool)
+                .await
+                .map_err(|e| format!("Failed to mark fallback delivery {delivery_id} uploaded: {e}"))?;
+
+                sqlx::query(
+                    "UPDATE clipping_jobs
+                     SET current_step = 'fallback_posted_to_youtube',
+                         updated_at = NOW()
+                     WHERE id = $1",
+                )
+                .bind(job_id)
+                .execute(&app_state.db_pool)
+                .await
+                .map_err(|e| format!("Failed to mark fallback job {job_id} posted: {e}"))?;
+
+                sqlx::query(
+                    "INSERT INTO youtube_uploads (
+                         user_id, channel_id, local_video_path, youtube_video_id,
+                         video_title, video_description, video_category, privacy_status,
+                         upload_status, upload_progress, youtube_url, published_at,
+                         created_at, updated_at
+                     )
+                     VALUES ($1, $2, $3, $4, $5, $6, '27', 'public',
+                             'completed', 100, $7, NOW(), NOW(), NOW())
+                     ON CONFLICT (youtube_video_id) DO NOTHING",
+                )
+                .bind(user_id)
+                .bind(destination_channel_id)
+                .bind(&local_path)
+                .bind(&youtube_video_id)
+                .bind(&title)
+                .bind(&description)
+                .bind(&youtube_url)
+                .execute(&app_state.db_pool)
+                .await
+                .map_err(|e| format!("Failed to record fallback YouTube upload {youtube_video_id}: {e}"))?;
+
+                tracing::warn!(
+                    "Posted fallback summary delivery {} for clipping job {} to YouTube: {}",
+                    delivery_id,
+                    job_id,
+                    youtube_url
+                );
+            }
+            Err(error) => {
+                mark_delivery_youtube_upload_error(&app_state.db_pool, delivery_id, &error).await;
+                tracing::warn!(
+                    "Fallback summary delivery {} upload recovery failed for job {}: {}",
+                    delivery_id,
+                    job_id,
+                    error
+                );
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn download_fallback_delivery_output(
+    app_state: &Arc<AppState>,
+    delivery_id: Uuid,
+    output_url: &str,
+    output_filename: Option<&str>,
+) -> Result<String, String> {
+    let ext = output_filename
+        .and_then(|filename| filename.rsplit('.').next())
+        .filter(|ext| ext.len() <= 5 && ext.chars().all(|c| c.is_ascii_alphanumeric()))
+        .unwrap_or("mp4");
+    let local_path = format!("/tmp/videosync-fallback-deliveries/{delivery_id}.{ext}");
+
+    tokio::fs::create_dir_all("/tmp/videosync-fallback-deliveries")
+        .await
+        .map_err(|e| format!("Failed to create fallback delivery temp directory: {e}"))?;
+
+    if let Some((bucket, key)) = r2_bucket_and_key_from_url(output_url) {
+        if let Some(r2_client) = app_state.r2_client.as_ref() {
+            if bucket == r2_client.bucket {
+                match r2_client.download(&key, &local_path).await {
+                    Ok(()) => return Ok(local_path),
+                    Err(error) => {
+                        tracing::warn!(
+                            "R2 download failed for fallback delivery {} key {}: {}",
+                            delivery_id,
+                            key,
+                            error
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    let response = reqwest::get(output_url)
+        .await
+        .map_err(|e| format!("Failed to download fallback delivery output: {e}"))?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "Fallback delivery output download returned HTTP {}",
+            response.status()
+        ));
+    }
+
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|e| format!("Failed to read fallback delivery output bytes: {e}"))?;
+    tokio::fs::write(&local_path, bytes)
+        .await
+        .map_err(|e| format!("Failed to save fallback delivery output: {e}"))?;
+
+    Ok(local_path)
+}
+
+fn r2_bucket_and_key_from_url(output_url: &str) -> Option<(String, String)> {
+    let url = url::Url::parse(output_url).ok()?;
+    let host = url.host_str().unwrap_or_default();
+    if !host.contains(".r2.cloudflarestorage.com") {
+        return None;
+    }
+
+    let mut parts = url
+        .path_segments()?
+        .filter(|part| !part.is_empty());
+    let bucket = parts.next()?.to_string();
+    let key = parts.collect::<Vec<_>>().join("/");
+    if key.is_empty() {
+        None
+    } else {
+        Some((bucket, key))
+    }
+}
+
+fn fallback_delivery_youtube_title(source_video_title: &str, delivery_title: &str) -> String {
+    let base_title = if delivery_title.trim().is_empty() {
+        source_video_title
+    } else {
+        delivery_title
+    };
+    let title = format!("{} | Animated Summary", base_title.trim());
+    if title.chars().count() > 95 {
+        let mut truncated: String = title.chars().take(92).collect();
+        truncated.push_str("...");
+        truncated
+    } else {
+        title
+    }
+}
+
+fn fallback_delivery_youtube_description(
+    source_video_title: &str,
+    delivery_prompt: &str,
+    source_url: Option<&str>,
+) -> String {
+    let mut description = format!(
+        "Animated AI summary generated when the original source could not be downloaded.\n\nSource: {}\n\n{}",
+        source_video_title.trim(),
+        delivery_prompt.trim()
+    );
+
+    if let Some(url) = source_url.filter(|url| !url.trim().is_empty()) {
+        description.push_str("\n\nOriginal reference: ");
+        description.push_str(url.trim());
+    }
+
+    description.push_str("\n\nGenerated with VideoSync.");
+    description
+}
+
+async fn mark_delivery_youtube_upload_error(pool: &sqlx::PgPool, delivery_id: Uuid, error: &str) {
+    let truncated_error: String = error.chars().take(1000).collect();
+    let _ = sqlx::query(
+        "UPDATE deliveries
+         SET youtube_upload_attempted_at = NOW(),
+             youtube_upload_error = $1
+         WHERE id = $2
+           AND youtube_video_id IS NULL",
+    )
+    .bind(truncated_error)
+    .bind(delivery_id)
+    .execute(pool)
+    .await;
 }
 
 // ============================================================================

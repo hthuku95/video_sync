@@ -9,7 +9,7 @@ use sqlx::PgPool;
 pub struct ModelPricing {
     pub input_price: f64,
     pub output_price: f64,
-    pub input_price_extended: Option<f64>,  // For Claude >200K context
+    pub input_price_extended: Option<f64>, // For Claude >200K context
     pub output_price_extended: Option<f64>,
 }
 
@@ -62,7 +62,12 @@ impl ModelPricing {
 
     /// Calculate cost in USD cents (avoids floating point precision issues)
     /// Returns: (input_cost_cents, output_cost_cents, total_cost_cents)
-    pub fn calculate_cost_cents(&self, input_tokens: u32, output_tokens: u32, context_size: u32) -> (i64, i64, i64) {
+    pub fn calculate_cost_cents(
+        &self,
+        input_tokens: u32,
+        output_tokens: u32,
+        context_size: u32,
+    ) -> (i64, i64, i64) {
         // Determine which pricing tier to use (for Claude extended context)
         let use_extended = context_size > 200_000;
 
@@ -136,21 +141,19 @@ async fn fetch_pricing_from_db(
     .fetch_one(pool)
     .await;
 
-    let input_ext_result: Result<(String,), sqlx::Error> = sqlx::query_as(
-        "SELECT setting_value FROM system_settings WHERE setting_key = $1"
-    )
-    .bind(&input_ext_key)
-    .fetch_optional(pool)
-    .await
-    .and_then(|opt| opt.ok_or(sqlx::Error::RowNotFound));
+    let input_ext_result: Result<(String,), sqlx::Error> =
+        sqlx::query_as("SELECT setting_value FROM system_settings WHERE setting_key = $1")
+            .bind(&input_ext_key)
+            .fetch_optional(pool)
+            .await
+            .and_then(|opt| opt.ok_or(sqlx::Error::RowNotFound));
 
-    let output_ext_result: Result<(String,), sqlx::Error> = sqlx::query_as(
-        "SELECT setting_value FROM system_settings WHERE setting_key = $1"
-    )
-    .bind(&output_ext_key)
-    .fetch_optional(pool)
-    .await
-    .and_then(|opt| opt.ok_or(sqlx::Error::RowNotFound));
+    let output_ext_result: Result<(String,), sqlx::Error> =
+        sqlx::query_as("SELECT setting_value FROM system_settings WHERE setting_key = $1")
+            .bind(&output_ext_key)
+            .fetch_optional(pool)
+            .await
+            .and_then(|opt| opt.ok_or(sqlx::Error::RowNotFound));
 
     if let (Ok(input), Ok(output)) = (input_result, output_result) {
         Ok(ModelPricing {
@@ -191,7 +194,10 @@ fn normalize_model_name(model: &str) -> String {
         "claude-3-5-sonnet".to_string()
     } else if model.contains("gemini-2.5-flash") || model.contains("gemini-flash-2.5") {
         "gemini-2.5-flash".to_string()
-    } else if model.contains("gemini-2.0-flash") || model.contains("gemini-2-flash") || model.contains("gemini-flash-2.0") {
+    } else if model.contains("gemini-2.0-flash")
+        || model.contains("gemini-2-flash")
+        || model.contains("gemini-flash-2.0")
+    {
         "gemini-2.0-flash".to_string()
     } else {
         model.to_string()
@@ -208,13 +214,13 @@ mod tests {
 
         // Small context (≤200K)
         let (input, output, total) = pricing.calculate_cost_cents(5000, 2000, 50000);
-        assert_eq!(input, 2);  // (5000/1M) * 3.00 * 100 = 1.5¢ → rounds to 2¢
+        assert_eq!(input, 2); // (5000/1M) * 3.00 * 100 = 1.5¢ → rounds to 2¢
         assert_eq!(output, 3); // (2000/1M) * 15.00 * 100 = 3¢
         assert_eq!(total, 5);
 
         // Large context (>200K)
         let (input, output, total) = pricing.calculate_cost_cents(5000, 2000, 250000);
-        assert_eq!(input, 3);  // (5000/1M) * 6.00 * 100 = 3¢
+        assert_eq!(input, 3); // (5000/1M) * 6.00 * 100 = 3¢
         assert_eq!(output, 5); // (2000/1M) * 22.50 * 100 = 4.5¢ → rounds to 5¢
         assert_eq!(total, 8);
     }
@@ -224,16 +230,25 @@ mod tests {
         let pricing = ModelPricing::gemini_2_0_flash();
 
         let (input, output, total) = pricing.calculate_cost_cents(10000, 3000, 0);
-        assert_eq!(input, 0);  // (10000/1M) * 0.10 * 100 = 0.1¢ → rounds to 0¢
+        assert_eq!(input, 0); // (10000/1M) * 0.10 * 100 = 0.1¢ → rounds to 0¢
         assert_eq!(output, 0); // (3000/1M) * 0.40 * 100 = 0.12¢ → rounds to 0¢
         assert_eq!(total, 0);
     }
 
     #[test]
     fn test_model_name_normalization() {
-        assert_eq!(normalize_model_name("claude-sonnet-4-5-20251101"), "claude-sonnet-4-5");
-        assert_eq!(normalize_model_name("claude-3-5-sonnet-latest"), "claude-3-5-sonnet");
-        assert_eq!(normalize_model_name("gemini-2.0-flash-exp"), "gemini-2.0-flash");
+        assert_eq!(
+            normalize_model_name("claude-sonnet-4-5-20251101"),
+            "claude-sonnet-4-5"
+        );
+        assert_eq!(
+            normalize_model_name("claude-3-5-sonnet-latest"),
+            "claude-3-5-sonnet"
+        );
+        assert_eq!(
+            normalize_model_name("gemini-2.0-flash-exp"),
+            "gemini-2.0-flash"
+        );
         assert_eq!(normalize_model_name("gemini-2.5-flash"), "gemini-2.5-flash");
     }
 }

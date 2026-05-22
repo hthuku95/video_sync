@@ -5,61 +5,61 @@ use tokio::sync::Semaphore;
 
 // Core modules
 pub mod agent;
-pub mod db;
-pub mod gemini_client;
-pub mod nvidia_nim_client;
-pub mod llm_utils;
-pub mod claude_client;
-pub mod voyage_embeddings;
-pub mod elevenlabs_client;
-pub mod vibevoice_client;
+pub mod ai_tool_selector;
 pub mod blender_mcp_client;
 pub mod blender_quality;
-pub mod r2_client;
-pub mod phantombuster_client;
-pub mod youtube_client;
-pub mod youtube_analytics_client;
-pub mod twitch_client;
+pub mod claude_client;
+pub mod clipping;
+pub mod db;
+pub mod elevenlabs_client;
+pub mod gemini_client;
 pub mod handlers;
 pub mod jobs;
-pub mod workflow;
+pub mod llm_utils;
 pub mod middleware;
 pub mod models;
+pub mod nvidia_nim_client;
 pub mod pexels_client;
+pub mod phantombuster_client;
+pub mod portfolio_samples;
 pub mod qdrant_client;
+pub mod r2_client;
+pub mod render_review;
 pub mod services;
-pub mod vector_db;
-pub mod clipping;
-pub mod tool_selector;
-pub mod ai_tool_selector;
-pub mod utils;
-pub mod token_manager;
-pub mod x402;
 pub mod telegram_bot;
 pub mod telegram_client;
-pub mod render_review;
-pub mod portfolio_samples;
+pub mod token_manager;
+pub mod tool_registry;
+pub mod twitch_client;
+pub mod utils;
+pub mod vector_db;
+pub mod vertex_multimodal_embeddings;
+pub mod vibevoice_client;
+pub mod voyage_embeddings;
+pub mod x402;
+pub mod youtube_analytics_client;
+pub mod youtube_client;
 
 // Video processing modules
-pub mod types;
-pub mod core;
-pub mod audio;
-pub mod visual;
-pub mod transform;
 pub mod advanced;
+pub mod audio;
+pub mod core;
 pub mod export;
-pub mod workflows;
-pub mod portfolio_tests;
 pub mod manual_clipping_tests;
+pub mod portfolio_tests;
+pub mod transform;
+pub mod types;
+pub mod visual;
+pub mod workflows;
 
 // Re-export commonly used types for convenience
-pub use types::*;
-pub use core::*;
-pub use audio::*;
-pub use visual::*;
-pub use transform::*;
 pub use advanced::*;
+pub use audio::*;
+pub use core::*;
 pub use export::*;
+pub use transform::*;
+pub use types::*;
+pub use visual::*;
 
 // AppState struct for integration tests
 pub struct AppState {
@@ -72,6 +72,8 @@ pub struct AppState {
     pub gemma_client: Option<gemini_client::GeminiClient>,
     pub nvidia_nim_client: Option<nvidia_nim_client::NvidiaNimClient>,
     pub claude_client: Option<claude_client::ClaudeClient>,
+    pub vertex_multimodal_embeddings:
+        Option<vertex_multimodal_embeddings::VertexMultimodalEmbeddingsClient>,
     pub voyage_embeddings: Option<voyage_embeddings::VoyageEmbeddings>,
     pub pexels_client: Option<pexels_client::PexelsClient>,
     pub elevenlabs_client: Option<elevenlabs_client::ElevenLabsClient>,
@@ -83,7 +85,6 @@ pub struct AppState {
     pub google_oauth_client_id: Option<String>,
     pub google_oauth_client_secret: Option<String>,
     pub job_manager: jobs::SharedJobManager,
-    pub workflow_checkpointer: Option<workflow::checkpoint::WorkflowCheckpointer>,
     pub token_manager: Option<Arc<token_manager::TokenManager>>,
     pub twitch_client: Option<Arc<twitch_client::TwitchClient>>,
     pub download_semaphore: Arc<Semaphore>,

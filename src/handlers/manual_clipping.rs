@@ -13,7 +13,7 @@ use axum::{
     routing::{delete, get, post},
     Router,
 };
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::json;
 use sqlx::Row;
 use std::sync::Arc;
@@ -49,6 +49,32 @@ fn detect_platform(url: &str) -> &'static str {
     }
 }
 
+async fn mark_manual_job_workflow_cancelled(
+    state: &Arc<AppState>,
+    job_id: Uuid,
+) {
+    let workflow_id = sqlx::query_scalar::<_, Option<Uuid>>(
+        "SELECT workflow_id FROM manual_clipping_jobs WHERE id = $1",
+    )
+    .bind(job_id)
+    .fetch_optional(&state.db_pool)
+    .await
+    .ok()
+    .flatten()
+    .flatten();
+
+    if let Some(workflow_id) = workflow_id {
+        let workflow_runtime = crate::services::WorkflowRuntime::new(state.db_pool.clone());
+        let _ = workflow_runtime
+            .mark_cancelled(
+                workflow_id,
+                Some("cancelled"),
+                "Manual clipping workflow was cancelled by the user.",
+            )
+            .await;
+    }
+}
+
 async fn create_job(
     Extension(state): Extension<Arc<AppState>>,
     Extension(claims): Extension<Claims>,
@@ -57,7 +83,10 @@ async fn create_job(
     if payload.video_url.trim().is_empty() {
         return Err((
             StatusCode::BAD_REQUEST,
-            Json(ErrorResponse { success: false, message: "video_url is required".to_string() }),
+            Json(ErrorResponse {
+                success: false,
+                message: "video_url is required".to_string(),
+            }),
         ));
     }
 
@@ -67,11 +96,63 @@ async fn create_job(
     let min_duration = payload.min_duration.unwrap_or(30).clamp(10, 300);
     let max_duration = payload.max_duration.unwrap_or(120).clamp(30, 600);
 
+    let workflow_runtime = crate::services::WorkflowRuntime::new(state.db_pool.clone());
+    let workflow_id = workflow_runtime
+        .create_workflow(crate::services::NewWorkflow {
+            idempotency_key: Some(format!(
+                "manual-clipping:{}:{}:{}:{}",
+                user_id, payload.video_url, clips_count, max_duration
+            )),
+            workflow_type: "manual_clipping_job".to_string(),
+            status: crate::services::WorkflowStatus::Queued,
+            session_uuid: None,
+            user_id: Some(user_id),
+            source_table: Some("manual_clipping_jobs".to_string()),
+            source_record_id: None,
+            request_summary: format!(
+                "Manual clipping request for {} ({}, {} clips, {}-{}s)",
+                payload.video_url,
+                platform,
+                clips_count,
+                min_duration,
+                max_duration
+            )
+            .chars()
+            .take(200)
+            .collect::<String>(),
+            current_step: Some("job_created".to_string()),
+            metadata: json!({
+                "video_url": payload.video_url,
+                "video_platform": platform,
+                "clips_requested": clips_count,
+                "min_clip_duration_seconds": min_duration,
+                "max_clip_duration_seconds": max_duration,
+            }),
+            artifact_requirements: json!([
+                {
+                    "kind": "manual_clips",
+                    "required": true,
+                    "must_create_clip_records": true
+                }
+            ]),
+        })
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to create manual clipping workflow: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    success: false,
+                    message: "Failed to initialize clipping workflow".to_string(),
+                }),
+            )
+        })?;
+
     let job_id: Uuid = sqlx::query_scalar(
         "INSERT INTO manual_clipping_jobs
          (user_id, video_url, video_platform, clips_requested,
-          min_clip_duration_seconds, max_clip_duration_seconds)
-         VALUES ($1, $2, $3, $4, $5, $6)
+          min_clip_duration_seconds, max_clip_duration_seconds, workflow_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
          RETURNING id",
     )
     .bind(user_id)
@@ -80,15 +161,42 @@ async fn create_job(
     .bind(clips_count)
     .bind(min_duration)
     .bind(max_duration)
+    .bind(workflow_id)
     .fetch_one(&state.db_pool)
     .await
     .map_err(|e| {
         tracing::error!("Failed to create manual clipping job: {}", e);
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse { success: false, message: "Failed to create job".to_string() }),
+            Json(ErrorResponse {
+                success: false,
+                message: "Failed to create job".to_string(),
+            }),
         )
     })?;
+
+    let _ = workflow_runtime
+        .append_event(
+            workflow_id,
+            "queued",
+            Some("job_created"),
+            "Manual clipping job created and waiting for background execution.",
+            json!({
+                "job_id": job_id,
+                "video_platform": platform,
+            }),
+        )
+        .await;
+
+    let _ = sqlx::query(
+        "UPDATE app_workflows
+         SET source_record_id = $2, updated_at = NOW()
+         WHERE id = $1",
+    )
+    .bind(workflow_id)
+    .bind(job_id)
+    .execute(&state.db_pool)
+    .await;
 
     // Spawn background execution
     let state_clone = Arc::clone(&state);
@@ -102,12 +210,34 @@ async fn create_job(
             .bind(job_id)
             .execute(&state_clone.db_pool)
             .await;
+            let workflow_id = sqlx::query_scalar::<_, Option<Uuid>>(
+                "SELECT workflow_id FROM manual_clipping_jobs WHERE id = $1",
+            )
+            .bind(job_id)
+            .fetch_optional(&state_clone.db_pool)
+            .await
+            .ok()
+            .flatten()
+            .flatten();
+            if let Some(workflow_id) = workflow_id {
+                let workflow_runtime =
+                    crate::services::WorkflowRuntime::new(state_clone.db_pool.clone());
+                let _ = workflow_runtime
+                    .mark_failed(
+                        workflow_id,
+                        Some("manual_clipping_execution"),
+                        &e,
+                        None,
+                    )
+                    .await;
+            }
         }
     });
 
     Ok(Json(json!({
         "success": true,
         "job_id": job_id.to_string(),
+        "workflow_id": workflow_id.to_string(),
         "status": "pending",
         "platform": platform
     })))
@@ -124,8 +254,8 @@ async fn list_jobs(
     let offset = (page - 1) * limit;
 
     let rows = sqlx::query(
-        "SELECT id, video_url, video_platform, video_title, status, progress_percent,
-                clips_count, error_message, created_at, completed_at
+            "SELECT id, video_url, video_platform, video_title, status, progress_percent,
+                clips_count, error_message, created_at, completed_at, workflow_id
          FROM manual_clipping_jobs
          WHERE user_id = $1
          ORDER BY created_at DESC
@@ -140,7 +270,10 @@ async fn list_jobs(
         tracing::error!("Failed to list manual jobs: {}", e);
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse { success: false, message: "Failed to fetch jobs".to_string() }),
+            Json(ErrorResponse {
+                success: false,
+                message: "Failed to fetch jobs".to_string(),
+            }),
         )
     })?;
 
@@ -156,6 +289,7 @@ async fn list_jobs(
                 "progress_percent": r.get::<i32, _>("progress_percent"),
                 "clips_count": r.get::<i32, _>("clips_count"),
                 "error_message": r.get::<Option<String>, _>("error_message"),
+                "workflow_id": r.get::<Option<Uuid>, _>("workflow_id").map(|id| id.to_string()),
                 "created_at": r.get::<chrono::DateTime<chrono::Utc>, _>("created_at"),
                 "completed_at": r.get::<Option<chrono::DateTime<chrono::Utc>>, _>("completed_at"),
             })
@@ -177,7 +311,7 @@ async fn get_job(
         sqlx::query(
             "SELECT id, user_id, video_url, video_platform, video_title, clips_requested,
                     min_clip_duration_seconds, max_clip_duration_seconds,
-                    status, progress_percent, clips_count, error_message,
+                    status, progress_percent, clips_count, error_message, workflow_id,
                     created_at, completed_at
              FROM manual_clipping_jobs WHERE id = $1",
         )
@@ -188,7 +322,7 @@ async fn get_job(
         sqlx::query(
             "SELECT id, user_id, video_url, video_platform, video_title, clips_requested,
                     min_clip_duration_seconds, max_clip_duration_seconds,
-                    status, progress_percent, clips_count, error_message,
+                    status, progress_percent, clips_count, error_message, workflow_id,
                     created_at, completed_at
              FROM manual_clipping_jobs WHERE id = $1 AND user_id = $2",
         )
@@ -201,14 +335,20 @@ async fn get_job(
         tracing::error!("DB error fetching manual job: {}", e);
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse { success: false, message: "Failed to fetch job".to_string() }),
+            Json(ErrorResponse {
+                success: false,
+                message: "Failed to fetch job".to_string(),
+            }),
         )
     })?;
 
     let row = row.ok_or_else(|| {
         (
             StatusCode::NOT_FOUND,
-            Json(ErrorResponse { success: false, message: "Job not found".to_string() }),
+            Json(ErrorResponse {
+                success: false,
+                message: "Job not found".to_string(),
+            }),
         )
     })?;
 
@@ -216,7 +356,8 @@ async fn get_job(
     let clip_rows = sqlx::query(
         "SELECT id, clip_number, title, description, start_time_seconds, end_time_seconds,
                 duration_seconds, quality_score, viral_factors,
-                r2_clip_url, r2_clip_url_expires_at, thumbnail_r2_url
+                r2_clip_url, r2_clip_url_expires_at, thumbnail_r2_url,
+                qa_status, qa_score, qa_feedback, qa_retry_hint
          FROM manual_clipping_clips
          WHERE job_id = $1
          ORDER BY clip_number ASC",
@@ -241,6 +382,10 @@ async fn get_job(
                 "download_url": c.get::<Option<String>, _>("r2_clip_url"),
                 "thumbnail_url": c.get::<Option<String>, _>("thumbnail_r2_url"),
                 "url_expires_at": c.get::<Option<chrono::DateTime<chrono::Utc>>, _>("r2_clip_url_expires_at"),
+                "qa_status": c.get::<String, _>("qa_status"),
+                "qa_score": c.get::<Option<i32>, _>("qa_score"),
+                "qa_feedback": c.get::<Option<String>, _>("qa_feedback"),
+                "qa_retry_hint": c.get::<Option<String>, _>("qa_retry_hint"),
             })
         })
         .collect();
@@ -257,6 +402,7 @@ async fn get_job(
             "progress_percent": row.get::<i32, _>("progress_percent"),
             "clips_count": row.get::<i32, _>("clips_count"),
             "error_message": row.get::<Option<String>, _>("error_message"),
+            "workflow_id": row.get::<Option<Uuid>, _>("workflow_id").map(|id| id.to_string()),
             "created_at": row.get::<chrono::DateTime<chrono::Utc>, _>("created_at"),
             "completed_at": row.get::<Option<chrono::DateTime<chrono::Utc>>, _>("completed_at"),
         },
@@ -299,9 +445,14 @@ async fn delete_job(
     if affected.rows_affected() == 0 {
         return Err((
             StatusCode::NOT_FOUND,
-            Json(ErrorResponse { success: false, message: "Job not found or not cancellable".to_string() }),
+            Json(ErrorResponse {
+                success: false,
+                message: "Job not found or not cancellable".to_string(),
+            }),
         ));
     }
+
+    mark_manual_job_workflow_cancelled(&state, id).await;
 
     Ok(Json(json!({ "success": true, "message": "Job cancelled" })))
 }

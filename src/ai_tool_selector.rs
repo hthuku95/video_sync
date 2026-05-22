@@ -1,49 +1,73 @@
-/// AI-powered tool selection — replaces the keyword-matching ToolSelector.
+/// Full-toolbelt-by-default tool access for agents.
 ///
-/// Instead of hardcoded keyword lists, we give the AI a compact catalog of all
-/// 320+ tool names + one-line descriptions and let it intelligently pick the
-/// most relevant tools for the user's specific request.
+/// Historically this module preselected a narrow subset of tools before the
+/// agent could reason about the task. That architecture became a reliability
+/// bottleneck in production because completion-critical and generation-critical
+/// tools could be omitted before the model even started planning.
 ///
-/// This works for ANY request including novel ones that keyword matching misses
-/// (e.g. "create cinematic travel reels" has no FFmpeg-specific keywords but the
-/// AI understands it needs auto_generate_video, add_text_overlay, add_audio, etc.)
+/// The system now defaults to returning the full allowed video toolbelt so the
+/// agent can choose tools for itself at runtime.
 ///
-/// Uses Gemma 4 via NVIDIA NIM (free, 40 RPM) — does not consume Gemini quota.
-/// Falls back to Gemini if NIM is unavailable. Falls back to a general tool set
-/// if both fail, so the agent always has something to work with.
-
+/// A legacy opt-in preselection mode is still available through
+/// `AI_TOOL_PRESELECTION_MODE=enabled` for experiments, but it is no longer the
+/// primary path anywhere in the app.
 use crate::gemini_client::FunctionDeclaration;
 
-/// Control tools that are always included regardless of request type.
-/// These let the agent manage its own workflow.
-const CONTROL_TOOL_NAMES: &[&str] = &[
-    "start_background_job",
-    "check_job_status",
-    "search_memory",
-];
+const ESSENTIAL_VIDEO_TOOL_NAMES: &[&str] = &["set_chat_title", "submit_final_answer"];
 
-/// Maximum video tools to include (control tools are on top of this).
-/// Keeps the total well under Gemini's practical schema complexity limit.
+/// Maximum video tools to include when legacy preselection mode is explicitly enabled.
 const MAX_VIDEO_TOOLS: usize = 30;
 
-/// Select the most relevant tools for `user_request` using AI.
+fn preselection_enabled() -> bool {
+    matches!(
+        std::env::var("AI_TOOL_PRESELECTION_MODE")
+            .ok()
+            .map(|value| value.trim().to_ascii_lowercase()),
+        Some(value) if value == "enabled" || value == "true" || value == "1"
+    )
+}
+
+fn all_video_tools_with_essentials() -> Vec<FunctionDeclaration> {
+    let all_video_tools = crate::tool_registry::ToolRegistry::gemini_tools_for_profile(
+        crate::tool_registry::AgentExecutionProfile::FullProduction,
+    );
+    build_tool_list(
+        all_video_tools.iter().map(|tool| tool.name.clone()).collect(),
+        all_video_tools,
+    )
+}
+
+/// Returns the full allowed video toolbelt by default.
 ///
-/// Returns the full `FunctionDeclaration` structs ready to pass to the model,
-/// including the 3 control tools plus up to MAX_VIDEO_TOOLS video tools.
+/// Legacy AI preselection is available only when
+/// `AI_TOOL_PRESELECTION_MODE=enabled`.
 pub async fn select_tools_for_request(
     user_request: &str,
     nvidia_nim_client: Option<&crate::nvidia_nim_client::NvidiaNimClient>,
     gemini_client: Option<&crate::gemini_client::GeminiClient>,
 ) -> Vec<FunctionDeclaration> {
+    if !preselection_enabled() {
+        let tools = all_video_tools_with_essentials();
+        tracing::info!(
+            "🔓 Full toolbelt mode enabled: exposing {} video tools for request: \"{}\"",
+            tools.len(),
+            user_request.chars().take(80).collect::<String>()
+        );
+        return tools;
+    }
+
     // All available video editing tool definitions
-    let all_video_tools = crate::gemini_client::GeminiClient::create_video_editing_tools();
+    let all_video_tools = crate::tool_registry::ToolRegistry::gemini_tools_for_profile(
+        crate::tool_registry::AgentExecutionProfile::FullProduction,
+    );
 
     // Build compact catalog: "tool_name: description\n" for each tool
     let catalog: String = all_video_tools
         .iter()
         .map(|t| {
             // Use just the first sentence of the description to keep the catalog concise
-            let short_desc = t.description
+            let short_desc = t
+                .description
                 .split(". ")
                 .next()
                 .unwrap_or(&t.description)
@@ -85,12 +109,12 @@ Return ONLY a valid JSON array of tool names. No explanation, no markdown, no co
     };
 
     tracing::info!(
-        "AI tool selector picked {} tools for request: \"{}\"",
+        "Legacy AI tool selector picked {} tools for request: \"{}\"",
         selected_names.len(),
         user_request.chars().take(80).collect::<String>()
     );
 
-    // Build the final tool list: control tools + AI-selected video tools
+    // Build the final tool list from AI-selected video tools
     build_tool_list(selected_names, all_video_tools)
 }
 
@@ -121,7 +145,10 @@ fn parse_tool_names(response: &str) -> Vec<String> {
         }
     }
 
-    tracing::warn!("Could not parse tool names from AI response: {}", &response[..response.len().min(200)]);
+    tracing::warn!(
+        "Could not parse tool names from AI response: {}",
+        &response[..response.len().min(200)]
+    );
     vec![]
 }
 
@@ -131,14 +158,32 @@ fn build_tool_list(
     selected_names: Vec<String>,
     all_video_tools: Vec<FunctionDeclaration>,
 ) -> Vec<FunctionDeclaration> {
+    let essential_tools: Vec<FunctionDeclaration> = ESSENTIAL_VIDEO_TOOL_NAMES
+        .iter()
+        .filter_map(|name| {
+            all_video_tools
+                .iter()
+                .find(|candidate| candidate.name == *name)
+                .cloned()
+        })
+        .collect();
+
+    let ensure_essential_tools = |mut tools: Vec<FunctionDeclaration>| {
+        for essential_tool in &essential_tools {
+            if tools.iter().any(|tool| tool.name == essential_tool.name) {
+                continue;
+            }
+
+            tools.push(essential_tool.clone());
+        }
+        tools
+    };
+
     if selected_names.is_empty() {
-        // Fallback: use the general-purpose set
-        tracing::info!("AI tool selection returned empty — using general tool set as fallback");
-        let general_names = crate::tool_selector::ToolSelector::general_tools();
-        return all_video_tools
-            .into_iter()
-            .filter(|t| general_names.contains(&t.name))
-            .collect();
+        tracing::warn!(
+            "Legacy AI tool selection returned empty — falling back to full toolbelt instead"
+        );
+        return ensure_essential_tools(all_video_tools);
     }
 
     // Filter to AI-selected tools, preserving the AI's ordering preference
@@ -148,21 +193,17 @@ fn build_tool_list(
         .take(MAX_VIDEO_TOOLS)
         .collect();
 
-    // If the AI selected fewer than 10 tools, pad with general tools to ensure coverage
+    // If the AI selected fewer than 10 tools, pad from the canonical registry order.
     if result.len() < 10 {
-        let general_names = crate::tool_selector::ToolSelector::general_tools();
         for tool in &all_video_tools {
             if result.len() >= MAX_VIDEO_TOOLS {
                 break;
             }
-            if general_names.contains(&tool.name) && !result.iter().any(|t| t.name == tool.name) {
+            if !result.iter().any(|t| t.name == tool.name) {
                 result.push(tool.clone());
             }
         }
     }
 
-    result
+    ensure_essential_tools(result)
 }
-
-/// Names of the control tools always included by the agent (exported for reference).
-pub const ALWAYS_INCLUDED_TOOLS: &[&str] = CONTROL_TOOL_NAMES;

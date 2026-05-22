@@ -88,11 +88,8 @@ impl VibeVoiceClient {
             .and_then(|value| value.as_str())
             .ok_or_else(|| "VibeVoice response missing audio_base64".to_string())?;
 
-        base64::Engine::decode(
-            &base64::engine::general_purpose::STANDARD,
-            base64_audio,
-        )
-        .map_err(|e| format!("Failed to decode VibeVoice base64 audio: {e}"))
+        base64::Engine::decode(&base64::engine::general_purpose::STANDARD, base64_audio)
+            .map_err(|e| format!("Failed to decode VibeVoice base64 audio: {e}"))
     }
 
     pub async fn transcribe_url(

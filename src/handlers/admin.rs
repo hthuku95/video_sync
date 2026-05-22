@@ -4,7 +4,7 @@ use crate::models::{admin::*, auth::*};
 use crate::AppState;
 use axum::{
     extract::{Extension, Path, Query},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{Html, Json},
     routing::{delete, get, post, put},
     Router,
@@ -16,6 +16,11 @@ use serde_json::json;
 use sqlx::{FromRow, Row};
 use std::sync::Arc;
 use uuid::Uuid;
+
+#[derive(Debug, Deserialize, Default)]
+pub struct DeliveryViewQuery {
+    pub token: Option<String>,
+}
 
 pub fn admin_routes() -> Router {
     // HTML pages - public routes with JavaScript authentication
@@ -45,6 +50,7 @@ pub fn admin_routes() -> Router {
         .route("/admin/revenue-ledger", get(admin_revenue_ledger_page))
         .route("/admin/how-it-works", get(admin_how_it_works_page))
         .route("/delivery/:id", get(delivery_page))
+        .route("/api/portfolio-samples", get(api_list_portfolio_samples))
         // x402 paywall endpoints — public on purpose; auth happens via the
         // signed USDC payment in the X-Payment header, not via JWT.
         .route("/delivery/:id/unlock-spec", get(delivery_unlock_spec))
@@ -182,8 +188,6 @@ pub struct CreateUserRequest {
 pub struct UpdateUserRequest {
     pub email: Option<String>,
     pub username: Option<String>,
-    pub is_active: Option<bool>,
-    pub is_staff: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -278,7 +282,10 @@ pub async fn admin_login_page() -> Html<String> {
                     // Check if user has admin privileges
                     if (data.user.is_staff || data.user.is_superuser) {
                         localStorage.setItem('authToken', data.token);
+                        localStorage.setItem('auth_token', data.token);
+                        localStorage.setItem('admin_token', data.token);
                         localStorage.setItem('user', JSON.stringify(data.user));
+                        localStorage.setItem('auth_user', JSON.stringify(data.user));
                         window.location.href = '/admin/dashboard';
                     } else {
                         document.getElementById('errorMessage').textContent = 'Access denied. Admin privileges required.';
@@ -3369,6 +3376,95 @@ pub async fn admin_clipping_stats(
         .try_get("success_rate")
         .unwrap_or_else(|_| rust_decimal::Decimal::new(0, 0));
 
+    let phase_row = sqlx::query(
+        r#"
+        SELECT
+            COUNT(*) FILTER (WHERE status = 'pending') as awaiting_worker_capacity,
+            COUNT(*) FILTER (WHERE status = 'downloading') as actively_downloading,
+            COUNT(*) FILTER (WHERE status IN ('analyzing')) as actively_analyzing,
+            COUNT(*) FILTER (WHERE status IN ('extracting_clips', 'posting')) as actively_encoding,
+            COUNT(*) FILTER (WHERE status = 'downloading' AND updated_at < NOW() - INTERVAL '15 minutes') as blocked_on_slow_media,
+            MIN(created_at) FILTER (WHERE status = 'pending') as oldest_pending_at,
+            MIN(updated_at) FILTER (WHERE status = 'downloading') as oldest_download_update_at
+        FROM clipping_jobs
+        "#,
+    )
+    .fetch_one(&state.db_pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("Failed to fetch clipping phase visibility: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let worker_rows = sqlx::query(
+        r#"
+        SELECT worker_id, last_seen_at, current_job_id, jobs_processed, jobs_failed
+        FROM worker_heartbeats
+        ORDER BY last_seen_at DESC
+        LIMIT 20
+        "#,
+    )
+    .fetch_all(&state.db_pool)
+    .await
+    .unwrap_or_else(|e| {
+        tracing::warn!("Failed to fetch worker heartbeat visibility: {}", e);
+        Vec::new()
+    });
+
+    let workers: Vec<serde_json::Value> = worker_rows
+        .iter()
+        .map(|row| {
+            use sqlx::Row;
+            let last_seen = row.get::<chrono::DateTime<chrono::Utc>, _>("last_seen_at");
+            let current_job_id = row.get::<Option<i32>, _>("current_job_id");
+            let age_seconds = chrono::Utc::now()
+                .signed_duration_since(last_seen)
+                .num_seconds();
+            let state = if age_seconds > 180 {
+                "stale"
+            } else if current_job_id.is_some() {
+                "active"
+            } else {
+                "idle"
+            };
+            json!({
+                "worker_id": row.get::<String, _>("worker_id"),
+                "state": state,
+                "current_job_id": current_job_id,
+                "last_seen_at": last_seen,
+                "age_seconds": age_seconds,
+                "jobs_processed": row.get::<i32, _>("jobs_processed"),
+                "jobs_failed": row.get::<i32, _>("jobs_failed"),
+            })
+        })
+        .collect();
+
+    let node_visibility_row = match sqlx::query(
+        r#"
+        SELECT
+            COUNT(*) FILTER (WHERE awn.status = 'running') as running_nodes,
+            COUNT(*) FILTER (WHERE awn.status = 'failed') as failed_nodes,
+            COUNT(*) FILTER (
+                WHERE awn.status = 'running'
+                  AND COALESCE(awn.last_heartbeat_at, awn.started_at, awn.updated_at) < NOW() - INTERVAL '15 minutes'
+            ) as stale_running_nodes,
+            COUNT(*) FILTER (WHERE awn.status = 'pending') as pending_nodes
+        FROM app_workflow_nodes awn
+        JOIN app_workflows aw ON aw.id = awn.workflow_id
+        WHERE aw.workflow_type ILIKE '%clipping%'
+           OR aw.source_table = 'clipping_jobs'
+        "#,
+    )
+    .fetch_one(&state.db_pool)
+    .await
+    {
+        Ok(row) => Some(row),
+        Err(e) => {
+            tracing::warn!("Failed to fetch workflow-node visibility: {}", e);
+            None
+        }
+    };
+
     // Query 2: Per-user breakdown
     let user_rows = sqlx::query(
         r#"
@@ -3438,6 +3534,20 @@ pub async fn admin_clipping_stats(
             "active_jobs": active,
             "success_rate": success_rate
         },
+        "worker_visibility": {
+            "awaiting_worker_capacity": phase_row.get::<i64, _>("awaiting_worker_capacity"),
+            "actively_downloading": phase_row.get::<i64, _>("actively_downloading"),
+            "actively_analyzing": phase_row.get::<i64, _>("actively_analyzing"),
+            "actively_encoding": phase_row.get::<i64, _>("actively_encoding"),
+            "blocked_on_slow_media": phase_row.get::<i64, _>("blocked_on_slow_media"),
+            "running_nodes": node_visibility_row.as_ref().and_then(|row| row.try_get::<i64, _>("running_nodes").ok()).unwrap_or(0),
+            "failed_nodes": node_visibility_row.as_ref().and_then(|row| row.try_get::<i64, _>("failed_nodes").ok()).unwrap_or(0),
+            "stale_running_nodes": node_visibility_row.as_ref().and_then(|row| row.try_get::<i64, _>("stale_running_nodes").ok()).unwrap_or(0),
+            "pending_nodes": node_visibility_row.as_ref().and_then(|row| row.try_get::<i64, _>("pending_nodes").ok()).unwrap_or(0),
+            "oldest_pending_at": phase_row.get::<Option<chrono::DateTime<chrono::Utc>>, _>("oldest_pending_at"),
+            "oldest_download_update_at": phase_row.get::<Option<chrono::DateTime<chrono::Utc>>, _>("oldest_download_update_at"),
+            "workers": workers
+        },
         "users": users
     })))
 }
@@ -3503,6 +3613,7 @@ pub async fn admin_user_clipping_details(
         r#"
         SELECT
             cj.id,
+            cj.workflow_id,
             cj.source_video_id,
             cj.source_video_title,
             cj.status,
@@ -3510,14 +3621,24 @@ pub async fn admin_user_clipping_details(
             cj.progress_percent,
             cj.error_message,
             cj.retry_count,
+            cj.supervisor_status,
+            cj.supervisor_reason,
+            cj.supervisor_last_action,
+            cj.blocked_by_job_id,
+            cj.fallback_strategy,
+            cj.fallback_delivery_id,
             cj.created_at,
             cj.updated_at,
             cj.completed_at,
+            d.title as fallback_delivery_title,
+            d.status as fallback_delivery_status,
+            d.output_r2_url as fallback_delivery_output_url,
             ycl.id as linkage_id,
             ysc.channel_name as source_channel
         FROM clipping_jobs cj
         JOIN youtube_channel_linkages ycl ON cj.linkage_id = ycl.id
         JOIN youtube_source_channels ysc ON ycl.source_channel_id = ysc.id
+        LEFT JOIN deliveries d ON d.id = cj.fallback_delivery_id
         WHERE ycl.user_id = $1
         ORDER BY cj.created_at DESC
         LIMIT 10
@@ -3531,12 +3652,14 @@ pub async fn admin_user_clipping_details(
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
-    let recent_jobs: Vec<serde_json::Value> = job_rows
-        .iter()
-        .map(|row| {
-            use sqlx::Row;
-            json!({
+    let mut recent_jobs: Vec<serde_json::Value> = Vec::new();
+    for row in &job_rows {
+        use sqlx::Row;
+        let workflow_id = row.get::<Option<uuid::Uuid>, _>("workflow_id");
+        let node_progress = clipping_job_node_progress_json(&state.db_pool, workflow_id).await;
+        recent_jobs.push(json!({
                 "id": row.get::<i32, _>("id"),
+                "workflow_id": workflow_id.map(|id| id.to_string()),
                 "source_video_id": row.get::<String, _>("source_video_id"),
                 "source_video_title": row.get::<Option<String>, _>("source_video_title"),
                 "status": row.get::<String, _>("status"),
@@ -3544,14 +3667,23 @@ pub async fn admin_user_clipping_details(
                 "progress_percent": row.get::<Option<i32>, _>("progress_percent"),
                 "error_message": row.get::<Option<String>, _>("error_message"),
                 "retry_count": row.get::<i32, _>("retry_count"),
+                "supervisor_status": row.get::<Option<String>, _>("supervisor_status"),
+                "supervisor_reason": row.get::<Option<String>, _>("supervisor_reason"),
+                "supervisor_last_action": row.get::<Option<String>, _>("supervisor_last_action"),
+                "blocked_by_job_id": row.get::<Option<i32>, _>("blocked_by_job_id"),
+                "node_progress": node_progress,
+                "fallback_strategy": row.get::<Option<String>, _>("fallback_strategy"),
+                "fallback_delivery_id": row.get::<Option<uuid::Uuid>, _>("fallback_delivery_id").map(|id| id.to_string()),
+                "fallback_delivery_title": row.get::<Option<String>, _>("fallback_delivery_title"),
+                "fallback_delivery_status": row.get::<Option<String>, _>("fallback_delivery_status"),
+                "fallback_delivery_output_url": row.get::<Option<String>, _>("fallback_delivery_output_url"),
                 "created_at": row.get::<chrono::DateTime<chrono::Utc>, _>("created_at"),
                 "updated_at": row.get::<chrono::DateTime<chrono::Utc>, _>("updated_at"),
                 "completed_at": row.get::<Option<chrono::DateTime<chrono::Utc>>, _>("completed_at"),
                 "linkage_id": row.get::<i32, _>("linkage_id"),
                 "source_channel": row.get::<String, _>("source_channel"),
-            })
-        })
-        .collect();
+            }));
+    }
 
     // Query 3: Extracted clips with analytics for those jobs
     let job_ids: Vec<i32> = {
@@ -3643,6 +3775,96 @@ pub async fn admin_user_clipping_details(
     })))
 }
 
+async fn clipping_job_node_progress_json(
+    pool: &sqlx::PgPool,
+    workflow_id: Option<uuid::Uuid>,
+) -> serde_json::Value {
+    let Some(workflow_id) = workflow_id else {
+        return json!({
+            "available": false,
+            "progress_percent": 0,
+            "summary": "No durable workflow is attached to this clipping job yet.",
+            "nodes": []
+        });
+    };
+
+    let runtime = crate::services::WorkflowRuntime::new(pool.clone());
+    match runtime.node_progress(workflow_id).await {
+        Ok(progress) => {
+            let active_node = progress
+                .running_node
+                .as_ref()
+                .or(progress.waiting_node.as_ref())
+                .or(progress.next_node.as_ref());
+            let summary = if let Some(reason) = progress.blocked_reason.as_deref() {
+                reason.to_string()
+            } else if let Some(node) = active_node {
+                format!(
+                    "Node '{}' is {} ({}/{} attempt(s)).",
+                    node.node_key, node.status, node.attempt_count, node.max_attempts
+                )
+            } else if progress.total_nodes > 0 && progress.completed_nodes == progress.total_nodes {
+                "All workflow nodes completed.".to_string()
+            } else {
+                "Workflow node progress is available.".to_string()
+            };
+
+            json!({
+                "available": true,
+                "workflow_id": workflow_id,
+                "progress_percent": progress.progress_percent,
+                "completed_nodes": progress.completed_nodes,
+                "failed_nodes": progress.failed_nodes,
+                "total_nodes": progress.total_nodes,
+                "active_node": active_node.map(|node| node.node_key.clone()),
+                "active_node_policy": active_node.and_then(|node| {
+                    node.input
+                        .get("durable_policy")
+                        .and_then(|value| value.as_str())
+                        .map(str::to_string)
+                }),
+                "blocked_reason": progress.blocked_reason,
+                "summary": summary,
+                "nodes": progress.nodes.into_iter().map(|node| {
+                    let tool_name = node
+                        .input
+                        .get("tool_name")
+                        .and_then(|value| value.as_str())
+                        .map(str::to_string);
+                    let durable_policy = node
+                        .input
+                        .get("durable_policy")
+                        .and_then(|value| value.as_str())
+                        .map(str::to_string);
+                    let timeout_hint_seconds = node
+                        .input
+                        .get("timeout_hint_seconds")
+                        .and_then(|value| value.as_i64());
+                    json!({
+                        "node_key": node.node_key,
+                        "node_type": node.node_type,
+                        "status": node.status,
+                        "attempt_count": node.attempt_count,
+                        "max_attempts": node.max_attempts,
+                        "tool_name": tool_name,
+                        "durable_policy": durable_policy,
+                        "timeout_hint_seconds": timeout_hint_seconds,
+                        "error_message": node.error_message,
+                        "output": node.output,
+                    })
+                }).collect::<Vec<_>>()
+            })
+        }
+        Err(error) => json!({
+            "available": false,
+            "workflow_id": workflow_id,
+            "progress_percent": 0,
+            "summary": format!("Failed to load node progress: {error}"),
+            "nodes": []
+        }),
+    }
+}
+
 /// Admin HTML Page: Clipping Activity Dashboard
 pub async fn admin_clipping_activity_page() -> Html<String> {
     let html = r###"
@@ -3681,7 +3903,12 @@ pub async fn admin_clipping_activity_page() -> Html<String> {
             .badge-success { background: #d4edda; color: #155724; }
             .badge-danger { background: #f8d7da; color: #721c24; }
             .badge-warning { background: #fff3cd; color: #856404; }
+            .badge-info { background: #d1ecf1; color: #0c5460; }
             .badge-secondary { background: #e2e3e5; color: #383d41; }
+            .ops-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:1rem; margin-top:1rem; }
+            .ops-card { border:1px solid #e9ecef; border-radius:8px; padding:1rem; background:#f8f9fa; }
+            .ops-card strong { display:block; font-size:1.35rem; margin-bottom:0.25rem; }
+            .worker-pill { display:inline-flex; align-items:center; gap:0.35rem; padding:0.35rem 0.65rem; border-radius:999px; margin:0.2rem; font-size:0.8rem; border:1px solid #dee2e6; background:#fff; }
             .btn { padding: 0.5rem 1rem; background: #dc3545; color: white; border: none; border-radius: 5px; cursor: pointer; text-decoration: none; display: inline-block; }
             .btn-secondary { background: #6c757d; }
             .btn-secondary:hover { background: #5a6268; }
@@ -3731,6 +3958,20 @@ pub async fn admin_clipping_activity_page() -> Html<String> {
                     <div class="stat-number" id="successRate">-</div>
                     <div class="stat-label">Success Rate</div>
                 </div>
+            </div>
+
+            <div class="recent-section">
+                <h2>Worker Visibility</h2>
+                <p style="color:#6c757d;margin-bottom:0.75rem;">Distinguishes idle workers, active downloads/encoding, slow media blockers, and jobs waiting for capacity.</p>
+                <div class="ops-grid">
+                    <div class="ops-card"><strong id="awaitingCapacity">-</strong><span>Awaiting worker capacity</span></div>
+                    <div class="ops-card"><strong id="activelyDownloading">-</strong><span>Actively downloading</span></div>
+                    <div class="ops-card"><strong id="activelyEncoding">-</strong><span>Encoding / posting</span></div>
+                    <div class="ops-card"><strong id="blockedSlowMedia">-</strong><span>Blocked on slow media</span></div>
+                    <div class="ops-card"><strong id="runningNodes">-</strong><span>Running workflow nodes</span></div>
+                    <div class="ops-card"><strong id="staleNodes">-</strong><span>Stale node recoveries needed</span></div>
+                </div>
+                <div id="workerList" style="margin-top:1rem;color:#495057;">Loading worker heartbeats...</div>
             </div>
 
             <div class="recent-section">
@@ -3857,6 +4098,7 @@ pub async fn admin_clipping_activity_page() -> Html<String> {
                     document.getElementById('failedJobs').textContent = data.overview.failed_jobs;
                     document.getElementById('activeJobs').textContent = data.overview.active_jobs;
                     document.getElementById('successRate').textContent = data.overview.success_rate + '%';
+                    renderWorkerVisibility(data.worker_visibility || {});
 
                     const tbody = document.getElementById('userTableBody');
                     tbody.innerHTML = '';
@@ -3885,6 +4127,36 @@ pub async fn admin_clipping_activity_page() -> Html<String> {
                     console.error('Failed to load stats:', error);
                     document.getElementById('userTableBody').innerHTML = '<tr><td colspan="8" style="text-align: center; padding: 2rem; color: #dc3545;">Failed to load data</td></tr>';
                 }
+            }
+
+            function renderWorkerVisibility(v) {
+                document.getElementById('awaitingCapacity').textContent = v.awaiting_worker_capacity ?? 0;
+                document.getElementById('activelyDownloading').textContent = v.actively_downloading ?? 0;
+                document.getElementById('activelyEncoding').textContent = v.actively_encoding ?? 0;
+                document.getElementById('blockedSlowMedia').textContent = v.blocked_on_slow_media ?? 0;
+                document.getElementById('runningNodes').textContent = v.running_nodes ?? 0;
+                document.getElementById('staleNodes').textContent = v.stale_running_nodes ?? 0;
+
+                const workers = v.workers || [];
+                const oldestPending = v.oldest_pending_at ? `Oldest pending: ${formatDate(v.oldest_pending_at)}. ` : '';
+                const oldestDownload = v.oldest_download_update_at ? `Oldest download update: ${formatDate(v.oldest_download_update_at)}. ` : '';
+                if (!workers.length) {
+                    document.getElementById('workerList').innerHTML = `<span style="color:#dc3545;">No recent worker heartbeat found.</span> ${oldestPending}${oldestDownload}`;
+                    return;
+                }
+
+                const colorFor = state => state === 'active' ? 'badge-info' : state === 'idle' ? 'badge-success' : 'badge-danger';
+                document.getElementById('workerList').innerHTML = `
+                    <div style="margin-bottom:0.5rem;">${oldestPending}${oldestDownload}</div>
+                    ${workers.map(w => `
+                        <span class="worker-pill">
+                            <span class="badge ${colorFor(w.state)}">${w.state}</span>
+                            ${w.worker_id}
+                            ${w.current_job_id ? `#${w.current_job_id}` : ''}
+                            <small>${Math.round((w.age_seconds || 0) / 60)}m ago</small>
+                        </span>
+                    `).join('')}
+                `;
             }
 
             async function loadUserDetails(userId, username) {
@@ -3940,7 +4212,7 @@ pub async fn admin_clipping_activity_page() -> Html<String> {
                     if (!data.recent_jobs || data.recent_jobs.length === 0) {
                         jobsContainer.innerHTML = '<p style="color:#6c757d;padding:1rem;">No jobs found for this user.</p>';
                     } else {
-                        jobsContainer.innerHTML = data.recent_jobs.map(job => {
+                        const jobRowsHtml = data.recent_jobs.map(job => {
                             const jobClips = clipsByJob[job.id] || [];
                             const clipsHtml = jobClips.length === 0 ? '' : `
                                 <tr id="clips-${job.id}" style="display:none;">
@@ -3980,8 +4252,34 @@ pub async fn admin_clipping_activity_page() -> Html<String> {
                             `;
 
                             const hasClips = jobClips.length > 0;
+                            const hasFallbackDelivery = !!job.fallback_delivery_id;
+                            const nodeProgress = job.node_progress || {};
+                            const progressPct = nodeProgress.available ? (nodeProgress.progress_percent || 0) : (job.progress_percent || 0);
+                            const activeNodeLabel = nodeProgress.active_node
+                                ? `${nodeProgress.active_node}${nodeProgress.active_node_policy ? ` (${nodeProgress.active_node_policy})` : ''}`
+                                : '';
+                            const nodeChips = Array.isArray(nodeProgress.nodes) && nodeProgress.nodes.length
+                                ? `<div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px;">${nodeProgress.nodes.slice(0, 6).map(node => {
+                                    const label = node.tool_name || node.node_key || node.node_type || 'node';
+                                    const color = node.status === 'completed' ? '#166534' : node.status === 'failed' ? '#991b1b' : node.status === 'running' ? '#075985' : '#475569';
+                                    const bg = node.status === 'completed' ? '#dcfce7' : node.status === 'failed' ? '#fee2e2' : node.status === 'running' ? '#e0f2fe' : '#f1f5f9';
+                                    return `<span title="${node.error_message || node.durable_policy || ''}" style="background:${bg};color:${color};border-radius:999px;padding:1px 6px;font-size:0.68rem;">${label}: ${node.status || 'unknown'}</span>`;
+                                }).join('')}</div>`
+                                : '';
+                            const diagnosisHtml = nodeProgress.available || job.supervisor_reason || job.current_step ? `
+                                <div style="margin-top:0.35rem;font-size:0.76rem;line-height:1.35;color:#64748b;">
+                                    ${nodeProgress.available ? `<div><strong>Nodes:</strong> ${nodeProgress.completed_nodes || 0}/${nodeProgress.total_nodes || 0} complete${nodeProgress.active_node ? ` · active: ${nodeProgress.active_node}` : ''}</div>` : ''}
+                                    ${nodeProgress.summary ? `<div>${nodeProgress.summary}</div>` : ''}
+                                    ${nodeChips}
+                                    ${job.supervisor_reason ? `<div style="color:#b45309;"><strong>Supervisor:</strong> ${job.supervisor_reason}</div>` : ''}
+                                    ${job.blocked_by_job_id ? `<div style="color:#dc3545;">Blocked by duplicate job #${job.blocked_by_job_id}</div>` : ''}
+                                    ${progressPct > 0 && job.status !== 'completed' ? `<div style="height:5px;background:#e5e7eb;border-radius:999px;margin-top:4px;overflow:hidden;"><span style="display:block;height:100%;width:${Math.min(100, progressPct)}%;background:#0ea5e9;"></span></div>` : ''}
+                                </div>
+                            ` : '';
                             const toggleBtn = hasClips
                                 ? `<button onclick="toggleClips(${job.id})" style="background:none;border:1px solid #dee2e6;padding:2px 8px;border-radius:3px;cursor:pointer;font-size:0.8rem;" id="toggle-${job.id}">▼ ${jobClips.length} clip${jobClips.length !== 1 ? 's' : ''}</button>`
+                                : hasFallbackDelivery
+                                    ? `<a href="/delivery/${job.fallback_delivery_id}" target="_blank" onclick="event.stopPropagation()" style="color:#0f766e;font-size:0.8rem;text-decoration:none;border:1px solid #99f6e4;background:#ccfbf1;padding:3px 7px;border-radius:999px;">summary delivery${job.fallback_delivery_status ? ` · ${job.fallback_delivery_status}` : ''}</a>`
                                 : `<span style="color:#6c757d;font-size:0.8rem;">no clips</span>`;
 
                             return `
@@ -3989,6 +4287,7 @@ pub async fn admin_clipping_activity_page() -> Html<String> {
                                     <td style="padding:0.75rem 1rem;font-size:0.85rem;">#${job.id}</td>
                                     <td style="padding:0.75rem 1rem;font-size:0.85rem;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
                                         <a href="https://youtube.com/watch?v=${job.source_video_id}" target="_blank" onclick="event.stopPropagation()" style="color:#dc3545;text-decoration:none;">${job.source_video_title || job.source_video_id}</a>
+                                        ${diagnosisHtml}
                                     </td>
                                     <td style="padding:0.75rem 1rem;"><span class="badge badge-${getStatusColor(job.status)}">${job.status}</span></td>
                                     <td style="padding:0.75rem 1rem;font-size:0.85rem;">${job.source_channel}</td>
@@ -4000,7 +4299,6 @@ pub async fn admin_clipping_activity_page() -> Html<String> {
                             `;
                         }).join('');
 
-                        // Wrap in table
                         jobsContainer.innerHTML = `
                             <table style="width:100%;border-collapse:collapse;">
                                 <thead>
@@ -4014,7 +4312,7 @@ pub async fn admin_clipping_activity_page() -> Html<String> {
                                     </tr>
                                 </thead>
                                 <tbody style="border:1px solid #dee2e6;">
-                                    ${jobsContainer.innerHTML}
+                                    ${jobRowsHtml}
                                 </tbody>
                             </table>
                         `;
@@ -6688,8 +6986,16 @@ load();
 
 pub async fn delivery_page(
     Path(id): Path<String>,
+    Query(query): Query<DeliveryViewQuery>,
     Extension(state): Extension<Arc<AppState>>,
 ) -> Html<String> {
+    let internal_reviewer = query
+        .token
+        .as_deref()
+        .and_then(|token| crate::handlers::auth::verify_jwt_token(token).ok())
+        .map(|claims| claims.is_staff || claims.is_superuser)
+        .unwrap_or(false);
+
     // Try test_results first, then custom deliveries table
     let (name, gig_type, status, r2_url, filename, score, feedback, unlock_price, unlocked_until) =
         if let Ok(uuid) = uuid::Uuid::parse_str(&id) {
@@ -6713,9 +7019,9 @@ pub async fn delivery_page(
                     .ok()
                     .flatten();
                 let u = match u {
-                    Some(existing) => refresh_r2_presigned_url_from_existing(&state, &existing)
-                        .await
-                        .or(Some(existing)),
+                    Some(existing) => {
+                        refresh_r2_presigned_url_from_existing(&state, &existing).await
+                    }
                     None => None,
                 };
                 let f: Option<String> = row.try_get("output_filename").ok();
@@ -6750,15 +7056,15 @@ pub async fn delivery_page(
                         .ok()
                         .flatten();
                     let full_u = match full_u {
-                        Some(existing) => refresh_r2_presigned_url_from_existing(&state, &existing)
-                            .await
-                            .or(Some(existing)),
+                        Some(existing) => {
+                            refresh_r2_presigned_url_from_existing(&state, &existing).await
+                        }
                         None => None,
                     };
                     let preview_u = match preview_u {
-                        Some(existing) => refresh_r2_presigned_url_from_existing(&state, &existing)
-                            .await
-                            .or(Some(existing)),
+                        Some(existing) => {
+                            refresh_r2_presigned_url_from_existing(&state, &existing).await
+                        }
                         None => None,
                     };
                     let f: Option<String> = row.try_get("output_filename").ok();
@@ -6769,8 +7075,9 @@ pub async fn delivery_page(
                     // Pick which URL to show: locked → preview (or full fallback),
                     // unlocked → full clean HD. The preview URL is the agent's
                     // watermarked 30-60s clip; paying unlocks the full 3-4min.
-                    let is_unlocked_now =
-                        price.is_none() || until.map(|t| t > chrono::Utc::now()).unwrap_or(false);
+                    let is_unlocked_now = internal_reviewer
+                        || price.is_none()
+                        || until.map(|t| t > chrono::Utc::now()).unwrap_or(false);
                     let served = if is_unlocked_now {
                         full_u.clone()
                     } else {
@@ -6797,7 +7104,8 @@ pub async fn delivery_page(
 
     // Unlocked = the deliverable can show full-quality download buttons.
     // Either: no price set (free delivery), or unlocked_until is in the future.
-    let is_unlocked = unlock_price.is_none()
+    let is_unlocked = internal_reviewer
+        || unlock_price.is_none()
         || unlocked_until
             .map(|t| t > chrono::Utc::now())
             .unwrap_or(false);
@@ -6842,10 +7150,18 @@ pub async fn delivery_page(
                 .as_deref()
                 .map(|f| f.ends_with(".png") || f.ends_with(".jpg"))
                 .unwrap_or(false);
+            let media_missing = r2_url.is_none() && status.eq_ignore_ascii_case("completed");
 
             let media_html = match &r2_url {
-                None => r#"<div class="no-media">⏳ Render in progress — check back shortly</div>"#
-                    .to_string(),
+                None => {
+                    if media_missing {
+                        r#"<div class="no-media">This sample record exists, but the media file is missing from storage and needs regeneration.</div>"#
+                            .to_string()
+                    } else {
+                        r#"<div class="no-media">⏳ Render in progress — check back shortly</div>"#
+                            .to_string()
+                    }
+                }
                 Some(url) => {
                     if is_image {
                         let watermark_overlay = if !is_unlocked {
@@ -6888,7 +7204,11 @@ pub async fn delivery_page(
                 (Some(url), true) => {
                     let fname = filename.as_deref().unwrap_or("output");
                     format!(
-                        r#"<a href="{url}" download="{fname}" class="btn-download">⬇ Download HD {fname}</a>"#
+                        r#"<div class="delivery-actions">
+  <a href="{url}" target="_blank" rel="noopener" class="btn-secondary">Open media</a>
+  <button type="button" class="btn-secondary" onclick="navigator.clipboard.writeText(window.location.href);this.textContent='Link copied';setTimeout(()=>this.textContent='Copy delivery link',1800)">Copy delivery link</button>
+  <a href="{url}" download="{fname}" class="btn-download">Download HD {fname}</a>
+</div>"#
                     )
                 }
                 (Some(_), false) => {
@@ -6949,11 +7269,17 @@ pub async fn delivery_page(
   .media-wrap {{ margin-bottom: 24px; border-radius: 12px; overflow: hidden;
                   background: #12121a; padding: 4px; }}
   .no-media {{ padding: 60px; text-align: center; color: #666680; font-size: 15px; }}
+  .delivery-actions {{ display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 24px; }}
   .btn-download {{ display: inline-block; background: #6366f1; color: #fff;
                    padding: 12px 28px; border-radius: 8px; text-decoration: none;
-                   font-weight: 600; font-size: 15px; margin-bottom: 24px;
+                   font-weight: 600; font-size: 15px; border: 0;
                    transition: background 0.15s; }}
   .btn-download:hover {{ background: #4f46e5; }}
+  .btn-secondary {{ display: inline-block; background: #1b1b27; color: #ddd6ff;
+                    padding: 12px 18px; border-radius: 8px; text-decoration: none;
+                    font-weight: 600; font-size: 14px; border: 1px solid #2f2f44;
+                    cursor: pointer; }}
+  .btn-secondary:hover {{ background: #25253a; color: #fff; }}
   .review-box {{ background: #12121a; border: 1px solid #2a2a36; border-radius: 10px;
                   padding: 16px 20px; margin-top: 8px; }}
   .score {{ font-size: 14px; color: #9999bb; margin-bottom: 6px; }}
@@ -7407,6 +7733,38 @@ pub struct CreateDeliveryRequest {
     pub extra: Option<serde_json::Value>,
 }
 
+fn core_delivery_gig_label(gig_type: &str) -> String {
+    match gig_type {
+        "scene" => "3D Scene / B-Roll Clip".to_string(),
+        "thumbnail" => "YouTube Thumbnail".to_string(),
+        "title_card" => "Animated Title Card".to_string(),
+        "data_viz" => "Data Visualization".to_string(),
+        "lower_third" => "Lower Third Overlay".to_string(),
+        "latex" => "LaTeX / Math Animation".to_string(),
+        "ui_mockup" => "UI Mockup (Phone/Screen)".to_string(),
+        _ => gig_type.to_string(),
+    }
+}
+
+fn service_offer_label(service_offer: &str) -> Option<&'static str> {
+    match service_offer {
+        "saas_launch_pack" => Some("SaaS Launch Pack"),
+        "clipper_enhancement_pack" => Some("Motion Pack"),
+        "creator_manager_fulfillment" => Some("Agency Production Backend"),
+        "x402_asset_api" => Some("Programmable Payments"),
+        _ => None,
+    }
+}
+
+fn delivery_display_gig_type(gig_type: &str, extra: Option<&serde_json::Value>) -> String {
+    extra
+        .and_then(|value| value.get("service_offer"))
+        .and_then(|value| value.as_str())
+        .and_then(service_offer_label)
+        .map(str::to_string)
+        .unwrap_or_else(|| core_delivery_gig_label(gig_type))
+}
+
 #[derive(serde::Deserialize)]
 pub struct NormalizeReferenceAssetRequest {
     pub source_url: Option<String>,
@@ -7440,22 +7798,103 @@ pub async fn api_create_delivery(
         Err(e) => return Json(json!({"error": format!("DB insert failed: {e}")})),
     };
 
-    // Spawn background render task
-    let state_clone = state.clone();
-    tokio::spawn(async move {
-        run_delivery_job(delivery_id, state_clone).await;
-    });
+    let workflow_id = if req.gig_type == "long_form_video" {
+        match crate::services::LongFormVideoWorkflow::start(
+            state.clone(),
+            crate::services::LongFormVideoRequest {
+                title: req.title.clone(),
+                brief: req.prompt.clone(),
+                target_duration_seconds: duration.max(30.0),
+                segment_duration_seconds: extra
+                    .get("segment_duration_seconds")
+                    .and_then(|value| value.as_f64())
+                    .unwrap_or(30.0),
+                style: style.clone(),
+                offer_type: extra
+                    .get("offer_type")
+                    .or_else(|| extra.get("service_offer"))
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("long_form_video")
+                    .to_string(),
+                narration_speaker: extra
+                    .get("narration_speaker")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("Emma")
+                    .to_string(),
+                include_narration: extra
+                    .get("include_narration")
+                    .and_then(|value| value.as_bool())
+                    .unwrap_or(true),
+                reference_url: extra
+                    .get("source_url")
+                    .or_else(|| extra.get("reference_url"))
+                    .and_then(|value| value.as_str())
+                    .map(ToOwned::to_owned),
+                session_uuid: None,
+                user_id: extra
+                    .get("sample_owner_user_id")
+                    .and_then(|value| value.as_i64())
+                    .and_then(|value| i32::try_from(value).ok()),
+                source_table: Some("deliveries".to_string()),
+                source_record_id: Some(delivery_id),
+                idempotency_key: Some(format!("delivery-long-form:{delivery_id}")),
+            },
+        )
+        .await
+        {
+            Ok(id) => {
+                let _ = sqlx::query("UPDATE deliveries SET workflow_id = $1 WHERE id = $2")
+                    .bind(id)
+                    .bind(delivery_id)
+                    .execute(&state.db_pool)
+                    .await;
+                Some(id.to_string())
+            }
+            Err(error) => {
+                let _ = sqlx::query(
+                    "UPDATE deliveries SET status='failed', error_message=$1, completed_at=NOW() WHERE id=$2",
+                )
+                .bind(&error)
+                .bind(delivery_id)
+                .execute(&state.db_pool)
+                .await;
+                return Json(json!({"error": format!("Long-form workflow failed to start: {error}")}));
+            }
+        }
+    } else {
+        let workflow_id = ensure_delivery_workflow(&state, delivery_id)
+            .await
+            .ok()
+            .map(|id| id.to_string());
 
-    Json(json!({"delivery_id": delivery_id.to_string()}))
+        let state_clone = state.clone();
+        tokio::spawn(async move {
+            run_delivery_job(delivery_id, state_clone).await;
+        });
+
+        workflow_id
+    };
+
+    Json(json!({
+        "delivery_id": delivery_id.to_string(),
+        "workflow_id": workflow_id
+    }))
 }
 
 pub async fn api_list_deliveries(
     Extension(state): Extension<Arc<AppState>>,
 ) -> Json<serde_json::Value> {
     let rows = sqlx::query(
-        "SELECT id, client_ref, title, gig_type, status, output_r2_url, \
-         created_at, completed_at, error_message \
-         FROM deliveries ORDER BY created_at DESC LIMIT 100",
+        "SELECT d.id, d.client_ref, d.title, d.gig_type, d.status, d.output_r2_url, \
+                d.output_filename, d.workflow_id, d.created_at, d.completed_at, \
+                d.error_message, d.extra_args, \
+                aw.status AS workflow_status, \
+                aw.current_step AS workflow_current_step, \
+                aw.last_heartbeat_at AS workflow_last_heartbeat_at, \
+                aw.error_message AS workflow_error_message \
+           FROM deliveries d \
+      LEFT JOIN app_workflows aw ON aw.id = d.workflow_id \
+       ORDER BY d.created_at DESC LIMIT 100",
     )
     .fetch_all(&state.db_pool)
     .await;
@@ -7471,18 +7910,29 @@ pub async fn api_list_deliveries(
             .try_get::<String, _>("output_r2_url")
             .ok()
             .filter(|value| !value.trim().is_empty());
+        let extra_args = row.try_get::<serde_json::Value, _>("extra_args").ok();
+        let gig_type = row.get::<String, _>("gig_type");
 
         deliveries.push(json!({
             "id":           row.get::<Uuid, _>("id").to_string(),
             "client_ref":   row.try_get::<String, _>("client_ref").ok(),
             "title":        row.get::<String, _>("title"),
-            "gig_type":     row.get::<String, _>("gig_type"),
+            "gig_type":     gig_type,
+            "display_gig_type": delivery_display_gig_type(&gig_type, extra_args.as_ref()),
             "status":       row.get::<String, _>("status"),
+            "workflow_id":  row.try_get::<Option<Uuid>, _>("workflow_id").ok().flatten().map(|id| id.to_string()),
+            "workflow_progress": {
+                "status": row.try_get::<String, _>("workflow_status").ok(),
+                "current_step": row.try_get::<String, _>("workflow_current_step").ok(),
+                "last_heartbeat_at": row.try_get::<chrono::DateTime<chrono::Utc>, _>("workflow_last_heartbeat_at").ok().map(|d| d.to_rfc3339()),
+                "error": row.try_get::<String, _>("workflow_error_message").ok(),
+            },
             "output_r2_url": refreshed_r2_media_value(&state, output_url).await,
             "output_filename": row.try_get::<String, _>("output_filename").ok(),
             "created_at":   row.get::<chrono::DateTime<chrono::Utc>, _>("created_at").to_rfc3339(),
             "completed_at": row.try_get::<chrono::DateTime<chrono::Utc>, _>("completed_at").ok().map(|d| d.to_rfc3339()),
-            "error":        row.try_get::<String, _>("error_message").ok(),
+            "error":        row.try_get::<String, _>("error_message").ok()
+                .or_else(|| row.try_get::<String, _>("workflow_error_message").ok()),
         }));
     }
 
@@ -7491,9 +7941,11 @@ pub async fn api_list_deliveries(
 
 pub async fn api_list_portfolio_samples(
     Extension(state): Extension<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(query): Query<DeliveryViewQuery>,
 ) -> Json<serde_json::Value> {
     let rows = sqlx::query(
-        "SELECT id, client_ref, title, gig_type, status, output_r2_url, preview_r2_url,
+        "SELECT id, client_ref, title, gig_type, status, output_r2_url, preview_r2_url, workflow_id,
                 source_url, unlock_price_usdc, created_at, completed_at, error_message, extra_args
          FROM deliveries
          WHERE client_ref LIKE 'portfolio:%'
@@ -7508,8 +7960,20 @@ pub async fn api_list_portfolio_samples(
         Err(e) => return Json(json!({"success": false, "error": format!("DB query failed: {e}")})),
     };
 
+    let viewer_claims = portfolio_viewer_claims(&headers, query.token.as_deref());
+    let viewer_user_id = viewer_claims
+        .as_ref()
+        .and_then(|claims| claims.sub.parse::<i32>().ok());
+    let viewer_is_admin = viewer_claims
+        .as_ref()
+        .map(|claims| claims.is_staff || claims.is_superuser)
+        .unwrap_or(false);
+
     let mut samples = Vec::with_capacity(rows.len());
     for row in &rows {
+        if !viewer_is_admin && !portfolio_sample_visible_to_viewer(row, viewer_user_id) {
+            continue;
+        }
         samples.push(portfolio_sample_json_with_fresh_media_urls(&state, row).await);
     }
     Json(
@@ -7527,7 +7991,7 @@ pub async fn api_generate_crypto_saas_portfolio_samples(
         let client_ref = crate::portfolio_samples::client_ref_for(target);
 
         let existing = sqlx::query(
-            "SELECT id, client_ref, title, gig_type, status, output_r2_url, preview_r2_url,
+            "SELECT id, client_ref, title, gig_type, status, output_r2_url, preview_r2_url, workflow_id,
                     source_url, unlock_price_usdc, created_at, completed_at, error_message, extra_args
              FROM deliveries
              WHERE client_ref = $1
@@ -7556,7 +8020,7 @@ pub async fn api_generate_crypto_saas_portfolio_samples(
                              source_url = $6, output_r2_url = NULL, preview_r2_url = NULL,
                              error_message = NULL, completed_at = NULL
                          WHERE id = $1
-                         RETURNING id, client_ref, title, gig_type, status, output_r2_url, preview_r2_url,
+                         RETURNING id, client_ref, title, gig_type, status, output_r2_url, preview_r2_url, workflow_id,
                                    source_url, unlock_price_usdc, created_at, completed_at, error_message, extra_args",
                     )
                     .bind(delivery_id)
@@ -7570,6 +8034,7 @@ pub async fn api_generate_crypto_saas_portfolio_samples(
 
                     match updated {
                         Ok(updated_row) => {
+                            let _ = ensure_delivery_workflow(&state, delivery_id).await;
                             let render_state = state.clone();
                             let delay_seconds = (queued as u64) * 90;
                             tokio::spawn(async move {
@@ -7623,7 +8088,7 @@ pub async fn api_generate_crypto_saas_portfolio_samples(
             "INSERT INTO deliveries (client_ref, title, gig_type, prompt, style, duration, extra_args, status,
                                       unlock_price_usdc, source_url)
              VALUES ($1, $2, 'scene', $3, 'modern', 15.0, $4, 'pending', $5, $6)
-             RETURNING id, client_ref, title, gig_type, status, output_r2_url, preview_r2_url,
+             RETURNING id, client_ref, title, gig_type, status, output_r2_url, preview_r2_url, workflow_id,
                        source_url, unlock_price_usdc, created_at, completed_at, error_message, extra_args",
         )
         .bind(&client_ref)
@@ -7650,6 +8115,7 @@ pub async fn api_generate_crypto_saas_portfolio_samples(
         };
 
         let delivery_id: Uuid = row.get("id");
+        let _ = ensure_delivery_workflow(&state, delivery_id).await;
         let render_state = state.clone();
         let delay_seconds = (queued as u64) * 90;
         tokio::spawn(async move {
@@ -7695,8 +8161,88 @@ async fn build_crypto_saas_render_inputs(
         None => None,
     };
     let prompt = crate::portfolio_samples::build_crypto_saas_prompt(target);
-    let extra = crate::portfolio_samples::build_crypto_saas_extra(target, hero_url.as_deref());
+    let mut extra = crate::portfolio_samples::build_crypto_saas_extra(target, hero_url.as_deref());
+    mark_portfolio_sample_as_shared_seed(&mut extra);
     (prompt, extra)
+}
+
+fn portfolio_viewer_claims(
+    headers: &HeaderMap,
+    query_token: Option<&str>,
+) -> Option<crate::models::auth::Claims> {
+    let bearer = headers
+        .get("Authorization")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+
+    bearer
+        .or(query_token)
+        .and_then(|token| crate::handlers::auth::verify_jwt_token(token).ok())
+}
+
+fn portfolio_sample_owner_user_id(row: &sqlx::postgres::PgRow) -> Option<i32> {
+    let extra = row
+        .try_get::<serde_json::Value, _>("extra_args")
+        .unwrap_or(serde_json::Value::Null);
+    extra.get("sample_owner_user_id").and_then(|value| {
+        value
+            .as_i64()
+            .and_then(|id| i32::try_from(id).ok())
+            .or_else(|| value.as_str().and_then(|id| id.parse::<i32>().ok()))
+    })
+}
+
+fn portfolio_sample_is_shared_seed(row: &sqlx::postgres::PgRow) -> bool {
+    let client_ref = row.try_get::<String, _>("client_ref").unwrap_or_default();
+    if client_ref.starts_with("portfolio:crypto-saas:") {
+        return true;
+    }
+
+    let extra = row
+        .try_get::<serde_json::Value, _>("extra_args")
+        .unwrap_or(serde_json::Value::Null);
+    extra
+        .get("sample_visibility")
+        .and_then(|value| value.as_str())
+        .map(|value| value == "shared_seed")
+        .unwrap_or(false)
+}
+
+fn portfolio_sample_visible_to_viewer(
+    row: &sqlx::postgres::PgRow,
+    viewer_user_id: Option<i32>,
+) -> bool {
+    if portfolio_sample_is_shared_seed(row) {
+        return true;
+    }
+
+    match (portfolio_sample_owner_user_id(row), viewer_user_id) {
+        (Some(owner), Some(viewer)) => owner == viewer,
+        _ => false,
+    }
+}
+
+fn mark_portfolio_sample_as_shared_seed(extra: &mut serde_json::Value) {
+    if !extra.is_object() {
+        *extra = json!({});
+    }
+
+    if let Some(obj) = extra.as_object_mut() {
+        obj.insert(
+            "sample_visibility".to_string(),
+            serde_json::Value::String("shared_seed".to_string()),
+        );
+        obj.insert(
+            "sample_source".to_string(),
+            serde_json::Value::String("crypto_saas_seed".to_string()),
+        );
+        obj.insert(
+            "is_shared_seed".to_string(),
+            serde_json::Value::Bool(true),
+        );
+    }
 }
 
 async fn portfolio_sample_json_with_fresh_media_urls(
@@ -7704,8 +8250,28 @@ async fn portfolio_sample_json_with_fresh_media_urls(
     row: &sqlx::postgres::PgRow,
 ) -> serde_json::Value {
     let mut sample = portfolio_sample_json_from_row(row);
+    let delivery_id = row.get::<Uuid, _>("id");
 
     if let Some(obj) = sample.as_object_mut() {
+        if obj
+            .get("workflow_id")
+            .and_then(|value| value.as_str())
+            .is_none()
+        {
+            if let Ok(Some(Some(workflow_id))) = sqlx::query_scalar::<_, Option<Uuid>>(
+                "SELECT workflow_id FROM deliveries WHERE id = $1",
+            )
+            .bind(delivery_id)
+            .fetch_optional(&state.db_pool)
+            .await
+            {
+                obj.insert(
+                    "workflow_id".to_string(),
+                    serde_json::Value::String(workflow_id.to_string()),
+                );
+            }
+        }
+
         let output_url = obj
             .get("output_r2_url")
             .and_then(|value| value.as_str())
@@ -7738,11 +8304,10 @@ async fn refreshed_r2_media_value(
         return serde_json::Value::Null;
     };
 
-    let refreshed = refresh_r2_presigned_url_from_existing(state, &existing_url)
-        .await
-        .unwrap_or(existing_url);
-
-    serde_json::Value::String(refreshed)
+    match refresh_r2_presigned_url_from_existing(state, &existing_url).await {
+        Some(refreshed) => serde_json::Value::String(refreshed),
+        None => serde_json::Value::Null,
+    }
 }
 
 async fn refresh_r2_presigned_url_from_existing(
@@ -7751,6 +8316,14 @@ async fn refresh_r2_presigned_url_from_existing(
 ) -> Option<String> {
     let r2 = state.r2_client.as_ref()?;
     let key = extract_r2_object_key_from_url(existing_url, &r2.bucket)?;
+
+    if !r2.exists(&key).await {
+        tracing::warn!(
+            key = %key,
+            "R2 object referenced by delivery media URL does not exist"
+        );
+        return None;
+    }
 
     match r2.presign_get(&key, 7 * 24 * 3600).await {
         Ok(url) => Some(url),
@@ -7859,6 +8432,7 @@ fn portfolio_sample_json_from_row(row: &sqlx::postgres::PgRow) -> serde_json::Va
         "company": company,
         "gig_type": row.get::<String, _>("gig_type"),
         "status": row.get::<String, _>("status"),
+        "workflow_id": row.try_get::<Option<Uuid>, _>("workflow_id").ok().flatten().map(|id| id.to_string()),
         "source_url": row.try_get::<Option<String>, _>("source_url").ok().flatten(),
         "output_r2_url": row.try_get::<Option<String>, _>("output_r2_url").ok().flatten(),
         "preview_r2_url": row.try_get::<Option<String>, _>("preview_r2_url").ok().flatten(),
@@ -8129,6 +8703,10 @@ pub async fn admin_portfolio_samples_page() -> Html<String> {
       const publicDeliveryUrl = sample.public_delivery_url || deliveryUrl;
       const source = sample.source_url || (sample.extra && sample.extra.source_url) || '';
       const output = sample.output_r2_url || sample.preview_r2_url;
+      const downloadName = (sample.output_filename || sample.title || company || 'videosync-delivery')
+        .toString()
+        .replace(/[^a-z0-9._-]+/gi, '-')
+        .replace(/^-+|-+$/g, '') || 'videosync-delivery';
       const poster = sample.reference_image_url || (sample.extra && sample.extra.reference_image_url) || '';
       return `
         <article class="card">
@@ -8145,7 +8723,7 @@ pub async fn admin_portfolio_samples_page() -> Html<String> {
           <div class="pitch">${sample.sales_positioning || salesPitch(sample)}</div>
           <div class="links">
             <a href="${deliveryUrl}" target="_blank" rel="noreferrer">Delivery Page</a>
-            ${output ? `<a href="${output}" target="_blank" rel="noreferrer">Rendered Output</a>` : ''}
+            ${output ? `<a href="${output}" download="${downloadName}" target="_blank" rel="noreferrer">Download Media</a>` : ''}
             <button type="button" data-copy="${publicDeliveryUrl.replace(/"/g, '&quot;')}">Copy Share Link</button>
           </div>
         </article>
@@ -8435,6 +9013,96 @@ async fn normalize_blender_reference_args(
 }
 
 /// Background task: renders one custom delivery job and updates the DB.
+pub async fn ensure_delivery_workflow(
+    state: &Arc<AppState>,
+    delivery_id: Uuid,
+) -> Result<Uuid, String> {
+    if let Some(existing) = sqlx::query_scalar::<_, Option<Uuid>>(
+        "SELECT workflow_id FROM deliveries WHERE id = $1",
+    )
+    .bind(delivery_id)
+    .fetch_optional(&state.db_pool)
+    .await
+    .map_err(|e| format!("Failed to fetch delivery workflow id: {}", e))?
+    .flatten()
+    {
+        return Ok(existing);
+    }
+
+    let row = sqlx::query(
+        "SELECT title, gig_type, prompt, extra_args
+         FROM deliveries
+         WHERE id = $1",
+    )
+    .bind(delivery_id)
+    .fetch_one(&state.db_pool)
+    .await
+    .map_err(|e| format!("Failed to fetch delivery context for workflow creation: {}", e))?;
+
+    let title: String = row.get("title");
+    let gig_type: String = row.get("gig_type");
+    let prompt: String = row.get("prompt");
+    let extra = row
+        .try_get::<serde_json::Value, _>("extra_args")
+        .unwrap_or(serde_json::Value::Null);
+    let owner_user_id = extra
+        .get("sample_owner_user_id")
+        .and_then(|value| value.as_i64())
+        .and_then(|value| i32::try_from(value).ok());
+
+    let workflow_runtime = crate::services::WorkflowRuntime::new(state.db_pool.clone());
+    let workflow_id = workflow_runtime
+        .create_workflow(crate::services::NewWorkflow {
+            idempotency_key: Some(format!("delivery-workflow:{delivery_id}")),
+            workflow_type: "delivery_render_job".to_string(),
+            status: crate::services::WorkflowStatus::Queued,
+            session_uuid: None,
+            user_id: owner_user_id,
+            source_table: Some("deliveries".to_string()),
+            source_record_id: Some(delivery_id),
+            request_summary: format!("Delivery render for {} ({})", title, gig_type)
+                .chars()
+                .take(200)
+                .collect::<String>(),
+            current_step: Some("job_created".to_string()),
+            metadata: serde_json::json!({
+                "delivery_id": delivery_id,
+                "title": title,
+                "gig_type": gig_type,
+                "prompt_preview": prompt.chars().take(240).collect::<String>(),
+            }),
+            artifact_requirements: serde_json::json!([
+                {
+                    "kind": "delivery_output",
+                    "required": true,
+                    "must_store_output_r2_url": true
+                }
+            ]),
+        })
+        .await?;
+
+    let _ = workflow_runtime
+        .append_event(
+            workflow_id,
+            "queued",
+            Some("job_created"),
+            "Delivery render job created and waiting for render execution.",
+            serde_json::json!({
+                "delivery_id": delivery_id,
+            }),
+        )
+        .await;
+
+    sqlx::query("UPDATE deliveries SET workflow_id = $1 WHERE id = $2")
+        .bind(workflow_id)
+        .bind(delivery_id)
+        .execute(&state.db_pool)
+        .await
+        .map_err(|e| format!("Failed to attach workflow to delivery: {}", e))?;
+
+    Ok(workflow_id)
+}
+
 pub async fn run_delivery_job(delivery_id: Uuid, state: Arc<AppState>) {
     let poll_interval_secs = 5u64;
     let poll_timeout_secs = std::env::var("DELIVERY_RENDER_TIMEOUT_SECS")
@@ -8443,6 +9111,7 @@ pub async fn run_delivery_job(delivery_id: Uuid, state: Arc<AppState>) {
         .unwrap_or(1800);
     let max_poll_attempts =
         std::cmp::max(1u64, poll_timeout_secs.div_ceil(poll_interval_secs)) as u16;
+    let workflow_id = ensure_delivery_workflow(&state, delivery_id).await.ok();
 
     // Fetch job details
     let row = sqlx::query(
@@ -8456,6 +9125,17 @@ pub async fn run_delivery_job(delivery_id: Uuid, state: Arc<AppState>) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("Delivery {delivery_id}: DB fetch failed: {e}");
+            if let Some(workflow_id) = workflow_id {
+                let workflow_runtime = crate::services::WorkflowRuntime::new(state.db_pool.clone());
+                let _ = workflow_runtime
+                    .mark_failed(
+                        workflow_id,
+                        Some("load_delivery_record"),
+                        &format!("Delivery record fetch failed: {}", e),
+                        None,
+                    )
+                    .await;
+            }
             return;
         }
     };
@@ -8472,6 +9152,17 @@ pub async fn run_delivery_job(delivery_id: Uuid, state: Arc<AppState>) {
     let blender = match state.blender_mcp_client.as_ref() {
         Some(c) => c.clone(),
         None => {
+            if let Some(workflow_id) = workflow_id {
+                let workflow_runtime = crate::services::WorkflowRuntime::new(state.db_pool.clone());
+                let _ = workflow_runtime
+                    .mark_failed(
+                        workflow_id,
+                        Some("blender_client_check"),
+                        "BlenderMCPServer not configured (BLENDER_MCP_URL not set)",
+                        None,
+                    )
+                    .await;
+            }
             let _ = sqlx::query(
                 "UPDATE deliveries SET status='failed', error_message=$1, completed_at=NOW() WHERE id=$2",
             )
@@ -8491,6 +9182,17 @@ pub async fn run_delivery_job(delivery_id: Uuid, state: Arc<AppState>) {
     {
         Ok(permit) => permit,
         Err(_) => {
+            if let Some(workflow_id) = workflow_id {
+                let workflow_runtime = crate::services::WorkflowRuntime::new(state.db_pool.clone());
+                let _ = workflow_runtime
+                    .mark_failed(
+                        workflow_id,
+                        Some("semaphore_acquire"),
+                        "Delivery render semaphore closed",
+                        None,
+                    )
+                    .await;
+            }
             let _ = sqlx::query(
                 "UPDATE deliveries SET status='failed', error_message=$1, completed_at=NOW() WHERE id=$2",
             )
@@ -8507,6 +9209,20 @@ pub async fn run_delivery_job(delivery_id: Uuid, state: Arc<AppState>) {
         .bind(delivery_id)
         .execute(&state.db_pool)
         .await;
+    if let Some(workflow_id) = workflow_id {
+        let workflow_runtime = crate::services::WorkflowRuntime::new(state.db_pool.clone());
+        let _ = workflow_runtime
+            .heartbeat(
+                workflow_id,
+                crate::services::WorkflowStatus::Running,
+                Some("render_queued"),
+                "Delivery render job started and is preparing render tool arguments.",
+                serde_json::json!({
+                    "delivery_id": delivery_id,
+                }),
+            )
+            .await;
+    }
 
     // Build tool + args
     let (tool, args, url_key, ext) =
@@ -8517,6 +9233,12 @@ pub async fn run_delivery_job(delivery_id: Uuid, state: Arc<AppState>) {
     let job_id = match blender.submit_job(&tool, args).await {
         Ok(id) => id,
         Err(e) => {
+            if let Some(workflow_id) = workflow_id {
+                let workflow_runtime = crate::services::WorkflowRuntime::new(state.db_pool.clone());
+                let _ = workflow_runtime
+                    .mark_failed(workflow_id, Some("submit_render_job"), &e, None)
+                    .await;
+            }
             let _ = sqlx::query(
                 "UPDATE deliveries SET status='failed', error_message=$1, completed_at=NOW() WHERE id=$2",
             )
@@ -8532,6 +9254,12 @@ pub async fn run_delivery_job(delivery_id: Uuid, state: Arc<AppState>) {
         let status = match blender.poll_job(&job_id).await {
             Ok(s) => s,
             Err(e) => {
+                if let Some(workflow_id) = workflow_id {
+                    let workflow_runtime = crate::services::WorkflowRuntime::new(state.db_pool.clone());
+                    let _ = workflow_runtime
+                        .mark_failed(workflow_id, Some("poll_render_job"), &e, None)
+                        .await;
+                }
                 let _ = sqlx::query(
                     "UPDATE deliveries SET status='failed', error_message=$1, completed_at=NOW() WHERE id=$2",
                 )
@@ -8553,13 +9281,40 @@ pub async fn run_delivery_job(delivery_id: Uuid, state: Arc<AppState>) {
                     .and_then(|v| v.as_str())
                     .unwrap_or("render failed")
                     .to_string();
+                if let Some(workflow_id) = workflow_id {
+                    let workflow_runtime = crate::services::WorkflowRuntime::new(state.db_pool.clone());
+                    let _ = workflow_runtime
+                        .mark_failed(workflow_id, Some("render_failed"), &msg, None)
+                        .await;
+                }
                 let _ = sqlx::query(
                     "UPDATE deliveries SET status='failed', error_message=$1, completed_at=NOW() WHERE id=$2",
                 )
                 .bind(&msg).bind(delivery_id).execute(&state.db_pool).await;
                 return;
             }
-            _ => {} // pending/running — keep polling
+            _ => {
+                if let Some(workflow_id) = workflow_id {
+                    let workflow_runtime = crate::services::WorkflowRuntime::new(state.db_pool.clone());
+                    let state_label = status
+                        .get("state")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or("running");
+                    let _ = workflow_runtime
+                        .heartbeat(
+                            workflow_id,
+                            crate::services::WorkflowStatus::Running,
+                            Some(state_label),
+                            "Delivery render job is still running on the render backend.",
+                            serde_json::json!({
+                                "delivery_id": delivery_id,
+                                "render_job_id": job_id,
+                                "render_state": state_label,
+                            }),
+                        )
+                        .await;
+                }
+            } // pending/running — keep polling
         }
     }
 
@@ -8686,6 +9441,83 @@ pub async fn run_delivery_job(delivery_id: Uuid, state: Arc<AppState>) {
             .bind(&url).bind(&filename).bind(error_note.as_deref())
             .bind(retries_used + 1).bind(review.score).bind(delivery_id)
             .execute(&state.db_pool).await;
+            if let Some(workflow_id) = workflow_id {
+                let workflow_runtime = crate::services::WorkflowRuntime::new(state.db_pool.clone());
+                let _ = workflow_runtime
+                    .mark_completed(
+                        workflow_id,
+                        Some("completed"),
+                        "Delivery render workflow completed with an output URL stored on the delivery record.",
+                        serde_json::json!({
+                            "output_r2_url_present": !url.trim().is_empty(),
+                            "output_filename": filename,
+                            "qa_score": review.score,
+                            "qa_pass": review.pass,
+                        }),
+                    )
+                    .await;
+            }
+
+            let service_slug = extra
+                .get("service_slug")
+                .and_then(|value| value.as_str())
+                .map(|value| value.to_string());
+            let owner_user_id = extra
+                .get("sample_owner_user_id")
+                .and_then(|value| value.as_i64())
+                .and_then(|value| i32::try_from(value).ok());
+            let company = extra
+                .get("company")
+                .and_then(|value| value.as_str())
+                .map(|value| value.to_string());
+            let visual_direction = extra
+                .get("visual_direction")
+                .and_then(|value| value.as_str())
+                .map(|value| value.to_string());
+            let narration_text = extra
+                .get("narration_text")
+                .and_then(|value| value.as_str())
+                .map(|value| value.to_string());
+            let review_artifact = crate::services::media_review::MediaReviewArtifact {
+                review_id: delivery_id.to_string(),
+                asset_kind: "delivery_output".to_string(),
+                source_type: "videosync_delivery".to_string(),
+                service_slug,
+                owner_user_id,
+                output_url: Some(url.clone()),
+                source_url: extra
+                    .get("source_url")
+                    .and_then(|value| value.as_str())
+                    .map(|value| value.to_string()),
+                prompt: Some(prompt.clone()),
+                title: Some(filename.clone()),
+                company,
+                review_status: if review.pass {
+                    "passed".to_string()
+                } else {
+                    "warning".to_string()
+                },
+                qa_score: Some(review.score),
+                qa_feedback: Some(review.feedback.clone()),
+                narration_text,
+                visual_direction,
+                transcript_excerpt: None,
+                tags: vec![gig_type.clone(), tool.clone()],
+            };
+
+            if let Err(error) =
+                crate::services::media_review::MediaReviewService::store_artifact(
+                    &state,
+                    review_artifact,
+                )
+                .await
+            {
+                tracing::warn!(
+                    "Failed to store media review artifact for delivery {}: {}",
+                    delivery_id,
+                    error
+                );
+            }
 
             if !review.pass {
                 tracing::warn!(
@@ -8698,6 +9530,17 @@ pub async fn run_delivery_job(delivery_id: Uuid, state: Arc<AppState>) {
             }
         }
         None => {
+            if let Some(workflow_id) = workflow_id {
+                let workflow_runtime = crate::services::WorkflowRuntime::new(state.db_pool.clone());
+                let _ = workflow_runtime
+                    .mark_failed(
+                        workflow_id,
+                        Some("render_timeout"),
+                        &format!("Delivery render timed out after {} seconds without producing an output URL.", poll_timeout_secs),
+                        None,
+                    )
+                    .await;
+            }
             let _ = sqlx::query(
                 "UPDATE deliveries SET status='failed', error_message=$1, \
                  completed_at=NOW() WHERE id=$2",
@@ -8955,16 +9798,25 @@ pub async fn admin_deliveries_page() -> Html<String> {
         <span class="hint">Shown on the client's delivery page</span>
       </div>
       <div class="form-group">
-        <label>Gig Type *</label>
+        <label>Service / Gig Type *</label>
         <select id="gig_type" onchange="onGigTypeChange()">
-          <option value="scene">3D Scene / B-Roll Clip</option>
-          <option value="thumbnail">YouTube Thumbnail</option>
-          <option value="title_card">Animated Title Card</option>
-          <option value="data_viz">Data Visualisation</option>
-          <option value="lower_third">Lower Third Overlay</option>
-          <option value="latex">LaTeX / Math Animation</option>
-          <option value="ui_mockup">UI Mockup (Phone/Screen)</option>
+          <optgroup label="Monetization Offers">
+            <option value="saas_launch_pack">SaaS Launch Pack</option>
+            <option value="clipper_enhancement_pack">Motion Pack</option>
+            <option value="creator_manager_fulfillment">Agency Production Backend</option>
+            <option value="x402_asset_api">Programmable Payments</option>
+          </optgroup>
+          <optgroup label="Production Tools">
+            <option value="scene">3D Scene / B-Roll Clip</option>
+            <option value="thumbnail">YouTube Thumbnail</option>
+            <option value="title_card">Animated Title Card</option>
+            <option value="data_viz">Data Visualization</option>
+            <option value="lower_third">Lower Third Overlay</option>
+            <option value="latex">LaTeX / Math Animation</option>
+            <option value="ui_mockup">UI Mockup (Phone/Screen)</option>
+          </optgroup>
         </select>
+        <span class="hint">Choose a sellable offer for client-facing packages, or a raw production tool when you need a specific render primitive.</span>
       </div>
       <div class="form-group" id="grp-style">
         <label>Style</label>
@@ -9108,6 +9960,10 @@ pub async fn admin_deliveries_page() -> Html<String> {
 
 <script>
 const GIG_CONFIG = {
+  saas_launch_pack: { promptLabel:'Website / Product Brief', style:true, subtitle:false, titleText:false, duration:true, chartType:false, dataJson:false, animType:false, bgStyle:false, device:false, mockupAnim:false, screenshotUrl:false, refImageUrl:true, narration:true, defaultDuration:20, submitGigType:'scene', serviceOffer:'saas_launch_pack' },
+  clipper_enhancement_pack: { promptLabel:'Visual Packaging Brief', style:true, subtitle:false, titleText:false, duration:true, chartType:false, dataJson:false, animType:false, bgStyle:false, device:false, mockupAnim:false, screenshotUrl:false, refImageUrl:true, narration:true, defaultDuration:15, submitGigType:'scene', serviceOffer:'clipper_enhancement_pack' },
+  creator_manager_fulfillment: { promptLabel:'Agency Production Brief', style:true, subtitle:false, titleText:false, duration:true, chartType:false, dataJson:false, animType:false, bgStyle:false, device:false, mockupAnim:false, screenshotUrl:false, refImageUrl:true, narration:true, defaultDuration:20, submitGigType:'scene', serviceOffer:'creator_manager_fulfillment' },
+  x402_asset_api: { promptLabel:'Programmable Payments Brief', style:true, subtitle:false, titleText:false, duration:true, chartType:false, dataJson:false, animType:false, bgStyle:false, device:false, mockupAnim:false, screenshotUrl:false, refImageUrl:true, narration:true, defaultDuration:15, submitGigType:'scene', serviceOffer:'x402_asset_api' },
   scene:       { promptLabel:'Scene Description', style:true,  subtitle:false, titleText:false, duration:true,  chartType:false, dataJson:false, animType:false, bgStyle:false, device:false, mockupAnim:false, screenshotUrl:false, refImageUrl:true,  narration:true,  defaultDuration:15 },
   thumbnail:   { promptLabel:'Thumbnail Description', style:true,  subtitle:false, titleText:true,  duration:false, chartType:false, dataJson:false, animType:false, bgStyle:false, device:false, mockupAnim:false, screenshotUrl:false, refImageUrl:false, narration:false, defaultDuration:0  },
   title_card:  { promptLabel:'Main Title Text', style:true,  subtitle:true,  titleText:false, duration:true,  chartType:false, dataJson:false, animType:false, bgStyle:false, device:false, mockupAnim:false, screenshotUrl:false, refImageUrl:false, narration:false, defaultDuration:5  },
@@ -9158,6 +10014,7 @@ async function createDelivery() {
 
   const gig = document.getElementById('gig_type').value;
   const cfg = GIG_CONFIG[gig];
+  const submitGigType = cfg.submitGigType || gig;
 
   const title = document.getElementById('title').value.trim();
   const prompt = document.getElementById('prompt').value.trim();
@@ -9177,6 +10034,7 @@ async function createDelivery() {
   if (cfg.mockupAnim)    extra.animation        = document.getElementById('mockup_animation').value;
   if (cfg.screenshotUrl) extra.screenshot_url   = document.getElementById('screenshot_url').value;
   if (cfg.refImageUrl)   extra.reference_image_url = document.getElementById('reference_image_url').value;
+  if (cfg.serviceOffer)  extra.service_offer    = cfg.serviceOffer;
   if (cfg.narration && document.getElementById('include_narration').checked) {
     extra.include_narration = true;
     extra.narration_text = document.getElementById('narration_text').value.trim() || prompt;
@@ -9187,7 +10045,7 @@ async function createDelivery() {
   const token = localStorage.getItem('auth_token') || localStorage.getItem('admin_token');
   const body = {
     client_ref: document.getElementById('client_ref').value.trim() || null,
-    title, gig_type: gig, prompt,
+    title, gig_type: submitGigType, prompt,
     style:    cfg.style    ? document.getElementById('style').value    : 'cinematic',
     duration: cfg.duration ? parseFloat(document.getElementById('duration').value) : 10,
     extra: Object.keys(extra).length ? extra : null,
@@ -9259,6 +10117,14 @@ async function loadDeliveries() {
       const deliveryUrl = `${location.origin}/delivery/${d.id}`;
       const r2Url = d.output_r2_url || '';
       const fname = d.output_filename || `delivery_${d.id.substring(0,8)}`;
+      const progress = d.workflow_progress || {};
+      const workflowStatus = progress.status || '';
+      const workflowStep = progress.current_step || '';
+      const activeWorkflow = ['queued','planning','running','waiting_for_external_service','retrying'].includes(workflowStatus);
+      const displayStatus = (d.status === 'pending' && activeWorkflow) ? workflowStatus : d.status;
+      const progressText = workflowStep
+        ? `${workflowStatus || d.status} / ${workflowStep}`
+        : (workflowStatus || d.status);
       const linkCell = d.status === 'completed'
         ? `<div class="link-cell">
              <button class="btn btn-copy btn-sm" onclick="navigator.clipboard.writeText('${deliveryUrl}');this.textContent='✓ Copied';setTimeout(()=>this.textContent='Copy Link',2000)">Copy Link</button>
@@ -9267,12 +10133,15 @@ async function loadDeliveries() {
            </div>`
         : d.status === 'failed'
           ? `<span style="font-size:11px;color:#f87171">${(d.error||'').substring(0,60)}</span>`
-          : `<span class="link-text">rendering…</span>`;
+          : `<div class="link-cell">
+               <span class="link-text">rendering...</span>
+               <span style="font-size:11px;color:#8b8aa8">${progressText}</span>
+             </div>`;
       return `<tr>
         <td><strong>${d.title}</strong></td>
-        <td><span class="gig-tag">${d.gig_type}</span></td>
+        <td><span class="gig-tag">${d.display_gig_type || d.gig_type}</span></td>
         <td><span class="client-ref">${d.client_ref || '—'}</span></td>
-        <td><span class="badge badge-${d.status}">${d.status}</span></td>
+        <td><span class="badge badge-${displayStatus}">${displayStatus}</span></td>
         <td style="font-size:12px;color:#666680">${fmtDate(d.created_at)}</td>
         <td>${linkCell}</td>
       </tr>`;

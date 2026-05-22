@@ -1,26 +1,29 @@
 // HTTP handlers for YouTube Clipping API endpoints
 
+use crate::agent::content_management_agent::ContentManagementAgent;
+use crate::clipping::models::*;
+use crate::clipping::uploader::ClipUploader;
+use crate::middleware::{
+    auth::auth_middleware, clipping_access::clipping_access_middleware,
+    rate_limit::strict_rate_limit_middleware,
+};
+use crate::models::auth::Claims;
+use crate::AppState;
 use axum::{
-    extract::{Extension, Path, Query},
     extract::ws::{Message, WebSocket, WebSocketUpgrade},
+    extract::{Extension, Path, Query},
     http::StatusCode,
     response::{IntoResponse, Json},
     routing::{delete, get, post},
     Router,
 };
-use crate::agent::content_management_agent::ContentManagementAgent;
-use crate::clipping::models::*;
-use crate::clipping::uploader::ClipUploader;
-use crate::middleware::{auth::auth_middleware, clipping_access::clipping_access_middleware, rate_limit::strict_rate_limit_middleware};
-use crate::models::auth::Claims;
-use crate::AppState;
+use chrono::{DateTime, Utc};
+use futures::{sink::SinkExt, stream::StreamExt};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::Row;
 use std::sync::Arc;
 use url::Url;
-use chrono::{DateTime, Utc};
-use futures::{sink::SinkExt, stream::StreamExt};
 
 pub fn clipping_routes() -> Router {
     // Mutation routes — strict rate limiting (10/min per IP)
@@ -64,14 +67,35 @@ pub fn clipping_routes() -> Router {
         .route("/api/clipping/clips", get(list_clips))
         .route("/api/clipping/clips/:id", get(get_clip_details))
         // Clip review system
-        .route("/api/clipping/clips/pending-review", get(list_pending_review_clips))
-        .route("/api/clipping/clips/:id/approve", axum::routing::put(approve_clip))
-        .route("/api/clipping/clips/:id/reject", axum::routing::put(reject_clip))
-        .route("/api/clipping/clips/:id/propose-edit", axum::routing::put(propose_edit_clip))
+        .route(
+            "/api/clipping/clips/pending-review",
+            get(list_pending_review_clips),
+        )
+        .route(
+            "/api/clipping/clips/:id/approve",
+            axum::routing::put(approve_clip),
+        )
+        .route(
+            "/api/clipping/clips/:id/reject",
+            axum::routing::put(reject_clip),
+        )
+        .route(
+            "/api/clipping/clips/:id/propose-edit",
+            axum::routing::put(propose_edit_clip),
+        )
         // Content management agent
-        .route("/api/clipping/manage-content", post(start_content_management_session))
-        .route("/api/clipping/manage-content/:session_id", get(get_content_management_session))
-        .route("/api/clipping/manage-content/:session_id/confirm", post(confirm_content_management_action))
+        .route(
+            "/api/clipping/manage-content",
+            post(start_content_management_session),
+        )
+        .route(
+            "/api/clipping/manage-content/:session_id",
+            get(get_content_management_session),
+        )
+        .route(
+            "/api/clipping/manage-content/:session_id/confirm",
+            post(confirm_content_management_action),
+        )
         // Access check endpoint
         .route("/api/clipping/access-check", get(check_access))
         // Twitch source channels
@@ -126,7 +150,7 @@ async fn ws_clipping_job_progress(
             SELECT 1 FROM clipping_jobs cj
             JOIN youtube_channel_linkages l ON l.id = cj.linkage_id
             WHERE cj.id = $1 AND l.user_id = $2
-        )"
+        )",
     )
     .bind(job_id)
     .bind(user_id)
@@ -201,10 +225,12 @@ async fn clipping_job_ws(stream: WebSocket, state: Arc<AppState>, job_id: i32) {
 async fn list_source_channels(
     Extension(state): Extension<Arc<AppState>>,
 ) -> Result<Json<Value>, StatusCode> {
-    let channels = sqlx::query_as::<_, SourceChannel>("SELECT * FROM youtube_source_channels ORDER BY created_at DESC")
-        .fetch_all(&state.db_pool)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let channels = sqlx::query_as::<_, SourceChannel>(
+        "SELECT * FROM youtube_source_channels ORDER BY created_at DESC",
+    )
+    .fetch_all(&state.db_pool)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok(Json(json!({
         "success": true,
@@ -233,7 +259,11 @@ fn extract_channel_identifier(input: &str) -> String {
 
         // Handle @username format: //@username or /@username
         if let Some(handle_pos) = path.find("/@") {
-            return path[handle_pos + 1..].split('/').next().unwrap_or("").to_string();
+            return path[handle_pos + 1..]
+                .split('/')
+                .next()
+                .unwrap_or("")
+                .to_string();
         }
 
         // Handle /channel/UCxxx format
@@ -261,7 +291,8 @@ async fn add_source_channel(
     Json(payload): Json<AddSourceChannelRequest>,
 ) -> Result<Json<Value>, StatusCode> {
     // Accept either channel_url (from content_machine) or channel_id (from embedded UI)
-    let input = payload.channel_url
+    let input = payload
+        .channel_url
         .or(payload.channel_id)
         .ok_or(StatusCode::BAD_REQUEST)?;
 
@@ -284,10 +315,7 @@ async fn add_source_channel(
         .await
         .map_err(|_| StatusCode::BAD_REQUEST)?;
 
-    let channel = channel_info
-        .items
-        .first()
-        .ok_or(StatusCode::NOT_FOUND)?;
+    let channel = channel_info.items.first().ok_or(StatusCode::NOT_FOUND)?;
 
     // Get thumbnail URL safely from JSON value
     let thumbnail_url = channel
@@ -334,12 +362,13 @@ async fn get_source_channel(
     Extension(state): Extension<Arc<AppState>>,
     Path(id): Path<i32>,
 ) -> Result<Json<Value>, StatusCode> {
-    let channel = sqlx::query_as::<_, SourceChannel>("SELECT * FROM youtube_source_channels WHERE id = $1")
-        .bind(id)
-        .fetch_optional(&state.db_pool)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
+    let channel =
+        sqlx::query_as::<_, SourceChannel>("SELECT * FROM youtube_source_channels WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&state.db_pool)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .ok_or(StatusCode::NOT_FOUND)?;
 
     Ok(Json(json!({
         "success": true,
@@ -365,12 +394,14 @@ async fn update_source_channel(
     }
 
     if let Some(interval) = polling_interval {
-        sqlx::query("UPDATE youtube_source_channels SET polling_interval_minutes = $1 WHERE id = $2")
-            .bind(interval as i32)
-            .bind(id)
-            .execute(&state.db_pool)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        sqlx::query(
+            "UPDATE youtube_source_channels SET polling_interval_minutes = $1 WHERE id = $2",
+        )
+        .bind(interval as i32)
+        .bind(id)
+        .execute(&state.db_pool)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     }
 
     Ok(Json(json!({
@@ -413,7 +444,7 @@ async fn list_linkages(
          LEFT JOIN youtube_source_channels sc ON l.source_channel_id = sc.id
          LEFT JOIN connected_youtube_channels cc ON l.destination_channel_id = cc.id
          WHERE l.user_id = $1
-         ORDER BY l.created_at DESC"
+         ORDER BY l.created_at DESC",
     )
     .bind(user_id)
     .fetch_all(&state.db_pool)
@@ -501,14 +532,14 @@ async fn get_linkage(
     let user_id = claims.sub.parse::<i32>().unwrap_or(0);
 
     let linkage = sqlx::query_as::<_, ChannelLinkage>(
-        "SELECT * FROM youtube_channel_linkages WHERE id = $1 AND user_id = $2"
+        "SELECT * FROM youtube_channel_linkages WHERE id = $1 AND user_id = $2",
     )
-        .bind(id)
-        .bind(user_id)
-        .fetch_optional(&state.db_pool)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
+    .bind(id)
+    .bind(user_id)
+    .fetch_optional(&state.db_pool)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    .ok_or(StatusCode::NOT_FOUND)?;
 
     Ok(Json(json!({
         "success": true,
@@ -526,7 +557,7 @@ async fn update_linkage(
 
     // Verify ownership before allowing updates
     let exists = sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS(SELECT 1 FROM youtube_channel_linkages WHERE id = $1 AND user_id = $2)"
+        "SELECT EXISTS(SELECT 1 FROM youtube_channel_linkages WHERE id = $1 AND user_id = $2)",
     )
     .bind(id)
     .bind(user_id)
@@ -539,13 +570,15 @@ async fn update_linkage(
     }
 
     if let Some(active) = payload.is_active {
-        sqlx::query("UPDATE youtube_channel_linkages SET is_active = $1 WHERE id = $2 AND user_id = $3")
-            .bind(active)
-            .bind(id)
-            .bind(user_id)
-            .execute(&state.db_pool)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        sqlx::query(
+            "UPDATE youtube_channel_linkages SET is_active = $1 WHERE id = $2 AND user_id = $3",
+        )
+        .bind(active)
+        .bind(id)
+        .bind(user_id)
+        .execute(&state.db_pool)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     }
 
     if let Some(clips_per_video) = payload.clips_per_video {
@@ -613,6 +646,7 @@ async fn delete_linkage(
 #[derive(Deserialize)]
 struct JobQueryParams {
     status: Option<String>,
+    #[allow(dead_code)]
     linkage_id: Option<i32>,
     limit: Option<i64>,
     offset: Option<i64>,
@@ -657,9 +691,49 @@ async fn list_jobs(
     }
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
+    let mut enriched_jobs = Vec::with_capacity(jobs.len());
+    for job in jobs {
+        let mut job_value =
+            serde_json::to_value(&job).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+        let fallback_delivery = if let Some(delivery_id) = job.fallback_delivery_id {
+            sqlx::query(
+                "SELECT id, title, status, output_r2_url, output_filename, error_message,
+                        created_at, completed_at
+                 FROM deliveries
+                 WHERE id = $1",
+            )
+            .bind(delivery_id)
+            .fetch_optional(&state.db_pool)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .map(|row| {
+                let delivery_uuid: uuid::Uuid = row.get("id");
+                json!({
+                    "id": delivery_uuid.to_string(),
+                    "delivery_page_url": format!("/delivery/{}", delivery_uuid),
+                    "title": row.get::<String, _>("title"),
+                    "status": row.get::<String, _>("status"),
+                    "output_r2_url": row.try_get::<Option<String>, _>("output_r2_url").ok().flatten(),
+                    "output_filename": row.try_get::<Option<String>, _>("output_filename").ok().flatten(),
+                    "error_message": row.try_get::<Option<String>, _>("error_message").ok().flatten(),
+                    "created_at": row.get::<chrono::DateTime<chrono::Utc>, _>("created_at").to_rfc3339(),
+                    "completed_at": row.try_get::<Option<chrono::DateTime<chrono::Utc>>, _>("completed_at").ok().flatten().map(|d| d.to_rfc3339()),
+                })
+            })
+        } else {
+            None
+        };
+
+        if let Some(object) = job_value.as_object_mut() {
+            object.insert("fallback_delivery".to_string(), json!(fallback_delivery));
+        }
+        enriched_jobs.push(job_value);
+    }
+
     Ok(Json(json!({
         "success": true,
-        "jobs": jobs
+        "jobs": enriched_jobs
     })))
 }
 
@@ -674,14 +748,14 @@ async fn get_job_status(
     let job = sqlx::query_as::<_, ClippingJob>(
         "SELECT cj.* FROM clipping_jobs cj
          JOIN youtube_channel_linkages ycl ON cj.linkage_id = ycl.id
-         WHERE cj.id = $1 AND ycl.user_id = $2"
+         WHERE cj.id = $1 AND ycl.user_id = $2",
     )
-        .bind(id)
-        .bind(user_id)
-        .fetch_optional(&state.db_pool)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
+    .bind(id)
+    .bind(user_id)
+    .fetch_optional(&state.db_pool)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    .ok_or(StatusCode::NOT_FOUND)?;
 
     // Get extracted clips for this job
     let clips = sqlx::query_as::<_, ExtractedClip>(
@@ -692,10 +766,52 @@ async fn get_job_status(
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
+    let fallback_delivery = if let Some(delivery_id) = job.fallback_delivery_id {
+        sqlx::query(
+            "SELECT id, title, status, output_r2_url, output_filename, error_message, source_url,
+                    extra_args,
+                    created_at, completed_at
+             FROM deliveries
+             WHERE id = $1",
+        )
+        .bind(delivery_id)
+        .fetch_optional(&state.db_pool)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .map(|row| {
+            let delivery_uuid: uuid::Uuid = row.get("id");
+            let extra_args = row
+                .try_get::<Option<serde_json::Value>, _>("extra_args")
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| json!({}));
+            json!({
+                "id": delivery_uuid.to_string(),
+                "delivery_page_url": format!("/delivery/{}", delivery_uuid),
+                "title": row.get::<String, _>("title"),
+                "status": row.get::<String, _>("status"),
+                "output_r2_url": row.try_get::<Option<String>, _>("output_r2_url").ok().flatten(),
+                "output_filename": row.try_get::<Option<String>, _>("output_filename").ok().flatten(),
+                "error_message": row.try_get::<Option<String>, _>("error_message").ok().flatten(),
+                "source_url": row.try_get::<Option<String>, _>("source_url").ok().flatten(),
+                "youtube_video_id": extra_args.get("youtube_video_id").and_then(|value| value.as_str()),
+                "youtube_url": extra_args.get("youtube_url").and_then(|value| value.as_str()),
+                "published_at": extra_args.get("published_at").and_then(|value| value.as_str()),
+                "created_at": row.get::<chrono::DateTime<chrono::Utc>, _>("created_at").to_rfc3339(),
+                "completed_at": row.try_get::<Option<chrono::DateTime<chrono::Utc>>, _>("completed_at").ok().flatten().map(|d| d.to_rfc3339()),
+                "fallback_strategy": job.fallback_strategy,
+                "fallback_activated_at": job.fallback_activated_at.map(|d| d.to_rfc3339()),
+            })
+        })
+    } else {
+        None
+    };
+
     Ok(Json(json!({
         "success": true,
         "job": job,
-        "clips": clips
+        "clips": clips,
+        "fallback_delivery": fallback_delivery
     })))
 }
 
@@ -714,16 +830,33 @@ async fn cancel_job(
          WHERE cj.id = $1
          AND cj.linkage_id = ycl.id
          AND ycl.user_id = $2
-         AND cj.status NOT IN ('completed', 'failed')"
+         AND cj.status NOT IN ('completed', 'failed')",
     )
-        .bind(id)
-        .bind(user_id)
-        .execute(&state.db_pool)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    .bind(id)
+    .bind(user_id)
+    .execute(&state.db_pool)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     if result.rows_affected() == 0 {
         return Err(StatusCode::NOT_FOUND);
+    }
+
+    if let Ok(Some(Some(workflow_id))) = sqlx::query_scalar::<_, Option<uuid::Uuid>>(
+        "SELECT workflow_id FROM clipping_jobs WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(&state.db_pool)
+    .await
+    {
+        let workflow_runtime = crate::services::WorkflowRuntime::new(state.db_pool.clone());
+        let _ = workflow_runtime
+            .mark_cancelled(
+                workflow_id,
+                Some("cancelled"),
+                "Auto clipping workflow was cancelled by the user.",
+            )
+            .await;
     }
 
     Ok(Json(json!({
@@ -758,19 +891,41 @@ async fn retry_job(
          WHERE cj.id = $1
          AND cj.linkage_id = ycl.id
          AND ycl.user_id = $2
-         AND cj.status = 'failed'"
+         AND cj.status = 'failed'",
     )
-        .bind(id)
-        .bind(user_id)
-        .execute(&state.db_pool)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    .bind(id)
+    .bind(user_id)
+    .execute(&state.db_pool)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     if result.rows_affected() == 0 {
         return Err(StatusCode::NOT_FOUND);
     }
 
-    tracing::info!("🔄 Job {} reset to pending for retry by user {}", id, user_id);
+    tracing::info!(
+        "🔄 Job {} reset to pending for retry by user {}",
+        id,
+        user_id
+    );
+
+    if let Ok(Some(Some(workflow_id))) = sqlx::query_scalar::<_, Option<uuid::Uuid>>(
+        "SELECT workflow_id FROM clipping_jobs WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(&state.db_pool)
+    .await
+    {
+        let workflow_runtime = crate::services::WorkflowRuntime::new(state.db_pool.clone());
+        let _ = workflow_runtime
+            .mark_retrying(
+                workflow_id,
+                Some("queued"),
+                1,
+                "Auto clipping workflow was reset to pending for retry by the user.",
+            )
+            .await;
+    }
 
     Ok(Json(json!({
         "success": true,
@@ -807,19 +962,41 @@ async fn reset_job(
          WHERE cj.id = $1
          AND cj.linkage_id = ycl.id
          AND ycl.user_id = $2
-         AND cj.status IN ('downloading', 'analyzing', 'extracting_clips', 'posting', 'failed')"
+         AND cj.status IN ('downloading', 'analyzing', 'extracting_clips', 'posting', 'failed')",
     )
-        .bind(id)
-        .bind(user_id)
-        .execute(&state.db_pool)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    .bind(id)
+    .bind(user_id)
+    .execute(&state.db_pool)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     if result.rows_affected() == 0 {
         return Err(StatusCode::NOT_FOUND);
     }
 
-    tracing::info!("🔄 Job {} manually reset to pending by user {} (unstuck operation)", id, user_id);
+    tracing::info!(
+        "🔄 Job {} manually reset to pending by user {} (unstuck operation)",
+        id,
+        user_id
+    );
+
+    if let Ok(Some(Some(workflow_id))) = sqlx::query_scalar::<_, Option<uuid::Uuid>>(
+        "SELECT workflow_id FROM clipping_jobs WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(&state.db_pool)
+    .await
+    {
+        let workflow_runtime = crate::services::WorkflowRuntime::new(state.db_pool.clone());
+        let _ = workflow_runtime
+            .mark_retrying(
+                workflow_id,
+                Some("queued"),
+                1,
+                "Auto clipping workflow was manually reset to pending after getting stuck.",
+            )
+            .await;
+    }
 
     Ok(Json(json!({
         "success": true,
@@ -831,7 +1008,9 @@ async fn reset_job(
 
 #[derive(Deserialize)]
 struct ClipQueryParams {
+    #[allow(dead_code)]
     job_id: Option<i32>,
+    #[allow(dead_code)]
     upload_status: Option<String>,
     limit: Option<i64>,
     offset: Option<i64>,
@@ -879,14 +1058,14 @@ async fn get_clip_details(
         "SELECT ec.* FROM extracted_clips ec
          JOIN clipping_jobs cj ON ec.clipping_job_id = cj.id
          JOIN youtube_channel_linkages ycl ON cj.linkage_id = ycl.id
-         WHERE ec.id = $1 AND ycl.user_id = $2"
+         WHERE ec.id = $1 AND ycl.user_id = $2",
     )
-        .bind(id)
-        .bind(user_id)
-        .fetch_optional(&state.db_pool)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
+    .bind(id)
+    .bind(user_id)
+    .fetch_optional(&state.db_pool)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    .ok_or(StatusCode::NOT_FOUND)?;
 
     Ok(Json(json!({
         "success": true,
@@ -909,7 +1088,7 @@ async fn repost_clip(
          JOIN youtube_channel_linkages ycl ON cj.linkage_id = ycl.id
          WHERE ec.id = $1
          AND ec.clipping_job_id = cj.id
-         AND ycl.user_id = $2"
+         AND ycl.user_id = $2",
     )
     .bind(id)
     .bind(user_id)
@@ -1271,6 +1450,10 @@ async fn list_pending_review_clips(
                 "proposed_title": r.try_get::<Option<String>, _>("proposed_title").ok().flatten(),
                 "proposed_description": r.try_get::<Option<String>, _>("proposed_description").ok().flatten(),
                 "review_status": r.try_get::<String, _>("review_status").unwrap_or_default(),
+                "qa_status": r.try_get::<String, _>("qa_status").unwrap_or_else(|_| "not_reviewed".to_string()),
+                "qa_score": r.try_get::<Option<i32>, _>("qa_score").ok().flatten(),
+                "qa_feedback": r.try_get::<Option<String>, _>("qa_feedback").ok().flatten(),
+                "qa_retry_hint": r.try_get::<Option<String>, _>("qa_retry_hint").ok().flatten(),
                 "source_video_title": r.try_get::<Option<String>, _>("source_video_title").ok().flatten(),
                 "created_at": r.try_get::<DateTime<Utc>, _>("created_at").ok(),
             })
@@ -1337,7 +1520,8 @@ async fn approve_clip(
     let proposed_title: Option<String> = row.try_get("proposed_title").unwrap_or(None);
     let proposed_description: Option<String> = row.try_get("proposed_description").unwrap_or(None);
     let ai_tags: Option<serde_json::Value> = row.try_get("ai_tags").unwrap_or(None);
-    let custom_thumbnail_path: Option<String> = row.try_get("custom_thumbnail_path").unwrap_or(None);
+    let custom_thumbnail_path: Option<String> =
+        row.try_get("custom_thumbnail_path").unwrap_or(None);
     let clip_number: i32 = row.try_get("clip_number").unwrap_or(0);
     let destination_channel_id: i32 = row.try_get("destination_channel_id").unwrap_or(0);
 
@@ -1400,10 +1584,17 @@ async fn approve_clip(
         r2_clip_key: None,
         r2_thumb_key: None,
         r2_clip_url: None,
+        qa_status: None,
+        qa_score: None,
+        qa_feedback: None,
+        qa_retry_hint: None,
     };
 
     // Upload — requires_human_approval=false so it goes through immediately
-    match uploader.upload_clip(&clip_data, id, &dest_channel, false).await {
+    match uploader
+        .upload_clip(&clip_data, id, &dest_channel, false)
+        .await
+    {
         Ok(result) => {
             // Mark as approved in DB
             sqlx::query(
@@ -1524,7 +1715,9 @@ async fn propose_edit_clip(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     }
 
-    Ok(Json(json!({"success": true, "message": "Proposed edit saved"})))
+    Ok(Json(
+        json!({"success": true, "message": "Proposed edit saved"}),
+    ))
 }
 
 // ─────────────────────────── Content Management Handlers ─────────────────────

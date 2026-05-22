@@ -138,7 +138,7 @@
       <li>All delivery pages + portfolio samples</li>
       <li>30-day access renewed per payment</li>
     </ul>
-    <button class="buy-btn" onclick="openPay()">Subscribe — Pay $15 USDC</button>
+    <button class="buy-btn" onclick="openPay()" id="subscribe-btn">Subscribe - login required</button>
     <div style="font-size:12px;color:var(--dim);margin-top:10px">
       Clipping + manual clipping are separate team tools, not included here.
     </div>
@@ -163,22 +163,60 @@
 
 <script>
 function getAuthToken() {
-  return localStorage.getItem('auth_token')
+  return localStorage.getItem('authToken')
       || localStorage.getItem('admin_token')
-      || localStorage.getItem('authToken');
+      || localStorage.getItem('auth_token');
 }
 
-function openPay() {
-  if (!getAuthToken()) {
-    // Kick unauthenticated visitors to login first — subscription is
-    // tied to a user account, so signup/login is required.
-    window.location.href = '/admin/login?next=' + encodeURIComponent('/subscribe');
-    return;
+document.addEventListener('DOMContentLoaded', () => {
+  const btn = document.getElementById('subscribe-btn');
+  if (!btn) return;
+  if (getAuthToken()) {
+    btn.textContent = 'Continue to secure wallet payment';
+  } else {
+    btn.textContent = 'Sign in to start subscription';
   }
+});
+
+function clearAuthState() {
+  ['authToken', 'auth_token', 'admin_token', 'user', 'auth_user'].forEach(k => localStorage.removeItem(k));
+}
+
+function loginRedirect() {
+  window.location.href = '/login?redirect_to=' + encodeURIComponent('/subscribe');
+}
+
+async function verifySessionOrRedirect() {
+  const token = getAuthToken();
+  if (!token) {
+    loginRedirect();
+    return null;
+  }
+
+  try {
+    const r = await fetch('/api/auth/verify', {
+      headers: { 'Authorization': 'Bearer ' + token },
+    });
+    if (!r.ok) throw new Error('session expired');
+    const data = await r.json();
+    if (!data.success || !data.user) throw new Error('invalid session');
+    return { token, user: data.user };
+  } catch {
+    clearAuthState();
+    loginRedirect();
+    return null;
+  }
+}
+
+async function openPay() {
+  // Subscription payments must be attached to a real VideoSync account.
+  // Verify the JWT with the server before any wallet connection/signature.
+  const session = await verifySessionOrRedirect();
+  if (!session) return;
   document.getElementById('modal').classList.add('open');
   document.getElementById('pay-btn').disabled = false;
   document.getElementById('pay-btn').textContent = 'Pay $15 USDC';
-  setStatus('Click Pay to open your wallet.', '');
+  setStatus('Signed in as ' + (session.user.email || session.user.username || 'your account') + '. Click Pay to open your wallet.', '');
 }
 function closePay() { document.getElementById('modal').classList.remove('open'); }
 
@@ -190,8 +228,9 @@ function setStatus(msg, kind) {
 
 async function executePay() {
   const btn = document.getElementById('pay-btn');
-  const token = getAuthToken();
-  if (!token) { setStatus('You need to log in first.', 'error'); return; }
+  const session = await verifySessionOrRedirect();
+  if (!session) return;
+  const token = session.token;
   btn.disabled = true; btn.textContent = 'Preparing...';
 
   // 1. Fetch x402 payment requirements
@@ -200,6 +239,11 @@ async function executePay() {
     const r = await fetch('/api/subscribe/unlock-spec', {
       headers: { 'Authorization': 'Bearer ' + token },
     });
+    if (r.status === 401 || r.status === 403) {
+      clearAuthState();
+      loginRedirect();
+      return;
+    }
     if (!r.ok) throw new Error('unlock-spec returned ' + r.status);
     spec = await r.json();
   } catch (e) {
@@ -207,7 +251,11 @@ async function executePay() {
     btn.disabled = false; btn.textContent = 'Try again'; return;
   }
   const req = (spec.accepts || [])[0];
-  if (!req) { setStatus('Payment spec missing requirements.', 'error'); return; }
+  if (!req) {
+    const detail = typeof spec.error === 'string' ? spec.error : 'Payment spec missing requirements.';
+    setStatus(detail, 'error');
+    btn.disabled = false; btn.textContent = 'Try again'; return;
+  }
 
   // 2. Connect wallet
   const provider = (window.phantom && window.phantom.ethereum) || window.ethereum;
@@ -306,6 +354,11 @@ async function executePay() {
         'Authorization': 'Bearer ' + token,
       },
     });
+    if (r.status === 401 || r.status === 403) {
+      clearAuthState();
+      loginRedirect();
+      return;
+    }
     const data = await r.json();
     if (!r.ok || !data.success) throw new Error(data.error || ('HTTP ' + r.status));
     setStatus('✅ Subscription active — 30 days unlocked. Redirecting...', 'success');
@@ -315,6 +368,27 @@ async function executePay() {
     btn.disabled = false; btn.textContent = 'Try again';
   }
 }
+
+(async function initSubscribePage() {
+  const btn = document.getElementById('subscribe-btn');
+  const token = getAuthToken();
+  if (!token) {
+    btn.textContent = 'Create account / log in to subscribe';
+    return;
+  }
+  try {
+    const r = await fetch('/api/auth/verify', {
+      headers: { 'Authorization': 'Bearer ' + token },
+    });
+    if (!r.ok) throw new Error('invalid');
+    const data = await r.json();
+    if (!data.success) throw new Error('invalid');
+    btn.textContent = 'Subscribe - Pay $15 USDC';
+  } catch {
+    clearAuthState();
+    btn.textContent = 'Create account / log in to subscribe';
+  }
+})();
 </script>
 </body>
 </html>

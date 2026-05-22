@@ -2,8 +2,8 @@
 // Token usage tracking and cost recording service
 // Records API token usage and costs to database for billing and analytics
 
-use sqlx::PgPool;
 use super::token_pricing::{get_model_pricing, ModelPricing};
+use sqlx::PgPool;
 
 pub struct TokenUsageService;
 
@@ -24,14 +24,12 @@ impl TokenUsageService {
         cache_read_tokens: Option<u32>,
     ) -> Result<i64, sqlx::Error> {
         // Get pricing (try DB first, fallback to hardcoded)
-        let pricing = get_model_pricing(pool, model).await
+        let pricing = get_model_pricing(pool, model)
+            .await
             .unwrap_or_else(|_| ModelPricing::claude_sonnet_4_5());
 
-        let (input_cost, output_cost, _) = pricing.calculate_cost_cents(
-            input_tokens,
-            output_tokens,
-            context_size,
-        );
+        let (input_cost, output_cost, _) =
+            pricing.calculate_cost_cents(input_tokens, output_tokens, context_size);
 
         let result: (i32,) = sqlx::query_as(
             r#"
@@ -43,7 +41,7 @@ impl TokenUsageService {
                 cache_creation_tokens, cache_read_tokens, context_size
             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
             RETURNING id
-            "#
+            "#,
         )
         .bind(session_id)
         .bind(user_id)
@@ -85,10 +83,12 @@ impl TokenUsageService {
         output_tokens: u32,
     ) -> Result<i64, sqlx::Error> {
         // Get pricing (try DB first, fallback to hardcoded)
-        let pricing = get_model_pricing(pool, model).await
+        let pricing = get_model_pricing(pool, model)
+            .await
             .unwrap_or_else(|_| ModelPricing::gemini_2_0_flash());
 
-        let (input_cost, output_cost, _) = pricing.calculate_cost_cents(input_tokens, output_tokens, 0);
+        let (input_cost, output_cost, _) =
+            pricing.calculate_cost_cents(input_tokens, output_tokens, 0);
 
         let result: (i32,) = sqlx::query_as(
             r#"
@@ -99,7 +99,7 @@ impl TokenUsageService {
                 input_cost_cents, output_cost_cents
             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
             RETURNING id
-            "#
+            "#,
         )
         .bind(session_id)
         .bind(user_id)
@@ -140,7 +140,7 @@ impl TokenUsageService {
             FROM api_token_usage t
             JOIN chat_sessions s ON s.id = t.session_id
             WHERE s.user_id = $1
-            "#
+            "#,
         )
         .bind(user_id)
         .fetch_one(pool)
@@ -169,7 +169,7 @@ impl TokenUsageService {
                 COUNT(*) as total_requests
             FROM api_token_usage
             WHERE session_id = $1
-            "#
+            "#,
         )
         .bind(session_id)
         .fetch_one(pool)
@@ -203,7 +203,7 @@ impl TokenUsageService {
             WHERE s.user_id = $1
             GROUP BY t.provider, t.model
             ORDER BY cost_cents DESC
-            "#
+            "#,
         )
         .bind(user_id)
         .fetch_all(pool)

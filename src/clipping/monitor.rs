@@ -129,7 +129,25 @@ async fn enqueue_clipping_job(
     .fetch_one(pool)
     .await
     {
-        Ok(job_id) => Ok((job_id, true)),
+        Ok(job_id) => {
+            let _ = sqlx::query(
+                "UPDATE app_workflows
+                 SET metadata = jsonb_set(
+                         COALESCE(metadata, '{}'::jsonb),
+                         '{clipping_job_id}',
+                         to_jsonb($1::int),
+                         true
+                     ),
+                     updated_at = NOW()
+                 WHERE id = $2
+                   AND source_table = 'clipping_jobs'",
+            )
+            .bind(job_id)
+            .bind(workflow_id)
+            .execute(pool)
+            .await;
+            Ok((job_id, true))
+        }
         Err(sqlx::Error::Database(db_err)) if db_err.is_unique_violation() => {
             let existing_job_id = find_active_clipping_job(pool, linkage.id, source_video_id)
                 .await?

@@ -10,21 +10,20 @@
 // Tool implementations wrap the same pub helper fns as execute_clipping_job() in clipping_job.rs.
 // execute_clipping_job() is kept intact as fallback + for tests.
 
-use crate::AppState;
 use crate::clipping::{
-    ai_clipper::AiClipper,
-    apify_client::ApifyClient,
-    gemini_video_analyzer::VideoAnalysis,
+    ai_clipper::AiClipper, apify_client::ApifyClient, gemini_video_analyzer::VideoAnalysis,
     uploader::ClipUploader,
 };
 use crate::gemini_client::Content;
-use crate::jobs::{JobStatus, ProgressUpdate};
 use crate::jobs::clipping_job::{
     count_clips_posted_today, fetch_destination_channel, fetch_job_details, fetch_linkage,
-    load_clips_from_db, mark_job_completed, save_clips_to_database, update_job_status,
-    update_linkage_session_timestamp, update_linkage_stats,
+    handle_download_failure_fallback, load_clips_from_db, load_reusable_source_analysis,
+    mark_job_completed, persist_job_analysis, save_clips_to_database, store_source_analysis_vector,
+    update_job_status, update_linkage_session_timestamp, update_linkage_stats,
 };
+use crate::jobs::{JobStatus, ProgressUpdate};
 use crate::services::VideoVectorizationService;
+use crate::AppState;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -237,15 +236,20 @@ impl GeminiClippingAgent {
              (checkpoint_num={}, phase_flags=[{},{},{},{},{}])",
             job_id,
             state.checkpoint_num,
-            state.phase_a_complete, state.phase_b_complete, state.phase_c_complete,
-            state.phase_d_complete, state.phase_e_complete,
+            state.phase_a_complete,
+            state.phase_b_complete,
+            state.phase_c_complete,
+            state.phase_d_complete,
+            state.phase_e_complete,
         );
 
-        self.send_progress(job_id, &state, "Agent started", "starting").await;
+        self.send_progress(job_id, &state, "Agent started", "starting")
+            .await;
 
         // ── Phase A: Video analysis (ONE Gemini call per job) ────────────────
         if !state.phase_a_complete {
-            self.send_progress(job_id, &state, "analyze_video_for_clips", "running").await;
+            self.send_progress(job_id, &state, "analyze_video_for_clips", "running")
+                .await;
             match self.tool_analyze_video(&mut state, job_id).await {
                 Ok(result) => {
                     let quality = result["overall_quality"].as_f64().unwrap_or(0.0);
@@ -258,7 +262,10 @@ impl GeminiClippingAgent {
                         args.insert("reason".to_string(), json!(reason));
                         self.tool_mark_failed(&args, &mut state, job_id).await.ok();
                         self.checkpointer.delete_all(job_id).await.ok();
-                        return Ok(format!("Job {} terminated: quality_too_low ({:.2})", job_id, quality));
+                        return Ok(format!(
+                            "Job {} terminated: quality_too_low ({:.2})",
+                            job_id, quality
+                        ));
                     }
                     self.advance_checkpoint(&mut state).await;
                 }
@@ -274,7 +281,8 @@ impl GeminiClippingAgent {
 
         // ── Phase B: Download video (with Twitch fallback) ───────────────────
         if !state.phase_b_complete {
-            self.send_progress(job_id, &state, "download_video", "running").await;
+            self.send_progress(job_id, &state, "download_video", "running")
+                .await;
             match self.tool_download_video(&mut state, job_id).await {
                 Ok(ref result) if result["twitch_fallback"].as_bool() == Some(true) => {
                     // Twitch fallback triggered — YouTube download failed.
@@ -302,13 +310,22 @@ impl GeminiClippingAgent {
                                 twitch_last_err = e.clone();
                                 tracing::warn!(
                                     "Job {}: Twitch VOD download attempt {} failed: {}",
-                                    job_id, attempt + 1, e
+                                    job_id,
+                                    attempt + 1,
+                                    e
                                 );
 
                                 // Blacklist the failed VOD so pick_twitch_vod skips it
-                                if let Ok(jd) = fetch_job_details(job_id, &self.app_state.db_pool).await {
+                                if let Ok(jd) =
+                                    fetch_job_details(job_id, &self.app_state.db_pool).await
+                                {
                                     if let Some(ref vid_id) = jd.twitch_video_id {
-                                        self.record_clipped_twitch_video(job_id, vid_id, &jd.source_video_title).await;
+                                        self.record_clipped_twitch_video(
+                                            job_id,
+                                            vid_id,
+                                            &jd.source_video_title,
+                                        )
+                                        .await;
                                     }
                                 }
 
@@ -321,7 +338,9 @@ impl GeminiClippingAgent {
                                     Some(next_vod) => {
                                         tracing::info!(
                                             "Job {}: switching to next Twitch VOD {} (attempt {})",
-                                            job_id, next_vod.id, attempt + 2
+                                            job_id,
+                                            next_vod.id,
+                                            attempt + 2
                                         );
                                         sqlx::query(
                                             "UPDATE clipping_jobs \
@@ -337,10 +356,8 @@ impl GeminiClippingAgent {
                                         state.active_video_url = Some(next_vod.url.clone());
                                     }
                                     None => {
-                                        twitch_last_err = format!(
-                                            "{} — no more Twitch VODs available",
-                                            e
-                                        );
+                                        twitch_last_err =
+                                            format!("{} — no more Twitch VODs available", e);
                                         break;
                                     }
                                 }
@@ -349,27 +366,45 @@ impl GeminiClippingAgent {
                     }
 
                     if !twitch_downloaded {
-                        let mut args = HashMap::new();
-                        args.insert("reason".to_string(), json!(twitch_last_err));
-                        self.tool_mark_failed(&args, &mut state, job_id).await.ok();
-                        self.checkpointer.delete_all(job_id).await.ok();
-                        return Err(format!("Phase B (Twitch download) failed: {}", twitch_last_err));
+                        match self
+                            .trigger_longform_fallback_after_download_failure(
+                                job_id,
+                                &twitch_last_err,
+                            )
+                            .await
+                        {
+                            Ok(message) => {
+                                self.checkpointer.delete_all(job_id).await.ok();
+                                return Ok(message);
+                            }
+                            Err(fallback_error) => {
+                                let combined_error = format!(
+                                    "{} | longform fallback also failed: {}",
+                                    twitch_last_err, fallback_error
+                                );
+                                let mut args = HashMap::new();
+                                args.insert("reason".to_string(), json!(combined_error));
+                                self.tool_mark_failed(&args, &mut state, job_id).await.ok();
+                                self.checkpointer.delete_all(job_id).await.ok();
+                                return Err(format!(
+                                    "Phase B (Twitch download) failed: {}. Longform fallback failed: {}",
+                                    twitch_last_err, fallback_error
+                                ));
+                            }
+                        }
                     }
 
                     // VOD downloaded — analyze via local frames (Gemini cannot fetch Twitch URLs)
                     match self.tool_analyze_twitch_vod(&mut state, job_id).await {
                         Ok(reresult) => {
-                            let quality =
-                                reresult["overall_quality"].as_f64().unwrap_or(0.0);
+                            let quality = reresult["overall_quality"].as_f64().unwrap_or(0.0);
                             if quality < 0.6 {
                                 let mut args = HashMap::new();
                                 args.insert(
                                     "reason".to_string(),
                                     json!("Twitch VOD quality below threshold"),
                                 );
-                                self.tool_mark_failed(&args, &mut state, job_id)
-                                    .await
-                                    .ok();
+                                self.tool_mark_failed(&args, &mut state, job_id).await.ok();
                                 self.checkpointer.delete_all(job_id).await.ok();
                                 return Ok(format!(
                                     "Job {} terminated: twitch_vod_quality_too_low",
@@ -391,22 +426,43 @@ impl GeminiClippingAgent {
                         }
                     }
                 }
-                Ok(_) => { self.advance_checkpoint(&mut state).await; }
+                Ok(_) => {
+                    self.advance_checkpoint(&mut state).await;
+                }
                 Err(e) => {
-                    let mut args = HashMap::new();
-                    args.insert("reason".to_string(), json!(e));
-                    self.tool_mark_failed(&args, &mut state, job_id).await.ok();
-                    self.checkpointer.delete_all(job_id).await.ok();
-                    return Err(format!("Phase B (download) failed: {}", e));
+                    match self
+                        .trigger_longform_fallback_after_download_failure(job_id, &e)
+                        .await
+                    {
+                        Ok(message) => {
+                            self.checkpointer.delete_all(job_id).await.ok();
+                            return Ok(message);
+                        }
+                        Err(fallback_error) => {
+                            let combined_error =
+                                format!("{} | longform fallback also failed: {}", e, fallback_error);
+                            let mut args = HashMap::new();
+                            args.insert("reason".to_string(), json!(combined_error));
+                            self.tool_mark_failed(&args, &mut state, job_id).await.ok();
+                            self.checkpointer.delete_all(job_id).await.ok();
+                            return Err(format!(
+                                "Phase B (download) failed: {}. Longform fallback failed: {}",
+                                e, fallback_error
+                            ));
+                        }
+                    }
                 }
             }
         }
 
         // ── Phase C: Extract clips via FFmpeg ────────────────────────────────
         if !state.phase_c_complete {
-            self.send_progress(job_id, &state, "extract_clips_from_video", "running").await;
+            self.send_progress(job_id, &state, "extract_clips_from_video", "running")
+                .await;
             match self.tool_extract_clips(&mut state, job_id).await {
-                Ok(_) => { self.advance_checkpoint(&mut state).await; }
+                Ok(_) => {
+                    self.advance_checkpoint(&mut state).await;
+                }
                 Err(e) => {
                     let mut args = HashMap::new();
                     args.insert("reason".to_string(), json!(e));
@@ -419,7 +475,8 @@ impl GeminiClippingAgent {
 
         // ── Phase D: Vectorize (non-fatal — Qdrant outage must not block uploads) ─
         if !state.phase_d_complete {
-            self.send_progress(job_id, &state, "vectorize_clips", "running").await;
+            self.send_progress(job_id, &state, "vectorize_clips", "running")
+                .await;
             self.tool_vectorize_clips(&mut state, job_id).await.ok();
             state.phase_d_complete = true;
             self.advance_checkpoint(&mut state).await;
@@ -427,7 +484,8 @@ impl GeminiClippingAgent {
 
         // ── Phase E: Upload clips to YouTube ─────────────────────────────────
         if !state.phase_e_complete {
-            self.send_progress(job_id, &state, "upload_clips_to_youtube", "running").await;
+            self.send_progress(job_id, &state, "upload_clips_to_youtube", "running")
+                .await;
             match self.tool_upload_clips(&mut state, job_id).await {
                 Ok(result) => {
                     state.clips_uploaded = result["uploaded"].as_i64().unwrap_or(0) as i32;
@@ -448,7 +506,8 @@ impl GeminiClippingAgent {
         let mut complete_args = HashMap::new();
         complete_args.insert("clips_uploaded".to_string(), json!(state.clips_uploaded));
         complete_args.insert("clips_total".to_string(), json!(state.clips_total));
-        self.tool_mark_complete(&complete_args, &mut state, job_id).await?;
+        self.tool_mark_complete(&complete_args, &mut state, job_id)
+            .await?;
         self.checkpointer.delete_all(job_id).await.ok();
 
         Ok(format!(
@@ -463,6 +522,31 @@ impl GeminiClippingAgent {
         state.step_count += 1;
         state.last_checkpoint_at = Utc::now();
         self.checkpointer.save(state, &[], None).await.ok();
+    }
+
+    async fn trigger_longform_fallback_after_download_failure(
+        &self,
+        job_id: i32,
+        failure_reason: &str,
+    ) -> Result<String, String> {
+        let job = fetch_job_details(job_id, &self.app_state.db_pool).await?;
+        let linkage = fetch_linkage(job.linkage_id, &self.app_state.db_pool).await?;
+        let analysis_value = job.viral_moments_json.clone().ok_or_else(|| {
+            "Cannot trigger longform fallback because Phase A analysis is missing".to_string()
+        })?;
+        let analysis: VideoAnalysis = serde_json::from_value(analysis_value)
+            .map_err(|e| format!("Failed to deserialize VideoAnalysis for fallback: {}", e))?;
+        let original_video_url = format!("https://youtube.com/watch?v={}", job.source_video_id);
+
+        handle_download_failure_fallback(
+            &job,
+            &linkage,
+            &original_video_url,
+            &analysis,
+            &self.app_state,
+            failure_reason,
+        )
+        .await
     }
 
     /// Load checkpoint from DB (crash resumption) or init fresh state from clipping_jobs.resume_from.
@@ -495,16 +579,25 @@ impl GeminiClippingAgent {
                 state.phase_a_complete = true;
                 state.phase_b_complete = true;
                 state.phase_c_complete = true;
-                tracing::info!("⏭️  Job {}: pre-setting phase A+B+C complete (resume_from=clips_extracted)", job_id);
+                tracing::info!(
+                    "⏭️  Job {}: pre-setting phase A+B+C complete (resume_from=clips_extracted)",
+                    job_id
+                );
             }
             "downloaded" => {
                 state.phase_a_complete = true;
                 state.phase_b_complete = true;
-                tracing::info!("⏭️  Job {}: pre-setting phase A+B complete (resume_from=downloaded)", job_id);
+                tracing::info!(
+                    "⏭️  Job {}: pre-setting phase A+B complete (resume_from=downloaded)",
+                    job_id
+                );
             }
             "analyzed" => {
                 state.phase_a_complete = true;
-                tracing::info!("⏭️  Job {}: pre-setting phase A complete (resume_from=analyzed)", job_id);
+                tracing::info!(
+                    "⏭️  Job {}: pre-setting phase A complete (resume_from=analyzed)",
+                    job_id
+                );
             }
             _ => {
                 tracing::info!("🆕 Job {}: fresh start (no resume_from)", job_id);
@@ -560,7 +653,9 @@ impl GeminiClippingAgent {
         job_id: i32,
     ) -> Result<Value, String> {
         if state.phase_a_complete {
-            return Ok(json!({"success": true, "skipped": true, "reason": "phase_a_complete=true"}));
+            return Ok(
+                json!({"success": true, "skipped": true, "reason": "phase_a_complete=true"}),
+            );
         }
 
         let job = fetch_job_details(job_id, &self.app_state.db_pool).await?;
@@ -580,6 +675,45 @@ impl GeminiClippingAgent {
             .gemini_client
             .as_ref()
             .ok_or("Gemini client not configured")?;
+
+        if let Some(analysis) =
+            load_reusable_source_analysis(job_id, &job.source_video_id, &self.app_state.db_pool)
+                .await?
+        {
+            let overall_quality = analysis.overall_quality;
+            let moments_count = analysis.viral_moments.len();
+            let qualified_count = analysis.qualified_moments(0.6).len();
+
+            tracing::info!(
+                "♻️ Phase A: Reusing source analysis for video {} from a sibling job",
+                job.source_video_id
+            );
+            persist_job_analysis(job_id, &analysis, &self.app_state.db_pool)
+                .await
+                .ok();
+            store_source_analysis_vector(
+                &job.source_video_id,
+                &video_url,
+                Some(linkage.user_id),
+                None,
+                &analysis,
+                &self.app_state,
+                "phase_a_reuse",
+            )
+            .await;
+            update_job_status(job_id, "analyzed", 20, None, &self.app_state.db_pool).await?;
+
+            state.phase_a_complete = true;
+            state.overall_quality = Some(overall_quality);
+
+            return Ok(json!({
+                "success": true,
+                "reused_source_analysis": true,
+                "overall_quality": overall_quality,
+                "moments_count": moments_count,
+                "qualified_moments": qualified_count,
+            }));
+        }
 
         // Emit heartbeat every 30s during Gemini analysis (up to 180s)
         let (stop_tx_a, stop_rx_a) = tokio::sync::watch::channel(false);
@@ -608,7 +742,7 @@ impl GeminiClippingAgent {
         // Fetch top-performing viral factors from performance tracker to bias selection
         let learned_factors: Vec<String> = sqlx::query_scalar(
             "SELECT viral_factor FROM viral_factor_performance \
-             WHERE total_clips >= 3 ORDER BY performance_score DESC LIMIT 5"
+             WHERE total_clips >= 3 ORDER BY performance_score DESC LIMIT 5",
         )
         .fetch_all(&self.app_state.db_pool)
         .await
@@ -639,18 +773,27 @@ impl GeminiClippingAgent {
 
         let analysis = match gemini_result {
             Ok(a) => a,
-            Err(e) if e.to_string().contains("429") || e.to_string().to_lowercase().contains("quota") => {
+            Err(e)
+                if e.to_string().contains("429")
+                    || e.to_string().to_lowercase().contains("quota") =>
+            {
                 tracing::warn!("⚠️ Gemini 429 on Phase A analysis (job {}), falling back to BlenderMCPServer: {}", job_id, e);
                 if let Some(blender) = self.app_state.blender_mcp_client.as_ref() {
-                    blender.analyze_video(
-                        &video_url,
-                        linkage.clips_per_video as u32,
-                        linkage.min_clip_duration_seconds as f64,
-                        linkage.max_clip_duration_seconds as f64,
-                        &learned_factors,
-                    )
-                    .await
-                    .map_err(|be| format!("Gemini quota exceeded (429); BlenderMCP fallback also failed: {}", be))?
+                    blender
+                        .analyze_video(
+                            &video_url,
+                            linkage.clips_per_video as u32,
+                            linkage.min_clip_duration_seconds as f64,
+                            linkage.max_clip_duration_seconds as f64,
+                            &learned_factors,
+                        )
+                        .await
+                        .map_err(|be| {
+                            format!(
+                                "Gemini quota exceeded (429); BlenderMCP fallback also failed: {}",
+                                be
+                            )
+                        })?
                 } else {
                     return Err(format!("Gemini analysis failed (429 quota): {}. No BlenderMCP fallback configured.", e));
                 }
@@ -662,16 +805,20 @@ impl GeminiClippingAgent {
         let moments_count = analysis.viral_moments.len();
         let qualified_count = analysis.qualified_moments(0.6).len();
 
-        // Persist full analysis to DB so retries can skip Phase A
-        sqlx::query(
-            "UPDATE clipping_jobs SET viral_moments_json = $1, analysis_quality = $2 WHERE id = $3",
+        // Persist full analysis to DB so retries and sibling jobs can skip Phase A.
+        persist_job_analysis(job_id, &analysis, &self.app_state.db_pool)
+            .await
+            .ok();
+        store_source_analysis_vector(
+            &job.source_video_id,
+            &video_url,
+            Some(linkage.user_id),
+            None,
+            &analysis,
+            &self.app_state,
+            "phase_a",
         )
-        .bind(serde_json::to_value(&analysis).unwrap_or(Value::Null))
-        .bind(overall_quality)
-        .bind(job_id)
-        .execute(&self.app_state.db_pool)
-        .await
-        .ok();
+        .await;
 
         update_job_status(job_id, "analyzed", 20, None, &self.app_state.db_pool).await?;
 
@@ -693,7 +840,9 @@ impl GeminiClippingAgent {
         job_id: i32,
     ) -> Result<Value, String> {
         if state.phase_b_complete {
-            return Ok(json!({"success": true, "skipped": true, "reason": "phase_b_complete=true", "video_path": state.local_video_path}));
+            return Ok(
+                json!({"success": true, "skipped": true, "reason": "phase_b_complete=true", "video_path": state.local_video_path}),
+            );
         }
 
         let job = fetch_job_details(job_id, &self.app_state.db_pool).await?;
@@ -736,10 +885,26 @@ impl GeminiClippingAgent {
         // Acquire download semaphore — limits concurrent downloads to 2 to avoid
         // overwhelming the ytdlp/Apify service. Permit is held for the duration of
         // the download and released automatically when _download_permit is dropped.
-        let _download_permit = self.app_state.download_semaphore.acquire().await
+        let _download_permit = self
+            .app_state
+            .download_semaphore
+            .acquire()
+            .await
             .map_err(|e| format!("Download semaphore closed: {}", e))?;
 
-        let download_result = self.download_via_apify(&video_url, &path).await;
+        let download_timeout_secs = download_timeout_secs();
+        let download_result = match tokio::time::timeout(
+            tokio::time::Duration::from_secs(download_timeout_secs),
+            self.download_via_apify(&video_url, &path),
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(_) => Err(format!(
+                "Download timed out after {}s for {}",
+                download_timeout_secs, video_url
+            )),
+        };
 
         let _ = stop_tx_b.send(true);
         let _ = heartbeat_handle_b.await;
@@ -761,8 +926,12 @@ impl GeminiClippingAgent {
                 // If this was a Twitch fallback download, record it in clipped_twitch_videos
                 if state.twitch_fallback_triggered {
                     if let Some(twitch_vid_id) = &job.twitch_video_id {
-                        self.record_clipped_twitch_video(job_id, twitch_vid_id, &job.source_video_title)
-                            .await;
+                        self.record_clipped_twitch_video(
+                            job_id,
+                            twitch_vid_id,
+                            &job.source_video_title,
+                        )
+                        .await;
                     }
                 }
 
@@ -787,10 +956,7 @@ impl GeminiClippingAgent {
             Err(download_err) => {
                 // Already on Twitch fallback — give up
                 if state.twitch_fallback_triggered {
-                    return Err(format!(
-                        "Twitch download also failed: {}",
-                        download_err
-                    ));
+                    return Err(format!("Twitch download also failed: {}", download_err));
                 }
 
                 // Try Twitch fallback
@@ -925,8 +1091,7 @@ impl GeminiClippingAgent {
 
     /// Call Apify (the existing download path) for any URL.
     async fn download_via_apify(&self, video_url: &str, path: &str) -> Result<(), String> {
-        let apify_token =
-            std::env::var("APIFY_TOKEN").map_err(|_| "APIFY_TOKEN not configured")?;
+        let apify_token = std::env::var("APIFY_TOKEN").map_err(|_| "APIFY_TOKEN not configured")?;
         let apify_actor = std::env::var("APIFY_YOUTUBE_CLIENT_ACTOR")
             .map_err(|_| "APIFY_YOUTUBE_CLIENT_ACTOR not configured")?;
 
@@ -944,8 +1109,12 @@ impl GeminiClippingAgent {
         let twitch_client = self.app_state.twitch_client.as_ref()?;
 
         // Get the job to find its linkage → source channel → twitch mapping
-        let job = fetch_job_details(job_id, &self.app_state.db_pool).await.ok()?;
-        let linkage = fetch_linkage(job.linkage_id, &self.app_state.db_pool).await.ok()?;
+        let job = fetch_job_details(job_id, &self.app_state.db_pool)
+            .await
+            .ok()?;
+        let linkage = fetch_linkage(job.linkage_id, &self.app_state.db_pool)
+            .await
+            .ok()?;
 
         // Resolve: youtube_source_channel → youtube_twitch_channel_mappings → twitch_source_channels
         let row: Option<(i32, String)> = sqlx::query_as::<_, (i32, String)>(
@@ -1021,8 +1190,12 @@ impl GeminiClippingAgent {
     ) {
         // Look up the twitch_channel_id via the job's linkage
         let channel_id: Option<i32> = async {
-            let job = fetch_job_details(job_id, &self.app_state.db_pool).await.ok()?;
-            let linkage = fetch_linkage(job.linkage_id, &self.app_state.db_pool).await.ok()?;
+            let job = fetch_job_details(job_id, &self.app_state.db_pool)
+                .await
+                .ok()?;
+            let linkage = fetch_linkage(job.linkage_id, &self.app_state.db_pool)
+                .await
+                .ok()?;
             let row: (i32,) = sqlx::query_as::<_, (i32,)>(
                 "SELECT tsc.id FROM youtube_twitch_channel_mappings ytm
                  JOIN twitch_source_channels tsc ON tsc.id = ytm.twitch_source_channel_id
@@ -1059,7 +1232,9 @@ impl GeminiClippingAgent {
         job_id: i32,
     ) -> Result<Value, String> {
         if state.phase_c_complete {
-            return Ok(json!({"success": true, "skipped": true, "reason": "phase_c_complete=true", "clip_ids": state.extracted_clip_ids}));
+            return Ok(
+                json!({"success": true, "skipped": true, "reason": "phase_c_complete=true", "clip_ids": state.extracted_clip_ids}),
+            );
         }
 
         let job = fetch_job_details(job_id, &self.app_state.db_pool).await?;
@@ -1129,7 +1304,9 @@ impl GeminiClippingAgent {
         job_id: i32,
     ) -> Result<Value, String> {
         if state.phase_d_complete {
-            return Ok(json!({"success": true, "skipped": true, "reason": "phase_d_complete=true"}));
+            return Ok(
+                json!({"success": true, "skipped": true, "reason": "phase_d_complete=true"}),
+            );
         }
 
         let job = fetch_job_details(job_id, &self.app_state.db_pool).await?;
@@ -1168,7 +1345,9 @@ impl GeminiClippingAgent {
         job_id: i32,
     ) -> Result<Value, String> {
         if state.phase_e_complete {
-            return Ok(json!({"success": true, "skipped": true, "reason": "phase_e_complete=true", "uploaded": state.clips_uploaded, "total": state.clips_total}));
+            return Ok(
+                json!({"success": true, "skipped": true, "reason": "phase_e_complete=true", "uploaded": state.clips_uploaded, "total": state.clips_total}),
+            );
         }
 
         let job = fetch_job_details(job_id, &self.app_state.db_pool).await?;
@@ -1236,7 +1415,12 @@ impl GeminiClippingAgent {
             }
 
             match uploader
-                .upload_clip(clip, *clip_id, &destination_channel, linkage.requires_human_approval)
+                .upload_clip(
+                    clip,
+                    *clip_id,
+                    &destination_channel,
+                    linkage.requires_human_approval,
+                )
                 .await
             {
                 Ok(_) => {
@@ -1310,12 +1494,10 @@ impl GeminiClippingAgent {
         .ok();
 
         // Update channel health score on successful completion
-        let _ = sqlx::query(
-            "SELECT recalculate_channel_health($1)"
-        )
-        .bind(linkage.source_channel_id)
-        .execute(&self.app_state.db_pool)
-        .await;
+        let _ = sqlx::query("SELECT recalculate_channel_health($1)")
+            .bind(linkage.source_channel_id)
+            .execute(&self.app_state.db_pool)
+            .await;
 
         state.terminal_status = Some("completed".to_string());
         state.clips_uploaded = clips_uploaded;
@@ -1387,4 +1569,11 @@ impl GeminiClippingAgent {
 
         Ok(json!({"success": true, "status": "failed", "reason": reason}))
     }
+}
+
+fn download_timeout_secs() -> u64 {
+    std::env::var("CLIPPING_DOWNLOAD_TIMEOUT_SECS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(900)
 }

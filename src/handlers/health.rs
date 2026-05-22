@@ -1,15 +1,9 @@
 // Health check and monitoring endpoints
-use axum::{
-    extract::Extension,
-    http::StatusCode,
-    response::Json,
-    routing::get,
-    Router,
-};
-use serde_json::{json, Value};
-use std::sync::Arc;
-use sqlx::Row;
 use crate::AppState;
+use axum::{extract::Extension, http::StatusCode, response::Json, routing::get, Router};
+use serde_json::{json, Value};
+use sqlx::Row;
+use std::sync::Arc;
 
 pub fn health_routes() -> Router {
     Router::new()
@@ -39,7 +33,7 @@ async fn health_check(
         "SELECT worker_id, jobs_processed, jobs_failed, current_job_id \
          FROM worker_heartbeats \
          ORDER BY last_seen_at DESC \
-         LIMIT 1"
+         LIMIT 1",
     )
     .fetch_optional(&state.db_pool)
     .await
@@ -48,7 +42,7 @@ async fn health_check(
 
     let worker_alive: bool = sqlx::query_scalar(
         "SELECT COUNT(*) > 0 FROM worker_heartbeats \
-         WHERE last_seen_at > NOW() - INTERVAL '3 minutes'"
+         WHERE last_seen_at > NOW() - INTERVAL '3 minutes'",
     )
     .fetch_one(&state.db_pool)
     .await
@@ -56,7 +50,7 @@ async fn health_check(
 
     let worker_last_heartbeat: Option<String> = sqlx::query_scalar(
         "SELECT last_seen_at::text FROM worker_heartbeats \
-         ORDER BY last_seen_at DESC LIMIT 1"
+         ORDER BY last_seen_at DESC LIMIT 1",
     )
     .fetch_optional(&state.db_pool)
     .await
@@ -65,35 +59,32 @@ async fn health_check(
     .flatten();
 
     // Queue depth
-    let pending_total: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM clipping_jobs WHERE status = 'pending'"
-    )
-    .fetch_one(&state.db_pool)
-    .await
-    .unwrap_or(0);
+    let pending_total: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM clipping_jobs WHERE status = 'pending'")
+            .fetch_one(&state.db_pool)
+            .await
+            .unwrap_or(0);
 
     let pending_old: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM clipping_jobs \
          WHERE status = 'pending' AND claimed_by IS NULL \
-         AND created_at < NOW() - INTERVAL '15 minutes'"
+         AND created_at < NOW() - INTERVAL '15 minutes'",
     )
     .fetch_one(&state.db_pool)
     .await
     .unwrap_or(0);
 
-    let failed_jobs: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM clipping_jobs WHERE status = 'failed'"
-    )
-    .fetch_one(&state.db_pool)
-    .await
-    .unwrap_or(0);
+    let failed_jobs: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM clipping_jobs WHERE status = 'failed'")
+            .fetch_one(&state.db_pool)
+            .await
+            .unwrap_or(0);
 
-    let discarded_jobs: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM clipping_jobs WHERE status = 'discarded'"
-    )
-    .fetch_one(&state.db_pool)
-    .await
-    .unwrap_or(0);
+    let discarded_jobs: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM clipping_jobs WHERE status = 'discarded'")
+            .fetch_one(&state.db_pool)
+            .await
+            .unwrap_or(0);
 
     // Determine overall status
     let db_status = if db_ok { "pass" } else { "fail" };
@@ -359,8 +350,14 @@ async fn get_job_statistics(state: &Arc<AppState>) -> Value {
             let failed: i64 = row.try_get("failed").unwrap_or(0);
             let pending: i64 = row.try_get("pending").unwrap_or(0);
             let in_progress: i64 = row.try_get("in_progress").unwrap_or(0);
-            let avg_retries: f64 = row.try_get::<Option<f64>, _>("avg_retries").unwrap_or(None).unwrap_or(0.0);
-            let max_retries: i32 = row.try_get::<Option<i32>, _>("max_retries").unwrap_or(None).unwrap_or(0);
+            let avg_retries: f64 = row
+                .try_get::<Option<f64>, _>("avg_retries")
+                .unwrap_or(None)
+                .unwrap_or(0.0);
+            let max_retries: i32 = row
+                .try_get::<Option<i32>, _>("max_retries")
+                .unwrap_or(None)
+                .unwrap_or(0);
 
             let success_rate = if total > 0 {
                 (completed as f64 / total as f64 * 100.0).round()

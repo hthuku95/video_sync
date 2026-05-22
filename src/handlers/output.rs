@@ -1,15 +1,15 @@
 // src/handlers/output.rs
+use crate::AppState;
 use axum::{
-    extract::{Path, Extension},
+    extract::{Extension, Path},
     http::{header, StatusCode},
     response::Response,
     routing::get,
     Router,
 };
+use serde::Serialize;
 use std::{path::PathBuf, sync::Arc};
 use tokio_util::io::ReaderStream;
-use crate::AppState;
-use serde::Serialize;
 
 #[derive(Serialize)]
 pub struct VideoOutputResponse {
@@ -22,7 +22,7 @@ pub struct VideoOutputResponse {
     pub content_type: String,
 }
 
-#[derive(Serialize)]  
+#[derive(Serialize)]
 pub struct VideoOutputListResponse {
     pub success: bool,
     pub outputs: Vec<VideoOutputResponse>,
@@ -43,7 +43,7 @@ async fn list_session_outputs(
 ) -> Result<axum::Json<VideoOutputListResponse>, StatusCode> {
     // Get output directory for this session
     let session_output_dir = PathBuf::from("outputs").join(&session_id);
-    
+
     if !session_output_dir.exists() {
         return Ok(axum::Json(VideoOutputListResponse {
             success: true,
@@ -52,7 +52,7 @@ async fn list_session_outputs(
     }
 
     let mut outputs = Vec::new();
-    
+
     // Read directory and collect video files
     match tokio::fs::read_dir(&session_output_dir).await {
         Ok(mut entries) => {
@@ -63,18 +63,20 @@ async fn list_session_outputs(
                     if matches!(ext_str.as_str(), "mp4" | "avi" | "mov" | "mkv" | "webm") {
                         if let Some(filename) = path.file_name() {
                             let filename_str = filename.to_string_lossy();
-                            
+
                             // Get file metadata
                             if let Ok(metadata) = entry.metadata().await {
                                 let file_id = generate_file_id(&path);
-                                
+
                                 outputs.push(VideoOutputResponse {
                                     file_id: file_id.clone(),
                                     filename: filename_str.to_string(),
                                     size_bytes: metadata.len(),
                                     download_url: format!("/api/outputs/download/{}", file_id),
                                     stream_url: format!("/api/outputs/stream/{}", file_id),
-                                    created_at: format_system_time(metadata.created().unwrap_or(std::time::SystemTime::now())),
+                                    created_at: format_system_time(
+                                        metadata.created().unwrap_or(std::time::SystemTime::now()),
+                                    ),
                                     content_type: get_content_type(&ext_str),
                                 });
                             }
@@ -101,10 +103,10 @@ async fn list_session_outputs(
 /// Download a video output file
 async fn download_video_output(
     Path(file_id): Path<String>,
-    Extension(_state): Extension<Arc<AppState>>,
+    Extension(state): Extension<Arc<AppState>>,
 ) -> Result<Response, StatusCode> {
-    let file_path = resolve_file_path(&file_id)?;
-    
+    let file_path = resolve_file_path(&state, &file_id).await?;
+
     if !file_path.exists() {
         return Err(StatusCode::NOT_FOUND);
     }
@@ -113,16 +115,20 @@ async fn download_video_output(
     match tokio::fs::File::open(&file_path).await {
         Ok(file) => {
             let stream = ReaderStream::new(file);
-            let filename = file_path.file_name()
+            let filename = file_path
+                .file_name()
                 .and_then(|name| name.to_str())
                 .unwrap_or("video.mp4");
-            
+
             let content_type = get_content_type_from_path(&file_path);
-            
+
             Response::builder()
                 .status(StatusCode::OK)
                 .header(header::CONTENT_TYPE, content_type)
-                .header(header::CONTENT_DISPOSITION, format!("attachment; filename=\"{}\"", filename))
+                .header(
+                    header::CONTENT_DISPOSITION,
+                    format!("attachment; filename=\"{}\"", filename),
+                )
                 .header(header::CACHE_CONTROL, "private, max-age=3600")
                 .body(axum::body::Body::from_stream(stream))
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
@@ -137,10 +143,10 @@ async fn download_video_output(
 /// Stream a video output file (for browser playback)
 async fn stream_video_output(
     Path(file_id): Path<String>,
-    Extension(_state): Extension<Arc<AppState>>,
+    Extension(state): Extension<Arc<AppState>>,
 ) -> Result<Response, StatusCode> {
-    let file_path = resolve_file_path(&file_id)?;
-    
+    let file_path = resolve_file_path(&state, &file_id).await?;
+
     if !file_path.exists() {
         return Err(StatusCode::NOT_FOUND);
     }
@@ -150,7 +156,7 @@ async fn stream_video_output(
         Ok(file) => {
             let stream = ReaderStream::new(file);
             let content_type = get_content_type_from_path(&file_path);
-            
+
             Response::builder()
                 .status(StatusCode::OK)
                 .header(header::CONTENT_TYPE, content_type)
@@ -169,30 +175,33 @@ async fn stream_video_output(
 /// Get information about a video output file
 async fn get_output_info(
     Path(file_id): Path<String>,
-    Extension(_state): Extension<Arc<AppState>>,
+    Extension(state): Extension<Arc<AppState>>,
 ) -> Result<axum::Json<VideoOutputResponse>, StatusCode> {
-    let file_path = resolve_file_path(&file_id)?;
-    
+    let file_path = resolve_file_path(&state, &file_id).await?;
+
     if !file_path.exists() {
         return Err(StatusCode::NOT_FOUND);
     }
 
     match tokio::fs::metadata(&file_path).await {
         Ok(metadata) => {
-            let filename = file_path.file_name()
+            let filename = file_path
+                .file_name()
                 .and_then(|name| name.to_str())
                 .unwrap_or("unknown.mp4")
                 .to_string();
-            
+
             let content_type = get_content_type_from_path(&file_path);
-            
+
             Ok(axum::Json(VideoOutputResponse {
                 file_id: file_id.clone(),
                 filename,
                 size_bytes: metadata.len(),
                 download_url: format!("/api/outputs/download/{}", file_id),
                 stream_url: format!("/api/outputs/stream/{}", file_id),
-                created_at: format_system_time(metadata.created().unwrap_or(std::time::SystemTime::now())),
+                created_at: format_system_time(
+                    metadata.created().unwrap_or(std::time::SystemTime::now()),
+                ),
                 content_type,
             }))
         }
@@ -216,7 +225,30 @@ fn generate_file_id(path: &PathBuf) -> String {
     format!("{:x}", hasher.finish())
 }
 
-fn resolve_file_path(file_id: &str) -> Result<PathBuf, StatusCode> {
+pub(crate) fn resolve_output_file_path_for_verification(file_id: &str) -> Option<PathBuf> {
+    resolve_file_path_from_scan(file_id).ok()
+}
+
+async fn resolve_file_path(
+    state: &Arc<AppState>,
+    file_id: &str,
+) -> Result<PathBuf, StatusCode> {
+    if let Ok(Some(artifact)) =
+        crate::services::GeneratedArtifactService::find_by_legacy_file_id(&state.db_pool, file_id)
+            .await
+    {
+        if let Some(path) = artifact.file_path {
+            let candidate = PathBuf::from(path);
+            if candidate.exists() {
+                return Ok(candidate);
+            }
+        }
+    }
+
+    resolve_file_path_from_scan(file_id)
+}
+
+fn resolve_file_path_from_scan(file_id: &str) -> Result<PathBuf, StatusCode> {
     // In a production system, you'd want to store file_id -> path mappings in a database
     // For now, we'll scan both project root and outputs directory
 
@@ -287,12 +319,13 @@ fn resolve_file_path(file_id: &str) -> Result<PathBuf, StatusCode> {
 fn get_content_type(extension: &str) -> String {
     match extension.to_lowercase().as_str() {
         "mp4" => "video/mp4",
-        "avi" => "video/x-msvideo", 
+        "avi" => "video/x-msvideo",
         "mov" => "video/quicktime",
         "mkv" => "video/x-matroska",
         "webm" => "video/webm",
         _ => "application/octet-stream",
-    }.to_string()
+    }
+    .to_string()
 }
 
 fn get_content_type_from_path(path: &PathBuf) -> String {
@@ -310,13 +343,8 @@ fn format_system_time(time: std::time::SystemTime) -> String {
                 .unwrap_or_else(chrono::Utc::now);
             datetime.format("%Y-%m-%d %H:%M:%S UTC").to_string()
         }
-        Err(_) => chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC").to_string(),
+        Err(_) => chrono::Utc::now()
+            .format("%Y-%m-%d %H:%M:%S UTC")
+            .to_string(),
     }
-}
-
-/// Ensure output directory exists for a session
-pub async fn ensure_session_output_directory(session_id: &str) -> Result<PathBuf, std::io::Error> {
-    let output_dir = PathBuf::from("outputs").join(session_id);
-    tokio::fs::create_dir_all(&output_dir).await?;
-    Ok(output_dir)
 }

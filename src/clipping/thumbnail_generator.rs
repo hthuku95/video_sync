@@ -2,9 +2,9 @@
 // Implements Hybrid Approach: Best frame selection + AI text overlay
 
 use crate::AppState;
-use base64::Engine;  // For base64 encoding/decoding
-use std::sync::Arc;
+use base64::Engine; // For base64 encoding/decoding
 use std::path::Path;
+use std::sync::Arc;
 
 pub struct ThumbnailGenerator {
     app_state: Arc<AppState>,
@@ -37,7 +37,9 @@ impl ThumbnailGenerator {
         }
 
         // Step 2: Gemini picks the best frame
-        let best_frame_path = self.select_best_frame(&candidate_frames, viral_factors).await?;
+        let best_frame_path = self
+            .select_best_frame(&candidate_frames, viral_factors)
+            .await?;
         tracing::info!("✅ AI selected best frame: {}", best_frame_path);
 
         let stem = Path::new(clip_path)
@@ -85,9 +87,9 @@ impl ThumbnailGenerator {
 
         // Extract frames at 10%, 40%, 70% of duration
         let timestamps = vec![
-            duration * 0.10,  // 10% - after any intro
-            duration * 0.40,  // 40% - mid-section (often peak moment)
-            duration * 0.70,  // 70% - near climax
+            duration * 0.10, // 10% - after any intro
+            duration * 0.40, // 40% - mid-section (often peak moment)
+            duration * 0.70, // 70% - near climax
         ];
 
         let mut frame_paths = Vec::new();
@@ -332,9 +334,7 @@ OUTPUT: A polished YouTube thumbnail (16:9 aspect ratio, 1280x720px minimum)"#,
             contents: vec![crate::gemini_client::Content {
                 role: Some("user".to_string()),
                 parts: vec![
-                    crate::gemini_client::Part::Text {
-                        text: prompt,
-                    },
+                    crate::gemini_client::Part::Text { text: prompt },
                     crate::gemini_client::Part::InlineData {
                         inline_data: crate::gemini_client::InlineData {
                             mime_type: "image/jpeg".to_string(),
@@ -344,7 +344,7 @@ OUTPUT: A polished YouTube thumbnail (16:9 aspect ratio, 1280x720px minimum)"#,
                 ],
             }],
             generation_config: Some(crate::gemini_client::GenerationConfig {
-                temperature: 0.4,  // Lower temperature for consistency
+                temperature: 0.4, // Lower temperature for consistency
                 top_p: 0.8,
                 top_k: 40,
                 max_output_tokens: 8192,
@@ -398,48 +398,4 @@ OUTPUT: A polished YouTube thumbnail (16:9 aspect ratio, 1280x720px minimum)"#,
         Ok(thumbnail_path)
     }
 
-    /// Cleanup temporary candidate frames (keep only the final thumbnail)
-    async fn cleanup_candidate_frames(&self, candidate_frames: &[String], best_frame: &str) {
-        for frame_path in candidate_frames {
-            // Don't delete the best frame if it's in the list
-            if frame_path != best_frame {
-                if let Err(e) = tokio::fs::remove_file(frame_path).await {
-                    tracing::warn!("Failed to cleanup frame {}: {}", frame_path, e);
-                }
-            }
-        }
-    }
-
-    /// Get learned optimal thumbnail strategy from performance data
-    /// Returns: (generation_method, text_overlay_style, frame_selection_strategy)
-    pub async fn get_optimal_thumbnail_strategy(
-        &self,
-    ) -> Result<(String, String, String), String> {
-        let query = "
-            SELECT generation_method, text_overlay_style, frame_selection_strategy
-            FROM thumbnail_performance_analysis
-            WHERE total_clips >= 5
-            ORDER BY performance_score DESC
-            LIMIT 1
-        ";
-
-        let result = sqlx::query_as::<_, (String, String, String)>(query)
-            .fetch_optional(&self.app_state.db_pool)
-            .await
-            .map_err(|e| format!("Failed to fetch optimal strategy: {}", e))?;
-
-        Ok(result.unwrap_or((
-            "hybrid".to_string(),
-            "bold_text_with_outline".to_string(),
-            "ai_vision_analysis".to_string(),
-        )))
-    }
-}
-
-/// Thumbnail generation result
-#[derive(Debug, Clone)]
-pub struct ThumbnailResult {
-    pub thumbnail_path: String,
-    pub generation_method: String,
-    pub selected_frame_timestamp: f64,
 }

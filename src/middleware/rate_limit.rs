@@ -51,47 +51,6 @@ impl RateLimiter {
             }
         }
     }
-
-    // Clean up old entries periodically
-    pub fn cleanup_expired(&self) {
-        let mut clients = self.clients.lock().unwrap();
-        let now = Instant::now();
-        
-        clients.retain(|_, (_, window_start)| {
-            now.duration_since(*window_start) <= self.window_duration
-        });
-    }
-}
-
-pub async fn rate_limit_middleware(
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
-    request: Request,
-    next: Next,
-) -> Result<Response, impl IntoResponse> {
-    // Create a basic rate limiter - 100 requests per minute per IP
-    static RATE_LIMITER: std::sync::OnceLock<RateLimiter> = std::sync::OnceLock::new();
-    let rate_limiter = RATE_LIMITER.get_or_init(|| RateLimiter::new(100, 60));
-
-    let client_ip = addr.ip().to_string();
-
-    if !rate_limiter.check_rate_limit(&client_ip) {
-        tracing::warn!("Rate limit exceeded for IP: {}", client_ip);
-        return Err((
-            StatusCode::TOO_MANY_REQUESTS,
-            Json(json!({
-                "success": false,
-                "message": "Rate limit exceeded. Please try again later.",
-                "retry_after": 60
-            })),
-        ));
-    }
-
-    // Occasionally clean up expired entries
-    if rand::random::<u8>() < 10 {
-        rate_limiter.cleanup_expired();
-    }
-
-    Ok(next.run(request).await)
 }
 
 // More aggressive rate limiting for sensitive endpoints

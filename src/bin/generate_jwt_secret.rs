@@ -1,5 +1,5 @@
-use rand::RngCore;
 use base64::prelude::*;
+use rand::RngCore;
 
 fn main() {
     println!("🔐 JWT Secret Key Generator");
@@ -12,7 +12,7 @@ fn main() {
     // Encode in different formats
     let base64_key = BASE64_STANDARD.encode(&key);
     let hex_key = hex::encode(&key);
-    
+
     println!();
     println!("Generated secure JWT secret key:");
     println!("Base64: {}", base64_key);

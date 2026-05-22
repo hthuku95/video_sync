@@ -35,12 +35,14 @@ fn search_queries() -> Vec<SearchQuery> {
         SearchQuery {
             keyword: "gaming highlights best moments compilation",
             niche: "gaming",
-            description: "Gaming channel — best-moment clip extraction service for content creators",
+            description:
+                "Gaming channel — best-moment clip extraction service for content creators",
         },
         SearchQuery {
             keyword: "tech tutorial explainer short",
             niche: "tech",
-            description: "Tech tutorial channel — educational clip extraction for YouTube Shorts pipeline",
+            description:
+                "Tech tutorial channel — educational clip extraction for YouTube Shorts pipeline",
         },
         SearchQuery {
             keyword: "fitness workout highlights motivation",
@@ -135,7 +137,10 @@ impl ManualClippingTestRunner {
     // ─────────────────────────────────────────────────────────────────────────
 
     async fn run_all(&self, run_id: Uuid) {
-        tracing::info!("🎬 Manual clipping test run {} — Phase 1: video discovery", run_id);
+        tracing::info!(
+            "🎬 Manual clipping test run {} — Phase 1: video discovery",
+            run_id
+        );
 
         // Phase 1 — discover real video URLs via YouTube Data API
         let scenarios = match self.discover_videos().await {
@@ -225,11 +230,7 @@ impl ManualClippingTestRunner {
             };
 
             if !resp.status().is_success() {
-                tracing::warn!(
-                    "YouTube API {} for query '{}'",
-                    resp.status(),
-                    q.keyword
-                );
+                tracing::warn!("YouTube API {} for query '{}'", resp.status(), q.keyword);
                 continue;
             }
 
@@ -297,10 +298,7 @@ impl ManualClippingTestRunner {
             }
         }
 
-        tracing::info!(
-            "Phase 1 complete — discovered {} video(s)",
-            scenarios.len()
-        );
+        tracing::info!("Phase 1 complete — discovered {} video(s)", scenarios.len());
         Ok(scenarios)
     }
 
@@ -485,18 +483,12 @@ impl ManualClippingTestRunner {
             .iter()
             .enumerate()
             .map(|(i, r)| {
-                let dur = r
-                    .get::<Option<f64>, _>("duration_seconds")
-                    .unwrap_or(0.0);
-                let score = r
-                    .get::<Option<f64>, _>("quality_score")
-                    .unwrap_or(0.0);
+                let dur = r.get::<Option<f64>, _>("duration_seconds").unwrap_or(0.0);
+                let score = r.get::<Option<f64>, _>("quality_score").unwrap_or(0.0);
                 let title = r
                     .get::<Option<String>, _>("title")
                     .unwrap_or_else(|| format!("Clip {}", i + 1));
-                let has_url = r
-                    .get::<Option<String>, _>("r2_clip_url")
-                    .is_some();
+                let has_url = r.get::<Option<String>, _>("r2_clip_url").is_some();
                 format!(
                     "  • Clip {}: '{}' — {:.0}s, quality {:.0}%, R2 url: {}",
                     i + 1,
@@ -555,21 +547,17 @@ impl ManualClippingTestRunner {
         .execute(&self.app_state.db_pool)
         .await;
 
-        let _ = sqlx::query(
-            "UPDATE test_runs SET failed_tests = failed_tests + 1 WHERE id = $1",
-        )
-        .bind(run_id)
-        .execute(&self.app_state.db_pool)
-        .await;
+        let _ = sqlx::query("UPDATE test_runs SET failed_tests = failed_tests + 1 WHERE id = $1")
+            .bind(run_id)
+            .execute(&self.app_state.db_pool)
+            .await;
     }
 
     async fn finish_run(&self, run_id: Uuid, status: &str) {
-        let _ = sqlx::query(
-            "UPDATE test_runs SET status = $1, completed_at = NOW() WHERE id = $2",
-        )
-        .bind(status)
-        .bind(run_id)
-        .execute(&self.app_state.db_pool)
-        .await;
+        let _ = sqlx::query("UPDATE test_runs SET status = $1, completed_at = NOW() WHERE id = $2")
+            .bind(status)
+            .bind(run_id)
+            .execute(&self.app_state.db_pool)
+            .await;
     }
 }

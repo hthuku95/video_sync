@@ -1,6 +1,5 @@
 // src/transform.rs
 
-
 use crate::utils::execute_ffmpeg_command;
 use std::process::Command;
 
@@ -121,7 +120,10 @@ pub fn scale_video(
     scale_factor: f64,
     algorithm: &str,
 ) -> Result<String, String> {
-    let filter = format!("scale=iw*{}:ih*{}:flags={}", scale_factor, scale_factor, algorithm);
+    let filter = format!(
+        "scale=iw*{}:ih*{}:flags={}",
+        scale_factor, scale_factor, algorithm
+    );
 
     let mut command = Command::new("ffmpeg");
     command
@@ -142,7 +144,10 @@ pub fn stabilize_video(
     output_file: &str,
     shakiness: u32,
 ) -> Result<String, String> {
-    let detect_filter = format!("vidstabdetect=shakiness={}:result=transforms.trf", shakiness);
+    let detect_filter = format!(
+        "vidstabdetect=shakiness={}:result=transforms.trf",
+        shakiness
+    );
     let transform_filter = "vidstabtransform=input=transforms.trf";
 
     let mut detect_command = Command::new("ffmpeg");
@@ -250,15 +255,38 @@ pub fn deinterlace_video(
 
 pub fn reverse_video(input_file: &str, output_file: &str) -> Result<String, String> {
     let mut command = Command::new("ffmpeg");
-    command.arg("-i").arg(input_file).arg("-vf").arg("reverse").arg("-af").arg("areverse").arg("-y").arg(output_file);
+    command
+        .arg("-i")
+        .arg(input_file)
+        .arg("-vf")
+        .arg("reverse")
+        .arg("-af")
+        .arg("areverse")
+        .arg("-y")
+        .arg(output_file);
     execute_ffmpeg_command(command)
 }
 
-pub fn loop_video(input_file: &str, output_file: &str, loop_count: i32, duration: f64) -> Result<String, String> {
+pub fn loop_video(
+    input_file: &str,
+    output_file: &str,
+    loop_count: i32,
+    duration: f64,
+) -> Result<String, String> {
     let vf = format!("loop=loop={}:size=32767:start=0", loop_count);
     let af = format!("aloop=loop={}:size=2147483647:start=0", loop_count);
     let mut command = Command::new("ffmpeg");
-    command.arg("-i").arg(input_file).arg("-vf").arg(vf).arg("-af").arg(af).arg("-t").arg(duration.to_string()).arg("-y").arg(output_file);
+    command
+        .arg("-i")
+        .arg(input_file)
+        .arg("-vf")
+        .arg(vf)
+        .arg("-af")
+        .arg(af)
+        .arg("-t")
+        .arg(duration.to_string())
+        .arg("-y")
+        .arg(output_file);
     execute_ffmpeg_command(command)
 }
 
@@ -267,21 +295,62 @@ pub fn loop_video(input_file: &str, output_file: &str, loop_count: i32, duration
 // ============================================================================
 
 /// Arbitrary-angle rotation via FFmpeg rotate filter (angle in radians). Unlike rotate_video (90°/180°/270° only), this rotates by any angle with configurable fill colour.
-pub fn apply_rotate_angle(input_file: &str, output_file: &str, angle_rad: f64, fillcolor: &str, expand: bool) -> Result<String, String> {
-    let fc = if fillcolor.is_empty() { "black" } else { fillcolor };
+pub fn apply_rotate_angle(
+    input_file: &str,
+    output_file: &str,
+    angle_rad: f64,
+    fillcolor: &str,
+    expand: bool,
+) -> Result<String, String> {
+    let fc = if fillcolor.is_empty() {
+        "black"
+    } else {
+        fillcolor
+    };
     let filter = if expand {
-        format!("rotate=angle={}:fillcolor={}:ow=rotw({}):oh=roth({})", angle_rad, fc, angle_rad, angle_rad)
+        format!(
+            "rotate=angle={}:fillcolor={}:ow=rotw({}):oh=roth({})",
+            angle_rad, fc, angle_rad, angle_rad
+        )
     } else {
         format!("rotate=angle={}:fillcolor={}:ow=iw:oh=ih", angle_rad, fc)
     };
     let mut command = Command::new("ffmpeg");
-    command.arg("-i").arg(input_file).arg("-vf").arg(filter).arg("-c:a").arg("copy").arg("-y").arg(output_file);
+    command
+        .arg("-i")
+        .arg(input_file)
+        .arg("-vf")
+        .arg(filter)
+        .arg("-c:a")
+        .arg("copy")
+        .arg("-y")
+        .arg(output_file);
     execute_ffmpeg_command(command)
 }
 
-pub fn deshake_video(input_file: &str, output_file: &str, x: i32, y: i32, w: i32, h: i32, rx: u32, ry: u32) -> Result<String, String> {
-    let filter = format!("deshake=x={}:y={}:w={}:h={}:rx={}:ry={}", x, y, w, h, rx, ry);
+pub fn deshake_video(
+    input_file: &str,
+    output_file: &str,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    rx: u32,
+    ry: u32,
+) -> Result<String, String> {
+    let filter = format!(
+        "deshake=x={}:y={}:w={}:h={}:rx={}:ry={}",
+        x, y, w, h, rx, ry
+    );
     let mut command = Command::new("ffmpeg");
-    command.arg("-i").arg(input_file).arg("-vf").arg(filter).arg("-c:a").arg("copy").arg("-y").arg(output_file);
+    command
+        .arg("-i")
+        .arg(input_file)
+        .arg("-vf")
+        .arg(filter)
+        .arg("-c:a")
+        .arg("copy")
+        .arg("-y")
+        .arg(output_file);
     execute_ffmpeg_command(command)
 }

@@ -56,13 +56,13 @@ pub struct PaymentRequiredResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PaymentRequirement {
-    pub scheme:    String,
-    pub network:   String,
+    pub scheme: String,
+    pub network: String,
     /// Max accepted amount, in atomic units (USDC has 6 decimals — $5 = 5_000_000).
     #[serde(rename = "maxAmountRequired")]
     pub max_amount_required: String,
     /// Resource being paid for (your URL).
-    pub resource:  String,
+    pub resource: String,
     /// Free-form description the wallet shows.
     pub description: String,
     /// Mime type of the eventual response.
@@ -70,25 +70,15 @@ pub struct PaymentRequirement {
     pub mime_type: String,
     /// Recipient wallet address (where USDC arrives).
     #[serde(rename = "payTo")]
-    pub pay_to:    String,
+    pub pay_to: String,
     /// How long the buyer has to sign + submit (seconds).
     #[serde(rename = "maxTimeoutSeconds")]
     pub max_timeout_seconds: i64,
     /// USDC contract address on the chosen network.
-    pub asset:     String,
+    pub asset: String,
     /// Optional EIP-712 domain extras. For USDC on Base this is
     /// `{"name":"USD Coin","version":"2"}` per the contract ABI.
-    pub extra:     serde_json::Value,
-}
-
-/// What the buyer's wallet POSTs back to us in `X-Payment` (base64-encoded).
-/// The facilitator parses this, verifies the signature, and submits.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PaymentPayload {
-    pub x402_version: u32,
-    pub scheme:       String,
-    pub network:      String,
-    pub payload:      serde_json::Value, // EIP-3009 authorization + sig
+    pub extra: serde_json::Value,
 }
 
 /// Build a 402 response for a fixed price.
@@ -110,23 +100,27 @@ pub fn build_payment_required(
     let network = std::env::var("X402_NETWORK").unwrap_or_else(|_| DEFAULT_NETWORK.to_string());
 
     let req = PaymentRequirement {
-        scheme:              SCHEME.to_string(),
-        network:             network.clone(),
+        scheme: SCHEME.to_string(),
+        network: network.clone(),
         max_amount_required: atomic.to_string(),
-        resource:            resource_url.to_string(),
-        description:         description.to_string(),
-        mime_type:           "application/json".to_string(),
-        pay_to:              recipient.to_string(),
+        resource: resource_url.to_string(),
+        description: description.to_string(),
+        mime_type: "application/json".to_string(),
+        pay_to: recipient.to_string(),
         max_timeout_seconds: PAYMENT_VALIDITY_SECONDS,
-        asset:               std::env::var("X402_ASSET_ADDRESS")
-                                .unwrap_or_else(|_| USDC_BASE_MAINNET.to_string()),
-        extra:               serde_json::json!({"name": "USD Coin", "version": "2"}),
+        asset: std::env::var("X402_ASSET_ADDRESS")
+            .unwrap_or_else(|_| USDC_BASE_MAINNET.to_string()),
+        extra: serde_json::json!({"name": "USD Coin", "version": "2"}),
     };
 
     PaymentRequiredResponse {
         x402_version: 1,
-        accepts:      vec![req],
-        error:        format!("Payment required: ${:.2} USDC on {}", price_usd_cents as f64 / 100.0, network),
+        accepts: vec![req],
+        error: format!(
+            "Payment required: ${:.2} USDC on {}",
+            price_usd_cents as f64 / 100.0,
+            network
+        ),
     }
 }
 
@@ -143,6 +137,7 @@ pub struct VerifyResponse {
     #[serde(rename = "txHash")]
     pub tx_hash: Option<String>,
     /// Sender address (lifted from the signed authorization).
+    #[allow(dead_code)]
     pub payer: Option<String>,
 }
 
@@ -174,6 +169,15 @@ pub async fn verify_payment(
 
     let facilitator_url = std::env::var("X402_FACILITATOR_URL")
         .unwrap_or_else(|_| "https://x402.org/facilitator".to_string());
+    let facilitator_token = std::env::var("X402_FACILITATOR_TOKEN")
+        .ok()
+        .filter(|value| !value.trim().is_empty());
+
+    if facilitator_url == "https://x402.org/facilitator" && requirements.network == "base" {
+        return Err(
+            "Production Base payments require a mainnet facilitator. Configure X402_FACILITATOR_URL and X402_FACILITATOR_TOKEN for the Coinbase CDP facilitator instead of the free x402.org test facilitator.".to_string()
+        );
+    }
 
     let body = serde_json::json!({
         "x402Version":         1,
@@ -190,15 +194,21 @@ pub async fn verify_payment(
     // submits on-chain. Coinbase's facilitator exposes both at /verify and
     // /settle; for public x402.org, /settle does both in one call. We use
     // /settle so a buyer's payment is final by the time we return 200.
-    let resp = client
-        .post(format!("{}/settle", facilitator_url))
-        .json(&body)
+    let mut request = client.post(format!("{}/settle", facilitator_url)).json(&body);
+    if let Some(token) = facilitator_token {
+        request = request.bearer_auth(token);
+    }
+
+    let resp = request
         .send()
         .await
         .map_err(|e| format!("Facilitator request failed: {}", e))?;
 
     let status = resp.status();
-    let raw    = resp.text().await.map_err(|e| format!("Facilitator response read failed: {}", e))?;
+    let raw = resp
+        .text()
+        .await
+        .map_err(|e| format!("Facilitator response read failed: {}", e))?;
 
     if !status.is_success() {
         return Err(format!("Facilitator HTTP {}: {}", status, raw));
@@ -217,7 +227,10 @@ pub async fn settle_or_reject(
 ) -> Result<String, String> {
     let res = verify_payment(x_payment_header_b64, requirements).await?;
     if !res.is_valid {
-        return Err(res.invalid_reason.unwrap_or_else(|| "Payment rejected by facilitator".to_string()));
+        return Err(res
+            .invalid_reason
+            .unwrap_or_else(|| "Payment rejected by facilitator".to_string()));
     }
-    res.tx_hash.ok_or_else(|| "Facilitator returned no tx_hash despite isValid=true".to_string())
+    res.tx_hash
+        .ok_or_else(|| "Facilitator returned no tx_hash despite isValid=true".to_string())
 }

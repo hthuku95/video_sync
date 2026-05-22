@@ -31,6 +31,9 @@ pub struct WorkerConfig {
 
     /// Initial backoff duration in seconds when quota is exhausted (default: 120)
     pub quota_pause_secs: u64,
+
+    /// Minutes before an unclaimed pending job is considered stale enough to discard (default: 1440 = 24h)
+    pub stale_pending_discard_mins: u64,
 }
 
 impl WorkerConfig {
@@ -76,6 +79,11 @@ impl WorkerConfig {
             .and_then(|v| v.parse().ok())
             .unwrap_or(120);
 
+        let stale_pending_discard_mins = env::var("CLIPPING_STALE_PENDING_DISCARD_MINS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(1440);
+
         // Generate unique worker ID: hostname-pid-timestamp
         let worker_id = format!(
             "{}-{}-{}",
@@ -97,6 +105,7 @@ impl WorkerConfig {
             stuck_posting_mins,
             max_retries,
             quota_pause_secs,
+            stale_pending_discard_mins,
         }
     }
 
@@ -108,7 +117,7 @@ impl WorkerConfig {
 
         if self.concurrency > 10 {
             return Err(
-                "CLIPPING_WORKER_CONCURRENCY must not exceed 10 (resource protection)".to_string()
+                "CLIPPING_WORKER_CONCURRENCY must not exceed 10 (resource protection)".to_string(),
             );
         }
 
@@ -120,6 +129,12 @@ impl WorkerConfig {
             tracing::warn!(
                 "CLIPPING_WORKER_POLL_INTERVAL is {}s (>5 minutes). Jobs may be delayed.",
                 self.poll_interval_secs
+            );
+        }
+
+        if self.stale_pending_discard_mins < 60 {
+            return Err(
+                "CLIPPING_STALE_PENDING_DISCARD_MINS must be at least 60 minutes".to_string(),
             );
         }
 
@@ -167,6 +182,7 @@ mod tests {
             stuck_posting_mins: 30,
             max_retries: 10,
             quota_pause_secs: 120,
+            stale_pending_discard_mins: 1440,
         };
 
         assert!(config.validate().is_ok());
@@ -196,6 +212,7 @@ mod tests {
             stuck_posting_mins: 30,
             max_retries: 10,
             quota_pause_secs: 120,
+            stale_pending_discard_mins: 1440,
         };
 
         // 5 (API) + 3 (workers) + 2 (buffer) = 10

@@ -45,12 +45,6 @@ pub struct ToggleActiveRequest {
     pub is_active: bool,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct WhitelistStatusResponse {
-    pub enabled: bool,
-    pub total_emails: i64,
-}
-
 impl From<WhitelistEmail> for WhitelistEmailResponse {
     fn from(whitelist: WhitelistEmail) -> Self {
         WhitelistEmailResponse {
@@ -70,19 +64,11 @@ impl SystemSetting {
                 "false" => Ok(false),
                 _ => Err(format!("Invalid boolean value: {}", self.setting_value)),
             },
-            _ => Err(format!("Setting {} is not a boolean type", self.setting_key)),
+            _ => Err(format!(
+                "Setting {} is not a boolean type",
+                self.setting_key
+            )),
         }
     }
 
-    pub fn as_string(&self) -> String {
-        self.setting_value.clone()
-    }
-
-    pub fn as_integer(&self) -> Result<i64, String> {
-        match self.setting_type.as_str() {
-            "integer" => self.setting_value.parse::<i64>()
-                .map_err(|_| format!("Invalid integer value: {}", self.setting_value)),
-            _ => Err(format!("Setting {} is not an integer type", self.setting_key)),
-        }
-    }
 }

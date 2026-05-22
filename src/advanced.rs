@@ -1,6 +1,5 @@
 // src/advanced.rs
 
-
 use crate::utils::execute_ffmpeg_command;
 use std::process::Command;
 
@@ -11,7 +10,10 @@ pub fn picture_in_picture(
     x: &str,
     y: &str,
 ) -> Result<String, String> {
-    let filter = format!("[1:v]scale=iw/4:ih/4 [pip]; [0:v][pip]overlay=x={}:y={}", x, y);
+    let filter = format!(
+        "[1:v]scale=iw/4:ih/4 [pip]; [0:v][pip]overlay=x={}:y={}",
+        x, y
+    );
 
     let mut command = Command::new("ffmpeg");
     command

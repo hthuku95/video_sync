@@ -117,15 +117,16 @@ impl YouTubeClient {
     }
 
     /// List user's YouTube channels using OAuth access token
-    pub async fn list_channels(&self, access_token: &str) -> Result<Vec<YouTubeChannel>, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn list_channels(
+        &self,
+        access_token: &str,
+    ) -> Result<Vec<YouTubeChannel>, Box<dyn std::error::Error + Send + Sync>> {
         let url = "https://www.googleapis.com/youtube/v3/channels";
 
-        let response = self.client
+        let response = self
+            .client
             .get(url)
-            .query(&[
-                ("part", "snippet,statistics"),
-                ("mine", "true"),
-            ])
+            .query(&[("part", "snippet,statistics"), ("mine", "true")])
             .header("Authorization", format!("Bearer {}", access_token))
             .send()
             .await?;
@@ -137,30 +138,38 @@ impl YouTubeClient {
 
         let channel_response: ChannelListResponse = response.json().await?;
 
-        Ok(channel_response.items.into_iter().map(|item| {
-            let thumbnail_url = item.snippet.thumbnails
-                .and_then(|t| t.high.or(t.medium).or(t.default))
-                .map(|t| t.url);
+        Ok(channel_response
+            .items
+            .into_iter()
+            .map(|item| {
+                let thumbnail_url = item
+                    .snippet
+                    .thumbnails
+                    .and_then(|t| t.high.or(t.medium).or(t.default))
+                    .map(|t| t.url);
 
-            let subscriber_count = item.statistics
-                .as_ref()
-                .and_then(|s| s.subscriber_count.as_ref())
-                .and_then(|c| c.parse().ok());
+                let subscriber_count = item
+                    .statistics
+                    .as_ref()
+                    .and_then(|s| s.subscriber_count.as_ref())
+                    .and_then(|c| c.parse().ok());
 
-            let video_count = item.statistics
-                .as_ref()
-                .and_then(|s| s.video_count.as_ref())
-                .and_then(|c| c.parse().ok());
+                let video_count = item
+                    .statistics
+                    .as_ref()
+                    .and_then(|s| s.video_count.as_ref())
+                    .and_then(|c| c.parse().ok());
 
-            YouTubeChannel {
-                id: item.id,
-                title: item.snippet.title,
-                description: item.snippet.description,
-                thumbnail_url,
-                subscriber_count,
-                video_count,
-            }
-        }).collect())
+                YouTubeChannel {
+                    id: item.id,
+                    title: item.snippet.title,
+                    description: item.snippet.description,
+                    thumbnail_url,
+                    subscriber_count,
+                    video_count,
+                }
+            })
+            .collect())
     }
 
     /// Upload video to YouTube
@@ -176,7 +185,9 @@ impl YouTubeClient {
     ) -> Result<VideoUploadResponse, Box<dyn std::error::Error + Send + Sync>> {
         // Validate privacy status
         if !["public", "private", "unlisted"].contains(&privacy_status) {
-            return Err("Invalid privacy status. Must be 'public', 'private', or 'unlisted'".into());
+            return Err(
+                "Invalid privacy status. Must be 'public', 'private', or 'unlisted'".into(),
+            );
         }
 
         // Read video file
@@ -206,24 +217,22 @@ impl YouTubeClient {
             .part(
                 "snippet",
                 reqwest::multipart::Part::text(metadata_json.clone())
-                    .mime_str("application/json")?
+                    .mime_str("application/json")?,
             )
             .part(
                 "media",
                 reqwest::multipart::Part::bytes(video_data)
                     .file_name(file_name.to_string())
-                    .mime_str("video/*")?
+                    .mime_str("video/*")?,
             );
 
         // Upload using resumable upload endpoint
         let upload_url = "https://www.googleapis.com/upload/youtube/v3/videos";
 
-        let response = self.client
+        let response = self
+            .client
             .post(upload_url)
-            .query(&[
-                ("part", "snippet,status"),
-                ("uploadType", "multipart"),
-            ])
+            .query(&[("part", "snippet,status"), ("uploadType", "multipart")])
             .header("Authorization", format!("Bearer {}", access_token))
             .multipart(form)
             .send()
@@ -237,7 +246,11 @@ impl YouTubeClient {
 
         let upload_response: VideoUploadResponse = response.json().await?;
 
-        tracing::info!("✅ Video uploaded to YouTube: {} (ID: {})", upload_response.snippet.title, upload_response.id);
+        tracing::info!(
+            "✅ Video uploaded to YouTube: {} (ID: {})",
+            upload_response.snippet.title,
+            upload_response.id
+        );
 
         Ok(upload_response)
     }
@@ -258,11 +271,7 @@ impl YouTubeClient {
             "grant_type": "refresh_token"
         });
 
-        let response = self.client
-            .post(url)
-            .json(&params)
-            .send()
-            .await?;
+        let response = self.client.post(url).json(&params).send().await?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -276,19 +285,22 @@ impl YouTubeClient {
             );
 
             // Try to parse error JSON to extract specific error reason
-            let error_reason = if let Ok(error_json) = serde_json::from_str::<serde_json::Value>(&error_text) {
-                if let Some(error) = error_json.get("error").and_then(|e| e.as_str()) {
-                    tracing::error!("🔍 Google OAuth Error Code: {}", error);
-                    Some(error.to_string())
-                } else if let Some(error_description) = error_json.get("error_description").and_then(|e| e.as_str()) {
-                    tracing::error!("🔍 Google OAuth Error Description: {}", error_description);
-                    Some(error_description.to_string())
+            let error_reason =
+                if let Ok(error_json) = serde_json::from_str::<serde_json::Value>(&error_text) {
+                    if let Some(error) = error_json.get("error").and_then(|e| e.as_str()) {
+                        tracing::error!("🔍 Google OAuth Error Code: {}", error);
+                        Some(error.to_string())
+                    } else if let Some(error_description) =
+                        error_json.get("error_description").and_then(|e| e.as_str())
+                    {
+                        tracing::error!("🔍 Google OAuth Error Description: {}", error_description);
+                        Some(error_description.to_string())
+                    } else {
+                        None
+                    }
                 } else {
                     None
-                }
-            } else {
-                None
-            };
+                };
 
             // Return error with specific reason if available
             let error_message = if let Some(reason) = error_reason {
@@ -551,7 +563,10 @@ impl YouTubeClient {
         image_data: Vec<u8>,
         content_type: &str,
     ) -> Result<ThumbnailUploadResponse, Box<dyn std::error::Error + Send + Sync>> {
-        let url = format!("https://www.googleapis.com/upload/youtube/v3/thumbnails/set?videoId={}", video_id);
+        let url = format!(
+            "https://www.googleapis.com/upload/youtube/v3/thumbnails/set?videoId={}",
+            video_id
+        );
 
         tracing::info!("🖼️ Uploading custom thumbnail for video: {}", video_id);
 
@@ -566,7 +581,11 @@ impl YouTubeClient {
 
         if !response.status().is_success() {
             let error_text = response.text().await?;
-            tracing::error!("❌ Failed to upload thumbnail for {}: {}", video_id, error_text);
+            tracing::error!(
+                "❌ Failed to upload thumbnail for {}: {}",
+                video_id,
+                error_text
+            );
             return Err(format!("Failed to upload thumbnail: {}", error_text).into());
         }
 
@@ -621,7 +640,11 @@ impl YouTubeClient {
         }
 
         let playlist_response: PlaylistResponse = response.json().await?;
-        tracing::info!("✅ Playlist created: {} (ID: {})", title, playlist_response.id);
+        tracing::info!(
+            "✅ Playlist created: {} (ID: {})",
+            title,
+            playlist_response.id
+        );
 
         Ok(playlist_response)
     }
@@ -723,7 +746,11 @@ impl YouTubeClient {
 
         if !response.status().is_success() {
             let error_text = response.text().await?;
-            tracing::error!("❌ Failed to delete playlist {}: {}", playlist_id, error_text);
+            tracing::error!(
+                "❌ Failed to delete playlist {}: {}",
+                playlist_id,
+                error_text
+            );
             return Err(format!("Failed to delete playlist: {}", error_text).into());
         }
 
@@ -864,7 +891,7 @@ impl YouTubeClient {
         let mut query_params = vec![
             ("part", "snippet".to_string()),
             ("q", query.to_string()),
-            ("type", "channel".to_string()),  // Search for channels instead of videos
+            ("type", "channel".to_string()), // Search for channels instead of videos
             ("maxResults", max_results.to_string()),
         ];
 
@@ -916,12 +943,7 @@ impl YouTubeClient {
             query_params.push(("videoCategoryId", category.to_string()));
         }
 
-        let response = self
-            .client
-            .get(url)
-            .query(&query_params)
-            .send()
-            .await?;
+        let response = self.client.get(url).query(&query_params).send().await?;
 
         if !response.status().is_success() {
             let error_text = response.text().await?;
@@ -1019,8 +1041,13 @@ impl YouTubeClient {
                     description: item.snippet.description.clone(),
                     channel_id: item.snippet.channel_id.clone(),
                     channel_title: item.snippet.channel_title.clone(),
-                    thumbnails: serde_json::to_value(&item.snippet.thumbnails).unwrap_or(serde_json::json!({})),
-                    published_at: item.content_details.video_published_at.clone().unwrap_or_else(|| item.snippet.published_at.clone()),
+                    thumbnails: serde_json::to_value(&item.snippet.thumbnails)
+                        .unwrap_or(serde_json::json!({})),
+                    published_at: item
+                        .content_details
+                        .video_published_at
+                        .clone()
+                        .unwrap_or_else(|| item.snippet.published_at.clone()),
                 },
             })
             .collect();
@@ -1044,10 +1071,7 @@ impl YouTubeClient {
         let response = self
             .client
             .get(url)
-            .query(&[
-                ("part", "statistics,snippet"),
-                ("id", video_id),
-            ])
+            .query(&[("part", "statistics,snippet"), ("id", video_id)])
             .header("Authorization", format!("Bearer {}", access_token))
             .send()
             .await?;
@@ -1083,7 +1107,7 @@ impl YouTubeClient {
                 ("part", "snippet,replies"),
                 ("videoId", video_id),
                 ("maxResults", &max_results.to_string()),
-                ("order", "time"),  // Most recent first
+                ("order", "time"), // Most recent first
             ])
             .header("Authorization", format!("Bearer {}", access_token))
             .send()
@@ -1176,10 +1200,7 @@ impl YouTubeClient {
         let response = self
             .client
             .get(url)
-            .query(&[
-                ("part", "snippet"),
-                ("videoId", video_id),
-            ])
+            .query(&[("part", "snippet"), ("videoId", video_id)])
             .header("Authorization", format!("Bearer {}", access_token))
             .send()
             .await?;
@@ -1206,7 +1227,12 @@ impl YouTubeClient {
     ) -> Result<CaptionResponse, Box<dyn std::error::Error + Send + Sync>> {
         let url = "https://www.googleapis.com/upload/youtube/v3/captions";
 
-        tracing::info!("📄 Uploading caption for video {}: {} ({})", video_id, name, language);
+        tracing::info!(
+            "📄 Uploading caption for video {}: {} ({})",
+            video_id,
+            name,
+            language
+        );
 
         let metadata = json!({
             "snippet": {
@@ -1222,8 +1248,7 @@ impl YouTubeClient {
         let form = reqwest::multipart::Form::new()
             .part(
                 "snippet",
-                reqwest::multipart::Part::text(metadata_json)
-                    .mime_str("application/json")?,
+                reqwest::multipart::Part::text(metadata_json).mime_str("application/json")?,
             )
             .part(
                 "media",
@@ -1235,10 +1260,7 @@ impl YouTubeClient {
         let response = self
             .client
             .post(url)
-            .query(&[
-                ("part", "snippet"),
-                ("uploadType", "multipart"),
-            ])
+            .query(&[("part", "snippet"), ("uploadType", "multipart")])
             .header("Authorization", format!("Bearer {}", access_token))
             .multipart(form)
             .send()
@@ -1305,7 +1327,11 @@ impl YouTubeClient {
     ) -> Result<ResumableUploadSessionResponse, Box<dyn std::error::Error + Send + Sync>> {
         let url = "https://www.googleapis.com/upload/youtube/v3/videos";
 
-        tracing::info!("🎬 Initiating resumable upload: {} ({} bytes)", title, file_size);
+        tracing::info!(
+            "🎬 Initiating resumable upload: {} ({} bytes)",
+            title,
+            file_size
+        );
 
         let metadata = json!({
             "snippet": {
@@ -1322,10 +1348,7 @@ impl YouTubeClient {
         let response = self
             .client
             .post(url)
-            .query(&[
-                ("uploadType", "resumable"),
-                ("part", "snippet,status"),
-            ])
+            .query(&[("uploadType", "resumable"), ("part", "snippet,status")])
             .header("Authorization", format!("Bearer {}", access_token))
             .header("Content-Type", "application/json")
             .header("X-Upload-Content-Length", file_size.to_string())
@@ -1369,7 +1392,12 @@ impl YouTubeClient {
         end_byte: i64,
         total_bytes: i64,
     ) -> Result<ResumableChunkResponse, Box<dyn std::error::Error + Send + Sync>> {
-        tracing::debug!("📤 Uploading chunk: bytes {}-{}/{}", start_byte, end_byte, total_bytes);
+        tracing::debug!(
+            "📤 Uploading chunk: bytes {}-{}/{}",
+            start_byte,
+            end_byte,
+            total_bytes
+        );
 
         let content_range = format!("bytes {}-{}/{}", start_byte, end_byte, total_bytes);
 
@@ -1434,18 +1462,24 @@ impl YouTubeClient {
         let file_metadata = tokio::fs::metadata(video_path).await?;
         let file_size = file_metadata.len() as i64;
 
-        tracing::info!("📤 Starting resumable upload: {} ({} bytes)", title, file_size);
+        tracing::info!(
+            "📤 Starting resumable upload: {} ({} bytes)",
+            title,
+            file_size
+        );
 
         // Step 1: Initiate resumable upload session
-        let session = self.initiate_resumable_upload(
-            access_token,
-            title,
-            description,
-            privacy_status,
-            category_id,
-            tags,
-            file_size,
-        ).await?;
+        let session = self
+            .initiate_resumable_upload(
+                access_token,
+                title,
+                description,
+                privacy_status,
+                category_id,
+                tags,
+                file_size,
+            )
+            .await?;
 
         // Step 2: Read file in chunks and upload
         let chunk_size = 8 * 1024 * 1024; // 8MB chunks (optimal per YouTube API docs)
@@ -1466,28 +1500,36 @@ impl YouTubeClient {
             let start_byte = bytes_uploaded;
             let end_byte = start_byte + bytes_read as i64 - 1;
 
-            tracing::debug!("📤 Uploading chunk: bytes {}-{}/{} ({:.1}%)",
-                start_byte, end_byte, file_size,
-                (end_byte as f64 / file_size as f64) * 100.0
-            );
-
-            let chunk_result = self.upload_resumable_chunk(
-                &session.session_url,
-                chunk_data,
+            tracing::debug!(
+                "📤 Uploading chunk: bytes {}-{}/{} ({:.1}%)",
                 start_byte,
                 end_byte,
                 file_size,
-            ).await?;
+                (end_byte as f64 / file_size as f64) * 100.0
+            );
+
+            let chunk_result = self
+                .upload_resumable_chunk(
+                    &session.session_url,
+                    chunk_data,
+                    start_byte,
+                    end_byte,
+                    file_size,
+                )
+                .await?;
 
             bytes_uploaded = end_byte + 1;
 
             if chunk_result.complete {
                 // Upload finished!
-                let video_response = chunk_result.video_response
+                let video_response = chunk_result
+                    .video_response
                     .ok_or("Upload completed but no video response received")?;
 
-                tracing::info!("✅ Resumable upload complete: {} (ID: {})",
-                    title, video_response.id
+                tracing::info!(
+                    "✅ Resumable upload complete: {} (ID: {})",
+                    title,
+                    video_response.id
                 );
 
                 return Ok(VideoUploadResponse {
@@ -1508,6 +1550,7 @@ impl YouTubeClient {
 pub struct TokenRefreshResponse {
     pub access_token: String,
     pub expires_in: i64,
+    #[allow(dead_code)]
     pub token_type: String,
     /// Google may return a new refresh token during refresh (token rotation)
     /// If present, this MUST replace the old refresh token in storage
@@ -1559,11 +1602,7 @@ pub async fn exchange_code_for_token(
         "grant_type": "authorization_code"
     });
 
-    let response = client
-        .post(url)
-        .json(&params)
-        .send()
-        .await?;
+    let response = client.post(url).json(&params).send().await?;
 
     if !response.status().is_success() {
         let error_text = response.text().await?;
@@ -1579,7 +1618,6 @@ pub struct GoogleTokenResponse {
     pub access_token: String,
     pub refresh_token: Option<String>,
     pub expires_in: i64,
-    pub token_type: String,
     pub scope: String,
 }
 
@@ -1611,6 +1649,7 @@ pub struct GoogleUserInfo {
     pub email: String,
     pub name: String,
     pub picture: Option<String>,
+    #[allow(dead_code)]
     pub verified_email: bool,
 }
 

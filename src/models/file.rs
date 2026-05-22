@@ -22,7 +22,7 @@ pub struct FileUploadResponse {
     pub original_name: String,
     pub stored_name: String,
     pub path: String,
-    pub file_size: i64,  // Changed from 'size' to match frontend expectations
+    pub file_size: i64, // Changed from 'size' to match frontend expectations
     pub file_type: String,
     pub status: String,
 }
@@ -57,17 +57,23 @@ pub struct OutputVideo {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct OutputVideoResponse {
-    pub id: i32,
-    pub file_name: String,
-    pub file_size: i64,
-    pub duration_seconds: Option<f64>,
-    pub width: Option<i32>,
-    pub height: Option<i32>,
-    pub operation_type: String,
-    pub tool_used: String,
-    pub download_url: String,
-    pub stream_url: String,
-    pub created_at: String,
+#[derive(Debug, Serialize, Deserialize, FromRow, Clone)]
+pub struct GeneratedArtifact {
+    pub artifact_id: uuid::Uuid,
+    pub workflow_id: Option<uuid::Uuid>,
+    pub session_uuid: Option<String>,
+    pub kind: String,
+    pub storage_backend: String,
+    pub storage_key: String,
+    pub file_path: Option<String>,
+    pub legacy_file_id: Option<String>,
+    pub public_url: Option<String>,
+    pub preview_url: Option<String>,
+    pub mime_type: Option<String>,
+    pub bytes: Option<i64>,
+    pub checksum: Option<String>,
+    pub source_table: Option<String>,
+    pub source_record_key: Option<String>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
 }

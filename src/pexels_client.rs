@@ -114,7 +114,7 @@ impl PexelsClient {
     ) -> Result<PexelsVideoResponse, Box<dyn std::error::Error + Send + Sync>> {
         let mut params = HashMap::new();
         params.insert("query", query.to_string());
-        
+
         if let Some(pp) = per_page {
             params.insert("per_page", pp.to_string());
         }
@@ -134,9 +134,14 @@ impl PexelsClient {
             params.insert("max_duration", maxd.to_string());
         }
 
-        info!("🎬 Searching Pexels for videos: '{}' with {} results per page", query, per_page.unwrap_or(15));
+        info!(
+            "🎬 Searching Pexels for videos: '{}' with {} results per page",
+            query,
+            per_page.unwrap_or(15)
+        );
 
-        let response = self.client
+        let response = self
+            .client
             .get(&format!("{}/videos/search", self.base_url))
             .header("Authorization", &self.api_key)
             .query(&params)
@@ -150,8 +155,12 @@ impl PexelsClient {
         }
 
         let videos = response.json::<PexelsVideoResponse>().await?;
-        info!("✅ Found {} videos for query: '{}'", videos.videos.len(), query);
-        
+        info!(
+            "✅ Found {} videos for query: '{}'",
+            videos.videos.len(),
+            query
+        );
+
         Ok(videos)
     }
 
@@ -161,13 +170,13 @@ impl PexelsClient {
         query: &str,
         per_page: Option<i32>,
         page: Option<i32>,
-        size: Option<&str>, // "large", "medium", "small"
-        color: Option<&str>, // "red", "orange", "yellow", etc.
+        size: Option<&str>,        // "large", "medium", "small"
+        color: Option<&str>,       // "red", "orange", "yellow", etc.
         orientation: Option<&str>, // "landscape", "portrait", "square"
     ) -> Result<PexelsPhotoResponse, Box<dyn std::error::Error + Send + Sync>> {
         let mut params = HashMap::new();
         params.insert("query", query.to_string());
-        
+
         if let Some(pp) = per_page {
             params.insert("per_page", pp.to_string());
         }
@@ -184,9 +193,14 @@ impl PexelsClient {
             params.insert("orientation", o.to_string());
         }
 
-        info!("📸 Searching Pexels for photos: '{}' with {} results per page", query, per_page.unwrap_or(15));
+        info!(
+            "📸 Searching Pexels for photos: '{}' with {} results per page",
+            query,
+            per_page.unwrap_or(15)
+        );
 
-        let response = self.client
+        let response = self
+            .client
             .get(&format!("{}/v1/search", self.base_url))
             .header("Authorization", &self.api_key)
             .query(&params)
@@ -200,8 +214,12 @@ impl PexelsClient {
         }
 
         let photos = response.json::<PexelsPhotoResponse>().await?;
-        info!("✅ Found {} photos for query: '{}'", photos.photos.len(), query);
-        
+        info!(
+            "✅ Found {} photos for query: '{}'",
+            photos.photos.len(),
+            query
+        );
+
         Ok(photos)
     }
 
@@ -211,10 +229,16 @@ impl PexelsClient {
         video_file: &PexelsVideoFile,
         download_path: &str,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        info!("⬇️ Downloading video: {} ({}x{} - {})", video_file.link, 
-              video_file.width.unwrap_or(0), video_file.height.unwrap_or(0), video_file.quality);
+        info!(
+            "⬇️ Downloading video: {} ({}x{} - {})",
+            video_file.link,
+            video_file.width.unwrap_or(0),
+            video_file.height.unwrap_or(0),
+            video_file.quality
+        );
 
-        let response = self.client
+        let response = self
+            .client
             .get(&video_file.link)
             .header("Authorization", &self.api_key)
             .send()
@@ -225,7 +249,7 @@ impl PexelsClient {
         }
 
         let bytes = response.bytes().await?;
-        
+
         // Ensure directory exists
         if let Some(parent) = std::path::Path::new(download_path).parent() {
             fs::create_dir_all(parent).await?;
@@ -257,9 +281,13 @@ impl PexelsClient {
             _ => &photo.src.large, // default
         };
 
-        info!("⬇️ Downloading photo: {} ({}x{} - {})", image_url, photo.width, photo.height, size);
+        info!(
+            "⬇️ Downloading photo: {} ({}x{} - {})",
+            image_url, photo.width, photo.height, size
+        );
 
-        let response = self.client
+        let response = self
+            .client
             .get(image_url)
             .header("Authorization", &self.api_key)
             .send()
@@ -270,7 +298,7 @@ impl PexelsClient {
         }
 
         let bytes = response.bytes().await?;
-        
+
         // Ensure directory exists
         if let Some(parent) = std::path::Path::new(download_path).parent() {
             fs::create_dir_all(parent).await?;
@@ -291,7 +319,7 @@ impl PexelsClient {
         page: Option<i32>,
     ) -> Result<PexelsVideoResponse, Box<dyn std::error::Error + Send + Sync>> {
         let mut params = HashMap::new();
-        
+
         if let Some(pp) = per_page {
             params.insert("per_page", pp.to_string());
         }
@@ -301,7 +329,8 @@ impl PexelsClient {
 
         info!("🔥 Fetching trending videos from Pexels");
 
-        let response = self.client
+        let response = self
+            .client
             .get(&format!("{}/videos/popular", self.base_url))
             .header("Authorization", &self.api_key)
             .query(&params)
@@ -315,7 +344,7 @@ impl PexelsClient {
 
         let videos = response.json::<PexelsVideoResponse>().await?;
         info!("✅ Found {} trending videos", videos.videos.len());
-        
+
         Ok(videos)
     }
 
@@ -326,7 +355,7 @@ impl PexelsClient {
         page: Option<i32>,
     ) -> Result<PexelsPhotoResponse, Box<dyn std::error::Error + Send + Sync>> {
         let mut params = HashMap::new();
-        
+
         if let Some(pp) = per_page {
             params.insert("per_page", pp.to_string());
         }
@@ -336,7 +365,8 @@ impl PexelsClient {
 
         info!("🎨 Fetching curated photos from Pexels");
 
-        let response = self.client
+        let response = self
+            .client
             .get(&format!("{}/v1/curated", self.base_url))
             .header("Authorization", &self.api_key)
             .query(&params)
@@ -350,7 +380,7 @@ impl PexelsClient {
 
         let photos = response.json::<PexelsPhotoResponse>().await?;
         info!("✅ Found {} curated photos", photos.photos.len());
-        
+
         Ok(photos)
     }
 }

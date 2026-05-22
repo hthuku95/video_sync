@@ -9,12 +9,7 @@
 //   - Write output to outputs/<job_id>.<ext>
 //   - Return a download URL via the existing /api/outputs/download/:file_id route
 
-use axum::{
-    extract::Extension,
-    http::StatusCode,
-    routing::post,
-    Json, Router,
-};
+use axum::{extract::Extension, http::StatusCode, routing::post, Json, Router};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use uuid::Uuid;
@@ -29,6 +24,14 @@ pub struct ToolResult {
     pub message: String,
     pub output_file_id: Option<String>,
     pub download_url: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct WorkflowStartResult {
+    pub success: bool,
+    pub message: String,
+    pub workflow_id: Option<String>,
+    pub status_url: Option<String>,
 }
 
 impl ToolResult {
@@ -88,9 +91,15 @@ pub struct StabilizeRequest {
     pub zoom: f64,
 }
 
-fn default_shakiness() -> u32 { 5 }
-fn default_accuracy() -> u32 { 10 }
-fn default_smoothing() -> u32 { 10 }
+fn default_shakiness() -> u32 {
+    5
+}
+fn default_accuracy() -> u32 {
+    10
+}
+fn default_smoothing() -> u32 {
+    10
+}
 
 pub async fn stabilize_video(
     Extension(_state): Extension<Arc<AppState>>,
@@ -103,9 +112,14 @@ pub async fn stabilize_video(
     let accuracy = req.accuracy.clamp(1, 15);
     let smoothing = req.smoothing.clamp(1, 100);
 
-    match crate::visual::stabilize_video_2pass(&input, &output, shakiness, accuracy, smoothing, req.zoom) {
+    match crate::visual::stabilize_video_2pass(
+        &input, &output, shakiness, accuracy, smoothing, req.zoom,
+    ) {
         Ok(msg) => Ok(Json(ToolResult::ok(msg, &file_id))),
-        Err(e) => Ok(Json(ToolResult::err(format!("Stabilization failed: {}", e)))),
+        Err(e) => Ok(Json(ToolResult::err(format!(
+            "Stabilization failed: {}",
+            e
+        )))),
     }
 }
 
@@ -160,9 +174,15 @@ pub struct AudioVisualizeRequest {
     pub height: u32,
 }
 
-fn default_viz_mode() -> String { "waveform".into() }
-fn default_viz_width() -> u32 { 1280 }
-fn default_viz_height() -> u32 { 400 }
+fn default_viz_mode() -> String {
+    "waveform".into()
+}
+fn default_viz_width() -> u32 {
+    1280
+}
+fn default_viz_height() -> u32 {
+    400
+}
 
 pub async fn visualize_audio(
     Extension(_state): Extension<Arc<AppState>>,
@@ -172,17 +192,29 @@ pub async fn visualize_audio(
     let (file_id, output) = output_path("mp4");
 
     let result = if req.mode == "spectrum" {
-        crate::audio::measure_audio_spectrum(&input, &output, req.width, req.height, "combined", "intensity")
+        crate::audio::measure_audio_spectrum(
+            &input,
+            &output,
+            req.width,
+            req.height,
+            "combined",
+            "intensity",
+        )
     } else if req.mode == "cqt" {
         crate::audio::visualize_cqt(&input, &output, req.width, req.height, 20, 30)
     } else {
         // default: waveform video
-        crate::audio::generate_waveform_video(&input, &output, req.width, req.height, "cwave", "0xFFFFFF")
+        crate::audio::generate_waveform_video(
+            &input, &output, req.width, req.height, "cwave", "0xFFFFFF",
+        )
     };
 
     match result {
         Ok(msg) => Ok(Json(ToolResult::ok(msg, &file_id))),
-        Err(e) => Ok(Json(ToolResult::err(format!("Visualization failed: {}", e)))),
+        Err(e) => Ok(Json(ToolResult::err(format!(
+            "Visualization failed: {}",
+            e
+        )))),
     }
 }
 
@@ -204,9 +236,15 @@ pub struct WorkflowRequest {
     pub gif_fps: f64,
 }
 
-fn default_duration() -> f64 { 5.0 }
-fn default_gif_width() -> u32 { 480 }
-fn default_gif_fps() -> f64 { 15.0 }
+fn default_duration() -> f64 {
+    5.0
+}
+fn default_gif_width() -> u32 {
+    480
+}
+fn default_gif_fps() -> f64 {
+    15.0
+}
 
 pub async fn run_workflow(
     Extension(_state): Extension<Arc<AppState>>,
@@ -252,6 +290,41 @@ pub async fn run_workflow(
     }
 }
 
+// ─── Long-form video generation ──────────────────────────────────────────────
+
+pub async fn start_long_form_video(
+    Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<crate::models::auth::Claims>,
+    Json(mut req): Json<crate::services::LongFormVideoRequest>,
+) -> Result<Json<WorkflowStartResult>, StatusCode> {
+    if req.user_id.is_none() {
+        req.user_id = claims.sub.parse::<i32>().ok();
+    }
+    if req.idempotency_key.is_none() {
+        req.idempotency_key = Some(format!(
+            "long-form:{}:{}:{:.0}",
+            req.user_id.unwrap_or_default(),
+            req.title.trim().to_lowercase(),
+            req.target_duration_seconds
+        ));
+    }
+
+    match crate::services::LongFormVideoWorkflow::start(state, req).await {
+        Ok(workflow_id) => Ok(Json(WorkflowStartResult {
+            success: true,
+            message: "Long-form video workflow started. The agent will plan, render, narrate, review, and assemble bounded segments.".to_string(),
+            workflow_id: Some(workflow_id.to_string()),
+            status_url: Some(format!("/api/workflows/{workflow_id}/status")),
+        })),
+        Err(error) => Ok(Json(WorkflowStartResult {
+            success: false,
+            message: error,
+            workflow_id: None,
+            status_url: None,
+        })),
+    }
+}
+
 // ─── Router ───────────────────────────────────────────────────────────────────
 
 pub fn tools_routes() -> Router {
@@ -264,6 +337,11 @@ pub fn tools_routes() -> Router {
         .route("/api/tools/convert", post(convert_format))
         .route("/api/tools/visualize-audio", post(visualize_audio))
         .route("/api/tools/workflow", post(run_workflow))
-        .layer(axum::middleware::from_fn(crate::middleware::subscription::subscription_middleware))
-        .layer(axum::middleware::from_fn(crate::middleware::auth::auth_middleware))
+        .route("/api/tools/long-form-video", post(start_long_form_video))
+        .layer(axum::middleware::from_fn(
+            crate::middleware::subscription::subscription_middleware,
+        ))
+        .layer(axum::middleware::from_fn(
+            crate::middleware::auth::auth_middleware,
+        ))
 }

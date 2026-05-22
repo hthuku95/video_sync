@@ -4,11 +4,24 @@
 
 use crate::agent::tool_executor::{execute_tool_gemini_with_context, ToolExecutionContext};
 use crate::gemini_client::{
-    Content, FunctionCallingConfig, FunctionCallingMode, GeminiClient, GenerateContentRequest,
-    GenerationConfig, Part, Tool, ToolConfig,
+    Content, FunctionCallingConfig, FunctionCallingMode, FunctionDeclaration, GeminiClient,
+    GenerateContentRequest, GenerationConfig, Part, Tool, ToolConfig,
 };
 use serde_json::Value;
+use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
+
+pub type GeminiToolExecutor = Arc<
+    dyn for<'a> Fn(
+            &'a str,
+            &'a HashMap<String, Value>,
+            &'a ToolExecutionContext,
+        ) -> Pin<Box<dyn Future<Output = Value> + Send + 'a>>
+        + Send
+        + Sync,
+>;
 
 pub struct SimpleGeminiAgent {
     client: Arc<GeminiClient>,
@@ -26,22 +39,10 @@ impl SimpleGeminiAgent {
         user_id: Option<i32>,
         app_state: Arc<crate::AppState>,
         progress_callback: Option<Arc<dyn Fn(f32, &str) + Send + Sync>>,
+        workflow_id: Option<uuid::Uuid>,
     ) -> Result<String, String> {
-        // Helper to send progress updates
-        let send_progress = |progress: f32, msg: &str| {
-            if let Some(ref callback) = progress_callback {
-                callback(progress, msg);
-            }
-        };
-        // Create execution context for saving outputs
-        let exec_context = ToolExecutionContext {
-            session_id: session_id.to_string(),
-            user_id,
-            app_state: app_state.clone(),
-        };
-
-        // Use the same AI-driven selector family as the stateful chat agent so
-        // clipping/background agents can reach the broader video-generation stack.
+        // Use the same full-toolbelt access path as the stateful chat agent so
+        // simple/background agents can choose from the full production stack.
         let tools = crate::ai_tool_selector::select_tools_for_request(
             user_input,
             app_state.nvidia_nim_client.as_ref(),
@@ -51,12 +52,13 @@ impl SimpleGeminiAgent {
         tracing::info!(
             "🎯 Selected {} tools for Gemini simple agent: {:?}",
             tools.len(),
-            tools.iter().take(5).map(|tool| tool.name.as_str()).collect::<Vec<_>>()
+            tools
+                .iter()
+                .take(5)
+                .map(|tool| tool.name.as_str())
+                .collect::<Vec<_>>()
         );
 
-        let mut conversation: Vec<Content> = vec![];
-
-        // System instruction as first user message
         let system_instruction = r#"You are a professional video editing agent with access to 45+ specialized tools including AUDIO GENERATION. BE CREATIVE AND USE YOUR TOOLS STRATEGICALLY!
 
 ## ⚠️ CRITICAL AUDIO REQUIREMENT - READ THIS FIRST!
@@ -333,16 +335,62 @@ IMPORTANT: You do NOT use AI to generate videos. Instead, you fetch stock media 
 - ✅ ALWAYS use review_video, not just view_video
 - submit_final_answer should be the LAST tool you call"#;
 
-        // Add system context + user message
-        conversation.push(Content {
+        let tool_executor: GeminiToolExecutor = Arc::new(|name, args, ctx| {
+            Box::pin(async move {
+                Value::String(execute_tool_gemini_with_context(name, args, ctx).await)
+            })
+        });
+
+        self.execute_with_custom_tools(
+            user_input,
+            session_id,
+            user_id,
+            app_state,
+            progress_callback,
+            system_instruction,
+            tools,
+            Some("submit_final_answer"),
+            tool_executor,
+            workflow_id,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn execute_with_custom_tools(
+        &self,
+        user_input: &str,
+        session_id: &str,
+        user_id: Option<i32>,
+        app_state: Arc<crate::AppState>,
+        progress_callback: Option<Arc<dyn Fn(f32, &str) + Send + Sync>>,
+        system_instruction: &str,
+        tools: Vec<FunctionDeclaration>,
+        completion_tool_name: Option<&str>,
+        tool_executor: GeminiToolExecutor,
+        workflow_id: Option<uuid::Uuid>,
+    ) -> Result<String, String> {
+        let send_progress = |progress: f32, msg: &str| {
+            if let Some(ref callback) = progress_callback {
+                callback(progress, msg);
+            }
+        };
+        let exec_context = ToolExecutionContext {
+            session_id: session_id.to_string(),
+            user_id,
+            app_state: app_state.clone(),
+            workflow_id,
+        };
+
+        let mut conversation: Vec<Content> = vec![Content {
             parts: vec![Part::Text {
                 text: format!("{}\n\nUser request: {}", system_instruction, user_input),
             }],
             role: Some("user".to_string()),
-        });
+        }];
 
         let mut iterations = 0;
-        let max_iterations = 50; // Safety limit - agent decides when done via submit_final_answer
+        let max_iterations = 50;
         let mut final_text = String::new();
 
         while iterations < max_iterations {
@@ -426,28 +474,29 @@ IMPORTANT: You do NOT use AI to generate videos. Instead, you fetch stock media 
                                 tracing::info!("🔧 Gemini calling: {}", function_call.name);
                                 send_progress(0.0, &format!("🔧 {}...", function_call.name));
 
-                                let result = execute_tool_gemini_with_context(
-                                    &function_call.name,
-                                    &function_call.args,
-                                    &exec_context,
-                                )
-                                .await;
+                                let result =
+                                    tool_executor(&function_call.name, &function_call.args, &exec_context)
+                                        .await;
 
-                                // CRITICAL: If this is submit_final_answer, return immediately
-                                if function_call.name == "submit_final_answer" && !result.is_empty()
-                                {
-                                    send_progress(0.0, "✅ Task completed!");
-                                    return Ok(result);
+                                if completion_tool_name == Some(function_call.name.as_str()) {
+                                    let result_text = match &result {
+                                        Value::String(text) => text.clone(),
+                                        other => serde_json::to_string_pretty(other)
+                                            .unwrap_or_else(|_| other.to_string()),
+                                    };
+
+                                    if !result_text.is_empty() {
+                                        send_progress(0.0, "✅ Task completed!");
+                                        return Ok(result_text);
+                                    }
                                 }
 
-                                // Add ONLY the FunctionResponse (not the FunctionCall again)
-                                // The model already sent the FunctionCall, we just need to respond with the result
                                 tool_results.push(Part::FunctionResponse {
                                     function_response: crate::gemini_client::FunctionResponse {
                                         name: function_call.name.clone(),
                                         response: {
                                             let mut map = std::collections::HashMap::new();
-                                            map.insert("result".to_string(), Value::String(result));
+                                            map.insert("result".to_string(), result);
                                             map
                                         },
                                         thought_signature: function_call.thought_signature.clone(),

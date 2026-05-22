@@ -1,15 +1,15 @@
 // YouTube integration handlers
 // Handles OAuth connection, channel management, and video uploads
 
+use crate::middleware::auth::auth_middleware;
 use crate::models::youtube::*;
 use crate::youtube_client;
-use crate::middleware::auth::auth_middleware;
 use crate::AppState;
 use axum::{
     extract::{Extension, Path, Query},
     http::StatusCode,
     response::{Html, Json},
-    routing::{get, post, delete, patch, put},
+    routing::{delete, get, patch, post, put},
     Router,
 };
 use base64::Engine;
@@ -45,8 +45,12 @@ fn is_allowed_redirect_url(url: &str) -> bool {
                 "localhost:5173,localhost:3000,cmachine.devthuku.io,www.videosync.video,videosync.video".to_string()
             });
 
-        tracing::debug!("🔍 Validating redirect URL - host: {}, host_with_port: {}, allowed_origins: {}",
-                       host, host_with_port, allowed_origins);
+        tracing::debug!(
+            "🔍 Validating redirect URL - host: {}, host_with_port: {}, allowed_origins: {}",
+            host,
+            host_with_port,
+            allowed_origins
+        );
 
         // Check if host:port or just host matches any allowed origin
         for allowed in allowed_origins.split(',') {
@@ -57,8 +61,12 @@ fn is_allowed_redirect_url(url: &str) -> bool {
             }
         }
 
-        tracing::warn!("🚫 Rejected redirect to disallowed domain: {} ({}). Allowed origins: {}",
-                      host, host_with_port, allowed_origins);
+        tracing::warn!(
+            "🚫 Rejected redirect to disallowed domain: {} ({}). Allowed origins: {}",
+            host,
+            host_with_port,
+            allowed_origins
+        );
         return false;
     }
 
@@ -82,7 +90,7 @@ async fn mark_channel_requires_reauth(
     sqlx::query(
         "UPDATE connected_youtube_channels
          SET requires_reauth = true, reauth_reason = $2, updated_at = NOW()
-         WHERE id = $1"
+         WHERE id = $1",
     )
     .bind(channel_id)
     .bind(reason)
@@ -103,63 +111,111 @@ pub fn youtube_routes() -> Router {
     let protected_routes = Router::new()
         // OAuth connection (requires auth to know which user)
         .route("/youtube/connect", get(initiate_youtube_connection))
-
         // Channel management (protected)
         .route("/api/youtube/channels", get(list_connected_channels))
-        .route("/api/youtube/channels/:id/disconnect", delete(disconnect_channel))
-        .route("/api/youtube/channels/:id/refresh", post(refresh_channel_token))
-        .route("/api/youtube/channels/:id/health", get(check_channel_health))
-
+        .route(
+            "/api/youtube/channels/:id/disconnect",
+            delete(disconnect_channel),
+        )
+        .route(
+            "/api/youtube/channels/:id/refresh",
+            post(refresh_channel_token),
+        )
+        .route(
+            "/api/youtube/channels/:id/health",
+            get(check_channel_health),
+        )
         // Video upload (protected)
         .route("/api/youtube/upload", post(upload_video_to_youtube))
         .route("/api/youtube/uploads", get(list_upload_history))
-
         // Video management (NEW)
-        .route("/api/youtube/videos/:video_id", delete(delete_video_from_youtube))
-        .route("/api/youtube/videos/:video_id", patch(update_video_metadata))
-        .route("/api/youtube/videos/:video_id/thumbnail", post(upload_custom_thumbnail))
-        .route("/api/youtube/videos/:video_id/thumbnail/generate", post(generate_and_upload_thumbnail))
-        .route("/api/youtube/videos/:video_id/schedule", post(schedule_video_publish))
-
+        .route(
+            "/api/youtube/videos/:video_id",
+            delete(delete_video_from_youtube),
+        )
+        .route(
+            "/api/youtube/videos/:video_id",
+            patch(update_video_metadata),
+        )
+        .route(
+            "/api/youtube/videos/:video_id/thumbnail",
+            post(upload_custom_thumbnail),
+        )
+        .route(
+            "/api/youtube/videos/:video_id/thumbnail/generate",
+            post(generate_and_upload_thumbnail),
+        )
+        .route(
+            "/api/youtube/videos/:video_id/schedule",
+            post(schedule_video_publish),
+        )
         // Playlist management (NEW)
         .route("/api/youtube/playlists", get(list_playlists))
         .route("/api/youtube/playlists", post(create_playlist))
         .route("/api/youtube/playlists/:id", patch(update_playlist))
         .route("/api/youtube/playlists/:id", delete(delete_playlist))
-        .route("/api/youtube/playlists/:id/videos", post(add_video_to_playlist))
-        .route("/api/youtube/playlists/:playlist_id/videos/:video_id", delete(remove_video_from_playlist))
-
+        .route(
+            "/api/youtube/playlists/:id/videos",
+            post(add_video_to_playlist),
+        )
+        .route(
+            "/api/youtube/playlists/:playlist_id/videos/:video_id",
+            delete(remove_video_from_playlist),
+        )
         // Analytics (NEW)
-        .route("/api/youtube/videos/:video_id/analytics", get(get_video_analytics))
-        .route("/api/youtube/videos/:video_id/analytics/realtime", get(get_realtime_stats))
-        .route("/api/youtube/channels/:id/analytics", get(get_channel_analytics))
-
+        .route(
+            "/api/youtube/videos/:video_id/analytics",
+            get(get_video_analytics),
+        )
+        .route(
+            "/api/youtube/videos/:video_id/analytics/realtime",
+            get(get_realtime_stats),
+        )
+        .route(
+            "/api/youtube/channels/:id/analytics",
+            get(get_channel_analytics),
+        )
         // Search & Discovery (NEW)
         .route("/api/youtube/search", get(search_videos))
         .route("/api/youtube/search-channels", get(search_channels_api))
         .route("/api/youtube/trending", get(get_trending_videos))
-        .route("/api/youtube/videos/:video_id/related", get(get_related_videos))
-
+        .route(
+            "/api/youtube/videos/:video_id/related",
+            get(get_related_videos),
+        )
         // Comment moderation (NEW)
-        .route("/api/youtube/videos/:video_id/comments", get(get_video_comments))
-        .route("/api/youtube/comments/:comment_id/reply", post(reply_to_comment))
+        .route(
+            "/api/youtube/videos/:video_id/comments",
+            get(get_video_comments),
+        )
+        .route(
+            "/api/youtube/comments/:comment_id/reply",
+            post(reply_to_comment),
+        )
         .route("/api/youtube/comments/:comment_id", delete(delete_comment))
-
         // Captions (NEW)
         .route("/api/youtube/videos/:video_id/captions", get(list_captions))
-        .route("/api/youtube/videos/:video_id/captions", post(upload_caption))
+        .route(
+            "/api/youtube/videos/:video_id/captions",
+            post(upload_caption),
+        )
         .route("/api/youtube/captions/:caption_id", delete(delete_caption))
-
         // Resumable uploads (NEW)
-        .route("/api/youtube/upload/resumable", post(initiate_resumable_upload))
-        .route("/api/youtube/upload/resumable/:upload_id/chunk", put(upload_chunk))
-        .layer(axum::middleware::from_fn(crate::middleware::youtube_access::youtube_access_middleware))
+        .route(
+            "/api/youtube/upload/resumable",
+            post(initiate_resumable_upload),
+        )
+        .route(
+            "/api/youtube/upload/resumable/:upload_id/chunk",
+            put(upload_chunk),
+        )
+        .layer(axum::middleware::from_fn(
+            crate::middleware::youtube_access::youtube_access_middleware,
+        ))
         .layer(axum::middleware::from_fn(auth_middleware));
 
     // Merge public and protected routes (proper order)
-    Router::new()
-        .merge(public_routes)
-        .merge(protected_routes)
+    Router::new().merge(public_routes).merge(protected_routes)
 }
 
 #[derive(Deserialize)]
@@ -194,14 +250,17 @@ pub async fn initiate_youtube_connection(
             Json(json!({
                 "success": false,
                 "message": "Google OAuth not configured"
-            }))
+            })),
         )
     })?;
 
     // Validate and get redirect URL
     let redirect_to = params.redirect_to.unwrap_or("/youtube/manage".to_string());
 
-    tracing::info!("🔐 Initiating YouTube OAuth with redirect_to: {}", redirect_to);
+    tracing::info!(
+        "🔐 Initiating YouTube OAuth with redirect_to: {}",
+        redirect_to
+    );
 
     if !is_allowed_redirect_url(&redirect_to) {
         tracing::error!("🚫 Rejected invalid redirect URL: {}", redirect_to);
@@ -210,7 +269,7 @@ pub async fn initiate_youtube_connection(
             Json(json!({
                 "success": false,
                 "message": "Invalid redirect URL"
-            }))
+            })),
         ));
     }
 
@@ -236,8 +295,8 @@ pub async fn initiate_youtube_connection(
     let scopes = [
         "https://www.googleapis.com/auth/youtube.upload",
         "https://www.googleapis.com/auth/youtube.readonly",
-        "https://www.googleapis.com/auth/youtube.force-ssl",  // NEW: For delete, update, thumbnails, comments, captions
-        "https://www.googleapis.com/auth/yt-analytics.readonly",  // NEW: For analytics data
+        "https://www.googleapis.com/auth/youtube.force-ssl", // NEW: For delete, update, thumbnails, comments, captions
+        "https://www.googleapis.com/auth/yt-analytics.readonly", // NEW: For analytics data
         "https://www.googleapis.com/auth/userinfo.email",
         "https://www.googleapis.com/auth/userinfo.profile",
     ];
@@ -245,14 +304,13 @@ pub async fn initiate_youtube_connection(
     let redirect_uri = std::env::var("GOOGLE_OAUTH_REDIRECT_URI")
         .unwrap_or_else(|_| "http://localhost:3000/youtube/callback".to_string());
 
-    let auth_url = youtube_client::build_google_oauth_url(
-        client_id,
-        &redirect_uri,
-        &scopes,
-        &state_param,
-    );
+    let auth_url =
+        youtube_client::build_google_oauth_url(client_id, &redirect_uri, &scopes, &state_param);
 
-    tracing::info!("🔐 Initiating YouTube OAuth for user {} (can connect ANY Google account)", user_id);
+    tracing::info!(
+        "🔐 Initiating YouTube OAuth for user {} (can connect ANY Google account)",
+        user_id
+    );
 
     Ok(Json(json!({
         "success": true,
@@ -280,7 +338,7 @@ pub async fn youtube_oauth_callback(
     let code = params.code.ok_or_else(|| {
         (
             StatusCode::BAD_REQUEST,
-            Html("<h1>Missing authorization code</h1>".to_string())
+            Html("<h1>Missing authorization code</h1>".to_string()),
         )
     })?;
 
@@ -288,21 +346,38 @@ pub async fn youtube_oauth_callback(
     let state_json = params.state.ok_or_else(|| {
         (
             StatusCode::BAD_REQUEST,
-            Html("<h1>Missing state parameter</h1>".to_string())
+            Html("<h1>Missing state parameter</h1>".to_string()),
         )
     })?;
 
-    let state_bytes = base64::prelude::BASE64_URL_SAFE_NO_PAD.decode(&state_json)
-        .map_err(|_| (StatusCode::BAD_REQUEST, Html("<h1>Invalid state</h1>".to_string())))?;
+    let state_bytes = base64::prelude::BASE64_URL_SAFE_NO_PAD
+        .decode(&state_json)
+        .map_err(|_| {
+            (
+                StatusCode::BAD_REQUEST,
+                Html("<h1>Invalid state</h1>".to_string()),
+            )
+        })?;
 
-    let state_str = String::from_utf8(state_bytes)
-        .map_err(|_| (StatusCode::BAD_REQUEST, Html("<h1>Invalid state</h1>".to_string())))?;
+    let state_str = String::from_utf8(state_bytes).map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            Html("<h1>Invalid state</h1>".to_string()),
+        )
+    })?;
 
-    let state_data: serde_json::Value = serde_json::from_str(&state_str)
-        .map_err(|_| (StatusCode::BAD_REQUEST, Html("<h1>Invalid state</h1>".to_string())))?;
+    let state_data: serde_json::Value = serde_json::from_str(&state_str).map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            Html("<h1>Invalid state</h1>".to_string()),
+        )
+    })?;
 
     let user_id = state_data["user_id"].as_i64().ok_or_else(|| {
-        (StatusCode::BAD_REQUEST, Html("<h1>Invalid state</h1>".to_string()))
+        (
+            StatusCode::BAD_REQUEST,
+            Html("<h1>Invalid state</h1>".to_string()),
+        )
     })? as i32;
 
     let redirect_to = state_data["redirect_to"]
@@ -310,11 +385,13 @@ pub async fn youtube_oauth_callback(
         .unwrap_or("/youtube/manage")
         .to_string();
 
-    let source_app = state_data["source_app"]
-        .as_str()
-        .unwrap_or("videosync");
+    let source_app = state_data["source_app"].as_str().unwrap_or("videosync");
 
-    tracing::info!("🔄 YouTube OAuth callback received - redirect_to: {}, source_app: {}", redirect_to, source_app);
+    tracing::info!(
+        "🔄 YouTube OAuth callback received - redirect_to: {}, source_app: {}",
+        redirect_to,
+        source_app
+    );
 
     // Validate redirect URL for security
     let redirect_to = if is_allowed_redirect_url(&redirect_to) {
@@ -325,18 +402,30 @@ pub async fn youtube_oauth_callback(
         let fallback = match source_app {
             "content_machine" => "https://cmachine.devthuku.io/channels/connected",
             "content_machine_local" => "http://localhost:5173/channels/connected",
-            _ => "/youtube/manage"
+            _ => "/youtube/manage",
         };
-        tracing::warn!("🚫 Invalid redirect URL in callback, falling back to {} for app {}: {}",
-                      fallback, source_app, redirect_to);
+        tracing::warn!(
+            "🚫 Invalid redirect URL in callback, falling back to {} for app {}: {}",
+            fallback,
+            source_app,
+            redirect_to
+        );
         fallback.to_string()
     };
 
     // Exchange code for tokens
-    let client_id = state.google_oauth_client_id.as_ref()
-        .ok_or_else(|| (StatusCode::SERVICE_UNAVAILABLE, Html("<h1>YouTube not configured. Set GOOGLE_CLIENT_ID.</h1>".to_string())))?;
-    let client_secret = state.google_oauth_client_secret.as_ref()
-        .ok_or_else(|| (StatusCode::SERVICE_UNAVAILABLE, Html("<h1>YouTube not configured. Set GOOGLE_CLIENT_SECRET.</h1>".to_string())))?;
+    let client_id = state.google_oauth_client_id.as_ref().ok_or_else(|| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Html("<h1>YouTube not configured. Set GOOGLE_CLIENT_ID.</h1>".to_string()),
+        )
+    })?;
+    let client_secret = state.google_oauth_client_secret.as_ref().ok_or_else(|| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Html("<h1>YouTube not configured. Set GOOGLE_CLIENT_SECRET.</h1>".to_string()),
+        )
+    })?;
     let redirect_uri = std::env::var("GOOGLE_OAUTH_REDIRECT_URI")
         .unwrap_or_else(|_| "http://localhost:3000/youtube/callback".to_string());
 
@@ -351,30 +440,41 @@ pub async fn youtube_oauth_callback(
     .await
     .map_err(|e| {
         tracing::error!("Failed to exchange code: {}", e);
-        (StatusCode::INTERNAL_SERVER_ERROR, Html(format!("<h1>Failed to exchange code: {}</h1>", e)))
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Html(format!("<h1>Failed to exchange code: {}</h1>", e)),
+        )
     })?;
 
     let access_token = &token_response.access_token;
 
     // Get user's YouTube channels first (moved from later in function)
     let youtube = state.youtube_client.as_ref().ok_or_else(|| {
-        (StatusCode::SERVICE_UNAVAILABLE, Html("<h1>YouTube client not initialized</h1>".to_string()))
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Html("<h1>YouTube client not initialized</h1>".to_string()),
+        )
     })?;
 
-    let channels = youtube.list_channels(access_token).await
-        .map_err(|e| {
-            tracing::error!("Failed to list channels: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, Html(format!("<h1>Failed to list channels: {}</h1>", e)))
-        })?;
+    let channels = youtube.list_channels(access_token).await.map_err(|e| {
+        tracing::error!("Failed to list channels: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Html(format!("<h1>Failed to list channels: {}</h1>", e)),
+        )
+    })?;
 
     if channels.is_empty() {
-        return Ok(Html(r#"
+        return Ok(Html(
+            r#"
 <!DOCTYPE html><html><head><title>No Channels Found</title></head>
 <body><h1>⚠️ No YouTube Channels Found</h1>
 <p>Your Google account doesn't have any YouTube channels.</p>
 <p>Please create a YouTube channel first, then try connecting again.</p>
 <a href="/youtube/manage">Back to Management</a></body></html>
-        "#.to_string()));
+        "#
+            .to_string(),
+        ));
     }
 
     // Google only returns refresh_token on FIRST authorization
@@ -390,7 +490,7 @@ pub async fn youtube_oauth_callback(
 
         let existing_channel = sqlx::query_as::<_, ConnectedYouTubeChannel>(
             "SELECT * FROM connected_youtube_channels
-             WHERE user_id = $1 AND channel_id = $2"
+             WHERE user_id = $1 AND channel_id = $2",
         )
         .bind(user_id)
         .bind(channel_id)
@@ -398,7 +498,10 @@ pub async fn youtube_oauth_callback(
         .await
         .map_err(|e| {
             tracing::error!("Failed to fetch existing channel: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, Html(format!("<h1>Database error: {}</h1>", e)))
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Html(format!("<h1>Database error: {}</h1>", e)),
+            )
         })?;
 
         match existing_channel {
@@ -410,11 +513,14 @@ pub async fn youtube_oauth_callback(
                 tracing::error!("🔴 CRITICAL: First-time OAuth but no refresh_token received");
                 return Err((
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    Html(r#"<h1>⚠️ OAuth Error</h1>
+                    Html(
+                        r#"<h1>⚠️ OAuth Error</h1>
                     <p>Google did not provide the necessary credentials for this connection.</p>
                     <p>This can happen if you previously revoked access to this app.</p>
                     <p><strong>Solution:</strong> Try again or contact support.</p>
-                    <a href="/youtube/manage">Try Again</a>"#.to_string())
+                    <a href="/youtube/manage">Try Again</a>"#
+                            .to_string(),
+                    ),
                 ));
             }
         }
@@ -449,7 +555,7 @@ pub async fn youtube_oauth_callback(
                 requires_reauth = false,
                 reauth_reason = NULL,
                 updated_at = NOW()
-            "#
+            "#,
         )
         .bind(user_id)
         .bind(&channel.id)
@@ -468,7 +574,11 @@ pub async fn youtube_oauth_callback(
         match result {
             Ok(_) => {
                 saved_count += 1;
-                tracing::info!("✅ Connected YouTube channel: {} (ID: {})", channel.title, channel.id);
+                tracing::info!(
+                    "✅ Connected YouTube channel: {} (ID: {})",
+                    channel.title,
+                    channel.id
+                );
             }
             Err(e) => {
                 tracing::error!("Failed to save channel {}: {}", channel.title, e);
@@ -504,14 +614,15 @@ pub async fn list_connected_channels(
     let channels = sqlx::query_as::<_, ConnectedYouTubeChannel>(
         "SELECT * FROM connected_youtube_channels
          WHERE user_id = $1
-         ORDER BY is_active DESC, COALESCE(requires_reauth, false) ASC, created_at DESC"
+         ORDER BY is_active DESC, COALESCE(requires_reauth, false) ASC, created_at DESC",
     )
     .bind(user_id)
     .fetch_all(&state.db_pool)
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let responses: Vec<ConnectedChannelResponse> = channels.into_iter()
+    let responses: Vec<ConnectedChannelResponse> = channels
+        .into_iter()
         .map(ConnectedChannelResponse::from)
         .collect();
 
@@ -531,7 +642,7 @@ pub async fn disconnect_channel(
 
     let result = sqlx::query(
         "UPDATE connected_youtube_channels SET is_active = false, updated_at = NOW()
-         WHERE id = $1 AND user_id = $2"
+         WHERE id = $1 AND user_id = $2",
     )
     .bind(channel_id)
     .bind(user_id)
@@ -540,14 +651,14 @@ pub async fn disconnect_channel(
     .map_err(|_| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"success": false, "message": "Database error"}))
+            Json(json!({"success": false, "message": "Database error"})),
         )
     })?;
 
     if result.rows_affected() == 0 {
         return Err((
             StatusCode::NOT_FOUND,
-            Json(json!({"success": false, "message": "Channel not found"}))
+            Json(json!({"success": false, "message": "Channel not found"})),
         ));
     }
 
@@ -567,39 +678,46 @@ pub async fn refresh_channel_token(
 
     // Get channel
     let channel = sqlx::query_as::<_, ConnectedYouTubeChannel>(
-        "SELECT * FROM connected_youtube_channels WHERE id = $1 AND user_id = $2"
+        "SELECT * FROM connected_youtube_channels WHERE id = $1 AND user_id = $2",
     )
     .bind(channel_id)
     .bind(user_id)
     .fetch_optional(&state.db_pool)
     .await
-    .map_err(|_| (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        Json(json!({"success": false, "message": "Database error"}))
-    ))?
-    .ok_or_else(|| (
-        StatusCode::NOT_FOUND,
-        Json(json!({"success": false, "message": "Channel not found"}))
-    ))?;
+    .map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"success": false, "message": "Database error"})),
+        )
+    })?
+    .ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(json!({"success": false, "message": "Channel not found"})),
+        )
+    })?;
 
     // Refresh token
     let youtube = state.youtube_client.as_ref().ok_or_else(|| {
-        (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"success": false, "message": "YouTube client not initialized"})))
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"success": false, "message": "YouTube client not initialized"})),
+        )
     })?;
 
     let client_id = state.google_oauth_client_id.as_ref().unwrap();
     let client_secret = state.google_oauth_client_secret.as_ref().unwrap();
 
-    let token_response = youtube.refresh_access_token(
-        &channel.refresh_token,
-        client_id,
-        client_secret,
-    )
-    .await
-    .map_err(|e| {
-        tracing::error!("Failed to refresh token: {}", e);
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"success": false, "message": format!("Token refresh failed: {}", e)})))
-    })?;
+    let token_response = youtube
+        .refresh_access_token(&channel.refresh_token, client_id, client_secret)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to refresh token: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"success": false, "message": format!("Token refresh failed: {}", e)})),
+            )
+        })?;
 
     // Update database
     let new_expiry = chrono::Utc::now() + chrono::Duration::seconds(token_response.expires_in);
@@ -607,17 +725,19 @@ pub async fn refresh_channel_token(
     sqlx::query(
         "UPDATE connected_youtube_channels
          SET access_token = $1, token_expiry = $2, updated_at = NOW()
-         WHERE id = $3"
+         WHERE id = $3",
     )
     .bind(&token_response.access_token)
     .bind(new_expiry)
     .bind(channel_id)
     .execute(&state.db_pool)
     .await
-    .map_err(|_| (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        Json(json!({"success": false, "message": "Failed to update token"}))
-    ))?;
+    .map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"success": false, "message": "Failed to update token"})),
+        )
+    })?;
 
     Ok(Json(json!({
         "success": true,
@@ -637,20 +757,24 @@ pub async fn check_channel_health(
 
     // Get channel
     let channel = sqlx::query_as::<_, ConnectedYouTubeChannel>(
-        "SELECT * FROM connected_youtube_channels WHERE id = $1 AND user_id = $2"
+        "SELECT * FROM connected_youtube_channels WHERE id = $1 AND user_id = $2",
     )
     .bind(channel_id)
     .bind(user_id)
     .fetch_optional(&state.db_pool)
     .await
-    .map_err(|_| (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        Json(json!({"success": false, "message": "Database error"}))
-    ))?
-    .ok_or_else(|| (
-        StatusCode::NOT_FOUND,
-        Json(json!({"success": false, "message": "Channel not found"}))
-    ))?;
+    .map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"success": false, "message": "Database error"})),
+        )
+    })?
+    .ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(json!({"success": false, "message": "Channel not found"})),
+        )
+    })?;
 
     // Determine health status
     let needs_reconnect = channel.requires_reauth.unwrap_or(false);
@@ -709,34 +833,56 @@ pub async fn upload_video_to_youtube(
 
     // Check if token needs refresh (refresh 30 minutes before expiry for safety margin)
     if channel.token_expiry < chrono::Utc::now() + chrono::Duration::minutes(30) {
-        tracing::info!("🔄 Refreshing expired token for channel: {}", channel.channel_name);
+        tracing::info!(
+            "🔄 Refreshing expired token for channel: {}",
+            channel.channel_name
+        );
 
         let youtube = state.youtube_client.as_ref().ok_or_else(|| {
-            (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"success": false, "message": "YouTube client not initialized"})))
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({"success": false, "message": "YouTube client not initialized"})),
+            )
         })?;
 
-        let client_id = state.google_oauth_client_id.as_ref()
-            .ok_or_else(|| (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": "YouTube not configured. Set GOOGLE_CLIENT_ID."}))))?;
-        let client_secret = state.google_oauth_client_secret.as_ref()
-            .ok_or_else(|| (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": "YouTube not configured. Set GOOGLE_CLIENT_SECRET."}))))?;
+        let client_id = state.google_oauth_client_id.as_ref().ok_or_else(|| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({"error": "YouTube not configured. Set GOOGLE_CLIENT_ID."})),
+            )
+        })?;
+        let client_secret = state.google_oauth_client_secret.as_ref().ok_or_else(|| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({"error": "YouTube not configured. Set GOOGLE_CLIENT_SECRET."})),
+            )
+        })?;
 
-        let token_response = match youtube.refresh_access_token(
-            &channel.refresh_token,
-            client_id,
-            client_secret,
-        ).await {
+        let token_response = match youtube
+            .refresh_access_token(&channel.refresh_token, client_id, client_secret)
+            .await
+        {
             Ok(response) => response,
             Err(e) => {
                 let error_str = e.to_string();
                 tracing::error!("Failed to refresh token: {}", error_str);
 
                 // Mark channel as requiring reauth if token expired
-                if error_str.contains("REFRESH_TOKEN_EXPIRED") || error_str.contains("invalid_grant") {
-                    let _ = mark_channel_requires_reauth(&state.db_pool, payload.channel_id, &error_str).await;
+                if error_str.contains("REFRESH_TOKEN_EXPIRED")
+                    || error_str.contains("invalid_grant")
+                {
+                    let _ = mark_channel_requires_reauth(
+                        &state.db_pool,
+                        payload.channel_id,
+                        &error_str,
+                    )
+                    .await;
                 }
 
                 // Parse error to provide specific user message
-                let user_message = if error_str.contains("REFRESH_TOKEN_EXPIRED") || error_str.contains("invalid_grant") {
+                let user_message = if error_str.contains("REFRESH_TOKEN_EXPIRED")
+                    || error_str.contains("invalid_grant")
+                {
                     "Your YouTube authorization has expired. Please reconnect your channel to continue uploading."
                 } else if error_str.contains("INVALID_CREDENTIALS") {
                     "YouTube authentication configuration error. Please contact support."
@@ -746,18 +892,22 @@ pub async fn upload_video_to_youtube(
                     "Failed to refresh YouTube authentication. Please reconnect your channel."
                 };
 
-                return Err((StatusCode::UNAUTHORIZED, Json(json!({"success": false, "message": user_message}))));
+                return Err((
+                    StatusCode::UNAUTHORIZED,
+                    Json(json!({"success": false, "message": user_message})),
+                ));
             }
         };
 
         // Update token in memory and database
         channel.access_token = token_response.access_token.clone();
-        channel.token_expiry = chrono::Utc::now() + chrono::Duration::seconds(token_response.expires_in);
+        channel.token_expiry =
+            chrono::Utc::now() + chrono::Duration::seconds(token_response.expires_in);
 
         sqlx::query(
             "UPDATE connected_youtube_channels
              SET access_token = $1, token_expiry = $2, updated_at = NOW()
-             WHERE id = $3"
+             WHERE id = $3",
         )
         .bind(&channel.access_token)
         .bind(channel.token_expiry)
@@ -771,15 +921,17 @@ pub async fn upload_video_to_youtube(
     if !std::path::Path::new(&payload.video_path).exists() {
         return Err((
             StatusCode::NOT_FOUND,
-            Json(json!({"success": false, "message": "Video file not found"}))
+            Json(json!({"success": false, "message": "Video file not found"})),
         ));
     }
 
     // Check file size (multipart upload limited to 5MB by YouTube API)
-    let file_metadata = std::fs::metadata(&payload.video_path).map_err(|_| (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        Json(json!({"success": false, "message": "Failed to read file metadata"}))
-    ))?;
+    let file_metadata = std::fs::metadata(&payload.video_path).map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"success": false, "message": "Failed to read file metadata"})),
+        )
+    })?;
 
     const MAX_MULTIPART_SIZE: u64 = 5 * 1024 * 1024; // 5MB limit for multipart
     if file_metadata.len() > MAX_MULTIPART_SIZE {
@@ -797,7 +949,7 @@ pub async fn upload_video_to_youtube(
                 "file_size_mb": file_metadata.len() as f64 / (1024.0 * 1024.0),
                 "max_size_mb": 5.0,
                 "recommendation": "Use POST /api/youtube/upload/resumable for files > 5MB"
-            }))
+            })),
         ));
     }
 
@@ -807,7 +959,7 @@ pub async fn upload_video_to_youtube(
             user_id, channel_id, local_video_path, video_title, video_description,
             video_category, privacy_status, upload_status, created_at, updated_at
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'uploading', NOW(), NOW())
-        RETURNING id"
+        RETURNING id",
     )
     .bind(user_id)
     .bind(payload.channel_id)
@@ -818,27 +970,38 @@ pub async fn upload_video_to_youtube(
     .bind(&payload.privacy_status)
     .fetch_one(&state.db_pool)
     .await
-    .map_err(|_| (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        Json(json!({"success": false, "message": "Failed to create upload record"}))
-    ))?;
+    .map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"success": false, "message": "Failed to create upload record"})),
+        )
+    })?;
 
     // Upload to YouTube
-    let youtube = state.youtube_client.as_ref()
-        .ok_or_else(|| (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": "YouTube not configured."}))))?;
+    let youtube = state.youtube_client.as_ref().ok_or_else(|| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"error": "YouTube not configured."})),
+        )
+    })?;
 
-    tracing::info!("📤 Uploading video to YouTube: {} ({})", payload.title, channel.channel_name);
+    tracing::info!(
+        "📤 Uploading video to YouTube: {} ({})",
+        payload.title,
+        channel.channel_name
+    );
 
-    let upload_result = youtube.upload_video(
-        &channel.access_token,
-        &payload.video_path,
-        &payload.title,
-        payload.description.as_deref().unwrap_or(""),
-        &payload.privacy_status,
-        payload.category.as_deref(),
-        payload.tags,
-    )
-    .await;
+    let upload_result = youtube
+        .upload_video(
+            &channel.access_token,
+            &payload.video_path,
+            &payload.title,
+            payload.description.as_deref().unwrap_or(""),
+            &payload.privacy_status,
+            payload.category.as_deref(),
+            payload.tags,
+        )
+        .await;
 
     match upload_result {
         Ok(response) => {
@@ -849,7 +1012,7 @@ pub async fn upload_video_to_youtube(
                 "UPDATE youtube_uploads
                  SET youtube_video_id = $1, youtube_url = $2, published_at = $3,
                      upload_status = 'completed', upload_progress = 100, updated_at = NOW()
-                 WHERE id = $4"
+                 WHERE id = $4",
             )
             .bind(&response.id)
             .bind(&youtube_url)
@@ -881,7 +1044,7 @@ pub async fn upload_video_to_youtube(
             sqlx::query(
                 "UPDATE youtube_uploads
                  SET upload_status = 'failed', error_message = $1, updated_at = NOW()
-                 WHERE id = $2"
+                 WHERE id = $2",
             )
             .bind(e.to_string())
             .bind(upload_id)
@@ -891,7 +1054,7 @@ pub async fn upload_video_to_youtube(
 
             Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"success": false, "message": format!("Upload failed: {}", e)}))
+                Json(json!({"success": false, "message": format!("Upload failed: {}", e)})),
             ))
         }
     }
@@ -905,17 +1068,127 @@ pub async fn list_upload_history(
     let user_id = claims.sub.parse::<i32>().unwrap_or(0);
 
     let uploads = sqlx::query_as::<_, YouTubeUpload>(
-        "SELECT * FROM youtube_uploads WHERE user_id = $1 ORDER BY created_at DESC LIMIT 50"
+        "SELECT * FROM youtube_uploads
+         WHERE user_id = $1 AND deleted_at IS NULL
+         ORDER BY created_at DESC LIMIT 50",
     )
     .bind(user_id)
     .fetch_all(&state.db_pool)
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
+    let mut videos = Vec::new();
+    let mut seen_video_ids = std::collections::HashSet::new();
+
+    for upload in uploads {
+        if let Some(video_id) = upload.youtube_video_id.clone() {
+            seen_video_ids.insert(video_id);
+        }
+
+        videos.push(json!({
+            "id": upload.id.to_string(),
+            "youtube_video_id": upload.youtube_video_id,
+            "channel_id": upload.channel_id,
+            "title": upload.video_title,
+            "video_title": upload.video_title,
+            "description": upload.video_description,
+            "video_description": upload.video_description,
+            "privacy_status": upload.privacy_status.unwrap_or_else(|| "private".to_string()),
+            "category_id": upload.video_category,
+            "tags": [],
+            "thumbnail_url": upload.custom_thumbnail_path,
+            "duration": null,
+            "view_count": 0,
+            "like_count": 0,
+            "comment_count": 0,
+            "published_at": upload.published_at,
+            "uploaded_at": upload.created_at,
+            "youtube_url": upload.youtube_url,
+            "upload_status": upload.upload_status,
+            "source": "videosync_upload",
+        }));
+    }
+
+    if let Some(youtube) = state.youtube_client.as_ref() {
+        let channels = sqlx::query_as::<_, ConnectedYouTubeChannel>(
+            "SELECT * FROM connected_youtube_channels
+             WHERE user_id = $1 AND is_active = true
+             ORDER BY created_at DESC",
+        )
+        .bind(user_id)
+        .fetch_all(&state.db_pool)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+        for channel in channels {
+            let uploads_playlist_id = uploads_playlist_id_for_channel(&channel.channel_id);
+            match youtube.get_channel_uploads(&uploads_playlist_id, 25).await {
+                Ok(response) => {
+                    for item in response.items {
+                        let video_id = item.id.video_id;
+                        if !seen_video_ids.insert(video_id.clone()) {
+                            continue;
+                        }
+
+                        videos.push(json!({
+                            "id": format!("yt:{}", video_id),
+                            "youtube_video_id": video_id,
+                            "channel_id": channel.id,
+                            "title": item.snippet.title,
+                            "video_title": item.snippet.title,
+                            "description": item.snippet.description,
+                            "video_description": item.snippet.description,
+                            "privacy_status": "public",
+                            "category_id": null,
+                            "tags": [],
+                            "thumbnail_url": best_thumbnail_url(&item.snippet.thumbnails),
+                            "duration": null,
+                            "view_count": 0,
+                            "like_count": 0,
+                            "comment_count": 0,
+                            "published_at": item.snippet.published_at,
+                            "uploaded_at": item.snippet.published_at,
+                            "youtube_url": format!("https://youtube.com/watch?v={}", video_id),
+                            "upload_status": "published",
+                            "source": "youtube_channel",
+                        }));
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to fetch YouTube uploads playlist for channel {}: {}",
+                        channel.channel_name,
+                        e
+                    );
+                }
+            }
+        }
+    }
+
     Ok(Json(json!({
         "success": true,
-        "uploads": uploads
+        "uploads": videos
     })))
+}
+
+fn uploads_playlist_id_for_channel(channel_id: &str) -> String {
+    if let Some(rest) = channel_id.strip_prefix("UC") {
+        format!("UU{}", rest)
+    } else {
+        format!("UU{}", channel_id)
+    }
+}
+
+fn best_thumbnail_url(thumbnails: &serde_json::Value) -> Option<String> {
+    ["maxres", "standard", "high", "medium", "default"]
+        .iter()
+        .find_map(|key| {
+            thumbnails
+                .get(*key)
+                .and_then(|thumb| thumb.get("url"))
+                .and_then(|url| url.as_str())
+                .map(|url| url.to_string())
+        })
 }
 
 // ============================================================================
@@ -1212,7 +1485,8 @@ pub async fn delete_video_from_youtube(
     }
 
     // Delete from YouTube
-    youtube.delete_video(&channel.access_token, &video_id)
+    youtube
+        .delete_video(&channel.access_token, &video_id)
         .await
         .map_err(|e| {
             tracing::error!("YouTube API error: {}", e);
@@ -1223,13 +1497,11 @@ pub async fn delete_video_from_youtube(
         })?;
 
     // Soft delete in database
-    sqlx::query(
-        "UPDATE youtube_uploads SET deleted_at = NOW(), updated_at = NOW() WHERE id = $1"
-    )
-    .bind(upload.id)
-    .execute(&state.db_pool)
-    .await
-    .ok();
+    sqlx::query("UPDATE youtube_uploads SET deleted_at = NOW(), updated_at = NOW() WHERE id = $1")
+        .bind(upload.id)
+        .execute(&state.db_pool)
+        .await
+        .ok();
 
     Ok(Json(json!({
         "success": true,
@@ -1312,23 +1584,24 @@ pub async fn update_video_metadata(
     }
 
     // Update on YouTube
-    let update_response = youtube.update_video(
-        &channel.access_token,
-        &video_id,
-        payload.title.as_deref(),
-        payload.description.as_deref(),
-        payload.privacy_status.as_deref(),
-        payload.category_id.as_deref(),
-        payload.tags.clone(),
-    )
-    .await
-    .map_err(|e| {
-        tracing::error!("YouTube API error: {}", e);
-        (
-            StatusCode::BAD_GATEWAY,
-            Json(json!({"success": false, "message": format!("YouTube API error: {}", e)})),
+    let update_response = youtube
+        .update_video(
+            &channel.access_token,
+            &video_id,
+            payload.title.as_deref(),
+            payload.description.as_deref(),
+            payload.privacy_status.as_deref(),
+            payload.category_id.as_deref(),
+            payload.tags.clone(),
         )
-    })?;
+        .await
+        .map_err(|e| {
+            tracing::error!("YouTube API error: {}", e);
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({"success": false, "message": format!("YouTube API error: {}", e)})),
+            )
+        })?;
 
     // Update local database
     sqlx::query(
@@ -1339,7 +1612,7 @@ pub async fn update_video_metadata(
          video_category = COALESCE($4, video_category),
          metadata_updated_at = NOW(),
          updated_at = NOW()
-         WHERE id = $5"
+         WHERE id = $5",
     )
     .bind(payload.title.as_ref())
     .bind(payload.description.as_ref())
@@ -1386,9 +1659,7 @@ pub async fn upload_custom_thumbnail(
 
     while let Some(field) = multipart.next_field().await.ok().flatten() {
         if field.name() == Some("thumbnail") {
-            content_type = field.content_type()
-                .unwrap_or("image/jpeg")
-                .to_string();
+            content_type = field.content_type().unwrap_or("image/jpeg").to_string();
             image_data = Some(field.bytes().await.unwrap_or_default().to_vec());
             break;
         }
@@ -1457,19 +1728,15 @@ pub async fn upload_custom_thumbnail(
     }
 
     // Upload to YouTube
-    let thumb_response = youtube.upload_thumbnail(
-        &channel.access_token,
-        &video_id,
-        image_data,
-        &content_type,
-    )
-    .await
-    .map_err(|e| {
-        (
-            StatusCode::BAD_GATEWAY,
-            Json(json!({"success": false, "message": format!("YouTube API error: {}", e)})),
-        )
-    })?;
+    let thumb_response = youtube
+        .upload_thumbnail(&channel.access_token, &video_id, image_data, &content_type)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({"success": false, "message": format!("YouTube API error: {}", e)})),
+            )
+        })?;
 
     Ok(Json(json!({
         "success": true,
@@ -1519,7 +1786,7 @@ pub async fn generate_and_upload_thumbnail(
 
     // Get channel
     let channel = sqlx::query_as::<_, crate::models::youtube::ConnectedYouTubeChannel>(
-        "SELECT * FROM connected_youtube_channels WHERE id = $1 AND user_id = $2"
+        "SELECT * FROM connected_youtube_channels WHERE id = $1 AND user_id = $2",
     )
     .bind(upload.channel_id)
     .bind(user_id)
@@ -1574,33 +1841,27 @@ pub async fn generate_and_upload_thumbnail(
     })?;
 
     // Read generated thumbnail
-    let image_data = tokio::fs::read(&thumbnail_path)
-        .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"success": false, "message": format!("Failed to read thumbnail: {}", e)})),
-            )
-        })?;
-
-    // Upload to YouTube
-    let thumb_response = youtube.upload_thumbnail(
-        &channel.access_token,
-        &video_id,
-        image_data,
-        "image/jpeg",
-    )
-    .await
-    .map_err(|e| {
+    let image_data = tokio::fs::read(&thumbnail_path).await.map_err(|e| {
         (
-            StatusCode::BAD_GATEWAY,
-            Json(json!({"success": false, "message": format!("YouTube API error: {}", e)})),
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"success": false, "message": format!("Failed to read thumbnail: {}", e)})),
         )
     })?;
 
+    // Upload to YouTube
+    let thumb_response = youtube
+        .upload_thumbnail(&channel.access_token, &video_id, image_data, "image/jpeg")
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({"success": false, "message": format!("YouTube API error: {}", e)})),
+            )
+        })?;
+
     // Update database with thumbnail path
     sqlx::query(
-        "UPDATE youtube_uploads SET custom_thumbnail_path = $1, updated_at = NOW() WHERE id = $2"
+        "UPDATE youtube_uploads SET custom_thumbnail_path = $1, updated_at = NOW() WHERE id = $2",
     )
     .bind(&thumbnail_path)
     .bind(upload.id)
@@ -1639,7 +1900,7 @@ pub async fn list_playlists(
 
     // Get user's channels
     let channels = sqlx::query_as::<_, crate::models::youtube::ConnectedYouTubeChannel>(
-        "SELECT * FROM connected_youtube_channels WHERE user_id = $1 AND is_active = true"
+        "SELECT * FROM connected_youtube_channels WHERE user_id = $1 AND is_active = true",
     )
     .bind(user_id)
     .fetch_all(&state.db_pool)
@@ -1670,7 +1931,11 @@ pub async fn list_playlists(
                 }
             }
             Err(e) => {
-                tracing::warn!("Failed to fetch playlists for channel {}: {}", channel.channel_name, e);
+                tracing::warn!(
+                    "Failed to fetch playlists for channel {}: {}",
+                    channel.channel_name,
+                    e
+                );
             }
         }
     }
@@ -1733,19 +1998,20 @@ pub async fn create_playlist(
     }
 
     // Create on YouTube
-    let playlist_response = youtube.create_playlist(
-        &channel.access_token,
-        &payload.title,
-        payload.description.as_deref(),
-        &payload.privacy_status,
-    )
-    .await
-    .map_err(|e| {
-        (
-            StatusCode::BAD_GATEWAY,
-            Json(json!({"success": false, "message": format!("YouTube API error: {}", e)})),
+    let playlist_response = youtube
+        .create_playlist(
+            &channel.access_token,
+            &payload.title,
+            payload.description.as_deref(),
+            &payload.privacy_status,
         )
-    })?;
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({"success": false, "message": format!("YouTube API error: {}", e)})),
+            )
+        })?;
 
     // Save to database
     sqlx::query(
@@ -1794,7 +2060,7 @@ pub async fn update_playlist(
 
     // Verify ownership
     let playlist = sqlx::query_as::<_, crate::models::youtube::YouTubePlaylist>(
-        "SELECT * FROM youtube_playlists WHERE youtube_playlist_id = $1 AND user_id = $2"
+        "SELECT * FROM youtube_playlists WHERE youtube_playlist_id = $1 AND user_id = $2",
     )
     .bind(&playlist_id)
     .bind(user_id)
@@ -1815,7 +2081,7 @@ pub async fn update_playlist(
 
     // Get channel
     let channel = sqlx::query_as::<_, crate::models::youtube::ConnectedYouTubeChannel>(
-        "SELECT * FROM connected_youtube_channels WHERE id = $1 AND user_id = $2"
+        "SELECT * FROM connected_youtube_channels WHERE id = $1 AND user_id = $2",
     )
     .bind(playlist.channel_id)
     .bind(user_id)
@@ -1848,20 +2114,21 @@ pub async fn update_playlist(
     }
 
     // Update on YouTube
-    let update_response = youtube.update_playlist(
-        &channel.access_token,
-        &playlist_id,
-        payload.title.as_deref(),
-        payload.description.as_deref(),
-        payload.privacy_status.as_deref(),
-    )
-    .await
-    .map_err(|e| {
-        (
-            StatusCode::BAD_GATEWAY,
-            Json(json!({"success": false, "message": format!("YouTube API error: {}", e)})),
+    let update_response = youtube
+        .update_playlist(
+            &channel.access_token,
+            &playlist_id,
+            payload.title.as_deref(),
+            payload.description.as_deref(),
+            payload.privacy_status.as_deref(),
         )
-    })?;
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({"success": false, "message": format!("YouTube API error: {}", e)})),
+            )
+        })?;
 
     // Update in database
     sqlx::query(
@@ -1870,7 +2137,7 @@ pub async fn update_playlist(
          description = COALESCE($2, description),
          privacy_status = COALESCE($3, privacy_status),
          updated_at = NOW()
-         WHERE id = $4"
+         WHERE id = $4",
     )
     .bind(payload.title.as_ref())
     .bind(payload.description.as_ref())
@@ -1909,7 +2176,7 @@ pub async fn delete_playlist(
 
     // Verify ownership
     let playlist = sqlx::query_as::<_, crate::models::youtube::YouTubePlaylist>(
-        "SELECT * FROM youtube_playlists WHERE youtube_playlist_id = $1 AND user_id = $2"
+        "SELECT * FROM youtube_playlists WHERE youtube_playlist_id = $1 AND user_id = $2",
     )
     .bind(&playlist_id)
     .bind(user_id)
@@ -1930,7 +2197,7 @@ pub async fn delete_playlist(
 
     // Get channel
     let channel = sqlx::query_as::<_, crate::models::youtube::ConnectedYouTubeChannel>(
-        "SELECT * FROM connected_youtube_channels WHERE id = $1"
+        "SELECT * FROM connected_youtube_channels WHERE id = $1",
     )
     .bind(playlist.channel_id)
     .fetch_optional(&state.db_pool)
@@ -1962,7 +2229,8 @@ pub async fn delete_playlist(
     }
 
     // Delete from YouTube
-    youtube.delete_playlist(&channel.access_token, &playlist_id)
+    youtube
+        .delete_playlist(&channel.access_token, &playlist_id)
         .await
         .map_err(|e| {
             (
@@ -2005,7 +2273,7 @@ pub async fn add_video_to_playlist(
 
     // Verify ownership
     let playlist = sqlx::query_as::<_, crate::models::youtube::YouTubePlaylist>(
-        "SELECT * FROM youtube_playlists WHERE youtube_playlist_id = $1 AND user_id = $2"
+        "SELECT * FROM youtube_playlists WHERE youtube_playlist_id = $1 AND user_id = $2",
     )
     .bind(&playlist_id)
     .bind(user_id)
@@ -2026,7 +2294,7 @@ pub async fn add_video_to_playlist(
 
     // Get channel
     let channel = sqlx::query_as::<_, crate::models::youtube::ConnectedYouTubeChannel>(
-        "SELECT * FROM connected_youtube_channels WHERE id = $1"
+        "SELECT * FROM connected_youtube_channels WHERE id = $1",
     )
     .bind(playlist.channel_id)
     .fetch_optional(&state.db_pool)
@@ -2045,19 +2313,20 @@ pub async fn add_video_to_playlist(
     })?;
 
     // Add to YouTube
-    let item_response = youtube.add_video_to_playlist(
-        &channel.access_token,
-        &playlist_id,
-        &payload.video_id,
-        payload.position,
-    )
-    .await
-    .map_err(|e| {
-        (
-            StatusCode::BAD_GATEWAY,
-            Json(json!({"success": false, "message": format!("YouTube API error: {}", e)})),
+    let item_response = youtube
+        .add_video_to_playlist(
+            &channel.access_token,
+            &playlist_id,
+            &payload.video_id,
+            payload.position,
         )
-    })?;
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({"success": false, "message": format!("YouTube API error: {}", e)})),
+            )
+        })?;
 
     // Save to database
     sqlx::query(
@@ -2106,7 +2375,7 @@ pub async fn remove_video_from_playlist(
 
     // Verify ownership and get playlist item ID
     let playlist = sqlx::query_as::<_, crate::models::youtube::YouTubePlaylist>(
-        "SELECT * FROM youtube_playlists WHERE youtube_playlist_id = $1 AND user_id = $2"
+        "SELECT * FROM youtube_playlists WHERE youtube_playlist_id = $1 AND user_id = $2",
     )
     .bind(&playlist_id)
     .bind(user_id)
@@ -2126,7 +2395,7 @@ pub async fn remove_video_from_playlist(
     })?;
 
     let item = sqlx::query_as::<_, crate::models::youtube::YouTubePlaylistItem>(
-        "SELECT * FROM youtube_playlist_items WHERE playlist_id = $1 AND youtube_video_id = $2"
+        "SELECT * FROM youtube_playlist_items WHERE playlist_id = $1 AND youtube_video_id = $2",
     )
     .bind(playlist.id)
     .bind(&video_id)
@@ -2154,7 +2423,7 @@ pub async fn remove_video_from_playlist(
 
     // Get channel
     let channel = sqlx::query_as::<_, crate::models::youtube::ConnectedYouTubeChannel>(
-        "SELECT * FROM connected_youtube_channels WHERE id = $1"
+        "SELECT * FROM connected_youtube_channels WHERE id = $1",
     )
     .bind(playlist.channel_id)
     .fetch_optional(&state.db_pool)
@@ -2173,7 +2442,8 @@ pub async fn remove_video_from_playlist(
     })?;
 
     // Remove from YouTube
-    youtube.remove_video_from_playlist(&channel.access_token, &playlist_item_id)
+    youtube
+        .remove_video_from_playlist(&channel.access_token, &playlist_item_id)
         .await
         .map_err(|e| {
             (
@@ -2190,11 +2460,13 @@ pub async fn remove_video_from_playlist(
         .ok();
 
     // Decrement video count
-    sqlx::query("UPDATE youtube_playlists SET video_count = GREATEST(0, video_count - 1) WHERE id = $1")
-        .bind(playlist.id)
-        .execute(&state.db_pool)
-        .await
-        .ok();
+    sqlx::query(
+        "UPDATE youtube_playlists SET video_count = GREATEST(0, video_count - 1) WHERE id = $1",
+    )
+    .bind(playlist.id)
+    .execute(&state.db_pool)
+    .await
+    .ok();
 
     Ok(Json(json!({
         "success": true,
@@ -2226,7 +2498,7 @@ pub async fn get_video_analytics(
 
     // Verify ownership
     let upload = sqlx::query_as::<_, crate::models::youtube::YouTubeUpload>(
-        "SELECT * FROM youtube_uploads WHERE youtube_video_id = $1 AND user_id = $2"
+        "SELECT * FROM youtube_uploads WHERE youtube_video_id = $1 AND user_id = $2",
     )
     .bind(&video_id)
     .bind(user_id)
@@ -2247,7 +2519,7 @@ pub async fn get_video_analytics(
 
     // Get channel for access token
     let mut channel = sqlx::query_as::<_, crate::models::youtube::ConnectedYouTubeChannel>(
-        "SELECT * FROM connected_youtube_channels WHERE id = $1"
+        "SELECT * FROM connected_youtube_channels WHERE id = $1",
     )
     .bind(upload.channel_id)
     .fetch_optional(&state.db_pool)
@@ -2267,34 +2539,53 @@ pub async fn get_video_analytics(
 
     // Check if token needs refresh before making analytics API call (refresh 30 minutes before expiry for safety margin)
     if channel.token_expiry < chrono::Utc::now() + chrono::Duration::minutes(30) {
-        tracing::info!("🔄 Refreshing expired token for channel: {}", channel.channel_name);
+        tracing::info!(
+            "🔄 Refreshing expired token for channel: {}",
+            channel.channel_name
+        );
 
         let youtube = state.youtube_client.as_ref().ok_or_else(|| {
-            (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"success": false, "message": "YouTube client not initialized"})))
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({"success": false, "message": "YouTube client not initialized"})),
+            )
         })?;
 
-        let client_id = state.google_oauth_client_id.as_ref()
-            .ok_or_else(|| (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": "YouTube not configured. Set GOOGLE_CLIENT_ID."}))))?;
-        let client_secret = state.google_oauth_client_secret.as_ref()
-            .ok_or_else(|| (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": "YouTube not configured. Set GOOGLE_CLIENT_SECRET."}))))?;
+        let client_id = state.google_oauth_client_id.as_ref().ok_or_else(|| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({"error": "YouTube not configured. Set GOOGLE_CLIENT_ID."})),
+            )
+        })?;
+        let client_secret = state.google_oauth_client_secret.as_ref().ok_or_else(|| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({"error": "YouTube not configured. Set GOOGLE_CLIENT_SECRET."})),
+            )
+        })?;
 
-        let token_response = match youtube.refresh_access_token(
-            &channel.refresh_token,
-            client_id,
-            client_secret,
-        ).await {
+        let token_response = match youtube
+            .refresh_access_token(&channel.refresh_token, client_id, client_secret)
+            .await
+        {
             Ok(response) => response,
             Err(e) => {
                 let error_str = e.to_string();
                 tracing::error!("Failed to refresh token: {}", error_str);
 
                 // Mark channel as requiring reauth if token expired
-                if error_str.contains("REFRESH_TOKEN_EXPIRED") || error_str.contains("invalid_grant") {
-                    let _ = mark_channel_requires_reauth(&state.db_pool, upload.channel_id, &error_str).await;
+                if error_str.contains("REFRESH_TOKEN_EXPIRED")
+                    || error_str.contains("invalid_grant")
+                {
+                    let _ =
+                        mark_channel_requires_reauth(&state.db_pool, upload.channel_id, &error_str)
+                            .await;
                 }
 
                 // Parse error to provide specific user message
-                let user_message = if error_str.contains("REFRESH_TOKEN_EXPIRED") || error_str.contains("invalid_grant") {
+                let user_message = if error_str.contains("REFRESH_TOKEN_EXPIRED")
+                    || error_str.contains("invalid_grant")
+                {
                     "Your YouTube authorization has expired. Please reconnect your channel to continue uploading."
                 } else if error_str.contains("INVALID_CREDENTIALS") {
                     "YouTube authentication configuration error. Please contact support."
@@ -2304,18 +2595,22 @@ pub async fn get_video_analytics(
                     "Failed to refresh YouTube authentication. Please reconnect your channel."
                 };
 
-                return Err((StatusCode::UNAUTHORIZED, Json(json!({"success": false, "message": user_message}))));
+                return Err((
+                    StatusCode::UNAUTHORIZED,
+                    Json(json!({"success": false, "message": user_message})),
+                ));
             }
         };
 
         // Update token in memory and database
         channel.access_token = token_response.access_token.clone();
-        channel.token_expiry = chrono::Utc::now() + chrono::Duration::seconds(token_response.expires_in);
+        channel.token_expiry =
+            chrono::Utc::now() + chrono::Duration::seconds(token_response.expires_in);
 
         sqlx::query(
             "UPDATE connected_youtube_channels
              SET access_token = $1, token_expiry = $2, updated_at = NOW()
-             WHERE id = $3"
+             WHERE id = $3",
         )
         .bind(&channel.access_token)
         .bind(channel.token_expiry)
@@ -2356,7 +2651,9 @@ pub async fn get_video_analytics(
     let metrics = analytics_response.to_metrics().ok_or_else(|| {
         (
             StatusCode::NOT_FOUND,
-            Json(json!({"success": false, "message": "No analytics data available for this video"})),
+            Json(
+                json!({"success": false, "message": "No analytics data available for this video"}),
+            ),
         )
     })?;
 
@@ -2401,7 +2698,7 @@ pub async fn get_realtime_stats(
 
     // Verify ownership
     let upload = sqlx::query_as::<_, crate::models::youtube::YouTubeUpload>(
-        "SELECT * FROM youtube_uploads WHERE youtube_video_id = $1 AND user_id = $2"
+        "SELECT * FROM youtube_uploads WHERE youtube_video_id = $1 AND user_id = $2",
     )
     .bind(&video_id)
     .bind(user_id)
@@ -2422,7 +2719,7 @@ pub async fn get_realtime_stats(
 
     // Get channel
     let channel = sqlx::query_as::<_, crate::models::youtube::ConnectedYouTubeChannel>(
-        "SELECT * FROM connected_youtube_channels WHERE id = $1"
+        "SELECT * FROM connected_youtube_channels WHERE id = $1",
     )
     .bind(upload.channel_id)
     .fetch_optional(&state.db_pool)
@@ -2441,7 +2738,8 @@ pub async fn get_realtime_stats(
     })?;
 
     // Get stats from YouTube Data API
-    let stats_response = youtube.get_video_realtime_stats(&channel.access_token, &video_id)
+    let stats_response = youtube
+        .get_video_realtime_stats(&channel.access_token, &video_id)
         .await
         .map_err(|e| {
             (
@@ -2489,7 +2787,7 @@ pub async fn get_channel_analytics(
 
     // Verify ownership
     let mut channel = sqlx::query_as::<_, crate::models::youtube::ConnectedYouTubeChannel>(
-        "SELECT * FROM connected_youtube_channels WHERE id = $1 AND user_id = $2"
+        "SELECT * FROM connected_youtube_channels WHERE id = $1 AND user_id = $2",
     )
     .bind(channel_id)
     .bind(user_id)
@@ -2510,34 +2808,52 @@ pub async fn get_channel_analytics(
 
     // Check if token needs refresh before making analytics API call (refresh 30 minutes before expiry for safety margin)
     if channel.token_expiry < chrono::Utc::now() + chrono::Duration::minutes(30) {
-        tracing::info!("🔄 Refreshing expired token for channel: {}", channel.channel_name);
+        tracing::info!(
+            "🔄 Refreshing expired token for channel: {}",
+            channel.channel_name
+        );
 
         let youtube = state.youtube_client.as_ref().ok_or_else(|| {
-            (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"success": false, "message": "YouTube client not initialized"})))
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({"success": false, "message": "YouTube client not initialized"})),
+            )
         })?;
 
-        let client_id = state.google_oauth_client_id.as_ref()
-            .ok_or_else(|| (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": "YouTube not configured. Set GOOGLE_CLIENT_ID."}))))?;
-        let client_secret = state.google_oauth_client_secret.as_ref()
-            .ok_or_else(|| (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": "YouTube not configured. Set GOOGLE_CLIENT_SECRET."}))))?;
+        let client_id = state.google_oauth_client_id.as_ref().ok_or_else(|| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({"error": "YouTube not configured. Set GOOGLE_CLIENT_ID."})),
+            )
+        })?;
+        let client_secret = state.google_oauth_client_secret.as_ref().ok_or_else(|| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({"error": "YouTube not configured. Set GOOGLE_CLIENT_SECRET."})),
+            )
+        })?;
 
-        let token_response = match youtube.refresh_access_token(
-            &channel.refresh_token,
-            client_id,
-            client_secret,
-        ).await {
+        let token_response = match youtube
+            .refresh_access_token(&channel.refresh_token, client_id, client_secret)
+            .await
+        {
             Ok(response) => response,
             Err(e) => {
                 let error_str = e.to_string();
                 tracing::error!("Failed to refresh token: {}", error_str);
 
                 // Mark channel as requiring reauth if token expired
-                if error_str.contains("REFRESH_TOKEN_EXPIRED") || error_str.contains("invalid_grant") {
-                    let _ = mark_channel_requires_reauth(&state.db_pool, channel_id, &error_str).await;
+                if error_str.contains("REFRESH_TOKEN_EXPIRED")
+                    || error_str.contains("invalid_grant")
+                {
+                    let _ =
+                        mark_channel_requires_reauth(&state.db_pool, channel_id, &error_str).await;
                 }
 
                 // Parse error to provide specific user message
-                let user_message = if error_str.contains("REFRESH_TOKEN_EXPIRED") || error_str.contains("invalid_grant") {
+                let user_message = if error_str.contains("REFRESH_TOKEN_EXPIRED")
+                    || error_str.contains("invalid_grant")
+                {
                     "Your YouTube authorization has expired. Please reconnect your channel to continue uploading."
                 } else if error_str.contains("INVALID_CREDENTIALS") {
                     "YouTube authentication configuration error. Please contact support."
@@ -2547,18 +2863,22 @@ pub async fn get_channel_analytics(
                     "Failed to refresh YouTube authentication. Please reconnect your channel."
                 };
 
-                return Err((StatusCode::UNAUTHORIZED, Json(json!({"success": false, "message": user_message}))));
+                return Err((
+                    StatusCode::UNAUTHORIZED,
+                    Json(json!({"success": false, "message": user_message})),
+                ));
             }
         };
 
         // Update token in memory and database
         channel.access_token = token_response.access_token.clone();
-        channel.token_expiry = chrono::Utc::now() + chrono::Duration::seconds(token_response.expires_in);
+        channel.token_expiry =
+            chrono::Utc::now() + chrono::Duration::seconds(token_response.expires_in);
 
         sqlx::query(
             "UPDATE connected_youtube_channels
              SET access_token = $1, token_expiry = $2, updated_at = NOW()
-             WHERE id = $3"
+             WHERE id = $3",
         )
         .bind(&channel.access_token)
         .bind(channel.token_expiry)
@@ -2640,7 +2960,7 @@ pub async fn search_videos(
     // Get user's access token if available for personalized search
     let user_id = claims.sub.parse::<i32>().unwrap_or(0);
     let channel = sqlx::query_as::<_, crate::models::youtube::ConnectedYouTubeChannel>(
-        "SELECT * FROM connected_youtube_channels WHERE user_id = $1 AND is_active = true LIMIT 1"
+        "SELECT * FROM connected_youtube_channels WHERE user_id = $1 AND is_active = true LIMIT 1",
     )
     .bind(user_id)
     .fetch_optional(&state.db_pool)
@@ -2651,31 +2971,36 @@ pub async fn search_videos(
     let access_token = channel.as_ref().map(|c| c.access_token.as_str());
     let max_results = params.max_results.unwrap_or(25).min(50);
 
-    let search_response = youtube.search_videos(
-        access_token,
-        &params.query,
-        max_results,
-        params.order.as_deref(),
-    )
-    .await
-    .map_err(|e| {
-        (
-            StatusCode::BAD_GATEWAY,
-            Json(json!({"success": false, "message": format!("YouTube API error: {}", e)})),
+    let search_response = youtube
+        .search_videos(
+            access_token,
+            &params.query,
+            max_results,
+            params.order.as_deref(),
         )
-    })?;
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({"success": false, "message": format!("YouTube API error: {}", e)})),
+            )
+        })?;
 
-    let results: Vec<_> = search_response.items.iter().map(|item| {
-        json!({
-            "video_id": item.id.video_id,
-            "title": item.snippet.title,
-            "description": item.snippet.description,
-            "channel_id": item.snippet.channel_id,
-            "channel_title": item.snippet.channel_title,
-            "thumbnail_url": item.snippet.thumbnails.get("default").and_then(|t| t.get("url")),
-            "published_at": item.snippet.published_at
+    let results: Vec<_> = search_response
+        .items
+        .iter()
+        .map(|item| {
+            json!({
+                "video_id": item.id.video_id,
+                "title": item.snippet.title,
+                "description": item.snippet.description,
+                "channel_id": item.snippet.channel_id,
+                "channel_title": item.snippet.channel_title,
+                "thumbnail_url": item.snippet.thumbnails.get("default").and_then(|t| t.get("url")),
+                "published_at": item.snippet.published_at
+            })
         })
-    }).collect();
+        .collect();
 
     Ok(Json(json!({
         "success": true,
@@ -2701,29 +3026,34 @@ pub async fn search_channels_api(
 
     let max_results = params.max_results.unwrap_or(10).min(50) as i32;
 
-    let search_response = youtube.search_channels(
-        None, // No access token needed for public channel search
-        &params.q,
-        max_results,
-        None, // No specific order
-    )
-    .await
-    .map_err(|e| {
-        (
-            StatusCode::BAD_GATEWAY,
-            Json(json!({"success": false, "message": format!("YouTube API error: {}", e)})),
+    let search_response = youtube
+        .search_channels(
+            None, // No access token needed for public channel search
+            &params.q,
+            max_results,
+            None, // No specific order
         )
-    })?;
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({"success": false, "message": format!("YouTube API error: {}", e)})),
+            )
+        })?;
 
-    let results: Vec<_> = search_response.items.iter().map(|item| {
-        json!({
-            "channel_id": item.id.channel_id,
-            "channel_name": item.snippet.title,
-            "description": item.snippet.description,
-            "thumbnail_url": item.snippet.thumbnails.get("default").and_then(|t| t.get("url")),
-            "published_at": item.snippet.published_at
+    let results: Vec<_> = search_response
+        .items
+        .iter()
+        .map(|item| {
+            json!({
+                "channel_id": item.id.channel_id,
+                "channel_name": item.snippet.title,
+                "description": item.snippet.description,
+                "thumbnail_url": item.snippet.thumbnails.get("default").and_then(|t| t.get("url")),
+                "published_at": item.snippet.published_at
+            })
         })
-    }).collect();
+        .collect();
 
     Ok(Json(json!({
         "success": true,
@@ -2755,30 +3085,35 @@ pub async fn get_trending_videos(
 
     let max_results = params.max_results.unwrap_or(25).min(50);
 
-    let trending_response = youtube.get_trending_videos(
-        params.region_code.as_deref(),
-        params.category_id.as_deref(),
-        max_results,
-    )
-    .await
-    .map_err(|e| {
-        (
-            StatusCode::BAD_GATEWAY,
-            Json(json!({"success": false, "message": format!("YouTube API error: {}", e)})),
+    let trending_response = youtube
+        .get_trending_videos(
+            params.region_code.as_deref(),
+            params.category_id.as_deref(),
+            max_results,
         )
-    })?;
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({"success": false, "message": format!("YouTube API error: {}", e)})),
+            )
+        })?;
 
-    let results: Vec<_> = trending_response.items.iter().map(|item| {
-        json!({
-            "video_id": item.id,
-            "title": item.snippet.title,
-            "channel_title": item.snippet.channel_title,
-            "thumbnail_url": item.snippet.thumbnails.get("default").and_then(|t| t.get("url")),
-            "view_count": item.statistics.view_count,
-            "like_count": item.statistics.like_count,
-            "comment_count": item.statistics.comment_count
+    let results: Vec<_> = trending_response
+        .items
+        .iter()
+        .map(|item| {
+            json!({
+                "video_id": item.id,
+                "title": item.snippet.title,
+                "channel_title": item.snippet.channel_title,
+                "thumbnail_url": item.snippet.thumbnails.get("default").and_then(|t| t.get("url")),
+                "view_count": item.statistics.view_count,
+                "like_count": item.statistics.like_count,
+                "comment_count": item.statistics.comment_count
+            })
         })
-    }).collect();
+        .collect();
 
     Ok(Json(json!({
         "success": true,
@@ -2801,12 +3136,14 @@ pub async fn get_related_videos(
         )
     })?;
 
-    let max_results = params.get("maxResults")
+    let max_results = params
+        .get("maxResults")
         .and_then(|v| v.parse::<i32>().ok())
         .unwrap_or(20)
         .min(50);
 
-    let related_response = youtube.get_related_videos(&video_id, max_results)
+    let related_response = youtube
+        .get_related_videos(&video_id, max_results)
         .await
         .map_err(|e| {
             (
@@ -2815,14 +3152,18 @@ pub async fn get_related_videos(
             )
         })?;
 
-    let results: Vec<_> = related_response.items.iter().map(|item| {
-        json!({
-            "video_id": item.id.video_id,
-            "title": item.snippet.title,
-            "channel_title": item.snippet.channel_title,
-            "thumbnail_url": item.snippet.thumbnails.get("default").and_then(|t| t.get("url"))
+    let results: Vec<_> = related_response
+        .items
+        .iter()
+        .map(|item| {
+            json!({
+                "video_id": item.id.video_id,
+                "title": item.snippet.title,
+                "channel_title": item.snippet.channel_title,
+                "thumbnail_url": item.snippet.thumbnails.get("default").and_then(|t| t.get("url"))
+            })
         })
-    }).collect();
+        .collect();
 
     Ok(Json(json!({
         "success": true,
@@ -2855,7 +3196,7 @@ pub async fn get_video_comments(
 
     // Verify ownership
     let upload = sqlx::query_as::<_, crate::models::youtube::YouTubeUpload>(
-        "SELECT * FROM youtube_uploads WHERE youtube_video_id = $1 AND user_id = $2"
+        "SELECT * FROM youtube_uploads WHERE youtube_video_id = $1 AND user_id = $2",
     )
     .bind(&video_id)
     .bind(user_id)
@@ -2876,7 +3217,7 @@ pub async fn get_video_comments(
 
     // Get channel
     let channel = sqlx::query_as::<_, crate::models::youtube::ConnectedYouTubeChannel>(
-        "SELECT * FROM connected_youtube_channels WHERE id = $1"
+        "SELECT * FROM connected_youtube_channels WHERE id = $1",
     )
     .bind(upload.channel_id)
     .fetch_optional(&state.db_pool)
@@ -2894,11 +3235,13 @@ pub async fn get_video_comments(
         )
     })?;
 
-    let max_results = params.get("maxResults")
+    let max_results = params
+        .get("maxResults")
         .and_then(|v| v.parse::<i32>().ok())
         .unwrap_or(100);
 
-    let comments_response = youtube.get_video_comments(&channel.access_token, &video_id, max_results)
+    let comments_response = youtube
+        .get_video_comments(&channel.access_token, &video_id, max_results)
         .await
         .map_err(|e| {
             (
@@ -2907,18 +3250,22 @@ pub async fn get_video_comments(
             )
         })?;
 
-    let comments: Vec<_> = comments_response.items.iter().map(|thread| {
-        let comment = &thread.snippet.top_level_comment;
-        json!({
-            "comment_id": comment.id,
-            "author_name": comment.snippet.author_display_name,
-            "text": comment.snippet.text_display,
-            "like_count": comment.snippet.like_count,
-            "published_at": comment.snippet.published_at,
-            "reply_count": thread.snippet.total_reply_count,
-            "can_reply": thread.snippet.can_reply
+    let comments: Vec<_> = comments_response
+        .items
+        .iter()
+        .map(|thread| {
+            let comment = &thread.snippet.top_level_comment;
+            json!({
+                "comment_id": comment.id,
+                "author_name": comment.snippet.author_display_name,
+                "text": comment.snippet.text_display,
+                "like_count": comment.snippet.like_count,
+                "published_at": comment.snippet.published_at,
+                "reply_count": thread.snippet.total_reply_count,
+                "can_reply": thread.snippet.can_reply
+            })
         })
-    }).collect();
+        .collect();
 
     Ok(Json(json!({
         "success": true,
@@ -2948,7 +3295,7 @@ pub async fn reply_to_comment(
 
     // Get any active channel for the user
     let channel = sqlx::query_as::<_, crate::models::youtube::ConnectedYouTubeChannel>(
-        "SELECT * FROM connected_youtube_channels WHERE user_id = $1 AND is_active = true LIMIT 1"
+        "SELECT * FROM connected_youtube_channels WHERE user_id = $1 AND is_active = true LIMIT 1",
     )
     .bind(user_id)
     .fetch_optional(&state.db_pool)
@@ -2980,7 +3327,8 @@ pub async fn reply_to_comment(
     }
 
     // Reply on YouTube
-    let reply_response = youtube.reply_to_comment(&channel.access_token, &comment_id, &payload.text)
+    let reply_response = youtube
+        .reply_to_comment(&channel.access_token, &comment_id, &payload.text)
         .await
         .map_err(|e| {
             (
@@ -3015,7 +3363,7 @@ pub async fn delete_comment(
 
     // Get channel
     let channel = sqlx::query_as::<_, crate::models::youtube::ConnectedYouTubeChannel>(
-        "SELECT * FROM connected_youtube_channels WHERE user_id = $1 AND is_active = true LIMIT 1"
+        "SELECT * FROM connected_youtube_channels WHERE user_id = $1 AND is_active = true LIMIT 1",
     )
     .bind(user_id)
     .fetch_optional(&state.db_pool)
@@ -3047,7 +3395,8 @@ pub async fn delete_comment(
     }
 
     // Delete from YouTube
-    youtube.delete_comment(&channel.access_token, &comment_id)
+    youtube
+        .delete_comment(&channel.access_token, &comment_id)
         .await
         .map_err(|e| {
             (
@@ -3086,7 +3435,7 @@ pub async fn list_captions(
 
     // Verify ownership
     let upload = sqlx::query_as::<_, crate::models::youtube::YouTubeUpload>(
-        "SELECT * FROM youtube_uploads WHERE youtube_video_id = $1 AND user_id = $2"
+        "SELECT * FROM youtube_uploads WHERE youtube_video_id = $1 AND user_id = $2",
     )
     .bind(&video_id)
     .bind(user_id)
@@ -3107,7 +3456,7 @@ pub async fn list_captions(
 
     // Get channel
     let channel = sqlx::query_as::<_, crate::models::youtube::ConnectedYouTubeChannel>(
-        "SELECT * FROM connected_youtube_channels WHERE id = $1"
+        "SELECT * FROM connected_youtube_channels WHERE id = $1",
     )
     .bind(upload.channel_id)
     .fetch_optional(&state.db_pool)
@@ -3125,7 +3474,8 @@ pub async fn list_captions(
         )
     })?;
 
-    let captions_response = youtube.list_captions(&channel.access_token, &video_id)
+    let captions_response = youtube
+        .list_captions(&channel.access_token, &video_id)
         .await
         .map_err(|e| {
             (
@@ -3134,15 +3484,19 @@ pub async fn list_captions(
             )
         })?;
 
-    let captions: Vec<_> = captions_response.items.iter().map(|track| {
-        json!({
-            "caption_id": track.id,
-            "language": track.snippet.language,
-            "name": track.snippet.name,
-            "track_kind": track.snippet.track_kind,
-            "is_draft": track.snippet.is_draft
+    let captions: Vec<_> = captions_response
+        .items
+        .iter()
+        .map(|track| {
+            json!({
+                "caption_id": track.id,
+                "language": track.snippet.language,
+                "name": track.snippet.name,
+                "track_kind": track.snippet.track_kind,
+                "is_draft": track.snippet.is_draft
+            })
         })
-    }).collect();
+        .collect();
 
     Ok(Json(json!({
         "success": true,
@@ -3171,7 +3525,7 @@ pub async fn upload_caption(
 
     // Verify ownership
     let upload = sqlx::query_as::<_, crate::models::youtube::YouTubeUpload>(
-        "SELECT * FROM youtube_uploads WHERE youtube_video_id = $1 AND user_id = $2"
+        "SELECT * FROM youtube_uploads WHERE youtube_video_id = $1 AND user_id = $2",
     )
     .bind(&video_id)
     .bind(user_id)
@@ -3192,7 +3546,7 @@ pub async fn upload_caption(
 
     // Get channel
     let channel = sqlx::query_as::<_, crate::models::youtube::ConnectedYouTubeChannel>(
-        "SELECT * FROM connected_youtube_channels WHERE id = $1"
+        "SELECT * FROM connected_youtube_channels WHERE id = $1",
     )
     .bind(upload.channel_id)
     .fetch_optional(&state.db_pool)
@@ -3224,32 +3578,35 @@ pub async fn upload_caption(
     }
 
     // Read caption file
-    let caption_data = tokio::fs::read(&payload.caption_file)
+    let caption_data = tokio::fs::read(&payload.caption_file).await.map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(
+                json!({"success": false, "message": format!("Failed to read caption file: {}", e)}),
+            ),
+        )
+    })?;
+
+    let name = payload
+        .name
+        .unwrap_or_else(|| format!("{} captions", payload.language));
+
+    // Upload to YouTube
+    let caption_response = youtube
+        .upload_caption(
+            &channel.access_token,
+            &video_id,
+            &payload.language,
+            &name,
+            caption_data,
+        )
         .await
         .map_err(|e| {
             (
-                StatusCode::BAD_REQUEST,
-                Json(json!({"success": false, "message": format!("Failed to read caption file: {}", e)})),
+                StatusCode::BAD_GATEWAY,
+                Json(json!({"success": false, "message": format!("YouTube API error: {}", e)})),
             )
         })?;
-
-    let name = payload.name.unwrap_or_else(|| format!("{} captions", payload.language));
-
-    // Upload to YouTube
-    let caption_response = youtube.upload_caption(
-        &channel.access_token,
-        &video_id,
-        &payload.language,
-        &name,
-        caption_data,
-    )
-    .await
-    .map_err(|e| {
-        (
-            StatusCode::BAD_GATEWAY,
-            Json(json!({"success": false, "message": format!("YouTube API error: {}", e)})),
-        )
-    })?;
 
     // Save to database
     sqlx::query(
@@ -3293,7 +3650,7 @@ pub async fn delete_caption(
 
     // Get channel (any active channel for the user)
     let channel = sqlx::query_as::<_, crate::models::youtube::ConnectedYouTubeChannel>(
-        "SELECT * FROM connected_youtube_channels WHERE user_id = $1 AND is_active = true LIMIT 1"
+        "SELECT * FROM connected_youtube_channels WHERE user_id = $1 AND is_active = true LIMIT 1",
     )
     .bind(user_id)
     .fetch_optional(&state.db_pool)
@@ -3325,7 +3682,8 @@ pub async fn delete_caption(
     }
 
     // Delete from YouTube
-    youtube.delete_caption(&channel.access_token, &caption_id)
+    youtube
+        .delete_caption(&channel.access_token, &caption_id)
         .await
         .map_err(|e| {
             (
@@ -3372,7 +3730,7 @@ pub async fn schedule_video_publish(
 
     // Verify ownership
     let upload = sqlx::query_as::<_, crate::models::youtube::YouTubeUpload>(
-        "SELECT * FROM youtube_uploads WHERE youtube_video_id = $1 AND user_id = $2"
+        "SELECT * FROM youtube_uploads WHERE youtube_video_id = $1 AND user_id = $2",
     )
     .bind(&video_id)
     .bind(user_id)
@@ -3393,7 +3751,7 @@ pub async fn schedule_video_publish(
 
     // Get channel
     let channel = sqlx::query_as::<_, crate::models::youtube::ConnectedYouTubeChannel>(
-        "SELECT * FROM connected_youtube_channels WHERE id = $1"
+        "SELECT * FROM connected_youtube_channels WHERE id = $1",
     )
     .bind(upload.channel_id)
     .fetch_optional(&state.db_pool)
@@ -3441,7 +3799,9 @@ pub async fn schedule_video_publish(
         let error_text = response.text().await.unwrap_or_default();
         return Err((
             StatusCode::BAD_GATEWAY,
-            Json(json!({"success": false, "message": format!("YouTube API error: {}", error_text)})),
+            Json(
+                json!({"success": false, "message": format!("YouTube API error: {}", error_text)}),
+            ),
         ));
     }
 
@@ -3507,30 +3867,52 @@ pub async fn initiate_resumable_upload(
 
     // Check if token needs refresh (refresh 30 minutes before expiry for safety margin)
     if channel.token_expiry < chrono::Utc::now() + chrono::Duration::minutes(30) {
-        tracing::info!("🔄 Refreshing expired token for channel: {} before resumable upload", channel.channel_name);
+        tracing::info!(
+            "🔄 Refreshing expired token for channel: {} before resumable upload",
+            channel.channel_name
+        );
 
-        let client_id = state.google_oauth_client_id.as_ref()
-            .ok_or_else(|| (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": "YouTube not configured. Set GOOGLE_CLIENT_ID."}))))?;
-        let client_secret = state.google_oauth_client_secret.as_ref()
-            .ok_or_else(|| (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": "YouTube not configured. Set GOOGLE_CLIENT_SECRET."}))))?;
+        let client_id = state.google_oauth_client_id.as_ref().ok_or_else(|| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({"error": "YouTube not configured. Set GOOGLE_CLIENT_ID."})),
+            )
+        })?;
+        let client_secret = state.google_oauth_client_secret.as_ref().ok_or_else(|| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({"error": "YouTube not configured. Set GOOGLE_CLIENT_SECRET."})),
+            )
+        })?;
 
-        let token_response = match youtube.refresh_access_token(
-            &channel.refresh_token,
-            client_id,
-            client_secret,
-        ).await {
+        let token_response = match youtube
+            .refresh_access_token(&channel.refresh_token, client_id, client_secret)
+            .await
+        {
             Ok(response) => response,
             Err(e) => {
                 let error_str = e.to_string();
-                tracing::error!("Failed to refresh token for resumable upload: {}", error_str);
+                tracing::error!(
+                    "Failed to refresh token for resumable upload: {}",
+                    error_str
+                );
 
                 // Mark channel as requiring reauth if token expired
-                if error_str.contains("REFRESH_TOKEN_EXPIRED") || error_str.contains("invalid_grant") {
-                    let _ = mark_channel_requires_reauth(&state.db_pool, payload.channel_id, &error_str).await;
+                if error_str.contains("REFRESH_TOKEN_EXPIRED")
+                    || error_str.contains("invalid_grant")
+                {
+                    let _ = mark_channel_requires_reauth(
+                        &state.db_pool,
+                        payload.channel_id,
+                        &error_str,
+                    )
+                    .await;
                 }
 
                 // Parse error to provide specific user message
-                let user_message = if error_str.contains("REFRESH_TOKEN_EXPIRED") || error_str.contains("invalid_grant") {
+                let user_message = if error_str.contains("REFRESH_TOKEN_EXPIRED")
+                    || error_str.contains("invalid_grant")
+                {
                     "Your YouTube authorization has expired. Please reconnect your channel to continue uploading."
                 } else if error_str.contains("INVALID_CREDENTIALS") {
                     "YouTube authentication configuration error. Please contact support."
@@ -3542,19 +3924,20 @@ pub async fn initiate_resumable_upload(
 
                 return Err((
                     StatusCode::UNAUTHORIZED,
-                    Json(json!({"success": false, "message": user_message}))
+                    Json(json!({"success": false, "message": user_message})),
                 ));
             }
         };
 
         // Update token in memory and database
         channel.access_token = token_response.access_token.clone();
-        channel.token_expiry = chrono::Utc::now() + chrono::Duration::seconds(token_response.expires_in);
+        channel.token_expiry =
+            chrono::Utc::now() + chrono::Duration::seconds(token_response.expires_in);
 
         sqlx::query(
             "UPDATE connected_youtube_channels
              SET access_token = $1, token_expiry = $2, updated_at = NOW()
-             WHERE id = $3"
+             WHERE id = $3",
         )
         .bind(&channel.access_token)
         .bind(channel.token_expiry)
@@ -3563,26 +3946,30 @@ pub async fn initiate_resumable_upload(
         .await
         .ok();
 
-        tracing::info!("✅ Token refreshed successfully for channel: {}", channel.channel_name);
+        tracing::info!(
+            "✅ Token refreshed successfully for channel: {}",
+            channel.channel_name
+        );
     }
 
     // Initiate resumable upload session with fresh token
-    let session_response = youtube.initiate_resumable_upload(
-        &channel.access_token,
-        &payload.title,
-        payload.description.as_deref().unwrap_or(""),
-        &payload.privacy_status,
-        payload.category.as_deref(),
-        payload.tags.clone(),
-        payload.file_size,
-    )
-    .await
-    .map_err(|e| {
-        (
-            StatusCode::BAD_GATEWAY,
-            Json(json!({"success": false, "message": format!("YouTube API error: {}", e)})),
+    let session_response = youtube
+        .initiate_resumable_upload(
+            &channel.access_token,
+            &payload.title,
+            payload.description.as_deref().unwrap_or(""),
+            &payload.privacy_status,
+            payload.category.as_deref(),
+            payload.tags.clone(),
+            payload.file_size,
         )
-    })?;
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({"success": false, "message": format!("YouTube API error: {}", e)})),
+            )
+        })?;
 
     // Create upload record in database
     let upload_id: i32 = sqlx::query_scalar(
@@ -3591,7 +3978,7 @@ pub async fn initiate_resumable_upload(
             privacy_status, video_category, upload_status, upload_session_url,
             total_bytes, bytes_uploaded, is_resumable
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'uploading', $8, $9, 0, true)
-        RETURNING id"
+        RETURNING id",
     )
     .bind(user_id)
     .bind(payload.channel_id)
@@ -3641,7 +4028,7 @@ pub async fn upload_chunk(
 
     // Get upload record
     let upload = sqlx::query_as::<_, crate::models::youtube::YouTubeUpload>(
-        "SELECT * FROM youtube_uploads WHERE id = $1 AND user_id = $2 AND is_resumable = true"
+        "SELECT * FROM youtube_uploads WHERE id = $1 AND user_id = $2 AND is_resumable = true",
     )
     .bind(upload_id)
     .bind(user_id)
@@ -3680,20 +4067,21 @@ pub async fn upload_chunk(
     let end_byte = start_byte + chunk_size - 1;
 
     // Upload chunk
-    let chunk_response = youtube.upload_resumable_chunk(
-        &session_url,
-        body.to_vec(),
-        start_byte,
-        end_byte,
-        total_bytes,
-    )
-    .await
-    .map_err(|e| {
-        (
-            StatusCode::BAD_GATEWAY,
-            Json(json!({"success": false, "message": format!("YouTube API error: {}", e)})),
+    let chunk_response = youtube
+        .upload_resumable_chunk(
+            &session_url,
+            body.to_vec(),
+            start_byte,
+            end_byte,
+            total_bytes,
         )
-    })?;
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({"success": false, "message": format!("YouTube API error: {}", e)})),
+            )
+        })?;
 
     // Update progress in database
     let new_bytes_uploaded = end_byte + 1;
@@ -3729,7 +4117,7 @@ pub async fn upload_chunk(
              youtube_url = $2,
              published_at = NOW(),
              updated_at = NOW()
-             WHERE id = $3"
+             WHERE id = $3",
         )
         .bind(&video_response.id)
         .bind(&youtube_url)
@@ -3758,7 +4146,7 @@ pub async fn upload_chunk(
 }
 
 // ============================================================================
-// YouTube Coming Soon Page
+// YouTube Workspace Preview Page
 // ============================================================================
 
 pub async fn youtube_coming_soon_page() -> Html<String> {
@@ -3768,7 +4156,7 @@ pub async fn youtube_coming_soon_page() -> Html<String> {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>YouTube Features - Coming Soon | VideoSync</title>
+    <title>YouTube Workspace Preview | VideoSync</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -3905,11 +4293,11 @@ pub async fn youtube_coming_soon_page() -> Html<String> {
 <body>
     <div class="container">
         <div class="icon">🎥</div>
-        <h1>YouTube Integration Coming Soon!</h1>
-        <p class="subtitle">We're preparing an amazing YouTube experience for you</p>
+        <h1>YouTube Workspace Preview</h1>
+        <p class="subtitle">This page is being consolidated into the main VideoSync YouTube workflow.</p>
 
         <div class="features-box">
-            <h2>What You'll Be Able to Do:</h2>
+            <h2>Available YouTube Workflow Areas</h2>
             <div class="feature-list">
                 <div class="feature-item">Upload videos directly</div>
                 <div class="feature-item">Manage video metadata</div>
@@ -3925,7 +4313,7 @@ pub async fn youtube_coming_soon_page() -> Html<String> {
         </div>
 
         <div class="other-features">
-            <h3>In the Meantime, Explore These Features:</h3>
+            <h3>Other Available VideoSync Tools</h3>
             <div class="tools-grid">
                 <div class="tool-item">🎬 Video Trimming</div>
                 <div class="tool-item">📦 Video Merging</div>
@@ -3948,8 +4336,8 @@ pub async fn youtube_coming_soon_page() -> Html<String> {
         </div>
 
         <div class="info-banner">
-            <strong>📧 Want Early Access?</strong><br>
-            YouTube features are currently in testing mode. Contact your administrator to get whitelisted for early access.
+            <strong>Status:</strong><br>
+            Uploads, captions, thumbnails, and analytics already exist in the product. This consolidated landing page is being folded into the main YouTube workspace so the navigation matches the real tool surface.
         </div>
     </div>
 </body>

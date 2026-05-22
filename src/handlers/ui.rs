@@ -1,8 +1,43 @@
-use axum::{response::Html, routing::get, Router};
+use crate::{
+    handlers::service_catalog::{
+        build_service_sample_chat_title, build_service_sample_prompt, service_sample_ui_config,
+    },
+    handlers::upload::get_or_create_session, middleware::auth::auth_middleware,
+    models::auth::Claims, AppState,
+};
+use axum::{
+    extract::Extension,
+    response::Html,
+    routing::{get, post},
+    Json, Router,
+};
+use serde::Deserialize;
+use serde_json::json;
+use std::sync::Arc;
 
 pub fn ui_routes() -> Router {
     Router::new()
         .route("/", get(landing_page))
+        .route("/services", get(services_overview_page))
+        .route("/services/saas-launch-pack", get(saas_launch_pack_page))
+        .route("/services/thumbnail-hero-pack", get(thumbnail_hero_pack_page))
+        .route("/services/product-mockup-pack", get(product_mockup_pack_page))
+        .route(
+            "/services/education-explainer-pack",
+            get(education_explainer_pack_page),
+        )
+        .route("/services/blender-scene-pack", get(blender_scene_pack_page))
+        .route("/services/voice-audio-pack", get(voice_audio_pack_page))
+        .route("/services/mixed-agency-bundle", get(mixed_agency_bundle_page))
+        .route(
+            "/services/clipper-enhancement-pack",
+            get(clipper_enhancement_pack_page),
+        )
+        .route(
+            "/services/creator-manager-fulfillment",
+            get(creator_manager_fulfillment_page),
+        )
+        .route("/services/x402-asset-api", get(x402_asset_api_page))
         .route("/login", get(login_page))
         .route("/signup", get(signup_page))
         .route("/dashboard", get(dashboard_page))
@@ -19,9 +54,1571 @@ pub fn ui_routes() -> Router {
         .route("/signup/clipper", get(clipper_signup_page))
 }
 
+pub fn ui_private_routes() -> Router {
+    Router::new()
+        .route("/api/service-samples/quota", get(get_service_sample_quota))
+        .route("/api/service-samples/request", post(create_service_sample_request))
+        .layer(axum::middleware::from_fn(auth_middleware))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ServiceSampleQuotaQuery {
+    pub service: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ServiceSampleRequest {
+    pub service_slug: String,
+    pub reference_url: Option<String>,
+    pub prospect_name: Option<String>,
+    pub brief: String,
+    pub source: Option<String>,
+}
+
+fn service_sample_free_limit() -> i64 {
+    std::env::var("SERVICE_SAMPLE_FREE_LIMIT")
+        .ok()
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(5)
+}
+
+fn parse_claim_user_id(claims: &Claims) -> Result<i32, String> {
+    claims
+        .sub
+        .parse::<i32>()
+        .map_err(|_| "Invalid user id in auth token".to_string())
+}
+
+pub async fn get_service_sample_quota(
+    Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
+    axum::extract::Query(query): axum::extract::Query<ServiceSampleQuotaQuery>,
+) -> Json<serde_json::Value> {
+    let user_id = match parse_claim_user_id(&claims) {
+        Ok(id) => id,
+        Err(message) => return Json(json!({"success": false, "message": message})),
+    };
+
+    let is_unlimited = claims.is_staff || claims.is_superuser;
+    let limit = service_sample_free_limit();
+
+    let used = if is_unlimited {
+        0
+    } else {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM service_sample_requests WHERE user_id = $1 AND source = 'videosync_service'",
+        )
+        .bind(user_id)
+        .fetch_one(&state.db_pool)
+        .await
+        .unwrap_or(0)
+    };
+
+    Json(json!({
+        "success": true,
+        "service": query.service,
+        "limit": limit,
+        "used": used,
+        "remaining": if is_unlimited { limit } else { std::cmp::max(0, limit - used) },
+        "unlimited": is_unlimited
+    }))
+}
+
+pub async fn create_service_sample_request(
+    Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
+    Json(payload): Json<ServiceSampleRequest>,
+) -> Json<serde_json::Value> {
+    let user_id = match parse_claim_user_id(&claims) {
+        Ok(id) => id,
+        Err(message) => return Json(json!({"success": false, "message": message})),
+    };
+
+    let brief = payload.brief.trim();
+    if brief.is_empty() {
+        return Json(json!({"success": false, "message": "A sample brief is required"}));
+    }
+
+    let is_unlimited = claims.is_staff || claims.is_superuser;
+    let limit = service_sample_free_limit();
+    let used = if is_unlimited {
+        0
+    } else {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM service_sample_requests WHERE user_id = $1 AND source = 'videosync_service'",
+        )
+        .bind(user_id)
+        .fetch_one(&state.db_pool)
+        .await
+        .unwrap_or(0)
+    };
+
+    if !is_unlimited && used >= limit {
+        return Json(json!({
+            "success": false,
+            "limit_reached": true,
+            "message": "Your included service-page outputs are used up. Upgrade to continue generating more output.",
+            "upgrade_url": "/subscribe",
+            "used": used,
+            "limit": limit,
+            "remaining": 0
+        }));
+    }
+
+    let service_slug = payload.service_slug.trim();
+    let reference_url = payload
+        .reference_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let prospect_name = payload
+        .prospect_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let source = payload
+        .source
+        .unwrap_or_else(|| "videosync_service".to_string());
+    let session_uuid = uuid::Uuid::new_v4().to_string();
+    let session_title =
+        build_service_sample_chat_title(service_slug, brief, prospect_name.as_deref());
+
+    let session_db_id = match get_or_create_session(&state, &session_uuid, Some(user_id)).await {
+        Ok(id) => id,
+        Err(error) => {
+            return Json(json!({
+                "success": false,
+                "message": format!("Failed to create chat session for this request: {error}")
+            }));
+        }
+    };
+
+    let _ = sqlx::query(
+        "UPDATE chat_sessions
+         SET title = $1, updated_at = NOW()
+         WHERE id = $2",
+    )
+    .bind(&session_title)
+    .bind(session_db_id)
+    .execute(&state.db_pool)
+    .await;
+
+    let request_id = uuid::Uuid::new_v4();
+    let prompt = build_service_sample_prompt(
+        service_slug,
+        reference_url.as_deref(),
+        prospect_name.as_deref(),
+        brief,
+    );
+    let workflow_runtime = crate::services::WorkflowRuntime::new(state.db_pool.clone());
+    let workflow_id = match workflow_runtime
+        .create_or_reuse_workflow(crate::services::NewWorkflow {
+            idempotency_key: Some(format!(
+                "service-sample:{user_id}:{session_uuid}:{service_slug}:{request_id}"
+            )),
+            workflow_type: "service_sample_generation".to_string(),
+            status: crate::services::WorkflowStatus::Planning,
+            session_uuid: Some(session_uuid.clone()),
+            user_id: Some(user_id),
+            source_table: Some("service_sample_requests".to_string()),
+            source_record_id: Some(request_id),
+            request_summary: session_title.clone(),
+            current_step: Some("request_received".to_string()),
+            metadata: json!({
+                "service_slug": service_slug,
+                "source": source.clone(),
+                "reference_url": reference_url.clone(),
+                "prospect_name": prospect_name.clone(),
+                "brief": brief,
+            }),
+            artifact_requirements: json!([
+                {
+                    "kind": "buyer_facing_sample",
+                    "required": true,
+                    "must_be_playable": true
+                }
+            ]),
+        })
+        .await
+    {
+        Ok(id) => id,
+        Err(error) => {
+            return Json(json!({
+                "success": false,
+                "message": format!("Failed to create durable workflow for this sample request: {error}")
+            }));
+        }
+    };
+
+    let _ = workflow_runtime
+        .append_event(
+            workflow_id,
+            "request_received",
+            Some("request_received"),
+            "Service sample request captured and ready to be routed into the AI workspace.",
+            json!({
+                "service_slug": service_slug,
+                "request_id": request_id,
+            }),
+        )
+        .await;
+
+    let inserted = sqlx::query(
+        "INSERT INTO service_sample_requests
+            (id, user_id, service_slug, source, reference_url, prospect_name, brief, generated_prompt, workflow_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+    )
+    .bind(request_id)
+    .bind(user_id)
+    .bind(service_slug)
+    .bind(&source)
+    .bind(reference_url.as_deref())
+    .bind(prospect_name.as_deref())
+    .bind(brief)
+    .bind(&prompt)
+    .bind(workflow_id)
+    .execute(&state.db_pool)
+    .await;
+
+    if let Err(error) = inserted {
+        let _ = workflow_runtime
+            .mark_failed(
+                workflow_id,
+                Some("request_persistence"),
+                &format!("Failed to store sample request: {error}"),
+                None,
+            )
+            .await;
+        return Json(json!({
+            "success": false,
+            "message": format!("Failed to store sample request: {error}")
+        }));
+    }
+
+    let _ = workflow_runtime
+        .heartbeat(
+            workflow_id,
+            crate::services::WorkflowStatus::Queued,
+            Some("awaiting_chat_execution"),
+            "The sample request has been stored and is waiting for the AI workspace to start generation.",
+            json!({
+                "request_id": request_id,
+                "chat_source": "service-page",
+            }),
+        )
+        .await;
+
+    let remaining = if is_unlimited {
+        limit
+    } else {
+        std::cmp::max(0, limit - (used + 1))
+    };
+
+    let chat_url = format!(
+        "/chat/{session_uuid}?{}",
+        url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("prompt", &prompt)
+            .append_pair("autosend", "1")
+            .append_pair("source", "service-page")
+            .append_pair("service", service_slug)
+            .append_pair("sample_request_id", &request_id.to_string())
+            .append_pair("workflow_id", &workflow_id.to_string())
+            .finish()
+    );
+
+    Json(json!({
+        "success": true,
+        "request_id": request_id.to_string(),
+        "workflow_id": workflow_id.to_string(),
+        "chat_url": chat_url,
+        "limit": limit,
+        "used": if is_unlimited { 0 } else { used + 1 },
+        "remaining": remaining,
+        "unlimited": is_unlimited
+    }))
+}
+
 pub async fn landing_page() -> Html<String> {
     let html = build_modern_landing_page_html();
     Html(html.to_string())
+}
+
+pub async fn services_overview_page() -> Html<String> {
+    Html(build_services_overview_page_html())
+}
+
+pub async fn saas_launch_pack_page() -> Html<String> {
+    Html(build_service_offer_page_html(
+        "saas-launch-pack",
+        "SaaS Launch Pack",
+        "$299-$1,500+",
+        "Product demos, launch trailers, onboarding explainers, and homepage videos built from your real product.",
+        "Built for founders, product marketers, agencies, and sales teams that need polished product video without waiting on a traditional studio.",
+        "Turn a live product URL, screenshots, app recording, or launch brief into a buyer-facing video package. VideoSync can create short homepage videos, narrated walkthroughs, launch trailers, onboarding explainers, sales demos, and social cutdowns from the same product source.",
+        "/subscribe",
+        "Start with the creator plan",
+        "/chat",
+        "Request a custom launch sample",
+        &[
+            "Homepage hero videos and launch trailers",
+            "Narrated product demos and walkthroughs",
+            "Device, browser, and app mockup scenes",
+            "Sales, onboarding, investor, and social cutdowns",
+            "Delivery page for sharing, review, and approval",
+        ],
+        &[
+            "Share your live product URL, screenshots, app recording, or launch brief.",
+            "We turn the product into a clear video concept with the right length, story, and format for your goal.",
+            "VideoSync builds the scenes, motion, narration, and cutdowns around the strongest parts of the product.",
+            "You receive a delivery link you can review, share, and use in launch, sales, or onboarding.",
+        ],
+        &[
+            ("SaaS founder", "Needs launch-ready product video for a homepage, launch, demo day, or investor update."),
+            ("Product marketer", "Needs polished motion assets without hiring a full video team for every release."),
+            ("Sales or onboarding team", "Needs clear product video that explains the product faster and shortens the learning curve."),
+        ],
+        r#"["landing_page","product_mockup","full_stack","scene"]"#,
+    ))
+}
+
+pub async fn clipper_enhancement_pack_page() -> Html<String> {
+    Html(build_service_offer_page_html(
+        "clipper-enhancement-pack",
+        "Thumbnail & Motion Graphics Pack",
+        "$97-$600+",
+        "High-converting thumbnails, title cards, lower thirds, mockups, and motion assets for creators, launches, and client campaigns.",
+        "Built for creators, marketers, agencies, and small teams that need premium visual packaging around their videos and campaigns.",
+        "This offer focuses on the platform's strongest visual add-ons: rendered thumbnails, title cards, lower thirds, device mockups, data visuals, and branded motion scenes. It is the fastest way to improve how a video package looks before someone clicks play.",
+        "/manual-clipping",
+        "Open video tools",
+        "/chat",
+        "Request a visual sample",
+        &[
+            "YouTube and social thumbnail variants",
+            "Title cards, lower thirds, and branded overlays",
+            "Device mockups and promo motion loops",
+            "Data visuals, explainer scenes, and support graphics",
+            "Polish assets you can reuse across campaigns",
+        ],
+        &[
+            "Share the video, channel, campaign, or design direction you want to improve.",
+            "We identify the supporting visuals that will make the content look more premium and click-worthy.",
+            "VideoSync produces the thumbnail, motion graphics, mockups, or support scenes around that brief.",
+            "You receive ready-to-use assets that fit your channel, launch, or client package.",
+        ],
+        &[
+            ("Creator or YouTube operator", "Needs stronger thumbnails and packaging to improve clicks and presentation."),
+            ("Launch marketer", "Needs motion assets that make a release look more polished across channels."),
+            ("Agency or freelance editor", "Needs premium visual add-ons without building every graphic from scratch."),
+        ],
+        r#"["animations","thumbnails","scene","ui_mockup"]"#,
+    ))
+}
+
+pub async fn thumbnail_hero_pack_page() -> Html<String> {
+    Html(build_service_offer_page_html(
+        "thumbnail-hero-pack",
+        "Thumbnail & Hero Visual Pack",
+        "$49-$250+",
+        "Click-focused thumbnails, hero visuals, and campaign graphics for creators, launches, products, and ads.",
+        "Built for YouTubers, SaaS founders, course sellers, agencies, and operators who need stronger first impressions fast.",
+        "VideoSync can turn a product, video, or campaign brief into thumbnail variants, hero visuals, ad stills, and reusable visual directions with Gemini multimodal QA before delivery.",
+        "/chat",
+        "Generate a hero visual",
+        "/services",
+        "See related offers",
+        &[
+            "YouTube thumbnail variants",
+            "SaaS/product hero visuals",
+            "Ad stills and campaign graphics",
+            "Visual direction notes and hooks",
+            "Download-ready delivery links",
+        ],
+        &[
+            "Share the product, video, campaign, or audience you want to attract.",
+            "The agent creates several visual angles and hook concepts.",
+            "VideoSync generates and reviews the strongest thumbnail/hero candidates.",
+            "You receive downloadable assets and captions/hooks to test.",
+        ],
+        &[
+            ("YouTube creator", "Needs better click-through without waiting on a designer."),
+            ("SaaS founder", "Needs stronger launch and landing-page visuals."),
+            ("Agency operator", "Needs fast visual variants for client campaigns."),
+        ],
+        r#"["thumbnails","generated_images","landing_page","ugc"]"#,
+    ))
+}
+
+pub async fn product_mockup_pack_page() -> Html<String> {
+    Html(build_service_offer_page_html(
+        "product-mockup-pack",
+        "Product Mockup Video Pack",
+        "$99-$600+",
+        "UI mockups, browser/device scenes, and product videos that make apps easier to sell.",
+        "Built for SaaS founders, indie hackers, app owners, no-code builders, and agencies selling productized demos.",
+        "Turn screenshots, a URL, Figma exports, or a written workflow into UI mockups, motion scenes, product walkthroughs, and short ad variants.",
+        "/chat",
+        "Generate a mockup video",
+        "/services/saas-launch-pack",
+        "Upgrade to SaaS launch pack",
+        &[
+            "Browser/device mockup scenes",
+            "Short product walkthrough videos",
+            "App promo clips and ads",
+            "Landing-page hero concepts",
+            "Delivery page with downloads",
+        ],
+        &[
+            "Share the product URL, screenshots, or app flow.",
+            "The agent identifies the clearest product story and buyer use case.",
+            "VideoSync renders UI mockups, narration, motion, and support footage.",
+            "You get a shareable delivery link and downloadable media.",
+        ],
+        &[
+            ("Indie hacker", "Needs a product video before paid ads or launch."),
+            ("No-code builder", "Needs a polished demo from screenshots and a short brief."),
+            ("Agency", "Needs repeatable client mockup videos."),
+        ],
+        r#"["product_mockup","landing_page","animations","full_stack"]"#,
+    ))
+}
+
+pub async fn education_explainer_pack_page() -> Html<String> {
+    Html(build_service_offer_page_html(
+        "education-explainer-pack",
+        "Education Explainer Pack",
+        "$149-$900+",
+        "Manim, LaTeX, diagrams, narration, and long-form explainers for lessons, courses, and technical content.",
+        "Built for educators, course creators, technical YouTubers, founders, and B2B teams that need concepts explained visually.",
+        "VideoSync can combine Manim/LaTeX renders, diagrams, stock footage, narration, and long-form assembly into lessons, explainer videos, and course modules.",
+        "/chat",
+        "Generate an explainer",
+        "/services/mixed-agency-bundle",
+        "Bundle with more assets",
+        &[
+            "Manim and LaTeX scenes",
+            "Narrated explainers and tutorials",
+            "Course lesson videos",
+            "Diagrams, formulas, and visual proofs",
+            "Long-form assembly with checkpoints",
+        ],
+        &[
+            "Share the concept, lesson outline, or technical topic.",
+            "The agent chooses diagrams, formulas, narration, and visual pacing.",
+            "VideoSync renders recoverable segments and reviews the outputs.",
+            "You receive a complete video plus reusable assets.",
+        ],
+        &[
+            ("Course creator", "Needs lesson videos without manually animating every concept."),
+            ("Technical founder", "Needs a clear product or API explainer."),
+            ("YouTube educator", "Needs repeatable educational video production."),
+        ],
+        r#"["education","manim","latex","long_form"]"#,
+    ))
+}
+
+pub async fn blender_scene_pack_page() -> Html<String> {
+    Html(build_service_offer_page_html(
+        "blender-scene-pack",
+        "Blender 2D/3D Scene Pack",
+        "$199-$1,200+",
+        "Blender scenes, product animations, 3D explainers, animated models, and cinematic support visuals.",
+        "Built for product teams, creators, agencies, educators, and technical brands that need visuals beyond flat stock footage.",
+        "VideoSync can use BlenderMCP outputs alongside editing, narration, QA, thumbnails, and delivery pages to produce stronger demos and explainers.",
+        "/chat",
+        "Generate a Blender scene",
+        "/services/mixed-agency-bundle",
+        "Bundle into a package",
+        &[
+            "2D/3D product scenes",
+            "Animated models and explainers",
+            "Title cards and lower thirds",
+            "Data visuals and cinematic loops",
+            "QA-reviewed rendered assets",
+        ],
+        &[
+            "Describe the object, scene, or animation goal.",
+            "The agent decides whether Blender, Manim, FFmpeg, or image generation fits best.",
+            "Rendered assets are reviewed and packaged with downloads.",
+            "Scenes can be inserted into longer product or education videos.",
+        ],
+        &[
+            ("Product marketer", "Needs visuals that make the product feel premium."),
+            ("Educator", "Needs physical or abstract concepts animated clearly."),
+            ("Agency", "Needs unique visuals clients cannot get from template editors."),
+        ],
+        r#"["blender","3d_scene","animations","full_stack"]"#,
+    ))
+}
+
+pub async fn voice_audio_pack_page() -> Html<String> {
+    Html(build_service_offer_page_html(
+        "voice-audio-pack",
+        "Voice & Audio Production Pack",
+        "$49-$400+",
+        "VibeVoice narration, podcast-style audio, voiceovers, summaries, and audio-backed video packages.",
+        "Built for founders, creators, educators, agencies, and newsletter operators who need narration or audio content quickly.",
+        "VideoSync can generate scripts, voiceovers, narrated summaries, audio visualizers, and video packages that combine narration with motion assets.",
+        "/chat",
+        "Generate voice/audio",
+        "/services/education-explainer-pack",
+        "Create a narrated explainer",
+        &[
+            "Voiceover and narration scripts",
+            "VibeVoice audio outputs",
+            "Podcast/video summaries",
+            "Audio visualizers",
+            "Narrated videos and delivery links",
+        ],
+        &[
+            "Share the source, topic, or script direction.",
+            "The agent writes or adapts narration for the goal.",
+            "VideoSync generates audio and optionally pairs it with visuals.",
+            "You receive downloadable audio/video assets.",
+        ],
+        &[
+            ("Founder", "Needs a clear narrated demo or update."),
+            ("Creator", "Needs voiceover-backed clips and summaries."),
+            ("Agency", "Needs fast narration for client deliverables."),
+        ],
+        r#"["voice_audio","vibevoice","summary","long_form"]"#,
+    ))
+}
+
+pub async fn mixed_agency_bundle_page() -> Html<String> {
+    Html(build_service_offer_page_html(
+        "mixed-agency-bundle",
+        "Mixed Agency Production Bundle",
+        "$499-$2,500+",
+        "A bundled package with demos, clips, thumbnails, mockups, narration, education scenes, 3D scenes, and delivery pages.",
+        "Built for agencies, consultants, creator managers, and growth operators who want a client-ready package instead of a single asset.",
+        "This is the broadest money lane: the agent chooses from clipping, long-form, thumbnails, UI mockups, Blender, Manim/LaTeX, VibeVoice, FFmpeg, QA, and delivery pages based on the client goal.",
+        "/chat",
+        "Generate a bundle",
+        "/services/creator-manager-fulfillment",
+        "Explore backend fulfillment",
+        &[
+            "One main demo or explainer",
+            "Short clip/ad variants",
+            "Thumbnail and hero concepts",
+            "Mockups, Blender, Manim, or voice as needed",
+            "Delivery page with download buttons",
+        ],
+        &[
+            "Share the client, product, or campaign goal.",
+            "The agent plans the right mix of assets instead of forcing one tool.",
+            "VideoSync renders, reviews, and packages the deliverables.",
+            "You get a client-ready bundle that can be sold immediately.",
+        ],
+        &[
+            ("Agency owner", "Needs a fast proof package to win or retain clients."),
+            ("Consultant", "Needs buyer-facing deliverables from strategy work."),
+            ("Creator manager", "Needs repeatable media packages across accounts."),
+        ],
+        r#"["bundle","full_stack","long_form","thumbnails","voice_audio","blender","education"]"#,
+    ))
+}
+
+pub async fn creator_manager_fulfillment_page() -> Html<String> {
+    Html(build_service_offer_page_html(
+        "creator-manager-fulfillment",
+        "Agency Production Backend",
+        "$999-$3,000+/month",
+        "A private production layer for agencies and operators selling recurring video deliverables to their own clients.",
+        "Built for boutique agencies, creator managers, consultants, and operators who already sell video services and need reliable fulfillment behind the scenes.",
+        "VideoSync works best here as a backend, not a personality. You keep the client relationship and use the platform to produce demos, thumbnails, motion graphics, narrated explainers, delivery pages, and repeatable monthly output under your own brand.",
+        "/dashboard",
+        "Open the workspace",
+        "/api-access",
+        "View API access",
+        &[
+            "White-label production support across multiple client accounts",
+            "Product demos, thumbnails, motion graphics, and narrated explainers",
+            "Delivery links that make review and handoff easier",
+            "Repeatable monthly fulfillment instead of one-off scrambling",
+            "A backend that can grow from manual work into API-driven workflows",
+        ],
+        &[
+            "You sell the offer under your own brand and keep the client relationship.",
+            "We help turn the brief into the right production workflow and output mix.",
+            "VideoSync fulfills the deliverables behind the scenes with the same production stack used across the platform.",
+            "Fulfill with VideoSync’s editing, generation, and delivery stack.",
+        ],
+        &[
+            ("Boutique agency owner", "Needs more delivery capacity without turning every new client into an operations problem."),
+            ("Creator manager", "Needs a production backend that helps keep fulfillment consistent across a small roster."),
+            ("Solo operator", "Needs a way to sell a larger service without hiring a full in-house team first."),
+        ],
+        r#"["full_stack","thumbnails","scene","landing_page"]"#,
+    ))
+}
+
+pub async fn x402_asset_api_page() -> Html<String> {
+    Html(build_x402_docs_page_html())
+}
+
+fn build_services_overview_page_html() -> String {
+    let cards = [
+        (
+            "SaaS Demo Video Pack",
+            "/services/saas-launch-pack",
+            "$299-$1,500+",
+            "Product demos, launch trailers, onboarding explainers, and homepage videos built from your real product.",
+        ),
+        (
+            "Thumbnail & Motion Graphics Pack",
+            "/services/clipper-enhancement-pack",
+            "$97-$600+",
+            "High-converting thumbnails, title cards, lower thirds, mockups, and motion assets for creators, launches, and campaigns.",
+        ),
+        (
+            "Thumbnail & Hero Visual Pack",
+            "/services/thumbnail-hero-pack",
+            "$49-$250+",
+            "Click-focused thumbnails, hero visuals, and campaign graphics for creators, launches, products, and ads.",
+        ),
+        (
+            "Product Mockup Video Pack",
+            "/services/product-mockup-pack",
+            "$99-$600+",
+            "UI mockups, browser/device scenes, and product videos that make apps easier to sell.",
+        ),
+        (
+            "Education Explainer Pack",
+            "/services/education-explainer-pack",
+            "$149-$900+",
+            "Manim, LaTeX, diagrams, narration, and long-form explainers for lessons, courses, and technical content.",
+        ),
+        (
+            "Blender 2D/3D Scene Pack",
+            "/services/blender-scene-pack",
+            "$199-$1,200+",
+            "Blender scenes, product animations, 3D explainers, animated models, and cinematic support visuals.",
+        ),
+        (
+            "Voice & Audio Production Pack",
+            "/services/voice-audio-pack",
+            "$49-$400+",
+            "VibeVoice narration, podcast-style audio, voiceovers, summaries, and audio-backed video packages.",
+        ),
+        (
+            "Mixed Agency Production Bundle",
+            "/services/mixed-agency-bundle",
+            "$499-$2,500+",
+            "A bundled package with demos, clips, thumbnails, mockups, narration, education scenes, 3D scenes, and delivery pages.",
+        ),
+        (
+            "Agency Production Backend",
+            "/services/creator-manager-fulfillment",
+            "$999-$3,000+/mo",
+            "A private production layer for agencies and operators selling recurring video deliverables to their own clients.",
+        ),
+        (
+        "Programmable Payments",
+        "/services/x402-asset-api",
+        "Pay per call",
+        "Wallet-paid delivery unlocks and API access for technical teams selling media, previews, or generation endpoints.",
+        ),
+    ]
+    .into_iter()
+    .map(|(title, href, price, copy)| {
+        format!(
+            r#"<article class="offer-card"><div class="eyebrow">Service page</div><h2>{title}</h2><div class="price">{price}</div><p>{copy}</p><a class="cta" href="{href}">Open page</a></article>"#
+        )
+    })
+    .collect::<Vec<_>>()
+    .join("");
+
+    format!(
+        r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VideoSync Services</title>
+  <style>
+    body {{ margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:#07111d; color:#e5eefb; }}
+    .shell {{ max-width:1180px; margin:0 auto; padding:32px 20px 72px; }}
+    .topbar {{ display:flex; justify-content:space-between; align-items:center; gap:1rem; flex-wrap:wrap; margin-bottom:28px; }}
+    .brand {{ color:#fff; text-decoration:none; font-weight:800; font-size:1.3rem; }}
+    .toplinks {{ display:flex; gap:0.8rem; flex-wrap:wrap; }}
+    .toplinks a {{ color:#c7d8f6; text-decoration:none; padding:0.65rem 1rem; border:1px solid rgba(148,163,184,0.2); border-radius:999px; background:rgba(8,15,28,0.75); }}
+    .hero {{ padding:24px; border-radius:26px; background:linear-gradient(135deg, rgba(59,130,246,0.18), rgba(8,15,28,0.92)); border:1px solid rgba(96,165,250,0.2); box-shadow:0 24px 70px rgba(2,6,23,0.45); }}
+    .hero h1 {{ margin:0; font-size:3rem; line-height:1.05; }}
+    .hero p {{ margin:1rem 0 0; max-width:820px; color:#a8b8d3; font-size:1.05rem; }}
+    .grid {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(250px,1fr)); gap:1.2rem; margin-top:28px; }}
+    .offer-card {{ padding:1.5rem; border-radius:22px; background:rgba(9,18,31,0.84); border:1px solid rgba(148,163,184,0.16); box-shadow:0 18px 45px rgba(2,6,23,0.35); }}
+    .offer-card h2 {{ margin:0.45rem 0; font-size:1.5rem; }}
+    .eyebrow {{ color:#93c5fd; font-size:0.78rem; text-transform:uppercase; letter-spacing:0.08em; font-weight:800; }}
+    .price {{ font-size:1.85rem; font-weight:800; margin:0.7rem 0; }}
+    .offer-card p {{ color:#a8b8d3; min-height:72px; }}
+    .cta {{ display:inline-flex; margin-top:1rem; color:#fff; text-decoration:none; background:#2563eb; border-radius:999px; padding:0.8rem 1.2rem; font-weight:700; }}
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <div class="topbar">
+      <a class="brand" href="/">VideoSync</a>
+      <div class="toplinks">
+        <a href="/dashboard">Dashboard</a>
+        <a href="/chat">Chat</a>
+        <a href="/subscribe">Subscribe</a>
+        <a href="/api-access">API Access</a>
+      </div>
+    </div>
+    <section class="hero">
+      <div class="eyebrow">Services</div>
+      <h1>Video services and infrastructure offers built from the real platform</h1>
+      <p>Each page explains a specific offer, who it is for, what is included, and how to request a custom sample from the same production stack that powers VideoSync.</p>
+    </section>
+    <section class="grid">{cards}</section>
+  </div>
+</body>
+</html>"#
+    )
+}
+
+fn build_x402_docs_page_html() -> String {
+    let endpoint_cards = [
+        (
+            "GET /api/subscribe/unlock-spec",
+            "Returns the signed payment requirements needed to start the creator subscription flow.",
+        ),
+        (
+            "POST /api/subscribe/unlock",
+            "Accepts the signed payment authorization and activates the paid subscription.",
+        ),
+        (
+            "GET /api/api-access/unlock-spec",
+            "Returns the payment requirements for API access tiers and usage plans.",
+        ),
+        (
+            "POST /api/api-access/unlock",
+            "Settles the API tier payment and unlocks the selected access tier.",
+        ),
+        (
+            "GET /delivery/:id/unlock-spec",
+            "Returns the HD delivery unlock price and payment requirements for a preview page.",
+        ),
+        (
+            "POST /delivery/:id/unlock",
+            "Settles the delivery unlock payment and returns the HD access metadata.",
+        ),
+    ]
+    .into_iter()
+    .map(|(route, copy)| {
+        format!(
+            r#"<article class="endpoint-card"><div class="route">{route}</div><p>{copy}</p></article>"#
+        )
+    })
+    .collect::<Vec<_>>()
+    .join("");
+
+    format!(
+        r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Programmable Payments | VideoSync</title>
+  <style>
+    :root {{
+      --bg:#07111d;
+      --panel:rgba(9,18,31,0.84);
+      --line:rgba(148,163,184,0.16);
+      --line-strong:rgba(96,165,250,0.28);
+      --text:#e5eefb;
+      --muted:#a8b8d3;
+      --blue:#3b82f6;
+      --green:#22c55e;
+      --shadow:0 24px 70px rgba(2,6,23,0.45);
+    }}
+    * {{ box-sizing:border-box; }}
+    body {{ margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; color:var(--text); background:
+      radial-gradient(circle at top left, rgba(59,130,246,0.18), transparent 28%),
+      linear-gradient(135deg, #0a1322 0%, #0d1728 55%, #07111d 100%); }}
+    .shell {{ max-width:1180px; margin:0 auto; padding:28px 20px 72px; }}
+    .topbar {{ display:flex; justify-content:space-between; align-items:center; gap:1rem; flex-wrap:wrap; margin-bottom:24px; }}
+    .brand {{ color:#fff; text-decoration:none; font-size:1.35rem; font-weight:800; }}
+    .toplinks {{ display:flex; gap:0.8rem; flex-wrap:wrap; }}
+    .toplinks a {{ text-decoration:none; color:#dbeafe; padding:0.65rem 1rem; border-radius:999px; border:1px solid var(--line); background:rgba(8,15,28,0.76); }}
+    .hero, .panel {{ border-radius:24px; border:1px solid var(--line); background:var(--panel); box-shadow:var(--shadow); backdrop-filter: blur(16px); }}
+    .hero {{ padding:1.8rem; }}
+    .eyebrow {{ color:#93c5fd; font-size:0.8rem; letter-spacing:0.08em; text-transform:uppercase; font-weight:800; }}
+    h1 {{ margin:0.6rem 0 0; font-size:3rem; line-height:1.05; }}
+    p {{ color:var(--muted); }}
+    .cta-row {{ display:flex; gap:0.8rem; flex-wrap:wrap; margin-top:1.4rem; }}
+    .btn {{ display:inline-flex; align-items:center; justify-content:center; padding:0.8rem 1.2rem; border-radius:999px; text-decoration:none; font-weight:700; }}
+    .btn-primary {{ background:linear-gradient(135deg,#3b82f6,#2563eb); color:#fff; }}
+    .btn-secondary {{ background:rgba(15,23,42,0.7); border:1px solid var(--line-strong); color:#dbeafe; }}
+    .panel {{ padding:1.5rem; margin-top:1.2rem; }}
+    .grid {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:1rem; }}
+    .endpoint-card, .code-card {{ padding:1.15rem; border-radius:18px; background:rgba(15,23,42,0.72); border:1px solid rgba(148,163,184,0.14); }}
+    .route {{ font-family:ui-monospace,SFMono-Regular,Menlo,monospace; color:#bfdbfe; font-weight:700; margin-bottom:0.55rem; }}
+    pre {{ margin:0; white-space:pre-wrap; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:13px; color:#dbeafe; }}
+    ul {{ margin:0; padding-left:1.1rem; color:#d7e3f5; }}
+    li {{ margin:0.55rem 0; }}
+    .spec-grid {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:1rem; }}
+    @media (max-width: 880px) {{
+      h1 {{ font-size:2.3rem; }}
+    }}
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <div class="topbar">
+      <a class="brand" href="/">VideoSync</a>
+      <div class="toplinks">
+        <a href="/services">All Services</a>
+        <a href="/api-access">API Access</a>
+        <a href="/subscribe">Subscribe</a>
+        <a href="/chat">Chat</a>
+      </div>
+    </div>
+
+    <section class="hero">
+      <div class="eyebrow">Programmable Payments</div>
+      <h1>Wallet-paid delivery and API access for technical buyers</h1>
+      <p>Use VideoSync when you need paid media unlocks or API access that can be purchased directly inside a product flow. The payment layer is designed for teams selling assets, previews, generation endpoints, or delivery access without forcing every buyer through a traditional checkout funnel.</p>
+      <div class="cta-row">
+        <a class="btn btn-primary" href="/api-access">Open API Access Page</a>
+        <a class="btn btn-secondary" href="/chat?prompt=I%20want%20to%20integrate%20VideoSync%20through%20x402.%20Show%20me%20the%20best%20live%20payment%20flow%20for%20my%20use%20case.&autosend=1">Request an integration walkthrough</a>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="eyebrow">Available now</div>
+      <h2>Endpoints you can integrate today</h2>
+      <div class="grid">
+        {endpoint_cards}
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="eyebrow">Implementation patterns</div>
+      <h2>What teams sell with this setup</h2>
+      <ul>
+        <li>Sell paid delivery unlocks for HD videos, previews, downloadable assets, and client handoff pages.</li>
+        <li>Turn generation endpoints into paid developer products without adding a separate billing layer first.</li>
+        <li>Support partner and automation flows where payment, access, and delivery need to happen in one request path.</li>
+      </ul>
+    </section>
+
+    <section class="panel">
+      <div class="eyebrow">Payment flow</div>
+      <h2>How the unlock flow works</h2>
+      <ul>
+        <li>The client requests an `unlock-spec` endpoint first.</li>
+        <li>VideoSync returns the payment requirements for a Base USDC transfer.</li>
+        <li>The wallet signs the payment authorization.</li>
+        <li>The signed payload is sent back in `X-Payment` to the matching `unlock` endpoint.</li>
+        <li>VideoSync settles the payment and returns the unlocked resource or access metadata.</li>
+      </ul>
+    </section>
+
+    <section class="panel">
+      <div class="eyebrow">Integration basics</div>
+      <h2>Headers and request shape</h2>
+      <div class="spec-grid">
+        <article class="code-card">
+          <div class="route">Request headers</div>
+<pre>Content-Type: application/json
+X-Payment: &lt;signed x402 payload&gt;</pre>
+        </article>
+        <article class="code-card">
+          <div class="route">Example resource pattern</div>
+<pre>GET  /delivery/:id/unlock-spec
+POST /delivery/:id/unlock
+
+GET  /api/subscribe/unlock-spec
+POST /api/subscribe/unlock</pre>
+        </article>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="eyebrow">Custom integration patterns</div>
+      <h2>Revenue flows available through implementation work</h2>
+      <ul>
+        <li>`POST /api/x402/generate-thumbnail-pack`</li>
+        <li>`POST /api/x402/generate-product-mockup`</li>
+        <li>`POST /api/x402/generate-landing-hero-video`</li>
+        <li>`POST /api/x402/generate-narrated-explainer`</li>
+        <li>`POST /api/x402/enrich-creator-lead`</li>
+      </ul>
+      <p>If you need one of these paid flows immediately, we can wire it through the current payment and delivery infrastructure as a custom integration while the dedicated endpoint is finalized.</p>
+    </section>
+
+    <section class="panel">
+      <div class="eyebrow">Why teams choose it</div>
+      <h2>Why this works as a monetization layer</h2>
+      <ul>
+        <li>It gives technical teams a direct path to sell access, unlocks, and paid delivery without adding a heavy checkout layer to every workflow.</li>
+        <li>It fits one-off asset delivery, API access, and paid generation endpoints where speed and automation matter.</li>
+        <li>It supports partner integrations and developer-led buying flows while the main service pages stay focused on buyer outcomes instead of payment mechanics.</li>
+      </ul>
+    </section>
+  </div>
+</body>
+</html>"#
+    )
+}
+
+fn build_service_offer_page_html(
+    service_slug: &str,
+    title: &str,
+    price: &str,
+    tagline: &str,
+    audience: &str,
+    summary: &str,
+    primary_href: &str,
+    primary_label: &str,
+    secondary_href: &str,
+    secondary_label: &str,
+    includes: &[&str],
+    workflow: &[&str],
+    lead_samples: &[(&str, &str)],
+    sample_filters_json: &str,
+) -> String {
+    let hero_highlights_html = includes
+        .iter()
+        .take(3)
+        .map(|item| format!(r#"<div class="hero-highlight">{item}</div>"#))
+        .collect::<Vec<_>>()
+        .join("");
+    let includes_html = includes
+        .iter()
+        .map(|item| format!(r#"<li>{item}</li>"#))
+        .collect::<Vec<_>>()
+        .join("");
+    let workflow_html = workflow
+        .iter()
+        .enumerate()
+        .map(|(idx, item)| {
+            format!(
+                r#"<div class="step"><div class="step-no">{}</div><div>{}</div></div>"#,
+                idx + 1,
+                item
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    let lead_html = lead_samples
+        .iter()
+        .map(|(persona, copy)| {
+            format!(
+                r#"<article class="lead-card"><div class="lead-title">{persona}</div><p>{copy}</p></article>"#
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    let nav_html = service_page_nav(title);
+    let sample_filters_json = sample_filters_json.to_string();
+    let sample_ui = service_sample_ui_config(service_slug).to_string();
+
+    format!(
+        r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{title} | VideoSync</title>
+  <style>
+    :root {{
+      --bg:#07111d;
+      --panel:rgba(9,18,31,0.84);
+      --line:rgba(148,163,184,0.16);
+      --line-strong:rgba(96,165,250,0.28);
+      --text:#e5eefb;
+      --muted:#a8b8d3;
+      --blue:#3b82f6;
+      --green:#22c55e;
+      --shadow:0 24px 70px rgba(2,6,23,0.45);
+    }}
+    * {{ box-sizing:border-box; }}
+    body {{ margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; color:var(--text); background:
+      radial-gradient(circle at top left, rgba(59,130,246,0.18), transparent 28%),
+      linear-gradient(135deg, #0a1322 0%, #0d1728 55%, #07111d 100%); position:relative; overflow-x:hidden; }}
+    a {{ color:inherit; }}
+    body::before {{ content:""; position:fixed; inset:0; background:
+      radial-gradient(circle at 15% 10%, rgba(56,189,248,0.08), transparent 0 28%),
+      radial-gradient(circle at 85% 12%, rgba(34,197,94,0.08), transparent 0 22%),
+      radial-gradient(circle at 50% 85%, rgba(99,102,241,0.10), transparent 0 24%);
+      pointer-events:none; z-index:-2; }}
+    .shell {{ max-width:1180px; margin:0 auto; padding:28px 20px 72px; }}
+    .topbar {{ display:flex; justify-content:space-between; align-items:center; gap:1rem; flex-wrap:wrap; margin-bottom:24px; }}
+    .brand {{ color:#fff; text-decoration:none; font-size:1.35rem; font-weight:800; }}
+    .toplinks {{ display:flex; gap:0.8rem; flex-wrap:wrap; }}
+    .toplinks a {{ text-decoration:none; color:#dbeafe; padding:0.65rem 1rem; border-radius:999px; border:1px solid var(--line); background:rgba(8,15,28,0.76); }}
+    .hero {{ display:grid; grid-template-columns:minmax(0,1.15fr) minmax(280px,0.85fr); gap:1.2rem; }}
+    .hero-panel, .panel {{ border-radius:24px; border:1px solid var(--line); background:var(--panel); box-shadow:var(--shadow); backdrop-filter: blur(16px); }}
+    .hero-panel {{ padding:1.8rem; }}
+    .eyebrow {{ color:#93c5fd; font-size:0.8rem; letter-spacing:0.08em; text-transform:uppercase; font-weight:800; }}
+    h1 {{ margin:0.6rem 0 0; font-size:3rem; line-height:1.05; }}
+    .tagline {{ margin-top:0.9rem; color:#dbeafe; font-size:1.08rem; }}
+    .summary {{ margin-top:1rem; color:var(--muted); max-width:760px; }}
+    .hero-highlights {{ display:flex; flex-wrap:wrap; gap:0.75rem; margin-top:1.15rem; }}
+    .hero-highlight {{ padding:0.7rem 0.95rem; border-radius:999px; background:rgba(15,23,42,0.68); border:1px solid rgba(96,165,250,0.18); color:#dbeafe; font-size:0.92rem; line-height:1.35; }}
+    .cta-row {{ display:flex; gap:0.8rem; flex-wrap:wrap; margin-top:1.4rem; }}
+    .btn {{ display:inline-flex; align-items:center; justify-content:center; padding:0.8rem 1.2rem; border-radius:999px; text-decoration:none; font-weight:700; }}
+    .btn-primary {{ background:linear-gradient(135deg,#3b82f6,#2563eb); color:#fff; }}
+    .btn-secondary {{ background:rgba(15,23,42,0.7); border:1px solid var(--line-strong); color:#dbeafe; }}
+    .mini-metrics {{ display:grid; gap:0.9rem; padding:1.5rem; }}
+    .metric {{ padding:1rem; border-radius:18px; background:rgba(15,23,42,0.72); border:1px solid rgba(148,163,184,0.14); }}
+    .metric strong {{ display:block; font-size:1.9rem; }}
+    .metric span {{ color:var(--muted); font-size:0.92rem; }}
+    .service-nav {{ display:flex; flex-wrap:wrap; gap:0.7rem; margin:24px 0; }}
+    .service-nav a {{ text-decoration:none; padding:0.7rem 1rem; border-radius:999px; border:1px solid var(--line); background:rgba(8,15,28,0.76); color:#dbeafe; }}
+    .service-nav a.active {{ border-color:var(--line-strong); background:rgba(59,130,246,0.16); }}
+    .grid {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:1.2rem; }}
+    .panel {{ padding:1.5rem; }}
+    .panel h2 {{ margin:0.5rem 0 0.9rem; font-size:1.45rem; }}
+    .panel p {{ color:var(--muted); }}
+    .checklist, .sample-list {{ list-style:none; padding:0; margin:0; }}
+    .checklist li {{ position:relative; padding:0.45rem 0 0.45rem 1rem; color:#d7e3f5; }}
+    .checklist li::before {{ content:""; position:absolute; left:0; top:0.95rem; width:6px; height:6px; border-radius:999px; background:var(--green); }}
+    .step {{ display:flex; gap:0.85rem; align-items:flex-start; margin:0.85rem 0; }}
+    .step-no {{ width:32px; height:32px; border-radius:999px; background:rgba(59,130,246,0.18); border:1px solid var(--line-strong); display:flex; align-items:center; justify-content:center; font-weight:800; flex-shrink:0; }}
+    .lead-grid, .portfolio-grid {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:1rem; }}
+    .lead-card, .sample-card {{ padding:1.1rem; border-radius:18px; background:rgba(15,23,42,0.72); border:1px solid rgba(148,163,184,0.14); }}
+    .lead-title, .sample-title {{ font-weight:800; color:#fff; margin-bottom:0.45rem; }}
+    .sample-video {{ width:100%; aspect-ratio:16/9; object-fit:cover; border-radius:14px; background:#020617; margin-bottom:0.8rem; }}
+    .sample-meta {{ color:var(--muted); font-size:0.92rem; }}
+    .sample-actions {{ display:flex; gap:0.7rem; flex-wrap:wrap; margin-top:0.9rem; }}
+    .sample-actions a {{ color:#93c5fd; text-decoration:none; font-weight:700; }}
+    .sample-lab {{ display:grid; grid-template-columns:minmax(0,1fr) minmax(280px,0.8fr); gap:1rem; }}
+    .sample-lab-card {{ padding:1.25rem; border-radius:18px; background:rgba(15,23,42,0.72); border:1px solid rgba(148,163,184,0.14); }}
+    .sample-form {{ display:grid; gap:0.85rem; margin-top:0.9rem; }}
+    .sample-form label {{ font-size:0.88rem; font-weight:700; color:#dbeafe; }}
+    .sample-form input, .sample-form textarea {{ width:100%; border-radius:14px; border:1px solid rgba(96,165,250,0.22); background:rgba(2,6,23,0.56); color:#e5eefb; padding:0.9rem 1rem; font:inherit; }}
+    .sample-form textarea {{ min-height:120px; resize:vertical; }}
+    .sample-form .row {{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:0.8rem; }}
+    .sample-note {{ color:var(--muted); font-size:0.92rem; line-height:1.6; }}
+    .sample-status {{ margin-top:0.75rem; color:#cbd5e1; font-size:0.92rem; }}
+    .admin-only-shell {{ display:none; }}
+    .admin-only-shell.visible {{ display:block; }}
+    .admin-pill {{ display:inline-flex; align-items:center; gap:0.45rem; padding:0.45rem 0.8rem; border-radius:999px; border:1px solid rgba(34,197,94,0.28); background:rgba(34,197,94,0.10); color:#bbf7d0; font-size:0.85rem; font-weight:700; }}
+    .locked-pill {{ display:inline-flex; align-items:center; gap:0.45rem; padding:0.45rem 0.8rem; border-radius:999px; border:1px solid rgba(148,163,184,0.18); background:rgba(15,23,42,0.56); color:#cbd5e1; font-size:0.85rem; font-weight:700; }}
+    .empty-note {{ color:var(--muted); }}
+    @media (max-width: 880px) {{
+      .hero {{ grid-template-columns:1fr; }}
+      h1 {{ font-size:2.4rem; }}
+      .sample-lab {{ grid-template-columns:1fr; }}
+      .sample-form .row {{ grid-template-columns:1fr; }}
+    }}
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <div class="topbar">
+      <a class="brand" href="/">VideoSync</a>
+      <div class="toplinks">
+        <a href="/services">All Services</a>
+        <a href="/dashboard">Dashboard</a>
+        <a href="/chat">Chat</a>
+        <a href="/subscribe">Subscribe</a>
+        <a href="/api-access">API Access</a>
+      </div>
+    </div>
+
+    <section class="hero">
+      <div class="hero-panel">
+        <div class="eyebrow">Service</div>
+        <h1>{title}</h1>
+        <div class="tagline">{tagline}</div>
+        <p class="summary">{summary}</p>
+        <div class="hero-highlights">{hero_highlights_html}</div>
+        <div class="cta-row">
+          <a class="btn btn-primary" href="{primary_href}">{primary_label}</a>
+          <a class="btn btn-secondary" href="{secondary_href}">{secondary_label}</a>
+        </div>
+      </div>
+      <aside class="hero-panel mini-metrics">
+        <div class="metric"><strong>{price}</strong><span>Typical project range</span></div>
+        <div class="metric"><strong>Production stack</strong><span>Built with VideoSync's editing, generation, narration, review, and delivery tools.</span></div>
+        <div class="metric"><strong>Best fit</strong><span>{audience}</span></div>
+      </aside>
+    </section>
+
+    {nav_html}
+
+    <section class="grid">
+      <article class="panel">
+        <div class="eyebrow">What you get</div>
+        <h2>Included in this service</h2>
+        <ul class="checklist">{includes_html}</ul>
+      </article>
+      <article class="panel">
+        <div class="eyebrow">Process</div>
+        <h2>How the project runs</h2>
+        {workflow_html}
+      </article>
+    </section>
+
+    <section class="panel" style="margin-top:1.2rem;">
+      <div class="eyebrow">Best fit</div>
+      <h2>Who this is for</h2>
+      <div class="lead-grid">{lead_html}</div>
+    </section>
+
+    <section class="panel" style="margin-top:1.2rem;">
+      <div class="eyebrow">Request output</div>
+      <h2 id="sampleSectionTitle">Request a custom output</h2>
+      <p id="sampleSectionCopy">Describe the exact output you want and VideoSync will hand the brief to the agent. Your included outputs stay available until the upgrade CTA takes over.</p>
+      <div class="sample-lab" style="margin-top:1rem;">
+        <div class="sample-lab-card">
+          <div class="locked-pill" id="sampleGateBadge">5 outputs available</div>
+          <form id="sampleRequestForm" class="sample-form">
+            <div class="row">
+              <div>
+                <label for="sampleUrl" id="sampleUrlLabel">Reference URL or media link</label>
+                <input id="sampleUrl" type="text" placeholder="https://example.com, YouTube/Twitch URL, or asset link">
+              </div>
+              <div>
+                <label for="sampleContact" id="sampleContactLabel">Prospect or brand name</label>
+                <input id="sampleContact" type="text" placeholder="Client, brand, or creator name">
+              </div>
+            </div>
+            <div class="row">
+              <div>
+                <label for="sampleFormat" id="sampleFormatLabel">Requested format</label>
+                <input id="sampleFormat" type="text" placeholder="Video type, length, or asset format">
+              </div>
+              <div>
+                <label for="sampleOutcome" id="sampleOutcomeLabel">Goal</label>
+                <input id="sampleOutcome" type="text" placeholder="What this sample should help you prove or sell">
+              </div>
+            </div>
+            <div>
+              <label for="sampleBrief" id="sampleBriefLabel">Describe the output you want the agent to create</label>
+              <textarea id="sampleBrief" placeholder="Describe the output you want the agent to create."></textarea>
+            </div>
+            <div class="cta-row" style="margin-top:0;">
+              <button type="submit" class="btn btn-primary" id="sampleLaunchBtn">Open project chat</button>
+              <a class="btn btn-secondary" href="/subscribe" id="sampleUpgradeBtn" style="display:none;">Continue with paid output</a>
+            </div>
+          </form>
+          <div class="sample-status" id="sampleStatus">This opens the agent chat with a structured brief so the requested output can be generated from scratch.</div>
+        </div>
+        <aside class="sample-lab-card">
+          <div class="eyebrow">Before you buy</div>
+          <h2 style="margin-top:0.5rem;" id="sampleHelperTitle">How generation works</h2>
+          <p class="sample-note" id="sampleHelperCopy">Use each included output to test the production direction before you pay for more.</p>
+          <ul class="checklist" style="margin-top:0.8rem;">
+            <li id="sampleHelperBullet1">Describe what you want clearly.</li>
+            <li id="sampleHelperBullet2">The agent opens in chat with your structured brief.</li>
+            <li id="sampleHelperBullet3">Your included outputs stay available before checkout appears.</li>
+          </ul>
+          <div class="sample-lab-card" style="margin-top:1rem; padding:1rem 1rem 0.95rem;">
+            <div class="eyebrow" id="sampleExampleHeading">Example request</div>
+            <p class="sample-note" id="sampleExampleCopy" style="margin-top:0.55rem;">Create a polished buyer-facing sample that shows the requested output clearly and includes a usable delivery or review link.</p>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <section class="panel admin-only-shell" id="adminReviewShell" style="margin-top:1.2rem;">
+      <div class="eyebrow">Admin review only</div>
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:1rem;flex-wrap:wrap;">
+        <div>
+          <h2>Live delivery examples from the platform</h2>
+          <p>These cards stay visible only for staff/superusers while the public-facing sample flow is being rebuilt.</p>
+        </div>
+        <div class="admin-pill">Admin visibility enabled</div>
+      </div>
+      <div id="portfolioGrid" class="portfolio-grid" style="margin-top:1rem;">
+        <div class="empty-note">Loading internal review samples...</div>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    const sampleFilters = {sample_filters_json};
+    const fallbackOrigin = window.location.origin;
+    const serviceSlug = {service_slug:?};
+    const sampleUi = {sample_ui};
+
+    function applySampleUiConfig() {{
+      document.getElementById('sampleSectionTitle').textContent = sampleUi.section_title;
+      document.getElementById('sampleSectionCopy').textContent = sampleUi.section_copy;
+      document.getElementById('sampleUrlLabel').textContent = sampleUi.source_label;
+      document.getElementById('sampleUrl').placeholder = sampleUi.source_placeholder;
+      document.getElementById('sampleContactLabel').textContent = sampleUi.contact_label;
+      document.getElementById('sampleContact').placeholder = sampleUi.contact_placeholder;
+      document.getElementById('sampleFormatLabel').textContent = sampleUi.format_label;
+      document.getElementById('sampleFormat').placeholder = sampleUi.format_placeholder;
+      document.getElementById('sampleOutcomeLabel').textContent = sampleUi.outcome_label;
+      document.getElementById('sampleOutcome').placeholder = sampleUi.outcome_placeholder;
+      document.getElementById('sampleBriefLabel').textContent = sampleUi.brief_label;
+      document.getElementById('sampleBrief').placeholder = sampleUi.brief_placeholder;
+      document.getElementById('sampleLaunchBtn').textContent = sampleUi.launch_label;
+      document.getElementById('sampleUpgradeBtn').href = sampleUi.upgrade_href;
+      document.getElementById('sampleUpgradeBtn').textContent = sampleUi.upgrade_label;
+      document.getElementById('sampleStatus').textContent = sampleUi.status_idle;
+      document.getElementById('sampleHelperTitle').textContent = sampleUi.helper_title;
+      document.getElementById('sampleHelperCopy').textContent = sampleUi.helper_copy;
+      document.getElementById('sampleHelperBullet1').textContent = sampleUi.helper_bullets[0] || '';
+      document.getElementById('sampleHelperBullet2').textContent = sampleUi.helper_bullets[1] || '';
+      document.getElementById('sampleHelperBullet3').textContent = sampleUi.helper_bullets[2] || '';
+      document.getElementById('sampleExampleHeading').textContent = sampleUi.example_heading;
+      document.getElementById('sampleExampleCopy').textContent = sampleUi.example_request;
+    }}
+
+    function absoluteUrl(value) {{
+      if (!value) return '';
+      if (/^https?:\/\//i.test(value)) return value;
+      return `${{fallbackOrigin}}${{value.startsWith('/') ? value : `/${{value}}`}}`;
+    }}
+
+    function parseJwt(token) {{
+      try {{
+        const base64 = token.split('.')[1];
+        if (!base64) return null;
+        const normalized = base64.replace(/-/g, '+').replace(/_/g, '/');
+        return JSON.parse(atob(normalized));
+      }} catch (_) {{
+        return null;
+      }}
+    }}
+
+    function getAuthToken() {{
+      return localStorage.getItem('authToken')
+        || localStorage.getItem('admin_token')
+        || localStorage.getItem('auth_token')
+        || '';
+    }}
+
+    function isAdminUser() {{
+      const token = getAuthToken();
+      const claims = token ? parseJwt(token) : null;
+      return !!(claims && (claims.is_staff || claims.is_superuser));
+    }}
+
+    function draftStorageKey() {{
+      return `videosync:service-sample-draft:${{serviceSlug}}`;
+    }}
+
+    async function updateSampleGateUI() {{
+      const launchBtn = document.getElementById('sampleLaunchBtn');
+      const upgradeBtn = document.getElementById('sampleUpgradeBtn');
+      const badge = document.getElementById('sampleGateBadge');
+      const authToken = getAuthToken();
+      if (!authToken) {{
+        badge.textContent = sampleUi.anon_badge;
+        launchBtn.style.display = 'inline-flex';
+        launchBtn.disabled = false;
+        upgradeBtn.style.display = 'none';
+        return;
+      }}
+
+      try {{
+        const response = await fetch(`/api/service-samples/quota?service=${{encodeURIComponent(serviceSlug)}}`, {{
+          headers: {{
+            Authorization: `Bearer ${{authToken}}`
+          }}
+        }});
+        const payload = await response.json();
+        const remaining = Number(payload.remaining || 0);
+        if (payload.unlimited) {{
+          badge.textContent = 'Admin or staff access: launch limit bypassed';
+          launchBtn.style.display = 'inline-flex';
+          launchBtn.disabled = false;
+          upgradeBtn.style.display = 'none';
+          return;
+        }}
+
+        if (remaining > 0) {{
+          const unit = remaining === 1 ? sampleUi.included_unit_singular : sampleUi.included_unit_plural;
+          badge.textContent = `${{remaining}} included ${{unit}} remaining before checkout`;
+          launchBtn.style.display = 'inline-flex';
+          launchBtn.disabled = false;
+          upgradeBtn.style.display = 'none';
+        }} else {{
+          badge.textContent = sampleUi.limit_reached_badge;
+          launchBtn.style.display = 'none';
+          upgradeBtn.style.display = 'inline-flex';
+        }}
+      }} catch (_) {{
+        badge.textContent = 'Sample quota could not be loaded right now.';
+        launchBtn.style.display = 'none';
+        upgradeBtn.style.display = 'inline-flex';
+      }}
+    }}
+
+    function sampleMatches(sample) {{
+      const bucket = [
+        sample.gig_type,
+        sample.portfolio_category,
+        sample.title,
+        sample.company,
+        sample.sales_positioning,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+      return sampleFilters.some((filter) => bucket.includes(String(filter).toLowerCase()));
+    }}
+
+    function renderSampleCard(sample) {{
+      const media = sample.output_r2_url || sample.preview_r2_url || '';
+      const mediaHtml = media
+        ? `<video class="sample-video" src="${{media}}" controls preload="metadata"></video>`
+        : '';
+      const authToken = getAuthToken();
+      const rawDeliveryUrl = absoluteUrl(sample.public_delivery_url || sample.delivery_url || '');
+      const deliveryUrl = rawDeliveryUrl && authToken
+        ? `${{rawDeliveryUrl}}${{rawDeliveryUrl.includes('?') ? '&' : '?'}}token=${{encodeURIComponent(authToken)}}`
+        : rawDeliveryUrl;
+      const sourceUrl = sample.source_url ? absoluteUrl(sample.source_url) : '';
+      const downloadUrl = absoluteUrl(sample.output_r2_url || sample.preview_r2_url || '');
+      const downloadName = (sample.output_filename || sample.title || sample.company || 'videosync-sample')
+        .toString()
+        .replace(/[^a-z0-9._-]+/gi, '-')
+        .replace(/^-+|-+$/g, '')
+        || 'videosync-sample';
+      return `
+        <article class="sample-card">
+          ${{mediaHtml}}
+          <div class="sample-title">${{sample.company || sample.title || 'Portfolio sample'}}</div>
+          <div class="sample-meta">${{sample.title || ''}}</div>
+          <div class="sample-meta" style="margin-top:0.35rem;">Status: ${{sample.status || 'unknown'}}</div>
+          <div class="sample-actions">
+            ${{deliveryUrl ? `<a href="${{deliveryUrl}}" target="_blank" rel="noreferrer">Delivery</a>` : ''}}
+            ${{downloadUrl ? `<a href="${{downloadUrl}}" download="${{downloadName}}" target="_blank" rel="noreferrer">Download</a>` : ''}}
+            ${{sourceUrl ? `<a href="${{sourceUrl}}" target="_blank" rel="noreferrer">Source</a>` : ''}}
+          </div>
+        </article>
+      `;
+    }}
+
+    function loadAdminPortfolioSamples() {{
+      if (!isAdminUser()) return;
+      const adminShell = document.getElementById('adminReviewShell');
+      adminShell.classList.add('visible');
+      fetch('/api/portfolio-samples')
+        .then((response) => response.json())
+        .then((payload) => {{
+          const root = document.getElementById('portfolioGrid');
+          const rawSamples = Array.isArray(payload.samples) ? payload.samples : [];
+          const completed = rawSamples.filter((sample) => sample.status === 'completed');
+          const prioritized = completed.filter(sampleMatches);
+          const selected = (prioritized.length ? prioritized : completed).slice(0, 4);
+          if (!selected.length) {{
+            root.innerHTML = '<div class="empty-note">No completed internal review samples are available yet. Use the chat or dashboard to generate a fresh delivery sample.</div>';
+            return;
+          }}
+          root.innerHTML = selected.map(renderSampleCard).join('');
+        }})
+        .catch(() => {{
+          document.getElementById('portfolioGrid').innerHTML =
+            '<div class="empty-note">Admin review samples could not be loaded right now.</div>';
+        }});
+    }}
+
+    function storePendingSampleDraft() {{
+      const draft = {{
+        reference_url: document.getElementById('sampleUrl').value.trim(),
+        prospect_name: document.getElementById('sampleContact').value.trim(),
+        format: document.getElementById('sampleFormat').value.trim(),
+        outcome: document.getElementById('sampleOutcome').value.trim(),
+        brief: document.getElementById('sampleBrief').value.trim(),
+      }};
+      sessionStorage.setItem(draftStorageKey(), JSON.stringify(draft));
+    }}
+
+    function loadPendingSampleDraft() {{
+      try {{
+        const raw = sessionStorage.getItem(draftStorageKey());
+        return raw ? JSON.parse(raw) : null;
+      }} catch (_) {{
+        return null;
+      }}
+    }}
+
+    function clearPendingSampleDraft() {{
+      sessionStorage.removeItem(draftStorageKey());
+    }}
+
+    async function submitSampleRequest(event) {{
+      event.preventDefault();
+
+      const url = document.getElementById('sampleUrl').value.trim();
+      const contact = document.getElementById('sampleContact').value.trim();
+      const formatValue = document.getElementById('sampleFormat').value.trim();
+      const outcomeValue = document.getElementById('sampleOutcome').value.trim();
+      const brief = document.getElementById('sampleBrief').value.trim();
+      const status = document.getElementById('sampleStatus');
+      const authToken = getAuthToken();
+
+      if (!brief) {{
+        status.textContent = 'Add a short brief so the agent knows what sample to generate.';
+        return;
+      }}
+
+      if (!authToken) {{
+        storePendingSampleDraft();
+        status.textContent = 'Sign in first so the agent can launch your tracked custom sample session.';
+        const redirectTo = `${{window.location.pathname}}?launch_sample=1`;
+        window.location.href = `/login?redirect_to=${{encodeURIComponent(redirectTo)}}`;
+        return;
+      }}
+
+      status.textContent = 'Recording your sample request and opening the AI chat...';
+
+      const structuredBriefParts = [
+        brief,
+        formatValue ? `${{sampleUi.format_label}}: ${{formatValue}}` : '',
+        outcomeValue ? `${{sampleUi.outcome_label}}: ${{outcomeValue}}` : ''
+      ].filter(Boolean);
+      const structuredBrief = structuredBriefParts.join('\n');
+
+      try {{
+        const response = await fetch('/api/service-samples/request', {{
+          method: 'POST',
+          headers: {{
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${{authToken}}`
+          }},
+          body: JSON.stringify({{
+            service_slug: serviceSlug,
+            reference_url: url || null,
+            prospect_name: contact || null,
+            brief: structuredBrief,
+            source: 'videosync_service'
+          }})
+        }});
+        const payload = await response.json();
+        if (!payload.success) {{
+          if (payload.limit_reached) {{
+            status.textContent = payload.message || 'Included launches used up.';
+            await updateSampleGateUI();
+            return;
+          }}
+          status.textContent = payload.message || 'Sample request failed.';
+          return;
+        }}
+
+        clearPendingSampleDraft();
+        await updateSampleGateUI();
+        status.textContent = 'Opening the AI chat with your structured sample brief...';
+        window.location.href = payload.chat_url;
+      }} catch (_) {{
+        status.textContent = 'Failed to launch the sample request right now.';
+      }}
+    }}
+
+    async function resumePendingSampleIfRequested() {{
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('launch_sample') !== '1') return;
+      const authToken = getAuthToken();
+      if (!authToken) return;
+
+      const draft = loadPendingSampleDraft();
+      if (!draft || !draft.brief) return;
+
+      document.getElementById('sampleUrl').value = draft.reference_url || '';
+      document.getElementById('sampleContact').value = draft.prospect_name || '';
+      document.getElementById('sampleFormat').value = draft.format || '';
+      document.getElementById('sampleOutcome').value = draft.outcome || '';
+      document.getElementById('sampleBrief').value = draft.brief || '';
+
+      const fakeEvent = {{ preventDefault() {{}} }};
+      await submitSampleRequest(fakeEvent);
+    }}
+
+    class ServicePageDynamicBackgroundManager {{
+      constructor() {{
+        this.lastBackgroundUpdate = Date.now();
+        this.updateInterval = 5 * 60 * 1000;
+        this.retryDelay = 30 * 1000;
+        this.isUpdating = false;
+        this.init();
+      }}
+
+      async init() {{
+        await this.updateBackground();
+        setInterval(() => this.checkAndUpdateBackground(), 60 * 1000);
+      }}
+
+      async checkAndUpdateBackground() {{
+        if (this.isUpdating) return;
+        if (Date.now() - this.lastBackgroundUpdate >= this.updateInterval) {{
+          await this.updateBackground();
+        }}
+      }}
+
+      async updateBackground() {{
+        if (this.isUpdating) return;
+        this.isUpdating = true;
+        try {{
+          const response = await fetch('/api/background/image');
+          if (!response.ok) return;
+          const contentType = response.headers.get('content-type') || '';
+          if (contentType.includes('application/json')) return;
+          const blob = await response.blob();
+          const imageUrl = URL.createObjectURL(blob);
+          let overlay = document.getElementById('serviceDynamicBg');
+          if (!overlay) {{
+            overlay = document.createElement('div');
+            overlay.id = 'serviceDynamicBg';
+            overlay.style.cssText = 'position:fixed;inset:0;background-size:cover;background-position:center;background-attachment:fixed;opacity:0;transition:opacity 0.9s ease;z-index:-1;pointer-events:none;mix-blend-mode:screen;';
+            document.body.appendChild(overlay);
+          }}
+          overlay.style.backgroundImage = 'url(' + imageUrl + ')';
+          requestAnimationFrame(() => {{
+            overlay.style.opacity = '0.18';
+          }});
+          this.lastBackgroundUpdate = Date.now();
+        }} catch (_) {{
+          setTimeout(() => {{
+            this.lastBackgroundUpdate = Date.now() - this.updateInterval + this.retryDelay;
+          }}, this.retryDelay);
+        }} finally {{
+          this.isUpdating = false;
+        }}
+      }}
+    }}
+
+    document.getElementById('sampleRequestForm').addEventListener('submit', submitSampleRequest);
+    applySampleUiConfig();
+    updateSampleGateUI();
+    loadAdminPortfolioSamples();
+    resumePendingSampleIfRequested();
+    try {{
+      new ServicePageDynamicBackgroundManager();
+    }} catch (_) {{}}
+  </script>
+</body>
+</html>"#
+    )
+}
+
+fn service_page_nav(active_title: &str) -> String {
+    let items = [
+        ("SaaS Launch Pack", "/services/saas-launch-pack"),
+        (
+            "Thumbnail & Motion Graphics Pack",
+            "/services/clipper-enhancement-pack",
+        ),
+        (
+            "Agency Production Backend",
+            "/services/creator-manager-fulfillment",
+        ),
+        ("Programmable Payments", "/services/x402-asset-api"),
+    ];
+
+    let links = items
+        .into_iter()
+        .map(|(label, href)| {
+            let active = if label == active_title { "active" } else { "" };
+            format!(r#"<a class="{active}" href="{href}">{label}</a>"#)
+        })
+        .collect::<Vec<_>>()
+        .join("");
+
+    format!(r#"<nav class="service-nav">{links}</nav>"#)
 }
 
 #[allow(dead_code)]
@@ -601,7 +2198,8 @@ fn build_landing_page_html() -> &'static str {
             <nav class="nav">
                 <a href="/" class="logo">🎬 VideoSync</a>
                 <div class="nav-links">
-                    <a href="#offers">Offers</a>
+                    <a href="#workflow">Workflow</a>
+                    <a href="/services">Services</a>
                     <a href="#pricing">Pricing</a>
                     <a href="#features">Features</a>
                 </div>
@@ -616,51 +2214,50 @@ fn build_landing_page_html() -> &'static str {
     <!-- Hero Section -->
     <section class="hero">
         <div class="container">
-            <h1>Turn Your Website Into Launch-Ready Video</h1>
-            <p>VideoSync turns SaaS landing pages, product screenshots, and creator content into hero videos, demo reels, 3D mockups, shorts, and paid delivery links. Start with a URL, get a preview, unlock the polished asset when it is ready.</p>
+            <h1>AI-Powered Video Editing and Generation</h1>
+            <p>Describe the video you want in natural language. VideoSync helps you edit existing footage or generate new videos of any length with AI planning, FFmpeg editing tools, Blender/Manim/LaTeX visuals, voice generation, thumbnails, and review built into one workflow.</p>
             <div style="background:rgba(122,76,255,0.15);border:1px solid rgba(122,76,255,0.4);border-radius:10px;padding:12px 18px;display:inline-block;margin:18px 0 14px;font-size:14px;color:#fff;font-weight:500">
-                <strong>SaaS hero videos</strong>, <strong>website demo videos</strong>, <strong>3D mockups</strong>, and <strong>white-label agency production</strong> paid in <strong>USDC on Base</strong>
+                <strong>Edit clips</strong>, <strong>generate long-form videos</strong>, <strong>create thumbnails</strong>, and <strong>produce visuals</strong> from one chat-based workspace
             </div>
             <div class="hero-buttons" id="homepageHeroButtons">
-                <a href="/signup" class="btn btn-primary btn-large">Get Started Free</a>
-                <a href="#offers" class="btn btn-secondary btn-large">See Offers ↓</a>
+                <a href="/signup" class="btn btn-primary btn-large">Start 7-Day Free Trial</a>
+                <a href="#workflow" class="btn btn-secondary btn-large">See How It Works</a>
+            </div>
+            <div style="text-align:center;margin-top:30px">
+                <a href="/services" class="btn btn-secondary">Explore Productized Services</a>
             </div>
         </div>
     </section>
 
-    <!-- Offers Section -->
-    <section id="offers" style="padding:60px 20px;background:#fff">
+    <!-- Workflow Section -->
+    <section id="workflow" style="padding:60px 20px;background:#fff">
         <div class="container">
-            <h2 style="text-align:center;margin-bottom:12px">Productized Offers You Can Sell Today</h2>
-            <p style="text-align:center;color:#666;margin-bottom:40px;max-width:760px;margin-left:auto;margin-right:auto">The platform is packaged around outcomes, not just features. Start with a URL or a creator profile, generate a preview, then close with an unlock, a launch pack, or a recurring retainer.</p>
+            <h2 style="text-align:center;margin-bottom:12px">One Chat, Full Video Production</h2>
+            <p style="text-align:center;color:#666;margin-bottom:40px;max-width:760px;margin-left:auto;margin-right:auto">The $15/month creator plan is for the core VideoSync workspace: natural-language video editing and generation after a 7-day free trial. Productized client offers live on the Services page.</p>
 
             <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:20px;max-width:1150px;margin:0 auto">
                 <div style="background:#f8f9fa;border:1px solid #e5e7eb;border-radius:16px;padding:28px 24px">
-                    <div style="font-size:12px;font-weight:700;letter-spacing:0.08em;color:#7a4cff;text-transform:uppercase;margin-bottom:8px">For SaaS Founders</div>
-                    <h3 style="margin:0 0 10px;color:#111">SaaS Hero Video</h3>
-                    <div style="font-size:32px;font-weight:800;color:#111">$149-$249</div>
-                    <p style="color:#666;font-size:14px;line-height:1.6;margin:12px 0 0">Paste a live URL and generate a 10-30 second animated landing-page hero or app promo built from the product's own visuals.</p>
+                    <div style="font-size:12px;font-weight:700;letter-spacing:0.08em;color:#7a4cff;text-transform:uppercase;margin-bottom:8px">Natural Language</div>
+                    <h3 style="margin:0 0 10px;color:#111">Tell the Agent What To Make</h3>
+                    <p style="color:#666;font-size:14px;line-height:1.6;margin:12px 0 0">Ask for edits, new scenes, thumbnails, long-form explainers, voiceover, captions, or clips without learning a traditional editing timeline first.</p>
                 </div>
 
                 <div style="background:#f8f9fa;border:1px solid #e5e7eb;border-radius:16px;padding:28px 24px">
-                    <div style="font-size:12px;font-weight:700;letter-spacing:0.08em;color:#7a4cff;text-transform:uppercase;margin-bottom:8px">For Product Launches</div>
-                    <h3 style="margin:0 0 10px;color:#111">Website Demo Video</h3>
-                    <div style="font-size:32px;font-weight:800;color:#111">$299-$499</div>
-                    <p style="color:#666;font-size:14px;line-height:1.6;margin:12px 0 0">Turn a SaaS or ecommerce website into a 45-90 second product walkthrough with scenes, motion, and optional voiceover.</p>
+                    <div style="font-size:12px;font-weight:700;letter-spacing:0.08em;color:#7a4cff;text-transform:uppercase;margin-bottom:8px">Any Length</div>
+                    <h3 style="margin:0 0 10px;color:#111">Shorts, Demos, or Long Videos</h3>
+                    <p style="color:#666;font-size:14px;line-height:1.6;margin:12px 0 0">Generate quick clips, 30-60 second promos, multi-minute explainers, or longer structured videos by letting the workflow plan segments and assemble them.</p>
                 </div>
 
                 <div style="background:#f8f9fa;border:1px solid #e5e7eb;border-radius:16px;padding:28px 24px">
-                    <div style="font-size:12px;font-weight:700;letter-spacing:0.08em;color:#7a4cff;text-transform:uppercase;margin-bottom:8px">For Launch Packs</div>
-                    <h3 style="margin:0 0 10px;color:#111">3D Product Mockups</h3>
-                    <div style="font-size:32px;font-weight:800;color:#111">$97-$197</div>
-                    <p style="color:#666;font-size:14px;line-height:1.6;margin:12px 0 0">Create device mockups, app promos, and cinematic product loops from screenshots, photos, or a live website.</p>
+                    <div style="font-size:12px;font-weight:700;letter-spacing:0.08em;color:#7a4cff;text-transform:uppercase;margin-bottom:8px">Creative Tools</div>
+                    <h3 style="margin:0 0 10px;color:#111">Editing + Generation Stack</h3>
+                    <p style="color:#666;font-size:14px;line-height:1.6;margin:12px 0 0">Use FFmpeg tools, Blender scenes, Manim/LaTeX visuals, VibeVoice narration, thumbnails, stock support, and AI review from the same system.</p>
                 </div>
 
                 <div style="background:#f8f9fa;border:1px solid #e5e7eb;border-radius:16px;padding:28px 24px">
-                    <div style="font-size:12px;font-weight:700;letter-spacing:0.08em;color:#7a4cff;text-transform:uppercase;margin-bottom:8px">For Agencies</div>
-                    <h3 style="margin:0 0 10px;color:#111">White-Label Production API</h3>
-                    <div style="font-size:32px;font-weight:800;color:#111">$99-$199<span style="font-size:14px;font-weight:500;color:#888;margin-left:6px">/mo</span></div>
-                    <p style="color:#666;font-size:14px;line-height:1.6;margin:12px 0 0">Resell clipping, thumbnails, animations, and delivery pages under your own brand with API access and operator-friendly pricing.</p>
+                    <div style="font-size:12px;font-weight:700;letter-spacing:0.08em;color:#7a4cff;text-transform:uppercase;margin-bottom:8px">Client Services</div>
+                    <h3 style="margin:0 0 10px;color:#111">Need a Sellable Package?</h3>
+                    <p style="color:#666;font-size:14px;line-height:1.6;margin:12px 0 0">SaaS launch packs, product mockups, clip packs, education videos, voice/audio work, and agency bundles are organized separately on the Services page.</p>
                 </div>
             </div>
         </div>
@@ -669,8 +2266,8 @@ fn build_landing_page_html() -> &'static str {
     <!-- Pricing Section -->
     <section id="pricing" style="padding:60px 20px;background:#f8f9fa">
         <div class="container">
-            <h2 style="text-align:center;margin-bottom:12px">Three Ways To Buy</h2>
-            <p style="text-align:center;color:#666;margin-bottom:40px;max-width:760px;margin-left:auto;margin-right:auto">Use VideoSync as a productized service, as a recurring creator workflow, or as a white-label agency backend. Every route settles in USDC on Base with wallet-native checkout.</p>
+            <h2 style="text-align:center;margin-bottom:12px">Start With the Core Creator Plan</h2>
+            <p style="text-align:center;color:#666;margin-bottom:40px;max-width:760px;margin-left:auto;margin-right:auto">The homepage subscription is simple: 7 days free, then $15/month for the AI video editing and generation workspace. Higher-priced client service packages are listed on the Services page.</p>
 
             <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:20px;max-width:1100px;margin:0 auto">
 
@@ -1033,31 +2630,48 @@ fn build_landing_page_html() -> &'static str {
             }
         }
 
-        // Initialize dynamic background manager
+        function getStoredHomepageToken() {
+            return localStorage.getItem('auth_token')
+                || localStorage.getItem('authToken')
+                || localStorage.getItem('admin_token')
+                || '';
+        }
+
+        function swapHomepageCtasForAuthenticatedUser() {
+            const authToken = getStoredHomepageToken();
+            if (!authToken) return;
+
+            const navButtons = document.getElementById('homepageAuthButtons');
+            const heroButtons = document.getElementById('homepageHeroButtons');
+
+            if (navButtons) {
+                navButtons.innerHTML = [
+                    '<a href="/dashboard" class="btn btn-primary">Dashboard</a>',
+                    '<a href="/chat" class="btn btn-secondary">Open Chat</a>'
+                ].join('');
+            }
+
+            if (heroButtons) {
+                heroButtons.innerHTML = [
+                    '<a href="/chat" class="btn btn-primary btn-large">Start New Chat</a>',
+                    '<a href="/dashboard" class="btn btn-secondary btn-large">Go to Dashboard</a>'
+                ].join('');
+            }
+        }
+
+        // Initialize interactive background effects without blocking the auth-state UI swap.
         document.addEventListener('DOMContentLoaded', () => {
-            new DynamicBackgroundManager();
+            swapHomepageCtasForAuthenticatedUser();
 
-            // Swap anonymous CTAs for dashboard actions if the user is authenticated.
-            const authToken = localStorage.getItem('auth_token') || localStorage.getItem('authToken');
-            if (authToken) {
-                const navButtons = document.getElementById('homepageAuthButtons');
-                const heroButtons = document.getElementById('homepageHeroButtons');
-
-                if (navButtons) {
-                    navButtons.innerHTML = [
-                        '<a href="/dashboard" class="btn btn-primary">Dashboard</a>',
-                        '<a href="/chat" class="btn btn-secondary">Open Chat</a>'
-                    ].join('');
-                }
-
-                if (heroButtons) {
-                    heroButtons.innerHTML = [
-                        '<a href="/chat" class="btn btn-primary btn-large">Start New Chat</a>',
-                        '<a href="/dashboard" class="btn btn-secondary btn-large">Go to Dashboard</a>'
-                    ].join('');
-                }
+            try {
+                new DynamicBackgroundManager();
+            } catch (error) {
+                console.error('Dynamic background initialization failed:', error);
             }
         });
+
+        // Run once immediately as well, since this script is already at the end of <body>.
+        swapHomepageCtasForAuthenticatedUser();
 
         // Add subtle loading indicator for background updates
         let backgroundLoadingIndicator = null;
@@ -1080,6 +2694,7 @@ fn build_landing_page_html() -> &'static str {
                 opacity: 0;
                 transition: opacity 0.3s ease;
             `;
+            backgroundLoadingIndicator.textContent = 'Refreshing background...';
             
             document.body.appendChild(backgroundLoadingIndicator);
             setTimeout(() => {
@@ -1802,8 +3417,9 @@ fn build_modern_landing_page_html() -> &'static str {
             <nav class="nav">
                 <a href="/" class="logo">VideoSync</a>
                 <div class="nav-links">
+                    <a href="#workflow">Workflow</a>
                     <a href="#pricing">Plans</a>
-                    <a href="#offers">Offers</a>
+                    <a href="/services">Services</a>
                     <a href="#features">Features</a>
                     <a href="#tools">Toolkit</a>
                 </div>
@@ -1822,21 +3438,21 @@ fn build_modern_landing_page_html() -> &'static str {
                     <path d="M12 3l7 4v10l-7 4-7-4V7l7-4Z"></path>
                     <path d="m8.5 12 2.2 2.2 4.8-4.8"></path>
                 </svg>
-                <span>Lead with the creator subscription, then upsell premium production</span>
+                <span>AI video editing and generation from natural language</span>
             </div>
-            <h1>AI Video Editing That Grows Into Premium Client Deliverables</h1>
-            <p class="hero-copy">VideoSync is first a <strong>$15/month AI video editing and generation workspace</strong> powered by FFmpeg, Blender, Manim, Pexels, ElevenLabs, and delivery automation. The same stack also sells website-to-video launch packs, 3D motion scenes, creator assets, and white-label agency output.</p>
+            <h1>Generate and Edit Videos of Any Length With AI</h1>
+            <p class="hero-copy">VideoSync is an <strong>AI-powered video editing and generation workspace</strong>. Tell the agent what you want in natural language: edit clips, create thumbnails, generate short promos, build long-form videos, add voice, render animations, and package the result for download or delivery.</p>
             <div class="hero-buttons">
                 <a href="/subscribe" class="btn btn-primary btn-large">Start 7-day trial</a>
                 <a href="#pricing" class="btn btn-secondary btn-large">See plans</a>
             </div>
-            <div class="hero-showcase">
+            <div class="hero-showcase" id="workflow">
                 <div class="hero-slider">
                     <article class="hero-slide">
                         <div>
-                            <span class="hero-slide-tag">Core Subscription</span>
-                            <h3>The $15/month AI editor stays the main product</h3>
-                            <p>Natural-language editing, generation, thumbnails, voice, stock footage, Blender scenes, Manim explainers, and delivery links in one recurring creator workflow.</p>
+                            <span class="hero-slide-tag">Core Workspace</span>
+                            <h3>The $15/month plan covers the AI editor and generator</h3>
+                            <p>Natural-language editing, video generation, thumbnails, voice, stock footage, Blender scenes, Manim/LaTeX explainers, and delivery/download workflows in one creator workspace.</p>
                         </div>
                         <div class="hero-slide-points">
                             <span>320 FFmpeg tools</span>
@@ -1847,48 +3463,48 @@ fn build_modern_landing_page_html() -> &'static str {
                     </article>
                     <article class="hero-slide">
                         <div>
-                            <span class="hero-slide-tag">Launch Packs</span>
-                            <h3>Website URLs can still become premium launch-ready videos</h3>
-                            <p>Paste a SaaS or ecommerce URL to create hero videos, walkthroughs, device mockups, presentation scenes, and buyer-ready previews with unlockable delivery.</p>
+                            <span class="hero-slide-tag">Any Length</span>
+                            <h3>Generate quick clips or longer structured videos</h3>
+                            <p>Ask for a 30-second promo, a 10-minute explainer, or a longer segmented production. The workflow can plan scenes, generate assets, assemble segments, and review the output.</p>
                         </div>
                         <div class="hero-slide-points">
-                            <span>SaaS hero videos</span>
-                            <span>Demo reels</span>
-                            <span>3D product loops</span>
-                            <span>Wallet checkout</span>
+                            <span>Short clips</span>
+                            <span>Long-form videos</span>
+                            <span>Segment planning</span>
+                            <span>QA review</span>
                         </div>
                     </article>
                     <article class="hero-slide">
                         <div>
-                            <span class="hero-slide-tag">Creator Assets</span>
-                            <h3>Shorts, UGC-style outputs, and branded creator systems</h3>
-                            <p>Use the same engine for talking-head cleanup, thumbnails, short-form repurposing, and recurring creator retainers.</p>
+                            <span class="hero-slide-tag">Editing Tools</span>
+                            <h3>Use the creative stack without learning every tool</h3>
+                            <p>The agent can use FFmpeg, thumbnails, voice, stock footage, Blender, Manim, LaTeX, and review tools depending on what the video needs.</p>
                         </div>
                         <div class="hero-slide-points">
                             <span>Thumbnails</span>
-                            <span>UGC cutdowns</span>
-                            <span>Talking-head cleanup</span>
+                            <span>FFmpeg edits</span>
+                            <span>Voice/audio</span>
                             <span>Cross-platform exports</span>
                         </div>
                     </article>
                     <article class="hero-slide">
                         <div>
-                            <span class="hero-slide-tag">Agency Backend</span>
-                            <h3>White-label production when you want agency-scale monetization</h3>
-                            <p>Run previews, unlocks, clipping, Blender renders, and client handoff through one backend so agencies can resell the output cleanly.</p>
+                            <span class="hero-slide-tag">Services Page</span>
+                            <h3>Client packages live separately from the core product</h3>
+                            <p>SaaS packs, mockups, education videos, clip packs, voice/audio work, and agency bundles are productized on the Services page so the homepage stays simple.</p>
                         </div>
                         <div class="hero-slide-points">
-                            <span>Delivery pages</span>
-                            <span>API access</span>
-                            <span>Resale workflow</span>
-                            <span>Recurring retainers</span>
+                            <span>SaaS packs</span>
+                            <span>Mockups</span>
+                            <span>Education</span>
+                            <span>Agency bundles</span>
                         </div>
                     </article>
                 </div>
                 <aside class="hero-summary">
-                    <div class="hero-summary-label">Positioning</div>
-                    <h3>The recurring product is the engine. Productized services are the leverage.</h3>
-                    <p>This keeps the long-term subscription strategy clear while still showing the high-ticket services your agents can generate and sell right now.</p>
+                    <div class="hero-summary-label">Core Offer</div>
+                    <h3>7 days free, then $15/month for the AI video workspace.</h3>
+                    <p>The subscription covers the editing/generation workspace. Premium done-for-you services and agency packages are separate offers on the Services page.</p>
                     <div class="hero-metrics">
                         <div class="hero-metric">
                             <strong>$15/mo</strong>
@@ -1915,9 +3531,9 @@ fn build_modern_landing_page_html() -> &'static str {
     <section id="pricing" class="section">
         <div class="container">
             <div class="section-intro">
-                <div class="section-kicker">Monetization Paths</div>
-                <h2>Three Ways To Buy</h2>
-                <p>Use VideoSync as a recurring creator workflow, as a productized service for premium deliverables, or as a white-label backend for agency production. Every route settles in USDC on Base with wallet-native checkout.</p>
+                <div class="section-kicker">Simple Subscription</div>
+                <h2>Start With the AI Video Workspace</h2>
+                <p>New users get a 7-day free trial. After that, the core VideoSync workspace is $15/month and covers natural-language editing, video generation, creative tools, delivery pages, and downloadable outputs.</p>
             </div>
             <div class="pricing-grid">
                 <article class="pricing-card featured">
@@ -1974,22 +3590,22 @@ fn build_modern_landing_page_html() -> &'static str {
     <section id="offers" class="section section-dark">
         <div class="container">
             <div class="section-intro">
-                <div class="section-kicker">Productized Upsells</div>
-                <h2>Productized Offers You Can Sell Today</h2>
-                <p>These are premium outcome-based offers layered on top of the editing engine. They help you monetize launches, creators, and agency work without confusing the homepage about what the core product is.</p>
+                <div class="section-kicker">Done-For-You Services</div>
+                <h2>Need a Client Package Instead?</h2>
+                <p>The SaaS launch pack, clip packs, thumbnails, product mockups, education videos, Blender scenes, VibeVoice audio, and agency bundles are separated into the Services page so the homepage stays focused on the $15 AI video workspace.</p>
             </div>
             <div class="offer-grid">
                 <article class="offer-card">
                     <div class="eyebrow">For SaaS Founders</div>
                     <h3>SaaS Hero Video</h3>
                     <div class="price">$149-$249</div>
-                    <p>Paste a live URL and generate a 10-30 second landing-page hero or app promo built from the product's own visuals.</p>
+                    <p>Paste a live URL and generate anything from a short landing-page hero to a longer app promo built from the product's own visuals.</p>
                 </article>
                 <article class="offer-card">
                     <div class="eyebrow">For Product Launches</div>
                     <h3>Website Demo Video</h3>
                     <div class="price">$299-$499</div>
-                    <p>Turn a SaaS or ecommerce website into a 45-90 second walkthrough with scenes, motion, and optional voiceover.</p>
+                    <p>Turn a SaaS or ecommerce website into a walkthrough with scenes, motion, and optional voiceover at the length that fits the campaign.</p>
                 </article>
                 <article class="offer-card">
                     <div class="eyebrow">For Launch Packs</div>
@@ -2003,6 +3619,9 @@ fn build_modern_landing_page_html() -> &'static str {
                     <div class="price">$99-$199<span style="font-size:0.5em;color:#94a3b8;margin-left:0.35rem">/mo</span></div>
                     <p>Resell clipping, thumbnails, animations, and delivery pages under your own brand with operator-friendly pricing.</p>
                 </article>
+            </div>
+            <div style="text-align:center;margin-top:2rem">
+                <a href="/services" class="btn btn-primary">View All Services</a>
             </div>
         </div>
     </section>
@@ -2540,6 +4159,11 @@ pub async fn login_page() -> Html<String> {
     </div>
 
     <script>
+        function getPostAuthRedirect(defaultPath) {
+            const params = new URLSearchParams(window.location.search);
+            return params.get('redirect_to') || defaultPath;
+        }
+
         document.getElementById('loginForm').addEventListener('submit', async (e) => {
             e.preventDefault();
             
@@ -2559,7 +4183,9 @@ pub async fn login_page() -> Html<String> {
                 
                 if (data.success) {
                     localStorage.setItem('authToken', data.token);
+                    localStorage.setItem('auth_token', data.token);
                     localStorage.setItem('user', JSON.stringify(data.user));
+                    localStorage.setItem('auth_user', JSON.stringify(data.user));
 
                     document.getElementById('successMessage').textContent = 'Login successful! Redirecting...';
                     document.getElementById('successMessage').style.display = 'block';
@@ -2567,7 +4193,8 @@ pub async fn login_page() -> Html<String> {
 
                     setTimeout(() => {
                         // Clippers land on manual clipping, everyone else on dashboard
-                        const dest = data.user && data.user.is_clipper ? '/manual-clipping' : '/dashboard';
+                        const defaultDest = data.user && data.user.is_clipper ? '/manual-clipping' : '/dashboard';
+                        const dest = getPostAuthRedirect(defaultDest);
                         window.location.href = dest;
                     }, 1000);
                 } else {
@@ -2583,7 +4210,9 @@ pub async fn login_page() -> Html<String> {
         });
 
         function signInWithGoogle() {
-            window.location.href = '/api/auth/google?redirect_to=' + encodeURIComponent('/dashboard');
+            const defaultDest = '/dashboard';
+            const dest = getPostAuthRedirect(defaultDest);
+            window.location.href = '/api/auth/google?redirect_to=' + encodeURIComponent(dest);
         }
 
         // Dynamic Background Management for Login Page
@@ -2998,6 +4627,11 @@ pub async fn signup_page() -> Html<String> {
     </div>
 
     <script>
+        function getPostAuthRedirect(defaultPath) {
+            const params = new URLSearchParams(window.location.search);
+            return params.get('redirect_to') || defaultPath;
+        }
+
         document.getElementById('signupForm').addEventListener('submit', async (e) => {
             e.preventDefault();
             
@@ -3026,37 +4660,47 @@ pub async fn signup_page() -> Html<String> {
                     headers: {
                         'Content-Type': 'application/json',
                     },
-                    body: JSON.stringify({ email, username, password }),
+                    body: JSON.stringify({ email, username, password, confirm_password: confirmPassword }),
                 });
+                const raw = await response.text();
+                let data = {};
+                try {
+                    data = raw ? JSON.parse(raw) : {};
+                } catch (_) {
+                    data = { success: false, message: raw || 'Registration failed.' };
+                }
                 
-                const data = await response.json();
-                
-                if (data.success) {
+                if (response.ok && data.success) {
                     localStorage.setItem('authToken', data.token);
+                    localStorage.setItem('auth_token', data.token);
                     localStorage.setItem('user', JSON.stringify(data.user));
+                    localStorage.setItem('auth_user', JSON.stringify(data.user));
                     
                     document.getElementById('successMessage').textContent = 'Account created successfully! Redirecting...';
                     document.getElementById('successMessage').style.display = 'block';
                     document.getElementById('errorMessage').style.display = 'none';
 
                     setTimeout(() => {
-                        const dest = data.user && data.user.is_clipper ? '/manual-clipping' : '/dashboard';
+                        const defaultDest = data.user && data.user.is_clipper ? '/manual-clipping' : '/dashboard';
+                        const dest = getPostAuthRedirect(defaultDest);
                         window.location.href = dest;
                     }, 1000);
                 } else {
-                    document.getElementById('errorMessage').textContent = data.message;
+                    document.getElementById('errorMessage').textContent = data.message || 'Registration failed.';
                     document.getElementById('errorMessage').style.display = 'block';
                     document.getElementById('successMessage').style.display = 'none';
                 }
             } catch (error) {
-                document.getElementById('errorMessage').textContent = 'Network error. Please try again.';
+                document.getElementById('errorMessage').textContent = 'Sign-up could not be completed right now. Please try again.';
                 document.getElementById('errorMessage').style.display = 'block';
                 document.getElementById('successMessage').style.display = 'none';
             }
         });
 
         function signUpWithGoogle() {
-            window.location.href = '/api/auth/google?redirect_to=' + encodeURIComponent('/dashboard');
+            const defaultDest = '/dashboard';
+            const dest = getPostAuthRedirect(defaultDest);
+            window.location.href = '/api/auth/google?redirect_to=' + encodeURIComponent(dest);
         }
 
         // Dynamic Background Manager Class for Signup
@@ -3511,6 +5155,14 @@ pub async fn dashboard_page() -> Html<String> {
             <p>Manage your video editing projects and start new conversations with our AI assistant.</p>
         </div>
 
+        <div style="display:flex;flex-wrap:wrap;gap:10px;margin:0 0 24px;">
+            <a href="/services" style="text-decoration:none;padding:10px 14px;border-radius:999px;background:rgba(59,130,246,0.18);border:1px solid rgba(96,165,250,0.28);color:#dbeafe;font-weight:600;">All Services</a>
+            <a href="/services/saas-launch-pack" style="text-decoration:none;padding:10px 14px;border-radius:999px;background:rgba(15,23,42,0.72);border:1px solid rgba(148,163,184,0.18);color:#dbeafe;">SaaS Launch Pack</a>
+            <a href="/services/clipper-enhancement-pack" style="text-decoration:none;padding:10px 14px;border-radius:999px;background:rgba(15,23,42,0.72);border:1px solid rgba(148,163,184,0.18);color:#dbeafe;">Thumbnail & Motion Graphics</a>
+            <a href="/services/creator-manager-fulfillment" style="text-decoration:none;padding:10px 14px;border-radius:999px;background:rgba(15,23,42,0.72);border:1px solid rgba(148,163,184,0.18);color:#dbeafe;">Agency Production Backend</a>
+            <a href="/services/x402-asset-api" style="text-decoration:none;padding:10px 14px;border-radius:999px;background:rgba(15,23,42,0.72);border:1px solid rgba(148,163,184,0.18);color:#dbeafe;">Programmable Payments</a>
+        </div>
+
         <div class="quick-actions">
             <h2>Quick Actions</h2>
             <div class="action-grid">
@@ -3535,7 +5187,7 @@ pub async fn dashboard_page() -> Html<String> {
                     <h3><span class="action-icon"><svg viewBox="0 0 24 24"><path d="m14.7 6.3 3 3"></path><path d="M4 20l4.5-1 9.2-9.2a2.1 2.1 0 1 0-3-3L5.5 16 4 20Z"></path><path d="M13 8 16 11"></path></svg></span>Video Tools</h3>
                     <p>Stabilize, convert formats, visualize audio, and run workflow recipes directly</p>
                 </a>
-                <a href="/gig-templates" class="action-card">
+                <a href="/gig-templates" class="action-card" id="gig-templates-action-card" style="display: none;">
                     <h3><span class="action-icon"><svg viewBox="0 0 24 24"><path d="M4 8h16v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2Z"></path><path d="M9 8V6a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"></path><path d="M4 12h16"></path></svg></span>Gig Templates</h3>
                     <p>Fiverr & PPH gig info with pricing tiers, copy-paste descriptions, and AI sample video generation</p>
                 </a>
@@ -3581,13 +5233,23 @@ pub async fn dashboard_page() -> Html<String> {
 
     <script>
         // Check authentication
-        const authToken = localStorage.getItem('auth_token') || localStorage.getItem('authToken');
+        const authToken = localStorage.getItem('authToken') || localStorage.getItem('admin_token') || localStorage.getItem('auth_token');
         if (!authToken) {
             window.location.href = '/login';
         }
 
         // Clippers should use manual clipping dashboard, not this page
-        const user = JSON.parse(localStorage.getItem('user') || '{}');
+        function parseJwt(token) {
+            try {
+                return JSON.parse(atob(token.split('.')[1]));
+            } catch (_) {
+                return {};
+            }
+        }
+
+        const storedUser = JSON.parse(localStorage.getItem('user') || localStorage.getItem('auth_user') || '{}');
+        const tokenClaims = parseJwt(authToken);
+        const user = { ...storedUser, ...tokenClaims };
         if (user.is_clipper) {
             window.location.href = '/manual-clipping';
         }
@@ -3600,15 +5262,17 @@ pub async fn dashboard_page() -> Html<String> {
         // Show/hide YouTube clipping card based on permissions
         // Check access via API to include whitelisted users
         const clippingCard = document.getElementById('clipping-action-card');
-        if (clippingCard) {
-            const authToken = localStorage.getItem('auth_token') || localStorage.getItem('authToken');
+        const gigTemplatesCard = document.getElementById('gig-templates-action-card');
+        if (clippingCard || gigTemplatesCard) {
+            const authToken = localStorage.getItem('authToken') || localStorage.getItem('admin_token') || localStorage.getItem('auth_token');
             if (authToken) {
                 fetch('/api/clipping/access-check', {
                     headers: { 'Authorization': 'Bearer ' + authToken }
                 })
                 .then(response => {
                     if (response.ok) {
-                        clippingCard.style.display = 'block';
+                        if (clippingCard) clippingCard.style.display = 'block';
+                        if (gigTemplatesCard) gigTemplatesCard.style.display = 'block';
                     }
                 })
                 .catch(err => console.debug('Clipping access check failed:', err));
@@ -3617,7 +5281,10 @@ pub async fn dashboard_page() -> Html<String> {
 
         function logout() {
             localStorage.removeItem('authToken');
+            localStorage.removeItem('auth_token');
+            localStorage.removeItem('admin_token');
             localStorage.removeItem('user');
+            localStorage.removeItem('auth_user');
             window.location.href = '/';
         }
 
@@ -3626,11 +5293,68 @@ pub async fn dashboard_page() -> Html<String> {
         }
 
         function viewProjects() {
-            alert('Projects feature coming soon!');
+            window.location.href = '/dashboard';
         }
 
         function viewHelp() {
-            alert('Help documentation coming soon!');
+            window.location.href = '/help';
+        }
+
+        function escapeHtml(value) {
+            return String(value || '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
+        function renderChatItem(chat, includeMessageCount = false) {
+            const meta = includeMessageCount
+                ? `${new Date(chat.created_at).toLocaleString()} • ${chat.message_count} messages`
+                : new Date(chat.created_at).toLocaleString();
+            const serializedTitle = JSON.stringify(chat.title || '');
+            return `
+                <div class="chat-item" onclick="openChat('${chat.session_id}')">
+                    <div class="chat-info">
+                        <div class="chat-title">${escapeHtml(chat.title)}</div>
+                        <div class="chat-time">${meta}</div>
+                    </div>
+                    <button class="btn btn-secondary" style="padding:6px 10px;font-size:12px;" onclick='renameChat(event, "${chat.session_id}", ${serializedTitle})'>Rename</button>
+                </div>
+            `;
+        }
+
+        async function renameChat(event, sessionId, currentTitle) {
+            event.stopPropagation();
+            const nextTitle = prompt('Rename this chat:', currentTitle || '');
+            if (nextTitle === null) return;
+
+            const trimmed = nextTitle.trim();
+            if (!trimmed) {
+                alert('Title cannot be empty.');
+                return;
+            }
+
+            const authToken = localStorage.getItem('auth_token') || localStorage.getItem('authToken');
+            const response = await fetch(`/api/chat/sessions/${sessionId}/title`, {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${authToken}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ title: trimmed })
+            });
+
+            if (!response.ok) {
+                alert('Failed to rename chat.');
+                return;
+            }
+
+            loadRecentChats();
+            if (document.getElementById('allTab').classList.contains('active')) {
+                loadAllChats(currentPage);
+            }
         }
 
         // Load recent chats
@@ -3648,14 +5372,7 @@ pub async fn dashboard_page() -> Html<String> {
                     const chatList = document.getElementById('chatList');
                     
                     if (data.success && data.chats && data.chats.length > 0) {
-                        chatList.innerHTML = data.chats.map(chat => `
-                            <div class="chat-item" onclick="openChat('${chat.session_id}')">
-                                <div class="chat-info">
-                                    <div class="chat-title">${chat.title}</div>
-                                    <div class="chat-time">${new Date(chat.created_at).toLocaleString()}</div>
-                                </div>
-                            </div>
-                        `).join('');
+                        chatList.innerHTML = data.chats.map(chat => renderChatItem(chat)).join('');
                     } else {
                         // Keep the empty state if no chats
                         chatList.innerHTML = `
@@ -3714,14 +5431,7 @@ pub async fn dashboard_page() -> Html<String> {
                     const paginationDiv = document.getElementById('pagination');
 
                     if (data.success && data.chats && data.chats.length > 0) {
-                        allChatsList.innerHTML = data.chats.map(chat => `
-                            <div class="chat-item" onclick="openChat('${chat.session_id}')">
-                                <div class="chat-info">
-                                    <div class="chat-title">${chat.title}</div>
-                                    <div class="chat-time">${new Date(chat.created_at).toLocaleString()} • ${chat.message_count} messages</div>
-                                </div>
-                            </div>
-                        `).join('');
+                        allChatsList.innerHTML = data.chats.map(chat => renderChatItem(chat, true)).join('');
 
                         // Update pagination
                         currentPage = data.pagination.page;
@@ -4331,7 +6041,16 @@ pub async fn chat_interface_with_session_id(session_id: Option<String>) -> Html<
         <!-- Main Content -->
         <div class="main-content">
             <div class="chat-header">
-                <div class="chat-title">Video Editing Assistant</div>
+                <div>
+                    <div class="chat-title">Video Editing Assistant</div>
+                    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
+                        <a href="/services" style="text-decoration:none;padding:6px 10px;border-radius:999px;background:rgba(59,130,246,0.18);border:1px solid rgba(96,165,250,0.28);color:#dbeafe;font-size:12px;font-weight:600;">Services</a>
+                        <a href="/services/saas-launch-pack" style="text-decoration:none;padding:6px 10px;border-radius:999px;background:rgba(15,23,42,0.72);border:1px solid rgba(148,163,184,0.18);color:#dbeafe;font-size:12px;">SaaS Launch</a>
+                        <a href="/services/clipper-enhancement-pack" style="text-decoration:none;padding:6px 10px;border-radius:999px;background:rgba(15,23,42,0.72);border:1px solid rgba(148,163,184,0.18);color:#dbeafe;font-size:12px;">Motion Pack</a>
+                        <a href="/services/creator-manager-fulfillment" style="text-decoration:none;padding:6px 10px;border-radius:999px;background:rgba(15,23,42,0.72);border:1px solid rgba(148,163,184,0.18);color:#dbeafe;font-size:12px;">Agency Backend</a>
+                        <a href="/services/x402-asset-api" style="text-decoration:none;padding:6px 10px;border-radius:999px;background:rgba(15,23,42,0.72);border:1px solid rgba(148,163,184,0.18);color:#dbeafe;font-size:12px;">Payments</a>
+                    </div>
+                </div>
                 <div style="display: flex; gap: 15px; align-items: center;">
                     <div class="status-indicator">
                         <div id="statusDot" class="status-dot disconnected"></div>
@@ -4454,11 +6173,54 @@ pub async fn chat_interface_with_session_id(session_id: Option<String>) -> Html<
                 if (providedSessionId) {
                     loadChatHistory(providedSessionId);
                 }
+                applyPrefilledPromptFromQuery();
             } catch (error) {
                 console.error('❌ FATAL: Error during initialization:', error);
                 alert('Failed to initialize chat: ' + error.message);
             }
         });
+
+        function applyPrefilledPromptFromQuery() {
+            const params = new URLSearchParams(window.location.search);
+            const prompt = params.get('prompt');
+            const autosend = params.get('autosend') === '1';
+            const sampleRequestId = params.get('sample_request_id');
+            if (!prompt) return;
+
+            const input = document.getElementById('chatInput');
+            if (!input) return;
+
+            input.value = prompt;
+            input.style.height = 'auto';
+            input.style.height = Math.min(input.scrollHeight, 120) + 'px';
+
+            if (!autosend) return;
+
+            const autosendKey = sampleRequestId
+                ? `videosync:autosent:${sampleRequestId}`
+                : `videosync:autosent:${sessionUuid}:${prompt}`;
+            if (sessionStorage.getItem(autosendKey) === '1') return;
+
+            const trySend = () => {
+                if (!isConnected) {
+                    setTimeout(trySend, 500);
+                    return;
+                }
+                const pendingPrompt = input.value.trim();
+                if (!pendingPrompt) return;
+                sessionStorage.setItem(autosendKey, '1');
+                sendMessage();
+                const cleanParams = new URLSearchParams(window.location.search);
+                cleanParams.delete('prompt');
+                cleanParams.delete('autosend');
+                cleanParams.delete('sample_request_id');
+                const cleanQuery = cleanParams.toString();
+                const nextUrl = cleanQuery ? `${window.location.pathname}?${cleanQuery}` : window.location.pathname;
+                window.history.replaceState({}, '', nextUrl);
+            };
+
+            setTimeout(trySend, 300);
+        }
 
         function generateUUID() {
             return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
@@ -4577,7 +6339,7 @@ pub async fn chat_interface_with_session_id(session_id: Option<String>) -> Html<
                             updateThinkingIndicator(jsonData.content);
                             break;
                         case 'background_job_status':
-                            // Shown on reconnect when a task is still running in the background
+                            // Shown on reconnect when a workflow has a persisted progress step
                             hideTypingIndicator();
                             addMessage('assistant', jsonData.content, true /* isStatus */);
                             break;
@@ -4610,9 +6372,9 @@ pub async fn chat_interface_with_session_id(session_id: Option<String>) -> Html<
                         const progressData = {
                             status: {
                                 progress_percent: parseInt(parts[0]) || 0,
-                                current_step: parts[1] || 'Processing...',
+                                current_step: parts[1] || '',
                             },
-                            message: parts[2] || 'Please wait...',
+                            message: parts[2] || parts[1] || '',
                         };
                         updateProgressBar(progressData);
                     } else if (data.startsWith('TOOL_CALL:')) {
@@ -4667,6 +6429,18 @@ pub async fn chat_interface_with_session_id(session_id: Option<String>) -> Html<
                     const data = await res.json();
                     const jobs = data.jobs || [];
                     for (const job of jobs) {
+                        const progressLog = Array.isArray(job.progress_log) ? job.progress_log : [];
+                        const latestProgress = progressLog.length ? progressLog[progressLog.length - 1] : null;
+                        const latestProgressMessage = latestProgress && latestProgress.msg
+                            ? String(latestProgress.msg)
+                            : '';
+                        const latestWorkflowEventMessage = job.workflow && job.workflow.latest_event_message
+                            ? String(job.workflow.latest_event_message)
+                            : '';
+                        const workflowStep = job.workflow && job.workflow.current_step
+                            ? String(job.workflow.current_step)
+                            : '';
+
                         if (job.status === 'completed' && job.result) {
                             const msgId = 'job-' + job.id;
                             if (!seenJobIds.has(msgId)) {
@@ -4679,7 +6453,15 @@ pub async fn chat_interface_with_session_id(session_id: Option<String>) -> Html<
                             if (!seenJobIds.has(msgId)) {
                                 seenJobIds.add(msgId);
                                 hideTypingIndicator();
-                                addMessage('assistant', '❌ Task failed: ' + job.error);
+                                addMessage('assistant', job.error);
+                            }
+                        } else if (job.status === 'running') {
+                            if (latestProgressMessage) {
+                                updateThinkingIndicator(latestProgressMessage);
+                            } else if (latestWorkflowEventMessage) {
+                                updateThinkingIndicator(latestWorkflowEventMessage);
+                            } else if (workflowStep) {
+                                updateThinkingIndicator(workflowStep);
                             }
                         }
                     }
@@ -4757,6 +6539,23 @@ pub async fn chat_interface_with_session_id(session_id: Option<String>) -> Html<
             sendMessage();
         }
 
+        function extractAssistantText(content) {
+            if (typeof content !== 'string') return content;
+            const trimmed = content.trim();
+            if (!trimmed.startsWith('{')) return content;
+
+            try {
+                const parsed = JSON.parse(trimmed);
+                if (parsed && typeof parsed.content === 'string') {
+                    return parsed.content;
+                }
+            } catch (_) {
+                return content;
+            }
+
+            return content;
+        }
+
         function addMessage(sender, content, shouldScroll = true, timestamp = null) {
             const messagesContainer = document.getElementById('chatMessages');
             const welcomeScreen = messagesContainer.querySelector('.welcome-screen');
@@ -4776,7 +6575,7 @@ pub async fn chat_interface_with_session_id(session_id: Option<String>) -> Html<
             // Process content to add download links if it's from assistant
             let processedContent = content;
             if (sender === 'assistant') {
-                processedContent = parseAndRenderDownloadLinks(content);
+                processedContent = parseAndRenderDownloadLinks(extractAssistantText(content));
             }
             
             messageDiv.innerHTML = `
@@ -5110,8 +6909,8 @@ pub async fn chat_interface_with_session_id(session_id: Option<String>) -> Html<
             // Running status
             if (progressData.status && progressData.status.status === 'running') {
                 const percentage = progressData.status.progress_percent || 0;
-                const progressTitle = progressData.status.current_step || 'Processing video...';
-                const progressDesc = progressData.message || 'Please wait...';
+                const progressTitle = progressData.status.current_step || 'Waiting for the next recorded production step';
+                const progressDesc = progressData.message || 'The job is active, but no detailed progress message was attached to this update.';
 
             // Show progress container
             container.classList.add('show');
@@ -5542,7 +7341,7 @@ pub async fn analytics_dashboard_page() -> Html<String> {
         </div>
 
         <div class="coming-soon">
-            <strong>🔧 Coming Soon:</strong> Interactive charts, date ranges, export reports
+            <strong>🔧 Planned next additions:</strong> Interactive charts, date ranges, export reports
         </div>
 
         <div style="margin-top: 30px; text-align: center;">
@@ -6344,7 +8143,9 @@ pub async fn clipping_management_page() -> Html<String> {
             const detail = s.current_action_detail || '';
 
             const stepEl = document.getElementById('job-step-' + jobId);
-            if (stepEl) stepEl.textContent = step || 'Processing...';
+            if (stepEl) {
+                stepEl.textContent = step;
+            }
 
             const detailEl = document.getElementById('job-detail-' + jobId);
             if (detailEl) detailEl.textContent = detail;
@@ -6417,6 +8218,16 @@ pub async fn clipping_management_page() -> Html<String> {
                     <div class="clip-card" id="review-clip-${clip.id}">
                         <div class="clip-thumbnail">🎬 ${(clip.duration_seconds || 0).toFixed(1)}s</div>
                         <p style="color:#94a3b8; font-size:0.8rem; margin-bottom:0.5rem;">${clip.source_video_title || 'Unknown source'}</p>
+                        ${(clip.qa_status || clip.qa_score || clip.qa_feedback) ? `
+                            <div style="margin-bottom:0.75rem; padding:0.6rem 0.75rem; border-radius:10px; background:rgba(15,23,42,0.75); border:1px solid rgba(59,130,246,0.18);">
+                                <div style="display:flex; justify-content:space-between; gap:0.75rem; align-items:center; margin-bottom:0.35rem;">
+                                    <strong style="font-size:0.82rem; color:#cbd5e1;">QA ${clip.qa_status || 'not_reviewed'}</strong>
+                                    <span style="font-size:0.8rem; color:#93c5fd;">${clip.qa_score != null ? `Score ${clip.qa_score}/10` : 'No score'}</span>
+                                </div>
+                                ${clip.qa_feedback ? `<div style="font-size:0.82rem; color:#94a3b8; line-height:1.35;">${clip.qa_feedback}</div>` : ''}
+                                ${clip.qa_retry_hint ? `<div style="font-size:0.8rem; color:#fbbf24; margin-top:0.35rem;">Retry hint: ${clip.qa_retry_hint}</div>` : ''}
+                            </div>
+                        ` : ''}
                         <div class="form-group" style="margin-bottom:0.5rem;">
                             <label style="font-size:0.85rem;">Title</label>
                             <input type="text" id="review-title-${clip.id}" value="${(clip.proposed_title || clip.ai_title || '').replace(/"/g, '&quot;')}"
@@ -6715,6 +8526,25 @@ pub async fn clipping_management_page() -> Html<String> {
                                        job.status === 'failed' ? 'status-failed' :
                                        job.status === 'pending' ? 'status-pending' : 'status-running';
                     const pct = job.progress_percent || 0;
+                    const fallback = job.fallback_delivery;
+                    const fallbackBlock = fallback ? `
+                        <div style="margin-top:0.9rem; padding:0.85rem 1rem; border-radius:12px; background:rgba(15,23,42,0.72); border:1px solid rgba(96,165,250,0.2);">
+                            <div style="display:flex; justify-content:space-between; gap:1rem; align-items:center; flex-wrap:wrap;">
+                                <div>
+                                    <div style="font-size:0.82rem; color:#93c5fd; margin-bottom:0.25rem;">Fallback delivery active</div>
+                                    <div style="font-weight:600; color:#e2e8f0;">${fallback.title || 'Generated fallback delivery'}</div>
+                                    <div style="font-size:0.8rem; color:#94a3b8; margin-top:0.2rem;">
+                                        ${(job.fallback_strategy || 'generated_summary_delivery')} • ${fallback.status || 'pending'}
+                                    </div>
+                                    ${fallback.error_message ? `<div style="font-size:0.8rem; color:#fca5a5; margin-top:0.3rem;">${fallback.error_message}</div>` : ''}
+                                </div>
+                                <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+                                    ${fallback.output_r2_url ? `<a href="${fallback.output_r2_url}" target="_blank" class="btn btn-small" style="text-decoration:none;">Open Output</a>` : ''}
+                                    ${fallback.delivery_page_url ? `<a href="${fallback.delivery_page_url}" target="_blank" class="btn btn-small btn-secondary" style="text-decoration:none;">Open Delivery</a>` : ''}
+                                </div>
+                            </div>
+                        </div>
+                    ` : '';
 
                     return `
                         <div class="job-card" id="job-card-${job.id}" data-status="${job.status}">
@@ -6734,6 +8564,7 @@ pub async fn clipping_management_page() -> Html<String> {
                                 </p>
                             </div>
                             ${job.error_message ? `<p style="color: #ef4444; margin-top: 0.5rem;">${job.error_message}</p>` : ''}
+                            ${fallbackBlock}
                             <p id="job-detail-${job.id}" style="color: #64748b; font-size: 0.8rem; margin-top: 0.25rem;"></p>
                         </div>
                     `;
@@ -7900,7 +9731,7 @@ input[type=number]{width:100%;padding:8px 12px;background:#0f3460;border:1px sol
   </div>
 </div>
 <script>
-const token = localStorage.getItem('auth_token') || localStorage.getItem('authToken') || localStorage.getItem('auth_token') || localStorage.getItem('admin_token');
+const token = localStorage.getItem('authToken') || localStorage.getItem('admin_token') || localStorage.getItem('auth_token');
 if (!token) window.location.href = '/login';
 function parseJwt(t){try{return JSON.parse(atob(t.split('.')[1]));}catch(e){return{};}}
 const claims = parseJwt(token);
@@ -7912,7 +9743,7 @@ async function submitJob(){const video_url=document.getElementById('video_url').
 let activeRefresh=null;
 async function loadJobs(){const res=await fetch('/api/manual-clipping/jobs',{headers:{'Authorization':'Bearer '+token}});const data=await res.json();if(!data.success){document.getElementById('jobs-area').innerHTML='<div class="empty">Failed to load</div>';return;}const jobs=data.jobs||[];if(!jobs.length){document.getElementById('jobs-area').innerHTML='<div class="empty">No jobs yet. Paste a URL above to get started.</div>';return;}let html='';let hasActive=false;for(const j of jobs){const active=['pending','analyzing','downloading','extracting','uploading'].includes(j.status);if(active)hasActive=true;const platBadge=j.video_platform==='twitch'?'<span class="platform-badge tw-badge">TWITCH</span>':'<span class="platform-badge yt-badge">YOUTUBE</span>';html+=`<div class="job-row" id="job-${j.id}"><div class="job-meta"><div class="job-url">${j.video_title||j.video_url}${platBadge}</div><div class="job-status"><span class="status-dot status-${j.status}"></span>${j.status.toUpperCase()}${active?` - ${j.progress_percent}%`:''}${j.error_message?` <span style="color:#ef4444">${j.error_message}</span>`:''}</div>${active?`<div class="progress-bar"><div class="progress-fill" style="width:${j.progress_percent}%"></div></div>`:''} ${j.status==='completed'?`<div id="clips-${j.id}" style="margin-top:12px"></div>`:''}</div>${j.status==='completed'?`<button class="btn btn-sm btn-download" onclick="loadClips('${j.id}')">Load Clips</button>`:''}${active?`<button class="btn btn-sm btn-cancel" onclick="cancelJob('${j.id}')">Cancel</button>`:''}</div>`;}
 document.getElementById('jobs-area').innerHTML=html;if(activeRefresh)clearTimeout(activeRefresh);if(hasActive)activeRefresh=setTimeout(loadJobs,5000);}
-async function loadClips(jobId){const res=await fetch(`/api/manual-clipping/jobs/${jobId}`,{headers:{'Authorization':'Bearer '+token}});const data=await res.json();if(!data.success)return;const clips=data.clips||[];if(!clips.length)return;let html='<div class="clips-grid">';for(const c of clips){const dur=c.duration_seconds?Math.round(c.duration_seconds)+'s':'';html+=`<div class="clip-card">${c.thumbnail_url?`<img class="clip-thumb" src="${c.thumbnail_url}" loading="lazy">`:'<div class="clip-thumb-ph">🎬</div>'}<div class="clip-info"><div class="clip-title">${c.title||'Clip '+c.clip_number}</div><div class="clip-meta">${dur}</div>${c.download_url?`<a href="${c.download_url}" download class="btn btn-download" style="display:block;text-align:center;text-decoration:none;font-size:0.82rem;padding:7px">Download</a>`:'<span style="color:#9ca3af;font-size:0.8rem">Link expired</span>'}</div></div>`;}html+='</div>';const el=document.getElementById(`clips-${jobId}`);if(el)el.innerHTML=html;}
+async function loadClips(jobId){const res=await fetch(`/api/manual-clipping/jobs/${jobId}`,{headers:{'Authorization':'Bearer '+token}});const data=await res.json();if(!data.success)return;const clips=data.clips||[];if(!clips.length)return;let html='<div class="clips-grid">';for(const c of clips){const dur=c.duration_seconds?Math.round(c.duration_seconds)+'s':'';const qaScore=c.qa_score!=null?`Score ${c.qa_score}/10`:'';const qaBlock=(c.qa_status||qaScore||c.qa_feedback||c.qa_retry_hint)?`<div style="margin-top:8px;padding:8px 10px;border-radius:10px;background:rgba(15,23,42,0.72);border:1px solid rgba(59,130,246,0.18)"><div style="font-size:0.78rem;color:#cbd5e1;margin-bottom:4px">QA ${c.qa_status||'not_reviewed'} ${qaScore?`• ${qaScore}`:''}</div>${c.qa_feedback?`<div style="font-size:0.78rem;color:#94a3b8;line-height:1.35">${c.qa_feedback}</div>`:''}${c.qa_retry_hint?`<div style="font-size:0.76rem;color:#fbbf24;margin-top:4px">Retry hint: ${c.qa_retry_hint}</div>`:''}</div>`:'';html+=`<div class="clip-card">${c.thumbnail_url?`<img class="clip-thumb" src="${c.thumbnail_url}" loading="lazy">`:'<div class="clip-thumb-ph">🎬</div>'}<div class="clip-info"><div class="clip-title">${c.title||'Clip '+c.clip_number}</div><div class="clip-meta">${dur}</div>${qaBlock}${c.download_url?`<a href="${c.download_url}" download class="btn btn-download" style="display:block;text-align:center;text-decoration:none;font-size:0.82rem;padding:7px;margin-top:8px">Download</a>`:'<span style="color:#9ca3af;font-size:0.8rem;display:block;margin-top:8px">Link expired</span>'}</div></div>`;}html+='</div>';const el=document.getElementById(`clips-${jobId}`);if(el)el.innerHTML=html;}
 async function cancelJob(id){const res=await fetch(`/api/manual-clipping/jobs/${id}`,{method:'DELETE',headers:{'Authorization':'Bearer '+token}});const data=await res.json();if(data.success)loadJobs();else showMsg('Could not cancel',false);}
 loadJobs();
 </script>
@@ -7974,7 +9805,7 @@ input:focus{outline:none;border-color:#5c5470}
 const params=new URLSearchParams(window.location.search);
 if(params.get('token'))document.getElementById('token').value=params.get('token');
 function showMsg(text,ok=true){document.getElementById('msg').innerHTML=`<div class="msg ${ok?'msg-success':'msg-error'}">${text}</div>`;}
-async function register(e){e.preventDefault();const payload={token:document.getElementById('token').value.trim(),email:document.getElementById('email').value.trim(),username:document.getElementById('username').value.trim(),password:document.getElementById('password').value,confirm_password:document.getElementById('confirm_password').value};const res=await fetch('/api/auth/register/clipper',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});const data=await res.json();if(data.success){localStorage.setItem('authToken',data.token);localStorage.setItem('user',JSON.stringify(data.user));showMsg('Account created! Redirecting...');setTimeout(()=>window.location.href='/manual-clipping',1200);}else showMsg(data.message||'Registration failed',false);}
+async function register(e){e.preventDefault();const payload={token:document.getElementById('token').value.trim(),email:document.getElementById('email').value.trim(),username:document.getElementById('username').value.trim(),password:document.getElementById('password').value,confirm_password:document.getElementById('confirm_password').value};const res=await fetch('/api/auth/register/clipper',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});const data=await res.json();if(data.success){localStorage.setItem('authToken',data.token);localStorage.setItem('auth_token',data.token);localStorage.setItem('user',JSON.stringify(data.user));localStorage.setItem('auth_user',JSON.stringify(data.user));showMsg('Account created! Redirecting...');setTimeout(()=>window.location.href='/manual-clipping',1200);}else showMsg(data.message||'Registration failed',false);}
 </script>
 </body>
 </html>"#####;

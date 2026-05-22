@@ -57,14 +57,14 @@ pub struct ErrorResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
-    pub sub: String,  // Subject (user id)
+    pub sub: String, // Subject (user id)
     pub username: String,
     pub email: String,
     pub is_superuser: bool,
     pub is_staff: bool,
     pub is_clipper: bool,
-    pub exp: usize,   // Expiration time
-    pub iat: usize,   // Issued at
+    pub exp: usize, // Expiration time
+    pub iat: usize, // Issued at
 }
 
 impl From<User> for UserResponse {

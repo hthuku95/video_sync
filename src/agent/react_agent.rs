@@ -2,13 +2,16 @@
 // ReAct Agent Implementation - Thought → Action → Observation → Reflection
 // Supports user interruption and real-time reasoning updates
 
-use super::react_state::{AgentState, AgentContext, UserCommand};
+use super::react_state::{AgentContext, AgentState, UserCommand};
 use super::tool_executor::{execute_tool_claude, execute_tool_gemini};
-use crate::claude_client::{ClaudeClient, ClaudeMessage, ClaudeContent, ContentBlock};
-use crate::gemini_client::{GeminiClient, GenerateContentRequest, Content, Part, Tool, GenerationConfig, ToolConfig, FunctionCallingConfig, FunctionCallingMode};
+use crate::claude_client::{ClaudeClient, ClaudeContent, ClaudeMessage, ContentBlock};
+use crate::gemini_client::{
+    Content, FunctionCallingConfig, FunctionCallingMode, GeminiClient, GenerateContentRequest,
+    GenerationConfig, Part, Tool, ToolConfig,
+};
+use serde_json::json;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use serde_json::json;
 
 pub struct ReActClaudeAgent {
     client: Arc<ClaudeClient>,
@@ -28,7 +31,9 @@ impl ReActClaudeAgent {
         progress_tx: mpsc::UnboundedSender<AgentState>,
         mut user_command_rx: mpsc::UnboundedReceiver<UserCommand>,
     ) -> Result<String, String> {
-        let tools = crate::claude_client::ClaudeClient::create_video_editing_tools();
+        let tools = crate::tool_registry::ToolRegistry::claude_tools_for_profile(
+            crate::tool_registry::AgentExecutionProfile::FullProduction,
+        );
         let mut messages: Vec<ClaudeMessage> = vec![];
 
         // PHASE 1: PLANNING
@@ -49,11 +54,15 @@ impl ReActClaudeAgent {
             content: ClaudeContent::Text(planning_prompt),
         });
 
-        let planning_response = self.client.generate_content(
-            messages.clone(),
-            None, // No tools yet, just planning
-            Some(self.get_system_prompt()),
-        ).await.map_err(|e| format!("Planning failed: {}", e))?;
+        let planning_response = self
+            .client
+            .generate_content(
+                messages.clone(),
+                None, // No tools yet, just planning
+                Some(self.get_system_prompt()),
+            )
+            .await
+            .map_err(|e| format!("Planning failed: {}", e))?;
 
         let plan = self.extract_text_from_response(&planning_response.content);
         let steps = self.extract_steps_from_plan(&plan);
@@ -91,7 +100,10 @@ impl ReActClaudeAgent {
                         let state_msg = self.context.current_state.to_user_message();
                         let _ = progress_tx.send(AgentState::Interrupted {
                             original_state: Box::new(self.context.current_state.clone()),
-                            user_message: format!("User asked: {}\n\nCurrent status: {}", q, state_msg),
+                            user_message: format!(
+                                "User asked: {}\n\nCurrent status: {}",
+                                q, state_msg
+                            ),
                             timestamp: chrono::Utc::now(),
                         });
                         continue;
@@ -120,19 +132,27 @@ impl ReActClaudeAgent {
 
             // THINKING PHASE
             self.context.transition_to(AgentState::Thinking {
-                thought: format!("Considering next action for step {}/{}", current_step, total_steps),
-                reasoning: "Analyzing current situation and determining best tool to use...".to_string(),
+                thought: format!(
+                    "Considering next action for step {}/{}",
+                    current_step, total_steps
+                ),
+                reasoning: "Analyzing current situation and determining best tool to use..."
+                    .to_string(),
                 step_number: current_step,
                 total_steps,
             });
             let _ = progress_tx.send(self.context.current_state.clone());
 
             // ACTION PHASE
-            let response = self.client.generate_content(
-                messages.clone(),
-                Some(tools.clone()),
-                Some(self.get_system_prompt()),
-            ).await.map_err(|e| format!("Claude API Error: {}", e))?;
+            let response = self
+                .client
+                .generate_content(
+                    messages.clone(),
+                    Some(tools.clone()),
+                    Some(self.get_system_prompt()),
+                )
+                .await
+                .map_err(|e| format!("Claude API Error: {}", e))?;
 
             let mut has_tool_calls = false;
             let mut tool_results = vec![];
@@ -197,7 +217,10 @@ impl ReActClaudeAgent {
                 // FINAL REFLECTION
                 self.context.transition_to(AgentState::Reflecting {
                     reflection: "All tasks completed".to_string(),
-                    progress_evaluation: format!("Successfully completed {} steps", current_step - 1),
+                    progress_evaluation: format!(
+                        "Successfully completed {} steps",
+                        current_step - 1
+                    ),
                     next_action_decision: "Ready to present final answer".to_string(),
                     step_number: current_step,
                 });
@@ -216,7 +239,10 @@ impl ReActClaudeAgent {
             // REFLECTION PHASE
             self.context.transition_to(AgentState::Reflecting {
                 reflection: format!("Completed step {}, evaluating progress", current_step),
-                progress_evaluation: format!("{} of {} estimated steps done", current_step, total_steps),
+                progress_evaluation: format!(
+                    "{} of {} estimated steps done",
+                    current_step, total_steps
+                ),
                 next_action_decision: if current_step < total_steps {
                     "Proceeding to next step".to_string()
                 } else {
@@ -263,7 +289,10 @@ Always explain your reasoning before acting. Be transparent about your decision-
     fn get_user_request(&self) -> String {
         match &self.context.current_state {
             AgentState::Planning { user_request, .. } => user_request.clone(),
-            _ => self.context.state_history.first()
+            _ => self
+                .context
+                .state_history
+                .first()
                 .and_then(|s| match s {
                     AgentState::Planning { user_request, .. } => Some(user_request.clone()),
                     _ => None,
@@ -272,8 +301,12 @@ Always explain your reasoning before acting. Be transparent about your decision-
         }
     }
 
-    fn extract_text_from_response(&self, content: &[crate::claude_client::ResponseContent]) -> String {
-        content.iter()
+    fn extract_text_from_response(
+        &self,
+        content: &[crate::claude_client::ResponseContent],
+    ) -> String {
+        content
+            .iter()
             .filter_map(|c| match c {
                 crate::claude_client::ResponseContent::Text { text } => Some(text.clone()),
                 _ => None,
@@ -290,7 +323,8 @@ Always explain your reasoning before acting. Be transparent about your decision-
     }
 
     fn extract_output_path(&self, result: &str) -> Option<String> {
-        result.split("outputs/")
+        result
+            .split("outputs/")
             .nth(1)
             .and_then(|s| s.split_whitespace().next())
             .map(|s| format!("outputs/{}", s))
@@ -300,7 +334,9 @@ Always explain your reasoning before acting. Be transparent about your decision-
         if self.context.uploaded_files.is_empty() {
             "None".to_string()
         } else {
-            self.context.uploaded_files.iter()
+            self.context
+                .uploaded_files
+                .iter()
                 .map(|f| format!("{} ({})", f.name, f.path))
                 .collect::<Vec<_>>()
                 .join(", ")
@@ -326,7 +362,9 @@ impl ReActGeminiAgent {
         progress_tx: mpsc::UnboundedSender<AgentState>,
         mut user_command_rx: mpsc::UnboundedReceiver<UserCommand>,
     ) -> Result<String, String> {
-        let tools = crate::gemini_client::GeminiClient::create_video_editing_tools();
+        let tools = crate::tool_registry::ToolRegistry::gemini_tools_for_profile(
+            crate::tool_registry::AgentExecutionProfile::FullProduction,
+        );
         let mut conversation: Vec<Content> = vec![];
 
         // PHASE 1: PLANNING
@@ -338,7 +376,9 @@ impl ReActGeminiAgent {
         let _ = progress_tx.send(self.context.current_state.clone());
 
         conversation.push(Content {
-            parts: vec![Part::Text { text: self.get_user_request() }],
+            parts: vec![Part::Text {
+                text: self.get_user_request(),
+            }],
             role: Some("user".to_string()),
         });
 
@@ -372,7 +412,9 @@ impl ReActGeminiAgent {
                         let _ = progress_tx.send(self.context.current_state.clone());
 
                         conversation.push(Content {
-                            parts: vec![Part::Text { text: format!("NEW INSTRUCTION: {}", new_inst) }],
+                            parts: vec![Part::Text {
+                                text: format!("NEW INSTRUCTION: {}", new_inst),
+                            }],
                             role: Some("user".to_string()),
                         });
                         continue;
@@ -394,7 +436,9 @@ impl ReActGeminiAgent {
             // ACTION PHASE
             let request = GenerateContentRequest {
                 contents: conversation.clone(),
-                tools: Some(vec![Tool { function_declarations: tools.iter().cloned().collect() }]),
+                tools: Some(vec![Tool {
+                    function_declarations: tools.iter().cloned().collect(),
+                }]),
                 generation_config: Some(GenerationConfig {
                     temperature: 0.3,
                     top_k: 40,
@@ -403,13 +447,16 @@ impl ReActGeminiAgent {
                 }),
                 tool_config: Some(ToolConfig {
                     function_calling_config: FunctionCallingConfig {
-                        mode: FunctionCallingMode::Any,  // CRITICAL FIX: Force tool calling like Claude does
+                        mode: FunctionCallingMode::Any, // CRITICAL FIX: Force tool calling like Claude does
                     },
                 }),
                 system_instruction: None,
             };
 
-            let response = self.client.generate_content(request).await
+            let response = self
+                .client
+                .generate_content(request)
+                .await
                 .map_err(|e| format!("Gemini API Error: {}", e))?;
 
             if let Some(candidate) = response.candidates.first() {
@@ -418,71 +465,82 @@ impl ReActGeminiAgent {
                     let mut tool_results = vec![];
 
                     for part in &content.parts {
-                    match part {
-                        Part::Text { text } => {
-                            final_text = text.clone();
-                        }
-                        Part::FunctionCall { function_call } => {
-                            has_tool_calls = true;
+                        match part {
+                            Part::Text { text } => {
+                                final_text = text.clone();
+                            }
+                            Part::FunctionCall { function_call } => {
+                                has_tool_calls = true;
 
-                            // EXECUTING PHASE
-                            self.context.transition_to(AgentState::Executing {
-                                action: format!("Executing {}", function_call.name),
-                                tool_name: function_call.name.clone(),
-                                tool_args: json!(function_call.args),
-                                step_number: current_step,
-                            });
-                            let _ = progress_tx.send(self.context.current_state.clone());
+                                // EXECUTING PHASE
+                                self.context.transition_to(AgentState::Executing {
+                                    action: format!("Executing {}", function_call.name),
+                                    tool_name: function_call.name.clone(),
+                                    tool_args: json!(function_call.args),
+                                    step_number: current_step,
+                                });
+                                let _ = progress_tx.send(self.context.current_state.clone());
 
-                            let result = execute_tool_gemini(&function_call.name, &function_call.args).await;
+                                let result =
+                                    execute_tool_gemini(&function_call.name, &function_call.args)
+                                        .await;
 
-                            // OBSERVATION PHASE
-                            self.context.transition_to(AgentState::Observing {
-                                observation: format!("Received results from {}", function_call.name),
-                                tool_output: result.clone(),
-                                step_number: current_step,
-                            });
-                            let _ = progress_tx.send(self.context.current_state.clone());
+                                // OBSERVATION PHASE
+                                self.context.transition_to(AgentState::Observing {
+                                    observation: format!(
+                                        "Received results from {}",
+                                        function_call.name
+                                    ),
+                                    tool_output: result.clone(),
+                                    step_number: current_step,
+                                });
+                                let _ = progress_tx.send(self.context.current_state.clone());
 
-                            tool_results.push(Part::FunctionResponse {
-                                function_response: crate::gemini_client::FunctionResponse {
-                                    name: function_call.name.clone(),
-                                    response: {
-                                        let mut map = std::collections::HashMap::new();
-                                        map.insert("result".to_string(), serde_json::Value::String(result));
-                                        map
+                                tool_results.push(Part::FunctionResponse {
+                                    function_response: crate::gemini_client::FunctionResponse {
+                                        name: function_call.name.clone(),
+                                        response: {
+                                            let mut map = std::collections::HashMap::new();
+                                            map.insert(
+                                                "result".to_string(),
+                                                serde_json::Value::String(result),
+                                            );
+                                            map
+                                        },
+                                        thought_signature: function_call.thought_signature.clone(),
                                     },
-                                    thought_signature: function_call.thought_signature.clone(),
-                                },
-                            });
+                                });
 
-                            current_step += 1;
+                                current_step += 1;
+                            }
+                            _ => {}
                         }
-                        _ => {}
                     }
-                }
 
-                conversation.push(content.clone());
+                    conversation.push(content.clone());
 
-                if !has_tool_calls {
-                    break;
-                }
+                    if !has_tool_calls {
+                        break;
+                    }
 
-                if !tool_results.is_empty() {
-                    conversation.push(Content {
-                        parts: tool_results,
-                        role: Some("user".to_string()),
-                    });
+                    if !tool_results.is_empty() {
+                        conversation.push(Content {
+                            parts: tool_results,
+                            role: Some("user".to_string()),
+                        });
 
-                    // REFLECTION PHASE
-                    self.context.transition_to(AgentState::Reflecting {
-                        reflection: "Evaluating progress...".to_string(),
-                        progress_evaluation: format!("Completed {} actions so far", current_step - 1),
-                        next_action_decision: "Determining if more work needed".to_string(),
-                        step_number: current_step,
-                    });
-                    let _ = progress_tx.send(self.context.current_state.clone());
-                }
+                        // REFLECTION PHASE
+                        self.context.transition_to(AgentState::Reflecting {
+                            reflection: "Evaluating progress...".to_string(),
+                            progress_evaluation: format!(
+                                "Completed {} actions so far",
+                                current_step - 1
+                            ),
+                            next_action_decision: "Determining if more work needed".to_string(),
+                            step_number: current_step,
+                        });
+                        let _ = progress_tx.send(self.context.current_state.clone());
+                    }
                 } else {
                     // No content in response
                     tracing::warn!("Gemini response has no content");

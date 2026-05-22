@@ -2,13 +2,13 @@
 // src/services/video_vectorization.rs
 use crate::gemini_client::GeminiClient;
 use crate::AppState;
+use base64::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::process::Command;
 use std::sync::Arc;
 use tokio::fs;
 use tracing::{info, warn};
-use base64::prelude::*;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VideoFrameMetadata {
@@ -36,12 +36,10 @@ impl VideoVectorizationService {
     /// Update job heartbeat to prevent stuck detection during long processing
     async fn update_heartbeat(job_id: Option<i32>, db_pool: &sqlx::PgPool, message: &str) {
         if let Some(id) = job_id {
-            match sqlx::query(
-                "UPDATE clipping_jobs SET updated_at = NOW() WHERE id = $1"
-            )
-            .bind(id)
-            .execute(db_pool)
-            .await
+            match sqlx::query("UPDATE clipping_jobs SET updated_at = NOW() WHERE id = $1")
+                .bind(id)
+                .execute(db_pool)
+                .await
             {
                 Ok(_) => {
                     tracing::debug!("💓 Heartbeat: Job {} - {}", id, message);
@@ -62,7 +60,10 @@ impl VideoVectorizationService {
         state: &Arc<AppState>,
         job_id: Option<i32>, // For heartbeat updates to prevent stuck detection
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        info!("Starting video vectorization for file: {} ({})", video_file_path, file_id);
+        info!(
+            "Starting video vectorization for file: {} ({})",
+            video_file_path, file_id
+        );
 
         // Step 1: Extract keyframes from video
         let frames_dir = format!("temp_frames/{}", file_id);
@@ -124,7 +125,9 @@ impl VideoVectorizationService {
 
         info!(
             "Analyzing {} frames with concurrency={}, timeout={}s per frame",
-            keyframes.len(), concurrency_limit, per_frame_timeout_secs
+            keyframes.len(),
+            concurrency_limit,
+            per_frame_timeout_secs
         );
 
         use futures::stream::{self, StreamExt};
@@ -145,14 +148,16 @@ impl VideoVectorizationService {
                             Self::analyze_frame_with_claude(
                                 &frame_path,
                                 frame_number as u32,
-                                state.claude_client.as_ref().unwrap()
-                            ).await
+                                state.claude_client.as_ref().unwrap(),
+                            )
+                            .await
                         } else {
                             Self::analyze_frame_with_gemini(
                                 &frame_path,
                                 frame_number as u32,
-                                state.gemini_client.as_ref().unwrap()
-                            ).await
+                                state.gemini_client.as_ref().unwrap(),
+                            )
+                            .await
                         }
                     };
 
@@ -163,7 +168,10 @@ impl VideoVectorizationService {
                             None
                         }
                         Err(_) => {
-                            warn!("Frame {} analysis timed out after {}s", frame_number, per_frame_timeout_secs);
+                            warn!(
+                                "Frame {} analysis timed out after {}s",
+                                frame_number, per_frame_timeout_secs
+                            );
                             None
                         }
                     }
@@ -177,16 +185,28 @@ impl VideoVectorizationService {
             .collect()
             .await;
 
-        info!("Successfully analyzed {}/{} frames", frame_metadata.len(), keyframes.len());
+        info!(
+            "Successfully analyzed {}/{} frames",
+            frame_metadata.len(),
+            keyframes.len()
+        );
 
         // Heartbeat: Frame analysis complete
         Self::update_heartbeat(job_id, &state.db_pool, "Frame analysis complete").await;
 
         // Step 3: Generate overall video summary using frame analysis
         let video_summary = if use_claude_vision {
-            Self::generate_video_summary_with_claude(&frame_metadata, state.claude_client.as_ref().unwrap()).await?
+            Self::generate_video_summary_with_claude(
+                &frame_metadata,
+                state.claude_client.as_ref().unwrap(),
+            )
+            .await?
         } else {
-            Self::generate_video_summary_with_gemini(&frame_metadata, state.gemini_client.as_ref().unwrap()).await?
+            Self::generate_video_summary_with_gemini(
+                &frame_metadata,
+                state.gemini_client.as_ref().unwrap(),
+            )
+            .await?
         };
 
         // Step 4: Create embeddings and store in Qdrant
@@ -208,7 +228,11 @@ impl VideoVectorizationService {
         // Step 5: Clean up temporary frames
         let _ = fs::remove_dir_all(&frames_dir).await;
 
-        info!("Successfully vectorized video: {} with {} frame embeddings", file_id, frame_metadata.len());
+        info!(
+            "Successfully vectorized video: {} with {} frame embeddings",
+            file_id,
+            frame_metadata.len()
+        );
         Ok(())
     }
 
@@ -218,10 +242,10 @@ impl VideoVectorizationService {
         output_dir: &str,
     ) -> Result<Vec<String>, Box<dyn std::error::Error + Send + Sync>> {
         info!("Extracting keyframes from video: {}", video_path);
-        
+
         // Use FFmpeg to extract keyframes at 1-second intervals
         let output_pattern = format!("{}/frame_%04d.jpg", output_dir);
-        
+
         let output = Command::new("ffmpeg")
             .arg("-i")
             .arg(video_path)
@@ -236,7 +260,9 @@ impl VideoVectorizationService {
             .output()?;
 
         if !output.status.success() {
-            return Err(format!("FFmpeg failed: {}", String::from_utf8_lossy(&output.stderr)).into());
+            return Err(
+                format!("FFmpeg failed: {}", String::from_utf8_lossy(&output.stderr)).into(),
+            );
         }
 
         // Get list of extracted frames
@@ -264,7 +290,7 @@ impl VideoVectorizationService {
         // Read frame data as base64
         let frame_data = fs::read(frame_path).await?;
         let _frame_base64 = base64::prelude::BASE64_STANDARD.encode(&frame_data);
-        
+
         let analysis_prompt = format!(
             "Analyze this video frame (frame #{}) and provide a detailed description. 
             Focus on:
@@ -278,11 +304,13 @@ impl VideoVectorizationService {
             frame_number
         );
 
-        let analysis_result = gemini_client.analyze_video_content(frame_path, Some(analysis_prompt)).await?;
-        
+        let analysis_result = gemini_client
+            .analyze_video_content(frame_path, Some(analysis_prompt))
+            .await?;
+
         // Parse the AI response to extract structured data
         let (description, visual_features) = Self::parse_frame_analysis(&analysis_result);
-        
+
         // Calculate timestamp based on frame number (assuming 1 frame per second for keyframes)
         let timestamp_seconds = frame_number as f64;
 
@@ -319,7 +347,7 @@ impl VideoVectorizationService {
         );
 
         // Build Claude request with image
-        use crate::claude_client::{ClaudeMessage, ClaudeContent, ContentBlock, ImageSource};
+        use crate::claude_client::{ClaudeContent, ClaudeMessage, ContentBlock, ImageSource};
 
         let messages = vec![ClaudeMessage {
             role: "user".to_string(),
@@ -364,22 +392,29 @@ impl VideoVectorizationService {
     fn parse_frame_analysis(analysis_result: &str) -> (String, Vec<String>) {
         // Try to parse as JSON first
         if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(analysis_result) {
-            let description = parsed.get("description")
+            let description = parsed
+                .get("description")
                 .and_then(|v| v.as_str())
                 .unwrap_or(analysis_result)
                 .to_string();
 
-            let features = parsed.get("visual_features")
+            let features = parsed
+                .get("visual_features")
                 .and_then(|v| v.as_array())
-                .map(|arr| arr.iter()
-                    .filter_map(|v| v.as_str().map(String::from))
-                    .collect())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
                 .unwrap_or_else(|| vec!["unstructured_analysis".to_string()]);
 
             (description, features)
         } else {
             // Fallback to using the raw text as description
-            (analysis_result.to_string(), vec!["text_analysis".to_string()])
+            (
+                analysis_result.to_string(),
+                vec!["text_analysis".to_string()],
+            )
         }
     }
 
@@ -410,8 +445,8 @@ impl VideoVectorizationService {
         );
 
         // Create a proper GenerateContentRequest
-        use crate::gemini_client::{GenerateContentRequest, Content, Part};
-        
+        use crate::gemini_client::{Content, GenerateContentRequest, Part};
+
         let request = GenerateContentRequest {
             contents: vec![Content {
                 parts: vec![Part::Text {
@@ -426,9 +461,10 @@ impl VideoVectorizationService {
         };
 
         let response = gemini_client.generate_content(request).await?;
-        
+
         // Extract text from response
-        let summary = response.candidates
+        let summary = response
+            .candidates
             .first()
             .and_then(|c| c.content.as_ref())
             .and_then(|content| content.parts.first())
@@ -468,7 +504,7 @@ impl VideoVectorizationService {
         );
 
         // Create Claude request
-        use crate::claude_client::{ClaudeMessage, ClaudeContent};
+        use crate::claude_client::{ClaudeContent, ClaudeMessage};
 
         let messages = vec![ClaudeMessage {
             role: "user".to_string(),
@@ -500,34 +536,45 @@ impl VideoVectorizationService {
         // Prefer Voyage AI if available (better Claude compatibility), fallback to Gemini
 
         // 1. Store video-level embedding with provider tracking
-        let (video_embedding, video_provider) = if let Some(ref voyage_embeddings) = state.voyage_embeddings {
-            // Use Voyage AI for Claude-compatible embeddings
-            info!("Using Voyage AI embeddings for video vectorization");
-            match voyage_embeddings.generate_single_embedding(vector_data.video_summary.clone()).await {
-                Ok(emb) => (emb, crate::qdrant_client::EmbeddingProvider::Voyage),
-                Err(e) => {
-                    warn!("Voyage AI embedding failed, falling back to Gemini: {}", e);
-                    // Fallback to Gemini
-                    if let Some(ref gemini_client) = state.gemini_client {
-                        (
-                            Self::generate_text_embedding_gemini(&vector_data.video_summary, gemini_client).await?,
-                            crate::qdrant_client::EmbeddingProvider::Gemini
-                        )
-                    } else {
-                        return Err("No embedding provider available (need Voyage AI or Gemini)".into());
+        let (video_embedding, video_provider) =
+            if let Some(ref voyage_embeddings) = state.voyage_embeddings {
+                // Use Voyage AI for Claude-compatible embeddings
+                info!("Using Voyage AI embeddings for video vectorization");
+                match voyage_embeddings
+                    .generate_single_embedding(vector_data.video_summary.clone())
+                    .await
+                {
+                    Ok(emb) => (emb, crate::qdrant_client::EmbeddingProvider::Voyage),
+                    Err(e) => {
+                        warn!("Voyage AI embedding failed, falling back to Gemini: {}", e);
+                        // Fallback to Gemini
+                        if let Some(ref gemini_client) = state.gemini_client {
+                            (
+                                Self::generate_text_embedding_gemini(
+                                    &vector_data.video_summary,
+                                    gemini_client,
+                                )
+                                .await?,
+                                crate::qdrant_client::EmbeddingProvider::Gemini,
+                            )
+                        } else {
+                            return Err(
+                                "No embedding provider available (need Voyage AI or Gemini)".into(),
+                            );
+                        }
                     }
                 }
-            }
-        } else if let Some(ref gemini_client) = state.gemini_client {
-            // Use Gemini embeddings
-            info!("Using Gemini embeddings for video vectorization");
-            (
-                Self::generate_text_embedding_gemini(&vector_data.video_summary, gemini_client).await?,
-                crate::qdrant_client::EmbeddingProvider::Gemini
-            )
-        } else {
-            return Err("No embedding provider available (need Voyage AI or Gemini)".into());
-        };
+            } else if let Some(ref gemini_client) = state.gemini_client {
+                // Use Gemini embeddings
+                info!("Using Gemini embeddings for video vectorization");
+                (
+                    Self::generate_text_embedding_gemini(&vector_data.video_summary, gemini_client)
+                        .await?,
+                    crate::qdrant_client::EmbeddingProvider::Gemini,
+                )
+            } else {
+                return Err("No embedding provider available (need Voyage AI or Gemini)".into());
+            };
 
         let video_point_id = format!("video_{}", vector_data.file_id);
         let video_payload = json!({
@@ -542,21 +589,43 @@ impl VideoVectorizationService {
             "embedding_provider": video_provider.vector_name()
         });
 
-        qdrant_client.upsert_point(&video_point_id, &video_embedding, &video_payload, video_provider).await?;
-        info!("Stored video-level embedding for file: {} using {:?}", vector_data.file_id, video_provider);
+        qdrant_client
+            .upsert_point(
+                &video_point_id,
+                &video_embedding,
+                &video_payload,
+                video_provider,
+            )
+            .await?;
+        info!(
+            "Stored video-level embedding for file: {} using {:?}",
+            vector_data.file_id, video_provider
+        );
 
         // 2. Store frame-level embeddings (use same embedding provider as video-level)
         for frame in &vector_data.frame_metadata {
-            let (frame_embedding, frame_provider) = if let Some(ref voyage_embeddings) = state.voyage_embeddings {
+            let (frame_embedding, frame_provider) = if let Some(ref voyage_embeddings) =
+                state.voyage_embeddings
+            {
                 // Use Voyage AI
-                match voyage_embeddings.generate_single_embedding(frame.description.clone()).await {
+                match voyage_embeddings
+                    .generate_single_embedding(frame.description.clone())
+                    .await
+                {
                     Ok(emb) => (emb, crate::qdrant_client::EmbeddingProvider::Voyage),
                     Err(e) => {
-                        warn!("Voyage AI embedding failed for frame {}, falling back to Gemini: {}", frame.frame_number, e);
+                        warn!(
+                            "Voyage AI embedding failed for frame {}, falling back to Gemini: {}",
+                            frame.frame_number, e
+                        );
                         if let Some(ref gemini_client) = state.gemini_client {
                             (
-                                Self::generate_text_embedding_gemini(&frame.description, gemini_client).await?,
-                                crate::qdrant_client::EmbeddingProvider::Gemini
+                                Self::generate_text_embedding_gemini(
+                                    &frame.description,
+                                    gemini_client,
+                                )
+                                .await?,
+                                crate::qdrant_client::EmbeddingProvider::Gemini,
                             )
                         } else {
                             return Err("No embedding provider available".into());
@@ -567,7 +636,7 @@ impl VideoVectorizationService {
                 // Use Gemini
                 (
                     Self::generate_text_embedding_gemini(&frame.description, gemini_client).await?,
-                    crate::qdrant_client::EmbeddingProvider::Gemini
+                    crate::qdrant_client::EmbeddingProvider::Gemini,
                 )
             } else {
                 return Err("No embedding provider available".into());
@@ -587,10 +656,21 @@ impl VideoVectorizationService {
                 "embedding_provider": frame_provider.vector_name()
             });
 
-            qdrant_client.upsert_point(&frame_point_id, &frame_embedding, &frame_payload, frame_provider).await?;
+            qdrant_client
+                .upsert_point(
+                    &frame_point_id,
+                    &frame_embedding,
+                    &frame_payload,
+                    frame_provider,
+                )
+                .await?;
         }
 
-        info!("Stored {} frame embeddings for file: {}", vector_data.frame_metadata.len(), vector_data.file_id);
+        info!(
+            "Stored {} frame embeddings for file: {}",
+            vector_data.frame_metadata.len(),
+            vector_data.file_id
+        );
         Ok(())
     }
 
@@ -605,7 +685,9 @@ impl VideoVectorizationService {
     }
 
     /// Get video duration using FFprobe
-    async fn get_video_duration(video_path: &str) -> Result<f64, Box<dyn std::error::Error + Send + Sync>> {
+    async fn get_video_duration(
+        video_path: &str,
+    ) -> Result<f64, Box<dyn std::error::Error + Send + Sync>> {
         let output = Command::new("ffprobe")
             .arg("-v")
             .arg("quiet")
@@ -622,7 +704,7 @@ impl VideoVectorizationService {
 
         let duration_str = String::from_utf8(output.stdout)?;
         let duration: f64 = duration_str.trim().parse()?;
-        
+
         Ok(duration)
     }
 
@@ -634,19 +716,22 @@ impl VideoVectorizationService {
         state: &Arc<AppState>,
     ) -> Result<Vec<serde_json::Value>, Box<dyn std::error::Error + Send + Sync>> {
         // Generate embedding for the search query (support both Voyage AI and Gemini)
-        let (query_embedding, provider) = if let Some(ref voyage_embeddings) = state.voyage_embeddings {
-            (
-                voyage_embeddings.generate_single_embedding(query.to_string()).await?,
-                crate::qdrant_client::EmbeddingProvider::Voyage
-            )
-        } else if let Some(ref gemini_client) = state.gemini_client {
-            (
-                Self::generate_text_embedding_gemini(query, gemini_client).await?,
-                crate::qdrant_client::EmbeddingProvider::Gemini
-            )
-        } else {
-            return Err("No embedding provider available".into());
-        };
+        let (query_embedding, provider) =
+            if let Some(ref voyage_embeddings) = state.voyage_embeddings {
+                (
+                    voyage_embeddings
+                        .generate_single_embedding(query.to_string())
+                        .await?,
+                    crate::qdrant_client::EmbeddingProvider::Voyage,
+                )
+            } else if let Some(ref gemini_client) = state.gemini_client {
+                (
+                    Self::generate_text_embedding_gemini(query, gemini_client).await?,
+                    crate::qdrant_client::EmbeddingProvider::Gemini,
+                )
+            } else {
+                return Err("No embedding provider available".into());
+            };
 
         // Search in Qdrant with session filter
         let filter = json!({
@@ -696,7 +781,10 @@ impl VideoVectorizationService {
 
         // Generate ONE embedding from the video summary
         let (embedding, provider) = if let Some(ref voyage) = state.voyage_embeddings {
-            match voyage.generate_single_embedding(analysis.video_summary.clone()).await {
+            match voyage
+                .generate_single_embedding(analysis.video_summary.clone())
+                .await
+            {
                 Ok(emb) => (emb, crate::qdrant_client::EmbeddingProvider::Voyage),
                 Err(e) => {
                     warn!("Voyage embedding failed: {} — trying Gemini", e);
@@ -719,8 +807,8 @@ impl VideoVectorizationService {
         let _ = qdrant_client.ensure_video_content_collection().await;
 
         // Serialize viral moments
-        let viral_moments_json = serde_json::to_string(&analysis.viral_moments)
-            .unwrap_or_else(|_| "[]".to_string());
+        let viral_moments_json =
+            serde_json::to_string(&analysis.viral_moments).unwrap_or_else(|_| "[]".to_string());
 
         // Build payload
         let payload = serde_json::json!({
@@ -738,7 +826,9 @@ impl VideoVectorizationService {
             "embedding_provider": provider.vector_name(),
         });
 
-        qdrant_client.store_video_content(video_id, payload, embedding, provider).await?;
+        qdrant_client
+            .store_video_content(video_id, payload, embedding, provider)
+            .await?;
 
         info!(
             "✅ Stored video analysis in video_content: video_id={}, {} viral moments, quality={:.2}",
@@ -774,7 +864,11 @@ impl VideoVectorizationService {
 
         let file_id = if path_stem.starts_with("clipping_") {
             // "clipping_{job_id}_{video_id}" → extract video_id (last segment after '_')
-            path_stem.rsplit('_').next().unwrap_or(path_stem).to_string()
+            path_stem
+                .rsplit('_')
+                .next()
+                .unwrap_or(path_stem)
+                .to_string()
         } else if path_stem.starts_with("clip_") {
             // "clip_{job_id}_{index}" → use full stem
             path_stem.to_string()
@@ -821,7 +915,9 @@ impl VideoVectorizationService {
             crate::qdrant_client::EmbeddingProvider::Gemini
         };
         let zero_vector = provider.zero_vector();
-        let results = qdrant_client.search_points(&zero_vector, 1, Some(&filter), provider).await?;
+        let results = qdrant_client
+            .search_points(&zero_vector, 1, Some(&filter), provider)
+            .await?;
 
         if results.is_empty() {
             return Err(format!("No vectorized data found for video: {}", video_file_path).into());
@@ -847,7 +943,9 @@ impl VideoVectorizationService {
             ]
         });
 
-        let frame_results = qdrant_client.search_points(&zero_vector, 50, Some(&frame_filter), provider).await?;
+        let frame_results = qdrant_client
+            .search_points(&zero_vector, 50, Some(&frame_filter), provider)
+            .await?;
 
         // Compile comprehensive analysis
         let analysis = json!({

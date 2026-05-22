@@ -11,15 +11,6 @@ use sqlx::Row;
 use std::sync::Arc;
 use uuid::Uuid;
 
-/// Detect whether a URL is YouTube or Twitch.
-fn detect_platform(url: &str) -> &'static str {
-    if url.contains("twitch.tv") || url.contains("twitch.com") {
-        "twitch"
-    } else {
-        "youtube"
-    }
-}
-
 /// Update manual job status in DB.
 async fn update_status(
     job_id: Uuid,
@@ -40,6 +31,128 @@ async fn update_status(
     .execute(pool)
     .await
     .map_err(|e| format!("Failed to update job status: {}", e))?;
+
+    if let Some(workflow_id) = workflow_id_for_manual_job(job_id, pool).await? {
+        let workflow_runtime = crate::services::WorkflowRuntime::new(pool.clone());
+        let step_message = error.unwrap_or(status);
+        match status {
+            "cancelled" => {
+                workflow_runtime
+                    .mark_cancelled(workflow_id, Some(status), step_message)
+                    .await?;
+            }
+            "failed" => {
+                workflow_runtime
+                    .mark_failed(workflow_id, Some(status), step_message, None)
+                    .await?;
+            }
+            "completed" => {
+                workflow_runtime
+                    .heartbeat(
+                        workflow_id,
+                        crate::services::WorkflowStatus::Running,
+                        Some(status),
+                        step_message,
+                        serde_json::json!({
+                            "job_id": job_id,
+                            "progress_percent": progress,
+                        }),
+                    )
+                    .await?;
+            }
+            _ => {
+                let workflow_status = if status == "pending" {
+                    crate::services::WorkflowStatus::Queued
+                } else {
+                    crate::services::WorkflowStatus::Running
+                };
+                workflow_runtime
+                    .heartbeat(
+                        workflow_id,
+                        workflow_status,
+                        Some(status),
+                        step_message,
+                        serde_json::json!({
+                            "job_id": job_id,
+                            "progress_percent": progress,
+                        }),
+                    )
+                    .await?;
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn workflow_id_for_manual_job(
+    job_id: Uuid,
+    pool: &sqlx::PgPool,
+) -> Result<Option<Uuid>, String> {
+    sqlx::query_scalar::<_, Option<Uuid>>(
+        "SELECT workflow_id FROM manual_clipping_jobs WHERE id = $1",
+    )
+    .bind(job_id)
+    .fetch_optional(pool)
+    .await
+    .map(|row| row.flatten())
+    .map_err(|e| format!("Failed to fetch manual clipping workflow id: {}", e))
+}
+
+async fn mark_manual_job_completed(
+    job_id: Uuid,
+    clip_count: i32,
+    pool: &sqlx::PgPool,
+) -> Result<(), String> {
+    sqlx::query(
+        "UPDATE manual_clipping_jobs
+         SET status = 'completed', progress_percent = 100, clips_count = $1,
+             completed_at = NOW(), updated_at = NOW()
+         WHERE id = $2",
+    )
+    .bind(clip_count)
+    .bind(job_id)
+    .execute(pool)
+    .await
+    .map_err(|e| format!("Failed to mark manual clipping job completed: {}", e))?;
+
+    let verified_clip_count = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM manual_clipping_clips WHERE job_id = $1",
+    )
+    .bind(job_id)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| format!("Failed to verify manual clipping artifacts: {}", e))?;
+
+    if verified_clip_count == 0 {
+        if let Some(workflow_id) = workflow_id_for_manual_job(job_id, pool).await? {
+            let workflow_runtime = crate::services::WorkflowRuntime::new(pool.clone());
+            let _ = workflow_runtime
+                .mark_failed(
+                    workflow_id,
+                    Some("artifact_verification"),
+                    "Manual clipping workflow completed without any persisted clip records.",
+                    None,
+                )
+                .await;
+        }
+        return Err("Manual clipping workflow completed without any persisted clip records.".to_string());
+    }
+
+    if let Some(workflow_id) = workflow_id_for_manual_job(job_id, pool).await? {
+        let workflow_runtime = crate::services::WorkflowRuntime::new(pool.clone());
+        workflow_runtime
+            .mark_completed(
+                workflow_id,
+                Some("completed"),
+                "Manual clipping workflow completed with persisted clip artifacts.",
+                serde_json::json!({
+                    "verified_clip_count": verified_clip_count,
+                    "reported_clip_count": clip_count,
+                }),
+            )
+            .await?;
+    }
+
     Ok(())
 }
 
@@ -363,10 +476,11 @@ pub async fn execute_manual_clipping_job(
     // audio normalization, etc. before the clips are uploaded.
     // Best-effort: failures are logged but do not abort the job.
     // =========================================================================
-    if let Some(gemini) = app_state
+    if app_state
         .manual_clipping_gemini_client
         .as_ref()
         .or(app_state.gemini_client.as_ref())
+        .is_some()
     {
         update_status(job_id, "enhancing", 65, None, &app_state.db_pool).await?;
         tracing::info!(
@@ -374,54 +488,18 @@ pub async fn execute_manual_clipping_job(
             clips.len()
         );
 
-        let agent = crate::agent::simple_gemini_agent::SimpleGeminiAgent::new(std::sync::Arc::new(
-            gemini.clone(),
-        ));
-
-        for (i, clip) in clips.iter().enumerate() {
-            let clip_path = &clip.local_clip_path;
-            if !std::path::Path::new(clip_path).exists() {
-                continue;
-            }
-
-            let prompt = format!(
-                "You are a professional video editor working on a clip for a Fiverr/PPH client.\n\
-                 Clip file: {path}\n\
-                 Title: {title}\n\
-                 Duration: {dur:.0}s | Content type: {ct}\n\
-                 Niche: {niche}\n\n\
-                 Intelligently enhance this clip for social media / YouTube Shorts delivery:\n\
-                 1. Analyze the clip quality (resolution, stability, audio levels, colour)\n\
-                 2. Apply appropriate FFmpeg tools: stabilize if shaky, normalize audio, \
-                    adjust brightness/contrast if needed, sharpen if soft\n\
-                 3. Output the enhanced file back to the SAME path: {path}\n\
-                 4. Keep under 90 seconds total. Do not re-encode unnecessarily.\n\
-                 Use only tools that will genuinely improve this specific clip.",
-                path = clip_path,
-                title = clip.ai_title,
-                dur = clip.duration_seconds,
-                ct = analysis.content_type,
-                niche = &video_url,
-            );
-
-            let session_id = format!("manual_clip_{}_{}", job_id, i + 1);
-            match tokio::time::timeout(
-                tokio::time::Duration::from_secs(120),
-                agent.execute(&prompt, &session_id, Some(user_id), app_state.clone(), None),
-            )
-            .await
-            {
-                Ok(Ok(result)) => tracing::info!(
-                    "✅ Clip {} enhanced: {}",
-                    i + 1,
-                    result.chars().take(100).collect::<String>()
-                ),
-                Ok(Err(e)) => {
-                    tracing::warn!("⚠️  Clip {} enhancement failed (non-fatal): {}", i + 1, e)
-                }
-                Err(_) => tracing::warn!("⚠️  Clip {} enhancement timed out (non-fatal)", i + 1),
-            }
-        }
+        crate::jobs::clipping_job::enhance_clips_with_full_agent(
+            i32::from_str_radix(&job_id.to_string().replace('-', "")[..6], 16)
+                .unwrap_or(999999)
+                .abs(),
+            user_id,
+            &video_url,
+            &analysis.content_type,
+            &mut clips,
+            &app_state,
+            "manual_clipping",
+        )
+        .await;
     } else {
         tracing::info!("ℹ️  Phase D skipped — Gemini not configured");
     }
@@ -487,8 +565,9 @@ pub async fn execute_manual_clipping_job(
             "INSERT INTO manual_clipping_clips
              (job_id, clip_number, title, description, start_time_seconds, end_time_seconds,
               duration_seconds, quality_score, viral_factors, r2_clip_key, r2_clip_url,
-              r2_clip_url_expires_at, thumbnail_r2_key, thumbnail_r2_url)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
+              r2_clip_url_expires_at, thumbnail_r2_key, thumbnail_r2_url,
+              qa_status, qa_score, qa_feedback, qa_retry_hint)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)",
         )
         .bind(job_id)
         .bind(clip_n as i32)
@@ -504,23 +583,59 @@ pub async fn execute_manual_clipping_job(
         .bind(clip_expires)
         .bind(&thumb_key_stored)
         .bind(&thumb_url)
+        .bind(clip.qa_status.as_deref().unwrap_or("not_reviewed"))
+        .bind(clip.qa_score)
+        .bind(&clip.qa_feedback)
+        .bind(&clip.qa_retry_hint)
         .execute(&app_state.db_pool)
         .await
         .map_err(|e| format!("Failed to insert clip row: {}", e))?;
+
+        let artifact = crate::services::media_review::MediaReviewArtifact {
+            review_id: format!("manual-clip-{}-{}", job_id, clip_n),
+            asset_kind: "manual_clip".to_string(),
+            source_type: "manual_clipping".to_string(),
+            service_slug: Some("clipper-enhancement-pack".to_string()),
+            owner_user_id: Some(user_id),
+            output_url: clip_url.clone(),
+            source_url: Some(video_url.clone()),
+            prompt: Some(format!("{} {}", clip.ai_title, clip.ai_description)),
+            title: Some(clip.ai_title.clone()),
+            company: None,
+            review_status: clip
+                .qa_status
+                .clone()
+                .unwrap_or_else(|| "completed".to_string()),
+            qa_score: clip.qa_score.or(Some(clip.ai_confidence_score.round() as i32)),
+            qa_feedback: clip.qa_feedback.clone(),
+            narration_text: None,
+            visual_direction: clip.enhancement_reasoning.clone(),
+            transcript_excerpt: Some(clip.ai_description.clone()),
+            tags: vec![
+                "manual-clipping".to_string(),
+                "clip".to_string(),
+                video_platform.clone(),
+            ],
+        };
+
+        if let Err(error) =
+            crate::services::media_review::MediaReviewService::store_artifact(
+                &app_state,
+                artifact,
+            )
+            .await
+        {
+            tracing::warn!(
+                "Failed to store media review artifact for manual clip {} / {}: {}",
+                job_id,
+                clip_n,
+                error
+            );
+        }
     }
 
     // Mark job complete
-    sqlx::query(
-        "UPDATE manual_clipping_jobs
-         SET status = 'completed', progress_percent = 100, clips_count = $1,
-             completed_at = NOW(), updated_at = NOW()
-         WHERE id = $2",
-    )
-    .bind(clips.len() as i32)
-    .bind(job_id)
-    .execute(&app_state.db_pool)
-    .await
-    .ok();
+    mark_manual_job_completed(job_id, clips.len() as i32, &app_state.db_pool).await?;
 
     // Cleanup local temp files (best-effort)
     let _ = tokio::fs::remove_file(&video_path).await;

@@ -94,7 +94,7 @@ pub struct FilterParameters {
     pub input_file: String,
     pub output_file: String,
     pub filter_type: String, // "sepia", "grayscale", "blur", etc.
-    pub intensity: f64, // 0.0 to 1.0
+    pub intensity: f64,      // 0.0 to 1.0
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -102,7 +102,7 @@ pub struct ColorAdjustParameters {
     pub input_file: String,
     pub output_file: String,
     pub brightness: f64, // -1.0 to 1.0
-    pub contrast: f64,   // -1.0 to 1.0  
+    pub contrast: f64,   // -1.0 to 1.0
     pub saturation: f64, // -1.0 to 1.0
 }
 
@@ -203,9 +203,9 @@ pub struct DeinterlaceParameters {
 pub struct ExportParameters {
     pub input_file: String,
     pub output_file: String,
-    pub format: String, // mp4, avi, mov, webm, etc.
-    pub quality: String, // low, medium, high, custom
-    pub bitrate: Option<u32>, // kbps
+    pub format: String,                 // mp4, avi, mov, webm, etc.
+    pub quality: String,                // low, medium, high, custom
+    pub bitrate: Option<u32>,           // kbps
     pub resolution: Option<(u32, u32)>, // (width, height)
 }
 
@@ -216,7 +216,7 @@ pub struct PictureInPictureParameters {
     pub overlay_video: String,
     pub output_file: String,
     pub position: String, // "top-left", "top-right", "bottom-left", "bottom-right"
-    pub size_ratio: f64, // 0.1 to 0.5 (10% to 50% of main video size)
+    pub size_ratio: f64,  // 0.1 to 0.5 (10% to 50% of main video size)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -225,7 +225,7 @@ pub struct ChromaKeyParameters {
     pub background_file: String,
     pub output_file: String,
     pub key_color: String, // hex color like "#00FF00" for green
-    pub threshold: f64, // 0.0 to 1.0
+    pub threshold: f64,    // 0.0 to 1.0
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

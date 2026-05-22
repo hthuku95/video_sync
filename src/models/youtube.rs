@@ -20,8 +20,8 @@ pub struct ConnectedYouTubeChannel {
     pub last_sync_at: Option<chrono::DateTime<chrono::Utc>>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
-    pub requires_reauth: Option<bool>,  // NEW: OAuth scope migration flag
-    pub reauth_reason: Option<String>,  // NEW: Human-readable reason for reauth requirement
+    pub requires_reauth: Option<bool>, // NEW: OAuth scope migration flag
+    pub reauth_reason: Option<String>, // NEW: Human-readable reason for reauth requirement
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -35,7 +35,7 @@ pub struct ConnectedChannelResponse {
     pub video_count: Option<i64>,
     pub is_active: bool,
     pub requires_reauth: bool,
-    pub reauth_reason: Option<String>,  // NEW: Show reason to frontend
+    pub reauth_reason: Option<String>, // NEW: Show reason to frontend
     pub connected_at: chrono::DateTime<chrono::Utc>,
 }
 
@@ -51,7 +51,7 @@ impl From<ConnectedYouTubeChannel> for ConnectedChannelResponse {
             video_count: channel.video_count,
             is_active: channel.is_active,
             requires_reauth: channel.requires_reauth.unwrap_or(false),
-            reauth_reason: channel.reauth_reason,  // NEW: Pass through to API response
+            reauth_reason: channel.reauth_reason, // NEW: Pass through to API response
             connected_at: channel.created_at,
         }
     }
@@ -125,9 +125,9 @@ pub struct UpdateVideoRequest {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct GenerateThumbnailRequest {
-    pub timestamp: f64,  // Seconds into video
+    pub timestamp: f64,      // Seconds into video
     pub width: Option<u32>,  // Defaults to 1280
-    pub height: Option<u32>,  // Defaults to 720
+    pub height: Option<u32>, // Defaults to 720
 }
 
 // ============================================================================
@@ -166,7 +166,7 @@ pub struct CreatePlaylistRequest {
     pub channel_id: i32,
     pub title: String,
     pub description: Option<String>,
-    pub privacy_status: String,  // public, private, unlisted
+    pub privacy_status: String, // public, private, unlisted
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -234,8 +234,8 @@ pub struct YouTubeChannelAnalytics {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AnalyticsRequest {
-    pub start_date: String,  // YYYY-MM-DD
-    pub end_date: String,    // YYYY-MM-DD
+    pub start_date: String, // YYYY-MM-DD
+    pub end_date: String,   // YYYY-MM-DD
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -304,15 +304,15 @@ pub struct VideoSearchResult {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SearchRequest {
     pub query: String,
-    pub max_results: Option<i32>,  // Max 50
-    pub order: Option<String>,     // date, rating, relevance, title, viewCount
-    pub published_after: Option<String>,  // ISO 8601
+    pub max_results: Option<i32>,        // Max 50
+    pub order: Option<String>,           // date, rating, relevance, title, viewCount
+    pub published_after: Option<String>, // ISO 8601
     pub published_before: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TrendingRequest {
-    pub region_code: Option<String>,  // US, GB, etc.
+    pub region_code: Option<String>, // US, GB, etc.
     pub category_id: Option<String>,
     pub max_results: Option<i32>,
 }
@@ -366,9 +366,9 @@ pub struct YouTubeCaption {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct UploadCaptionRequest {
-    pub language: String,  // ISO 639-1 code
+    pub language: String, // ISO 639-1 code
     pub name: Option<String>,
-    pub caption_file: String,  // Path to SRT/VTT file
+    pub caption_file: String, // Path to SRT/VTT file
 }
 
 // ============================================================================
@@ -377,7 +377,7 @@ pub struct UploadCaptionRequest {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ScheduleVideoRequest {
-    pub publish_at: String,  // ISO 8601 timestamp
+    pub publish_at: String, // ISO 8601 timestamp
 }
 
 // ============================================================================

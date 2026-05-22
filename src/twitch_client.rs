@@ -111,12 +111,11 @@ impl TwitchClient {
     /// fresh token if missing or expiring within the next hour.
     async fn get_app_token(&self) -> Result<String, String> {
         // Try cached token
-        let row: Option<(String, DateTime<Utc>)> = sqlx::query_as(
-            "SELECT access_token, expires_at FROM twitch_app_token WHERE id = 1",
-        )
-        .fetch_optional(&self.db_pool)
-        .await
-        .map_err(|e| format!("DB error reading twitch token: {}", e))?;
+        let row: Option<(String, DateTime<Utc>)> =
+            sqlx::query_as("SELECT access_token, expires_at FROM twitch_app_token WHERE id = 1")
+                .fetch_optional(&self.db_pool)
+                .await
+                .map_err(|e| format!("DB error reading twitch token: {}", e))?;
 
         if let Some((token, expires_at)) = row {
             // Use cached token if it lasts more than 1 hour
@@ -186,10 +185,7 @@ impl TwitchClient {
             .get("https://api.twitch.tv/helix/search/channels")
             .header("Authorization", format!("Bearer {}", token))
             .header("Client-Id", &self.client_id)
-            .query(&[
-                ("query", query),
-                ("first", &limit.to_string()),
-            ])
+            .query(&[("query", query), ("first", &limit.to_string())])
             .send()
             .await
             .map_err(|e| format!("Twitch search_channels request failed: {}", e))?;
@@ -324,15 +320,15 @@ impl TwitchClient {
                 .and_then(|s| s.parse::<u64>().ok())
                 .unwrap_or(1);
 
-            tracing::warn!("Twitch 429 rate limit — waiting {}s before retry", reset_secs);
+            tracing::warn!(
+                "Twitch 429 rate limit — waiting {}s before retry",
+                reset_secs
+            );
             tokio::time::sleep(tokio::time::Duration::from_secs(reset_secs)).await;
 
             // Retry the request (re-issue full request would require cloning the
             // builder, so we return an error that callers can handle instead)
-            return Err(format!(
-                "Twitch rate-limited; retry after {}s",
-                reset_secs
-            ));
+            return Err(format!("Twitch rate-limited; retry after {}s", reset_secs));
         }
 
         if !resp.status().is_success() {

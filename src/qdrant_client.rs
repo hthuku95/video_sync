@@ -1,7 +1,7 @@
 use qdrant_client::qdrant::{
-    CreateCollectionBuilder, CreateFieldIndexCollectionBuilder, Distance, PointStruct,
-    SearchPointsBuilder, UpsertPointsBuilder, VectorParamsBuilder, FieldType,
-    VectorsConfig, VectorParamsMap, Vectors, ScrollPointsBuilder, Filter, Condition,
+    Condition, CreateCollectionBuilder, CreateFieldIndexCollectionBuilder, Distance, FieldType,
+    Filter, PointStruct, ScrollPointsBuilder, SearchPointsBuilder, UpsertPointsBuilder,
+    VectorParamsBuilder, VectorParamsMap, Vectors, VectorsConfig,
 };
 use qdrant_client::Qdrant;
 use serde::{Deserialize, Serialize};
@@ -17,6 +17,8 @@ pub enum EmbeddingProvider {
     Voyage,
     /// Gemini embeddings (768 dimensions) - fallback provider
     Gemini,
+    /// Gemini Embeddings 2 review vectors.
+    GeminiEmbedding2,
 }
 
 impl EmbeddingProvider {
@@ -25,6 +27,7 @@ impl EmbeddingProvider {
         match self {
             Self::Voyage => "voyage",
             Self::Gemini => "gemini",
+            Self::GeminiEmbedding2 => "gemini_mm",
         }
     }
 
@@ -33,6 +36,7 @@ impl EmbeddingProvider {
         match self {
             Self::Voyage => vec![0.0; 1024],
             Self::Gemini => vec![0.0; 768],
+            Self::GeminiEmbedding2 => vec![0.0; gemini_embedding2_dimensions()],
         }
     }
 
@@ -41,6 +45,7 @@ impl EmbeddingProvider {
         match self {
             Self::Voyage => 1024,
             Self::Gemini => 768,
+            Self::GeminiEmbedding2 => gemini_embedding2_dimensions(),
         }
     }
 
@@ -49,9 +54,21 @@ impl EmbeddingProvider {
         match dims {
             1024 => Ok(Self::Voyage),
             768 => Ok(Self::Gemini),
-            _ => Err(format!("Unknown embedding dimension: {}. Expected 1024 (Voyage) or 768 (Gemini)", dims)),
+            d if d == gemini_embedding2_dimensions() => Ok(Self::GeminiEmbedding2),
+            _ => Err(format!(
+                "Unknown embedding dimension: {}. Expected 1024 (Voyage), 768 (Gemini), or {} (Gemini Embeddings 2)",
+                dims,
+                gemini_embedding2_dimensions()
+            )),
         }
     }
+}
+
+fn gemini_embedding2_dimensions() -> usize {
+    std::env::var("GEMINI_EMBEDDING2_DIMENSIONS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(1536)
 }
 
 #[derive(Clone)]
@@ -74,17 +91,17 @@ pub struct ChatMemoryDocument {
 
 impl QdrantClient {
     pub async fn new(
-        url: String, 
-        api_key: Option<String>
+        url: String,
+        api_key: Option<String>,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let mut client_builder = Qdrant::from_url(&url);
-        
+
         if let Some(key) = api_key {
             client_builder = client_builder.api_key(key);
         }
-        
+
         let client = client_builder.build()?;
-        
+
         Ok(Self {
             client,
             collection_name: "agent_memory".to_string(),
@@ -92,7 +109,10 @@ impl QdrantClient {
     }
 
     pub async fn create_collection(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        tracing::info!("Creating Qdrant collection with named vectors: {}", self.collection_name);
+        tracing::info!(
+            "Creating Qdrant collection with named vectors: {}",
+            self.collection_name
+        );
 
         // Create collection with NAMED VECTORS to support multiple embedding providers
         // This allows both Voyage (1024 dims) and Gemini (768 dims) in the same collection
@@ -101,44 +121,59 @@ impl QdrantClient {
         // Voyage AI vector (1024 dimensions) - primary for Claude compatibility
         named_vectors.insert(
             "voyage".to_string(),
-            VectorParamsBuilder::new(1024, Distance::Cosine).build()
+            VectorParamsBuilder::new(1024, Distance::Cosine).build(),
         );
 
         // Gemini vector (768 dimensions) - fallback provider
         named_vectors.insert(
             "gemini".to_string(),
-            VectorParamsBuilder::new(768, Distance::Cosine).build()
+            VectorParamsBuilder::new(768, Distance::Cosine).build(),
+        );
+        named_vectors.insert(
+            "gemini_mm".to_string(),
+            VectorParamsBuilder::new(gemini_embedding2_dimensions() as u64, Distance::Cosine)
+                .build(),
         );
 
-        let result = self.client
+        let result = self
+            .client
             .create_collection(
-                CreateCollectionBuilder::new(&self.collection_name)
-                    .vectors_config(VectorsConfig {
-                        config: Some(qdrant_client::qdrant::vectors_config::Config::ParamsMap(
-                            VectorParamsMap { map: named_vectors }
-                        ))
-                    })
+                CreateCollectionBuilder::new(&self.collection_name).vectors_config(VectorsConfig {
+                    config: Some(qdrant_client::qdrant::vectors_config::Config::ParamsMap(
+                        VectorParamsMap { map: named_vectors },
+                    )),
+                }),
             )
             .await;
 
         match result {
             Ok(_) => {
-                tracing::info!("Successfully created Qdrant collection: {}", self.collection_name);
-                
+                tracing::info!(
+                    "Successfully created Qdrant collection: {}",
+                    self.collection_name
+                );
+
                 // Create payload field indexes for efficient filtering
                 self.create_payload_indexes().await?;
-                
+
                 Ok(())
             }
             Err(e) => {
                 let error_msg = e.to_string();
                 if error_msg.contains("already exists") {
-                    tracing::debug!("Qdrant collection '{}' already exists, ensuring indexes exist", self.collection_name);
-                    
+                    tracing::debug!(
+                        "Qdrant collection '{}' already exists, ensuring indexes exist",
+                        self.collection_name
+                    );
+
                     // Still try to create indexes in case they're missing
                     self.create_payload_indexes().await?;
                 } else {
-                    tracing::warn!("Failed to create Qdrant collection '{}': {}", self.collection_name, e);
+                    tracing::warn!(
+                        "Failed to create Qdrant collection '{}': {}",
+                        self.collection_name,
+                        e
+                    );
                 }
                 Ok(()) // Collection might already exist, which is fine
             }
@@ -147,9 +182,10 @@ impl QdrantClient {
 
     async fn create_payload_indexes(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         tracing::info!("Creating payload field indexes for efficient filtering...");
-        
+
         // Create index for session_id field (for session-based filtering)
-        let session_id_index = self.client
+        let session_id_index = self
+            .client
             .create_field_index(
                 CreateFieldIndexCollectionBuilder::new(
                     &self.collection_name,
@@ -159,20 +195,23 @@ impl QdrantClient {
                 .wait(true),
             )
             .await;
-            
+
         match session_id_index {
             Ok(_) => tracing::info!("✅ Created session_id index successfully"),
             Err(e) => {
-                if e.to_string().contains("already exists") || e.to_string().contains("Index already exists") {
+                if e.to_string().contains("already exists")
+                    || e.to_string().contains("Index already exists")
+                {
                     tracing::debug!("session_id index already exists, skipping");
                 } else {
                     tracing::warn!("Failed to create session_id index: {}", e);
                 }
             }
         }
-        
-        // Create index for user_id field (for user-based filtering) 
-        let user_id_index = self.client
+
+        // Create index for user_id field (for user-based filtering)
+        let user_id_index = self
+            .client
             .create_field_index(
                 CreateFieldIndexCollectionBuilder::new(
                     &self.collection_name,
@@ -182,20 +221,23 @@ impl QdrantClient {
                 .wait(true),
             )
             .await;
-            
+
         match user_id_index {
             Ok(_) => tracing::info!("✅ Created user_id index successfully"),
             Err(e) => {
-                if e.to_string().contains("already exists") || e.to_string().contains("Index already exists") {
+                if e.to_string().contains("already exists")
+                    || e.to_string().contains("Index already exists")
+                {
                     tracing::debug!("user_id index already exists, skipping");
                 } else {
                     tracing::warn!("Failed to create user_id index: {}", e);
                 }
             }
         }
-        
+
         // Create index for timestamp field (for time-based filtering)
-        let timestamp_index = self.client
+        let timestamp_index = self
+            .client
             .create_field_index(
                 CreateFieldIndexCollectionBuilder::new(
                     &self.collection_name,
@@ -205,20 +247,23 @@ impl QdrantClient {
                 .wait(true),
             )
             .await;
-            
+
         match timestamp_index {
             Ok(_) => tracing::info!("✅ Created timestamp index successfully"),
             Err(e) => {
-                if e.to_string().contains("already exists") || e.to_string().contains("Index already exists") {
+                if e.to_string().contains("already exists")
+                    || e.to_string().contains("Index already exists")
+                {
                     tracing::debug!("timestamp index already exists, skipping");
                 } else {
                     tracing::warn!("Failed to create timestamp index: {}", e);
                 }
             }
         }
-        
+
         // Create index for file_id field (for video vectorization retrieval)
-        let file_id_index = self.client
+        let file_id_index = self
+            .client
             .create_field_index(
                 CreateFieldIndexCollectionBuilder::new(
                     &self.collection_name,
@@ -232,7 +277,9 @@ impl QdrantClient {
         match file_id_index {
             Ok(_) => tracing::info!("✅ Created file_id index successfully"),
             Err(e) => {
-                if e.to_string().contains("already exists") || e.to_string().contains("Index already exists") {
+                if e.to_string().contains("already exists")
+                    || e.to_string().contains("Index already exists")
+                {
                     tracing::debug!("file_id index already exists, skipping");
                 } else {
                     tracing::warn!("Failed to create file_id index: {}", e);
@@ -241,7 +288,8 @@ impl QdrantClient {
         }
 
         // Create index for content_type field (for filtering video frames vs summaries)
-        let content_type_index = self.client
+        let content_type_index = self
+            .client
             .create_field_index(
                 CreateFieldIndexCollectionBuilder::new(
                     &self.collection_name,
@@ -255,7 +303,9 @@ impl QdrantClient {
         match content_type_index {
             Ok(_) => tracing::info!("✅ Created content_type index successfully"),
             Err(e) => {
-                if e.to_string().contains("already exists") || e.to_string().contains("Index already exists") {
+                if e.to_string().contains("already exists")
+                    || e.to_string().contains("Index already exists")
+                {
                     tracing::debug!("content_type index already exists, skipping");
                 } else {
                     tracing::warn!("Failed to create content_type index: {}", e);
@@ -279,7 +329,9 @@ impl QdrantClient {
         feature: Option<&str>,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         // Generate embedding using Voyage AI
-        let embedding = voyage_client.generate_single_embedding(user_message.to_string()).await?;
+        let embedding = voyage_client
+            .generate_single_embedding(user_message.to_string())
+            .await?;
 
         let document = ChatMemoryDocument {
             id: Uuid::new_v4().to_string(),
@@ -294,7 +346,10 @@ impl QdrantClient {
 
         // Create named vectors for Voyage provider
         let mut named_vectors = HashMap::new();
-        named_vectors.insert(EmbeddingProvider::Voyage.vector_name().to_string(), embedding);
+        named_vectors.insert(
+            EmbeddingProvider::Voyage.vector_name().to_string(),
+            embedding,
+        );
 
         // Add provider metadata to payload
         let payload_value: serde_json::Value = json!({
@@ -309,7 +364,8 @@ impl QdrantClient {
             "embedding_provider": "voyage"
         });
 
-        let mut qdrant_payload: std::collections::HashMap<String, qdrant_client::qdrant::Value> = std::collections::HashMap::new();
+        let mut qdrant_payload: std::collections::HashMap<String, qdrant_client::qdrant::Value> =
+            std::collections::HashMap::new();
         if let Some(obj) = payload_value.as_object() {
             for (key, value) in obj {
                 qdrant_payload.insert(key.clone(), value.clone().into());
@@ -320,18 +376,18 @@ impl QdrantClient {
         let point = PointStruct::new(
             document.id.clone(),
             Vectors::from(named_vectors),
-            qdrant_payload
+            qdrant_payload,
         );
 
         // Upsert point to collection
         self.client
-            .upsert_points(
-                UpsertPointsBuilder::new(&self.collection_name, vec![point])
-                    .wait(true),
-            )
+            .upsert_points(UpsertPointsBuilder::new(&self.collection_name, vec![point]).wait(true))
             .await?;
 
-        tracing::debug!("Stored chat memory with Voyage embeddings, ID: {}", document.id);
+        tracing::debug!(
+            "Stored chat memory with Voyage embeddings, ID: {}",
+            document.id
+        );
         Ok(document.id)
     }
 
@@ -362,7 +418,10 @@ impl QdrantClient {
 
         // Create named vectors for Gemini provider
         let mut named_vectors = HashMap::new();
-        named_vectors.insert(EmbeddingProvider::Gemini.vector_name().to_string(), embedding);
+        named_vectors.insert(
+            EmbeddingProvider::Gemini.vector_name().to_string(),
+            embedding,
+        );
 
         // Add provider metadata to payload
         let payload_value: serde_json::Value = json!({
@@ -377,7 +436,8 @@ impl QdrantClient {
             "embedding_provider": "gemini"
         });
 
-        let mut qdrant_payload: std::collections::HashMap<String, qdrant_client::qdrant::Value> = std::collections::HashMap::new();
+        let mut qdrant_payload: std::collections::HashMap<String, qdrant_client::qdrant::Value> =
+            std::collections::HashMap::new();
         if let Some(obj) = payload_value.as_object() {
             for (key, value) in obj {
                 qdrant_payload.insert(key.clone(), value.clone().into());
@@ -388,18 +448,18 @@ impl QdrantClient {
         let point = PointStruct::new(
             document.id.clone(),
             Vectors::from(named_vectors),
-            qdrant_payload
+            qdrant_payload,
         );
 
         // Upsert point to collection
         self.client
-            .upsert_points(
-                UpsertPointsBuilder::new(&self.collection_name, vec![point])
-                    .wait(true),
-            )
+            .upsert_points(UpsertPointsBuilder::new(&self.collection_name, vec![point]).wait(true))
             .await?;
 
-        tracing::debug!("Stored chat memory with Gemini embeddings, ID: {}", document.id);
+        tracing::debug!(
+            "Stored chat memory with Gemini embeddings, ID: {}",
+            document.id
+        );
         Ok(document.id)
     }
 
@@ -411,10 +471,13 @@ impl QdrantClient {
         voyage_client: &crate::voyage_embeddings::VoyageEmbeddings,
     ) -> Result<Vec<ChatMemoryDocument>, Box<dyn std::error::Error + Send + Sync>> {
         // Generate query embedding using Voyage AI
-        let query_embedding = voyage_client.generate_single_embedding(query.to_string()).await?;
+        let query_embedding = voyage_client
+            .generate_single_embedding(query.to_string())
+            .await?;
 
         // Search for similar vectors using Voyage named vector
-        let search_result = self.client
+        let search_result = self
+            .client
             .search_points(
                 SearchPointsBuilder::new(&self.collection_name, query_embedding, limit as u64)
                     .vector_name(EmbeddingProvider::Voyage.vector_name())
@@ -427,18 +490,18 @@ impl QdrantClient {
                                         r#match: Some(qdrant_client::qdrant::Match {
                                             match_value: Some(
                                                 qdrant_client::qdrant::r#match::MatchValue::Keyword(
-                                                    session_id.to_string()
-                                                )
+                                                    session_id.to_string(),
+                                                ),
                                             ),
                                         }),
                                         ..Default::default()
-                                    }
+                                    },
                                 ),
                             ),
                         }],
                         ..Default::default()
                     })
-                    .with_payload(true)
+                    .with_payload(true),
             )
             .await?;
 
@@ -449,7 +512,9 @@ impl QdrantClient {
             let point_id = match scored_point.id {
                 Some(id) => match id.point_id_options {
                     Some(qdrant_client::qdrant::point_id::PointIdOptions::Uuid(uuid)) => uuid,
-                    Some(qdrant_client::qdrant::point_id::PointIdOptions::Num(num)) => num.to_string(),
+                    Some(qdrant_client::qdrant::point_id::PointIdOptions::Num(num)) => {
+                        num.to_string()
+                    }
                     None => continue,
                 },
                 None => continue,
@@ -457,28 +522,34 @@ impl QdrantClient {
 
             let doc = ChatMemoryDocument {
                 id: point_id,
-                session_id: payload.get("session_id")
+                session_id: payload
+                    .get("session_id")
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string())
                     .unwrap_or_default(),
-                user_id: payload.get("user_id")
+                user_id: payload
+                    .get("user_id")
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string()),
-                timestamp: payload.get("timestamp")
+                timestamp: payload
+                    .get("timestamp")
                     .and_then(|v| v.as_str())
                     .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
                     .map(|dt| dt.with_timezone(&chrono::Utc))
                     .unwrap_or_else(chrono::Utc::now),
-                user_message: payload.get("user_message")
+                user_message: payload
+                    .get("user_message")
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string())
                     .unwrap_or_default(),
-                agent_response: payload.get("agent_response")
+                agent_response: payload
+                    .get("agent_response")
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string())
                     .unwrap_or_default(),
                 context: HashMap::new(),
-                files_referenced: payload.get("files_referenced")
+                files_referenced: payload
+                    .get("files_referenced")
                     .and_then(|v| {
                         let json_val: serde_json::Value = serde_json::to_value(v).ok()?;
                         serde_json::from_value(json_val).ok()
@@ -502,7 +573,8 @@ impl QdrantClient {
         let query_embedding = gemini_client.embed_content(query).await?;
 
         // Search for similar vectors using Gemini named vector
-        let search_result = self.client
+        let search_result = self
+            .client
             .search_points(
                 SearchPointsBuilder::new(&self.collection_name, query_embedding, limit as u64)
                     .vector_name(EmbeddingProvider::Gemini.vector_name())
@@ -515,18 +587,18 @@ impl QdrantClient {
                                         r#match: Some(qdrant_client::qdrant::Match {
                                             match_value: Some(
                                                 qdrant_client::qdrant::r#match::MatchValue::Keyword(
-                                                    session_id.to_string()
-                                                )
+                                                    session_id.to_string(),
+                                                ),
                                             ),
                                         }),
                                         ..Default::default()
-                                    }
+                                    },
                                 ),
                             ),
                         }],
                         ..Default::default()
                     })
-                    .with_payload(true)
+                    .with_payload(true),
             )
             .await?;
 
@@ -536,41 +608,50 @@ impl QdrantClient {
             let point_id = match scored_point.id {
                 Some(id) => match id.point_id_options {
                     Some(qdrant_client::qdrant::point_id::PointIdOptions::Uuid(uuid)) => uuid,
-                    Some(qdrant_client::qdrant::point_id::PointIdOptions::Num(num)) => num.to_string(),
+                    Some(qdrant_client::qdrant::point_id::PointIdOptions::Num(num)) => {
+                        num.to_string()
+                    }
                     None => continue,
                 },
                 None => continue,
             };
-                
+
             let doc = ChatMemoryDocument {
                 id: point_id,
-                session_id: payload.get("session_id")
+                session_id: payload
+                    .get("session_id")
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string())
                     .unwrap_or_default(),
-                user_id: payload.get("user_id")
+                user_id: payload
+                    .get("user_id")
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string()),
-                timestamp: payload.get("timestamp")
+                timestamp: payload
+                    .get("timestamp")
                     .and_then(|v| v.as_str())
                     .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
                     .map(|dt| dt.with_timezone(&chrono::Utc))
                     .unwrap_or_else(chrono::Utc::now),
-                user_message: payload.get("user_message")
+                user_message: payload
+                    .get("user_message")
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string())
                     .unwrap_or_default(),
-                agent_response: payload.get("agent_response")
+                agent_response: payload
+                    .get("agent_response")
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string())
                     .unwrap_or_default(),
-                context: payload.get("context")
+                context: payload
+                    .get("context")
                     .and_then(|v| {
                         let json_val: serde_json::Value = serde_json::to_value(v).ok()?;
                         serde_json::from_value(json_val).ok()
                     })
                     .unwrap_or_default(),
-                files_referenced: payload.get("files_referenced")
+                files_referenced: payload
+                    .get("files_referenced")
                     .and_then(|v| {
                         let json_val: serde_json::Value = serde_json::to_value(v).ok()?;
                         serde_json::from_value(json_val).ok()
@@ -591,10 +672,14 @@ impl QdrantClient {
         // Use Qdrant scroll API instead of zero-vector search.
         // Scroll is designed for filter-only retrieval — O(log n) via payload index,
         // not an O(n) scan like searching with a zero vector.
-        let scroll_result = self.client
+        let scroll_result = self
+            .client
             .scroll(
                 ScrollPointsBuilder::new(&self.collection_name)
-                    .filter(Filter::must([Condition::matches("session_id", session_id.to_string())]))
+                    .filter(Filter::must([Condition::matches(
+                        "session_id",
+                        session_id.to_string(),
+                    )]))
                     .limit(limit)
                     .with_payload(true),
             )
@@ -614,7 +699,9 @@ impl QdrantClient {
             let point_id = match point.id {
                 Some(id) => match id.point_id_options {
                     Some(qdrant_client::qdrant::point_id::PointIdOptions::Uuid(uuid)) => uuid,
-                    Some(qdrant_client::qdrant::point_id::PointIdOptions::Num(num)) => num.to_string(),
+                    Some(qdrant_client::qdrant::point_id::PointIdOptions::Num(num)) => {
+                        num.to_string()
+                    }
                     None => continue,
                 },
                 None => continue,
@@ -622,33 +709,40 @@ impl QdrantClient {
 
             let doc = ChatMemoryDocument {
                 id: point_id,
-                session_id: payload.get("session_id")
+                session_id: payload
+                    .get("session_id")
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string())
                     .unwrap_or_default(),
-                user_id: payload.get("user_id")
+                user_id: payload
+                    .get("user_id")
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string()),
-                timestamp: payload.get("timestamp")
+                timestamp: payload
+                    .get("timestamp")
                     .and_then(|v| v.as_str())
                     .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
                     .map(|dt| dt.with_timezone(&chrono::Utc))
                     .unwrap_or_else(chrono::Utc::now),
-                user_message: payload.get("user_message")
+                user_message: payload
+                    .get("user_message")
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string())
                     .unwrap_or_default(),
-                agent_response: payload.get("agent_response")
+                agent_response: payload
+                    .get("agent_response")
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string())
                     .unwrap_or_default(),
-                context: payload.get("context")
+                context: payload
+                    .get("context")
                     .and_then(|v| {
                         let json_val: serde_json::Value = serde_json::to_value(v).ok()?;
                         serde_json::from_value(json_val).ok()
                     })
                     .unwrap_or_default(),
-                files_referenced: payload.get("files_referenced")
+                files_referenced: payload
+                    .get("files_referenced")
                     .and_then(|v| {
                         let json_val: serde_json::Value = serde_json::to_value(v).ok()?;
                         serde_json::from_value(json_val).ok()
@@ -674,17 +768,19 @@ impl QdrantClient {
         let recent_history = self.get_session_history(session_id, 5).await?;
 
         // Get similar past conversations using Voyage embeddings
-        let similar_conversations = self.search_similar_conversations_with_voyage(query, session_id, 3, voyage_client).await?;
+        let similar_conversations = self
+            .search_similar_conversations_with_voyage(query, session_id, 3, voyage_client)
+            .await?;
 
         let mut context = String::new();
 
         if !recent_history.is_empty() {
             context.push_str("Recent conversation history:\n");
-            for memory in recent_history.iter().rev() { // Reverse to show chronologically
+            for memory in recent_history.iter().rev() {
+                // Reverse to show chronologically
                 context.push_str(&format!(
                     "User: {}\nAssistant: {}\n\n",
-                    memory.user_message,
-                    memory.agent_response
+                    memory.user_message, memory.agent_response
                 ));
             }
         }
@@ -694,8 +790,7 @@ impl QdrantClient {
             for memory in &similar_conversations {
                 context.push_str(&format!(
                     "User: {}\nAssistant: {}\n\n",
-                    memory.user_message,
-                    memory.agent_response
+                    memory.user_message, memory.agent_response
                 ));
             }
         }
@@ -713,17 +808,19 @@ impl QdrantClient {
         let recent_history = self.get_session_history(session_id, 5).await?;
 
         // Get similar past conversations using Gemini embeddings
-        let similar_conversations = self.search_similar_conversations_with_gemini(query, session_id, 3, gemini_client).await?;
+        let similar_conversations = self
+            .search_similar_conversations_with_gemini(query, session_id, 3, gemini_client)
+            .await?;
 
         let mut context = String::new();
 
         if !recent_history.is_empty() {
             context.push_str("Recent conversation history:\n");
-            for memory in recent_history.iter().rev() { // Reverse to show chronologically
+            for memory in recent_history.iter().rev() {
+                // Reverse to show chronologically
                 context.push_str(&format!(
                     "User: {}\nAssistant: {}\n\n",
-                    memory.user_message,
-                    memory.agent_response
+                    memory.user_message, memory.agent_response
                 ));
             }
         }
@@ -733,8 +830,7 @@ impl QdrantClient {
             for memory in &similar_conversations {
                 context.push_str(&format!(
                     "User: {}\nAssistant: {}\n\n",
-                    memory.user_message,
-                    memory.agent_response
+                    memory.user_message, memory.agent_response
                 ));
             }
         }
@@ -753,7 +849,9 @@ impl QdrantClient {
         let ns = uuid::Uuid::NAMESPACE_URL;
         let v5 = Uuid::new_v5(&ns, video_id.as_bytes());
         let bytes = v5.as_bytes();
-        u64::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7]])
+        u64::from_be_bytes([
+            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+        ])
     }
 
     pub async fn upsert_point(
@@ -772,11 +870,13 @@ impl QdrantClient {
                 vector.len(),
                 provider.dimensions(),
                 provider
-            ).into());
+            )
+            .into());
         }
 
         // Convert JSON payload to Qdrant payload format
-        let mut qdrant_payload: std::collections::HashMap<String, qdrant_client::qdrant::Value> = std::collections::HashMap::new();
+        let mut qdrant_payload: std::collections::HashMap<String, qdrant_client::qdrant::Value> =
+            std::collections::HashMap::new();
         if let Some(obj) = payload.as_object() {
             for (key, value) in obj {
                 qdrant_payload.insert(key.clone(), value.clone().into());
@@ -786,13 +886,13 @@ impl QdrantClient {
         // Add provider metadata to payload for tracking
         qdrant_payload.insert(
             "embedding_provider".to_string(),
-            serde_json::Value::String(provider.vector_name().to_string()).into()
+            serde_json::Value::String(provider.vector_name().to_string()).into(),
         );
 
         // Store original string ID in payload for reference
         qdrant_payload.insert(
             "original_point_id".to_string(),
-            serde_json::Value::String(point_id.to_string()).into()
+            serde_json::Value::String(point_id.to_string()).into(),
         );
 
         // Create named vector map
@@ -809,11 +909,15 @@ impl QdrantClient {
             qdrant_payload,
         );
 
-        let upsert_request = UpsertPointsBuilder::new(&self.collection_name, vec![point])
-            .wait(true);
+        let upsert_request =
+            UpsertPointsBuilder::new(&self.collection_name, vec![point]).wait(true);
 
         self.client.upsert_points(upsert_request).await?;
-        tracing::debug!("Upserted point: string_id='{}', numeric_id={}", point_id, numeric_point_id);
+        tracing::debug!(
+            "Upserted point: string_id='{}', numeric_id={}",
+            point_id,
+            numeric_point_id
+        );
         Ok(())
     }
 
@@ -828,7 +932,7 @@ impl QdrantClient {
         filter: Option<&serde_json::Value>,
         provider: EmbeddingProvider,
     ) -> Result<Vec<serde_json::Value>, Box<dyn std::error::Error + Send + Sync>> {
-        use qdrant_client::qdrant::{SearchPointsBuilder, Filter, Condition};
+        use qdrant_client::qdrant::{Condition, Filter, SearchPointsBuilder};
 
         // Validate vector dimensions match provider
         if query_vector.len() != provider.dimensions() {
@@ -837,22 +941,28 @@ impl QdrantClient {
                 query_vector.len(),
                 provider.dimensions(),
                 provider
-            ).into());
+            )
+            .into());
         }
 
-        let mut search_builder = SearchPointsBuilder::new(&self.collection_name, query_vector.to_vec(), limit as u64)
-            .with_payload(true)
-            .vector_name(provider.vector_name());
+        let mut search_builder =
+            SearchPointsBuilder::new(&self.collection_name, query_vector.to_vec(), limit as u64)
+                .with_payload(true)
+                .vector_name(provider.vector_name());
 
         // Apply filter if provided
         if let Some(filter_json) = filter {
             if let Some(must_conditions) = filter_json.get("must") {
                 if let Some(conditions) = must_conditions.as_array() {
                     let mut filter_conditions = Vec::new();
-                    
+
                     for condition in conditions {
-                        if let (Some(key), Some(match_obj)) = (condition.get("key"), condition.get("match")) {
-                            if let (Some(key_str), Some(value)) = (key.as_str(), match_obj.get("value")) {
+                        if let (Some(key), Some(match_obj)) =
+                            (condition.get("key"), condition.get("match"))
+                        {
+                            if let (Some(key_str), Some(value)) =
+                                (key.as_str(), match_obj.get("value"))
+                            {
                                 let condition = if let Some(str_value) = value.as_str() {
                                     Condition::matches(key_str, str_value.to_string())
                                 } else if let Some(int_value) = value.as_i64() {
@@ -866,7 +976,7 @@ impl QdrantClient {
                             }
                         }
                     }
-                    
+
                     if !filter_conditions.is_empty() {
                         let filter = Filter::must(filter_conditions);
                         search_builder = search_builder.filter(filter);
@@ -876,7 +986,7 @@ impl QdrantClient {
         }
 
         let search_result = self.client.search_points(search_builder).await?;
-        
+
         // Convert results to JSON format
         let mut results = Vec::new();
         for hit in search_result.result {
@@ -886,15 +996,18 @@ impl QdrantClient {
                 qdrant_client::qdrant::point_id::PointIdOptions::Num(num) => num.to_string(),
             };
             result_obj.insert("id".to_string(), serde_json::Value::String(point_id));
-            result_obj.insert("score".to_string(), serde_json::Value::Number(serde_json::Number::from_f64(hit.score as f64).unwrap()));
-            
+            result_obj.insert(
+                "score".to_string(),
+                serde_json::Value::Number(serde_json::Number::from_f64(hit.score as f64).unwrap()),
+            );
+
             for (key, value) in hit.payload {
                 result_obj.insert(key, serde_json::to_value(value)?);
             }
-            
+
             results.push(serde_json::Value::Object(result_obj));
         }
-        
+
         Ok(results)
     }
 
@@ -904,26 +1017,41 @@ impl QdrantClient {
 
     /// Create (or verify) the `video_content` collection.
     /// One point per analyzed video — deduplication, content discovery, editing context.
-    pub async fn ensure_video_content_collection(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn ensure_video_content_collection(
+        &self,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let collection_name = "video_content";
         let mut named_vectors = HashMap::new();
-        named_vectors.insert("voyage".to_string(), VectorParamsBuilder::new(1024, Distance::Cosine).build());
-        named_vectors.insert("gemini".to_string(), VectorParamsBuilder::new(768, Distance::Cosine).build());
+        named_vectors.insert(
+            "voyage".to_string(),
+            VectorParamsBuilder::new(1024, Distance::Cosine).build(),
+        );
+        named_vectors.insert(
+            "gemini".to_string(),
+            VectorParamsBuilder::new(768, Distance::Cosine).build(),
+        );
+        named_vectors.insert(
+            "gemini_mm".to_string(),
+            VectorParamsBuilder::new(gemini_embedding2_dimensions() as u64, Distance::Cosine)
+                .build(),
+        );
 
-        let result = self.client
+        let result = self
+            .client
             .create_collection(
-                CreateCollectionBuilder::new(collection_name)
-                    .vectors_config(VectorsConfig {
-                        config: Some(qdrant_client::qdrant::vectors_config::Config::ParamsMap(
-                            VectorParamsMap { map: named_vectors }
-                        ))
-                    })
+                CreateCollectionBuilder::new(collection_name).vectors_config(VectorsConfig {
+                    config: Some(qdrant_client::qdrant::vectors_config::Config::ParamsMap(
+                        VectorParamsMap { map: named_vectors },
+                    )),
+                }),
             )
             .await;
 
         match result {
             Ok(_) => tracing::info!("✅ Created video_content collection"),
-            Err(e) if e.to_string().contains("already exists") => tracing::debug!("video_content collection already exists"),
+            Err(e) if e.to_string().contains("already exists") => {
+                tracing::debug!("video_content collection already exists")
+            }
             Err(e) => tracing::warn!("Failed to create video_content collection: {}", e),
         }
 
@@ -935,9 +1063,11 @@ impl QdrantClient {
             ("channel_id", FieldType::Keyword),
             ("content_category", FieldType::Keyword),
         ] {
-            let _ = self.client
+            let _ = self
+                .client
                 .create_field_index(
-                    CreateFieldIndexCollectionBuilder::new(collection_name, *field, *field_type).wait(true)
+                    CreateFieldIndexCollectionBuilder::new(collection_name, *field, *field_type)
+                        .wait(true),
                 )
                 .await;
         }
@@ -947,25 +1077,32 @@ impl QdrantClient {
 
     /// Create (or verify) the `extracted_clips` collection.
     /// One point per generated YouTube Short — clip search, quality analytics, upload tracking.
-    pub async fn ensure_extracted_clips_collection(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn ensure_extracted_clips_collection(
+        &self,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let collection_name = "extracted_clips";
         let mut named_vectors = HashMap::new();
-        named_vectors.insert("voyage".to_string(), VectorParamsBuilder::new(1024, Distance::Cosine).build());
+        named_vectors.insert(
+            "voyage".to_string(),
+            VectorParamsBuilder::new(1024, Distance::Cosine).build(),
+        );
 
-        let result = self.client
+        let result = self
+            .client
             .create_collection(
-                CreateCollectionBuilder::new(collection_name)
-                    .vectors_config(VectorsConfig {
-                        config: Some(qdrant_client::qdrant::vectors_config::Config::ParamsMap(
-                            VectorParamsMap { map: named_vectors }
-                        ))
-                    })
+                CreateCollectionBuilder::new(collection_name).vectors_config(VectorsConfig {
+                    config: Some(qdrant_client::qdrant::vectors_config::Config::ParamsMap(
+                        VectorParamsMap { map: named_vectors },
+                    )),
+                }),
             )
             .await;
 
         match result {
             Ok(_) => tracing::info!("✅ Created extracted_clips collection"),
-            Err(e) if e.to_string().contains("already exists") => tracing::debug!("extracted_clips collection already exists"),
+            Err(e) if e.to_string().contains("already exists") => {
+                tracing::debug!("extracted_clips collection already exists")
+            }
             Err(e) => tracing::warn!("Failed to create extracted_clips collection: {}", e),
         }
 
@@ -976,9 +1113,11 @@ impl QdrantClient {
             ("destination_channel_id", FieldType::Keyword),
             ("upload_status", FieldType::Keyword),
         ] {
-            let _ = self.client
+            let _ = self
+                .client
                 .create_field_index(
-                    CreateFieldIndexCollectionBuilder::new(collection_name, *field, *field_type).wait(true)
+                    CreateFieldIndexCollectionBuilder::new(collection_name, *field, *field_type)
+                        .wait(true),
                 )
                 .await;
         }
@@ -988,26 +1127,41 @@ impl QdrantClient {
 
     /// Create (or verify) the `agent_memory` collection (replaces `chat_memory`).
     /// All AI conversation context — video editing, generation, clipping, general chat.
-    pub async fn ensure_agent_memory_collection(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn ensure_agent_memory_collection(
+        &self,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let collection_name = "agent_memory";
         let mut named_vectors = HashMap::new();
-        named_vectors.insert("voyage".to_string(), VectorParamsBuilder::new(1024, Distance::Cosine).build());
-        named_vectors.insert("gemini".to_string(), VectorParamsBuilder::new(768, Distance::Cosine).build());
+        named_vectors.insert(
+            "voyage".to_string(),
+            VectorParamsBuilder::new(1024, Distance::Cosine).build(),
+        );
+        named_vectors.insert(
+            "gemini".to_string(),
+            VectorParamsBuilder::new(768, Distance::Cosine).build(),
+        );
+        named_vectors.insert(
+            "gemini_mm".to_string(),
+            VectorParamsBuilder::new(gemini_embedding2_dimensions() as u64, Distance::Cosine)
+                .build(),
+        );
 
-        let result = self.client
+        let result = self
+            .client
             .create_collection(
-                CreateCollectionBuilder::new(collection_name)
-                    .vectors_config(VectorsConfig {
-                        config: Some(qdrant_client::qdrant::vectors_config::Config::ParamsMap(
-                            VectorParamsMap { map: named_vectors }
-                        ))
-                    })
+                CreateCollectionBuilder::new(collection_name).vectors_config(VectorsConfig {
+                    config: Some(qdrant_client::qdrant::vectors_config::Config::ParamsMap(
+                        VectorParamsMap { map: named_vectors },
+                    )),
+                }),
             )
             .await;
 
         match result {
             Ok(_) => tracing::info!("✅ Created agent_memory collection"),
-            Err(e) if e.to_string().contains("already exists") => tracing::debug!("agent_memory collection already exists"),
+            Err(e) if e.to_string().contains("already exists") => {
+                tracing::debug!("agent_memory collection already exists")
+            }
             Err(e) => tracing::warn!("Failed to create agent_memory collection: {}", e),
         }
 
@@ -1018,9 +1172,61 @@ impl QdrantClient {
             ("feature", FieldType::Keyword),
             ("timestamp", FieldType::Keyword),
         ] {
-            let _ = self.client
+            let _ = self
+                .client
                 .create_field_index(
-                    CreateFieldIndexCollectionBuilder::new(collection_name, *field, *field_type).wait(true)
+                    CreateFieldIndexCollectionBuilder::new(collection_name, *field, *field_type)
+                        .wait(true),
+                )
+                .await;
+        }
+
+        Ok(())
+    }
+
+    /// Create or verify the media review collection for multimodal QA artifacts.
+    pub async fn ensure_media_review_collection(
+        &self,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let collection_name = "media_review";
+        let mut named_vectors = HashMap::new();
+        named_vectors.insert(
+            "gemini_mm".to_string(),
+            VectorParamsBuilder::new(gemini_embedding2_dimensions() as u64, Distance::Cosine)
+                .build(),
+        );
+
+        let result = self
+            .client
+            .create_collection(
+                CreateCollectionBuilder::new(collection_name).vectors_config(VectorsConfig {
+                    config: Some(qdrant_client::qdrant::vectors_config::Config::ParamsMap(
+                        VectorParamsMap { map: named_vectors },
+                    )),
+                }),
+            )
+            .await;
+
+        match result {
+            Ok(_) => tracing::info!("✅ Created media_review collection"),
+            Err(e) if e.to_string().contains("already exists") => {
+                tracing::debug!("media_review collection already exists")
+            }
+            Err(e) => tracing::warn!("Failed to create media_review collection: {}", e),
+        }
+
+        for (field, field_type) in &[
+            ("asset_kind", FieldType::Keyword),
+            ("service_slug", FieldType::Keyword),
+            ("source_type", FieldType::Keyword),
+            ("owner_user_id", FieldType::Integer),
+            ("review_status", FieldType::Keyword),
+        ] {
+            let _ = self
+                .client
+                .create_field_index(
+                    CreateFieldIndexCollectionBuilder::new(collection_name, *field, *field_type)
+                        .wait(true),
                 )
                 .await;
         }
@@ -1034,18 +1240,22 @@ impl QdrantClient {
         &self,
         video_id: &str,
     ) -> Result<Option<serde_json::Value>, Box<dyn std::error::Error + Send + Sync>> {
-        let scroll_result = self.client
+        let scroll_result = self
+            .client
             .scroll(
                 ScrollPointsBuilder::new("video_content")
-                    .filter(Filter::must([Condition::matches("video_id", video_id.to_string())]))
+                    .filter(Filter::must([Condition::matches(
+                        "video_id",
+                        video_id.to_string(),
+                    )]))
                     .limit(1)
                     .with_payload(true),
             )
             .await?;
 
         if let Some(point) = scroll_result.result.into_iter().next() {
-            let payload_json: serde_json::Value = serde_json::to_value(&point.payload)
-                .unwrap_or(serde_json::Value::Null);
+            let payload_json: serde_json::Value =
+                serde_json::to_value(&point.payload).unwrap_or(serde_json::Value::Null);
             Ok(Some(payload_json))
         } else {
             Ok(None)
@@ -1061,7 +1271,8 @@ impl QdrantClient {
         embedding: Vec<f32>,
         provider: EmbeddingProvider,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let mut qdrant_payload: std::collections::HashMap<String, qdrant_client::qdrant::Value> = std::collections::HashMap::new();
+        let mut qdrant_payload: std::collections::HashMap<String, qdrant_client::qdrant::Value> =
+            std::collections::HashMap::new();
         if let Some(obj) = payload.as_object() {
             for (key, value) in obj {
                 qdrant_payload.insert(key.clone(), value.clone().into());
@@ -1090,7 +1301,8 @@ impl QdrantClient {
         payload: serde_json::Value,
         embedding: Vec<f32>,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let mut qdrant_payload: std::collections::HashMap<String, qdrant_client::qdrant::Value> = std::collections::HashMap::new();
+        let mut qdrant_payload: std::collections::HashMap<String, qdrant_client::qdrant::Value> =
+            std::collections::HashMap::new();
         if let Some(obj) = payload.as_object() {
             for (key, value) in obj {
                 qdrant_payload.insert(key.clone(), value.clone().into());
@@ -1100,7 +1312,11 @@ impl QdrantClient {
         let mut named_vectors = HashMap::new();
         named_vectors.insert("voyage".to_string(), embedding);
 
-        let point = PointStruct::new(clip_db_id as u64, Vectors::from(named_vectors), qdrant_payload);
+        let point = PointStruct::new(
+            clip_db_id as u64,
+            Vectors::from(named_vectors),
+            qdrant_payload,
+        );
 
         self.client
             .upsert_points(UpsertPointsBuilder::new("extracted_clips", vec![point]).wait(true))
@@ -1110,23 +1326,60 @@ impl QdrantClient {
         Ok(())
     }
 
+    pub async fn store_media_review(
+        &self,
+        review_id: &str,
+        payload: serde_json::Value,
+        embedding: Vec<f32>,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let mut qdrant_payload: std::collections::HashMap<String, qdrant_client::qdrant::Value> =
+            std::collections::HashMap::new();
+        if let Some(obj) = payload.as_object() {
+            for (key, value) in obj {
+                qdrant_payload.insert(key.clone(), value.clone().into());
+            }
+        }
+
+        let mut named_vectors = HashMap::new();
+        named_vectors.insert(
+            EmbeddingProvider::GeminiEmbedding2.vector_name().to_string(),
+            embedding,
+        );
+
+        let point_id = Self::video_id_to_point_id(review_id);
+        let point = PointStruct::new(point_id, Vectors::from(named_vectors), qdrant_payload);
+
+        self.client
+            .upsert_points(UpsertPointsBuilder::new("media_review", vec![point]).wait(true))
+            .await?;
+
+        tracing::info!("✅ Stored media review in Qdrant: review_id={}", review_id);
+        Ok(())
+    }
+
     /// Get all clips for a clipping job from the `extracted_clips` collection.
     pub async fn get_clips_for_job(
         &self,
         job_id: i32,
     ) -> Result<Vec<serde_json::Value>, Box<dyn std::error::Error + Send + Sync>> {
-        let scroll_result = self.client
+        let scroll_result = self
+            .client
             .scroll(
                 ScrollPointsBuilder::new("extracted_clips")
-                    .filter(Filter::must([Condition::matches("clipping_job_id", job_id as i64)]))
+                    .filter(Filter::must([Condition::matches(
+                        "clipping_job_id",
+                        job_id as i64,
+                    )]))
                     .limit(50)
                     .with_payload(true),
             )
             .await?;
 
-        let results = scroll_result.result.into_iter().map(|point| {
-            serde_json::to_value(&point.payload).unwrap_or(serde_json::Value::Null)
-        }).collect();
+        let results = scroll_result
+            .result
+            .into_iter()
+            .map(|point| serde_json::to_value(&point.payload).unwrap_or(serde_json::Value::Null))
+            .collect();
 
         Ok(results)
     }

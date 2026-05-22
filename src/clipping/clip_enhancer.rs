@@ -13,7 +13,9 @@
 // All errors are best-effort — if enhancement fails, the original clip is kept unchanged.
 
 use crate::clipping::ai_clipper::ExtractedClipData;
-use crate::utils::ffmpeg_utils::{cleanup_temp_files, create_temp_file, extract_frame_at_timestamp};
+use crate::utils::ffmpeg_utils::{
+    cleanup_temp_files, create_temp_file, extract_frame_at_timestamp,
+};
 use crate::AppState;
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
@@ -120,10 +122,8 @@ impl ClipEnhancer {
             &metadata,
             &frame_paths,
         );
-        let plan_result = tokio::time::timeout(
-            tokio::time::Duration::from_secs(45),
-            plan_future,
-        ).await;
+        let plan_result =
+            tokio::time::timeout(tokio::time::Duration::from_secs(45), plan_future).await;
 
         // Always clean up frame files regardless of success/failure/timeout
         cleanup_temp_files(&frame_paths);
@@ -178,20 +178,15 @@ fn assess_clip_quality(clip_path: &str) -> Result<ClipQualityMetadata, String> {
 }
 
 /// Extract 3 inspection frames at 15%, 50%, 85% of clip duration.
-fn extract_inspection_frames(
-    clip_path: &str,
-    clip_number: i32,
-) -> Result<Vec<String>, String> {
+fn extract_inspection_frames(clip_path: &str, clip_number: i32) -> Result<Vec<String>, String> {
     let duration = crate::core::get_video_duration(clip_path)?;
 
     let timestamps = [duration * 0.15, duration * 0.50, duration * 0.85];
 
     let mut frame_paths = Vec::new();
     for (i, &ts) in timestamps.iter().enumerate() {
-        let frame_path = create_temp_file(
-            &format!("clip{}_inspect_frame{}", clip_number, i),
-            "jpg",
-        );
+        let frame_path =
+            create_temp_file(&format!("clip{}_inspect_frame{}", clip_number, i), "jpg");
         match extract_frame_at_timestamp(clip_path, ts, &frame_path) {
             Ok(path) => frame_paths.push(path),
             Err(e) => {
@@ -319,7 +314,8 @@ Respond with valid JSON only — no markdown, no code fences:
         Err(e) => {
             tracing::warn!(
                 "Could not parse Gemini enhancement plan ({}), skipping enhancement. Raw: {}",
-                e, json_str
+                e,
+                json_str
             );
             Ok(ClipEnhancementPlan {
                 needs_enhancement: false,
@@ -354,14 +350,8 @@ fn apply_enhancement_plan(clip_path: &str, plan: &ClipEnhancementPlan) -> Result
 
         let result = match tool.as_str() {
             "extra_stabilize" => {
-                let r = crate::visual::stabilize_video_2pass(
-                    &current_input,
-                    &temp_out,
-                    7,
-                    15,
-                    12,
-                    0.0,
-                );
+                let r =
+                    crate::visual::stabilize_video_2pass(&current_input, &temp_out, 7, 15, 12, 0.0);
                 // Clean up the .trf sidecar created by vidstabdetect
                 std::fs::remove_file(format!("{}.trf", current_input)).ok();
                 r
@@ -372,9 +362,7 @@ fn apply_enhancement_plan(clip_path: &str, plan: &ClipEnhancementPlan) -> Result
             "color_temperature" => {
                 crate::visual::adjust_color_temperature(&current_input, &temp_out, 0.1, 1.0)
             }
-            "exposure_fix" => {
-                crate::visual::adjust_exposure(&current_input, &temp_out, 0.5, 0.05)
-            }
+            "exposure_fix" => crate::visual::adjust_exposure(&current_input, &temp_out, 0.5, 0.05),
             "sharpen" => crate::visual::apply_cas(&current_input, &temp_out, 0.5, 7),
             "deflicker" => crate::visual::remove_flicker(&current_input, &temp_out, 2, "median"),
             "audio_denoise" => {
@@ -387,22 +375,22 @@ fn apply_enhancement_plan(clip_path: &str, plan: &ClipEnhancementPlan) -> Result
             "color_balance" => {
                 // Slight warm highlights, neutral shadows/midtones
                 crate::visual::color_balance(
-                    &current_input, &temp_out,
-                    (0.0, 0.0, 0.0),       // shadows: neutral
-                    (0.0, 0.0, 0.0),       // midtones: neutral
-                    (0.05, 0.02, -0.03),   // highlights: warm
+                    &current_input,
+                    &temp_out,
+                    (0.0, 0.0, 0.0),     // shadows: neutral
+                    (0.0, 0.0, 0.0),     // midtones: neutral
+                    (0.05, 0.02, -0.03), // highlights: warm
                 )
             }
-            "normalize_video" => {
-                crate::visual::normalize_video(&current_input, &temp_out, 10)
-            }
+            "normalize_video" => crate::visual::normalize_video(&current_input, &temp_out, 10),
             "denoise_video" => {
                 // Moderate spatial+temporal denoise (luma_spatial, luma_temporal, chroma_spatial, chroma_temporal)
                 crate::visual::denoise_video(&current_input, &temp_out, 4.0, 3.0, 3.0, 2.0)
             }
             "add_vignette" => {
                 crate::visual::add_vignette(
-                    &current_input, &temp_out,
+                    &current_input,
+                    &temp_out,
                     std::f64::consts::PI / 5.0, // ~36° angle
                     "forward",
                 )
@@ -410,10 +398,13 @@ fn apply_enhancement_plan(clip_path: &str, plan: &ClipEnhancementPlan) -> Result
             "split_tone" => {
                 // Cool shadows (240° blue-ish), warm highlights (40° orange-ish)
                 crate::visual::split_tone(
-                    &current_input, &temp_out,
-                    240.0, 0.08,  // shadow hue + saturation
-                    40.0,  0.08,  // highlight hue + saturation
-                    0.5,          // balance
+                    &current_input,
+                    &temp_out,
+                    240.0,
+                    0.08, // shadow hue + saturation
+                    40.0,
+                    0.08, // highlight hue + saturation
+                    0.5,  // balance
                 )
             }
             "hue_adjust" => {

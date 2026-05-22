@@ -3,9 +3,9 @@
 // Runs every 10 minutes. Processes at most 3 unmapped channels per cycle to
 // stay well within the Gemini free-tier RPM limit (15s delay between calls).
 
-use crate::AppState;
 use crate::clipping::models::SourceChannel;
-use crate::services::twitch_mapper::{MappingResult, auto_map_youtube_to_twitch};
+use crate::services::twitch_mapper::{auto_map_youtube_to_twitch, MappingResult};
+use crate::AppState;
 use std::sync::Arc;
 use tokio::time::Duration;
 
@@ -43,7 +43,10 @@ async fn run_mapping_pass(
     {
         Ok(rows) => rows,
         Err(e) => {
-            tracing::warn!("Twitch mapper cron: failed to fetch unmapped channels: {}", e);
+            tracing::warn!(
+                "Twitch mapper cron: failed to fetch unmapped channels: {}",
+                e
+            );
             return;
         }
     };

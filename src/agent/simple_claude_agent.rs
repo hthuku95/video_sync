@@ -22,6 +22,7 @@ impl SimpleClaudeAgent {
         user_id: Option<i32>,
         app_state: Arc<crate::AppState>,
         progress_callback: Option<Arc<dyn Fn(f32, &str) + Send + Sync>>,
+        workflow_id: Option<uuid::Uuid>,
     ) -> Result<String, String> {
         // Helper to send progress updates
         let send_progress = |progress: f32, msg: &str| {
@@ -35,10 +36,11 @@ impl SimpleClaudeAgent {
             session_id: session_id.to_string(),
             user_id,
             app_state: app_state.clone(),
+            workflow_id,
         };
 
-        // Use the same AI-driven selector family as the stateful chat agent so
-        // clipping/background agents can reach the broader video-generation stack.
+        // Use the same full-toolbelt access path as the stateful chat agent so
+        // simple/background agents can choose from the full production stack.
         let selected_tool_names = crate::ai_tool_selector::select_tools_for_request(
             user_input,
             app_state.nvidia_nim_client.as_ref(),

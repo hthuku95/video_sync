@@ -74,7 +74,10 @@ pub fn build_crypto_saas_prompt(target: &PortfolioTarget) -> String {
     )
 }
 
-pub fn build_crypto_saas_extra(target: &PortfolioTarget, reference_image_url: Option<&str>) -> Value {
+pub fn build_crypto_saas_extra(
+    target: &PortfolioTarget,
+    reference_image_url: Option<&str>,
+) -> Value {
     let narration_text = format!(
         "{company} powers {market}. This speculative VideoSync sample shows {angle} in a polished website-to-video explainer built for outbound sales.",
         company = target.company,
@@ -110,8 +113,12 @@ mod tests {
         slugs.dedup();
 
         assert_eq!(slugs.len(), targets.len());
-        assert!(targets.iter().all(|target| target.url.starts_with("https://")));
-        assert!(targets.iter().all(|target| !target.company.trim().is_empty()));
+        assert!(targets
+            .iter()
+            .all(|target| target.url.starts_with("https://")));
+        assert!(targets
+            .iter()
+            .all(|target| !target.company.trim().is_empty()));
     }
 
     #[test]
@@ -131,7 +138,10 @@ mod tests {
         assert_eq!(extra["portfolio_category"], "crypto_saas");
         assert_eq!(extra["company"], target.company);
         assert_eq!(extra["source_url"], target.url);
-        assert_eq!(extra["reference_image_url"], "https://assets.example/hero.png");
+        assert_eq!(
+            extra["reference_image_url"],
+            "https://assets.example/hero.png"
+        );
         assert_eq!(extra["include_narration"], true);
         assert!(extra["narration_text"]
             .as_str()

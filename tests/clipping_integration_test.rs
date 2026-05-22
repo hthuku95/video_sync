@@ -12,8 +12,8 @@
 
 mod helpers;
 
-use helpers::{TestContext, assertions};
 use helpers::test_youtube::test_videos;
+use helpers::{assertions, TestContext};
 use sqlx::Row;
 
 // ============================================================================
@@ -33,9 +33,7 @@ use sqlx::Row;
 async fn test_complete_clipping_workflow() {
     let ctx = TestContext::new()
         .await
-        .expect(
-            "Failed to create test context — ensure a channel linkage with valid OAuth exists"
-        );
+        .expect("Failed to create test context — ensure a channel linkage with valid OAuth exists");
 
     // 1. Look for an existing non-terminal job on this linkage — resume if found
     let existing_job = sqlx::query(
@@ -43,7 +41,7 @@ async fn test_complete_clipping_workflow() {
          WHERE linkage_id = $1
            AND status NOT IN ('completed', 'cancelled')
          ORDER BY created_at DESC
-         LIMIT 1"
+         LIMIT 1",
     )
     .bind(ctx.linkage_id)
     .fetch_optional(&ctx.pool)
@@ -76,7 +74,10 @@ async fn test_complete_clipping_workflow() {
         .await
         .expect("Failed waiting for completion");
 
-    let final_status = ctx.get_job_status(job_id).await.unwrap_or_else(|_| "unknown".into());
+    let final_status = ctx
+        .get_job_status(job_id)
+        .await
+        .unwrap_or_else(|_| "unknown".into());
     assert!(
         completed,
         "Job {} should reach 'completed' within {} seconds. Final status: '{}'",
@@ -93,14 +94,18 @@ async fn test_complete_clipping_workflow() {
     // 4. Verify at least 1 clip was actually published to YouTube
     let clips = sqlx::query(
         "SELECT youtube_video_id, upload_status FROM extracted_clips
-         WHERE clipping_job_id = $1"
+         WHERE clipping_job_id = $1",
     )
     .bind(job_id)
     .fetch_all(&ctx.pool)
     .await
     .expect("Failed to fetch clips");
 
-    assert!(!clips.is_empty(), "No clips in extracted_clips table for job {}", job_id);
+    assert!(
+        !clips.is_empty(),
+        "No clips in extracted_clips table for job {}",
+        job_id
+    );
 
     let published = clips
         .iter()
@@ -113,10 +118,15 @@ async fn test_complete_clipping_workflow() {
     assert!(
         published >= 1,
         "Expected at least 1 published clip for job {} but got {} (total clips: {})",
-        job_id, published, clips.len()
+        job_id,
+        published,
+        clips.len()
     );
 
-    eprintln!("✅ {} clip(s) published to YouTube for job {}", published, job_id);
+    eprintln!(
+        "✅ {} clip(s) published to YouTube for job {}",
+        published, job_id
+    );
 
     // 5. Verify timing (new pipeline should complete within 20 minutes)
     assertions::assert_completed_within(&ctx.pool, job_id, 1200)
@@ -161,7 +171,10 @@ async fn test_gemini_analysis_phase() {
     let start = std::time::Instant::now();
     let mut passed_analysis = false;
     loop {
-        let status = ctx.get_job_status(job_id).await.unwrap_or_else(|_| "unknown".into());
+        let status = ctx
+            .get_job_status(job_id)
+            .await
+            .unwrap_or_else(|_| "unknown".into());
         match status.as_str() {
             "pending" | "analyzing" => {
                 // still in Phase A — keep waiting
@@ -171,9 +184,12 @@ async fn test_gemini_analysis_phase() {
                 passed_analysis = true;
                 break;
             }
-            "analyzed" | "downloading" | "downloaded" | "extracting_clips"
-            | "clips_extracted" | "vectorizing" | "posting" | "completed" => {
-                eprintln!("✅ Job {} passed Phase A analysis, now at: '{}'", job_id, status);
+            "analyzed" | "downloading" | "downloaded" | "extracting_clips" | "clips_extracted"
+            | "vectorizing" | "posting" | "completed" => {
+                eprintln!(
+                    "✅ Job {} passed Phase A analysis, now at: '{}'",
+                    job_id, status
+                );
                 passed_analysis = true;
                 break;
             }
@@ -187,7 +203,10 @@ async fn test_gemini_analysis_phase() {
         }
 
         if start.elapsed().as_secs() > timeout_secs {
-            eprintln!("⏰ Phase A timed out after {}s — final status: '{}'", timeout_secs, status);
+            eprintln!(
+                "⏰ Phase A timed out after {}s — final status: '{}'",
+                timeout_secs, status
+            );
             break;
         }
 
@@ -244,17 +263,26 @@ async fn test_download_phase() {
     let start = std::time::Instant::now();
     let mut download_succeeded = false;
     loop {
-        let status = ctx.get_job_status(job_id).await.unwrap_or_else(|_| "unknown".into());
+        let status = ctx
+            .get_job_status(job_id)
+            .await
+            .unwrap_or_else(|_| "unknown".into());
         match status.as_str() {
-            "downloaded" | "extracting_clips" | "clips_extracted"
-            | "vectorizing" | "posting" | "completed" => {
-                eprintln!("✅ Job {} download confirmed — status: '{}'", job_id, status);
+            "downloaded" | "extracting_clips" | "clips_extracted" | "vectorizing" | "posting"
+            | "completed" => {
+                eprintln!(
+                    "✅ Job {} download confirmed — status: '{}'",
+                    job_id, status
+                );
                 download_succeeded = true;
                 break;
             }
             "no_clips_found" => {
                 // Phase A found nothing → download was skipped (that's correct behaviour)
-                eprintln!("ℹ️  Job {} → no_clips_found — download correctly skipped", job_id);
+                eprintln!(
+                    "ℹ️  Job {} → no_clips_found — download correctly skipped",
+                    job_id
+                );
                 download_succeeded = true; // skip is also correct behaviour
                 break;
             }
@@ -264,7 +292,11 @@ async fn test_download_phase() {
                     .fetch_one(&ctx.pool)
                     .await
                     .ok()
-                    .and_then(|r| r.try_get::<Option<String>, _>("error_message").ok().flatten())
+                    .and_then(|r| {
+                        r.try_get::<Option<String>, _>("error_message")
+                            .ok()
+                            .flatten()
+                    })
                     .unwrap_or_else(|| "no error message".into());
                 eprintln!("❌ Job {} failed: {}", job_id, err);
                 break;
@@ -273,7 +305,10 @@ async fn test_download_phase() {
         }
 
         if start.elapsed().as_secs() > timeout_secs {
-            eprintln!("⏰ Download timed out after {}s — final status: '{}'", timeout_secs, status);
+            eprintln!(
+                "⏰ Download timed out after {}s — final status: '{}'",
+                timeout_secs, status
+            );
             break;
         }
 
@@ -326,16 +361,25 @@ async fn test_job_claiming_atomicity() {
         worker3.claim_next_job()
     );
 
-    let claimed1 = claim1.expect("Worker 1 should claim").expect("Should get job");
-    let claimed2 = claim2.expect("Worker 2 should claim").expect("Should get job");
-    let claimed3 = claim3.expect("Worker 3 should claim").expect("Should get job");
+    let claimed1 = claim1
+        .expect("Worker 1 should claim")
+        .expect("Should get job");
+    let claimed2 = claim2
+        .expect("Worker 2 should claim")
+        .expect("Should get job");
+    let claimed3 = claim3
+        .expect("Worker 3 should claim")
+        .expect("Should get job");
 
     // No two workers should claim the same job
     assert_ne!(claimed1, claimed2, "Workers should claim different jobs");
     assert_ne!(claimed2, claimed3, "Workers should claim different jobs");
     assert_ne!(claimed1, claimed3, "Workers should claim different jobs");
 
-    eprintln!("✅ Atomic claiming verified: {} != {} != {}", claimed1, claimed2, claimed3);
+    eprintln!(
+        "✅ Atomic claiming verified: {} != {} != {}",
+        claimed1, claimed2, claimed3
+    );
 
     for (job_id, worker_id) in [
         (claimed1, "test-worker-1"),
@@ -354,16 +398,30 @@ async fn test_job_claiming_atomicity() {
                 claimed_by.as_deref(),
                 Some(worker_id),
                 "Job {} should be claimed by {}, got {:?}",
-                job_id, worker_id, claimed_by
+                job_id,
+                worker_id,
+                claimed_by
             );
         } else {
-            eprintln!("⚠️  Job {} (claimed by {}) no longer in DB — concurrent cleanup", job_id, worker_id);
+            eprintln!(
+                "⚠️  Job {} (claimed by {}) no longer in DB — concurrent cleanup",
+                job_id, worker_id
+            );
         }
     }
 
-    worker1.release_all_claims().await.expect("Should release worker 1 claims");
-    worker2.release_all_claims().await.expect("Should release worker 2 claims");
-    worker3.release_all_claims().await.expect("Should release worker 3 claims");
+    worker1
+        .release_all_claims()
+        .await
+        .expect("Should release worker 1 claims");
+    worker2
+        .release_all_claims()
+        .await
+        .expect("Should release worker 2 claims");
+    worker3
+        .release_all_claims()
+        .await
+        .expect("Should release worker 3 claims");
 
     eprintln!("✅ All test worker claims released");
 
@@ -400,7 +458,7 @@ async fn test_stuck_job_detection() {
         "UPDATE clipping_jobs
          SET status = 'analyzing',
              updated_at = NOW() - INTERVAL '65 minutes'
-         WHERE id = $1"
+         WHERE id = $1",
     )
     .bind(job_id)
     .execute(&ctx.pool)
@@ -419,14 +477,17 @@ async fn test_stuck_job_detection() {
         "SELECT id FROM clipping_jobs
          WHERE status = 'analyzing'
            AND updated_at < NOW() - INTERVAL '60 minutes'
-           AND id = $1"
+           AND id = $1",
     )
     .bind(job_id)
     .fetch_optional(&ctx.pool)
     .await
     .expect("Should query stuck jobs");
 
-    assert!(result.is_some(), "Stuck job should be detected by the 60-min query");
+    assert!(
+        result.is_some(),
+        "Stuck job should be detected by the 60-min query"
+    );
 
     // Simulate worker resetting the stuck job to failed
     sqlx::query(
@@ -434,7 +495,7 @@ async fn test_stuck_job_detection() {
          SET status = 'failed',
              error_message = 'Job stuck in analyzing status for > 60 minutes',
              stuck_detection_count = stuck_detection_count + 1
-         WHERE id = $1"
+         WHERE id = $1",
     )
     .bind(job_id)
     .execute(&ctx.pool)
@@ -472,7 +533,7 @@ async fn test_auto_retry_failed_jobs() {
              error_message = 'Simulated transient failure',
              completed_at = NOW() - INTERVAL '6 minutes',
              retry_count = 0
-         WHERE id = $1"
+         WHERE id = $1",
     )
     .bind(job_id)
     .execute(&ctx.pool)
@@ -488,14 +549,17 @@ async fn test_auto_retry_failed_jobs() {
            AND completed_at > NOW() - INTERVAL '6 hours'
            AND completed_at < NOW() - INTERVAL '5 minutes'
            AND retry_count < 10
-           AND id = $1"
+           AND id = $1",
     )
     .bind(job_id)
     .fetch_optional(&ctx.pool)
     .await
     .expect("Should query retryable jobs");
 
-    assert!(retryable.is_some(), "Failed job should be retryable within the 6h window");
+    assert!(
+        retryable.is_some(),
+        "Failed job should be retryable within the 6h window"
+    );
 
     // Simulate the retry reset
     sqlx::query(
@@ -504,7 +568,7 @@ async fn test_auto_retry_failed_jobs() {
              error_message = NULL,
              retry_count = retry_count + 1,
              last_retry_at = NOW()
-         WHERE id = $1"
+         WHERE id = $1",
     )
     .bind(job_id)
     .execute(&ctx.pool)
@@ -544,7 +608,10 @@ async fn test_no_clips_found_fast_fail() {
         .await
         .expect("Failed to create test job");
 
-    eprintln!("✅ Created job {} for no_clips_found test (18s video)", job_id);
+    eprintln!(
+        "✅ Created job {} for no_clips_found test (18s video)",
+        job_id
+    );
 
     // Phase A + fast-fail should happen within 3 minutes
     let timeout_secs: u64 = std::env::var("TEST_TIMEOUT_ANALYSIS")
@@ -557,7 +624,10 @@ async fn test_no_clips_found_fast_fail() {
     let mut reached_terminal = false;
     let mut final_status = String::from("pending");
     loop {
-        let status = ctx.get_job_status(job_id).await.unwrap_or_else(|_| "unknown".into());
+        let status = ctx
+            .get_job_status(job_id)
+            .await
+            .unwrap_or_else(|_| "unknown".into());
         match status.as_str() {
             "pending" | "analyzing" => {}
             _ => {
@@ -568,7 +638,10 @@ async fn test_no_clips_found_fast_fail() {
         }
 
         if start.elapsed().as_secs() > timeout_secs {
-            final_status = ctx.get_job_status(job_id).await.unwrap_or_else(|_| "unknown".into());
+            final_status = ctx
+                .get_job_status(job_id)
+                .await
+                .unwrap_or_else(|_| "unknown".into());
             break;
         }
 
@@ -590,7 +663,7 @@ async fn test_no_clips_found_fast_fail() {
     let did_download = sqlx::query(
         "SELECT id FROM clipping_jobs
          WHERE id = $1 AND status IN ('downloading','downloaded','extracting_clips',
-                                      'clips_extracted','vectorizing','posting','completed')"
+                                      'clips_extracted','vectorizing','posting','completed')",
     )
     .bind(job_id)
     .fetch_optional(&ctx.pool)
@@ -632,29 +705,30 @@ async fn test_no_clips_found_fast_fail() {
 async fn test_twitch_channel_search() {
     dotenvy::from_filename(".env.test").ok();
 
-    let ctx = TestContext::new().await
+    let ctx = TestContext::new()
+        .await
         .expect("Need an active channel linkage with valid OAuth — see TestContext::new()");
 
-    let client_id = std::env::var("TWITCH_TV_CLIENT_ID")
-        .expect("TWITCH_TV_CLIENT_ID required in .env.test");
+    let client_id =
+        std::env::var("TWITCH_TV_CLIENT_ID").expect("TWITCH_TV_CLIENT_ID required in .env.test");
     let client_secret = std::env::var("TWITCH_TV_CLIENT_SECRET")
         .expect("TWITCH_TV_CLIENT_SECRET required in .env.test");
 
-    let twitch = video_editor::twitch_client::TwitchClient::new(
-        client_id, client_secret, ctx.pool.clone(),
-    );
+    let twitch =
+        video_editor::twitch_client::TwitchClient::new(client_id, client_secret, ctx.pool.clone());
 
     // Fetch the real channel name from the DB — no hardcoded names
-    let row = sqlx::query(
-        "SELECT channel_name FROM youtube_source_channels WHERE id = $1",
-    )
-    .bind(ctx.source_channel_id)
-    .fetch_one(&ctx.pool)
-    .await
-    .expect("Failed to fetch source channel name");
+    let row = sqlx::query("SELECT channel_name FROM youtube_source_channels WHERE id = $1")
+        .bind(ctx.source_channel_id)
+        .fetch_one(&ctx.pool)
+        .await
+        .expect("Failed to fetch source channel name");
 
     let channel_name: String = row.get("channel_name");
-    eprintln!("Searching Twitch for real YouTube source channel: '{}'", channel_name);
+    eprintln!(
+        "Searching Twitch for real YouTube source channel: '{}'",
+        channel_name
+    );
 
     let results = twitch
         .search_channels(&channel_name, 5)
@@ -671,7 +745,10 @@ async fn test_twitch_channel_search() {
 
     // We don't assert a non-empty result — the real YouTube source channel may not
     // have a Twitch presence. We assert only that the API call succeeded without error.
-    eprintln!("✅ Twitch search API responded successfully for '{}'", channel_name);
+    eprintln!(
+        "✅ Twitch search API responded successfully for '{}'",
+        channel_name
+    );
 }
 
 /// Test: Add a Twitch channel derived from the real YouTube source channel, then create
@@ -690,26 +767,23 @@ async fn test_twitch_channel_search() {
 async fn test_twitch_channel_add_and_map() {
     dotenvy::from_filename(".env.test").ok();
 
-    let ctx = TestContext::new().await
+    let ctx = TestContext::new()
+        .await
         .expect("Need an active channel linkage with valid OAuth");
 
-    let client_id = std::env::var("TWITCH_TV_CLIENT_ID")
-        .expect("TWITCH_TV_CLIENT_ID required");
-    let client_secret = std::env::var("TWITCH_TV_CLIENT_SECRET")
-        .expect("TWITCH_TV_CLIENT_SECRET required");
+    let client_id = std::env::var("TWITCH_TV_CLIENT_ID").expect("TWITCH_TV_CLIENT_ID required");
+    let client_secret =
+        std::env::var("TWITCH_TV_CLIENT_SECRET").expect("TWITCH_TV_CLIENT_SECRET required");
 
-    let twitch = video_editor::twitch_client::TwitchClient::new(
-        client_id, client_secret, ctx.pool.clone(),
-    );
+    let twitch =
+        video_editor::twitch_client::TwitchClient::new(client_id, client_secret, ctx.pool.clone());
 
     // 1. Get real channel name from DB
-    let row = sqlx::query(
-        "SELECT channel_name FROM youtube_source_channels WHERE id = $1",
-    )
-    .bind(ctx.source_channel_id)
-    .fetch_one(&ctx.pool)
-    .await
-    .expect("Failed to fetch source channel");
+    let row = sqlx::query("SELECT channel_name FROM youtube_source_channels WHERE id = $1")
+        .bind(ctx.source_channel_id)
+        .fetch_one(&ctx.pool)
+        .await
+        .expect("Failed to fetch source channel");
 
     let channel_name: String = row.get("channel_name");
     eprintln!("Real YouTube source channel: '{}'", channel_name);
@@ -749,7 +823,9 @@ async fn test_twitch_channel_add_and_map() {
         .await
         .expect("Login response parse failed");
 
-    let token = login_body["token"].as_str().expect("No token in login response");
+    let token = login_body["token"]
+        .as_str()
+        .expect("No token in login response");
 
     // 4. Add Twitch channel (broadcaster_id from real Twitch API search result)
     let add_resp = http
@@ -766,7 +842,9 @@ async fn test_twitch_channel_add_and_map() {
 
     assert!(
         add_status.is_success() || add_status.as_u16() == 409,
-        "Expected 201 or 409 from add, got {}: {:?}", add_status, add_body
+        "Expected 201 or 409 from add, got {}: {:?}",
+        add_status,
+        add_body
     );
 
     // 5. Fetch the twitch_source_channels.id that was just added/already existed
@@ -796,12 +874,17 @@ async fn test_twitch_channel_add_and_map() {
         .expect("Create mapping request failed");
 
     let map_status = map_resp.status();
-    let map_body: serde_json::Value = map_resp.json().await.expect("Mapping response parse failed");
+    let map_body: serde_json::Value = map_resp
+        .json()
+        .await
+        .expect("Mapping response parse failed");
     eprintln!("Create mapping ({}): {:?}", map_status, map_body);
 
     assert!(
         map_status.is_success() || map_status.as_u16() == 409,
-        "Expected 201 or 409 from mapping, got {}: {:?}", map_status, map_body
+        "Expected 201 or 409 from mapping, got {}: {:?}",
+        map_status,
+        map_body
     );
 
     eprintln!(
@@ -822,26 +905,26 @@ async fn test_twitch_channel_add_and_map() {
 async fn test_twitch_mapper_ai() {
     dotenvy::from_filename(".env.test").ok();
 
-    let ctx = TestContext::new().await
+    let ctx = TestContext::new()
+        .await
         .expect("Need an active channel linkage with valid OAuth");
 
     let client_id = std::env::var("TWITCH_TV_CLIENT_ID").expect("TWITCH_TV_CLIENT_ID required");
-    let client_secret = std::env::var("TWITCH_TV_CLIENT_SECRET").expect("TWITCH_TV_CLIENT_SECRET required");
+    let client_secret =
+        std::env::var("TWITCH_TV_CLIENT_SECRET").expect("TWITCH_TV_CLIENT_SECRET required");
     let gemini_key = std::env::var("GEMINI_API_KEY").expect("GEMINI_API_KEY required");
 
-    let twitch = video_editor::twitch_client::TwitchClient::new(
-        client_id, client_secret, ctx.pool.clone(),
-    );
+    let twitch =
+        video_editor::twitch_client::TwitchClient::new(client_id, client_secret, ctx.pool.clone());
     let gemini = video_editor::gemini_client::GeminiClient::new(gemini_key);
 
     // Fetch the real SourceChannel row from the DB — the same one linked by this linkage
-    let source_channel: video_editor::clipping::models::SourceChannel = sqlx::query_as(
-        "SELECT * FROM youtube_source_channels WHERE id = $1",
-    )
-    .bind(ctx.source_channel_id)
-    .fetch_one(&ctx.pool)
-    .await
-    .expect("Failed to fetch source channel from DB");
+    let source_channel: video_editor::clipping::models::SourceChannel =
+        sqlx::query_as("SELECT * FROM youtube_source_channels WHERE id = $1")
+            .bind(ctx.source_channel_id)
+            .fetch_one(&ctx.pool)
+            .await
+            .expect("Failed to fetch source channel from DB");
 
     eprintln!(
         "Running Gemini auto-mapper on real YouTube source channel: '{}' (id={})",
@@ -875,7 +958,10 @@ async fn test_twitch_mapper_ai() {
         .expect("DB query failed");
 
         if let Some((_, login)) = mapping {
-            eprintln!("✅ Existing mapping: YouTube:'{}' → Twitch:'{}'", source_channel.channel_name, login);
+            eprintln!(
+                "✅ Existing mapping: YouTube:'{}' → Twitch:'{}'",
+                source_channel.channel_name, login
+            );
         }
         return;
     }
@@ -903,7 +989,10 @@ async fn test_twitch_mapper_ai() {
             );
         }
         Err(e) => {
-            panic!("Auto-mapper returned error for '{}': {}", source_channel.channel_name, e);
+            panic!(
+                "Auto-mapper returned error for '{}': {}",
+                source_channel.channel_name, e
+            );
         }
     }
 }
@@ -920,14 +1009,18 @@ async fn test_twitch_mapper_ai() {
 async fn test_twitch_fallback_logic() {
     dotenvy::from_filename(".env.test").ok();
 
-    let ctx = TestContext::new().await
+    let ctx = TestContext::new()
+        .await
         .expect("Need an active channel linkage with valid OAuth");
 
     let client_id = std::env::var("TWITCH_TV_CLIENT_ID").expect("TWITCH_TV_CLIENT_ID required");
-    let client_secret = std::env::var("TWITCH_TV_CLIENT_SECRET").expect("TWITCH_TV_CLIENT_SECRET required");
+    let client_secret =
+        std::env::var("TWITCH_TV_CLIENT_SECRET").expect("TWITCH_TV_CLIENT_SECRET required");
 
     let twitch = video_editor::twitch_client::TwitchClient::new(
-        client_id.clone(), client_secret.clone(), ctx.pool.clone(),
+        client_id.clone(),
+        client_secret.clone(),
+        ctx.pool.clone(),
     );
 
     // Look up the real Twitch broadcaster_id for the linkage's source channel
@@ -944,19 +1037,20 @@ async fn test_twitch_fallback_logic() {
 
     let (broadcaster_id, broadcaster_login) = match mapping {
         Some(m) => {
-            eprintln!("Using real mapping: YouTube source_channel_id={} → Twitch:{}", ctx.source_channel_id, m.1);
+            eprintln!(
+                "Using real mapping: YouTube source_channel_id={} → Twitch:{}",
+                ctx.source_channel_id, m.1
+            );
             m
         }
         None => {
             // No mapping yet — try a Twitch search using the real channel name and use
             // the first result so the test still exercises the get_videos path
-            let row = sqlx::query(
-                "SELECT channel_name FROM youtube_source_channels WHERE id = $1",
-            )
-            .bind(ctx.source_channel_id)
-            .fetch_one(&ctx.pool)
-            .await
-            .expect("Failed to fetch source channel");
+            let row = sqlx::query("SELECT channel_name FROM youtube_source_channels WHERE id = $1")
+                .bind(ctx.source_channel_id)
+                .fetch_one(&ctx.pool)
+                .await
+                .expect("Failed to fetch source channel");
 
             let channel_name: String = row.get("channel_name");
             eprintln!(
@@ -981,7 +1075,10 @@ async fn test_twitch_fallback_logic() {
                 "Using first Twitch search result: {} ({})",
                 results[0].display_name, results[0].broadcaster_login
             );
-            (results[0].broadcaster_id.clone(), results[0].broadcaster_login.clone())
+            (
+                results[0].broadcaster_id.clone(),
+                results[0].broadcaster_login.clone(),
+            )
         }
     };
 
@@ -993,7 +1090,9 @@ async fn test_twitch_fallback_logic() {
 
     eprintln!(
         "Twitch:{} — {} VODs returned (cursor={:?}):",
-        broadcaster_login, videos.len(), cursor
+        broadcaster_login,
+        videos.len(),
+        cursor
     );
     for v in &videos {
         eprintln!(
@@ -1012,5 +1111,8 @@ async fn test_twitch_fallback_logic() {
         );
     }
 
-    eprintln!("✅ Twitch get_videos verified for Twitch:{} (broadcaster_id={})", broadcaster_login, broadcaster_id);
+    eprintln!(
+        "✅ Twitch get_videos verified for Twitch:{} (broadcaster_id={})",
+        broadcaster_login, broadcaster_id
+    );
 }

@@ -94,7 +94,10 @@ impl AiClipper {
 
         if extracted_clips.is_empty() {
             let reason = first_error.unwrap_or_else(|| "unknown — no clips attempted".to_string());
-            return Err(format!("All clip extractions failed. First error: {}", reason));
+            return Err(format!(
+                "All clip extractions failed. First error: {}",
+                reason
+            ));
         }
 
         tracing::info!(
@@ -110,12 +113,17 @@ impl AiClipper {
         // Best-effort — if enhancement fails the original clip is preserved unchanged.
         // 120s total budget for enhancement across all clips.
         if self.app_state.gemini_client.is_some() {
-            tracing::info!("🎬 Phase C+: running AI clip enhancement for job {}", job_id);
+            tracing::info!(
+                "🎬 Phase C+: running AI clip enhancement for job {}",
+                job_id
+            );
             let enhancer = ClipEnhancer::new(self.app_state.clone());
             match tokio::time::timeout(
                 tokio::time::Duration::from_secs(120),
                 enhancer.enhance_clips_with_ai(&mut extracted_clips, content_type),
-            ).await {
+            )
+            .await
+            {
                 Ok(_) => {}
                 Err(_) => tracing::warn!("Phase C+ timed out after 120s — skipping enhancement"),
             }
@@ -129,8 +137,14 @@ impl AiClipper {
             for clip in &mut extracted_clips {
                 match tokio::time::timeout(
                     tokio::time::Duration::from_secs(60),
-                    thumbnail_gen.generate_thumbnail(&clip.local_clip_path, &clip.ai_title, &clip.viral_factors),
-                ).await {
+                    thumbnail_gen.generate_thumbnail(
+                        &clip.local_clip_path,
+                        &clip.ai_title,
+                        &clip.viral_factors,
+                    ),
+                )
+                .await
+                {
                     Ok(Ok(ai_thumb)) => {
                         tracing::info!(
                             "🎨 AI thumbnail for clip {}: {}",
@@ -193,24 +207,43 @@ fn extract_single_clip(
     let seg_status = std::process::Command::new("ffmpeg")
         .args([
             "-y",
-            "-loglevel", "error",
-            "-ss", &moment.start_sec.to_string(),
-            "-i", video_path,
-            "-t", &segment_duration.to_string(),
-            "-c", "copy",
-            "-avoid_negative_ts", "make_zero",
+            "-loglevel",
+            "error",
+            "-ss",
+            &moment.start_sec.to_string(),
+            "-i",
+            video_path,
+            "-t",
+            &segment_duration.to_string(),
+            "-c",
+            "copy",
+            "-avoid_negative_ts",
+            "make_zero",
             &segment_path,
         ])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
         .output()
-        .map_err(|e| format!("Clip {} segment extraction spawn failed: {}", clip_number, e))?;
+        .map_err(|e| {
+            format!(
+                "Clip {} segment extraction spawn failed: {}",
+                clip_number, e
+            )
+        })?;
 
     if !seg_status.status.success() {
         let stderr = String::from_utf8_lossy(&seg_status.stderr);
-        return Err(format!("Clip {} segment extraction failed: {}", clip_number, &stderr[..stderr.len().min(400)]));
+        return Err(format!(
+            "Clip {} segment extraction failed: {}",
+            clip_number,
+            &stderr[..stderr.len().min(400)]
+        ));
     }
-    tracing::info!("✅ Clip {} segment extracted: {}", clip_number, segment_path);
+    tracing::info!(
+        "✅ Clip {} segment extracted: {}",
+        clip_number,
+        segment_path
+    );
 
     // Step 2: apply the full filter chain to the small segment (starts at t=0)
     let result = crate::core::trim_and_convert_to_shorts(
@@ -220,7 +253,8 @@ fn extract_single_clip(
         moment.end_sec - moment.start_sec,
         &moment.title,
         content_type,
-    ).map_err(|e| format!("Clip {} shorts-enhance failed: {}", clip_number, e));
+    )
+    .map_err(|e| format!("Clip {} shorts-enhance failed: {}", clip_number, e));
 
     // Always clean up the temp segment, even on failure
     let _ = std::fs::remove_file(&segment_path);
@@ -246,13 +280,17 @@ fn extract_single_clip(
                     if attempt < 3 {
                         tracing::warn!(
                             "Clip {} thumbnail attempt {}/3 failed: {}. Retrying in {}ms...",
-                            clip_number, attempt, e, 200 * attempt
+                            clip_number,
+                            attempt,
+                            e,
+                            200 * attempt
                         );
                         std::thread::sleep(std::time::Duration::from_millis(200 * attempt as u64));
                     } else {
                         tracing::warn!(
                             "Clip {} thumbnail failed after 3 attempts: {}",
-                            clip_number, e
+                            clip_number,
+                            e
                         );
                     }
                 }
@@ -274,13 +312,21 @@ fn extract_single_clip(
         ai_confidence_score: moment.quality_score,
         viral_factors: moment.viral_factors.clone(),
         custom_thumbnail_path: custom_thumbnail,
-        thumbnail_generation_method: if has_thumb { Some("ffmpeg_timestamp".to_string()) } else { None },
+        thumbnail_generation_method: if has_thumb {
+            Some("ffmpeg_timestamp".to_string())
+        } else {
+            None
+        },
         enhancement_applied: false,
         enhancement_tools: Vec::new(),
         enhancement_reasoning: None,
         r2_clip_key: None,
         r2_thumb_key: None,
         r2_clip_url: None,
+        qa_status: None,
+        qa_score: None,
+        qa_feedback: None,
+        qa_retry_hint: None,
     })
 }
 
@@ -310,4 +356,8 @@ pub struct ExtractedClipData {
     pub r2_clip_key: Option<String>,
     pub r2_thumb_key: Option<String>,
     pub r2_clip_url: Option<String>,
+    pub qa_status: Option<String>,
+    pub qa_score: Option<i32>,
+    pub qa_feedback: Option<String>,
+    pub qa_retry_hint: Option<String>,
 }
