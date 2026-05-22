@@ -130,12 +130,9 @@ pub async fn execute_clipping_job(job_id: i32, app_state: Arc<AppState>) -> Resu
 
             match gemini_result {
                 Ok(a) => a,
-                Err(e)
-                    if e.to_string().contains("429")
-                        || e.to_string().to_lowercase().contains("quota") =>
-                {
+                Err(e) if should_fallback_from_gemini_video_analysis_error(&e.to_string()) => {
                     tracing::warn!(
-                        "⚠️ Gemini 429 on video analysis, falling back to BlenderMCPServer: {}",
+                        "⚠️ Gemini provider error on video analysis, falling back to BlenderMCPServer: {}",
                         e
                     );
                     if let Some(blender) = app_state.blender_mcp_client.as_ref() {
@@ -150,12 +147,12 @@ pub async fn execute_clipping_job(job_id: i32, app_state: Arc<AppState>) -> Resu
                             .await
                             .map_err(|be| {
                                 format!(
-                                    "Gemini quota exceeded (429); BlenderMCP fallback also failed: {}",
+                                    "Gemini provider analysis failed; BlenderMCP fallback also failed: {}",
                                     be
                                 )
                             })?
                     } else {
-                        return Err(format!("Gemini video analysis failed (429 quota): {}. No BlenderMCP fallback configured.", e));
+                        return Err(format!("Gemini video analysis failed with provider error: {}. No BlenderMCP fallback configured.", e));
                     }
                 }
                 Err(e) => return Err(format!("Gemini video analysis failed: {}", e)),
@@ -929,6 +926,18 @@ pub async fn execute_clipping_job(job_id: i32, app_state: Arc<AppState>) -> Resu
         uploaded_count,
         clips.len()
     ))
+}
+
+pub(crate) fn should_fallback_from_gemini_video_analysis_error(error: &str) -> bool {
+    let lower = error.to_lowercase();
+    error.contains("429")
+        || error.contains("403")
+        || error.contains("PERMISSION_DENIED")
+        || error.contains("RESOURCE_EXHAUSTED")
+        || lower.contains("quota")
+        || lower.contains("rate limit")
+        || lower.contains("permission denied")
+        || lower.contains("model")
 }
 
 /// Load unpublished clips from the extracted_clips table for Phase E resume.

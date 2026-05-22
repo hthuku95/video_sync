@@ -18,7 +18,8 @@ use crate::gemini_client::Content;
 use crate::jobs::clipping_job::{
     count_clips_posted_today, fetch_destination_channel, fetch_job_details, fetch_linkage,
     handle_download_failure_fallback, load_clips_from_db, load_reusable_source_analysis,
-    mark_job_completed, persist_job_analysis, save_clips_to_database, store_source_analysis_vector,
+    mark_job_completed, persist_job_analysis, save_clips_to_database,
+    should_fallback_from_gemini_video_analysis_error, store_source_analysis_vector,
     update_job_status, update_linkage_session_timestamp, update_linkage_stats,
 };
 use crate::jobs::{JobStatus, ProgressUpdate};
@@ -773,11 +774,8 @@ impl GeminiClippingAgent {
 
         let analysis = match gemini_result {
             Ok(a) => a,
-            Err(e)
-                if e.to_string().contains("429")
-                    || e.to_string().to_lowercase().contains("quota") =>
-            {
-                tracing::warn!("⚠️ Gemini 429 on Phase A analysis (job {}), falling back to BlenderMCPServer: {}", job_id, e);
+            Err(e) if should_fallback_from_gemini_video_analysis_error(&e.to_string()) => {
+                tracing::warn!("⚠️ Gemini provider error on Phase A analysis (job {}), falling back to BlenderMCPServer: {}", job_id, e);
                 if let Some(blender) = self.app_state.blender_mcp_client.as_ref() {
                     blender
                         .analyze_video(
@@ -790,12 +788,12 @@ impl GeminiClippingAgent {
                         .await
                         .map_err(|be| {
                             format!(
-                                "Gemini quota exceeded (429); BlenderMCP fallback also failed: {}",
+                                "Gemini provider analysis failed; BlenderMCP fallback also failed: {}",
                                 be
                             )
                         })?
                 } else {
-                    return Err(format!("Gemini analysis failed (429 quota): {}. No BlenderMCP fallback configured.", e));
+                    return Err(format!("Gemini analysis failed with provider error: {}. No BlenderMCP fallback configured.", e));
                 }
             }
             Err(e) => return Err(format!("Gemini analysis failed: {}", e)),
