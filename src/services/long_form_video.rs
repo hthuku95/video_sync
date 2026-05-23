@@ -1159,13 +1159,16 @@ fn long_form_publish_timeout_secs(bytes: Option<i64>) -> u64 {
         .and_then(|bytes| u64::try_from(bytes).ok())
         .map(|bytes| {
             let mib = (bytes / (1024 * 1024)).max(1);
-            120 + (mib * 3)
+            // R2/S3 uploads can be bursty from Cloud Run, and publish is the
+            // revenue-critical handoff step. Give it room instead of timing
+            // out a completed render during the final upload.
+            600 + (mib * 15)
         })
-        .unwrap_or(300);
+        .unwrap_or(900);
     let configured_timeout = std::env::var("LONG_FORM_PUBLISH_TIMEOUT_SECS")
         .ok()
         .and_then(|value| value.parse::<u64>().ok());
-    configured_timeout.unwrap_or(default_timeout).clamp(120, 1800)
+    configured_timeout.unwrap_or(default_timeout).clamp(600, 7200)
 }
 
 fn extract_json_array(text: &str) -> Option<String> {
