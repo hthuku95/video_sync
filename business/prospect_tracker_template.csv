@@ -1,0 +1,2 @@
+company_name,product_url,founder_name,x_handle,email,category,offer_lane,score,missing_video,custom_angle,dm_sent_at,email_sent_at,reply_status,quoted_price,payment_status,delivery_url,next_action
+Example SaaS,https://example.com,Founder Name,@handle,founder@example.com,AI SaaS,SaaS/App Demo Pack,9,yes,"Homepage explains the product but has no fast demo video.",,,,not_contacted,499,not_sent,,Send X DM and email today
