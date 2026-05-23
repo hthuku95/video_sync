@@ -21,7 +21,7 @@ pub fn build_service_sample_prompt(
     };
 
     let focus = match service_slug {
-        "saas-launch-pack" => "Create a founder-ready demo sample from a website/app URL, screenshots, app recording, or launch brief. The default buyer-facing promise is simple: turn the product into a polished 30-60s demo/promo video in 24 hours.",
+        "saas-launch-pack" => "Create a founder-ready demo sample from a website/app URL, screenshots, app recording, or launch brief. The default buyer-facing promise is simple: turn the product into a polished demo/promo video in 24 hours. Most rush demos are 30-60s; longer explainers and walkthroughs are available.",
         "clipper-enhancement-pack" => "Create a premium visual-packaging sample with stronger thumbnails, motion graphics, mockups, overlays, narration support, or branded polish that improves how the final offer looks before anyone clicks play.",
         "thumbnail-hero-pack" => "Create click-focused thumbnail and hero visual concepts with hooks, variants, and QA so the buyer can test stronger first impressions quickly.",
         "product-mockup-pack" => "Create UI mockup scenes and short product videos from a URL, screenshots, Figma exports, app recordings, or a written workflow.",
@@ -34,7 +34,7 @@ pub fn build_service_sample_prompt(
         _ => "Create a high-quality custom sample that matches the requested service.",
     };
     let production_stack = match service_slug {
-        "saas-launch-pack" => "Use long-form assembly when the brief asks for a 30s+ product story, demo, explainer, launch trailer, or multi-cutdown campaign. Pull from UI mockups, product screenshots, Blender scenes, VibeVoice narration, Pexels support footage, captions, thumbnails, and Gemini multimodal QA as needed. Default deliverable split: $299 basic rush demo = one polished 30-60s video; $499 full pack = video plus hooks/captions, thumbnail or hero concept, and delivery/download page.",
+        "saas-launch-pack" => "Use long-form assembly when the brief asks for a 30s+ product story, demo, explainer, launch trailer, or multi-cutdown campaign. Pull from UI mockups, product screenshots, Blender scenes, VibeVoice narration, Pexels support footage, captions, thumbnails, and Gemini multimodal QA as needed. Default deliverable split: $299 basic rush demo = one tightly scoped short demo, usually 30-60s; $499 full pack = longer or more polished video when needed plus hooks/captions, thumbnail or hero concept, and delivery/download page.",
         "clipper-enhancement-pack" => "Use long-form assembly when the request asks for a clip pack, recap, narrated summary, or multiple enhanced cutdowns. Combine clipping/enhancement tools with captions, thumbnail/hero assets, motion graphics, audio cleanup, and QA instead of treating it as a single raw clip.",
         "thumbnail-hero-pack" => "Use thumbnail/hero generation first, then add short motion loops or product mockups when a static visual alone will not sell the offer.",
         "product-mockup-pack" => "Use UI mockup and long-form assembly when the buyer needs browser/device scenes, app walkthroughs, launch cutdowns, or homepage hero video.",

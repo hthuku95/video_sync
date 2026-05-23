@@ -10,7 +10,7 @@ Built with VideoSync: AI video generation, product mockups, thumbnails, narratio
 
 ### SaaS/App Demo Pack
 
-Turn your app or website into a 30-60s product video.
+Turn your app or website into a product demo/promo video. Most rush demos are 30-60 seconds; longer explainers and walkthroughs are available.
 
 Includes:
 

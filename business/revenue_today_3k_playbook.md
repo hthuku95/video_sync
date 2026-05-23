@@ -10,7 +10,7 @@ Best buyer: SaaS founders, indie hackers, no-code builders, AI tools, devtools, 
 
 Fast promise:
 
-> I will turn your app or website into a polished 30-60s promo/demo video plus 3 short ad hooks in 24h.
+> I will turn your app or website into a polished product demo/promo video plus 3 short ad hooks in 24h. Most rush demos are 30-60s; longer explainers and walkthroughs are available.
 
 Pricing:
 
@@ -21,7 +21,7 @@ Pricing:
 
 What to deliver:
 
-- 30-60s demo/promo video
+- Product demo/promo video, usually 30-60s for rush delivery
 - 3 hook/caption variants
 - 1 thumbnail/hero concept
 - Delivery page with download button
@@ -217,7 +217,7 @@ High-intent signals:
 
 ### SaaS Founder DM
 
-Hey {{name}}, saw {{product}}. Quick idea: your site could probably sell faster with a 30-60s demo video that shows the product clearly instead of making people figure it out from the page.
+Hey {{name}}, saw {{product}}. Quick idea: your site could probably sell faster with a short demo video that shows the product clearly instead of making people figure it out from the page.
 
 I run VideoSync, an AI video production system. I can turn your site/app into a promo/demo video + 3 short ad hooks in 24h.
 
@@ -265,7 +265,7 @@ I came across {{product}} and had a quick idea: the landing page could probably 
 
 I run VideoSync, an AI-powered video production system. For SaaS/app teams, I’m offering a 24h demo pack:
 
-- 30-60s product promo/demo video
+- Product promo/demo video, usually 30-60s for fast launches
 - 3 hook/caption variants
 - 1 thumbnail/hero visual concept
 - Shareable delivery page with downloads
