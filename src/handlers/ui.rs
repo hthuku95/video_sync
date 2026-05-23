@@ -352,27 +352,27 @@ pub async fn services_overview_page() -> Html<String> {
 pub async fn saas_launch_pack_page() -> Html<String> {
     Html(build_service_offer_page_html(
         "saas-launch-pack",
-        "SaaS Launch Pack",
-        "$299-$1,500+",
-        "Product demos, launch trailers, onboarding explainers, and homepage videos built from your real product.",
+        "SaaS/App Demo Rush Pack",
+        "$299-$499",
+        "Send your website or app URL. We turn it into a polished 30-60s demo/promo video in 24 hours.",
         "Built for founders, product marketers, agencies, and sales teams that need polished product video without waiting on a traditional studio.",
-        "Turn a live product URL, screenshots, app recording, or launch brief into a buyer-facing video package. VideoSync can create short homepage videos, narrated walkthroughs, launch trailers, onboarding explainers, sales demos, and social cutdowns from the same product source.",
+        "The simple offer: send a live product URL, screenshots, app recording, or launch brief and get a buyer-facing demo video package. The full pack can include the main video, 3 hooks/captions, a thumbnail or hero concept, and a delivery page with downloads.",
         "/subscribe",
-        "Start with the creator plan",
+        "Start 7-day trial",
         "/chat",
-        "Request a custom launch sample",
+        "Request a demo video",
         &[
-            "Homepage hero videos and launch trailers",
-            "Narrated product demos and walkthroughs",
-            "Device, browser, and app mockup scenes",
-            "Sales, onboarding, investor, and social cutdowns",
-            "Delivery page for sharing, review, and approval",
+            "$299 basic rush demo: one 30-60s demo/promo video from your URL",
+            "$499 full demo pack: main video, 3 hooks/captions, thumbnail or hero concept, delivery/download page",
+            "Optional device, browser, app mockup, narration, and launch scenes",
+            "Built for Product Hunt, X, LinkedIn, homepage, onboarding, or sales",
+            "Delivered as a review/download link you can share immediately",
         ],
         &[
-            "Share your live product URL, screenshots, app recording, or launch brief.",
-            "We turn the product into a clear video concept with the right length, story, and format for your goal.",
-            "VideoSync builds the scenes, motion, narration, and cutdowns around the strongest parts of the product.",
-            "You receive a delivery link you can review, share, and use in launch, sales, or onboarding.",
+            "Send the website/app URL and the target buyer.",
+            "We decide the strongest 30-60s story: pain, product workflow, proof, CTA.",
+            "VideoSync builds the video using mockups, motion, narration, captions, and QA where useful.",
+            "You receive a delivery page with preview and download links within the rush window.",
         ],
         &[
             ("SaaS founder", "Needs launch-ready product video for a homepage, launch, demo day, or investor update."),
@@ -455,10 +455,10 @@ pub async fn product_mockup_pack_page() -> Html<String> {
     Html(build_service_offer_page_html(
         "product-mockup-pack",
         "Product Mockup Video Pack",
-        "$99-$600+",
-        "UI mockups, browser/device scenes, and product videos that make apps easier to sell.",
+        "$199-$499",
+        "Send a website, screenshots, or app flow. We turn it into animated UI/product mockups that make the product easier to sell.",
         "Built for SaaS founders, indie hackers, app owners, no-code builders, and agencies selling productized demos.",
-        "Turn screenshots, a URL, Figma exports, or a written workflow into UI mockups, motion scenes, product walkthroughs, and short ad variants.",
+        "This is the visual upgrade for apps that look useful but do not yet feel premium. Send a URL, screenshots, Figma exports, or a written workflow; VideoSync turns it into browser/device scenes, motion callouts, and short product videos.",
         "/chat",
         "Generate a mockup video",
         "/services/saas-launch-pack",
@@ -590,32 +590,32 @@ pub async fn voice_audio_pack_page() -> Html<String> {
 pub async fn mixed_agency_bundle_page() -> Html<String> {
     Html(build_service_offer_page_html(
         "mixed-agency-bundle",
-        "Mixed Agency Production Bundle",
-        "$499-$2,500+",
-        "A bundled package with demos, clips, thumbnails, mockups, narration, education scenes, 3D scenes, and delivery pages.",
-        "Built for agencies, consultants, creator managers, and growth operators who want a client-ready package instead of a single asset.",
-        "This is the broadest money lane: the agent chooses from clipping, long-form, thumbnails, UI mockups, Blender, Manim/LaTeX, VibeVoice, FFmpeg, QA, and delivery pages based on the client goal.",
+        "Website-to-Video Agency Pack",
+        "$999 for 3 client videos",
+        "For Webflow, Framer, SaaS, and marketing agencies: send 3 client websites and get 3 client-ready demo videos you can resell.",
+        "Built for agencies, freelancers, Webflow/Framer studios, no-code builders, and SaaS marketers who already have clients but need faster video fulfillment.",
+        "The plain offer: agencies send client websites or app URLs, and VideoSync produces demo/promo videos plus supporting assets they can deliver under their own brand. This is not vague backend infrastructure; it is website-to-video fulfillment for agencies.",
         "/chat",
-        "Generate a bundle",
+        "Request 3 client videos",
         "/services/creator-manager-fulfillment",
-        "Explore backend fulfillment",
+        "Explore monthly fulfillment",
         &[
-            "One main demo or explainer",
-            "Short clip/ad variants",
-            "Thumbnail and hero concepts",
-            "Mockups, Blender, Manim, or voice as needed",
-            "Delivery page with download buttons",
+            "$999 pack: 3 client website/app demo videos",
+            "Each client gets a delivery page with preview and downloads",
+            "Optional hook/caption variants, thumbnails, mockups, and narration",
+            "Designed so agencies can resell the assets to their own clients",
+            "Upsell path into monthly fulfillment once one pack works",
         ],
         &[
-            "Share the client, product, or campaign goal.",
-            "The agent plans the right mix of assets instead of forcing one tool.",
-            "VideoSync renders, reviews, and packages the deliverables.",
-            "You get a client-ready bundle that can be sold immediately.",
+            "Agency sends 3 client URLs and the goal for each video.",
+            "We turn each site/app into a simple 30-60s demo/promo concept.",
+            "VideoSync generates, reviews, and packages each client video.",
+            "Agency receives 3 delivery/download links they can send or resell.",
         ],
         &[
-            ("Agency owner", "Needs a fast proof package to win or retain clients."),
-            ("Consultant", "Needs buyer-facing deliverables from strategy work."),
-            ("Creator manager", "Needs repeatable media packages across accounts."),
+            ("Webflow or Framer agency", "Already builds sites and can resell demo videos as a launch add-on."),
+            ("SaaS marketing agency", "Needs product videos for clients without hiring a video team."),
+            ("No-code builder or consultant", "Can offer website-to-video as an upsell after shipping an app or landing page."),
         ],
         r#"["bundle","full_stack","long_form","thumbnails","voice_audio","blender","education"]"#,
     ))
@@ -662,10 +662,10 @@ pub async fn x402_asset_api_page() -> Html<String> {
 fn build_services_overview_page_html() -> String {
     let cards = [
         (
-            "SaaS Demo Video Pack",
+            "SaaS/App Demo Rush Pack",
             "/services/saas-launch-pack",
-            "$299-$1,500+",
-            "Product demos, launch trailers, onboarding explainers, and homepage videos built from your real product.",
+            "$299-$499",
+            "Send your website/app URL. We turn it into a polished 30-60s demo/promo video in 24 hours.",
         ),
         (
             "Thumbnail & Motion Graphics Pack",
@@ -682,8 +682,8 @@ fn build_services_overview_page_html() -> String {
         (
             "Product Mockup Video Pack",
             "/services/product-mockup-pack",
-            "$99-$600+",
-            "UI mockups, browser/device scenes, and product videos that make apps easier to sell.",
+            "$199-$499",
+            "Send a website, screenshots, or app flow. We turn it into animated UI/product mockups that make the product easier to sell.",
         ),
         (
             "Education Explainer Pack",
@@ -704,10 +704,10 @@ fn build_services_overview_page_html() -> String {
             "VibeVoice narration, podcast-style audio, voiceovers, summaries, and audio-backed video packages.",
         ),
         (
-            "Mixed Agency Production Bundle",
+            "Website-to-Video Agency Pack",
             "/services/mixed-agency-bundle",
-            "$499-$2,500+",
-            "A bundled package with demos, clips, thumbnails, mockups, narration, education scenes, 3D scenes, and delivery pages.",
+            "$999 for 3 client videos",
+            "For Webflow, Framer, SaaS, and marketing agencies: send 3 client websites and get 3 client-ready demo videos you can resell.",
         ),
         (
             "Agency Production Backend",
@@ -770,8 +770,8 @@ fn build_services_overview_page_html() -> String {
     </div>
     <section class="hero">
       <div class="eyebrow">Services</div>
-      <h1>Video services and infrastructure offers built from the real platform</h1>
-      <p>Each page explains a specific offer, who it is for, what is included, and how to request a custom sample from the same production stack that powers VideoSync.</p>
+      <h1>Clear done-for-you video offers you can buy today</h1>
+      <p>The fastest offer is simple: send a website, app, screenshots, or a lesson/topic, and VideoSync turns it into a polished video, mockup, visual, explainer, or delivery-ready asset. The $15/month AI workspace is separate; these are premium done-for-you service packs.</p>
     </section>
     <section class="grid">{cards}</section>
   </div>

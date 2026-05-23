@@ -21,27 +21,27 @@ pub fn build_service_sample_prompt(
     };
 
     let focus = match service_slug {
-        "saas-launch-pack" => "Create a founder-ready launch sample that matches the requested length, use case, and distribution channel. It can be a homepage hero, narrated product demo, launch trailer, onboarding explainer, or another buyer-facing product video.",
+        "saas-launch-pack" => "Create a founder-ready demo sample from a website/app URL, screenshots, app recording, or launch brief. The default buyer-facing promise is simple: turn the product into a polished 30-60s demo/promo video in 24 hours.",
         "clipper-enhancement-pack" => "Create a premium visual-packaging sample with stronger thumbnails, motion graphics, mockups, overlays, narration support, or branded polish that improves how the final offer looks before anyone clicks play.",
         "thumbnail-hero-pack" => "Create click-focused thumbnail and hero visual concepts with hooks, variants, and QA so the buyer can test stronger first impressions quickly.",
         "product-mockup-pack" => "Create UI mockup scenes and short product videos from a URL, screenshots, Figma exports, app recordings, or a written workflow.",
         "education-explainer-pack" => "Create a lesson or explainer using Manim, LaTeX, diagrams, narration, and long-form assembly when the topic needs more than a static asset.",
         "blender-scene-pack" => "Create Blender 2D/3D support visuals, animated models, product scenes, lower thirds, data visuals, or cinematic loops.",
         "voice-audio-pack" => "Create voice/audio assets with scripts, VibeVoice narration, summaries, audio visualizers, or narration-backed videos.",
-        "mixed-agency-bundle" => "Create a client-ready production bundle where the agent chooses from demos, clips, thumbnails, mockups, narration, education scenes, Blender, QA, and delivery pages.",
+        "mixed-agency-bundle" => "Create a website-to-video agency package: agencies send client websites or app URLs, and VideoSync produces client-ready demo/promo videos they can resell with delivery/download links.",
         "creator-manager-fulfillment" => "Create an agency-backend sample that shows how repeatable client video deliverables could be produced through VideoSync without exposing internal operations language to the buyer.",
         "x402-asset-api" => "Create a technical-buyer sample that shows how paid access, delivery unlocks, or a custom media integration would work in practice without turning the explanation into internal product language.",
         _ => "Create a high-quality custom sample that matches the requested service.",
     };
     let production_stack = match service_slug {
-        "saas-launch-pack" => "Use long-form assembly when the brief asks for a 30s+ product story, demo, explainer, launch trailer, or multi-cutdown campaign. Pull from UI mockups, product screenshots, Blender scenes, VibeVoice narration, Pexels support footage, captions, thumbnails, and Gemini multimodal QA as needed.",
+        "saas-launch-pack" => "Use long-form assembly when the brief asks for a 30s+ product story, demo, explainer, launch trailer, or multi-cutdown campaign. Pull from UI mockups, product screenshots, Blender scenes, VibeVoice narration, Pexels support footage, captions, thumbnails, and Gemini multimodal QA as needed. Default deliverable split: $299 basic rush demo = one polished 30-60s video; $499 full pack = video plus hooks/captions, thumbnail or hero concept, and delivery/download page.",
         "clipper-enhancement-pack" => "Use long-form assembly when the request asks for a clip pack, recap, narrated summary, or multiple enhanced cutdowns. Combine clipping/enhancement tools with captions, thumbnail/hero assets, motion graphics, audio cleanup, and QA instead of treating it as a single raw clip.",
         "thumbnail-hero-pack" => "Use thumbnail/hero generation first, then add short motion loops or product mockups when a static visual alone will not sell the offer.",
         "product-mockup-pack" => "Use UI mockup and long-form assembly when the buyer needs browser/device scenes, app walkthroughs, launch cutdowns, or homepage hero video.",
         "education-explainer-pack" => "Use Manim/LaTeX, narration, diagrams, and resumable long-form segments for lessons, tutorials, formulas, and technical explanations.",
         "blender-scene-pack" => "Use BlenderMCP scenes, render QA, and optional video assembly when 2D/3D motion can make the result more premium than stock footage.",
         "voice-audio-pack" => "Use VibeVoice narration, audio cleanup/visualization, summaries, and optional video assembly depending on whether the deliverable is audio-only or narrated media.",
-        "mixed-agency-bundle" => "Use the full canonical tool stack: long-form video, clipping, thumbnails, UI mockups, Blender, Manim/LaTeX, VibeVoice, FFmpeg, QA, and delivery pages.",
+        "mixed-agency-bundle" => "Use the full canonical tool stack only where it helps the agency deliver client websites as videos. Default package: $999 for 3 client website/app demo videos, each with a delivery/download page and optional hooks, thumbnail/hero concept, mockups, or narration.",
         "creator-manager-fulfillment" => "Use bundle-style long-form assembly for mixed agency packages: demos, clips, thumbnails, product mockups, narration, delivery pages, and review artifacts. The agent should choose the right tool mix instead of forcing one asset type.",
         "x402-asset-api" => "Use long-form assembly for buyer-facing technical demos when a walkthrough needs script, UI mockup, narration, diagrams, and delivery-page proof. Keep the story commercial, not just architectural.",
         _ => "Use long-form assembly whenever the buyer asks for a longer video, a multi-part asset pack, or a package that combines editing, Blender/Manim/LaTeX, thumbnails, mockups, voice/audio, QA, and delivery-page output.",
