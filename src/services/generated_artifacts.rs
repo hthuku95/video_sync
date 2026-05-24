@@ -53,6 +53,7 @@ impl GeneratedArtifactService {
                 $1, $2, $3, 'local', $4, $5, $6, NULL, NULL, $7, $8, NULL, $9, $10, $11, $11
             )
             ON CONFLICT (source_table, source_record_key)
+            WHERE source_table IS NOT NULL AND source_record_key IS NOT NULL
             DO UPDATE SET
                 workflow_id = COALESCE(EXCLUDED.workflow_id, generated_artifacts.workflow_id),
                 session_uuid = COALESCE(EXCLUDED.session_uuid, generated_artifacts.session_uuid),
@@ -136,6 +137,7 @@ impl GeneratedArtifactService {
                 $1, $2, 'output_video', 'local', $3, $4, $5, $6, $7, $8, $9, NULL, 'output_videos', $10, $11, $11
             )
             ON CONFLICT (source_table, source_record_key)
+            WHERE source_table IS NOT NULL AND source_record_key IS NOT NULL
             DO UPDATE SET
                 workflow_id = COALESCE(EXCLUDED.workflow_id, generated_artifacts.workflow_id),
                 session_uuid = COALESCE(EXCLUDED.session_uuid, generated_artifacts.session_uuid),
