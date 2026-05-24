@@ -713,14 +713,54 @@ impl LongFormVideoWorkflow {
         let output_filename = format!("long_form_{}.mp4", workflow_id);
         let mut public_url = None;
         let mut storage_key = None;
+        let user_id = req.user_id.unwrap_or(0).max(0);
+        let generated_key = crate::r2_client::R2Client::key_generated_video(user_id, &output_filename);
+        let mut r2_error = None;
 
         if let Some(r2) = state.r2_client.as_ref() {
-            let user_id = req.user_id.unwrap_or(0).max(0);
-            let key = crate::r2_client::R2Client::key_generated_video(user_id, &output_filename);
-            r2.upload(final_path, &key).await?;
-            let url = r2.presign_get(&key, 7 * 24 * 3600).await?;
-            storage_key = Some(key);
-            public_url = Some(url);
+            match r2.upload(final_path, &generated_key).await {
+                Ok(()) => {
+                    let url = r2.presign_get(&generated_key, 7 * 24 * 3600).await?;
+                    storage_key = Some(generated_key.clone());
+                    public_url = Some(url);
+                }
+                Err(upload_error) => {
+                    tracing::warn!(
+                        workflow_id = %workflow_id,
+                        error = %upload_error,
+                        "R2 publish failed; trying GCS delivery fallback"
+                    );
+                    r2_error = Some(upload_error);
+                }
+            }
+        }
+
+        if public_url.is_none() {
+            let gcs = crate::gcs_client::GcsClient::from_env()
+                .ok_or_else(|| "No GCS fallback client is configured".to_string())?;
+            gcs.upload_file(final_path, &generated_key, "video/mp4")
+                .await
+                .map_err(|gcs_error| {
+                    if let Some(r2_error) = r2_error.as_ref() {
+                        format!("{r2_error}; GCS fallback also failed: {gcs_error}")
+                    } else {
+                        gcs_error
+                    }
+                })?;
+
+            tracing::info!(
+                workflow_id = %workflow_id,
+                bucket = %gcs.bucket(),
+                object_key = %generated_key,
+                "Published long-form media output to GCS fallback"
+            );
+            storage_key = Some(format!("gcs:{generated_key}"));
+            if let Some(delivery_id) = req.source_record_id {
+                public_url = Some(format!(
+                    "/delivery/{delivery_id}/download-gcs?key={}",
+                    urlencoding::encode(&generated_key)
+                ));
+            }
         }
 
         if req.source_table.as_deref() == Some("deliveries") {

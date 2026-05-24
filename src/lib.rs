@@ -13,6 +13,7 @@ pub mod clipping;
 pub mod db;
 pub mod elevenlabs_client;
 pub mod gemini_client;
+pub mod gcs_client;
 pub mod handlers;
 pub mod jobs;
 pub mod llm_utils;

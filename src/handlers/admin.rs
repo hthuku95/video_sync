@@ -4,8 +4,8 @@ use crate::models::{admin::*, auth::*};
 use crate::AppState;
 use axum::{
     extract::{Extension, Path, Query},
-    http::{HeaderMap, StatusCode},
-    response::{Html, Json},
+    http::{header, HeaderMap, StatusCode},
+    response::{Html, IntoResponse, Json, Response},
     routing::{delete, get, post, put},
     Router,
 };
@@ -20,6 +20,11 @@ use uuid::Uuid;
 #[derive(Debug, Deserialize, Default)]
 pub struct DeliveryViewQuery {
     pub token: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub struct DeliveryGcsDownloadQuery {
+    pub key: Option<String>,
 }
 
 pub fn admin_routes() -> Router {
@@ -50,6 +55,7 @@ pub fn admin_routes() -> Router {
         .route("/admin/revenue-ledger", get(admin_revenue_ledger_page))
         .route("/admin/how-it-works", get(admin_how_it_works_page))
         .route("/delivery/:id", get(delivery_page))
+        .route("/delivery/:id/download-gcs", get(delivery_gcs_download))
         .route("/api/portfolio-samples", get(api_list_portfolio_samples))
         // x402 paywall endpoints — public on purpose; auth happens via the
         // signed USDC payment in the X-Payment header, not via JWT.
@@ -7508,6 +7514,89 @@ pub async fn delivery_page(
     Html(html)
 }
 
+pub async fn delivery_gcs_download(
+    Path(id): Path<String>,
+    Query(query): Query<DeliveryGcsDownloadQuery>,
+    Extension(state): Extension<Arc<AppState>>,
+) -> Response {
+    let uuid = match uuid::Uuid::parse_str(&id) {
+        Ok(uuid) => uuid,
+        Err(_) => return (StatusCode::BAD_REQUEST, "Invalid delivery id").into_response(),
+    };
+
+    let row = match sqlx::query("SELECT status, output_filename FROM deliveries WHERE id = $1")
+        .bind(uuid)
+        .fetch_optional(&state.db_pool)
+        .await
+    {
+        Ok(Some(row)) => row,
+        Ok(None) => return (StatusCode::NOT_FOUND, "Delivery not found").into_response(),
+        Err(error) => {
+            tracing::warn!(delivery_id = %uuid, error = %error, "Failed to load GCS delivery metadata");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to load delivery").into_response();
+        }
+    };
+
+    let status: String = row.get("status");
+    if status != "completed" {
+        return (StatusCode::CONFLICT, "Delivery is not completed yet").into_response();
+    }
+
+    let filename = match row
+        .try_get::<Option<String>, _>("output_filename")
+        .ok()
+        .flatten()
+    {
+        Some(filename) if filename.starts_with("long_form_") && filename.ends_with(".mp4") => {
+            filename
+        }
+        _ => return (StatusCode::NOT_FOUND, "GCS delivery file is not available").into_response(),
+    };
+
+    let object_key = query
+        .key
+        .filter(|key| key.starts_with("generated/") && key.ends_with(".mp4"))
+        .unwrap_or_else(|| format!("generated/0/video/{filename}"));
+    let gcs = match crate::gcs_client::GcsClient::from_env() {
+        Some(gcs) => gcs,
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "GCS delivery storage is not configured",
+            )
+                .into_response()
+        }
+    };
+    let bytes = match gcs.download_bytes(&object_key).await {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            tracing::warn!(
+                delivery_id = %uuid,
+                object_key = %object_key,
+                error = %error,
+                "GCS delivery file missing or unreadable"
+            );
+            return (
+                StatusCode::NOT_FOUND,
+                "This delivery file is not available in GCS yet. Regenerate or repair storage.",
+            )
+                .into_response();
+        }
+    };
+
+    (
+        [
+            (header::CONTENT_TYPE, "video/mp4".to_string()),
+            (
+                header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{filename}\""),
+            ),
+        ],
+        bytes,
+    )
+        .into_response()
+}
+
 // =============================================================================
 // x402 paywall — public endpoints (no auth, payment IS the auth)
 // =============================================================================
@@ -7858,7 +7947,9 @@ pub async fn api_create_delivery(
                 .bind(delivery_id)
                 .execute(&state.db_pool)
                 .await;
-                return Json(json!({"error": format!("Long-form workflow failed to start: {error}")}));
+                return Json(
+                    json!({"error": format!("Long-form workflow failed to start: {error}")}),
+                );
             }
         }
     } else {
@@ -8238,10 +8329,7 @@ fn mark_portfolio_sample_as_shared_seed(extra: &mut serde_json::Value) {
             "sample_source".to_string(),
             serde_json::Value::String("crypto_saas_seed".to_string()),
         );
-        obj.insert(
-            "is_shared_seed".to_string(),
-            serde_json::Value::Bool(true),
-        );
+        obj.insert("is_shared_seed".to_string(), serde_json::Value::Bool(true));
     }
 }
 
@@ -9017,14 +9105,13 @@ pub async fn ensure_delivery_workflow(
     state: &Arc<AppState>,
     delivery_id: Uuid,
 ) -> Result<Uuid, String> {
-    if let Some(existing) = sqlx::query_scalar::<_, Option<Uuid>>(
-        "SELECT workflow_id FROM deliveries WHERE id = $1",
-    )
-    .bind(delivery_id)
-    .fetch_optional(&state.db_pool)
-    .await
-    .map_err(|e| format!("Failed to fetch delivery workflow id: {}", e))?
-    .flatten()
+    if let Some(existing) =
+        sqlx::query_scalar::<_, Option<Uuid>>("SELECT workflow_id FROM deliveries WHERE id = $1")
+            .bind(delivery_id)
+            .fetch_optional(&state.db_pool)
+            .await
+            .map_err(|e| format!("Failed to fetch delivery workflow id: {}", e))?
+            .flatten()
     {
         return Ok(existing);
     }
@@ -9037,7 +9124,12 @@ pub async fn ensure_delivery_workflow(
     .bind(delivery_id)
     .fetch_one(&state.db_pool)
     .await
-    .map_err(|e| format!("Failed to fetch delivery context for workflow creation: {}", e))?;
+    .map_err(|e| {
+        format!(
+            "Failed to fetch delivery context for workflow creation: {}",
+            e
+        )
+    })?;
 
     let title: String = row.get("title");
     let gig_type: String = row.get("gig_type");
@@ -9255,7 +9347,8 @@ pub async fn run_delivery_job(delivery_id: Uuid, state: Arc<AppState>) {
             Ok(s) => s,
             Err(e) => {
                 if let Some(workflow_id) = workflow_id {
-                    let workflow_runtime = crate::services::WorkflowRuntime::new(state.db_pool.clone());
+                    let workflow_runtime =
+                        crate::services::WorkflowRuntime::new(state.db_pool.clone());
                     let _ = workflow_runtime
                         .mark_failed(workflow_id, Some("poll_render_job"), &e, None)
                         .await;
@@ -9282,7 +9375,8 @@ pub async fn run_delivery_job(delivery_id: Uuid, state: Arc<AppState>) {
                     .unwrap_or("render failed")
                     .to_string();
                 if let Some(workflow_id) = workflow_id {
-                    let workflow_runtime = crate::services::WorkflowRuntime::new(state.db_pool.clone());
+                    let workflow_runtime =
+                        crate::services::WorkflowRuntime::new(state.db_pool.clone());
                     let _ = workflow_runtime
                         .mark_failed(workflow_id, Some("render_failed"), &msg, None)
                         .await;
@@ -9295,7 +9389,8 @@ pub async fn run_delivery_job(delivery_id: Uuid, state: Arc<AppState>) {
             }
             _ => {
                 if let Some(workflow_id) = workflow_id {
-                    let workflow_runtime = crate::services::WorkflowRuntime::new(state.db_pool.clone());
+                    let workflow_runtime =
+                        crate::services::WorkflowRuntime::new(state.db_pool.clone());
                     let state_label = status
                         .get("state")
                         .and_then(|value| value.as_str())
@@ -9505,12 +9600,11 @@ pub async fn run_delivery_job(delivery_id: Uuid, state: Arc<AppState>) {
                 tags: vec![gig_type.clone(), tool.clone()],
             };
 
-            if let Err(error) =
-                crate::services::media_review::MediaReviewService::store_artifact(
-                    &state,
-                    review_artifact,
-                )
-                .await
+            if let Err(error) = crate::services::media_review::MediaReviewService::store_artifact(
+                &state,
+                review_artifact,
+            )
+            .await
             {
                 tracing::warn!(
                     "Failed to store media review artifact for delivery {}: {}",

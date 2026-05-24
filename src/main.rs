@@ -14,6 +14,7 @@ mod clipping; // 📹 YouTube clipping feature
 mod db;
 mod elevenlabs_client; // 🎙️ Eleven Labs TTS, Sound Effects, Music
 mod gemini_client;
+mod gcs_client;
 mod handlers;
 mod jobs; // 🆕 Background job system for video editing
 mod llm_utils;

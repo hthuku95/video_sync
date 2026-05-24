@@ -124,7 +124,7 @@ impl R2Client {
             .body(body)
             .send()
             .await
-            .map_err(|e| format!("R2 upload failed for {key}: {e}"))?;
+            .map_err(|e| format!("R2 upload failed for {key}: {e:?}"))?;
 
         tracing::info!("R2 upload: {local_path} → {key}");
         Ok(())
