@@ -28,6 +28,7 @@ test_downloads/
 temp_frames/
 thumbnails/
 node_modules/
+.video_sync_build_context/
 transforms.trf
 video_editor.log
 app.log

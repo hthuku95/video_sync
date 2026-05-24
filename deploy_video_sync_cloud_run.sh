@@ -22,6 +22,7 @@ set -euo pipefail
 #   VIDEO_SYNC_CPU_BOOST       default: true
 #   VIDEO_SYNC_BUILD_MACHINE_TYPE optional Cloud Build machine type override
 #   VIDEO_SYNC_BUILD_TIMEOUT   default: 7200s
+#   VIDEO_SYNC_BUILD_CONTEXT   default: .video_sync_build_context
 
 PROJECT_ID="${GCP_PROJECT_ID:?GCP_PROJECT_ID is required}"
 ENV_FILE="${VIDEO_SYNC_ENV_FILE:?VIDEO_SYNC_ENV_FILE is required}"
@@ -39,6 +40,7 @@ CPU_THROTTLING="${VIDEO_SYNC_CPU_THROTTLING:-false}"
 CPU_BOOST="${VIDEO_SYNC_CPU_BOOST:-true}"
 BUILD_MACHINE_TYPE="${VIDEO_SYNC_BUILD_MACHINE_TYPE:-}"
 BUILD_TIMEOUT="${VIDEO_SYNC_BUILD_TIMEOUT:-7200s}"
+BUILD_CONTEXT="${VIDEO_SYNC_BUILD_CONTEXT:-.video_sync_build_context}"
 
 if [[ ! -f "${ENV_FILE}" ]]; then
   echo "Missing env file: ${ENV_FILE}" >&2
@@ -51,6 +53,13 @@ echo "Using project: ${PROJECT_ID}"
 echo "Using region:  ${REGION}"
 echo "Using image:   ${IMAGE_URI}"
 echo "Using envs:    ${ENV_FILE}"
+
+echo "Preparing minimal Cloud Build context: ${BUILD_CONTEXT}"
+rm -rf "${BUILD_CONTEXT}"
+mkdir -p "${BUILD_CONTEXT}"
+cp Cargo.toml Cargo.lock Dockerfile .dockerignore .gcloudignore "${BUILD_CONTEXT}/"
+cp -R src migrations "${BUILD_CONTEXT}/"
+du -sh "${BUILD_CONTEXT}" || true
 
 gcloud services enable \
   --project="${PROJECT_ID}" \
@@ -68,7 +77,7 @@ if ! gcloud artifacts repositories describe "${REPO_NAME}" \
 fi
 
 BUILD_SUBMIT_ARGS=(
-  .
+  "${BUILD_CONTEXT}"
   "--project=${PROJECT_ID}"
   "--region=${REGION}"
   "--tag=${IMAGE_URI}"
