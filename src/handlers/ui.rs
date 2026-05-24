@@ -2,8 +2,10 @@ use crate::{
     handlers::service_catalog::{
         build_service_sample_chat_title, build_service_sample_prompt, service_sample_ui_config,
     },
-    handlers::upload::get_or_create_session, middleware::auth::auth_middleware,
-    models::auth::Claims, AppState,
+    handlers::upload::get_or_create_session,
+    middleware::auth::auth_middleware,
+    models::auth::Claims,
+    AppState,
 };
 use axum::{
     extract::Extension,
@@ -20,15 +22,24 @@ pub fn ui_routes() -> Router {
         .route("/", get(landing_page))
         .route("/services", get(services_overview_page))
         .route("/services/saas-launch-pack", get(saas_launch_pack_page))
-        .route("/services/thumbnail-hero-pack", get(thumbnail_hero_pack_page))
-        .route("/services/product-mockup-pack", get(product_mockup_pack_page))
+        .route(
+            "/services/thumbnail-hero-pack",
+            get(thumbnail_hero_pack_page),
+        )
+        .route(
+            "/services/product-mockup-pack",
+            get(product_mockup_pack_page),
+        )
         .route(
             "/services/education-explainer-pack",
             get(education_explainer_pack_page),
         )
         .route("/services/blender-scene-pack", get(blender_scene_pack_page))
         .route("/services/voice-audio-pack", get(voice_audio_pack_page))
-        .route("/services/mixed-agency-bundle", get(mixed_agency_bundle_page))
+        .route(
+            "/services/mixed-agency-bundle",
+            get(mixed_agency_bundle_page),
+        )
         .route(
             "/services/clipper-enhancement-pack",
             get(clipper_enhancement_pack_page),
@@ -57,7 +68,10 @@ pub fn ui_routes() -> Router {
 pub fn ui_private_routes() -> Router {
     Router::new()
         .route("/api/service-samples/quota", get(get_service_sample_quota))
-        .route("/api/service-samples/request", post(create_service_sample_request))
+        .route(
+            "/api/service-samples/request",
+            post(create_service_sample_request),
+        )
         .layer(axum::middleware::from_fn(auth_middleware))
 }
 
@@ -662,70 +676,113 @@ pub async fn x402_asset_api_page() -> Html<String> {
 fn build_services_overview_page_html() -> String {
     let cards = [
         (
-            "SaaS/App Demo Rush Pack",
+            "SaaS/App Demo Video Pack",
             "/services/saas-launch-pack",
-            "$299-$499",
-            "Send your website/app URL. We turn it into a polished product demo/promo video in 24 hours. Most rush demos are 30-60s; longer explainers and walkthroughs are available.",
+            "$299-$499+",
+            "Best first offer",
+            "For SaaS founders, indie hackers, app owners, and startups that need a launch-ready product video fast.",
+            "You send a website/app URL, screenshots, loom, or short brief.",
+            "We deliver a polished demo, promo, or walkthrough video. 30-120s is standard; longer videos are available.",
         ),
         (
-            "Thumbnail & Motion Graphics Pack",
-            "/services/clipper-enhancement-pack",
-            "$97-$600+",
-            "High-converting thumbnails, title cards, lower thirds, mockups, and motion assets for creators, launches, and campaigns.",
-        ),
-        (
-            "Thumbnail & Hero Visual Pack",
-            "/services/thumbnail-hero-pack",
-            "$49-$250+",
-            "Click-focused thumbnails, hero visuals, and campaign graphics for creators, launches, products, and ads.",
+            "Website-to-Video Agency Pack",
+            "/services/mixed-agency-bundle",
+            "$999 for 3 videos",
+            "Fast agency resale",
+            "For Webflow, Framer, SaaS, and marketing agencies that want to resell video deliverables to existing clients.",
+            "You send 3 client websites, offers, or landing pages.",
+            "We deliver 3 client-ready demo/promo videos with delivery pages and download links.",
         ),
         (
             "Product Mockup Video Pack",
             "/services/product-mockup-pack",
-            "$199-$499",
-            "Send a website, screenshots, or app flow. We turn it into animated UI/product mockups that make the product easier to sell.",
+            "$199-$499+",
+            "Product visuals",
+            "For founders and teams that need UI mockups, app-flow visuals, or product scenes before they have polished footage.",
+            "You send screenshots, a product URL, Figma-style references, or an app flow.",
+            "We deliver animated UI/product mockups for ads, landing pages, demos, or sales decks.",
         ),
         (
             "Education Explainer Pack",
             "/services/education-explainer-pack",
             "$149-$900+",
-            "Manim, LaTeX, diagrams, narration, and long-form explainers for lessons, courses, and technical content.",
+            "Courses and lessons",
+            "For educators, technical creators, coaches, and course sellers who need clearer visual explanations.",
+            "You send a topic, outline, lesson, script, or source material.",
+            "We deliver Manim/LaTeX diagrams, narrated explainers, visual lessons, or long-form educational videos.",
         ),
         (
             "Blender 2D/3D Scene Pack",
             "/services/blender-scene-pack",
             "$199-$1,200+",
-            "Blender scenes, product animations, 3D explainers, animated models, and cinematic support visuals.",
+            "3D and motion scenes",
+            "For teams that need cinematic product visuals, 3D explainers, animated models, or support scenes.",
+            "You send the idea, product, object, style reference, or scene description.",
+            "We deliver Blender-rendered 2D/3D visuals, animations, product scenes, or explainer assets.",
+        ),
+        (
+            "Thumbnail & Hero Visual Pack",
+            "/services/thumbnail-hero-pack",
+            "$49-$250+",
+            "Click and conversion",
+            "For creators, SaaS launches, ads, and landing pages that need a stronger first impression.",
+            "You send the topic, product, face/photo, brand colors, or campaign goal.",
+            "We deliver thumbnails, hero images, ad visuals, and campaign graphics ready to publish.",
+        ),
+        (
+            "Clip Enhancement Pack",
+            "/services/clipper-enhancement-pack",
+            "$97-$600+",
+            "Creator polish",
+            "For creators and brands that already have clips but need them packaged like professional social content.",
+            "You send raw clips, highlights, timestamps, or exported videos.",
+            "We deliver captions, title cards, lower thirds, thumbnails, motion graphics, and export-ready variants.",
         ),
         (
             "Voice & Audio Production Pack",
             "/services/voice-audio-pack",
             "$49-$400+",
-            "VibeVoice narration, podcast-style audio, voiceovers, summaries, and audio-backed video packages.",
+            "Narration and audio",
+            "For videos, explainers, summaries, podcasts, and sales assets that need clean narration or audio.",
+            "You send a script, topic, article, video, or rough notes.",
+            "We deliver VibeVoice narration, voiceovers, podcast-style audio, summaries, or audio-backed video packages.",
         ),
         (
-            "Website-to-Video Agency Pack",
-            "/services/mixed-agency-bundle",
-            "$999 for 3 client videos",
-            "For Webflow, Framer, SaaS, and marketing agencies: send 3 client websites and get 3 client-ready demo videos you can resell.",
-        ),
-        (
-            "Agency Production Backend",
+            "Private Agency Production Backend",
             "/services/creator-manager-fulfillment",
             "$999-$3,000+/mo",
-            "A private production layer for agencies and operators selling recurring video deliverables to their own clients.",
+            "Recurring fulfillment",
+            "For agencies and operators selling monthly video deliverables who need a reliable production layer.",
+            "You send recurring client tasks, briefs, brand notes, and fulfillment requirements.",
+            "We help fulfill ongoing video, thumbnail, mockup, voice, and delivery-page work behind the scenes.",
         ),
         (
-        "Programmable Payments",
-        "/services/x402-asset-api",
-        "Pay per call",
-        "Wallet-paid delivery unlocks and API access for technical teams selling media, previews, or generation endpoints.",
+            "Programmable Payments & Asset API",
+            "/services/x402-asset-api",
+            "Custom / pay per call",
+            "Developer monetization",
+            "For technical teams that want wallet-paid delivery unlocks, paid previews, or media-generation API flows.",
+            "You send the access pattern, asset type, and buyer flow.",
+            "We help wire paid delivery pages, x402-style unlocks, and API-backed media access.",
         ),
     ]
     .into_iter()
-    .map(|(title, href, price, copy)| {
+    .map(|(title, href, price, badge, audience, input, output)| {
         format!(
-            r#"<article class="offer-card"><div class="eyebrow">Service page</div><h2>{title}</h2><div class="price">{price}</div><p>{copy}</p><a class="cta" href="{href}">Open page</a></article>"#
+            r#"<article class="offer-card">
+              <div class="card-top">
+                <div class="eyebrow">Service</div>
+                <span class="badge">{badge}</span>
+              </div>
+              <h2>{title}</h2>
+              <div class="price">{price}</div>
+              <p class="audience">{audience}</p>
+              <div class="mini-list">
+                <div><strong>You send:</strong> {input}</div>
+                <div><strong>We deliver:</strong> {output}</div>
+              </div>
+              <a class="cta" href="{href}">See details</a>
+            </article>"#
         )
     })
     .collect::<Vec<_>>()
@@ -739,22 +796,56 @@ fn build_services_overview_page_html() -> String {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>VideoSync Services</title>
   <style>
-    body {{ margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:#07111d; color:#e5eefb; }}
+    :root {{
+      --bg:#07111d;
+      --panel:rgba(9,18,31,0.86);
+      --line:rgba(148,163,184,0.16);
+      --line-strong:rgba(96,165,250,0.28);
+      --text:#e5eefb;
+      --muted:#a8b8d3;
+      --blue:#3b82f6;
+      --green:#22c55e;
+      --amber:#fbbf24;
+    }}
+    * {{ box-sizing:border-box; }}
+    body {{ margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:
+      radial-gradient(circle at top left, rgba(59,130,246,0.18), transparent 28%),
+      radial-gradient(circle at bottom right, rgba(34,197,94,0.10), transparent 30%),
+      #07111d; color:var(--text); }}
     .shell {{ max-width:1180px; margin:0 auto; padding:32px 20px 72px; }}
     .topbar {{ display:flex; justify-content:space-between; align-items:center; gap:1rem; flex-wrap:wrap; margin-bottom:28px; }}
     .brand {{ color:#fff; text-decoration:none; font-weight:800; font-size:1.3rem; }}
     .toplinks {{ display:flex; gap:0.8rem; flex-wrap:wrap; }}
     .toplinks a {{ color:#c7d8f6; text-decoration:none; padding:0.65rem 1rem; border:1px solid rgba(148,163,184,0.2); border-radius:999px; background:rgba(8,15,28,0.75); }}
-    .hero {{ padding:24px; border-radius:26px; background:linear-gradient(135deg, rgba(59,130,246,0.18), rgba(8,15,28,0.92)); border:1px solid rgba(96,165,250,0.2); box-shadow:0 24px 70px rgba(2,6,23,0.45); }}
-    .hero h1 {{ margin:0; font-size:3rem; line-height:1.05; }}
-    .hero p {{ margin:1rem 0 0; max-width:820px; color:#a8b8d3; font-size:1.05rem; }}
-    .grid {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(250px,1fr)); gap:1.2rem; margin-top:28px; }}
-    .offer-card {{ padding:1.5rem; border-radius:22px; background:rgba(9,18,31,0.84); border:1px solid rgba(148,163,184,0.16); box-shadow:0 18px 45px rgba(2,6,23,0.35); }}
-    .offer-card h2 {{ margin:0.45rem 0; font-size:1.5rem; }}
+    .hero {{ padding:28px; border-radius:28px; background:linear-gradient(135deg, rgba(59,130,246,0.2), rgba(8,15,28,0.94)); border:1px solid rgba(96,165,250,0.22); box-shadow:0 24px 70px rgba(2,6,23,0.45); }}
+    .hero h1 {{ margin:0; font-size:3.15rem; line-height:1.03; max-width:940px; }}
+    .hero p {{ margin:1rem 0 0; max-width:860px; color:#b9c8df; font-size:1.08rem; }}
+    .hero-actions {{ display:flex; flex-wrap:wrap; gap:0.8rem; margin-top:1.35rem; }}
+    .hero-action {{ display:inline-flex; align-items:center; text-decoration:none; padding:0.8rem 1.05rem; border-radius:999px; border:1px solid var(--line-strong); background:rgba(15,23,42,0.72); color:#dbeafe; font-weight:800; }}
+    .hero-action.primary {{ background:linear-gradient(135deg,#3b82f6,#2563eb); color:white; border-color:transparent; }}
+    .chooser {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:0.85rem; margin-top:1.15rem; }}
+    .chooser-card {{ border:1px solid rgba(96,165,250,0.18); background:rgba(15,23,42,0.58); border-radius:18px; padding:1rem; color:#dbeafe; }}
+    .chooser-card strong {{ display:block; color:#fff; margin-bottom:0.3rem; }}
+    .chooser-card span {{ color:#a8b8d3; font-size:0.92rem; line-height:1.4; }}
+    .section-intro {{ margin:30px 0 12px; display:flex; justify-content:space-between; gap:1rem; flex-wrap:wrap; align-items:end; }}
+    .section-intro h2 {{ margin:0; font-size:1.6rem; }}
+    .section-intro p {{ margin:0; color:#a8b8d3; max-width:620px; }}
+    .grid {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:1.2rem; margin-top:16px; }}
+    .offer-card {{ display:flex; flex-direction:column; min-height:410px; padding:1.45rem; border-radius:24px; background:var(--panel); border:1px solid var(--line); box-shadow:0 18px 45px rgba(2,6,23,0.35); }}
+    .offer-card:first-child {{ border-color:rgba(96,165,250,0.45); box-shadow:0 24px 70px rgba(37,99,235,0.18); }}
+    .card-top {{ display:flex; justify-content:space-between; align-items:center; gap:0.8rem; }}
+    .offer-card h2 {{ margin:0.55rem 0 0.35rem; font-size:1.5rem; line-height:1.22; }}
     .eyebrow {{ color:#93c5fd; font-size:0.78rem; text-transform:uppercase; letter-spacing:0.08em; font-weight:800; }}
-    .price {{ font-size:1.85rem; font-weight:800; margin:0.7rem 0; }}
-    .offer-card p {{ color:#a8b8d3; min-height:72px; }}
-    .cta {{ display:inline-flex; margin-top:1rem; color:#fff; text-decoration:none; background:#2563eb; border-radius:999px; padding:0.8rem 1.2rem; font-weight:700; }}
+    .badge {{ color:#022c22; background:#86efac; border:1px solid rgba(34,197,94,0.25); font-size:0.74rem; font-weight:900; padding:0.38rem 0.55rem; border-radius:999px; white-space:nowrap; }}
+    .price {{ font-size:1.85rem; font-weight:900; margin:0.55rem 0 0.7rem; color:#fff; }}
+    .audience {{ color:#b9c8df; min-height:88px; line-height:1.5; }}
+    .mini-list {{ display:grid; gap:0.75rem; margin-top:0.3rem; color:#a8b8d3; font-size:0.94rem; line-height:1.45; }}
+    .mini-list strong {{ color:#e5eefb; }}
+    .cta {{ display:inline-flex; align-self:flex-start; margin-top:auto; color:#fff; text-decoration:none; background:#2563eb; border-radius:999px; padding:0.82rem 1.2rem; font-weight:800; }}
+    @media (max-width: 760px) {{
+      .hero h1 {{ font-size:2.25rem; }}
+      .offer-card {{ min-height:auto; }}
+    }}
   </style>
 </head>
 <body>
@@ -770,9 +861,24 @@ fn build_services_overview_page_html() -> String {
     </div>
     <section class="hero">
       <div class="eyebrow">Services</div>
-      <h1>Clear done-for-you video offers you can buy today</h1>
-      <p>The fastest offer is simple: send a website, app, screenshots, or a lesson/topic, and VideoSync turns it into a polished video, mockup, visual, explainer, or delivery-ready asset. The $15/month AI workspace is separate; these are premium done-for-you service packs.</p>
+      <h1>Done-for-you video production packs for launches, creators, courses, and agencies</h1>
+      <p>Send a website, app, screenshots, raw clips, a lesson topic, or a short brief. VideoSync turns it into a client-ready video, mockup, thumbnail, explainer, voiceover, or delivery page with download links. The $15/month AI workspace is separate; this page is for premium done-for-you work.</p>
+      <div class="hero-actions">
+        <a class="hero-action primary" href="/services/saas-launch-pack">Start with a SaaS demo</a>
+        <a class="hero-action" href="/services/mixed-agency-bundle">See agency pack</a>
+        <a class="hero-action" href="/chat?prompt=I%20want%20a%20done-for-you%20video%20service.%20Help%20me%20choose%20the%20right%20pack.&autosend=1">Help me choose</a>
+      </div>
+      <div class="chooser">
+        <div class="chooser-card"><strong>Have a URL?</strong><span>Choose SaaS/App Demo or Website-to-Video Agency Pack.</span></div>
+        <div class="chooser-card"><strong>Have raw clips?</strong><span>Choose Clip Enhancement or Thumbnail/Hero Visual Pack.</span></div>
+        <div class="chooser-card"><strong>Have a lesson?</strong><span>Choose Education Explainer, with Manim, LaTeX, diagrams, and narration.</span></div>
+        <div class="chooser-card"><strong>Need visuals/audio?</strong><span>Choose Blender Scene, Product Mockup, or Voice & Audio Pack.</span></div>
+      </div>
     </section>
+    <div class="section-intro">
+      <h2>Pick the outcome you want to sell or publish</h2>
+      <p>Every pack is designed around a concrete buyer outcome: launch faster, make the product easier to understand, package creator content, or fulfill agency work.</p>
+    </div>
     <section class="grid">{cards}</section>
   </div>
 </body>
