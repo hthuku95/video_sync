@@ -398,6 +398,7 @@ pub async fn saas_launch_pack_page() -> Html<String> {
             ("Sales or onboarding team", "Needs clear product video that explains the product faster and shortens the learning curve."),
         ],
         r#"["landing_page","product_mockup","full_stack","scene"]"#,
+        r#"["saas-demo-starter","saas-demo-launch","agency-3-videos"]"#,
     ))
 }
 
@@ -432,6 +433,7 @@ pub async fn clipper_enhancement_pack_page() -> Html<String> {
             ("Agency or freelance editor", "Needs premium visual add-ons without building every graphic from scratch."),
         ],
         r#"["animations","thumbnails","scene","ui_mockup"]"#,
+        r#"["clip-enhancement-standard"]"#,
     ))
 }
 
@@ -466,6 +468,7 @@ pub async fn thumbnail_hero_pack_page() -> Html<String> {
             ("Agency operator", "Needs fast visual variants for client campaigns."),
         ],
         r#"["thumbnails","generated_images","landing_page","ugc"]"#,
+        r#"["clip-enhancement-standard"]"#,
     ))
 }
 
@@ -500,6 +503,7 @@ pub async fn product_mockup_pack_page() -> Html<String> {
             ("Agency", "Needs repeatable client mockup videos."),
         ],
         r#"["product_mockup","landing_page","animations","full_stack"]"#,
+        r#"["product-mockup-standard"]"#,
     ))
 }
 
@@ -534,6 +538,7 @@ pub async fn education_explainer_pack_page() -> Html<String> {
             ("YouTube educator", "Needs repeatable educational video production."),
         ],
         r#"["education","manim","latex","long_form"]"#,
+        r#"["education-explainer-standard"]"#,
     ))
 }
 
@@ -568,6 +573,7 @@ pub async fn blender_scene_pack_page() -> Html<String> {
             ("Agency", "Needs unique visuals clients cannot get from template editors."),
         ],
         r#"["blender","3d_scene","animations","full_stack"]"#,
+        r#"["blender-scene-standard"]"#,
     ))
 }
 
@@ -602,6 +608,7 @@ pub async fn voice_audio_pack_page() -> Html<String> {
             ("Agency", "Needs fast narration for client deliverables."),
         ],
         r#"["voice_audio","summary","long_form"]"#,
+        r#"["audio-standard"]"#,
     ))
 }
 
@@ -636,6 +643,7 @@ pub async fn mixed_agency_bundle_page() -> Html<String> {
             ("No-code builder or consultant", "Can offer website-to-video as an upsell after shipping an app or landing page."),
         ],
         r#"["bundle","full_stack","long_form","thumbnails","voice_audio","blender","education"]"#,
+        r#"["agency-3-videos"]"#,
     ))
 }
 
@@ -670,6 +678,7 @@ pub async fn creator_manager_fulfillment_page() -> Html<String> {
             ("Solo operator", "Needs a way to sell a larger service without hiring a full in-house team first."),
         ],
         r#"["full_stack","thumbnails","scene","landing_page"]"#,
+        r#"[]"#,
     ))
 }
 
@@ -1197,6 +1206,7 @@ fn build_service_offer_page_html(
     workflow: &[&str],
     lead_samples: &[(&str, &str)],
     sample_filters_json: &str,
+    paypal_offers: &str,
 ) -> String {
     let hero_highlights_html = includes
         .iter()
@@ -1389,6 +1399,10 @@ fn build_service_offer_page_html(
         <div class="cta-row">
           <a class="btn btn-primary" href="{primary_href}">{primary_label}</a>
           <a class="btn btn-secondary" href="{secondary_href}">{secondary_label}</a>
+        </div>
+        <div id="paypal-section" style="margin-top:1.2rem;border-top:1px solid var(--line);padding-top:1rem;">
+          <div style="font-size:0.85rem;color:var(--muted);margin-bottom:0.6rem;">Buy this service:</div>
+          <div id="paypal-buttons-container"></div>
         </div>
       </div>
       <aside class="hero-panel visual-stage">
@@ -1853,6 +1867,276 @@ fn build_service_offer_page_html(
     try {{
       new ServicePageDynamicBackgroundManager();
     }} catch (_) {{}}
+
+    // ── Payment buttons (PayPal + USDC) ────────────────────────────────────
+    (function() {{
+      const offers = {paypal_offers};
+      if (!offers || offers.length === 0) return;
+
+      var container = document.getElementById('paypal-buttons-container');
+
+      function showSuccess(deliveryId) {{
+        var url = deliveryId ? '/delivery/' + deliveryId : '/dashboard';
+        container.innerHTML =
+          '<div style="padding:1rem;border-radius:8px;background:rgba(34,197,94,0.12);border:1px solid rgba(34,197,94,0.28);color:#bbf7d0;text-align:center;">' +
+          'Payment successful! Your delivery is being prepared. <a href="' + url + '" style="color:#93c5fd;font-weight:700;">View delivery</a>' +
+          '</div>';
+      }}
+
+      function setStatus(msg, isError) {{
+        var el = document.getElementById('crypto-status');
+        if (el) {{
+          el.style.color = isError ? '#f87171' : '#9999bb';
+          el.textContent = msg;
+        }}
+      }}
+
+      // ── Fetch offer prices from unlock-spec ─────────────────────────────────
+      var offerPrices = {{}};
+      Promise.all(offers.map(function(offerId) {{
+        return fetch('/api/crypto/unlock-spec', {{
+          method: 'POST',
+          headers: {{ 'Content-Type': 'application/json' }},
+          body: JSON.stringify({{ offer_id: offerId }})
+        }}).then(function(r) {{ return r.json(); }})
+          .then(function(d) {{
+            if (d.success) offerPrices[offerId] = d.price_usd_cents;
+          }}).catch(function() {{}});
+      }})).then(function() {{
+        offers.forEach(function(offerId) {{
+          var cents = offerPrices[offerId] || 0;
+          var dollars = (cents / 100).toFixed(2);
+
+          // Card
+          var card = document.createElement('div');
+          card.style.cssText = 'margin-bottom:1rem;padding:0.75rem;border-radius:8px;border:1px solid var(--line);';
+          var label = document.createElement('div');
+          label.style.cssText = 'font-size:0.85rem;color:var(--muted);margin-bottom:0.5rem;font-weight:600;';
+          label.textContent = '$' + dollars + ' — ' + offerId.replace(/-/g, ' ');
+          card.appendChild(label);
+
+          var row = document.createElement('div');
+          row.style.cssText = 'display:flex;gap:0.5rem;flex-wrap:wrap;';
+
+          // PayPal button container
+          var ppEl = document.createElement('div');
+          ppEl.id = 'paypal-button-' + offerId;
+          ppEl.style.flex = '1';
+          ppEl.style.minWidth = '200px';
+          row.appendChild(ppEl);
+
+          // USDC button
+          var cryptoBtn = document.createElement('button');
+          cryptoBtn.textContent = 'Buy with USDC $' + dollars;
+          cryptoBtn.style.cssText = 'flex:1;min-width:200px;padding:0.6rem 1rem;border-radius:999px;border:1px solid rgba(148,163,184,0.3);background:rgba(15,23,42,0.6);color:#dbeafe;cursor:pointer;font-size:0.85rem;white-space:nowrap;';
+          cryptoBtn.onmouseenter = function() {{ cryptoBtn.style.background = 'rgba(99,102,241,0.2)'; }};
+          cryptoBtn.onmouseleave = function() {{ cryptoBtn.style.background = 'rgba(15,23,42,0.6)'; }};
+          cryptoBtn.dataset.offerId = offerId;
+          row.appendChild(cryptoBtn);
+
+          var statusEl = document.createElement('div');
+          statusEl.id = 'crypto-status-' + offerId;
+          statusEl.style.cssText = 'font-size:0.8rem;margin-top:0.3rem;';
+          statusEl.textContent = '';
+          card.appendChild(row);
+          card.appendChild(statusEl);
+          container.appendChild(card);
+
+          // ── USDC click handler ──────────────────────────────────────────
+          cryptoBtn.addEventListener('click', async function() {{
+            var btn = this;
+            var sid = 'crypto-status-' + offerId;
+            var st = document.getElementById(sid);
+            function set(m, e) {{ st.style.color = e ? '#f87171' : '#9999bb'; st.textContent = m; }}
+
+            btn.disabled = true;
+            btn.textContent = 'Connecting wallet...';
+
+            // Step 1 — fetch unlock spec
+            var spec;
+            try {{
+              var r = await fetch('/api/crypto/unlock-spec', {{
+                method: 'POST',
+                headers: {{ 'Content-Type': 'application/json' }},
+                body: JSON.stringify({{ offer_id: offerId }})
+              }});
+              if (!r.ok) throw new Error('unlock-spec returned ' + r.status);
+              spec = await r.json();
+            }} catch (e) {{
+              set('Could not fetch payment spec: ' + e.message, true);
+              btn.disabled = false; btn.textContent = 'Buy with USDC $' + dollars;
+              return;
+            }}
+
+            var req = (spec.x402 && spec.x402.accepts) ? spec.x402.accepts[0] : null;
+            if (!req) {{ set('Payment spec missing requirements.', true); btn.disabled = false; btn.textContent = 'Buy with USDC $' + dollars; return; }}
+
+            // Step 2 — detect wallet
+            var provider = (window.phantom && window.phantom.ethereum) || window.ethereum;
+            if (!provider) {{
+              set('No crypto wallet detected. Install Phantom, MetaMask, or Coinbase Wallet.', true);
+              btn.disabled = false; btn.textContent = 'Buy with USDC $' + dollars;
+              return;
+            }}
+
+            // Step 3 — connect accounts + switch to Base
+            var accounts;
+            try {{ accounts = await provider.request({{ method: 'eth_requestAccounts' }}); }} catch (e) {{
+              set('Wallet connection rejected.', true);
+              btn.disabled = false; btn.textContent = 'Buy with USDC $' + dollars;
+              return;
+            }}
+            var from = accounts[0];
+
+            try {{
+              await provider.request({{ method: 'wallet_switchEthereumChain', params: [{{ chainId: '0x2105' }}] }});
+            }} catch (sw) {{
+              try {{
+                await provider.request({{
+                  method: 'wallet_addEthereumChain',
+                  params: [{{
+                    chainId: '0x2105', chainName: 'Base',
+                    nativeCurrency: {{ name: 'Ether', symbol: 'ETH', decimals: 18 }},
+                    rpcUrls: ['https://mainnet.base.org'],
+                    blockExplorerUrls: ['https://basescan.org']
+                  }}]
+                }});
+              }} catch {{
+                set('Switch your wallet to Base network and try again.', true);
+                btn.disabled = false; btn.textContent = 'Buy with USDC $' + dollars;
+                return;
+              }}
+            }}
+
+            set('Sign the USDC payment in your wallet to unlock...');
+            btn.textContent = 'Awaiting signature...';
+
+            // Step 4 — build EIP-3009 typed data
+            var validAfter  = 0;
+            var validBefore = Math.floor(Date.now() / 1000) + (req.maxTimeoutSeconds || 120);
+            var nonce = '0x' + Array.from(crypto.getRandomValues(new Uint8Array(32)))
+                                       .map(function(b) {{ return b.toString(16).padStart(2, '0'); }}).join('');
+            var typedData = {{
+              types: {{
+                EIP712Domain: [
+                  {{ name: 'name', type: 'string' }},
+                  {{ name: 'version', type: 'string' }},
+                  {{ name: 'chainId', type: 'uint256' }},
+                  {{ name: 'verifyingContract', type: 'address' }},
+                ],
+                TransferWithAuthorization: [
+                  {{ name: 'from', type: 'address' }},
+                  {{ name: 'to', type: 'address' }},
+                  {{ name: 'value', type: 'uint256' }},
+                  {{ name: 'validAfter', type: 'uint256' }},
+                  {{ name: 'validBefore', type: 'uint256' }},
+                  {{ name: 'nonce', type: 'bytes32' }},
+                ],
+              }},
+              primaryType: 'TransferWithAuthorization',
+              domain: {{
+                name: (req.extra && req.extra.name) || 'USD Coin',
+                version: (req.extra && req.extra.version) || '2',
+                chainId: 8453,
+                verifyingContract: req.asset,
+              }},
+              message: {{
+                from: from, to: req.payTo,
+                value: req.maxAmountRequired,
+                validAfter: validAfter, validBefore: validBefore, nonce: nonce,
+              }},
+            }};
+
+            var signature;
+            try {{
+              signature = await provider.request({{
+                method: 'eth_signTypedData_v4',
+                params: [from, JSON.stringify(typedData)]
+              }});
+            }} catch (e) {{
+              set('Signature rejected.', true);
+              btn.disabled = false; btn.textContent = 'Buy with USDC $' + dollars;
+              return;
+            }}
+
+            // Step 5 — submit
+            set('Submitting payment to Base network...');
+            btn.textContent = 'Settling on-chain...';
+
+            var xPaymentBody = {{
+              x402Version: 1,
+              scheme: req.scheme,
+              network: req.network,
+              payload: {{
+                signature: signature,
+                authorization: {{
+                  from: from, to: req.payTo,
+                  value: req.maxAmountRequired,
+                  validAfter: String(validAfter),
+                  validBefore: String(validBefore),
+                  nonce: nonce,
+                }},
+              }},
+            }};
+            var xPaymentB64 = btoa(JSON.stringify(xPaymentBody));
+
+            try {{
+              var r = await fetch('/api/crypto/unlock', {{
+                method: 'POST',
+                headers: {{ 'Content-Type': 'application/json', 'X-Payment': xPaymentB64 }},
+                body: JSON.stringify({{ offer_id: offerId }})
+              }});
+              var data = await r.json();
+              if (!r.ok || !data.success) throw new Error(data.error || ('HTTP ' + r.status));
+              var deliveryId = data.delivery_id || null;
+              set(''); btn.textContent = '✅ Paid!';
+              setTimeout(function() {{ showSuccess(deliveryId); }}, 600);
+            }} catch (e) {{
+              set('Settlement failed: ' + e.message, true);
+              btn.disabled = false; btn.textContent = 'Buy with USDC $' + dollars;
+            }}
+          }});
+        }});
+      }});
+
+      // ── PayPal buttons ──────────────────────────────────────────────────
+      fetch('/api/paypal/config')
+        .then(function(r) {{ return r.json(); }})
+        .then(function(config) {{
+          if (!config.client_id) return;
+          var script = document.createElement('script');
+          script.src = 'https://www.paypal.com/sdk/js?client-id=' + encodeURIComponent(config.client_id) + '&currency=USD';
+          document.body.appendChild(script);
+          script.onload = function() {{
+            offers.forEach(function(offerId) {{
+              paypal.Buttons({{
+                style: {{ layout: 'horizontal', label: 'buynow', tagline: false, height: 40 }},
+                createOrder: function(data, actions) {{
+                  return fetch('/api/paypal/orders', {{
+                    method: 'POST',
+                    headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify({{ offer_id: offerId }})
+                  }}).then(function(r) {{ return r.json(); }}).then(function(d) {{
+                    if (!d.order || !d.order.id) throw new Error('No order ID');
+                    return d.order.id;
+                  }});
+                }},
+                onApprove: function(data, actions) {{
+                  return fetch('/api/paypal/orders/' + data.orderID + '/capture', {{
+                    method: 'POST'
+                  }}).then(function(r) {{ return r.json(); }}).then(function(d) {{
+                    if (d.success) showSuccess(d.delivery_id);
+                    else alert('Payment capture failed: ' + (d.message || 'unknown error'));
+                  }});
+                }},
+                onError: function(err) {{
+                  console.error('PayPal error:', err);
+                }}
+              }}).render('#paypal-button-' + offerId);
+            }});
+          }};
+        }}).catch(function(e) {{ console.error('PayPal config fetch failed:', e); }});
+    }})();
   </script>
 </body>
 </html>"#

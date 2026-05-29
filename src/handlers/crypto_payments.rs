@@ -11,6 +11,7 @@ use axum::{
 use serde::Deserialize;
 use serde_json::json;
 use std::sync::Arc;
+use uuid::Uuid;
 
 pub fn crypto_routes() -> Router {
     Router::new()
@@ -212,6 +213,49 @@ async fn crypto_unlock(
         crate::email::notify_admin(&email_subject, &email_body).await;
     });
 
+    // Fulfill: create a delivery for the purchased offer
+    let gig_type = match offer_id.as_str() {
+        "saas-demo-starter" | "saas-demo-launch" => "product_demo",
+        "agency-3-videos" => "product_demo",
+        "product-mockup-standard" => "product_mockup",
+        "education-explainer-standard" => "educational_explainer",
+        "blender-scene-standard" => "blender_scene",
+        "clip-enhancement-standard" => "clip_enhancement",
+        "audio-standard" => "voice_audio",
+        _ => "product_demo",
+    };
+    let delivery_title = format!("{} — {}", offer_name, payer);
+    let delivery_id: Option<Uuid> = sqlx::query_scalar(
+        "INSERT INTO deliveries (client_ref, title, gig_type, prompt, style, duration, extra_args, status)
+         VALUES ($1, $2, $3, $4, 'professional', 30.0, $5, 'pending')
+         RETURNING id",
+    )
+    .bind(&payer)
+    .bind(&delivery_title)
+    .bind(gig_type)
+    .bind(format!("USDC purchase: {}. Offer: {}. Payer: {}. Tx: {}.",
+        offer_name, offer_id, payer, tx_hash))
+    .bind(serde_json::json!({
+        "source": "usdc",
+        "offer_id": offer_id,
+        "tx_hash": tx_hash,
+        "payer_address": payer,
+    }))
+    .fetch_optional(&state.db_pool)
+    .await
+    .ok()
+    .flatten();
+
+    // Auto-fulfillment: kick off delivery generation workflow
+    if let Some(did) = delivery_id {
+        let render_state = state.clone();
+        tokio::spawn(async move {
+            let _ = crate::handlers::admin::ensure_delivery_workflow(&render_state, did).await;
+            crate::handlers::admin::run_delivery_job(did, render_state).await;
+        });
+    }
+
+    let delivery_id_val = delivery_id.map(|id| id.to_string());
     (
         StatusCode::OK,
         Json(json!({
@@ -219,6 +263,7 @@ async fn crypto_unlock(
             "tx_hash": tx_hash,
             "offer_id": offer_id,
             "price_usd_cents": price_cents,
+            "delivery_id": delivery_id_val,
             "message": format!("Payment received for {}. Your order is confirmed.", offer_name),
         })),
     )

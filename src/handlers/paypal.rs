@@ -330,6 +330,7 @@ async fn capture_paypal_order(
         .unwrap_or("UNKNOWN");
 
     let is_completed = capture_status == "COMPLETED";
+    let mut delivery_id_val: Option<String> = None;
 
     // Record payment in database
     if is_completed {
@@ -462,11 +463,22 @@ async fn capture_paypal_order(
         tokio::spawn(async move {
             crate::email::notify_admin(&email_subject, &email_body).await;
         });
+
+        // Auto-fulfillment: kick off delivery generation workflow
+        if let Some(did) = delivery_id {
+            delivery_id_val = Some(did.to_string());
+            let render_state = state.clone();
+            tokio::spawn(async move {
+                let _ = crate::handlers::admin::ensure_delivery_workflow(&render_state, did).await;
+                crate::handlers::admin::run_delivery_job(did, render_state).await;
+            });
+        }
     }
 
     (StatusCode::OK, Json(json!({
         "success": is_completed,
         "status": capture_status,
         "capture": capture_body,
+        "delivery_id": delivery_id_val,
     })))
 }
