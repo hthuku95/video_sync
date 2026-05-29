@@ -1000,15 +1000,20 @@ fn extract_best_twitter_handle(description: &str) -> Option<String> {
                 r"x profile",
                 r"x handle",
                 r"x\.com",
+                r"x\s+at",
             ],
         )
     }).or_else(|| {
-        // Fallback: standalone @handle — Twitter handles are alphanumeric+underscore (no dots).
-        let regex = Regex::new(r"(?<!\w)@([a-zA-Z0-9_]{2,50})(?![a-zA-Z0-9_])").ok()?;
-        for capture in regex.captures_iter(description) {
-            let handle = capture.get(1)?.as_str();
-            if !handle.contains('.') && handle.len() >= 2 {
-                return Some(format!("@{}", handle));
+        // Fallback: standalone @handle but only if near Twitter/X context (avoids brand mentions).
+        let context_regex = Regex::new(
+            r"(?i)(?:twitter|x\s*(?:/|at|:|\s))\s*@([a-zA-Z0-9_]{2,50})(?![a-zA-Z0-9_])"
+        ).ok()?;
+        for capture in context_regex.captures_iter(description) {
+            if let Some(m) = capture.get(1) {
+                let handle = m.as_str();
+                if !handle.contains('.') && handle.len() >= 2 {
+                    return Some(format!("@{}", handle));
+                }
             }
         }
         None
@@ -1331,22 +1336,20 @@ Description: {description}
 Prospect type (already tagged by us): {prospect_type}
 
 The studio offers these services — pick the ONE that fits best:
-- **landing_page**   — SaaS/app demo pack: 30-90s promo/demo video + 3 short ad variants from their website/app. Best fit: SaaS founders, app owners, indie hackers, no-code builders. $99 starter, $199-$499 rush/custom, $500-$1500/mo retainer.
-- **clipping**       — long-form → Shorts/Reels with captions, hooks, thumbnails, and optional animated summaries. Best fit: podcasters, long-form YouTubers, Twitch streamers. $297-$899/mo.
-- **thumbnails**     — YouTube packaging kit: thumbnails, title cards, lower thirds, and a short motion preview. Best fit: growing YouTubers. $49-$249 per kit.
-- **product_mockup** — 3D/device product mockup, app walkthrough, or product reveal. Best fit: ecommerce stores, hardware brands, app developers, Kickstarter creators. $100-$600 each.
-- **education**      — Manim/LaTeX lesson/explainer with narration, diagrams, and reusable lesson clips. Best fit: educators, tutors, course creators, technical YouTubers. $150-$900 each.
-- **three_d_scene**  — Blender 2D/3D scene, animation, product scene, logo reveal, or cinematic visual. Best fit: brands, studios, game/dev/tool creators. $150-$1000 each.
-- **voice_audio**    — VibeVoice narration, audio summary, podcast intro, voiceover, or multilingual explainer track. Best fit: podcasters, course creators, SaaS docs, agencies. $49-$399 per pack.
-- **ugc**            — vertical product-demo ad variants. Best fit: ecommerce/DTC/SaaS teams testing hooks. $149-$699 per pack.
-- **agency_bundle**  — mixed package: demos, clips, thumbnails, product mockups, narration, delivery pages. Best fit: agencies, creator managers, marketers, white-label operators. $500-$3000/mo.
-- **full_stack**     — recurring AI production backend for high-volume creators/agencies, including all above lanes. $1000-$3000/mo.
+- **clipping**       — turn long-form videos, podcasts, or streams into short-form clips with captions and thumbnails. Best fit: podcasters, long-form YouTubers, Twitch streamers. $297-$899/mo.
+- **education**      — AI-driven Blender animations: explainer scenes, data visualizations, title cards, lower thirds, motion graphics. Best fit: educators, finance/crypto creators, technical YouTubers. $75-$400 per asset.
+- **thumbnails**     — click-optimised YouTube thumbnails with branded title treatments. Best fit: growing channels and creators. $25-$75 per thumbnail.
+- **ugc**            — vertical-first product-demo videos and ad-ready promo assets for ecommerce and SaaS. Best fit: Shopify operators, SaaS founders, marketers testing paid acquisition. $200-$900 per video.
+- **product_mockup** — rendered 3D product visuals, device mockups, and motion-enhanced launch assets. Best fit: ecommerce, hardware, app launches. $100-$600 per asset.
+- **landing_page**   — homepage hero videos, narrated product demos, launch cutdowns from your website or app. Best fit: indie founders, SaaS teams, launch marketers. $299-$1,500+.
+- **full_stack**     — private production backend: demos, thumbnails, motion graphics, mockups under your brand. Best fit: boutique agencies, creator managers, operators. $1,000-$3,000/mo.
 
 Prospect-type guidance:
 - If `prospect_type` is `clipper`, favor people or teams already selling clip editing, short-form growth, or creator post-production. Score higher if they would clearly benefit from tooling, faster fulfillment, or premium add-on renders.
-- If `prospect_type` is `creator_manager`, favor agencies, talent managers, creator ops teams, marketers, or media operators managing multiple channels. Score higher if they likely need scalable fulfillment, samples, or white-label production help. Prefer `agency_bundle` or `full_stack`.
-- If `prospect_type` is `content_creator`, `podcaster`, or `educator`, treat them as direct buyers of clipping / explainers / thumbnails / voice_audio.
-- If `prospect_type` is `business_owner`, favor product-demo, landing-page, or UGC-style services.
+- If `prospect_type` is `creator_manager`, favor agencies, talent managers, creator ops teams, marketers, or media operators managing multiple channels. Score higher if they likely need scalable fulfillment, samples, or white-label production help. Prefer `full_stack`.
+- If `prospect_type` is `content_creator` or `podcaster`, treat them as direct buyers of clipping / thumbnails / animations.
+- If `prospect_type` is `educator`, favor education (Blender animations/explainers).
+- If `prospect_type` is `business_owner`, favor landing_page, ugc, or product_mockup.
 - If the prospect looks like a founder, SaaS, app, startup, AI tool, agency, consultant, software channel, business operator, or has an external product/site URL, favor **landing_page** unless another service is obviously stronger.
 
 Score guidelines:
@@ -1366,7 +1369,7 @@ Return ONLY valid JSON (no markdown):
   "dm_clipper": "<alt DM treating them as a clipper looking for tooling — 2-3 sentences>"
 }}
 
-`service` MUST be one of: clipping, thumbnails, product_mockup, landing_page, education, three_d_scene, voice_audio, ugc, agency_bundle, full_stack."#,
+`service` MUST be one of: clipping, education, thumbnails, ugc, product_mockup, landing_page, full_stack. No other values are valid."#,
         name = name,
         audience = audience_size,
         category_word = if audience_size > 0 {
@@ -1479,7 +1482,7 @@ fn default_service_for_prospect(category: &str, prospect_type: &str) -> String {
         || combined.contains("marketer")
         || combined.contains("white label")
     {
-        "agency_bundle".to_string()
+        "full_stack".to_string()
     } else if combined.contains("education")
         || combined.contains("educator")
         || combined.contains("course")
@@ -1496,13 +1499,13 @@ fn default_service_for_prospect(category: &str, prospect_type: &str) -> String {
         || combined.contains("game")
         || combined.contains("studio")
     {
-        "three_d_scene".to_string()
+        "product_mockup".to_string()
     } else if combined.contains("podcast")
         || combined.contains("voice")
         || combined.contains("audio")
         || combined.contains("narration")
     {
-        "voice_audio".to_string()
+        "ugc".to_string()
     } else if combined.contains("thumbnail") || combined.contains("youtube") {
         "thumbnails".to_string()
     } else if combined.contains("business")
@@ -1525,10 +1528,9 @@ fn default_service_for_prospect(category: &str, prospect_type: &str) -> String {
 fn normalize_revenue_service(service: &str) -> &str {
     match service {
         "animations" => "education",
-        "fullstack" => "full_stack",
-        "agency" | "agency_fulfillment" | "creator_manager_fulfillment" => "agency_bundle",
-        "3d" | "blender" | "scene" => "three_d_scene",
-        "voice" | "audio" | "narration" => "voice_audio",
+        "fullstack" | "agency" | "agency_fulfillment" | "creator_manager_fulfillment" | "agency_bundle" => "full_stack",
+        "3d" | "blender" | "scene" | "three_d_scene" => "product_mockup",
+        "voice" | "audio" | "narration" | "voice_audio" => "ugc",
         other => other,
     }
 }
@@ -1541,41 +1543,34 @@ fn is_valid_revenue_service(service: &str) -> bool {
             | "product_mockup"
             | "landing_page"
             | "education"
-            | "three_d_scene"
-            | "voice_audio"
             | "ugc"
-            | "agency_bundle"
             | "full_stack"
     )
 }
 
 fn service_offer_line(service: &str) -> &'static str {
     match normalize_revenue_service(service) {
-        "ugc" => "5 ad creative variants for one product in 24h",
-        "product_mockup" => "a premium product/device mockup promo plus motion walkthrough",
-        "education" => "a narrated Manim/LaTeX lesson or technical explainer",
-        "three_d_scene" => "a Blender 2D/3D motion scene or cinematic product visual",
-        "voice_audio" => "a VibeVoice narration/audio summary pack",
-        "thumbnails" => "a YouTube packaging kit with thumbnails and motion preview assets",
-        "clipping" => "a long-form-to-Shorts repurposing pack with optional animated summary",
-        "agency_bundle" => "a mixed white-label production sample pack",
-        "full_stack" => "a recurring AI production backend for your content",
-        _ => "a 30-60s SaaS/app promo video plus 3 short ad variants",
+        "clipping" => "turn long-form videos into short-form clips with captions and thumbnails",
+        "education" => "a narrated Blender animation explainer with motion graphics",
+        "thumbnails" => "click-optimised YouTube thumbnails with branded title treatments",
+        "ugc" => "vertical-first product-demo videos and ad-ready promo assets",
+        "product_mockup" => "a 3D device mockup or product reveal with motion",
+        "landing_page" => "a 30-90s homepage hero or narrated product demo video from your site",
+        "full_stack" => "a private production backend with all lanes under your brand",
+        _ => "a product video or motion asset from your website or app",
     }
 }
 
 fn service_price_line(service: &str) -> &'static str {
     match normalize_revenue_service(service) {
-        "ugc" => "$149-$699",
-        "product_mockup" => "$100-$600",
-        "education" => "$150-$900",
-        "three_d_scene" => "$150-$1000",
-        "voice_audio" => "$49-$399",
-        "thumbnails" => "$49-$249",
         "clipping" => "$297-$899/mo",
-        "agency_bundle" => "$500-$3,000/mo",
-        "full_stack" => "$500-$1,500/mo to start",
-        _ => "$99 starter, $199-$499 custom/rush",
+        "education" => "$75-$400 per asset",
+        "thumbnails" => "$25-$75 per thumbnail",
+        "ugc" => "$200-$900 per video",
+        "product_mockup" => "$100-$600 per asset",
+        "landing_page" => "$299-$1,500+",
+        "full_stack" => "$1,000-$3,000/mo",
+        _ => "$99 starter",
     }
 }
 
@@ -6243,28 +6238,20 @@ Return ONLY valid JSON (no markdown):
 pub fn unlock_price_for(service: Option<&str>, has_website: bool) -> f64 {
     let service = service.map(normalize_revenue_service);
     if has_website {
-        // Agent-generated comprehensive video (script + scenes + voiceover).
-        // Full production value justifies mid-market pricing.
         match service {
-            Some("full_stack") | Some("agency_bundle") => 497.00, // Most ambitious: mixed production pack
-            Some("landing_page") => 297.00, // Animated landing page presentation
-            Some("product_mockup") => 197.00, // Product showcase video
-            Some("ugc") => 197.00,          // UGC-style promo video
-            Some("education") => 197.00,    // Manim/LaTeX explainer package
-            Some("three_d_scene") => 247.00, // Blender scene / product reveal
-            Some("voice_audio") => 97.00,   // Narrated audio/video summary
-            Some("clipping") => 147.00,     // Clip-pack sample
-            _ => 197.00,                    // Default: scene-based branded video
+            Some("full_stack") => 497.00,
+            Some("landing_page") => 297.00,
+            Some("product_mockup") => 197.00,
+            Some("ugc") => 197.00,
+            Some("education") => 197.00,
+            Some("clipping") => 147.00,
+            _ => 197.00,
         }
     } else {
-        // Single-shot Blender render (faster, cheaper to produce).
         match service {
             Some("landing_page") => 97.00,
-            Some("product_mockup") => 97.00,
-            Some("education") | Some("three_d_scene") => 97.00,
-            Some("voice_audio") => 49.00,
-            Some("clipping") => 49.00,
-            Some("ugc") | Some("agency_bundle") | Some("full_stack") => 49.00,
+            Some("product_mockup") | Some("education") => 97.00,
+            Some("clipping") | Some("ugc") | Some("full_stack") => 49.00,
             Some("thumbnails") => 19.00,
             _ => 29.00,
         }
