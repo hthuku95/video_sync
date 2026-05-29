@@ -8,6 +8,7 @@ pub mod output_video;
 pub mod token_pricing;
 pub mod token_usage;
 pub mod twitch_mapper;
+pub mod kick_mapper;
 pub mod video_vectorization;
 pub mod workflow_runtime;
 

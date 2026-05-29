@@ -21,6 +21,7 @@ mod gemini_client;
 mod gcs_client;
 mod handlers;
 mod jobs; // 🆕 Background job system for video editing
+mod kick_client; // 📺 Kick.com API client
 mod llm_utils;
 mod middleware;
 mod models;
@@ -89,6 +90,7 @@ pub struct AppState {
     pub delivery_render_semaphore: Arc<Semaphore>, // 🎬 Limits concurrent delivery renders to avoid OOM
     pub phantombuster_client: Option<phantombuster_client::PhantomBusterClient>, // 🎯 LinkedIn scraping
     pub active_agent_channels: Arc<tokio::sync::RwLock<HashMap<String, UnboundedSender<String>>>>, // Interactive agent channels
+    pub kick_client: Option<kick_client::KickClient>, // 📺 Kick.com API client
 }
 
 /// Validate Apify API token on startup
@@ -654,6 +656,17 @@ async fn main() {
                 .unwrap_or(1), // default to 1 active delivery render to reduce memory spikes
         )),
         active_agent_channels: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+        kick_client: {
+            let id = std::env::var("KICK_CLIENT_ID").unwrap_or_default();
+            let secret = std::env::var("KICK_CLIENT_SECRET").unwrap_or_default();
+            if !id.is_empty() && !secret.is_empty() {
+                tracing::info!("📺 Kick.com client initialized");
+                Some(kick_client::KickClient::new(id, secret))
+            } else {
+                tracing::warn!("📺 Kick.com client not configured (missing KICK_CLIENT_ID/SECRET)");
+                None
+            }
+        },
     });
 
     // Admin-only routes

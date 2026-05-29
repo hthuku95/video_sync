@@ -62,6 +62,8 @@ pub struct ClippingAgentState {
     // Twitch fallback
     /// True once we have switched from YouTube to a Twitch VOD.
     pub twitch_fallback_triggered: bool,
+    /// True once we have switched from Twitch to a Kick broadcast.
+    pub kick_fallback_triggered: bool,
     /// When set, this URL overrides the YouTube URL for Phase A and Phase B.
     pub active_video_url: Option<String>,
 
@@ -367,63 +369,193 @@ impl GeminiClippingAgent {
                     }
 
                     if !twitch_downloaded {
-                        match self
-                            .trigger_longform_fallback_after_download_failure(
-                                job_id,
-                                &twitch_last_err,
+                        // ── Twitch exhausted → Kick.com fallback ──
+                        tracing::info!(
+                            "Job {}: Twitch VODs exhausted, trying Kick.com fallback",
+                            job_id
+                        );
+                        let kick_slug = self.pick_kick_channel_slug(job_id).await;
+                        if let Some(ref slug) = kick_slug {
+                            // Switch to Kick — set the active url and let the next tool_download_video call handle it
+                            let kick_url = format!("https://kick.com/{}", slug);
+                            tracing::info!("Job {}: switching to Kick.com @{}", job_id, slug);
+                            sqlx::query(
+                                "UPDATE clipping_jobs \
+                                 SET used_kick_fallback = true, \
+                                     kick_channel_slug = $1, \
+                                     active_video_url = $2, \
+                                     kick_video_url = $2 \
+                                 WHERE id = $3",
                             )
+                            .bind(slug)
+                            .bind(&kick_url)
+                            .bind(job_id)
+                            .execute(&self.app_state.db_pool)
                             .await
-                        {
-                            Ok(message) => {
-                                self.checkpointer.delete_all(job_id).await.ok();
-                                return Ok(message);
+                            .ok();
+
+                            state.kick_fallback_triggered = true;
+                            state.active_video_url = Some(kick_url.clone());
+                            state.phase_a_complete = false;
+
+                            // Retry download with Kick URL
+                            let mut kick_downloaded = false;
+                            let mut kick_last_err = String::new();
+                            for attempt in 0..3u32 {
+                                match self.tool_download_video(&mut state, job_id).await {
+                                    Ok(_) => {
+                                        kick_downloaded = true;
+                                        break;
+                                    }
+                                    Err(ref e) => {
+                                        kick_last_err = e.clone();
+                                        tracing::warn!(
+                                            "Job {}: Kick download attempt {} failed: {}",
+                                            job_id,
+                                            attempt + 1,
+                                            e
+                                        );
+                                        if attempt >= 2 {
+                                            break;
+                                        }
+                                        sqlx::query(
+                                            "UPDATE clipping_jobs \
+                                             SET worker_heartbeat_at = NOW() \
+                                             WHERE id = $1",
+                                        )
+                                        .bind(job_id)
+                                        .execute(&self.app_state.db_pool)
+                                        .await
+                                        .ok();
+                                    }
+                                }
                             }
-                            Err(fallback_error) => {
-                                let combined_error = format!(
-                                    "{} | longform fallback also failed: {}",
-                                    twitch_last_err, fallback_error
+
+                            if kick_downloaded {
+                                // Download succeeded — analyze local file for viral moments
+                                // (same local-frame approach used for Twitch VODs)
+                                match self.tool_analyze_twitch_vod(&mut state, job_id).await {
+                                    Ok(reresult) => {
+                                        let quality = reresult["overall_quality"].as_f64().unwrap_or(0.0);
+                                        if quality < 0.6 {
+                                            let mut args = HashMap::new();
+                                            args.insert(
+                                                "reason".to_string(),
+                                                json!("Kick video quality below threshold"),
+                                            );
+                                            self.tool_mark_failed(&args, &mut state, job_id).await.ok();
+                                            self.checkpointer.delete_all(job_id).await.ok();
+                                            return Ok(format!(
+                                                "Job {} terminated: kick_video_quality_too_low",
+                                                job_id
+                                            ));
+                                        }
+                                        self.advance_checkpoint(&mut state).await;
+                                    }
+                                    Err(e) => {
+                                        let mut args = HashMap::new();
+                                        args.insert(
+                                            "reason".to_string(),
+                                            json!(format!("Kick video analysis failed: {}", e)),
+                                        );
+                                        self.tool_mark_failed(&args, &mut state, job_id).await.ok();
+                                        self.checkpointer.delete_all(job_id).await.ok();
+                                        return Err(format!("Phase A (Kick fallback) failed: {}", e));
+                                    }
+                                }
+                            } else {
+                                // Everything failed — longform narration fallback
+                                let combined = format!(
+                                    "Twitch exhausted: {}; Kick also failed: {}",
+                                    twitch_last_err, kick_last_err
                                 );
-                                let mut args = HashMap::new();
-                                args.insert("reason".to_string(), json!(combined_error));
-                                self.tool_mark_failed(&args, &mut state, job_id).await.ok();
-                                self.checkpointer.delete_all(job_id).await.ok();
-                                return Err(format!(
-                                    "Phase B (Twitch download) failed: {}. Longform fallback failed: {}",
-                                    twitch_last_err, fallback_error
-                                ));
+                                match self
+                                    .trigger_longform_fallback_after_download_failure(
+                                        job_id,
+                                        &combined,
+                                    )
+                                    .await
+                                {
+                                    Ok(message) => {
+                                        self.checkpointer.delete_all(job_id).await.ok();
+                                        return Ok(message);
+                                    }
+                                    Err(fallback_error) => {
+                                        let combined_error = format!(
+                                            "{} | longform fallback also failed: {}",
+                                            combined, fallback_error
+                                        );
+                                        let mut args = HashMap::new();
+                                        args.insert("reason".to_string(), json!(combined_error));
+                                        self.tool_mark_failed(&args, &mut state, job_id).await.ok();
+                                        self.checkpointer.delete_all(job_id).await.ok();
+                                        return Err(format!(
+                                            "Phase B failed (Twitch+Kick): {}. Longform fallback failed: {}",
+                                            combined, fallback_error
+                                        ));
+                                    }
+                                }
+                            }
+                        } else {
+                            // No Kick mapping — go straight to longform
+                            match self
+                                .trigger_longform_fallback_after_download_failure(
+                                    job_id,
+                                    &twitch_last_err,
+                                )
+                                .await
+                            {
+                                Ok(message) => {
+                                    self.checkpointer.delete_all(job_id).await.ok();
+                                    return Ok(message);
+                                }
+                                Err(fallback_error) => {
+                                    let combined_error = format!(
+                                        "{} | longform fallback also failed: {}",
+                                        twitch_last_err, fallback_error
+                                    );
+                                    let mut args = HashMap::new();
+                                    args.insert("reason".to_string(), json!(combined_error));
+                                    self.tool_mark_failed(&args, &mut state, job_id).await.ok();
+                                    self.checkpointer.delete_all(job_id).await.ok();
+                                    return Err(format!(
+                                        "Phase B (Twitch download) failed: {}. Longform fallback failed: {}",
+                                        twitch_last_err, fallback_error
+                                    ));
+                                }
                             }
                         }
-                    }
-
-                    // VOD downloaded — analyze via local frames (Gemini cannot fetch Twitch URLs)
-                    match self.tool_analyze_twitch_vod(&mut state, job_id).await {
-                        Ok(reresult) => {
-                            let quality = reresult["overall_quality"].as_f64().unwrap_or(0.0);
-                            if quality < 0.6 {
+                    } else {
+                        // VOD downloaded — analyze via local frames (Gemini cannot fetch Twitch URLs)
+                        match self.tool_analyze_twitch_vod(&mut state, job_id).await {
+                            Ok(reresult) => {
+                                let quality = reresult["overall_quality"].as_f64().unwrap_or(0.0);
+                                if quality < 0.6 {
+                                    let mut args = HashMap::new();
+                                    args.insert(
+                                        "reason".to_string(),
+                                        json!("Twitch VOD quality below threshold"),
+                                    );
+                                    self.tool_mark_failed(&args, &mut state, job_id).await.ok();
+                                    self.checkpointer.delete_all(job_id).await.ok();
+                                    return Ok(format!(
+                                        "Job {} terminated: twitch_vod_quality_too_low",
+                                        job_id
+                                    ));
+                                }
+                                // Both download (B) and analysis (A) complete
+                                self.advance_checkpoint(&mut state).await;
+                            }
+                            Err(e) => {
                                 let mut args = HashMap::new();
                                 args.insert(
                                     "reason".to_string(),
-                                    json!("Twitch VOD quality below threshold"),
+                                    json!(format!("Twitch VOD analysis failed: {}", e)),
                                 );
                                 self.tool_mark_failed(&args, &mut state, job_id).await.ok();
                                 self.checkpointer.delete_all(job_id).await.ok();
-                                return Ok(format!(
-                                    "Job {} terminated: twitch_vod_quality_too_low",
-                                    job_id
-                                ));
+                                return Err(format!("Phase A (Twitch fallback) failed: {}", e));
                             }
-                            // Both download (B) and analysis (A) complete
-                            self.advance_checkpoint(&mut state).await;
-                        }
-                        Err(e) => {
-                            let mut args = HashMap::new();
-                            args.insert(
-                                "reason".to_string(),
-                                json!(format!("Twitch VOD analysis failed: {}", e)),
-                            );
-                            self.tool_mark_failed(&args, &mut state, job_id).await.ok();
-                            self.checkpointer.delete_all(job_id).await.ok();
-                            return Err(format!("Phase A (Twitch fallback) failed: {}", e));
                         }
                     }
                 }
@@ -954,7 +1086,11 @@ impl GeminiClippingAgent {
                 Ok(json!({"success": true, "video_path": path}))
             }
             Err(download_err) => {
-                // Already on Twitch fallback — give up
+                // Already on Kick fallback first (last resort before longform)
+                if state.kick_fallback_triggered {
+                    return Err(format!("Kick download also failed: {}", download_err));
+                }
+                // Already on Twitch fallback — try Kick next
                 if state.twitch_fallback_triggered {
                     return Err(format!("Twitch download also failed: {}", download_err));
                 }
@@ -1218,6 +1354,65 @@ impl GeminiClippingAgent {
             )
             .bind(tcid)
             .bind(twitch_video_id)
+            .bind(video_title.as_deref().unwrap_or(""))
+            .bind(job_id)
+            .execute(&self.app_state.db_pool)
+            .await
+            .ok();
+        }
+    }
+
+    /// Resolve the Kick.com channel slug for this job's YouTube source channel
+    /// from the three-way mapping. Returns `None` if no Kick mapping exists.
+    async fn pick_kick_channel_slug(&self, job_id: i32) -> Option<String> {
+        let job = fetch_job_details(job_id, &self.app_state.db_pool)
+            .await
+            .ok()?;
+        let linkage = fetch_linkage(job.linkage_id, &self.app_state.db_pool)
+            .await
+            .ok()?;
+
+        let slug: Option<String> = sqlx::query_scalar(
+            "SELECT ksc.slug
+             FROM youtube_kick_channel_mappings ykm
+             JOIN kick_source_channels ksc ON ksc.id = ykm.kick_source_channel_id
+             WHERE ykm.youtube_source_channel_id = $1",
+        )
+        .bind(linkage.source_channel_id)
+        .fetch_optional(&self.app_state.db_pool)
+        .await
+        .ok()?;
+
+        slug
+    }
+
+    /// Record a Kick.com broadcast as used so it won't be re-downloaded.
+    #[allow(dead_code)]
+    async fn record_clipped_kick_video(
+        &self,
+        kick_slug: &str,
+        video_id: &str,
+        video_title: &Option<String>,
+        job_id: i32,
+    ) {
+        let db_id: Option<i32> = sqlx::query_scalar(
+            "SELECT id FROM kick_source_channels WHERE slug = $1",
+        )
+        .bind(kick_slug)
+        .fetch_optional(&self.app_state.db_pool)
+        .await
+        .ok()
+        .flatten();
+
+        if let Some(kcid) = db_id {
+            sqlx::query(
+                "INSERT INTO clipped_kick_videos
+                     (kick_channel_id, video_id, video_title, clipping_job_id)
+                 VALUES ($1, $2, $3, $4)
+                 ON CONFLICT DO NOTHING",
+            )
+            .bind(kcid)
+            .bind(video_id)
             .bind(video_title.as_deref().unwrap_or(""))
             .bind(job_id)
             .execute(&self.app_state.db_pool)

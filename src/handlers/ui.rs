@@ -73,6 +73,9 @@ pub fn ui_private_routes() -> Router {
             post(create_service_sample_request),
         )
         .layer(axum::middleware::from_fn(auth_middleware))
+        .layer(axum::middleware::from_fn(
+            crate::middleware::subscription::subscription_middleware,
+        ))
 }
 
 #[derive(Debug, Deserialize)]

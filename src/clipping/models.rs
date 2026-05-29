@@ -80,6 +80,12 @@ pub struct ClippingJob {
     pub twitch_video_id: Option<String>,
     /// Overrides source_video_id URL when Twitch fallback is active.
     pub active_video_url: Option<String>,
+    /// True when this job used a Kick.com broadcast instead of the YouTube source video.
+    pub used_kick_fallback: bool,
+    /// Kick channel slug resolved from three-way mapping.
+    pub kick_channel_slug: Option<String>,
+    /// URL of the Kick broadcast to download.
+    pub kick_video_url: Option<String>,
     /// Generated longform fallback delivery row created when download fails.
     pub fallback_delivery_id: Option<Uuid>,
     /// Fallback mode used for this job, e.g. "generated_summary_delivery".
@@ -316,5 +322,36 @@ pub struct PendingUnclippedVideo {
     pub video_title: Option<String>,
     pub video_published_at: Option<DateTime<Utc>>,
     pub discovered_at: DateTime<Utc>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// A Kick.com broadcaster account.
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct KickSourceChannel {
+    pub id: i32,
+    pub slug: String,
+    pub display_name: String,
+    pub profile_picture: Option<String>,
+    pub is_active: bool,
+    pub broadcaster_user_id: Option<i64>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Mapping from a YouTube source channel to its Kick.com equivalent.
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct YoutubeKickMapping {
+    pub id: i32,
+    pub youtube_source_channel_id: i32,
+    pub kick_source_channel_id: i32,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Mapping from a Twitch source channel to its Kick.com equivalent.
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct TwitchKickMapping {
+    pub id: i32,
+    pub twitch_source_channel_id: i32,
+    pub kick_source_channel_id: i32,
     pub created_at: DateTime<Utc>,
 }

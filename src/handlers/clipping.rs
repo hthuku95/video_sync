@@ -352,6 +352,74 @@ async fn add_source_channel(
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
+    // 🆕 THREE-WAY MAPPING REQUIREMENT:
+    // Every source channel must have Twitch + Kick.com equivalents.
+    // If either is missing, the channel is rejected.
+
+    // 1. Try Twitch mapping
+    let twitch_ok = if let (Some(twitch_client), Some(gemini)) = (
+        state.twitch_client.as_ref(),
+        state.video_gemini_client.as_ref().or(state.gemini_client.as_ref()),
+    ) {
+        match crate::services::twitch_mapper::auto_map_youtube_to_twitch(
+            &source_channel,
+            twitch_client,
+            gemini,
+            &state.db_pool,
+        )
+        .await
+        {
+            Ok(crate::services::twitch_mapper::MappingResult::Mapped(_)) => true,
+            _ => false,
+        }
+    } else {
+        false
+    };
+
+    // 2. Try Kick mapping
+    let kick_ok = if state.kick_client.is_some() {
+        crate::services::kick_mapper::auto_map_kick_channel(
+            &state,
+            &source_channel.channel_name,
+            "youtube",
+            source_channel.id,
+        )
+        .await
+        .is_ok()
+    } else {
+        false
+    };
+
+    // 3. Reject if not all three platforms exist
+    if !twitch_ok || !kick_ok {
+        // Rollback: delete the source channel and its schedule
+        let _ = sqlx::query("DELETE FROM clipping_poll_schedule WHERE source_channel_id = $1")
+            .bind(source_channel.id)
+            .execute(&state.db_pool)
+            .await;
+        let _ = sqlx::query("DELETE FROM youtube_source_channels WHERE id = $1")
+            .bind(source_channel.id)
+            .execute(&state.db_pool)
+            .await;
+
+        let mut missing = Vec::new();
+        if !twitch_ok {
+            missing.push("Twitch");
+        }
+        if !kick_ok {
+            missing.push("Kick.com");
+        }
+
+        return Ok(Json(json!({
+            "success": false,
+            "reason": "three_way_mapping_required",
+            "message": format!(
+                "This creator does not have {} account(s). A YouTube channel must have both a Twitch and a Kick.com account to be a valid source channel.",
+                missing.join(" and ")
+            ),
+        })));
+    }
+
     Ok(Json(json!({
         "success": true,
         "channel": source_channel

@@ -6,9 +6,12 @@ use axum::{
     routing::{get, post},
     Router,
 };
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sqlx::Row;
 use std::sync::Arc;
+use uuid::Uuid;
 
 pub fn paypal_routes() -> Router {
     Router::new()
@@ -356,11 +359,12 @@ async fn capture_paypal_order(
             _ => "paypal_sandbox",
         };
 
-        let _ = sqlx::query(
+        let payment_id: Option<Uuid> = sqlx::query_scalar(
             "INSERT INTO studio_payments
              (offer_id, offer_name, amount_cents, currency, payment_method, status,
               paypal_order_id, paypal_capture_id, buyer_email, buyer_name, raw_meta, completed_at)
-             VALUES ($1, $2, $3, 'USD', $4, 'completed', $5, $6, $7, $8, $9, NOW())",
+             VALUES ($1, $2, $3, 'USD', $4, 'completed', $5, $6, $7, $8, $9, NOW())
+             RETURNING id",
         )
         .bind(offer_id)
         .bind(offer_name)
@@ -371,8 +375,56 @@ async fn capture_paypal_order(
         .bind(payer_email)
         .bind(payer_name)
         .bind(serde_json::to_value(&capture_body).ok())
-        .execute(&state.db_pool)
-        .await;
+        .fetch_optional(&state.db_pool)
+        .await
+        .ok()
+        .flatten();
+
+        // Fulfill: create a delivery for the purchased offer
+        let gig_type = match offer_id {
+            "saas-demo-starter" | "saas-demo-launch" => "product_demo",
+            "agency-3-videos" => "product_demo",
+            "product-mockup-standard" => "product_mockup",
+            "education-explainer-standard" => "educational_explainer",
+            "blender-scene-standard" => "blender_scene",
+            "clip-enhancement-standard" => "clip_enhancement",
+            "audio-standard" => "voice_audio",
+            _ => "product_demo",
+        };
+        let delivery_title = format!("{} — {}", offer_name, payer_email.unwrap_or("Buyer"));
+        let delivery_id: Option<Uuid> = sqlx::query_scalar(
+            "INSERT INTO deliveries (client_ref, title, gig_type, prompt, style, duration, extra_args, status)
+             VALUES ($1, $2, $3, $4, 'professional', 30.0, $5, 'pending')
+             RETURNING id",
+        )
+        .bind(payer_email.unwrap_or("anonymous"))
+        .bind(&delivery_title)
+        .bind(gig_type)
+        .bind(format!("PayPal purchase: {}. Offer: {}. Payer: {}. Order: {}.",
+            offer_name, offer_id, payer_email.unwrap_or("unknown"), order_id))
+        .bind(json!({
+            "source": "paypal",
+            "offer_id": offer_id,
+            "paypal_order_id": order_id,
+            "paypal_capture_id": capture_id,
+            "buyer_email": payer_email,
+            "buyer_name": payer_name,
+        }))
+        .fetch_optional(&state.db_pool)
+        .await
+        .ok()
+        .flatten();
+
+        // Link delivery to payment
+        if let (Some(pid), Some(did)) = (payment_id, delivery_id) {
+            let _ = sqlx::query(
+                "UPDATE studio_payments SET delivery_id = $1 WHERE id = $2",
+            )
+            .bind(did)
+            .bind(pid)
+            .execute(&state.db_pool)
+            .await;
+        }
 
         let dollars = amount_cents as f64 / 100.0;
         let payer = payer_email.unwrap_or("unknown");

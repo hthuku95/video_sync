@@ -327,6 +327,11 @@ impl ApifyClient {
             return download_twitch_vod(video_url, output_path).await;
         }
 
+        // Kick.com broadcasts — yt-dlp natively supports kick.com but other strategies don't.
+        if video_url.contains("kick.com") {
+            return download_kick_video(video_url, output_path).await;
+        }
+
         // Ensure parent directory exists
         if let Some(parent) = Path::new(output_path).parent() {
             fs::create_dir_all(parent)
@@ -860,4 +865,61 @@ async fn download_twitch_hls(
         width: None,
         height: None,
     })
+}
+
+/// Download a Kick.com broadcast using yt-dlp (which natively supports kick.com).
+///
+/// Kick.com does not have a public VOD listing API, so we rely on yt-dlp's Kick extractor
+/// which supports `https://kick.com/{slug}` and `https://kick.com/video/{video_id}` URLs.
+/// Only yt-dlp strategies are tried since Apify, rustube, etc. are YouTube-only.
+async fn download_kick_video(
+    video_url: &str,
+    output_path: &str,
+) -> Result<VideoDownloadResult, String> {
+    tracing::info!("💥 Kick.com broadcast detected — using kick-specific download strategies");
+
+    // Ensure parent directory exists
+    if let Some(parent) = std::path::Path::new(output_path).parent() {
+        fs::create_dir_all(parent)
+            .await
+            .map_err(|e| format!("Failed to create output directory: {}", e))?;
+    }
+
+    // Strategy 1: FastAPI yt-dlp (supports Kick extractor)
+    tracing::info!("🔄 Kick S1: FastAPI yt-dlp microservice...");
+    match YtdlpApiClient::download_video(video_url, output_path).await {
+        Ok(result) => {
+            tracing::info!("✅ Kick S1 (FastAPI yt-dlp) succeeded");
+            return Ok(VideoDownloadResult {
+                file_path: result.file_path,
+                title: result.title,
+                duration_seconds: Some(result.duration_seconds),
+                width: result.width.map(|w| w as i32),
+                height: result.height.map(|h| h as i32),
+            });
+        }
+        Err(e) => {
+            tracing::warn!("⚠️ Kick S1 (FastAPI yt-dlp) failed: {}", e);
+        }
+    }
+
+    // Strategy 2: Local yt-dlp CLI (also has Kick extractor)
+    tracing::info!("🔄 Kick S2: local yt-dlp CLI...");
+    match YtDlpClient::download_video(video_url, output_path).await {
+        Ok(result) => {
+            tracing::info!("✅ Kick S2 (local yt-dlp CLI) succeeded");
+            return Ok(VideoDownloadResult {
+                file_path: result.file_path,
+                title: result.title,
+                duration_seconds: result.duration_seconds,
+                width: result.width.map(|w| w as i32),
+                height: result.height.map(|h| h as i32),
+            });
+        }
+        Err(e) => {
+            tracing::warn!("⚠️ Kick S2 (local yt-dlp CLI) failed: {}", e);
+        }
+    }
+
+    Err("All Kick.com download strategies failed (yt-dlp API + CLI)".to_string())
 }

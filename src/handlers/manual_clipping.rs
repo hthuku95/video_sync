@@ -44,6 +44,8 @@ struct ListJobsQuery {
 fn detect_platform(url: &str) -> &'static str {
     if url.contains("twitch.tv") || url.contains("twitch.com") {
         "twitch"
+    } else if url.contains("kick.com") {
+        "kick"
     } else {
         "youtube"
     }

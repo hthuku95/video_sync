@@ -340,20 +340,22 @@ async fn search_prospects(
         search_youtube_prospects(&state, &payload, limit).await
     } else if payload.platform == "twitch" {
         search_twitch_prospects(&state, &payload, limit).await
+    } else if payload.platform == "kick" {
+        search_kick_prospects(&state, &payload, limit).await
     } else {
         complete_prospect_agent_run(
             &state,
             run_id,
             "failed",
             json!({"error": "unsupported_platform", "platform": payload.platform}),
-            Some("platform must be 'youtube' or 'twitch'"),
+            Some("platform must be 'youtube', 'twitch', or 'kick'"),
         )
         .await;
         return Err((
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
                 success: false,
-                message: "platform must be 'youtube' or 'twitch'".to_string(),
+                message: "platform must be 'youtube', 'twitch', or 'kick'".to_string(),
             }),
         ));
     };
@@ -897,6 +899,119 @@ async fn search_twitch_prospects(
         .bind(&x_dm)
         .bind(&email_script)
         .bind(&contact_enrichment)
+        .execute(&state.db_pool)
+        .await
+        .ok();
+
+        count += 1;
+    }
+
+    Ok(count)
+}
+
+async fn search_kick_prospects(
+    state: &Arc<AppState>,
+    payload: &SearchRequest,
+    limit: usize,
+) -> Result<usize, (StatusCode, Json<ErrorResponse>)> {
+    let kick_client = state.kick_client.as_ref().ok_or_else(|| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ErrorResponse {
+                success: false,
+                message: "Kick.com client not configured".to_string(),
+            }),
+        )
+    })?;
+
+    // AI picks the best Kick category to search for this prospect type
+    let category_query = ai_generate_twitch_category(
+        state,
+        &payload.prospect_type,
+        &payload
+            .category
+            .clone()
+            .unwrap_or_else(|| "general".to_string()),
+    )
+    .await;
+    tracing::info!("🎮 Kick prospect category (AI): \"{}\"", category_query);
+
+    // Fetch live streams in the AI-recommended category
+    let streams = if !category_query.is_empty() && category_query != "NONE" {
+        kick_client
+            .search_livestreams_by_category_name(&category_query)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::BAD_GATEWAY,
+                    Json(ErrorResponse {
+                        success: false,
+                        message: format!("Kick livestream search failed: {}", e),
+                    }),
+                )
+            })?
+    } else {
+        kick_client.get_livestreams(None, None, Some(100)).await.map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(ErrorResponse {
+                    success: false,
+                    message: format!("Kick livestream list failed: {}", e),
+                }),
+            )
+        })?
+    };
+
+    let mut count = 0usize;
+    for stream in streams.iter().take(limit) {
+        let channel_url = format!("https://kick.com/{}", stream.slug);
+        let channel_name = stream.slug.clone();
+        let description = stream
+            .stream_title
+            .as_deref()
+            .unwrap_or(&channel_name)
+            .to_string();
+        let scoring_description = build_scoring_description(&description);
+
+        let (ai_score, _reasoning, service, dm_creator, dm_clipper, x_dm, email_script) =
+            score_prospect_with_ai(
+                state,
+                &channel_name,
+                stream.viewer_count.unwrap_or(0),
+                &scoring_description,
+                &payload
+                    .category
+                    .clone()
+                    .unwrap_or_else(|| "general".to_string()),
+                &payload.prospect_type,
+            )
+            .await;
+
+        if ai_score < 0.3 {
+            continue;
+        }
+
+        let _ = sqlx::query(
+            r#"INSERT INTO prospects
+               (source, channel_name, channel_url, description, platform,
+                ai_score, dm_script_creator, dm_script_clipper,
+                recommended_service, x_dm, email_dm)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+               ON CONFLICT (channel_url) DO UPDATE SET
+                ai_score = EXCLUDED.ai_score,
+                updated_at = NOW()"#,
+        )
+        .bind("kick")
+        .bind(&stream.slug)
+        .bind(&channel_url)
+        .bind(&description)
+        .bind("kick")
+        .bind(ai_score)
+        .bind(&dm_creator)
+        .bind(&dm_clipper)
+        .bind(&service)
+        .bind(&x_dm)
+        .bind(&email_script)
         .execute(&state.db_pool)
         .await
         .ok();

@@ -448,6 +448,7 @@ async fn escalate_download_failure_fallbacks(app_state: &Arc<AppState>) -> Resul
             &failure_reason,
             json!({
                 "source_url": source_url,
+                "used_kick_fallback": job.used_kick_fallback,
                 "used_twitch_fallback": job.used_twitch_fallback,
             }),
         )

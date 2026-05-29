@@ -18,6 +18,7 @@ pub mod gemini_client;
 pub mod gcs_client;
 pub mod handlers;
 pub mod jobs;
+pub mod kick_client;
 pub mod llm_utils;
 pub mod middleware;
 pub mod models;
@@ -97,4 +98,5 @@ pub struct AppState {
     pub phantombuster_client: Option<phantombuster_client::PhantomBusterClient>,
     pub active_agent_channels:
         std::sync::Arc<tokio::sync::RwLock<std::collections::HashMap<String, tokio::sync::mpsc::UnboundedSender<String>>>>,
+    pub kick_client: Option<kick_client::KickClient>,
 }
