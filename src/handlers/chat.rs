@@ -494,6 +494,37 @@ async fn websocket(
             // Check if we have context (before moving it)
             let _has_context = context.is_some() || !file_context.is_empty();
 
+            // 🆕 INTERACTIVE AGENT: If there's an active background agent for this
+            // session, forward the user's message directly to it instead of spawning
+            // a new one. The agent will respond conversationally mid-work.
+            {
+                let channels = state.active_agent_channels.read().await;
+                if let Some(tx) = channels.get(&session_id) {
+                    let enhanced_query = {
+                        let mut query_parts = Vec::new();
+                        if !file_context.is_empty() {
+                            query_parts.push(file_context.clone());
+                        }
+                        if let Some(ref ctx) = context {
+                            query_parts.push(format!("PREVIOUS CONVERSATIONS CONTEXT:\n{}", ctx));
+                        }
+                        query_parts.push(format!("USER REQUEST:\n{}", text));
+                        query_parts.join("\n\n")
+                    };
+                    if tx.send(enhanced_query).is_ok() {
+                        tracing::info!(
+                            "📨 Forwarded message to running agent for session: {}",
+                            session_id
+                        );
+                        continue;
+                    }
+                    tracing::warn!(
+                        "Agent channel closed for session {}, falling through to spawn new agent",
+                        session_id
+                    );
+                }
+            }
+
             // Create enhanced query with file context and conversation context
             let enhanced_query = {
                 let mut query_parts = Vec::new();
@@ -569,6 +600,15 @@ async fn websocket(
             let job_manager_bg = state.job_manager.clone();
             let agent_tx_bg = agent_progress_tx.clone();
 
+            // 🆕 Create agent channel for interactive messaging
+            let (agent_user_tx, agent_user_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+            {
+                let mut channels = state.active_agent_channels.write().await;
+                channels.insert(session_id.clone(), agent_user_tx);
+            }
+
+            let state_bg_clone = state_bg.clone();
+            let session_id_clone = session_id.clone();
             tokio::spawn(async move {
                 run_agent_background(
                     state_bg,
@@ -579,7 +619,12 @@ async fn websocket(
                     job_id,
                     job_manager_bg,
                     agent_tx_bg,
-                ).await;
+                    agent_user_rx,
+                )
+                .await;
+                // Unregister agent channel on completion
+                let mut channels = state_bg_clone.active_agent_channels.write().await;
+                channels.remove(&session_id_clone);
             });
 
             // Send immediate ACK so the user knows the agent has started
@@ -2269,6 +2314,7 @@ async fn run_agent_background(
     job_id: Option<uuid::Uuid>,
     job_manager: std::sync::Arc<crate::jobs::JobManager>,
     agent_progress_tx: tokio::sync::mpsc::UnboundedSender<String>,
+    user_message_rx: tokio::sync::mpsc::UnboundedReceiver<String>,
 ) {
     tracing::info!(
         "🚀 Background agent task started for session: {}",
@@ -2317,6 +2363,9 @@ async fn run_agent_background(
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(1800);
 
+    // Wrap receiver in Option so it can be moved into one branch
+    let mut user_msg_rx_opt = Some(user_message_rx);
+
     let response = tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), async {
         if use_claude {
             if let Some(ref claude_client) = state.claude_client {
@@ -2330,6 +2379,7 @@ async fn run_agent_background(
                         job_manager.clone(),
                         Some(proxy_tx),
                         agent_workflow_id,
+                        None, // Claude agent doesn't support interactivity yet
                     )
                     .await
             } else {
@@ -2350,6 +2400,7 @@ async fn run_agent_background(
                     job_manager.clone(),
                     Some(proxy_tx),
                     agent_workflow_id,
+                    user_msg_rx_opt.take(),
                 )
                 .await
         } else {

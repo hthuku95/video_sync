@@ -1,7 +1,9 @@
 // Build: 2026-03-10 — deploy with YOUTUBE_API_KEY + Gemini retry fixes
 use axum::{extract::DefaultBodyLimit, Extension, Router};
 mod tool_registry;
+use std::collections::HashMap;
 use std::sync::Arc;
+use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::Semaphore;
 use tower_http::cors::CorsLayer;
 
@@ -86,6 +88,7 @@ pub struct AppState {
     pub download_semaphore: Arc<Semaphore>, // 🔒 Limits concurrent downloads to 2
     pub delivery_render_semaphore: Arc<Semaphore>, // 🎬 Limits concurrent delivery renders to avoid OOM
     pub phantombuster_client: Option<phantombuster_client::PhantomBusterClient>, // 🎯 LinkedIn scraping
+    pub active_agent_channels: Arc<tokio::sync::RwLock<HashMap<String, UnboundedSender<String>>>>, // Interactive agent channels
 }
 
 /// Validate Apify API token on startup
@@ -650,6 +653,7 @@ async fn main() {
                 .and_then(|v| v.parse::<usize>().ok())
                 .unwrap_or(1), // default to 1 active delivery render to reduce memory spikes
         )),
+        active_agent_channels: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
     });
 
     // Admin-only routes

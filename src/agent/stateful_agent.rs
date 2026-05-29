@@ -29,6 +29,7 @@ impl StatefulClaudeAgent {
         job_manager: Arc<crate::jobs::JobManager>,
         progress_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
         _workflow_id: Option<uuid::Uuid>,
+        _user_message_rx: Option<tokio::sync::mpsc::UnboundedReceiver<String>>,
     ) -> Result<String, String> {
         // Helper to send progress updates
         let send_progress = |msg: &str| {
@@ -534,6 +535,7 @@ impl StatefulGeminiAgent {
         job_manager: Arc<crate::jobs::JobManager>,
         progress_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
         workflow_id: Option<uuid::Uuid>,
+        mut user_message_rx: Option<tokio::sync::mpsc::UnboundedReceiver<String>>,
     ) -> Result<String, String> {
         // Helper to send progress updates
         let send_progress = |msg: &str| {
@@ -799,6 +801,73 @@ For complex multi-step workflows that benefit from parallel execution:
             if is_first_call {
                 send_progress("🤖 Processing your message...");
                 is_first_call = false;
+            }
+
+            // 🆕 INTERACTIVE: Check for user follow-up messages between tool calls
+            if let Some(ref mut rx) = user_message_rx {
+                while let Ok(followup) = rx.try_recv() {
+                    tracing::info!("📨 Agent received follow-up message mid-work: session={}", session_id);
+                    send_progress("💬 Received your follow-up while working...");
+
+                    // Save user message to conversation history
+                    let user_msg = ConversationMessage::new_human(
+                        session_id.to_string(),
+                        followup.clone(),
+                    );
+                    let _ = conversation_manager.save_message(&user_msg).await;
+
+                    // Append to conversation history for the LLM
+                    conversation_contents.push(crate::gemini_client::Content {
+                        parts: vec![crate::gemini_client::Part::Text {
+                            text: followup,
+                        }],
+                        role: Some("user".to_string()),
+                    });
+
+                    // Call Gemini for a quick conversational response
+                    let quick_req = crate::gemini_client::GenerateContentRequest {
+                        contents: conversation_contents.clone(),
+                        tools: Some(vec![crate::gemini_client::Tool {
+                            function_declarations: all_tools.clone(),
+                        }]),
+                        generation_config: Some(crate::gemini_client::GenerationConfig {
+                            temperature: 0.7,
+                            top_k: 40,
+                            top_p: 0.9,
+                            max_output_tokens: 1024,
+                        }),
+                        tool_config: None,
+                        system_instruction: None,
+                    };
+                    let response = self.client.generate_content(quick_req).await;
+
+                    if let Ok(response) = response {
+                        if let Some(candidate) = response.candidates.first() {
+                            if let Some(content) = &candidate.content {
+                                if let Some(text) = content.parts.first() {
+                                    if let crate::gemini_client::Part::Text { text } = text {
+                                        let reply = text.clone();
+                                        // Save assistant response
+                                        let assistant_msg = ConversationMessage::new_assistant(
+                                            session_id.to_string(),
+                                            reply.clone(),
+                                        );
+                                        let _ = conversation_manager.save_message(&assistant_msg).await;
+                                        // Push to conversation history
+                                        conversation_contents.push(crate::gemini_client::Content {
+                                            parts: vec![crate::gemini_client::Part::Text {
+                                                text: reply.clone(),
+                                            }],
+                                            role: Some("model".to_string()),
+                                        });
+                                        // Send to WebSocket via progress channel
+                                        send_progress(&format!("💬 {}", reply));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
             let request = crate::gemini_client::GenerateContentRequest {

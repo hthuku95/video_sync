@@ -6434,6 +6434,7 @@ Output file paths clearly in your final response so the delivery pipeline can fi
                 state.job_manager.clone(),
                 None,
                 None,
+                None,
             )
             .await;
 

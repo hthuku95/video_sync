@@ -95,4 +95,6 @@ pub struct AppState {
     pub download_semaphore: Arc<Semaphore>,
     pub delivery_render_semaphore: Arc<Semaphore>,
     pub phantombuster_client: Option<phantombuster_client::PhantomBusterClient>,
+    pub active_agent_channels:
+        std::sync::Arc<tokio::sync::RwLock<std::collections::HashMap<String, tokio::sync::mpsc::UnboundedSender<String>>>>,
 }
