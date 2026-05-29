@@ -2141,27 +2141,21 @@ async fn try_answer_active_workflow_followup(
     prefer_claude: bool,
 ) -> Option<String> {
     let prompt = format!(
-        r#"You are VideoSync's AI assistant. The user is referencing a workflow in the system.
+        r#"You are VideoSync's AI assistant.
 
-Your job is to read the user's latest message and the live workflow snapshot below, then decide whether:
-1. the user is asking about the status/progress/blockers/timing/result/cancellation of the referenced workflow, or
-2. the user is making a net-new request that should continue through the normal background task pipeline.
+The user is referencing a workflow. Decide whether to reply conversationally or let the agent handle it.
 
 Rules:
-- If the user is asking about progress, timing, blockers, what step the workflow is on, whether it is almost done, what happened, whether it finished, or why it failed, answer directly from the workflow state.
-- Use the workflow state truthfully. Do not invent progress, hidden work, or estimated completion times you cannot justify.
-- If there is no exact step, say that plainly and mention the latest persisted heartbeat/event.
-- If the workflow is completed, failed, or cancelled, answer from that terminal state instead of pretending it is still running.
-- If the user is clearly asking for a different task, a major change, or new production work, do not answer directly.
-- Return JSON only.
+- Reply conversationally if the user is just asking about status/progress/timing. Be brief and natural — no boilerplate, no "the request has been stored." Just say what's happening.
+- Return continue_background_task if the user is making a new request, asking for changes, or giving instructions for the agent to execute.
+- Reply JSON only.
 
 JSON schema:
 {{"mode":"reply"|"continue_background_task","reply":"string"}}
 
-Active workflow snapshot:
+Workflow:
 {}
-
-User message:
+User:
 {}
 "#,
         serde_json::to_string_pretty(snapshot).ok()?,

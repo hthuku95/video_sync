@@ -363,4 +363,7 @@ cookies.txt
 *:Zone.Identifier
 
 # Local research/debug images
-images_for_claude/
+images_for_claude/# Cloud Run env files with secrets
+*.cloudrun.env.yaml
+*.cloudrun.env.local.yaml
+ytdlp.cloudrun.env.yaml
