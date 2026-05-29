@@ -1004,14 +1004,15 @@ fn extract_best_twitter_handle(description: &str) -> Option<String> {
             ],
         )
     }).or_else(|| {
-        // Fallback: standalone @handle but only if near Twitter/X context (avoids brand mentions).
+        // Fallback: standalone @handle near Twitter/X context words.
+        // Avoid false-positives by requiring explicit Twitter/X labels.
         let context_regex = Regex::new(
-            r"(?i)(?:twitter|x\s*(?:/|at|:|\s))\s*@([a-zA-Z0-9_]{2,50})(?![a-zA-Z0-9_])"
+            r"(?i)(?:twitter|x\s*(?:/|at|:))\s*@?([a-zA-Z0-9_]{2,50})(?![a-zA-Z0-9_])"
         ).ok()?;
         for capture in context_regex.captures_iter(description) {
             if let Some(m) = capture.get(1) {
                 let handle = m.as_str();
-                if !handle.contains('.') && handle.len() >= 2 {
+                if !handle.contains('.') && handle.len() >= 2 && handle.len() <= 50 {
                     return Some(format!("@{}", handle));
                 }
             }
@@ -1428,6 +1429,21 @@ Return ONLY valid JSON (no markdown):
                             "animations" => "education".to_string(),
                             _ => default_service_for_prospect(category, prospect_type),
                         }
+                    };
+                    // Post-process: override LLM's choice for known prospect types
+                    // where DeepSeek tends to default to "clipping".
+                    let service = match prospect_type {
+                        "business_owner" => {
+                            if service != "ugc" && service != "product_mockup" && service != "full_stack" {
+                                "landing_page".to_string()
+                            } else { service }
+                        }
+                        "educator" => {
+                            if service != "education" {
+                                "education".to_string()
+                            } else { service }
+                        }
+                        _ => service,
                     };
                     (
                         score,
