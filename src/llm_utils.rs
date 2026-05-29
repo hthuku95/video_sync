@@ -9,6 +9,42 @@ use crate::deepseek_client::DeepSeekClient;
 use crate::gemini_client::GeminiClient;
 use crate::nvidia_nim_client::NvidiaNimClient;
 
+/// Fast text generation — tries DeepSeek first, then Gemini, skipping NIM+Gemma.
+/// Use for bulk/scoring tasks where speed matters and DeepSeek is preferred.
+pub async fn generate_text_fast(
+    gemini: Option<&GeminiClient>,
+    deepseek: Option<&DeepSeekClient>,
+    prompt: &str,
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    // Tier 1: DeepSeek V4 — fast, cheap, always-on
+    if let Some(client) = deepseek {
+        match client.generate_text(prompt).await {
+            Ok(result) => {
+                tracing::debug!("✅ Text generated via DeepSeek V4 (fast path)");
+                return Ok(result);
+            }
+            Err(e) => {
+                tracing::warn!("⚠️ DeepSeek (fast path) failed, trying Gemini: {}", e);
+            }
+        }
+    }
+
+    // Tier 2: Gemini Flash — fallback
+    if let Some(client) = gemini {
+        match client.generate_text(prompt).await {
+            Ok(result) => {
+                tracing::debug!("✅ Text generated via Gemini Flash (fast path)");
+                return Ok(result);
+            }
+            Err(e) => {
+                tracing::warn!("⚠️ Gemini (fast path) also failed: {}", e);
+            }
+        }
+    }
+
+    Err("No LLM client available for fast text generation".into())
+}
+
 /// Generate text using the best available LLM, with automatic fallback.
 ///
 /// Use this for all text-only tasks (DM scripts, prospect scoring, outreach messages,

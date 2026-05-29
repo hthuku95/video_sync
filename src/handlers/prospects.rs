@@ -1382,9 +1382,7 @@ Return ONLY valid JSON (no markdown):
         prospect_type = prospect_type,
     );
 
-    match generate_text_best_effort(
-        state.nvidia_nim_client.as_ref(),
-        state.gemma_client.as_ref(),
+    match crate::llm_utils::generate_text_fast(
         state.gemini_client.as_ref(),
         state.deepseek_client.as_ref(),
         &prompt,
@@ -5665,9 +5663,7 @@ The query should:
 Return ONLY the raw search query string, nothing else."#
     );
 
-    match generate_text_best_effort(
-        state.nvidia_nim_client.as_ref(),
-        state.gemma_client.as_ref(),
+    match crate::llm_utils::generate_text_fast(
         state.gemini_client.as_ref(),
         state.deepseek_client.as_ref(),
         &prompt,
@@ -5713,9 +5709,7 @@ If the niche is not gaming, pick the closest non-gaming Twitch category (e.g. "J
 Return ONLY the category name, nothing else."#
     );
 
-    match generate_text_best_effort(
-        state.nvidia_nim_client.as_ref(),
-        state.gemma_client.as_ref(),
+    match crate::llm_utils::generate_text_fast(
         state.gemini_client.as_ref(),
         state.deepseek_client.as_ref(),
         &prompt,
