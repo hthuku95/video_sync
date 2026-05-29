@@ -522,28 +522,32 @@ async fn websocket(
 
             if let Some(active_workflow_snapshot) = workflow_snapshot
             {
-                if let Some(followup_reply) = try_answer_active_workflow_followup(
-                    &state,
-                    &session_id,
-                    &text,
-                    &active_workflow_snapshot,
-                    use_claude,
-                )
-                .await
-                {
-                    let json_response = serde_json::json!({
-                        "type": "result",
-                        "content": followup_reply.clone(),
-                        "timestamp": chrono::Utc::now().to_rfc3339(),
-                    });
+                // 🚀 Planning workflows haven't started yet — always route to the
+                // agent instead of asking the LLM whether to answer or continue.
+                if active_workflow_snapshot.status != "planning" {
+                    if let Some(followup_reply) = try_answer_active_workflow_followup(
+                        &state,
+                        &session_id,
+                        &text,
+                        &active_workflow_snapshot,
+                        use_claude,
+                    )
+                    .await
+                    {
+                        let json_response = serde_json::json!({
+                            "type": "result",
+                            "content": followup_reply.clone(),
+                            "timestamp": chrono::Utc::now().to_rfc3339(),
+                        });
 
-                    if let Ok(json_str) = serde_json::to_string(&json_response) {
-                        if sender.send(Message::Text(json_str)).await.is_err() {
-                            tracing::error!("Failed to send active-workflow follow-up response");
-                            break;
+                        if let Ok(json_str) = serde_json::to_string(&json_response) {
+                            if sender.send(Message::Text(json_str)).await.is_err() {
+                                tracing::error!("Failed to send active-workflow follow-up response");
+                                break;
+                            }
                         }
+                        continue;
                     }
-                    continue;
                 }
             }
 
