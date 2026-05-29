@@ -11,6 +11,8 @@ pub mod blender_quality;
 pub mod claude_client;
 pub mod clipping;
 pub mod db;
+pub mod deepseek_client;
+pub mod email;
 pub mod elevenlabs_client;
 pub mod gemini_client;
 pub mod gcs_client;
@@ -72,6 +74,8 @@ pub struct AppState {
     pub video_gemini_client: Option<gemini_client::GeminiClient>,
     pub gemma_client: Option<gemini_client::GeminiClient>,
     pub nvidia_nim_client: Option<nvidia_nim_client::NvidiaNimClient>,
+    pub nvidia_nim_vision_client: Option<nvidia_nim_client::NvidiaNimClient>,
+    pub deepseek_client: Option<deepseek_client::DeepSeekClient>,
     pub claude_client: Option<claude_client::ClaudeClient>,
     pub vertex_multimodal_embeddings:
         Option<vertex_multimodal_embeddings::VertexMultimodalEmbeddingsClient>,

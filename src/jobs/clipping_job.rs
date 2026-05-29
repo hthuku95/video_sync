@@ -49,13 +49,20 @@ pub async fn execute_clipping_job(job_id: i32, app_state: Arc<AppState>) -> Resu
 
     let video_url = format!("https://youtube.com/watch?v={}", job.source_video_id);
     let workflow_id = job.workflow_id;
-    ensure_clipping_workflow_plan(&app_state, workflow_id, job_id, &job.source_video_id, &video_url)
-        .await;
+    ensure_clipping_workflow_plan(
+        &app_state,
+        workflow_id,
+        job_id,
+        &job.source_video_id,
+        &video_url,
+    )
+    .await;
 
     // =========================================================================
     // Phase Determination - smart resume via durable nodes first, legacy hint second
     // =========================================================================
-    let node_resume_from = infer_clipping_resume_from_nodes(&app_state.db_pool, workflow_id).await?;
+    let node_resume_from =
+        infer_clipping_resume_from_nodes(&app_state.db_pool, workflow_id).await?;
     let resume_hint = node_resume_from
         .as_deref()
         .or(job.resume_from.as_deref())
@@ -688,7 +695,9 @@ pub async fn execute_clipping_job(job_id: i32, app_state: Arc<AppState>) -> Resu
                 "Extraction/vectorization nodes completed; job released for the upload node.",
             )
             .await?;
-            return Ok("Extraction/vectorization node completed; job requeued for upload".to_string());
+            return Ok(
+                "Extraction/vectorization node completed; job requeued for upload".to_string(),
+            );
         }
         (clips, clip_db_ids)
     } else {
@@ -950,7 +959,7 @@ pub async fn load_clips_from_db(
     pool: &PgPool,
 ) -> Result<(Vec<ExtractedClipData>, Vec<i32>), String> {
     let rows = sqlx::query(
-            "SELECT id, clip_number, local_clip_path,
+        "SELECT id, clip_number, local_clip_path,
                 start_time_seconds, end_time_seconds, duration_seconds,
                 ai_title, ai_description, ai_tags, ai_confidence_score,
                 viral_factors, custom_thumbnail_path, thumbnail_generation_method,
@@ -1032,13 +1041,23 @@ async fn store_clip_in_qdrant(
 
     let text_to_embed = format!("{} {}", clip.ai_title, clip.ai_description);
 
-    let embedding = if let Some(ref voyage) = app_state.voyage_embeddings {
+    let embedding = if let Some(ref gemini) = app_state.video_gemini_client.as_ref().or(app_state.gemini_client.as_ref()) {
+        // Tier 1: Gemini Embedding 2
+        match gemini.embed_content_with_model(&text_to_embed, "models/gemini-embedding-2", Some(1536)).await {
+            Ok(emb) => Some(emb),
+            Err(e) => {
+                tracing::warn!("Gemini Embedding 2 failed for clip: {}", e);
+                // Tier 2: Voyage
+                if let Some(ref voyage) = app_state.voyage_embeddings {
+                    voyage.generate_single_embedding(text_to_embed.clone()).await.ok()
+                } else {
+                    // Tier 3: Gemini text-embedding-004
+                    gemini.embed_content(&text_to_embed).await.ok()
+                }
+            }
+        }
+    } else if let Some(ref voyage) = app_state.voyage_embeddings {
         voyage.generate_single_embedding(text_to_embed).await.ok()
-    } else if let Some(ref gemini) = app_state.gemini_client {
-        gemini
-            .embed_content(&format!("{} {}", clip.ai_title, clip.ai_description))
-            .await
-            .ok()
     } else {
         None
     };
@@ -1122,9 +1141,7 @@ pub async fn infer_clipping_resume_from_nodes(
         return Ok(Some("downloaded".to_string()));
     }
 
-    if has("analysis", &["completed"])
-        || has("download", &["running", "failed"])
-    {
+    if has("analysis", &["completed"]) || has("download", &["running", "failed"]) {
         return Ok(Some("analyzed".to_string()));
     }
 
@@ -1372,7 +1389,7 @@ pub async fn fetch_destination_channel(
     .bind(channel_id)
     .fetch_one(pool)
     .await
-        .map_err(|e| format!("Failed to fetch destination channel: {}", e))
+    .map_err(|e| format!("Failed to fetch destination channel: {}", e))
 }
 
 pub async fn load_reusable_source_analysis(
@@ -1653,7 +1670,12 @@ pub async fn handle_download_failure_fallback(
     .bind(job.id)
     .execute(&app_state.db_pool)
     .await
-    .map_err(|e| format!("Failed to update clipping job with fallback delivery: {}", e))?;
+    .map_err(|e| {
+        format!(
+            "Failed to update clipping job with fallback delivery: {}",
+            e
+        )
+    })?;
 
     Ok(format!(
         "Clipping download failed, so a segmented fallback summary delivery was created and queued. Delivery ID: {}. Workflow ID: {}.",
@@ -1683,14 +1705,8 @@ pub(crate) async fn enhance_clips_with_full_agent(
     for clip in clips.iter_mut() {
         enhancer.enhance_clip(clip, content_type).await;
 
-        let mut review = review_clip_with_qa(
-            clip,
-            app_state,
-            source_type,
-            source_video_url,
-            content_type,
-        )
-        .await;
+        let mut review =
+            review_clip_with_qa(clip, app_state, source_type, source_video_url, content_type).await;
         let mut reviewed_after_retry = false;
 
         if !review.pass {

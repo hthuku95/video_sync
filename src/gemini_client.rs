@@ -301,11 +301,13 @@ pub struct ImageCandidate {
 
 impl GeminiClient {
     pub fn new(api_key: String) -> Self {
+        let text_model = std::env::var("GEMINI_TEXT_MODEL")
+            .unwrap_or_else(|_| "gemini-2.5-flash".to_string());
         Self {
             client: Client::new(),
             api_key,
             base_url: "https://generativelanguage.googleapis.com/v1beta".to_string(),
-            text_model: "gemini-2.5-flash".to_string(),
+            text_model,
             semaphore: Arc::new(tokio::sync::Semaphore::new(GEMINI_MAX_CONCURRENT)),
         }
     }
@@ -447,6 +449,21 @@ impl GeminiClient {
                 continue;
             }
 
+            // On 503 (model overloaded), retry with exponential backoff.
+            if status.as_u16() == 503 && attempt < max_attempts - 1 {
+                let wait_secs = (10u64 * 2u64.pow(attempt)).min(60);
+                tracing::warn!(
+                    "⚠️ Gemini model overloaded (503, attempt {}/{}). \
+                     Waiting {}s before retry…",
+                    attempt + 1,
+                    max_attempts,
+                    wait_secs
+                );
+                tokio::time::sleep(tokio::time::Duration::from_secs(wait_secs)).await;
+                last_error = format!("Gemini API error (model overloaded): {}", error_text).into();
+                continue;
+            }
+
             // Non-retryable error.
             return Err(format!("Gemini API error: {}", error_text).into());
         }
@@ -532,7 +549,11 @@ impl GeminiClient {
             })
             .unwrap_or_else(|| "uploaded-media".to_string());
 
-        let start_url = format!("{}/upload/v1beta/files?key={}", self.api_root(), self.api_key);
+        let start_url = format!(
+            "{}/upload/v1beta/files?key={}",
+            self.api_root(),
+            self.api_key
+        );
         let file_bytes = tokio::fs::read(path).await?;
         let start_response = self
             .client
@@ -590,7 +611,12 @@ impl GeminiClient {
         &self,
         file_name: &str,
     ) -> Result<UploadedFile, Box<dyn std::error::Error + Send + Sync>> {
-        let status_url = format!("{}/v1beta/{}?key={}", self.api_root(), file_name, self.api_key);
+        let status_url = format!(
+            "{}/v1beta/{}?key={}",
+            self.api_root(),
+            file_name,
+            self.api_key
+        );
 
         for attempt in 0..30u32 {
             let response = self.client.get(&status_url).send().await?;

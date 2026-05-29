@@ -635,12 +635,12 @@ impl VideoEditingJob {
                         "Storing the editing conversation in long-term memory when vector storage is available.",
                         json!({
                             "session_id": session_id,
-                            "provider": if self.app_state.voyage_embeddings.is_some() {
-                                "voyage"
-                            } else if self.app_state.video_gemini_client.is_some()
+                            "provider": if self.app_state.video_gemini_client.is_some()
                                 || self.app_state.gemini_client.is_some()
                             {
-                                "gemini"
+                                "gemini_embedding2"
+                            } else if self.app_state.voyage_embeddings.is_some() {
+                                "voyage"
                             } else {
                                 "not_configured"
                             },
@@ -654,49 +654,24 @@ impl VideoEditingJob {
                     let files_referenced = vec![];
                     let context_data = std::collections::HashMap::new();
 
-                    if let Some(ref voyage_embeddings) = self.app_state.voyage_embeddings {
-                        if let Err(e) = qdrant_client
-                            .store_chat_memory_with_voyage(
-                                &session_id,
-                                None,
-                                &raw_input,
-                                &response,
-                                files_referenced,
-                                context_data,
-                                voyage_embeddings,
-                                Some("video_editing"),
-                            )
-                            .await
-                        {
-                            tracing::warn!(
-                                "Failed to store conversation in Qdrant (Voyage): {}",
-                                e
-                            );
-                        }
-                    } else if let Some(ref gemini_client) = self
-                        .app_state
-                        .video_gemini_client
-                        .as_ref()
-                        .or(self.app_state.gemini_client.as_ref())
+                    if let Err(e) = qdrant_client
+                        .store_chat_memory(
+                            &session_id,
+                            None,
+                            &raw_input,
+                            &response,
+                            files_referenced,
+                            context_data,
+                            self.app_state.voyage_embeddings.as_ref(),
+                            self.app_state.video_gemini_client.as_ref().or(self.app_state.gemini_client.as_ref()),
+                            Some("video_editing"),
+                        )
+                        .await
                     {
-                        if let Err(e) = qdrant_client
-                            .store_chat_memory_with_gemini(
-                                &session_id,
-                                None,
-                                &raw_input,
-                                &response,
-                                files_referenced,
-                                context_data,
-                                gemini_client,
-                                Some("video_editing"),
-                            )
-                            .await
-                        {
-                            tracing::warn!(
-                                "Failed to store conversation in Qdrant (Gemini): {}",
-                                e
-                            );
-                        }
+                        tracing::warn!(
+                            "Failed to store conversation in Qdrant: {}",
+                            e
+                        );
                     }
                 }
 

@@ -3,8 +3,10 @@
 FROM rust:1.94.1 as builder
 WORKDIR /app
 
-# Keep Rust compilation memory usage predictable in constrained Cloud Build workers.
-ENV CARGO_BUILD_JOBS=1
+# Allow overriding parallelism at build time (e.g., --build-arg CARGO_JOBS=2).
+# Cloud Build E2_HIGHCPU_8 can handle 2 concurrent jobs safely.
+ARG CARGO_JOBS=1
+ENV CARGO_BUILD_JOBS=${CARGO_JOBS}
 
 # Install OpenSSL dev libraries (needed by openssl-sys, qdrant-client, reqwest)
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -20,7 +22,7 @@ COPY src ./src
 COPY migrations ./migrations
 
 # Build release binary (links against Bookworm's libssl.so.3)
-RUN cargo build --release -j 1
+RUN cargo build --release -j ${CARGO_JOBS}
 
 # Stage 2: Runtime image — Debian Trixie to match the builder's glibc/OpenSSL ABI
 FROM debian:trixie-slim

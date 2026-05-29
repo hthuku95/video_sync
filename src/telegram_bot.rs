@@ -246,6 +246,7 @@ async fn handle_dm(
         state.nvidia_nim_client.as_ref(),
         state.gemma_client.as_ref(),
         state.gemini_client.as_ref(),
+        state.deepseek_client.as_ref(),
         &prompt,
     )
     .await

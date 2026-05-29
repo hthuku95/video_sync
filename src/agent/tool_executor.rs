@@ -90,7 +90,11 @@ async fn start_tool_execution_node(
 
     let runtime = crate::services::WorkflowRuntime::new(ctx.app_state.db_pool.clone());
     let args_hash = stable_value_hash(&args);
-    let node_key = format!("tool_exec_{}_{}", sanitize_tool_node_key(tool_name), args_hash);
+    let node_key = format!(
+        "tool_exec_{}_{}",
+        sanitize_tool_node_key(tool_name),
+        args_hash
+    );
 
     let node = runtime
         .ensure_node(
@@ -410,7 +414,11 @@ async fn persist_tool_output(
     }
 
     let artifact = crate::services::media_review::MediaReviewArtifact {
-        review_id: format!("tool-output-{}-{}", ctx.session_id, crate::services::GeneratedArtifactService::legacy_file_id(&normalized_output_path)),
+        review_id: format!(
+            "tool-output-{}-{}",
+            ctx.session_id,
+            crate::services::GeneratedArtifactService::legacy_file_id(&normalized_output_path)
+        ),
         asset_kind: infer_artifact_kind(&mime_type).to_string(),
         source_type: format!("tool_output:{tool_name}"),
         service_slug: None,
@@ -558,7 +566,9 @@ pub async fn execute_tool_claude_with_context(
     }
     let result = execute_tool_claude_with_context_inner(name, args, ctx).await;
     finish_tool_execution_node(
-        node_start.as_ref().map(|node_start| node_start.node_key.as_str()),
+        node_start
+            .as_ref()
+            .map(|node_start| node_start.node_key.as_str()),
         name,
         &result,
         ctx,
@@ -681,8 +691,7 @@ async fn execute_tool_claude_with_context_inner(
     }
     if name == "blender_generate_code_animation" {
         let result =
-            execute_blender_simple_manim_claude("blender_generate_code_animation", args, ctx)
-                .await;
+            execute_blender_simple_manim_claude("blender_generate_code_animation", args, ctx).await;
         return finalize_special_tool_result_value(name, args, result, ctx).await;
     }
     if name == "blender_generate_timeline" {
@@ -692,8 +701,7 @@ async fn execute_tool_claude_with_context_inner(
     }
     if name == "blender_generate_network_graph" {
         let result =
-            execute_blender_simple_manim_claude("blender_generate_network_graph", args, ctx)
-                .await;
+            execute_blender_simple_manim_claude("blender_generate_network_graph", args, ctx).await;
         return finalize_special_tool_result_value(name, args, result, ctx).await;
     }
     if name == "blender_generate_logo_reveal" {
@@ -713,8 +721,7 @@ async fn execute_tool_claude_with_context_inner(
     }
     if name == "blender_generate_text_animation" {
         let result =
-            execute_blender_simple_manim_claude("blender_generate_text_animation", args, ctx)
-                .await;
+            execute_blender_simple_manim_claude("blender_generate_text_animation", args, ctx).await;
         return finalize_special_tool_result_value(name, args, result, ctx).await;
     }
     if name == "blender_generate_vector_field" {
@@ -723,12 +730,9 @@ async fn execute_tool_claude_with_context_inner(
         return finalize_special_tool_result_value(name, args, result, ctx).await;
     }
     if name == "blender_generate_matrix_transform" {
-        let result = execute_blender_simple_manim_claude(
-            "blender_generate_matrix_transform",
-            args,
-            ctx,
-        )
-        .await;
+        let result =
+            execute_blender_simple_manim_claude("blender_generate_matrix_transform", args, ctx)
+                .await;
         return finalize_special_tool_result_value(name, args, result, ctx).await;
     }
     if name == "blender_generate_polar_graph" {
@@ -738,17 +742,13 @@ async fn execute_tool_claude_with_context_inner(
     }
     if name == "blender_generate_geometry_proof" {
         let result =
-            execute_blender_simple_manim_claude("blender_generate_geometry_proof", args, ctx)
-                .await;
+            execute_blender_simple_manim_claude("blender_generate_geometry_proof", args, ctx).await;
         return finalize_special_tool_result_value(name, args, result, ctx).await;
     }
     if name == "blender_generate_particle_confetti" {
-        let result = execute_blender_simple_manim_claude(
-            "blender_generate_particle_confetti",
-            args,
-            ctx,
-        )
-        .await;
+        let result =
+            execute_blender_simple_manim_claude("blender_generate_particle_confetti", args, ctx)
+                .await;
         return finalize_special_tool_result_value(name, args, result, ctx).await;
     }
     if name == "blender_generate_rigid_body_drop" {
@@ -768,12 +768,9 @@ async fn execute_tool_claude_with_context_inner(
         return finalize_special_tool_result_value(name, args, result, ctx).await;
     }
     if name == "blender_generate_grease_pencil_reveal" {
-        let result = execute_blender_simple_manim_claude(
-            "blender_generate_grease_pencil_reveal",
-            args,
-            ctx,
-        )
-        .await;
+        let result =
+            execute_blender_simple_manim_claude("blender_generate_grease_pencil_reveal", args, ctx)
+                .await;
         return finalize_special_tool_result_value(name, args, result, ctx).await;
     }
     if name == "blender_generate_geometry_scatter" {
@@ -827,13 +824,56 @@ pub async fn execute_tool_gemini_with_context(
     }
     let result = execute_tool_gemini_with_context_inner(name, args, ctx).await;
     finish_tool_execution_node(
-        node_start.as_ref().map(|node_start| node_start.node_key.as_str()),
+        node_start
+            .as_ref()
+            .map(|node_start| node_start.node_key.as_str()),
         name,
         &result,
         ctx,
     )
     .await;
     result
+}
+
+/// Try Gemini vision analysis, fall back to NIM vision on 503/5xx errors.
+async fn analyze_image_gemini_nim_fallback(
+    image_bytes: &[u8],
+    prompt: &str,
+    nim_vision: Option<&crate::nvidia_nim_client::NvidiaNimClient>,
+) -> String {
+    // Try Gemini first
+    if let Ok(api_key) = std::env::var("GEMINI_API_KEY") {
+        if !api_key.is_empty() {
+            let client = crate::gemini_client::GeminiClient::new(api_key);
+            match client.analyze_image_bytes(image_bytes, prompt).await {
+                Ok(text) => return text,
+                Err(e) => {
+                    let err_str = e.to_string().to_lowercase();
+                    if err_str.contains("503") || err_str.contains("unavailable") || err_str.contains("500") {
+                        tracing::warn!("Gemini vision unavailable, trying NIM vision: {}", e);
+                    } else {
+                        return format!("❌ Image analysis failed: {}", e);
+                    }
+                }
+            }
+        }
+    }
+
+    // Fallback to NIM vision
+    if let Some(nim) = nim_vision {
+        match nim.analyze_image_bytes(image_bytes, prompt).await {
+            Ok(text) => text,
+            Err(e) => format!("❌ Gemini + NIM vision both failed: {}", e),
+        }
+    } else if let Ok(nim_key) = std::env::var("NVIDIA_API_KEY") {
+        let nim = crate::nvidia_nim_client::NvidiaNimClient::new_vision(nim_key);
+        match nim.analyze_image_bytes(image_bytes, prompt).await {
+            Ok(text) => text,
+            Err(e) => format!("❌ Gemini + NIM vision both failed: {}", e),
+        }
+    } else {
+        "❌ No vision provider available (Gemini unavailable, NIM not configured)".to_string()
+    }
 }
 
 async fn execute_tool_gemini_with_context_inner(
@@ -2628,8 +2668,7 @@ fn execute_submit_final_answer_claude(args: &Value) -> String {
             response.push_str(&format!("Stream: `/api/outputs/stream/{}`\n", file_id));
             response.push_str(&format!("YouTube: `{}|{}`\n\n", file_path, file_name));
         }
-    }
-    else {
+    } else {
         tracing::warn!(
             summary = %summary,
             "submit_final_answer returned without output artifacts (Claude)"
@@ -3720,8 +3759,7 @@ fn execute_submit_final_answer_gemini(args: &HashMap<String, Value>) -> String {
             response.push_str(&format!("Stream: `/api/outputs/stream/{}`\n", file_id));
             response.push_str(&format!("YouTube: `{}|{}`\n\n", file_path, file_name));
         }
-    }
-    else {
+    } else {
         tracing::warn!(
             summary = %summary,
             "submit_final_answer returned without output artifacts (Gemini)"
@@ -3928,7 +3966,10 @@ async fn execute_generate_long_form_video_claude(
     execute_generate_long_form_video_value(args, ctx).await
 }
 
-async fn execute_generate_long_form_video_value(args: &Value, ctx: &ToolExecutionContext) -> String {
+async fn execute_generate_long_form_video_value(
+    args: &Value,
+    ctx: &ToolExecutionContext,
+) -> String {
     let title = string_arg(args, &["title", "topic", "product_name"])
         .unwrap_or_else(|| "Long-form generated video".to_string());
     let brief = string_arg(args, &["brief", "description", "prompt"]).unwrap_or_else(|| {
@@ -3937,21 +3978,25 @@ async fn execute_generate_long_form_video_value(args: &Value, ctx: &ToolExecutio
             title
         )
     });
-    let target_duration_seconds =
-        number_arg(args, &["target_duration_seconds", "duration_seconds", "duration"])
-            .unwrap_or(600.0)
-            .max(15.0);
-    let segment_duration_seconds =
-        number_arg(args, &["segment_duration_seconds", "preferred_segment_seconds"])
-            .unwrap_or(30.0);
-    let style = string_arg(args, &["style"]).unwrap_or_else(|| {
-        "premium SaaS explainer, cinematic, clean motion graphics".to_string()
-    });
+    let target_duration_seconds = number_arg(
+        args,
+        &["target_duration_seconds", "duration_seconds", "duration"],
+    )
+    .unwrap_or(600.0)
+    .max(15.0);
+    let segment_duration_seconds = number_arg(
+        args,
+        &["segment_duration_seconds", "preferred_segment_seconds"],
+    )
+    .unwrap_or(30.0);
+    let style = string_arg(args, &["style"])
+        .unwrap_or_else(|| "premium SaaS explainer, cinematic, clean motion graphics".to_string());
     let offer_type = string_arg(args, &["offer_type", "workflow_type"])
         .unwrap_or_else(|| "long_form_video".to_string());
     let narration_speaker =
         string_arg(args, &["narration_speaker", "speaker"]).unwrap_or_else(|| "Emma".to_string());
-    let include_narration = bool_arg(args, &["include_narration", "with_narration"]).unwrap_or(true);
+    let include_narration =
+        bool_arg(args, &["include_narration", "with_narration"]).unwrap_or(true);
     let reference_url = string_arg(args, &["reference_url", "url"]);
 
     let idempotency_key = Some(format!(
@@ -5709,14 +5754,6 @@ async fn execute_analyze_pexels_thumbnail_claude(args: &Value) -> String {
         return "❌ Error: thumbnail_url is required".to_string();
     }
 
-    let api_key = std::env::var("VIDEO_GEMINI_API_KEY").unwrap_or_else(|_| {
-        std::env::var("GEMINI_API_KEY")
-            .unwrap_or_else(|_| std::env::var("GOOGLE_API_KEY").unwrap_or_default())
-    });
-    if api_key.is_empty() {
-        return "❌ Error: GEMINI_API_KEY not set".to_string();
-    }
-
     // Download thumbnail bytes
     let image_bytes = match reqwest::get(thumbnail_url).await {
         Ok(resp) => match resp.bytes().await {
@@ -5726,7 +5763,6 @@ async fn execute_analyze_pexels_thumbnail_claude(args: &Value) -> String {
         Err(e) => return format!("❌ Failed to fetch thumbnail: {}", e),
     };
 
-    let client = crate::gemini_client::GeminiClient::new(api_key);
     let prompt = format!(
         "I am building a video about: \"{topic}\". \
         Look at this thumbnail image and answer: \
@@ -5735,13 +5771,11 @@ async fn execute_analyze_pexels_thumbnail_claude(args: &Value) -> String {
         Format: DESCRIPTION: <text> | SCORE: <number>"
     );
 
-    match client.analyze_image_bytes(&image_bytes, &prompt).await {
-        Ok(analysis) => format!("🖼️ Thumbnail analysis for topic '{topic}':\n{analysis}"),
-        Err(e) => format!("❌ Thumbnail analysis failed: {}", e),
-    }
+    format!("🖼️ Thumbnail analysis for topic '{topic}':\n{}",
+        analyze_image_gemini_nim_fallback(&image_bytes, &prompt, None).await)
 }
 
-/// Download a Pexels thumbnail URL and analyze it with Gemini vision for topic relevance (Gemini).
+/// Download a Pexels thumbnail URL and analyze it with Gemini or NIM vision for topic relevance (Gemini dispatch).
 async fn execute_analyze_pexels_thumbnail_gemini(args: &HashMap<String, Value>) -> String {
     let thumbnail_url = args
         .get("thumbnail_url")
@@ -5755,14 +5789,6 @@ async fn execute_analyze_pexels_thumbnail_gemini(args: &HashMap<String, Value>) 
         return "❌ Error: thumbnail_url is required".to_string();
     }
 
-    let api_key = std::env::var("VIDEO_GEMINI_API_KEY").unwrap_or_else(|_| {
-        std::env::var("GEMINI_API_KEY")
-            .unwrap_or_else(|_| std::env::var("GOOGLE_API_KEY").unwrap_or_default())
-    });
-    if api_key.is_empty() {
-        return "❌ Error: GEMINI_API_KEY not set".to_string();
-    }
-
     let image_bytes = match reqwest::get(thumbnail_url).await {
         Ok(resp) => match resp.bytes().await {
             Ok(b) => b.to_vec(),
@@ -5771,7 +5797,6 @@ async fn execute_analyze_pexels_thumbnail_gemini(args: &HashMap<String, Value>) 
         Err(e) => return format!("❌ Failed to fetch thumbnail: {}", e),
     };
 
-    let client = crate::gemini_client::GeminiClient::new(api_key);
     let prompt = format!(
         "I am building a video about: \"{topic}\". \
         Look at this thumbnail image and answer: \
@@ -5780,10 +5805,8 @@ async fn execute_analyze_pexels_thumbnail_gemini(args: &HashMap<String, Value>) 
         Format: DESCRIPTION: <text> | SCORE: <number>"
     );
 
-    match client.analyze_image_bytes(&image_bytes, &prompt).await {
-        Ok(analysis) => format!("🖼️ Thumbnail analysis for topic '{topic}':\n{analysis}"),
-        Err(e) => format!("❌ Thumbnail analysis failed: {}", e),
-    }
+    format!("🖼️ Thumbnail analysis for topic '{topic}':\n{}",
+        analyze_image_gemini_nim_fallback(&image_bytes, &prompt, None).await)
 }
 
 /// Expose verify_clip_quality as an agent-callable tool (Claude).
@@ -5834,17 +5857,9 @@ fn execute_run_video_qa_gemini(args: &HashMap<String, Value>) -> String {
     run_final_qa(file_path)
 }
 
-/// Option B: Download a Pexels video thumbnail and ask Gemini to score its relevance 1-10.
-/// Returns the score, or 5 (neutral / proceed) if Gemini is unavailable or the call fails.
+/// Option B: Download a Pexels video thumbnail and ask Gemini (or NIM vision) to score its relevance 1-10.
+/// Returns the score, or 5 (neutral / proceed) if both are unavailable.
 async fn screen_pexels_thumbnail(thumbnail_url: &str, topic: &str) -> i32 {
-    let api_key = std::env::var("VIDEO_GEMINI_API_KEY").unwrap_or_else(|_| {
-        std::env::var("GEMINI_API_KEY")
-            .unwrap_or_else(|_| std::env::var("GOOGLE_API_KEY").unwrap_or_default())
-    });
-    if api_key.is_empty() {
-        return 5; // no key → don't block downloads
-    }
-
     let image_bytes = match reqwest::get(thumbnail_url).await {
         Ok(r) => match r.bytes().await {
             Ok(b) => b.to_vec(),
@@ -5853,25 +5868,21 @@ async fn screen_pexels_thumbnail(thumbnail_url: &str, topic: &str) -> i32 {
         Err(_) => return 5,
     };
 
-    let client = crate::gemini_client::GeminiClient::new(api_key);
     let prompt = format!(
         "Video topic: \"{topic}\". \
         Rate how relevant this thumbnail is for that topic, from 1 (completely unrelated) \
         to 10 (perfect match). Reply with ONLY a single integer, nothing else."
     );
 
-    match client.analyze_image_bytes(&image_bytes, &prompt).await {
-        Ok(response) => {
-            // Extract the first 1-2 digit number from the response
-            let digits: String = response
-                .chars()
-                .filter(|c| c.is_ascii_digit())
-                .take(2)
-                .collect();
-            digits.parse::<i32>().unwrap_or(5).min(10).max(1)
-        }
-        Err(_) => 5, // fail open
-    }
+    let response = analyze_image_gemini_nim_fallback(&image_bytes, &prompt, None).await;
+
+    // Extract the first 1-2 digit number from the response
+    let digits: String = response
+        .chars()
+        .filter(|c| c.is_ascii_digit())
+        .take(2)
+        .collect();
+    digits.parse::<i32>().unwrap_or(5).min(10).max(1)
 }
 
 /// Lightweight FFmpeg-based quality check for a freshly downloaded Pexels clip.
@@ -6727,20 +6738,16 @@ async fn execute_view_image_with_state_claude(args: &Value, ctx: &ToolExecutionC
         Err(e) => return format!("❌ Failed to read image file: {}", e),
     };
 
-    // Use Gemini to analyze the image
-    if let Some(ref gemini_client) = ctx.app_state.gemini_client {
-        match gemini_client.analyze_image_bytes(&image_bytes, "Analyze this image in detail. Describe what you see, colors, composition, style, text if any, and whether it would work well as a video overlay or background.").await {
-            Ok(analysis) => {
-                format!("🖼️ **Image Analysis: {}**\n\n{}", image_path, analysis)
-            }
-            Err(e) => format!("❌ Failed to analyze image: {}", e),
-        }
-    } else {
-        "❌ Gemini client not available for image analysis".to_string()
-    }
+    // Use Gemini (or NIM vision fallback) to analyze the image
+    let analysis = analyze_image_gemini_nim_fallback(
+        &image_bytes,
+        "Analyze this image in detail. Describe what you see, colors, composition, style, text if any, and whether it would work well as a video overlay or background.",
+        ctx.app_state.nvidia_nim_vision_client.as_ref(),
+    ).await;
+    format!("🖼️ **Image Analysis: {}**\n\n{}", image_path, analysis)
 }
 
-/// View/analyze an image using Gemini's vision capabilities - WITH AppState (Gemini version)
+/// View/analyze an image using Gemini (or NIM vision) capabilities - WITH AppState (Gemini version)
 async fn execute_view_image_with_state_gemini(
     args: &HashMap<String, Value>,
     ctx: &ToolExecutionContext,
@@ -6775,17 +6782,12 @@ async fn execute_view_image_with_state_gemini(
         Err(e) => return format!("❌ Failed to read image file: {}", e),
     };
 
-    // Use Gemini to analyze the image
-    if let Some(ref gemini_client) = ctx.app_state.gemini_client {
-        match gemini_client.analyze_image_bytes(&image_bytes, "Analyze this image in detail. Describe what you see, colors, composition, style, text if any, and whether it would work well as a video overlay or background.").await {
-            Ok(analysis) => {
-                format!("🖼️ **Image Analysis: {}**\n\n{}", image_path, analysis)
-            }
-            Err(e) => format!("❌ Failed to analyze image: {}", e),
-        }
-    } else {
-        "❌ Gemini client not available for image analysis".to_string()
-    }
+    let analysis = analyze_image_gemini_nim_fallback(
+        &image_bytes,
+        "Analyze this image in detail. Describe what you see, colors, composition, style, text if any, and whether it would work well as a video overlay or background.",
+        ctx.app_state.nvidia_nim_vision_client.as_ref(),
+    ).await;
+    format!("🖼️ **Image Analysis: {}**\n\n{}", image_path, analysis)
 }
 
 // ============================================================================
@@ -17264,10 +17266,7 @@ fn blender_client_or_err(
 // because it never holds an HTTP connection open during the actual render.
 
 fn append_retry_hint_to_blender_args(args: &Value, retry_hint: &str) -> Value {
-    let mut updated = args
-        .as_object()
-        .cloned()
-        .unwrap_or_default();
+    let mut updated = args.as_object().cloned().unwrap_or_default();
 
     let mut applied = false;
     for key in [

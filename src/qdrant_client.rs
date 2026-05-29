@@ -463,6 +463,76 @@ impl QdrantClient {
         Ok(document.id)
     }
 
+    /// Store chat memory using Gemini Embedding 2 (1536d multimodal).
+    pub async fn store_chat_memory_with_gemini2(
+        &self,
+        session_id: &str,
+        user_id: Option<&str>,
+        user_message: &str,
+        agent_response: &str,
+        files_referenced: Vec<String>,
+        context: HashMap<String, serde_json::Value>,
+        gemini_client: &crate::gemini_client::GeminiClient,
+        feature: Option<&str>,
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        let embedding = gemini_client
+            .embed_content_with_model(user_message, "models/gemini-embedding-2", Some(1536))
+            .await?;
+
+        let document = ChatMemoryDocument {
+            id: Uuid::new_v4().to_string(),
+            session_id: session_id.to_string(),
+            user_id: user_id.map(|s| s.to_string()),
+            timestamp: chrono::Utc::now(),
+            user_message: user_message.to_string(),
+            agent_response: agent_response.to_string(),
+            context,
+            files_referenced,
+        };
+
+        let mut named_vectors = HashMap::new();
+        named_vectors.insert(
+            EmbeddingProvider::GeminiEmbedding2.vector_name().to_string(),
+            embedding,
+        );
+
+        let payload_value: serde_json::Value = json!({
+            "session_id": document.session_id,
+            "user_id": document.user_id,
+            "feature": feature.unwrap_or("general"),
+            "timestamp": document.timestamp.to_rfc3339(),
+            "user_message": document.user_message,
+            "agent_response": document.agent_response,
+            "context": document.context,
+            "files_referenced": document.files_referenced,
+            "embedding_provider": "gemini_embedding2"
+        });
+
+        let mut qdrant_payload: std::collections::HashMap<String, qdrant_client::qdrant::Value> =
+            std::collections::HashMap::new();
+        if let Some(obj) = payload_value.as_object() {
+            for (key, value) in obj {
+                qdrant_payload.insert(key.clone(), value.clone().into());
+            }
+        }
+
+        let point = PointStruct::new(
+            document.id.clone(),
+            Vectors::from(named_vectors),
+            qdrant_payload,
+        );
+
+        self.client
+            .upsert_points(UpsertPointsBuilder::new(&self.collection_name, vec![point]).wait(true))
+            .await?;
+
+        tracing::debug!(
+            "Stored chat memory with Gemini Embedding 2, ID: {}",
+            document.id
+        );
+        Ok(document.id)
+    }
+
     pub async fn search_similar_conversations_with_voyage(
         &self,
         query: &str,
@@ -578,6 +648,109 @@ impl QdrantClient {
             .search_points(
                 SearchPointsBuilder::new(&self.collection_name, query_embedding, limit as u64)
                     .vector_name(EmbeddingProvider::Gemini.vector_name())
+                    .filter(qdrant_client::qdrant::Filter {
+                        must: vec![qdrant_client::qdrant::Condition {
+                            condition_one_of: Some(
+                                qdrant_client::qdrant::condition::ConditionOneOf::Field(
+                                    qdrant_client::qdrant::FieldCondition {
+                                        key: "session_id".to_string(),
+                                        r#match: Some(qdrant_client::qdrant::Match {
+                                            match_value: Some(
+                                                qdrant_client::qdrant::r#match::MatchValue::Keyword(
+                                                    session_id.to_string(),
+                                                ),
+                                            ),
+                                        }),
+                                        ..Default::default()
+                                    },
+                                ),
+                            ),
+                        }],
+                        ..Default::default()
+                    })
+                    .with_payload(true),
+            )
+            .await?;
+
+        let mut documents = Vec::new();
+        for scored_point in search_result.result {
+            let payload = scored_point.payload;
+            let point_id = match scored_point.id {
+                Some(id) => match id.point_id_options {
+                    Some(qdrant_client::qdrant::point_id::PointIdOptions::Uuid(uuid)) => uuid,
+                    Some(qdrant_client::qdrant::point_id::PointIdOptions::Num(num)) => {
+                        num.to_string()
+                    }
+                    None => continue,
+                },
+                None => continue,
+            };
+
+            let doc = ChatMemoryDocument {
+                id: point_id,
+                session_id: payload
+                    .get("session_id")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .unwrap_or_default(),
+                user_id: payload
+                    .get("user_id")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
+                timestamp: payload
+                    .get("timestamp")
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                    .map(|dt| dt.with_timezone(&chrono::Utc))
+                    .unwrap_or_else(chrono::Utc::now),
+                user_message: payload
+                    .get("user_message")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .unwrap_or_default(),
+                agent_response: payload
+                    .get("agent_response")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .unwrap_or_default(),
+                context: payload
+                    .get("context")
+                    .and_then(|v| {
+                        let json_val: serde_json::Value = serde_json::to_value(v).ok()?;
+                        serde_json::from_value(json_val).ok()
+                    })
+                    .unwrap_or_default(),
+                files_referenced: payload
+                    .get("files_referenced")
+                    .and_then(|v| {
+                        let json_val: serde_json::Value = serde_json::to_value(v).ok()?;
+                        serde_json::from_value(json_val).ok()
+                    })
+                    .unwrap_or_default(),
+            };
+            documents.push(doc);
+        }
+
+        Ok(documents)
+    }
+
+    /// Search similar conversations using Gemini Embedding 2 (1536d multimodal).
+    pub async fn search_similar_conversations_with_gemini2(
+        &self,
+        query: &str,
+        session_id: &str,
+        limit: u32,
+        gemini_client: &crate::gemini_client::GeminiClient,
+    ) -> Result<Vec<ChatMemoryDocument>, Box<dyn std::error::Error + Send + Sync>> {
+        let query_embedding = gemini_client
+            .embed_content_with_model(query, "models/gemini-embedding-2", Some(1536))
+            .await?;
+
+        let search_result = self
+            .client
+            .search_points(
+                SearchPointsBuilder::new(&self.collection_name, query_embedding, limit as u64)
+                    .vector_name(EmbeddingProvider::GeminiEmbedding2.vector_name())
                     .filter(qdrant_client::qdrant::Filter {
                         must: vec![qdrant_client::qdrant::Condition {
                             condition_one_of: Some(
@@ -818,6 +991,155 @@ impl QdrantClient {
             context.push_str("Recent conversation history:\n");
             for memory in recent_history.iter().rev() {
                 // Reverse to show chronologically
+                context.push_str(&format!(
+                    "User: {}\nAssistant: {}\n\n",
+                    memory.user_message, memory.agent_response
+                ));
+            }
+        }
+
+        if !similar_conversations.is_empty() {
+            context.push_str("Similar past conversations:\n");
+            for memory in &similar_conversations {
+                context.push_str(&format!(
+                    "User: {}\nAssistant: {}\n\n",
+                    memory.user_message, memory.agent_response
+                ));
+            }
+        }
+
+        Ok(context)
+    }
+
+    /// Unified RAG context retrieval: Gemini Embedding 2 → Voyage → Gemini text-embedding-004.
+    pub async fn build_context_for_query(
+        &self,
+        query: &str,
+        session_id: &str,
+        voyage: Option<&crate::voyage_embeddings::VoyageEmbeddings>,
+        gemini: Option<&crate::gemini_client::GeminiClient>,
+    ) -> Result<Option<String>, String> {
+        // Tier 1: Gemini Embedding 2 (1536d, multimodal)
+        if let Some(g) = gemini {
+            match self.build_context_for_query_with_gemini2(query, session_id, g).await {
+                Ok(ctx) if !ctx.is_empty() => return Ok(Some(ctx)),
+                Ok(_) => {} // empty context, try next tier
+                Err(e) => tracing::warn!("Gemini Embedding 2 RAG failed: {}", e),
+            }
+        }
+
+        // Tier 2: Voyage AI (1024d, text)
+        if let Some(v) = voyage {
+            match self.build_context_for_query_with_voyage(query, session_id, v).await {
+                Ok(ctx) if !ctx.is_empty() => return Ok(Some(ctx)),
+                Ok(_) => {}
+                Err(e) => tracing::warn!("Voyage RAG failed: {}", e),
+            }
+        }
+
+        // Tier 3: Gemini text-embedding-004 (768d, text)
+        if let Some(g) = gemini {
+            match self.build_context_for_query_with_gemini(query, session_id, g).await {
+                Ok(ctx) if !ctx.is_empty() => return Ok(Some(ctx)),
+                Ok(_) => {}
+                Err(e) => tracing::warn!("Gemini text-embedding-004 RAG failed: {}", e),
+            }
+        }
+
+        Ok(None)
+    }
+
+    /// Unified chat memory storage: Gemini Embedding 2 → Voyage → Gemini text-embedding-004.
+    /// Returns `Ok(())` if any provider succeeded, or `Err` with the last failure.
+    pub async fn store_chat_memory(
+        &self,
+        session_id: &str,
+        user_id: Option<&str>,
+        user_message: &str,
+        agent_response: &str,
+        files_referenced: Vec<String>,
+        context: HashMap<String, serde_json::Value>,
+        voyage: Option<&crate::voyage_embeddings::VoyageEmbeddings>,
+        gemini: Option<&crate::gemini_client::GeminiClient>,
+        feature: Option<&str>,
+    ) -> Result<(), String> {
+        let mut last_err = String::new();
+
+        // Tier 1: Gemini Embedding 2
+        if let Some(g) = gemini {
+            match self
+                .store_chat_memory_with_gemini2(
+                    session_id, user_id, user_message, agent_response,
+                    files_referenced.clone(), context.clone(), g, feature,
+                )
+                .await
+            {
+                Ok(_) => return Ok(()),
+                Err(e) => {
+                    last_err = format!("Gemini Embedding 2: {}", e);
+                    tracing::warn!("{}", last_err);
+                }
+            }
+        }
+
+        // Tier 2: Voyage AI
+        if let Some(v) = voyage {
+            match self
+                .store_chat_memory_with_voyage(
+                    session_id, user_id, user_message, agent_response,
+                    files_referenced.clone(), context.clone(), v, feature,
+                )
+                .await
+            {
+                Ok(_) => return Ok(()),
+                Err(e) => {
+                    last_err = format!("Voyage: {}", e);
+                    tracing::warn!("{}", last_err);
+                }
+            }
+        }
+
+        // Tier 3: Gemini text-embedding-004
+        if let Some(g) = gemini {
+            if let Err(e) = self
+                .store_chat_memory_with_gemini(
+                    session_id, user_id, user_message, agent_response,
+                    files_referenced, context, g, feature,
+                )
+                .await
+            {
+                last_err = format!("Gemini text-embedding-004: {}", e);
+                tracing::warn!("{}", last_err);
+            } else {
+                return Ok(());
+            }
+        }
+
+        if last_err.is_empty() {
+            Err("No embedding provider available".to_string())
+        } else {
+            Err(last_err)
+        }
+    }
+
+    /// Build RAG context using Gemini Embedding 2 (1536d multimodal).
+    pub async fn build_context_for_query_with_gemini2(
+        &self,
+        query: &str,
+        session_id: &str,
+        gemini_client: &crate::gemini_client::GeminiClient,
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        let recent_history = self.get_session_history(session_id, 5).await?;
+
+        let similar_conversations = self
+            .search_similar_conversations_with_gemini2(query, session_id, 3, gemini_client)
+            .await?;
+
+        let mut context = String::new();
+
+        if !recent_history.is_empty() {
+            context.push_str("Recent conversation history:\n");
+            for memory in recent_history.iter().rev() {
                 context.push_str(&format!(
                     "User: {}\nAssistant: {}\n\n",
                     memory.user_message, memory.agent_response

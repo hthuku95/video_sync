@@ -281,7 +281,7 @@ async fn websocket_handler(
             target_workflow_id,
         )
     })
-        .into_response()
+    .into_response()
 }
 
 /// Returns Ok(true) if the user is allowed to use paid compute right now.
@@ -423,40 +423,24 @@ async fn websocket(
 
             // Build context from vector database if available (prefer Qdrant over AstraDB)
             let context = if let Some(ref qdrant_client) = state.qdrant_client {
-                // Prefer Voyage embeddings for Claude, fallback to Gemini
-                if let Some(ref voyage_embeddings) = state.voyage_embeddings {
-                    match qdrant_client.build_context_for_query_with_voyage(&text, &session_id, voyage_embeddings).await {
-                        Ok(ctx) => {
-                            if !ctx.is_empty() {
-                                tracing::debug!("Built context from Qdrant with Voyage AI: {} chars", ctx.len());
-                                Some(ctx)
-                            } else {
-                                None
-                            }
-                        }
-                        Err(e) => {
-                            tracing::warn!("Failed to build context from Qdrant with Voyage: {}", e);
-                            None
-                        }
+                match qdrant_client.build_context_for_query(
+                    &text,
+                    &session_id,
+                    state.voyage_embeddings.as_ref(),
+                    state.video_gemini_client.as_ref().or(state.gemini_client.as_ref()),
+                ).await {
+                    Ok(Some(ctx)) => {
+                        tracing::debug!("Built context from Qdrant: {} chars", ctx.len());
+                        Some(ctx)
                     }
-                } else if let Some(ref gemini_client) = state.video_gemini_client.as_ref().or(state.gemini_client.as_ref()) {
-                    match qdrant_client.build_context_for_query_with_gemini(&text, &session_id, gemini_client).await {
-                        Ok(ctx) => {
-                            if !ctx.is_empty() {
-                                tracing::debug!("Built context from Qdrant with Gemini: {} chars", ctx.len());
-                                Some(ctx)
-                            } else {
-                                None
-                            }
-                        }
-                        Err(e) => {
-                            tracing::warn!("Failed to build context from Qdrant: {}", e);
-                            None
-                        }
+                    Ok(None) => {
+                        tracing::warn!("No embedding client available for Qdrant");
+                        None
                     }
-                } else {
-                    tracing::warn!("No embedding client available for Qdrant");
-                    None
+                    Err(e) => {
+                        tracing::warn!("Qdrant context retrieval error: {}", e);
+                        None
+                    }
                 }
             } else if let Some(ref vector_db) = state.vector_db {
                 // Fallback to AstraDB
@@ -654,32 +638,18 @@ async fn websocket(
                                 String::new()
                             };
 
-                            if let Some(ref voyage_embeddings) = state.voyage_embeddings {
-                                if let Err(e) = qdrant_client.store_chat_memory_with_voyage(
-                                    &session_id,
-                                    None,
-                                    &user_message,
-                                    result,
-                                    files_referenced.clone(),
-                                    context_data.clone(),
-                                    voyage_embeddings,
-                                    Some("general"),
-                                ).await {
-                                    tracing::warn!("Failed to store in Qdrant (Voyage): {}", e);
-                                }
-                            } else if let Some(ref gemini_client) = state.video_gemini_client.as_ref().or(state.gemini_client.as_ref()) {
-                                if let Err(e) = qdrant_client.store_chat_memory_with_gemini(
-                                    &session_id,
-                                    None,
-                                    &user_message,
-                                    result,
-                                    files_referenced,
-                                    context_data,
-                                    gemini_client,
-                                    Some("general"),
-                                ).await {
-                                    tracing::warn!("Failed to store in Qdrant (Gemini): {}", e);
-                                }
+                            if let Err(e) = qdrant_client.store_chat_memory(
+                                &session_id,
+                                None,
+                                &user_message,
+                                result,
+                                files_referenced.clone(),
+                                context_data.clone(),
+                                state.voyage_embeddings.as_ref(),
+                                state.video_gemini_client.as_ref().or(state.gemini_client.as_ref()),
+                                Some("general"),
+                            ).await {
+                                tracing::warn!("Failed to store in Qdrant: {}", e);
                             }
                         }
 
@@ -1151,7 +1121,7 @@ async fn get_recent_chats(
                AND LENGTH(BTRIM(COALESCE(cm.content, ''))) > 0
            )
          ORDER BY cs.created_at DESC
-         LIMIT 10"
+         LIMIT 10",
     )
     .bind(claims.sub.parse::<i32>().unwrap_or(0))
     .fetch_all(&state.db_pool)
@@ -1161,14 +1131,12 @@ async fn get_recent_chats(
             let mut chats = Vec::new();
             for (id, session_uuid, title, created_at) in rows {
                 let display_title = resolve_chat_display_title(&state.db_pool, id, &title).await;
-                chats.push(
-                    serde_json::json!({
-                        "id": id,
-                        "session_id": session_uuid,
-                        "title": display_title,
-                        "created_at": created_at.format("%Y-%m-%d %H:%M:%S").to_string()
-                    }),
-                );
+                chats.push(serde_json::json!({
+                    "id": id,
+                    "session_id": session_uuid,
+                    "title": display_title,
+                    "created_at": created_at.format("%Y-%m-%d %H:%M:%S").to_string()
+                }));
             }
 
             Ok(axum::response::Json(serde_json::json!({
@@ -1201,9 +1169,8 @@ async fn get_all_chats(
     let user_id = claims.sub.parse::<i32>().unwrap_or(0);
 
     // Get total count
-    let total_count: (i64,) =
-        sqlx::query_as(
-            "SELECT COUNT(*)
+    let total_count: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*)
              FROM chat_sessions cs
              WHERE cs.user_id = $1
                AND EXISTS (
@@ -1213,14 +1180,14 @@ async fn get_all_chats(
                    AND cm.role IN ('user', 'human', 'assistant', 'model')
                    AND LENGTH(BTRIM(COALESCE(cm.content, ''))) > 0
                )",
-        )
-            .bind(user_id)
-            .fetch_one(&state.db_pool)
-            .await
-            .map_err(|e| {
-                tracing::error!("Failed to get chat count: {}", e);
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR
-            })?;
+    )
+    .bind(user_id)
+    .fetch_one(&state.db_pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("Failed to get chat count: {}", e);
+        axum::http::StatusCode::INTERNAL_SERVER_ERROR
+    })?;
 
     // Get paginated chats
     let rows = sqlx::query_as::<_, (i32, String, String, chrono::DateTime<chrono::Utc>)>(
@@ -1449,14 +1416,7 @@ fn truncate_title(input: &str, max_chars: usize) -> String {
 fn request_expects_generated_artifact(user_message: &str) -> bool {
     let normalized = user_message.to_lowercase();
     let generation_intent = [
-        "create",
-        "generate",
-        "render",
-        "produce",
-        "make",
-        "build",
-        "edit",
-        "deliver",
+        "create", "generate", "render", "produce", "make", "build", "edit", "deliver",
     ]
     .iter()
     .any(|needle| normalized.contains(needle));
@@ -1488,9 +1448,8 @@ fn response_output_links(response: &str) -> Vec<String> {
         let idx = line.find(needle)?;
         let candidate = &line[idx..];
         let token = candidate.split_whitespace().next().unwrap_or(candidate);
-        let cleaned = token.trim_matches(|ch: char| {
-            matches!(ch, '`' | '"' | '\'' | ')' | ']' | '}' | ',' | '.')
-        });
+        let cleaned = token
+            .trim_matches(|ch: char| matches!(ch, '`' | '"' | '\'' | ')' | ']' | '}' | ',' | '.'));
         if cleaned.starts_with(needle) {
             Some(cleaned.to_string())
         } else {
@@ -1501,9 +1460,13 @@ fn response_output_links(response: &str) -> Vec<String> {
     response
         .lines()
         .flat_map(|line| {
-            ["/api/outputs/stream/", "/api/outputs/download/", "/delivery/"]
-                .into_iter()
-                .filter_map(move |needle| extract_link(line, needle))
+            [
+                "/api/outputs/stream/",
+                "/api/outputs/download/",
+                "/delivery/",
+            ]
+            .into_iter()
+            .filter_map(move |needle| extract_link(line, needle))
         })
         .collect::<std::collections::BTreeSet<_>>()
         .into_iter()
@@ -1517,7 +1480,9 @@ fn background_workflow_idempotency_key(
 ) -> String {
     let message_hash = crate::services::GeneratedArtifactService::legacy_file_id(user_message);
     match existing_workflow_id {
-        Some(workflow_id) => format!("background-agent:{session_uuid}:{workflow_id}:{message_hash}"),
+        Some(workflow_id) => {
+            format!("background-agent:{session_uuid}:{workflow_id}:{message_hash}")
+        }
         None => format!("background-agent:{session_uuid}:{message_hash}"),
     }
 }
@@ -1757,12 +1722,7 @@ async fn fail_agent_job(state: &Arc<AppState>, job_id: uuid::Uuid, error: &str) 
     if let Some(workflow_id) = workflow_id {
         let workflow_runtime = crate::services::WorkflowRuntime::new(state.db_pool.clone());
         let _ = workflow_runtime
-            .mark_failed(
-                workflow_id,
-                Some("background_agent"),
-                error,
-                None,
-            )
+            .mark_failed(workflow_id, Some("background_agent"), error, None)
             .await;
     }
 }
@@ -2013,7 +1973,15 @@ async fn workflow_recent_events(
     state: &Arc<AppState>,
     workflow_id: uuid::Uuid,
 ) -> Vec<serde_json::Value> {
-    sqlx::query_as::<_, (String, Option<String>, String, chrono::DateTime<chrono::Utc>)>(
+    sqlx::query_as::<
+        _,
+        (
+            String,
+            Option<String>,
+            String,
+            chrono::DateTime<chrono::Utc>,
+        ),
+    >(
         "SELECT event_type, node_name, message, created_at
          FROM app_workflow_events
          WHERE workflow_id = $1
@@ -2237,7 +2205,17 @@ User message:
 /// Returns the latest persisted progress step for a running agent job in this session,
 /// or None if there's no in-progress work or no persisted step yet.
 async fn get_running_agent_job_status(state: &Arc<AppState>, session_uuid: &str) -> Option<String> {
-    let row = sqlx::query_as::<_, (uuid::Uuid, String, chrono::DateTime<chrono::Utc>, serde_json::Value, Option<String>, Option<String>)>(
+    let row = sqlx::query_as::<
+        _,
+        (
+            uuid::Uuid,
+            String,
+            chrono::DateTime<chrono::Utc>,
+            serde_json::Value,
+            Option<String>,
+            Option<String>,
+        ),
+    >(
         "SELECT abj.id, abj.user_message, abj.created_at, abj.progress_log, aw.current_step,
                 (
                     SELECT awe.message
@@ -2339,34 +2317,12 @@ async fn run_agent_background(
     let timeout_secs = std::env::var("AGENT_BACKGROUND_TIMEOUT_SECONDS")
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(1200);
+        .unwrap_or(1800);
 
-    let response = tokio::time::timeout(
-        std::time::Duration::from_secs(timeout_secs),
-        async {
-            if use_claude {
-                if let Some(ref claude_client) = state.claude_client {
-                    let agent = StatefulClaudeAgent::new(Arc::new(claude_client.clone()));
-                    agent
-                        .chat(
-                            &text,
-                            &session_id,
-                            enhanced_query,
-                            state.clone(),
-                            job_manager.clone(),
-                            Some(proxy_tx),
-                            agent_workflow_id,
-                        )
-                        .await
-                } else {
-                    Err("Claude client not configured".to_string())
-                }
-            } else if let Some(gemini_client) = state
-                .video_gemini_client
-                .as_ref()
-                .or(state.gemini_client.as_ref())
-            {
-                let agent = StatefulGeminiAgent::new(Arc::new(gemini_client.clone()));
+    let response = tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), async {
+        if use_claude {
+            if let Some(ref claude_client) = state.claude_client {
+                let agent = StatefulClaudeAgent::new(Arc::new(claude_client.clone()));
                 agent
                     .chat(
                         &text,
@@ -2379,10 +2335,29 @@ async fn run_agent_background(
                     )
                     .await
             } else {
-                Err("Gemini client not configured".to_string())
+                Err("Claude client not configured".to_string())
             }
-        },
-    )
+        } else if let Some(gemini_client) = state
+            .video_gemini_client
+            .as_ref()
+            .or(state.gemini_client.as_ref())
+        {
+            let agent = StatefulGeminiAgent::new(Arc::new(gemini_client.clone()));
+            agent
+                .chat(
+                    &text,
+                    &session_id,
+                    enhanced_query,
+                    state.clone(),
+                    job_manager.clone(),
+                    Some(proxy_tx),
+                    agent_workflow_id,
+                )
+                .await
+        } else {
+            Err("Gemini client not configured".to_string())
+        }
+    })
     .await;
 
     match response {
@@ -2561,7 +2536,20 @@ async fn get_session_jobs(
     let jobs: Vec<serde_json::Value> = rows
         .into_iter()
         .map(
-            |(id, msg, status, result, error, progress_log, created_at, updated_at, workflow_id, workflow_current_step, workflow_last_heartbeat_at, workflow_latest_event_message)| {
+            |(
+                id,
+                msg,
+                status,
+                result,
+                error,
+                progress_log,
+                created_at,
+                updated_at,
+                workflow_id,
+                workflow_current_step,
+                workflow_last_heartbeat_at,
+                workflow_latest_event_message,
+            )| {
                 serde_json::json!({
                     "id": id,
                     "user_message": msg,

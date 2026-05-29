@@ -61,6 +61,8 @@ aws-credential-types = "1"
 # we can call install_default() at startup before any TLS connection is made.
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
 
+lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls-tls"] }
+
 # Telegram MTProto: grammers-client 0.9 (SenderPool + UpdateStream API).
 # grammers-session sqlite-storage uses libsql (not sqlite3), so no link
 # collision with sqlx (which has default-features = false, no sqlite driver).

@@ -12,6 +12,8 @@ mod blender_quality;
 mod claude_client;
 mod clipping; // 📹 YouTube clipping feature
 mod db;
+mod deepseek_client;
+mod email;
 mod elevenlabs_client; // 🎙️ Eleven Labs TTS, Sound Effects, Music
 mod gemini_client;
 mod gcs_client;
@@ -63,7 +65,9 @@ pub struct AppState {
     pub manual_clipping_gemini_client: Option<gemini_client::GeminiClient>, // Manual clipping only
     pub video_gemini_client: Option<gemini_client::GeminiClient>, // Video editing, generation, agents, Blender MCP
     pub gemma_client: Option<gemini_client::GeminiClient>, // Gemma 4 via Google AI Studio (text tasks, own quota)
-    pub nvidia_nim_client: Option<nvidia_nim_client::NvidiaNimClient>, // Gemma 4 via NVIDIA NIM (40 RPM, text tasks)
+    pub nvidia_nim_client: Option<nvidia_nim_client::NvidiaNimClient>, // NVIDIA NIM (text + tools, 40 RPM)
+    pub nvidia_nim_vision_client: Option<nvidia_nim_client::NvidiaNimClient>, // NVIDIA NIM (vision + tools, Gemini fallback)
+    pub deepseek_client: Option<deepseek_client::DeepSeekClient>, // DeepSeek V4 (OpenAI-compatible, tool calling)
     pub claude_client: Option<claude_client::ClaudeClient>,
     pub vertex_multimodal_embeddings: Option<vertex_multimodal_embeddings::VertexMultimodalEmbeddingsClient>,
     pub voyage_embeddings: Option<voyage_embeddings::VoyageEmbeddings>,
@@ -156,6 +160,38 @@ async fn reset_orphaned_jobs(db_pool: &sqlx::PgPool) {
     }
 }
 
+/// Reset app_workflows stuck in 'queued' or 'running' for more than 1 hour.
+/// These get orphaned when the server restarts while a tokio::spawn task
+/// was in flight or when the background executor crashes before calling heartbeat.
+async fn reset_orphaned_workflows(db_pool: &sqlx::PgPool) {
+    tracing::info!("🔄 Checking for orphaned workflows from previous server session...");
+
+    match sqlx::query(
+        "UPDATE app_workflows
+         SET status = 'failed',
+             error_message = 'Workflow was orphaned (server restarted while in progress). Automatically reset on startup.',
+             completed_at = NOW(),
+             updated_at = NOW()
+         WHERE status IN ('queued', 'running')
+         AND updated_at < NOW() - INTERVAL '1 hour'"
+    )
+    .execute(db_pool)
+    .await
+    {
+        Ok(result) => {
+            let count = result.rows_affected();
+            if count > 0 {
+                tracing::warn!("⚠️ Reset {} orphaned workflow(s) on startup", count);
+            } else {
+                tracing::info!("✅ No orphaned workflows found");
+            }
+        }
+        Err(e) => {
+            tracing::error!("❌ Failed to reset orphaned workflows: {}", e);
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() {
     // Install rustls CryptoProvider before any TLS connection is made.
@@ -219,6 +255,8 @@ async fn main() {
         let db_pool_for_reset = db_pool.clone();
         tokio::spawn(async move {
             reset_orphaned_jobs(&db_pool_for_reset).await;
+            reset_orphaned_workflows(&db_pool_for_reset).await;
+            handlers::prospects::backfill_null_service_types(&db_pool_for_reset).await;
         });
     }
     tokio::spawn(async {
@@ -331,10 +369,27 @@ async fn main() {
             gemini_client::GeminiClient::new_with_model(k, "gemma-4-27b-it".to_string())
         });
 
-    // Gemma 4 via NVIDIA NIM — 40 RPM, OpenAI-compatible, free 1K credits.
+    // NVIDIA NIM — text + tool-calling model (default: Gemma 4 31B, 40 RPM).
     let nvidia_nim_client = std::env::var("NVIDIA_API_KEY").ok().map(|k| {
-        tracing::info!("Initializing NVIDIA NIM client (Gemma 4, 40 RPM)...");
-        nvidia_nim_client::NvidiaNimClient::new(k)
+        let model = std::env::var("NVIDIA_NIM_MODEL")
+            .unwrap_or_else(|_| "google/gemma-4-31b-it".to_string());
+        tracing::info!("Initializing NVIDIA NIM text client ({})...", model);
+        nvidia_nim_client::NvidiaNimClient::with_model(k, model)
+    });
+
+    // NVIDIA NIM — vision + tool-calling model (Gemini multimodal fallback).
+    let nvidia_nim_vision_client = std::env::var("NVIDIA_API_KEY").ok().map(|k| {
+        let model = std::env::var("NVIDIA_NIM_VISION_MODEL")
+            .unwrap_or_else(|_| "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning".to_string());
+        tracing::info!("Initializing NVIDIA NIM vision client ({})...", model);
+        nvidia_nim_client::NvidiaNimClient::with_model(k, model)
+    });
+
+    // DeepSeek V4 — OpenAI-compatible, fallback when Gemini/NIM are unavailable.
+    let deepseek_client = std::env::var("DEEPSEEK_API_KEY").ok().map(|k| {
+        tracing::info!("Initializing DeepSeek V4 client (model: {})...",
+            std::env::var("DEEPSEEK_MODEL").unwrap_or_else(|_| "deepseek-v4-flash".to_string()));
+        deepseek_client::DeepSeekClient::new(k)
     });
 
     let vertex_multimodal_embeddings =
@@ -559,6 +614,8 @@ async fn main() {
         video_gemini_client,
         gemma_client,
         nvidia_nim_client,
+        nvidia_nim_vision_client,
+        deepseek_client,
         claude_client,
         vertex_multimodal_embeddings,
         voyage_embeddings,
@@ -624,6 +681,8 @@ async fn main() {
         .merge(handlers::prospects::instagram_routes()) // 📸 Instagram leads (all users)
         .merge(handlers::api_access::api_access_routes()) // 💳 Agency USDC license
         .merge(handlers::subscribe::subscribe_routes()) // 💳 Regular-user $15/mo paywall
+        .merge(handlers::paypal::paypal_routes()) // 💳 PayPal/card checkout for service packs
+        .merge(handlers::crypto_payments::crypto_routes()) // 💳 USDC on Base checkout for service packs
         .merge(handlers::auth::clipper_invite_routes()) // 🎫 Clipper invites
         .merge(admin_only_routes) // Admin-only routes like API docs
         .route("/api/status", axum::routing::get(api_status))

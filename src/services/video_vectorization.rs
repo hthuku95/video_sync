@@ -532,23 +532,48 @@ impl VideoVectorizationService {
             None => return Err("Qdrant client not available".into()),
         };
 
-        // CRITICAL: Support BOTH Voyage AI (for Claude) and Gemini embeddings
-        // Prefer Voyage AI if available (better Claude compatibility), fallback to Gemini
+        // CRITICAL: Support all embedding providers
+        // Preference: Gemini Embedding 2 (multimodal, 1536d) → Voyage AI (1024d) → Gemini text-embedding-004 (768d)
 
         // 1. Store video-level embedding with provider tracking
         let (video_embedding, video_provider) =
-            if let Some(ref voyage_embeddings) = state.voyage_embeddings {
-                // Use Voyage AI for Claude-compatible embeddings
-                info!("Using Voyage AI embeddings for video vectorization");
-                match voyage_embeddings
-                    .generate_single_embedding(vector_data.video_summary.clone())
+            if let Some(ref gemini_client) = state.gemini_client {
+                // Tier 1: Gemini Embedding 2 (1536d, multimodal)
+                match gemini_client
+                    .embed_content_with_model(
+                        &vector_data.video_summary,
+                        "models/gemini-embedding-2",
+                        Some(1536),
+                    )
                     .await
                 {
-                    Ok(emb) => (emb, crate::qdrant_client::EmbeddingProvider::Voyage),
+                    Ok(emb) => {
+                        info!("Using Gemini Embedding 2 for video vectorization");
+                        (emb, crate::qdrant_client::EmbeddingProvider::GeminiEmbedding2)
+                    }
                     Err(e) => {
-                        warn!("Voyage AI embedding failed, falling back to Gemini: {}", e);
-                        // Fallback to Gemini
-                        if let Some(ref gemini_client) = state.gemini_client {
+                        warn!("Gemini Embedding 2 failed, trying Voyage: {}", e);
+                        // Tier 2: Voyage AI
+                        if let Some(ref voyage_embeddings) = state.voyage_embeddings {
+                            match voyage_embeddings
+                                .generate_single_embedding(vector_data.video_summary.clone())
+                                .await
+                            {
+                                Ok(emb) => (emb, crate::qdrant_client::EmbeddingProvider::Voyage),
+                                Err(e2) => {
+                                    warn!("Voyage also failed, trying Gemini text-embedding-004: {}", e2);
+                                    // Tier 3: Gemini text-embedding-004
+                                    (
+                                        Self::generate_text_embedding_gemini(
+                                            &vector_data.video_summary,
+                                            gemini_client,
+                                        )
+                                        .await?,
+                                        crate::qdrant_client::EmbeddingProvider::Gemini,
+                                    )
+                                }
+                            }
+                        } else {
                             (
                                 Self::generate_text_embedding_gemini(
                                     &vector_data.video_summary,
@@ -557,23 +582,20 @@ impl VideoVectorizationService {
                                 .await?,
                                 crate::qdrant_client::EmbeddingProvider::Gemini,
                             )
-                        } else {
-                            return Err(
-                                "No embedding provider available (need Voyage AI or Gemini)".into(),
-                            );
                         }
                     }
                 }
-            } else if let Some(ref gemini_client) = state.gemini_client {
-                // Use Gemini embeddings
-                info!("Using Gemini embeddings for video vectorization");
+            } else if let Some(ref voyage_embeddings) = state.voyage_embeddings {
+                info!("Using Voyage AI embeddings for video vectorization");
                 (
-                    Self::generate_text_embedding_gemini(&vector_data.video_summary, gemini_client)
-                        .await?,
-                    crate::qdrant_client::EmbeddingProvider::Gemini,
+                    voyage_embeddings
+                        .generate_single_embedding(vector_data.video_summary.clone())
+                        .await
+                        .map_err(|e| format!("Voyage embedding failed: {}", e))?,
+                    crate::qdrant_client::EmbeddingProvider::Voyage,
                 )
             } else {
-                return Err("No embedding provider available (need Voyage AI or Gemini)".into());
+                return Err("No embedding provider available (need Gemini or Voyage AI)".into());
             };
 
         let video_point_id = format!("video_{}", vector_data.file_id);
@@ -602,45 +624,66 @@ impl VideoVectorizationService {
             vector_data.file_id, video_provider
         );
 
-        // 2. Store frame-level embeddings (use same embedding provider as video-level)
+        // 2. Store frame-level embeddings (prefer Gemini Embedding 2, then Voyage, then text-embedding-004)
         for frame in &vector_data.frame_metadata {
-            let (frame_embedding, frame_provider) = if let Some(ref voyage_embeddings) =
-                state.voyage_embeddings
-            {
-                // Use Voyage AI
-                match voyage_embeddings
-                    .generate_single_embedding(frame.description.clone())
-                    .await
-                {
-                    Ok(emb) => (emb, crate::qdrant_client::EmbeddingProvider::Voyage),
-                    Err(e) => {
-                        warn!(
-                            "Voyage AI embedding failed for frame {}, falling back to Gemini: {}",
-                            frame.frame_number, e
-                        );
-                        if let Some(ref gemini_client) = state.gemini_client {
-                            (
-                                Self::generate_text_embedding_gemini(
-                                    &frame.description,
-                                    gemini_client,
+            let (frame_embedding, frame_provider) =
+                if let Some(ref gemini_client) = state.gemini_client {
+                    // Tier 1: Gemini Embedding 2
+                    match gemini_client
+                        .embed_content_with_model(
+                            &frame.description,
+                            "models/gemini-embedding-2",
+                            Some(1536),
+                        )
+                        .await
+                    {
+                        Ok(emb) => {
+                            (emb, crate::qdrant_client::EmbeddingProvider::GeminiEmbedding2)
+                        }
+                        Err(e) => {
+                            warn!("Gemini Embedding 2 failed for frame {}, trying Voyage: {}", frame.frame_number, e);
+                            // Tier 2: Voyage AI
+                            if let Some(ref voyage_embeddings) = state.voyage_embeddings {
+                                match voyage_embeddings
+                                    .generate_single_embedding(frame.description.clone())
+                                    .await
+                                {
+                                    Ok(emb) => (emb, crate::qdrant_client::EmbeddingProvider::Voyage),
+                                    Err(e2) => {
+                                        warn!("Voyage also failed for frame {}, trying text-embedding-004: {}", frame.frame_number, e2);
+                                        (
+                                            Self::generate_text_embedding_gemini(
+                                                &frame.description,
+                                                gemini_client,
+                                            )
+                                            .await?,
+                                            crate::qdrant_client::EmbeddingProvider::Gemini,
+                                        )
+                                    }
+                                }
+                            } else {
+                                (
+                                    Self::generate_text_embedding_gemini(
+                                        &frame.description,
+                                        gemini_client,
+                                    )
+                                    .await?,
+                                    crate::qdrant_client::EmbeddingProvider::Gemini,
                                 )
-                                .await?,
-                                crate::qdrant_client::EmbeddingProvider::Gemini,
-                            )
-                        } else {
-                            return Err("No embedding provider available".into());
+                            }
                         }
                     }
-                }
-            } else if let Some(ref gemini_client) = state.gemini_client {
-                // Use Gemini
-                (
-                    Self::generate_text_embedding_gemini(&frame.description, gemini_client).await?,
-                    crate::qdrant_client::EmbeddingProvider::Gemini,
-                )
-            } else {
-                return Err("No embedding provider available".into());
-            };
+                } else if let Some(ref voyage_embeddings) = state.voyage_embeddings {
+                    (
+                        voyage_embeddings
+                            .generate_single_embedding(frame.description.clone())
+                            .await
+                            .map_err(|e| format!("Voyage embedding failed: {}", e))?,
+                        crate::qdrant_client::EmbeddingProvider::Voyage,
+                    )
+                } else {
+                    return Err("No embedding provider available".into());
+                };
 
             let frame_point_id = format!("frame_{}_f{}", vector_data.file_id, frame.frame_number);
             let frame_payload = json!({
@@ -715,19 +758,39 @@ impl VideoVectorizationService {
         limit: usize,
         state: &Arc<AppState>,
     ) -> Result<Vec<serde_json::Value>, Box<dyn std::error::Error + Send + Sync>> {
-        // Generate embedding for the search query (support both Voyage AI and Gemini)
+        // Generate embedding for the search query (prefer Gemini Embedding 2 → Voyage → text-embedding-004)
         let (query_embedding, provider) =
-            if let Some(ref voyage_embeddings) = state.voyage_embeddings {
+            if let Some(ref gemini_client) = state.gemini_client {
+                // Tier 1: Gemini Embedding 2
+                match gemini_client
+                    .embed_content_with_model(query, "models/gemini-embedding-2", Some(1536))
+                    .await
+                {
+                    Ok(emb) => (emb, crate::qdrant_client::EmbeddingProvider::GeminiEmbedding2),
+                    Err(e) => {
+                        warn!("Gemini Embedding 2 search failed, trying Voyage: {}", e);
+                        // Tier 2: Voyage
+                        if let Some(ref voyage_embeddings) = state.voyage_embeddings {
+                            (
+                                voyage_embeddings
+                                    .generate_single_embedding(query.to_string())
+                                    .await?,
+                                crate::qdrant_client::EmbeddingProvider::Voyage,
+                            )
+                        } else {
+                            (
+                                Self::generate_text_embedding_gemini(query, gemini_client).await?,
+                                crate::qdrant_client::EmbeddingProvider::Gemini,
+                            )
+                        }
+                    }
+                }
+            } else if let Some(ref voyage_embeddings) = state.voyage_embeddings {
                 (
                     voyage_embeddings
                         .generate_single_embedding(query.to_string())
                         .await?,
                     crate::qdrant_client::EmbeddingProvider::Voyage,
-                )
-            } else if let Some(ref gemini_client) = state.gemini_client {
-                (
-                    Self::generate_text_embedding_gemini(query, gemini_client).await?,
-                    crate::qdrant_client::EmbeddingProvider::Gemini,
                 )
             } else {
                 return Err("No embedding provider available".into());
@@ -760,7 +823,7 @@ impl VideoVectorizationService {
     /// Store video analysis from Gemini into the `video_content` Qdrant collection.
     ///
     /// This replaces the 100+ frame embedding approach:
-    /// - One embedding from the video summary (Voyage AI preferred, Gemini fallback)
+    /// - One embedding from the video summary (Gemini Embedding 2 → Voyage → text-embedding-004)
     /// - Stored in `video_content` collection with full viral moments payload
     /// - Deterministic point ID from UUID v5 of video_id (idempotent upsert)
     pub async fn store_video_analysis_from_gemini(
@@ -779,26 +842,45 @@ impl VideoVectorizationService {
             }
         };
 
-        // Generate ONE embedding from the video summary
-        let (embedding, provider) = if let Some(ref voyage) = state.voyage_embeddings {
-            match voyage
-                .generate_single_embedding(analysis.video_summary.clone())
+        // Generate ONE embedding from the video summary (Gemini Embedding 2 → Voyage → text-embedding-004)
+        let (embedding, provider) = if let Some(ref gemini) = state.gemini_client {
+            // Tier 1: Gemini Embedding 2
+            match gemini
+                .embed_content_with_model(
+                    &analysis.video_summary,
+                    "models/gemini-embedding-2",
+                    Some(1536),
+                )
                 .await
             {
-                Ok(emb) => (emb, crate::qdrant_client::EmbeddingProvider::Voyage),
+                Ok(emb) => (emb, crate::qdrant_client::EmbeddingProvider::GeminiEmbedding2),
                 Err(e) => {
-                    warn!("Voyage embedding failed: {} — trying Gemini", e);
-                    if let Some(ref gemini) = state.gemini_client {
+                    warn!("Gemini Embedding 2 failed: {} — trying Voyage", e);
+                    // Tier 2: Voyage
+                    if let Some(ref voyage) = state.voyage_embeddings {
+                        match voyage
+                            .generate_single_embedding(analysis.video_summary.clone())
+                            .await
+                        {
+                            Ok(emb) => (emb, crate::qdrant_client::EmbeddingProvider::Voyage),
+                            Err(e2) => {
+                                warn!("Voyage also failed: {} — trying text-embedding-004", e2);
+                                let emb = gemini.embed_content(&analysis.video_summary).await?;
+                                (emb, crate::qdrant_client::EmbeddingProvider::Gemini)
+                            }
+                        }
+                    } else {
                         let emb = gemini.embed_content(&analysis.video_summary).await?;
                         (emb, crate::qdrant_client::EmbeddingProvider::Gemini)
-                    } else {
-                        return Err("No embedding provider available".into());
                     }
                 }
             }
-        } else if let Some(ref gemini) = state.gemini_client {
-            let emb = gemini.embed_content(&analysis.video_summary).await?;
-            (emb, crate::qdrant_client::EmbeddingProvider::Gemini)
+        } else if let Some(ref voyage) = state.voyage_embeddings {
+            let emb = voyage
+                .generate_single_embedding(analysis.video_summary.clone())
+                .await
+                .map_err(|e| format!("Voyage embedding failed: {}", e))?;
+            (emb, crate::qdrant_client::EmbeddingProvider::Voyage)
         } else {
             return Err("No embedding provider available".into());
         };
@@ -908,8 +990,10 @@ impl VideoVectorizationService {
         });
 
         // Use search with zero vector (we just want to filter and retrieve)
-        // Determine provider based on available clients (prefer Voyage, fallback to Gemini)
-        let provider = if state.voyage_embeddings.is_some() {
+        // Determine provider based on available clients (Gemini Embedding 2 → Voyage → text-embedding-004)
+        let provider = if state.gemini_client.is_some() {
+            crate::qdrant_client::EmbeddingProvider::GeminiEmbedding2
+        } else if state.voyage_embeddings.is_some() {
             crate::qdrant_client::EmbeddingProvider::Voyage
         } else {
             crate::qdrant_client::EmbeddingProvider::Gemini

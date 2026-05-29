@@ -390,14 +390,12 @@ async fn search_prospects(
     )
     .await;
 
-    Ok(Json(
-        json!({
-            "success": true,
-            "found": found,
-            "agent_run_id": run_id.map(|id| id.to_string()),
-            "message": format!("Found and scored {} prospects", found)
-        }),
-    ))
+    Ok(Json(json!({
+        "success": true,
+        "found": found,
+        "agent_run_id": run_id.map(|id| id.to_string()),
+        "message": format!("Found and scored {} prospects", found)
+    })))
 }
 
 async fn search_youtube_prospects(
@@ -562,15 +560,16 @@ async fn search_youtube_prospects(
         .await;
         let scoring_description = build_scoring_description(&description);
 
-        let (score, reasoning, service, dm_creator, dm_clipper, x_dm, email_script) = score_prospect_with_ai(
-            state,
-            &display_name,
-            sub_count,
-            &scoring_description,
-            &category,
-            &payload.prospect_type,
-        )
-        .await;
+        let (score, reasoning, service, dm_creator, dm_clipper, x_dm, email_script) =
+            score_prospect_with_ai(
+                state,
+                &display_name,
+                sub_count,
+                &scoring_description,
+                &category,
+                &payload.prospect_type,
+            )
+            .await;
 
         sqlx::query(
             "INSERT INTO prospects (platform, channel_id, display_name, platform_url,
@@ -845,15 +844,16 @@ async fn search_twitch_prospects(
         .await;
         let scoring_description = build_scoring_description(&description);
 
-        let (score, reasoning, service, dm_creator, dm_clipper, x_dm, email_script) = score_prospect_with_ai(
-            state,
-            &display_name,
-            viewer_count,
-            &scoring_description,
-            &category,
-            &payload.prospect_type,
-        )
-        .await;
+        let (score, reasoning, service, dm_creator, dm_clipper, x_dm, email_script) =
+            score_prospect_with_ai(
+                state,
+                &display_name,
+                viewer_count,
+                &scoring_description,
+                &category,
+                &payload.prospect_type,
+            )
+            .await;
 
         sqlx::query(
             "INSERT INTO prospects (platform, channel_id, display_name, platform_url,
@@ -1002,6 +1002,16 @@ fn extract_best_twitter_handle(description: &str) -> Option<String> {
                 r"x\.com",
             ],
         )
+    }).or_else(|| {
+        // Fallback: standalone @handle — Twitter handles are alphanumeric+underscore (no dots).
+        let regex = Regex::new(r"(?<!\w)@([a-zA-Z0-9_]{2,50})(?![a-zA-Z0-9_])").ok()?;
+        for capture in regex.captures_iter(description) {
+            let handle = capture.get(1)?.as_str();
+            if !handle.contains('.') && handle.len() >= 2 {
+                return Some(format!("@{}", handle));
+            }
+        }
+        None
     })
 }
 
@@ -1163,7 +1173,10 @@ async fn enrich_public_contact_fields(
                 || lower.contains("bio.site")
                 || lower.contains("lnk.bio")
                 || lower.contains("hoo.be");
-            if is_same_family && !found_lower.contains("linktr.ee") && !found_lower.contains("beacons.ai") {
+            if is_same_family
+                && !found_lower.contains("linktr.ee")
+                && !found_lower.contains("beacons.ai")
+            {
                 *external_url = Some(found.clone());
             }
         }
@@ -1370,6 +1383,7 @@ Return ONLY valid JSON (no markdown):
         state.nvidia_nim_client.as_ref(),
         state.gemma_client.as_ref(),
         state.gemini_client.as_ref(),
+        state.deepseek_client.as_ref(),
         &prompt,
     )
     .await
@@ -1390,10 +1404,7 @@ Return ONLY valid JSON (no markdown):
                         .or_else(|| v["dm_creator"].as_str()) // legacy field name
                         .unwrap_or(&default_dm_creator(name))
                         .to_string();
-                    let x_dm = v["x_dm"]
-                        .as_str()
-                        .unwrap_or(&dm_creator)
-                        .to_string();
+                    let x_dm = v["x_dm"].as_str().unwrap_or(&dm_creator).to_string();
                     let email_script = v["email_script"]
                         .as_str()
                         .map(str::to_string)
@@ -1417,7 +1428,15 @@ Return ONLY valid JSON (no markdown):
                             _ => default_service_for_prospect(category, prospect_type),
                         }
                     };
-                    (score, reasoning, service, dm_creator, dm_clipper, x_dm, email_script)
+                    (
+                        score,
+                        reasoning,
+                        service,
+                        dm_creator,
+                        dm_clipper,
+                        x_dm,
+                        email_script,
+                    )
                 }
                 Err(_) => (
                     0.5,
@@ -1426,7 +1445,10 @@ Return ONLY valid JSON (no markdown):
                     default_x_dm(name, &default_service_for_prospect(category, prospect_type)),
                     default_dm_clipper(name),
                     default_x_dm(name, &default_service_for_prospect(category, prospect_type)),
-                    default_email_script(name, &default_service_for_prospect(category, prospect_type)),
+                    default_email_script(
+                        name,
+                        &default_service_for_prospect(category, prospect_type),
+                    ),
                 ),
             }
         }
@@ -1490,7 +1512,9 @@ fn default_service_for_prospect(category: &str, prospect_type: &str) -> String {
         || combined.contains("founder")
     {
         "landing_page".to_string()
-    } else if combined.contains("podcast") || combined.contains("stream") || combined.contains("creator")
+    } else if combined.contains("podcast")
+        || combined.contains("stream")
+        || combined.contains("creator")
     {
         "clipping".to_string()
     } else {
@@ -2001,6 +2025,7 @@ Legacy DM: {existing_dm}"#,
             .video_gemini_client
             .as_ref()
             .or(state.gemini_client.as_ref()),
+        state.deepseek_client.as_ref(),
         &prompt,
     )
     .await
@@ -2123,8 +2148,7 @@ async fn generate_prospect_sample_pack(
         .or_else(|| row.get::<Option<String>, _>("external_url"))
         .unwrap_or_else(|| platform_url.clone());
     let has_product_url = source_url.starts_with("http://") || source_url.starts_with("https://");
-    let use_long_form_workflow =
-        should_use_long_form_for_revenue_sample(&service, has_product_url);
+    let use_long_form_workflow = should_use_long_form_for_revenue_sample(&service, has_product_url);
     let target_duration = service_target_duration_seconds(&service);
     let long_form_style = service_long_form_style(&service);
     let offer_type = service_long_form_offer_type(&service);
@@ -2193,7 +2217,11 @@ async fn generate_prospect_sample_pack(
     .bind(&extra)
     .bind(id)
     .bind(unlock_price)
-    .bind(if has_product_url { Some(source_url.as_str()) } else { None })
+    .bind(if has_product_url {
+        Some(source_url.as_str())
+    } else {
+        None
+    })
     .fetch_one(&state.db_pool)
     .await
     .map_err(|e| {
@@ -3623,50 +3651,59 @@ async fn linkedin_launch_search(
         }));
     };
 
-    let launch_result = match crate::phantombuster_client::PhantomBusterClient::classify_linkedin_phantom(&agent.name) {
-        Some(crate::phantombuster_client::LinkedInPhantomKind::SalesNavSearch) => {
-            if !crate::phantombuster_client::PhantomBusterClient::looks_like_sales_nav_search(&req.search_url) {
+    let launch_result =
+        match crate::phantombuster_client::PhantomBusterClient::classify_linkedin_phantom(
+            &agent.name,
+        ) {
+            Some(crate::phantombuster_client::LinkedInPhantomKind::SalesNavSearch) => {
+                if !crate::phantombuster_client::PhantomBusterClient::looks_like_sales_nav_search(
+                    &req.search_url,
+                ) {
+                    return Json(json!({
+                        "success": false,
+                        "error": "This phantom expects a Sales Navigator people-search URL. Paste a linkedin.com/sales/search/... URL or use the smart-search launcher instead."
+                    }));
+                }
+                pb.launch_agent(&req.agent_id, &req.search_url, &req.session_cookie, max)
+                    .await
+            }
+            Some(crate::phantombuster_client::LinkedInPhantomKind::LinkedInSearch) => {
+                if crate::phantombuster_client::PhantomBusterClient::looks_like_sales_nav_search(
+                    &req.search_url,
+                ) {
+                    return Json(json!({
+                        "success": false,
+                        "error": "This phantom is a regular LinkedIn Search Export, not a Sales Navigator phantom. Use a normal linkedin.com/search/results/... URL, plain keywords, or switch to a Sales Navigator Search Export phantom."
+                    }));
+                }
+                pb.launch_linkedin_search(&req.agent_id, &req.search_url, &req.session_cookie, max)
+                    .await
+            }
+            Some(crate::phantombuster_client::LinkedInPhantomKind::LeadOutreach) => {
                 return Json(json!({
                     "success": false,
-                    "error": "This phantom expects a Sales Navigator people-search URL. Paste a linkedin.com/sales/search/... URL or use the smart-search launcher instead."
+                    "error": "The selected phantom is a LinkedIn Lead Outreach phantom. It expects messaging-specific inputs and cannot be used for scrape-only lead search launches."
                 }));
             }
-            pb.launch_agent(&req.agent_id, &req.search_url, &req.session_cookie, max).await
-        }
-        Some(crate::phantombuster_client::LinkedInPhantomKind::LinkedInSearch) => {
-            if crate::phantombuster_client::PhantomBusterClient::looks_like_sales_nav_search(&req.search_url) {
+            Some(crate::phantombuster_client::LinkedInPhantomKind::EventGuests) => {
                 return Json(json!({
                     "success": false,
-                    "error": "This phantom is a regular LinkedIn Search Export, not a Sales Navigator phantom. Use a normal linkedin.com/search/results/... URL, plain keywords, or switch to a Sales Navigator Search Export phantom."
+                    "error": "The selected phantom is for LinkedIn Event Guests. Paste an event URL there instead, or choose a search-export phantom for lead search."
                 }));
             }
-            pb.launch_linkedin_search(&req.agent_id, &req.search_url, &req.session_cookie, max).await
-        }
-        Some(crate::phantombuster_client::LinkedInPhantomKind::LeadOutreach) => {
-            return Json(json!({
-                "success": false,
-                "error": "The selected phantom is a LinkedIn Lead Outreach phantom. It expects messaging-specific inputs and cannot be used for scrape-only lead search launches."
-            }));
-        }
-        Some(crate::phantombuster_client::LinkedInPhantomKind::EventGuests) => {
-            return Json(json!({
-                "success": false,
-                "error": "The selected phantom is for LinkedIn Event Guests. Paste an event URL there instead, or choose a search-export phantom for lead search."
-            }));
-        }
-        Some(crate::phantombuster_client::LinkedInPhantomKind::ProfileScraper) => {
-            return Json(json!({
-                "success": false,
-                "error": "The selected phantom scrapes profile lists, not searches. Use a Search Export phantom for this workflow."
-            }));
-        }
-        None => {
-            return Json(json!({
-                "success": false,
-                "error": "The selected PhantomBuster agent is not recognized as a supported LinkedIn search phantom."
-            }));
-        }
-    };
+            Some(crate::phantombuster_client::LinkedInPhantomKind::ProfileScraper) => {
+                return Json(json!({
+                    "success": false,
+                    "error": "The selected phantom scrapes profile lists, not searches. Use a Search Export phantom for this workflow."
+                }));
+            }
+            None => {
+                return Json(json!({
+                    "success": false,
+                    "error": "The selected PhantomBuster agent is not recognized as a supported LinkedIn search phantom."
+                }));
+            }
+        };
 
     match launch_result {
         Err(e) => return Json(json!({"success": false, "error": e})),
@@ -4395,6 +4432,7 @@ Output ONLY the DM body. No quotes, no labels, no preamble."#,
         state.nvidia_nim_client.as_ref(),
         state.gemma_client.as_ref(),
         state.gemini_client.as_ref(),
+        state.deepseek_client.as_ref(),
         &prompt,
     )
     .await
@@ -4533,108 +4571,121 @@ async fn instagram_generate_sample(
         )
     } else {
         match service.as_deref() {
-        Some("animations") => (
-            "title_card",
-            format!("{} — channel intro", full_name),
-            "modern",
-            8.0,
-            json!({"subtitle": bio.chars().take(60).collect::<String>()}),
-        ),
+            Some("animations") => (
+                "title_card",
+                format!("{} — channel intro", full_name),
+                "modern",
+                8.0,
+                json!({"subtitle": bio.chars().take(60).collect::<String>()}),
+            ),
 
-        Some("product_mockup") => {
-            // If the lead has a website, scrape their og:image first —
-            // showing their ACTUAL product is way more compelling than
-            // a generic AI-generated image.
-            let img_url = if let Some(ref url) = source_url {
-                match fetch_landing_page_hero(url).await {
-                    Some(u) => Some(u),
-                    None => {
-                        let product_prompt = format!(
+            Some("product_mockup") => {
+                // If the lead has a website, scrape their og:image first —
+                // showing their ACTUAL product is way more compelling than
+                // a generic AI-generated image.
+                let img_url = if let Some(ref url) = source_url {
+                    match fetch_landing_page_hero(url).await {
+                        Some(u) => Some(u),
+                        None => {
+                            let product_prompt = format!(
                             "Professional product photograph, clean white background, studio lighting: {}",
                             bio.chars().take(200).collect::<String>()
                         );
-                        try_generate_image(&state, &product_prompt).await
+                            try_generate_image(&state, &product_prompt).await
+                        }
                     }
-                }
-            } else {
-                let product_prompt = format!(
+                } else {
+                    let product_prompt = format!(
                     "Professional product photograph, clean white background, studio lighting: {}",
                     bio.chars().take(200).collect::<String>()
                 );
-                try_generate_image(&state, &product_prompt).await
-            };
-            (
-                "ui_mockup",
-                format!("{} — product showcase mockup", full_name),
-                "modern",
-                8.0,
-                json!({
-                    "device":         "phone",
-                    "animation":      "zoom_in",
-                    "screenshot_url": img_url.unwrap_or_default(),
-                }),
-            )
-        }
+                    try_generate_image(&state, &product_prompt).await
+                };
+                (
+                    "ui_mockup",
+                    format!("{} — product showcase mockup", full_name),
+                    "modern",
+                    8.0,
+                    json!({
+                        "device":         "phone",
+                        "animation":      "zoom_in",
+                        "screenshot_url": img_url.unwrap_or_default(),
+                    }),
+                )
+            }
 
-        Some("landing_page") => {
-            // If the user pasted a landing-page URL, try to pull the hero
-            // image (og:image meta tag) from it. Fall back to synthesising
-            // one via Gemini if the site has no usable meta or we can't
-            // reach it. Fall further back to empty — Blender renders a
-            // scene without a reference image rather than erroring.
-            let hero_url = match source_url.as_deref() {
-                Some(url) => match fetch_landing_page_hero(url).await {
-                    Some(u) => u,
+            Some("landing_page") => {
+                // If the user pasted a landing-page URL, try to pull the hero
+                // image (og:image meta tag) from it. Fall back to synthesising
+                // one via Gemini if the site has no usable meta or we can't
+                // reach it. Fall further back to empty — Blender renders a
+                // scene without a reference image rather than erroring.
+                let hero_url = match source_url.as_deref() {
+                    Some(url) => match fetch_landing_page_hero(url).await {
+                        Some(u) => u,
+                        None => {
+                            let p = format!(
+                                "Clean SaaS landing-page hero illustration: {}",
+                                bio.chars().take(150).collect::<String>()
+                            );
+                            try_generate_image(&state, &p).await.unwrap_or_default()
+                        }
+                    },
                     None => {
                         let p = format!(
-                            "Clean SaaS landing-page hero illustration: {}",
-                            bio.chars().take(150).collect::<String>()
-                        );
-                        try_generate_image(&state, &p).await.unwrap_or_default()
-                    }
-                },
-                None => {
-                    let p = format!(
                         "Clean SaaS landing-page hero illustration for: {}. Modern, gradient background, tech/startup aesthetic.",
                         bio.chars().take(200).collect::<String>()
                     );
-                    try_generate_image(&state, &p).await.unwrap_or_default()
-                }
-            };
-            (
-                "scene",
-                format!("Animated landing page for {}", full_name),
+                        try_generate_image(&state, &p).await.unwrap_or_default()
+                    }
+                };
+                (
+                    "scene",
+                    format!("Animated landing page for {}", full_name),
+                    "modern",
+                    15.0,
+                    json!({
+                        "reference_image_url": hero_url,
+                        "animation_style":     "parallax",
+                        "source_url":          source_url,
+                    }),
+                )
+            }
+
+            Some("ugc") | Some("full_stack") => (
+                "ui_mockup",
+                format!("{}'s product showcase", full_name),
                 "modern",
-                15.0,
-                json!({
-                    "reference_image_url": hero_url,
-                    "animation_style":     "parallax",
-                    "source_url":          source_url,
-                }),
-            )
-        }
+                6.0,
+                json!({"device": "phone", "animation": "fade_in"}),
+            ),
 
-        Some("ugc") | Some("full_stack") => (
-            "ui_mockup",
-            format!("{}'s product showcase", full_name),
-            "modern",
-            6.0,
-            json!({"device": "phone", "animation": "fade_in"}),
-        ),
-
-        _ => {
-            // If the lead has a website, generate a scene animation with
-            // their hero image instead of a plain thumbnail — far more
-            // impressive in a DM.
-            if let Some(ref url) = source_url {
-                if let Some(hero) = fetch_landing_page_hero(url).await {
-                    (
-                        "scene",
-                        format!("Professional animated showcase for {}", full_name),
-                        "modern",
-                        10.0,
-                        json!({"reference_image_url": hero, "source_url": url}),
-                    )
+            _ => {
+                // If the lead has a website, generate a scene animation with
+                // their hero image instead of a plain thumbnail — far more
+                // impressive in a DM.
+                if let Some(ref url) = source_url {
+                    if let Some(hero) = fetch_landing_page_hero(url).await {
+                        (
+                            "scene",
+                            format!("Professional animated showcase for {}", full_name),
+                            "modern",
+                            10.0,
+                            json!({"reference_image_url": hero, "source_url": url}),
+                        )
+                    } else {
+                        (
+                            "thumbnail",
+                            format!(
+                                "Eye-catching thumbnail for @{} — {}",
+                                username,
+                                bio.chars().take(80).collect::<String>()
+                            ),
+                            "bold",
+                            0.0,
+                            json!({"title_text": full_name}),
+                        )
+                    }
                 } else {
                     (
                         "thumbnail",
@@ -4648,32 +4699,13 @@ async fn instagram_generate_sample(
                         json!({"title_text": full_name}),
                     )
                 }
-            } else {
-                (
-                    "thumbnail",
-                    format!(
-                        "Eye-catching thumbnail for @{} — {}",
-                        username,
-                        bio.chars().take(80).collect::<String>()
-                    ),
-                    "bold",
-                    0.0,
-                    json!({"title_text": full_name}),
-                )
             }
-        }
         }
     };
 
     if let Some(extra_obj) = extra.as_object_mut() {
-        extra_obj.insert(
-            "sample_owner_user_id".to_string(),
-            json!(user_id),
-        );
-        extra_obj.insert(
-            "sourced_from_lead_id".to_string(),
-            json!(id),
-        );
+        extra_obj.insert("sample_owner_user_id".to_string(), json!(user_id));
+        extra_obj.insert("sourced_from_lead_id".to_string(), json!(id));
     }
 
     let title = format!("Sample for @{}", username);
@@ -4764,19 +4796,19 @@ async fn instagram_generate_sample(
         // For simpler cases, use the direct Blender render path.
         let has_website = source_url.is_some();
         if has_website && gig_type == "scene" {
-        let website_url = source_url.clone().unwrap_or_default();
-        let lead_name = full_name.clone();
-        let lead_bio = bio.clone();
-        tokio::spawn(async move {
-            run_agent_video_for_lead(
-                delivery_id,
-                &website_url,
-                &lead_name,
-                &lead_bio,
-                render_state,
-            )
-            .await;
-        });
+            let website_url = source_url.clone().unwrap_or_default();
+            let lead_name = full_name.clone();
+            let lead_bio = bio.clone();
+            tokio::spawn(async move {
+                run_agent_video_for_lead(
+                    delivery_id,
+                    &website_url,
+                    &lead_name,
+                    &lead_bio,
+                    render_state,
+                )
+                .await;
+            });
         } else {
             tokio::spawn(async move {
                 crate::handlers::admin::run_delivery_job(delivery_id, render_state).await;
@@ -4918,6 +4950,7 @@ Return ONLY a JSON array of strings. No explanation. Example: ["youtuber", "cont
         state.nvidia_nim_client.as_ref(),
         state.gemma_client.as_ref(),
         state.gemini_client.as_ref(),
+        state.deepseek_client.as_ref(),
         &prompt,
     )
     .await
@@ -5547,6 +5580,7 @@ Use education instead of animations for Manim/LaTeX/teaching content. Use three_
             state.nvidia_nim_client.as_ref(),
             state.gemma_client.as_ref(),
             state.gemini_client.as_ref(),
+            state.deepseek_client.as_ref(),
             &prompt,
         )
         .await;
@@ -5640,6 +5674,7 @@ Return ONLY the raw search query string, nothing else."#
         state.nvidia_nim_client.as_ref(),
         state.gemma_client.as_ref(),
         state.gemini_client.as_ref(),
+        state.deepseek_client.as_ref(),
         &prompt,
     )
     .await
@@ -5687,6 +5722,7 @@ Return ONLY the category name, nothing else."#
         state.nvidia_nim_client.as_ref(),
         state.gemma_client.as_ref(),
         state.gemini_client.as_ref(),
+        state.deepseek_client.as_ref(),
         &prompt,
     )
     .await
@@ -5746,6 +5782,7 @@ Return ONLY the JSON, no explanation."#
         state.nvidia_nim_client.as_ref(),
         state.gemma_client.as_ref(),
         state.gemini_client.as_ref(),
+        state.deepseek_client.as_ref(),
         &prompt,
     )
     .await
@@ -5840,15 +5877,16 @@ async fn ai_score_linkedin_leads(state: &Arc<AppState>, job_id: uuid::Uuid) {
             job_title, company, seniority, description
         );
 
-        let (score, reasoning, service, dm_creator, _, x_dm, email_script) = score_prospect_with_ai(
-            state,
-            &name,
-            audience,
-            &enriched_desc,
-            &category,
-            "linkedin_lead",
-        )
-        .await;
+        let (score, reasoning, service, dm_creator, _, x_dm, email_script) =
+            score_prospect_with_ai(
+                state,
+                &name,
+                audience,
+                &enriched_desc,
+                &category,
+                "linkedin_lead",
+            )
+            .await;
 
         let _ = sqlx::query(
             "UPDATE prospects
@@ -6148,6 +6186,7 @@ Return ONLY valid JSON (no markdown):
         state.nvidia_nim_client.as_ref(),
         state.gemma_client.as_ref(),
         state.gemini_client.as_ref(),
+        state.deepseek_client.as_ref(),
         &prompt,
     )
     .await
@@ -6394,11 +6433,11 @@ Output file paths clearly in your final response so the delivery pipeline can fi
                 &current_prompt,
                 &session_id,
                 String::new(),
-            state.clone(),
-            state.job_manager.clone(),
-            None,
-            None,
-        )
+                state.clone(),
+                state.job_manager.clone(),
+                None,
+                None,
+            )
             .await;
 
         // Collect the actual output paths the agent produced
@@ -6840,6 +6879,40 @@ struct UpdateServiceTypeRequest {
     service_type: Option<String>,
 }
 
+/// Backfill prospects with null service_type using the same
+/// default_service_for_prospect logic. Runs at startup.
+pub async fn backfill_null_service_types(db_pool: &sqlx::PgPool) {
+    tracing::info!("🔄 Backfilling prospects with null service_type...");
+    match sqlx::query_as::<_, (uuid::Uuid, String, String)>(
+        "SELECT id, content_category, prospect_type FROM prospects WHERE service_type IS NULL"
+    )
+    .fetch_all(db_pool)
+    .await
+    {
+        Ok(rows) => {
+            if rows.is_empty() {
+                tracing::info!("✅ No prospects need service_type backfill");
+                return;
+            }
+            let mut updated = 0u64;
+            for (id, category, prospect_type) in &rows {
+                let service = default_service_for_prospect(category, prospect_type);
+                match sqlx::query("UPDATE prospects SET service_type = $1, updated_at = NOW() WHERE id = $2")
+                    .bind(&service)
+                    .bind(id)
+                    .execute(db_pool)
+                    .await
+                {
+                    Ok(_) => updated += 1,
+                    Err(e) => tracing::error!("Failed to backfill prospect {}: {}", id, e),
+                }
+            }
+            tracing::info!("✅ Backfilled {} / {} prospects with service_type", updated, rows.len());
+        }
+        Err(e) => tracing::error!("❌ Failed to query null-service_type prospects: {}", e),
+    }
+}
+
 async fn instagram_update_service_type(
     Extension(state): Extension<Arc<AppState>>,
     Extension(claims): Extension<Claims>,
@@ -6860,7 +6933,7 @@ async fn instagram_update_service_type(
                 return Json(json!({
                     "success": false,
                     "error":   format!("service_type must be one of: clipping, thumbnails, product_mockup, landing_page, education, three_d_scene, voice_audio, ugc, agency_bundle, full_stack (got: {})", s),
-                }))
+                }));
             }
         }
     };
@@ -6927,7 +7000,9 @@ async fn telegram_discover_channels(
         .collect();
 
     if queries.is_empty() {
-        return Json(json!({"success": false, "error": "Provide at least one Telegram search query."}));
+        return Json(
+            json!({"success": false, "error": "Provide at least one Telegram search query."}),
+        );
     }
 
     let limit_per_query = req.limit_per_query.unwrap_or(15).clamp(1, 50);

@@ -367,7 +367,7 @@ pub async fn saas_launch_pack_page() -> Html<String> {
     Html(build_service_offer_page_html(
         "saas-launch-pack",
         "SaaS/App Demo Rush Pack",
-        "$299-$499",
+        "$399-$1,200+",
         "Send your website or app URL. We turn it into a polished product demo/promo video in 24 hours. Most rush demos are 30-60s; longer explainers and walkthroughs are available.",
         "Built for founders, product marketers, agencies, and sales teams that need polished product video without waiting on a traditional studio.",
         "The simple offer: send a live product URL, screenshots, app recording, or launch brief and get a buyer-facing demo video package. The full pack can include the main video, 3 hooks/captions, a thumbnail or hero concept, and a delivery page with downloads.",
@@ -376,8 +376,9 @@ pub async fn saas_launch_pack_page() -> Html<String> {
         "/chat",
         "Request a demo video",
         &[
-            "$299 basic rush demo: one tightly scoped demo/promo video, usually 30-60s",
-            "$499 full demo pack: longer or more polished video when needed, plus 3 hooks/captions, thumbnail or hero concept, delivery/download page",
+            "$399 starter demo: one tightly scoped product demo/promo video, usually 30-90s",
+            "$699 launch demo pack: polished demo plus hooks/captions, thumbnail or hero concept, delivery/download page",
+            "$1,200+ walkthrough or campaign pack: longer product walkthrough, multiple variants, or stronger motion/voice polish",
             "Optional device, browser, app mockup, narration, and launch scenes",
             "Built for Product Hunt, X, LinkedIn, homepage, onboarding, or sales",
             "Delivered as a review/download link you can share immediately",
@@ -401,7 +402,7 @@ pub async fn clipper_enhancement_pack_page() -> Html<String> {
     Html(build_service_offer_page_html(
         "clipper-enhancement-pack",
         "Thumbnail & Motion Graphics Pack",
-        "$97-$600+",
+        "$250-$1,200+",
         "High-converting thumbnails, title cards, lower thirds, mockups, and motion assets for creators, launches, and client campaigns.",
         "Built for creators, marketers, agencies, and small teams that need premium visual packaging around their videos and campaigns.",
         "This offer focuses on the platform's strongest visual add-ons: rendered thumbnails, title cards, lower thirds, device mockups, data visuals, and branded motion scenes. It is the fastest way to improve how a video package looks before someone clicks play.",
@@ -435,7 +436,7 @@ pub async fn thumbnail_hero_pack_page() -> Html<String> {
     Html(build_service_offer_page_html(
         "thumbnail-hero-pack",
         "Thumbnail & Hero Visual Pack",
-        "$49-$250+",
+        "$75-$300+",
         "Click-focused thumbnails, hero visuals, and campaign graphics for creators, launches, products, and ads.",
         "Built for YouTubers, SaaS founders, course sellers, agencies, and operators who need stronger first impressions fast.",
         "VideoSync can turn a product, video, or campaign brief into thumbnail variants, hero visuals, ad stills, and reusable visual directions with Gemini multimodal QA before delivery.",
@@ -469,7 +470,7 @@ pub async fn product_mockup_pack_page() -> Html<String> {
     Html(build_service_offer_page_html(
         "product-mockup-pack",
         "Product Mockup Video Pack",
-        "$199-$499",
+        "$299-$900+",
         "Send a website, screenshots, or app flow. We turn it into animated UI/product mockups that make the product easier to sell.",
         "Built for SaaS founders, indie hackers, app owners, no-code builders, and agencies selling productized demos.",
         "This is the visual upgrade for apps that look useful but do not yet feel premium. Send a URL, screenshots, Figma exports, or a written workflow; VideoSync turns it into browser/device scenes, motion callouts, and short product videos.",
@@ -503,7 +504,7 @@ pub async fn education_explainer_pack_page() -> Html<String> {
     Html(build_service_offer_page_html(
         "education-explainer-pack",
         "Education Explainer Pack",
-        "$149-$900+",
+        "$300-$1,500+",
         "Manim, LaTeX, diagrams, narration, and long-form explainers for lessons, courses, and technical content.",
         "Built for educators, course creators, technical YouTubers, founders, and B2B teams that need concepts explained visually.",
         "VideoSync can combine Manim/LaTeX renders, diagrams, stock footage, narration, and long-form assembly into lessons, explainer videos, and course modules.",
@@ -537,7 +538,7 @@ pub async fn blender_scene_pack_page() -> Html<String> {
     Html(build_service_offer_page_html(
         "blender-scene-pack",
         "Blender 2D/3D Scene Pack",
-        "$199-$1,200+",
+        "$500-$2,500+",
         "Blender scenes, product animations, 3D explainers, animated models, and cinematic support visuals.",
         "Built for product teams, creators, agencies, educators, and technical brands that need visuals beyond flat stock footage.",
         "VideoSync can use BlenderMCP outputs alongside editing, narration, QA, thumbnails, and delivery pages to produce stronger demos and explainers.",
@@ -571,8 +572,8 @@ pub async fn voice_audio_pack_page() -> Html<String> {
     Html(build_service_offer_page_html(
         "voice-audio-pack",
         "Voice & Audio Production Pack",
-        "$49-$400+",
-        "VibeVoice narration, podcast-style audio, voiceovers, summaries, and audio-backed video packages.",
+        "$99-$750+",
+        "Narration, podcast-style audio, voiceovers, summaries, and audio-backed video packages.",
         "Built for founders, creators, educators, agencies, and newsletter operators who need narration or audio content quickly.",
         "VideoSync can generate scripts, voiceovers, narrated summaries, audio visualizers, and video packages that combine narration with motion assets.",
         "/chat",
@@ -581,7 +582,7 @@ pub async fn voice_audio_pack_page() -> Html<String> {
         "Create a narrated explainer",
         &[
             "Voiceover and narration scripts",
-            "VibeVoice audio outputs",
+            "AI-assisted voice and narration outputs",
             "Podcast/video summaries",
             "Audio visualizers",
             "Narrated videos and delivery links",
@@ -597,7 +598,7 @@ pub async fn voice_audio_pack_page() -> Html<String> {
             ("Creator", "Needs voiceover-backed clips and summaries."),
             ("Agency", "Needs fast narration for client deliverables."),
         ],
-        r#"["voice_audio","vibevoice","summary","long_form"]"#,
+        r#"["voice_audio","summary","long_form"]"#,
     ))
 }
 
@@ -605,7 +606,7 @@ pub async fn mixed_agency_bundle_page() -> Html<String> {
     Html(build_service_offer_page_html(
         "mixed-agency-bundle",
         "Website-to-Video Agency Pack",
-        "$999 for 3 client videos",
+        "$1,500 for 3 client videos",
         "For Webflow, Framer, SaaS, and marketing agencies: send 3 client websites and get 3 client-ready demo videos you can resell.",
         "Built for agencies, freelancers, Webflow/Framer studios, no-code builders, and SaaS marketers who already have clients but need faster video fulfillment.",
         "The plain offer: agencies send client websites or app URLs, and VideoSync produces demo/promo videos plus supporting assets they can deliver under their own brand. This is not vague backend infrastructure; it is website-to-video fulfillment for agencies.",
@@ -614,7 +615,7 @@ pub async fn mixed_agency_bundle_page() -> Html<String> {
         "/services/creator-manager-fulfillment",
         "Explore monthly fulfillment",
         &[
-            "$999 pack: 3 client website/app demo videos",
+            "$1,500 pack: 3 client website/app demo videos",
             "Each client gets a delivery page with preview and downloads",
             "Optional hook/caption variants, thumbnails, mockups, and narration",
             "Designed so agencies can resell the assets to their own clients",
@@ -673,12 +674,117 @@ pub async fn x402_asset_api_page() -> Html<String> {
     Html(build_x402_docs_page_html())
 }
 
+struct ServicePageTheme {
+    accent: &'static str,
+    secondary: &'static str,
+    glow_a: &'static str,
+    glow_b: &'static str,
+    pattern: &'static str,
+    eyebrow: &'static str,
+    visual_title: &'static str,
+    visual_points: &'static [&'static str],
+    lab_class: &'static str,
+}
+
+fn service_page_theme(service_slug: &str) -> ServicePageTheme {
+    match service_slug {
+        "saas-launch-pack" => ServicePageTheme {
+            accent: "#3b82f6",
+            secondary: "#22c55e",
+            glow_a: "rgba(59,130,246,0.24)",
+            glow_b: "rgba(34,197,94,0.10)",
+            pattern: "linear-gradient(135deg, rgba(59,130,246,0.26), transparent 38%), repeating-linear-gradient(90deg, rgba(147,197,253,0.10) 0 1px, transparent 1px 58px), repeating-linear-gradient(0deg, rgba(147,197,253,0.08) 0 1px, transparent 1px 42px)",
+            eyebrow: "URL to demo",
+            visual_title: "Website in. Buyer-ready product video out.",
+            visual_points: &["Landing page scan", "Product story", "Mockups + motion", "Downloadable delivery"],
+            lab_class: "service-lab-saas",
+        },
+        "thumbnail-hero-pack" | "clipper-enhancement-pack" => ServicePageTheme {
+            accent: "#f97316",
+            secondary: "#facc15",
+            glow_a: "rgba(249,115,22,0.22)",
+            glow_b: "rgba(250,204,21,0.12)",
+            pattern: "radial-gradient(circle at 25% 30%, rgba(250,204,21,0.28), transparent 0 18%), radial-gradient(circle at 75% 24%, rgba(249,115,22,0.22), transparent 0 22%), linear-gradient(135deg, rgba(15,23,42,0.48), rgba(2,6,23,0.74))",
+            eyebrow: "Click package",
+            visual_title: "First frame, thumbnail, hook, and polish.",
+            visual_points: &["Hero frame", "CTR thumbnail", "Caption/title card", "Reusable campaign visual"],
+            lab_class: "service-lab-visual",
+        },
+        "product-mockup-pack" => ServicePageTheme {
+            accent: "#14b8a6",
+            secondary: "#38bdf8",
+            glow_a: "rgba(20,184,166,0.20)",
+            glow_b: "rgba(56,189,248,0.12)",
+            pattern: "linear-gradient(135deg, rgba(20,184,166,0.24), transparent 42%), radial-gradient(circle at 70% 20%, rgba(56,189,248,0.18), transparent 0 24%), repeating-linear-gradient(135deg, rgba(226,232,240,0.07) 0 1px, transparent 1px 22px)",
+            eyebrow: "Mockup system",
+            visual_title: "Screenshots become animated product scenes.",
+            visual_points: &["UI flow", "Device/browser scenes", "Callouts", "Ad-ready export"],
+            lab_class: "service-lab-saas",
+        },
+        "education-explainer-pack" => ServicePageTheme {
+            accent: "#22c55e",
+            secondary: "#38bdf8",
+            glow_a: "rgba(34,197,94,0.20)",
+            glow_b: "rgba(56,189,248,0.10)",
+            pattern: "linear-gradient(135deg, rgba(34,197,94,0.18), transparent 42%), repeating-linear-gradient(0deg, rgba(226,232,240,0.08) 0 1px, transparent 1px 34px), repeating-linear-gradient(90deg, rgba(226,232,240,0.06) 0 1px, transparent 1px 34px)",
+            eyebrow: "Explain visually",
+            visual_title: "Concept → storyboard → Manim/LaTeX → lesson.",
+            visual_points: &["f(x) = clarity", "Animated diagrams", "Narrated lesson", "Long-form assembly"],
+            lab_class: "service-lab-education",
+        },
+        "blender-scene-pack" => ServicePageTheme {
+            accent: "#a855f7",
+            secondary: "#fb7185",
+            glow_a: "rgba(168,85,247,0.22)",
+            glow_b: "rgba(251,113,133,0.12)",
+            pattern: "radial-gradient(circle at 50% 28%, rgba(168,85,247,0.28), transparent 0 24%), conic-gradient(from 180deg at 50% 50%, rgba(251,113,133,0.12), rgba(59,130,246,0.18), rgba(168,85,247,0.12))",
+            eyebrow: "Scene engine",
+            visual_title: "3D scenes and cinematic support visuals.",
+            visual_points: &["Scene brief", "Model/lighting", "Camera motion", "Rendered assets"],
+            lab_class: "service-lab-visual",
+        },
+        "voice-audio-pack" => ServicePageTheme {
+            accent: "#ec4899",
+            secondary: "#8b5cf6",
+            glow_a: "rgba(236,72,153,0.20)",
+            glow_b: "rgba(139,92,246,0.14)",
+            pattern: "repeating-linear-gradient(90deg, rgba(236,72,153,0.22) 0 3px, transparent 3px 18px), linear-gradient(135deg, rgba(15,23,42,0.62), rgba(88,28,135,0.36))",
+            eyebrow: "Audio layer",
+            visual_title: "Scripts, voiceovers, summaries, and narrated assets.",
+            visual_points: &["Script polish", "Voiceover", "Audio-backed video", "Downloadable files"],
+            lab_class: "service-lab-audio",
+        },
+        "mixed-agency-bundle" | "creator-manager-fulfillment" => ServicePageTheme {
+            accent: "#0ea5e9",
+            secondary: "#f59e0b",
+            glow_a: "rgba(14,165,233,0.22)",
+            glow_b: "rgba(245,158,11,0.12)",
+            pattern: "linear-gradient(135deg, rgba(14,165,233,0.22), transparent 42%), radial-gradient(circle at 80% 15%, rgba(245,158,11,0.18), transparent 0 22%), repeating-linear-gradient(90deg, rgba(226,232,240,0.07) 0 1px, transparent 1px 46px)",
+            eyebrow: "Agency system",
+            visual_title: "Multiple client deliverables, one production backend.",
+            visual_points: &["3 client URLs", "3 videos", "Delivery pages", "Monthly upsell"],
+            lab_class: "service-lab-saas",
+        },
+        _ => ServicePageTheme {
+            accent: "#3b82f6",
+            secondary: "#22c55e",
+            glow_a: "rgba(59,130,246,0.18)",
+            glow_b: "rgba(34,197,94,0.10)",
+            pattern: "linear-gradient(135deg, rgba(59,130,246,0.20), rgba(15,23,42,0.44))",
+            eyebrow: "Production path",
+            visual_title: "Brief in. Buyer-facing media out.",
+            visual_points: &["Brief", "Workflow", "Review", "Delivery"],
+            lab_class: "service-lab-saas",
+        },
+    }
+}
+
 fn build_services_overview_page_html() -> String {
     let cards = [
         (
             "SaaS/App Demo Video Pack",
             "/services/saas-launch-pack",
-            "$299-$499+",
+            "$399-$1,200+",
             "Best first offer",
             "For SaaS founders, indie hackers, app owners, and startups that need a launch-ready product video fast.",
             "You send a website/app URL, screenshots, loom, or short brief.",
@@ -687,7 +793,7 @@ fn build_services_overview_page_html() -> String {
         (
             "Website-to-Video Agency Pack",
             "/services/mixed-agency-bundle",
-            "$999 for 3 videos",
+            "$1,500 for 3 videos",
             "Fast agency resale",
             "For Webflow, Framer, SaaS, and marketing agencies that want to resell video deliverables to existing clients.",
             "You send 3 client websites, offers, or landing pages.",
@@ -696,7 +802,7 @@ fn build_services_overview_page_html() -> String {
         (
             "Product Mockup Video Pack",
             "/services/product-mockup-pack",
-            "$199-$499+",
+            "$299-$900+",
             "Product visuals",
             "For founders and teams that need UI mockups, app-flow visuals, or product scenes before they have polished footage.",
             "You send screenshots, a product URL, Figma-style references, or an app flow.",
@@ -705,7 +811,7 @@ fn build_services_overview_page_html() -> String {
         (
             "Education Explainer Pack",
             "/services/education-explainer-pack",
-            "$149-$900+",
+            "$300-$1,500+",
             "Courses and lessons",
             "For educators, technical creators, coaches, and course sellers who need clearer visual explanations.",
             "You send a topic, outline, lesson, script, or source material.",
@@ -714,7 +820,7 @@ fn build_services_overview_page_html() -> String {
         (
             "Blender 2D/3D Scene Pack",
             "/services/blender-scene-pack",
-            "$199-$1,200+",
+            "$500-$2,500+",
             "3D and motion scenes",
             "For teams that need cinematic product visuals, 3D explainers, animated models, or support scenes.",
             "You send the idea, product, object, style reference, or scene description.",
@@ -723,7 +829,7 @@ fn build_services_overview_page_html() -> String {
         (
             "Thumbnail & Hero Visual Pack",
             "/services/thumbnail-hero-pack",
-            "$49-$250+",
+            "$75-$300+",
             "Click and conversion",
             "For creators, SaaS launches, ads, and landing pages that need a stronger first impression.",
             "You send the topic, product, face/photo, brand colors, or campaign goal.",
@@ -732,7 +838,7 @@ fn build_services_overview_page_html() -> String {
         (
             "Clip Enhancement Pack",
             "/services/clipper-enhancement-pack",
-            "$97-$600+",
+            "$250-$1,200+",
             "Creator polish",
             "For creators and brands that already have clips but need them packaged like professional social content.",
             "You send raw clips, highlights, timestamps, or exported videos.",
@@ -741,16 +847,16 @@ fn build_services_overview_page_html() -> String {
         (
             "Voice & Audio Production Pack",
             "/services/voice-audio-pack",
-            "$49-$400+",
+            "$99-$750+",
             "Narration and audio",
             "For videos, explainers, summaries, podcasts, and sales assets that need clean narration or audio.",
             "You send a script, topic, article, video, or rough notes.",
-            "We deliver VibeVoice narration, voiceovers, podcast-style audio, summaries, or audio-backed video packages.",
+            "We deliver narration, voiceovers, podcast-style audio, summaries, or audio-backed video packages.",
         ),
         (
             "Private Agency Production Backend",
             "/services/creator-manager-fulfillment",
-            "$999-$3,000+/mo",
+            "$1,500-$5,000+/mo",
             "Recurring fulfillment",
             "For agencies and operators selling monthly video deliverables who need a reliable production layer.",
             "You send recurring client tasks, briefs, brand notes, and fulfillment requirements.",
@@ -841,7 +947,8 @@ fn build_services_overview_page_html() -> String {
     .audience {{ color:#b9c8df; min-height:88px; line-height:1.5; }}
     .mini-list {{ display:grid; gap:0.75rem; margin-top:0.3rem; color:#a8b8d3; font-size:0.94rem; line-height:1.45; }}
     .mini-list strong {{ color:#e5eefb; }}
-    .cta {{ display:inline-flex; align-self:flex-start; margin-top:auto; color:#fff; text-decoration:none; background:#2563eb; border-radius:999px; padding:0.82rem 1.2rem; font-weight:800; }}
+    .cta {{ display:inline-flex; align-self:flex-start; margin-top:auto; color:#fff; text-decoration:none; background:#2563eb; border-radius:5px; padding:0.82rem 1.2rem; font-weight:800; transition:transform 0.18s ease, box-shadow 0.18s ease, background 0.18s ease; }}
+    .cta:hover {{ transform:translateY(-2px); box-shadow:0 14px 34px rgba(37,99,235,0.26); background:#1d4ed8; }}
     @media (max-width: 760px) {{
       .hero h1 {{ font-size:2.25rem; }}
       .offer-card {{ min-height:auto; }}
@@ -1123,6 +1230,21 @@ fn build_service_offer_page_html(
     let nav_html = service_page_nav(title);
     let sample_filters_json = sample_filters_json.to_string();
     let sample_ui = service_sample_ui_config(service_slug).to_string();
+    let theme = service_page_theme(service_slug);
+    let theme_accent = theme.accent;
+    let theme_secondary = theme.secondary;
+    let theme_glow_a = theme.glow_a;
+    let theme_glow_b = theme.glow_b;
+    let theme_pattern = theme.pattern;
+    let theme_eyebrow = theme.eyebrow;
+    let theme_visual_title = theme.visual_title;
+    let theme_lab_class = theme.lab_class;
+    let visual_points = theme
+        .visual_points
+        .iter()
+        .map(|point| format!(r#"<span>{point}</span>"#))
+        .collect::<Vec<_>>()
+        .join("");
 
     format!(
         r#"<!DOCTYPE html>
@@ -1139,13 +1261,14 @@ fn build_service_offer_page_html(
       --line-strong:rgba(96,165,250,0.28);
       --text:#e5eefb;
       --muted:#a8b8d3;
-      --blue:#3b82f6;
-      --green:#22c55e;
+      --blue:{theme_accent};
+      --green:{theme_secondary};
       --shadow:0 24px 70px rgba(2,6,23,0.45);
     }}
     * {{ box-sizing:border-box; }}
     body {{ margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; color:var(--text); background:
-      radial-gradient(circle at top left, rgba(59,130,246,0.18), transparent 28%),
+      radial-gradient(circle at top left, {theme_glow_a}, transparent 28%),
+      radial-gradient(circle at bottom right, {theme_glow_b}, transparent 30%),
       linear-gradient(135deg, #0a1322 0%, #0d1728 55%, #07111d 100%); position:relative; overflow-x:hidden; }}
     a {{ color:inherit; }}
     body::before {{ content:""; position:fixed; inset:0; background:
@@ -1158,7 +1281,8 @@ fn build_service_offer_page_html(
     .brand {{ color:#fff; text-decoration:none; font-size:1.35rem; font-weight:800; }}
     .toplinks {{ display:flex; gap:0.8rem; flex-wrap:wrap; }}
     .toplinks a {{ text-decoration:none; color:#dbeafe; padding:0.65rem 1rem; border-radius:999px; border:1px solid var(--line); background:rgba(8,15,28,0.76); }}
-    .hero {{ display:grid; grid-template-columns:minmax(0,1.15fr) minmax(280px,0.85fr); gap:1.2rem; }}
+    .page-content {{ position:relative; z-index:1; }}
+    .hero {{ display:grid; grid-template-columns:minmax(0,1.1fr) minmax(300px,0.9fr); gap:1.2rem; animation:riseIn 0.65s ease both; }}
     .hero-panel, .panel {{ border-radius:24px; border:1px solid var(--line); background:var(--panel); box-shadow:var(--shadow); backdrop-filter: blur(16px); }}
     .hero-panel {{ padding:1.8rem; }}
     .eyebrow {{ color:#93c5fd; font-size:0.8rem; letter-spacing:0.08em; text-transform:uppercase; font-weight:800; }}
@@ -1166,20 +1290,22 @@ fn build_service_offer_page_html(
     .tagline {{ margin-top:0.9rem; color:#dbeafe; font-size:1.08rem; }}
     .summary {{ margin-top:1rem; color:var(--muted); max-width:760px; }}
     .hero-highlights {{ display:flex; flex-wrap:wrap; gap:0.75rem; margin-top:1.15rem; }}
-    .hero-highlight {{ padding:0.7rem 0.95rem; border-radius:999px; background:rgba(15,23,42,0.68); border:1px solid rgba(96,165,250,0.18); color:#dbeafe; font-size:0.92rem; line-height:1.35; }}
+    .hero-highlight {{ padding:0.7rem 0.95rem; border-radius:8px; background:rgba(15,23,42,0.68); border:1px solid rgba(96,165,250,0.18); color:#dbeafe; font-size:0.92rem; line-height:1.35; }}
     .cta-row {{ display:flex; gap:0.8rem; flex-wrap:wrap; margin-top:1.4rem; }}
-    .btn {{ display:inline-flex; align-items:center; justify-content:center; padding:0.8rem 1.2rem; border-radius:999px; text-decoration:none; font-weight:700; }}
-    .btn-primary {{ background:linear-gradient(135deg,#3b82f6,#2563eb); color:#fff; }}
+    .btn {{ display:inline-flex; align-items:center; justify-content:center; padding:0.8rem 1.2rem; border-radius:5px; text-decoration:none; font-weight:700; transition:transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease; cursor:pointer; }}
+    .btn:hover {{ transform:translateY(-2px); box-shadow:0 14px 34px rgba(2,6,23,0.28); }}
+    .btn-primary {{ background:linear-gradient(135deg,var(--blue),#2563eb); color:#fff; border:0; }}
     .btn-secondary {{ background:rgba(15,23,42,0.7); border:1px solid var(--line-strong); color:#dbeafe; }}
     .mini-metrics {{ display:grid; gap:0.9rem; padding:1.5rem; }}
     .metric {{ padding:1rem; border-radius:18px; background:rgba(15,23,42,0.72); border:1px solid rgba(148,163,184,0.14); }}
     .metric strong {{ display:block; font-size:1.9rem; }}
     .metric span {{ color:var(--muted); font-size:0.92rem; }}
     .service-nav {{ display:flex; flex-wrap:wrap; gap:0.7rem; margin:24px 0; }}
-    .service-nav a {{ text-decoration:none; padding:0.7rem 1rem; border-radius:999px; border:1px solid var(--line); background:rgba(8,15,28,0.76); color:#dbeafe; }}
+    .service-nav a {{ text-decoration:none; padding:0.7rem 1rem; border-radius:5px; border:1px solid var(--line); background:rgba(8,15,28,0.76); color:#dbeafe; transition:transform 0.18s ease, border-color 0.18s ease; }}
+    .service-nav a:hover {{ transform:translateY(-2px); border-color:var(--line-strong); }}
     .service-nav a.active {{ border-color:var(--line-strong); background:rgba(59,130,246,0.16); }}
     .grid {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:1.2rem; }}
-    .panel {{ padding:1.5rem; }}
+    .panel {{ padding:1.5rem; animation:softReveal 0.7s ease both; }}
     .panel h2 {{ margin:0.5rem 0 0.9rem; font-size:1.45rem; }}
     .panel p {{ color:var(--muted); }}
     .checklist, .sample-list {{ list-style:none; padding:0; margin:0; }}
@@ -1195,10 +1321,28 @@ fn build_service_offer_page_html(
     .sample-actions {{ display:flex; gap:0.7rem; flex-wrap:wrap; margin-top:0.9rem; }}
     .sample-actions a {{ color:#93c5fd; text-decoration:none; font-weight:700; }}
     .sample-lab {{ display:grid; grid-template-columns:minmax(0,1fr) minmax(280px,0.8fr); gap:1rem; }}
+    .visual-stage {{ min-height:100%; position:relative; overflow:hidden; }}
+    .visual-stage::before {{ content:""; position:absolute; inset:-20%; background:{theme_pattern}; opacity:0.72; filter:blur(0.2px); animation:slowDrift 14s ease-in-out infinite alternate; }}
+    .visual-inner {{ position:relative; z-index:1; min-height:320px; display:flex; flex-direction:column; justify-content:space-between; }}
+    .visual-title {{ font-size:1.7rem; font-weight:900; letter-spacing:-0.03em; max-width:320px; }}
+    .visual-points {{ display:grid; gap:0.65rem; }}
+    .visual-points span {{ display:block; border:1px solid rgba(226,232,240,0.13); background:rgba(2,6,23,0.42); border-radius:10px; padding:0.75rem 0.85rem; color:#dbeafe; }}
+    .service-saas-launch-pack .visual-inner {{ background:linear-gradient(180deg, rgba(15,23,42,0.25), rgba(15,23,42,0.68)); border-radius:18px; padding:1rem; }}
+    .service-thumbnail-hero-pack .visual-points {{ grid-template-columns:repeat(2,minmax(0,1fr)); }}
+    .service-thumbnail-hero-pack .visual-points span:first-child {{ grid-column:span 2; min-height:88px; font-size:1.15rem; display:flex; align-items:center; }}
+    .service-education-explainer-pack .visual-stage {{ background:rgba(2,6,23,0.42); }}
+    .service-education-explainer-pack .visual-points span {{ font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }}
+    .service-blender-scene-pack .visual-title {{ text-transform:uppercase; letter-spacing:0.08em; font-size:1.25rem; }}
+    .service-voice-audio-pack .visual-points span {{ border-left:4px solid var(--green); }}
+    .sample-lab-card.service-lab-saas {{ border-color:rgba(96,165,250,0.24); }}
+    .sample-lab-card.service-lab-visual {{ background:linear-gradient(145deg, rgba(15,23,42,0.86), rgba(30,41,59,0.68)); }}
+    .sample-lab-card.service-lab-education {{ background:linear-gradient(145deg, rgba(12,20,33,0.92), rgba(20,45,48,0.58)); }}
+    .sample-lab-card.service-lab-audio {{ background:linear-gradient(145deg, rgba(15,23,42,0.88), rgba(68,27,99,0.42)); }}
     .sample-lab-card {{ padding:1.25rem; border-radius:18px; background:rgba(15,23,42,0.72); border:1px solid rgba(148,163,184,0.14); }}
     .sample-form {{ display:grid; gap:0.85rem; margin-top:0.9rem; }}
     .sample-form label {{ font-size:0.88rem; font-weight:700; color:#dbeafe; }}
-    .sample-form input, .sample-form textarea {{ width:100%; border-radius:14px; border:1px solid rgba(96,165,250,0.22); background:rgba(2,6,23,0.56); color:#e5eefb; padding:0.9rem 1rem; font:inherit; }}
+    .sample-form input, .sample-form textarea {{ width:100%; border-radius:6px; border:1px solid rgba(96,165,250,0.22); background:rgba(2,6,23,0.56); color:#e5eefb; padding:0.9rem 1rem; font:inherit; transition:border-color 0.18s ease, box-shadow 0.18s ease; }}
+    .sample-form input:focus, .sample-form textarea:focus {{ outline:none; border-color:var(--blue); box-shadow:0 0 0 3px rgba(59,130,246,0.16); }}
     .sample-form textarea {{ min-height:120px; resize:vertical; }}
     .sample-form .row {{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:0.8rem; }}
     .sample-note {{ color:var(--muted); font-size:0.92rem; line-height:1.6; }}
@@ -1208,6 +1352,9 @@ fn build_service_offer_page_html(
     .admin-pill {{ display:inline-flex; align-items:center; gap:0.45rem; padding:0.45rem 0.8rem; border-radius:999px; border:1px solid rgba(34,197,94,0.28); background:rgba(34,197,94,0.10); color:#bbf7d0; font-size:0.85rem; font-weight:700; }}
     .locked-pill {{ display:inline-flex; align-items:center; gap:0.45rem; padding:0.45rem 0.8rem; border-radius:999px; border:1px solid rgba(148,163,184,0.18); background:rgba(15,23,42,0.56); color:#cbd5e1; font-size:0.85rem; font-weight:700; }}
     .empty-note {{ color:var(--muted); }}
+    @keyframes riseIn {{ from {{ opacity:0; transform:translateY(18px); }} to {{ opacity:1; transform:translateY(0); }} }}
+    @keyframes softReveal {{ from {{ opacity:0; transform:translateY(12px); }} to {{ opacity:1; transform:translateY(0); }} }}
+    @keyframes slowDrift {{ from {{ transform:translate3d(-1%, -1%, 0) scale(1.02); }} to {{ transform:translate3d(1.5%, 1%, 0) scale(1.06); }} }}
     @media (max-width: 880px) {{
       .hero {{ grid-template-columns:1fr; }}
       h1 {{ font-size:2.4rem; }}
@@ -1217,7 +1364,7 @@ fn build_service_offer_page_html(
   </style>
 </head>
 <body>
-  <div class="shell">
+  <div class="shell page-content service-{service_slug}">
     <div class="topbar">
       <a class="brand" href="/">VideoSync</a>
       <div class="toplinks">
@@ -1241,10 +1388,15 @@ fn build_service_offer_page_html(
           <a class="btn btn-secondary" href="{secondary_href}">{secondary_label}</a>
         </div>
       </div>
-      <aside class="hero-panel mini-metrics">
-        <div class="metric"><strong>{price}</strong><span>Typical project range</span></div>
-        <div class="metric"><strong>Production stack</strong><span>Built with VideoSync's editing, generation, narration, review, and delivery tools.</span></div>
-        <div class="metric"><strong>Best fit</strong><span>{audience}</span></div>
+      <aside class="hero-panel visual-stage">
+        <div class="visual-inner">
+          <div>
+            <div class="eyebrow">{theme_eyebrow}</div>
+            <div class="visual-title">{theme_visual_title}</div>
+          </div>
+          <div class="visual-points">{visual_points}</div>
+          <div class="metric"><strong>{price}</strong><span>Typical project range</span></div>
+        </div>
       </aside>
     </section>
 
@@ -1274,7 +1426,7 @@ fn build_service_offer_page_html(
       <h2 id="sampleSectionTitle">Request a custom output</h2>
       <p id="sampleSectionCopy">Describe the exact output you want and VideoSync will hand the brief to the agent. Your included outputs stay available until the upgrade CTA takes over.</p>
       <div class="sample-lab" style="margin-top:1rem;">
-        <div class="sample-lab-card">
+        <div class="sample-lab-card {theme_lab_class}">
           <div class="locked-pill" id="sampleGateBadge">5 outputs available</div>
           <form id="sampleRequestForm" class="sample-form">
             <div class="row">
@@ -1308,7 +1460,7 @@ fn build_service_offer_page_html(
           </form>
           <div class="sample-status" id="sampleStatus">This opens the agent chat with a structured brief so the requested output can be generated from scratch.</div>
         </div>
-        <aside class="sample-lab-card">
+        <aside class="sample-lab-card {theme_lab_class}">
           <div class="eyebrow">Before you buy</div>
           <h2 style="margin-top:0.5rem;" id="sampleHelperTitle">How generation works</h2>
           <p class="sample-note" id="sampleHelperCopy">Use each included output to test the production direction before you pay for more.</p>
@@ -1503,7 +1655,10 @@ fn build_service_offer_page_html(
       if (!isAdminUser()) return;
       const adminShell = document.getElementById('adminReviewShell');
       adminShell.classList.add('visible');
-      fetch('/api/portfolio-samples')
+      const authToken = getAuthToken();
+      fetch('/api/portfolio-samples', {{
+        headers: authToken ? {{ Authorization: `Bearer ${{authToken}}` }} : {{}}
+      }})
         .then((response) => response.json())
         .then((payload) => {{
           const root = document.getElementById('portfolioGrid');
@@ -1669,12 +1824,12 @@ fn build_service_offer_page_html(
           if (!overlay) {{
             overlay = document.createElement('div');
             overlay.id = 'serviceDynamicBg';
-            overlay.style.cssText = 'position:fixed;inset:0;background-size:cover;background-position:center;background-attachment:fixed;opacity:0;transition:opacity 0.9s ease;z-index:-1;pointer-events:none;mix-blend-mode:screen;';
+          overlay.style.cssText = 'position:fixed;inset:0;background-size:cover;background-position:center;background-attachment:fixed;opacity:0;transition:opacity 0.9s ease;z-index:0;pointer-events:none;mix-blend-mode:screen;';
             document.body.appendChild(overlay);
           }}
           overlay.style.backgroundImage = 'url(' + imageUrl + ')';
           requestAnimationFrame(() => {{
-            overlay.style.opacity = '0.18';
+            overlay.style.opacity = '0.16';
           }});
           this.lastBackgroundUpdate = Date.now();
         }} catch (_) {{
@@ -2357,7 +2512,7 @@ fn build_landing_page_html() -> &'static str {
                 <div style="background:#f8f9fa;border:1px solid #e5e7eb;border-radius:16px;padding:28px 24px">
                     <div style="font-size:12px;font-weight:700;letter-spacing:0.08em;color:#7a4cff;text-transform:uppercase;margin-bottom:8px">Creative Tools</div>
                     <h3 style="margin:0 0 10px;color:#111">Editing + Generation Stack</h3>
-                    <p style="color:#666;font-size:14px;line-height:1.6;margin:12px 0 0">Use FFmpeg tools, Blender scenes, Manim/LaTeX visuals, VibeVoice narration, thumbnails, stock support, and AI review from the same system.</p>
+                    <p style="color:#666;font-size:14px;line-height:1.6;margin:12px 0 0">Use FFmpeg tools, Blender scenes, Manim/LaTeX visuals, narration, thumbnails, stock support, and AI review from the same system.</p>
                 </div>
 
                 <div style="background:#f8f9fa;border:1px solid #e5e7eb;border-radius:16px;padding:28px 24px">
@@ -3698,7 +3853,7 @@ fn build_modern_landing_page_html() -> &'static str {
             <div class="section-intro">
                 <div class="section-kicker">Done-For-You Services</div>
                 <h2>Need a Client Package Instead?</h2>
-                <p>The SaaS launch pack, clip packs, thumbnails, product mockups, education videos, Blender scenes, VibeVoice audio, and agency bundles are separated into the Services page so the homepage stays focused on the $15 AI video workspace.</p>
+                <p>The SaaS launch pack, clip packs, thumbnails, product mockups, education videos, Blender scenes, audio production, and agency bundles are separated into the Services page so the homepage stays focused on the $15 AI video workspace.</p>
             </div>
             <div class="offer-grid">
                 <article class="offer-card">

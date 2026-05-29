@@ -344,48 +344,22 @@ Trust your understanding of natural language to determine user intent:
                             let tool_result = if let Some(ref qdrant_client) =
                                 app_state.qdrant_client
                             {
-                                if let Some(ref voyage_embeddings) = app_state.voyage_embeddings {
-                                    match qdrant_client
-                                        .build_context_for_query_with_voyage(
-                                            query,
-                                            session_id,
-                                            voyage_embeddings,
-                                        )
-                                        .await
-                                    {
-                                        Ok(context) => {
-                                            if context.is_empty() {
-                                                "No relevant memories found".to_string()
-                                            } else {
-                                                context
-                                            }
-                                        }
-                                        Err(e) => format!("Error searching memory: {}", e),
-                                    }
-                                } else if let Some(ref gemini_client) = app_state
-                                    .video_gemini_client
-                                    .as_ref()
-                                    .or(app_state.gemini_client.as_ref())
+                                match qdrant_client
+                                    .build_context_for_query(
+                                        query,
+                                        session_id,
+                                        app_state.voyage_embeddings.as_ref(),
+                                        app_state.video_gemini_client.as_ref().or(app_state.gemini_client.as_ref()),
+                                    )
+                                    .await
                                 {
-                                    match qdrant_client
-                                        .build_context_for_query_with_gemini(
-                                            query,
-                                            session_id,
-                                            gemini_client,
-                                        )
-                                        .await
-                                    {
-                                        Ok(context) => {
-                                            if context.is_empty() {
-                                                "No relevant memories found".to_string()
-                                            } else {
-                                                context
-                                            }
-                                        }
-                                        Err(e) => format!("Error searching memory: {}", e),
+                                    Ok(Some(context)) => {
+                                        context
                                     }
-                                } else {
-                                    "Memory search unavailable - no embedding client".to_string()
+                                    Ok(None) => {
+                                        "Memory search unavailable - no embedding client".to_string()
+                                    }
+                                    Err(e) => format!("Error searching memory: {}", e),
                                 }
                             } else {
                                 "Memory search unavailable - Qdrant not configured".to_string()
@@ -715,39 +689,37 @@ For complex multi-step workflows that benefit from parallel execution:
             Err(e) => tracing::error!("❌ Failed to save user message: {}", e),
         }
 
-        // ── Gemma 4 via NVIDIA NIM (preferred — reduces load on Gemini quota) ──
-        // NVIDIA NIM uses the same OpenAI-compatible API as for text generation,
-        // just with the `tools` parameter added. Gemma 4 has NATIVE function calling
-        // via special tokens, so no prompt-engineering tricks needed.
-        // Falls back to Gemini below if NIM is unavailable or returns an error.
+        // ── NVIDIA NIM (preferred — reduces load on Gemini quota) ──
+        // Shared messages and execution context for all NIM model attempts.
+        // Both text and vision NIM clients receive the same message history
+        // and full tool catalog with multi-turn tool loops.
+        let mut nim_messages: Vec<serde_json::Value> =
+            vec![serde_json::json!({"role": "system", "content": system_instruction})];
+        for msg in &conversation_history {
+            let role = match msg.role {
+                crate::agent::conversation_manager::MessageRole::Human => "user",
+                crate::agent::conversation_manager::MessageRole::Assistant => "assistant",
+                _ => continue,
+            };
+            nim_messages.push(serde_json::json!({"role": role, "content": msg.content}));
+        }
+        let current_message = if !context.is_empty() {
+            format!("{}\n\n{}", context, user_input)
+        } else {
+            user_input.to_string()
+        };
+        nim_messages.push(serde_json::json!({"role": "user", "content": current_message}));
+
+        let exec_context = crate::agent::tool_executor::ToolExecutionContext {
+            session_id: session_id.to_string(),
+            user_id: None,
+            app_state: app_state.clone(),
+            workflow_id,
+        };
+
+        // ── NIM Text (Gemma 4) — primary agent ──
         if let Some(ref nim_client) = app_state.nvidia_nim_client {
             send_progress("🤖 Processing your message with Gemma 4...");
-
-            // Build OpenAI-format messages from the same conversation data
-            let mut nim_messages: Vec<serde_json::Value> =
-                vec![serde_json::json!({"role": "system", "content": system_instruction})];
-            for msg in &conversation_history {
-                let role = match msg.role {
-                    crate::agent::conversation_manager::MessageRole::Human => "user",
-                    crate::agent::conversation_manager::MessageRole::Assistant => "assistant",
-                    _ => continue,
-                };
-                nim_messages.push(serde_json::json!({"role": role, "content": msg.content}));
-            }
-            // Add current user message (with any extra context prepended)
-            let current_message = if !context.is_empty() {
-                format!("{}\n\n{}", context, user_input)
-            } else {
-                user_input.to_string()
-            };
-            nim_messages.push(serde_json::json!({"role": "user", "content": current_message}));
-
-            let exec_context = crate::agent::tool_executor::ToolExecutionContext {
-                session_id: session_id.to_string(),
-                user_id: None,
-                app_state: app_state.clone(),
-                workflow_id,
-            };
 
             let nim_result = run_nim_tool_loop(
                 nim_client,
@@ -760,25 +732,55 @@ For complex multi-step workflows that benefit from parallel execution:
 
             match nim_result {
                 Ok(response) if !response.is_empty() => {
-                    // Save assistant response and return
                     let assistant_msg = ConversationMessage::new_assistant(
                         session_id.to_string(),
                         response.clone(),
                     );
                     let _ = conversation_manager.save_message(&assistant_msg).await;
-                    tracing::info!("✅ Gemma 4 (NIM) completed task for session {}", session_id);
+                    tracing::info!("✅ NIM (text) completed task for session {}", session_id);
                     return Ok(response);
                 }
                 Ok(_) => {
-                    tracing::warn!(
-                        "⚠️ Gemma 4 (NIM) returned empty response — falling back to Gemini"
-                    );
+                    tracing::warn!("⚠️ NIM (text) returned empty — trying NIM vision");
                 }
                 Err(e) => {
-                    tracing::warn!("⚠️ Gemma 4 (NIM) failed: {} — falling back to Gemini", e);
+                    tracing::warn!("⚠️ NIM (text) failed: {} — trying NIM vision", e);
                 }
             }
         }
+
+        // ── NIM Vision fallback — same tool loop, same messages, vision-capable model ──
+        if let Some(ref nim_vision_client) = app_state.nvidia_nim_vision_client {
+            send_progress("🤖 Text NIM failed, trying NIM vision model...");
+
+            let nim_result = run_nim_tool_loop(
+                nim_vision_client,
+                &mut nim_messages,
+                &all_tools,
+                &exec_context,
+                &send_progress,
+            )
+            .await;
+
+            match nim_result {
+                Ok(response) if !response.is_empty() => {
+                    let assistant_msg = ConversationMessage::new_assistant(
+                        session_id.to_string(),
+                        response.clone(),
+                    );
+                    let _ = conversation_manager.save_message(&assistant_msg).await;
+                    tracing::info!("✅ NIM (vision) completed task for session {}", session_id);
+                    return Ok(response);
+                }
+                Ok(_) => {
+                    tracing::warn!("⚠️ NIM (vision) returned empty — falling back to Gemini");
+                }
+                Err(e) => {
+                    tracing::warn!("⚠️ NIM (vision) failed: {} — falling back to Gemini", e);
+                }
+            }
+        }
+
         // ── Gemini fallback ───────────────────────────────────────────────────
 
         let mut final_response = String::new();
@@ -811,11 +813,72 @@ For complex multi-step workflows that benefit from parallel execution:
                 system_instruction: None,
             };
 
-            let response = self
-                .client
-                .generate_content(request)
-                .await
-                .map_err(|e| format!("Gemini API Error: {}", e))?;
+            let response = match self.client.generate_content(request).await {
+                Ok(r) => r,
+                Err(gemini_err) => {
+                    tracing::warn!("⚠️ Gemini failed, trying DeepSeek fallback: {}", gemini_err);
+                    // Build OpenAI-format messages from conversation history
+                    let mut ds_messages: Vec<serde_json::Value> = vec![
+                        serde_json::json!({"role": "system", "content": system_instruction})
+                    ];
+                    for msg in &conversation_history {
+                        let role = match msg.role {
+                            crate::agent::conversation_manager::MessageRole::Human => "user",
+                            crate::agent::conversation_manager::MessageRole::Assistant => "assistant",
+                            _ => continue,
+                        };
+                        ds_messages.push(serde_json::json!({"role": role, "content": msg.content}));
+                    }
+                    let current_msg = if !context.is_empty() {
+                        format!("{}\n\n{}", context, user_input)
+                    } else {
+                        user_input.to_string()
+                    };
+                    ds_messages.push(serde_json::json!({"role": "user", "content": current_msg}));
+
+                    if let Some(ref ds_client) = app_state.deepseek_client {
+                        send_progress("🤖 Gemini unavailable, trying DeepSeek V4...");
+
+                        let exec_context = crate::agent::tool_executor::ToolExecutionContext {
+                            session_id: session_id.to_string(),
+                            user_id: None,
+                            app_state: app_state.clone(),
+                            workflow_id,
+                        };
+
+                        match run_deepseek_tool_loop(
+                            ds_client,
+                            &mut ds_messages,
+                            &all_tools,
+                            &exec_context,
+                            &send_progress,
+                        )
+                        .await
+                        {
+                            Ok(response) => {
+                                let clean = response.trim().to_string();
+                                let msg = ConversationMessage::new_assistant(
+                                    session_id.to_string(),
+                                    clean.clone(),
+                                );
+                                let _ = conversation_manager.save_message(&msg).await;
+                                tracing::info!(
+                                    "✅ DeepSeek V4 completed task for session {}",
+                                    session_id
+                                );
+                                return Ok(clean);
+                            }
+                            Err(ds_err) => {
+                                return Err(format!(
+                                    "Gemini + DeepSeek both failed. Gemini: {} | DeepSeek: {}",
+                                    gemini_err, ds_err
+                                ));
+                            }
+                        }
+                    }
+                    return Err(format!("Gemini API Error: {}", gemini_err));
+                }
+            };
 
             let mut has_function_calls = false;
             let mut function_results: Vec<(String, serde_json::Value, Option<String>)> = Vec::new(); // (name, result, thought_signature)
@@ -1085,66 +1148,29 @@ For complex multi-step workflows that benefit from parallel execution:
                                     let tool_result = if let Some(ref qdrant_client) =
                                         app_state.qdrant_client
                                     {
-                                        if let Some(ref voyage_embeddings) =
-                                            app_state.voyage_embeddings
+                                        match qdrant_client
+                                            .build_context_for_query(
+                                                query,
+                                                session_id,
+                                                app_state.voyage_embeddings.as_ref(),
+                                                app_state.video_gemini_client.as_ref().or(app_state.gemini_client.as_ref()),
+                                            )
+                                            .await
                                         {
-                                            match qdrant_client
-                                                .build_context_for_query_with_voyage(
-                                                    query,
-                                                    session_id,
-                                                    voyage_embeddings,
-                                                )
-                                                .await
-                                            {
-                                                Ok(context) => {
-                                                    if context.is_empty() {
-                                                        serde_json::json!({
-                                                            "found": false,
-                                                            "message": "No relevant memories found"
-                                                        })
-                                                    } else {
-                                                        serde_json::json!({
-                                                            "found": true,
-                                                            "context": context
-                                                        })
-                                                    }
-                                                }
-                                                Err(e) => serde_json::json!({
-                                                    "error": format!("Error searching memory: {}", e)
-                                                }),
+                                            Ok(Some(context)) => {
+                                                serde_json::json!({
+                                                    "found": true,
+                                                    "context": context
+                                                })
                                             }
-                                        } else if let Some(ref gemini_client) =
-                                            app_state.gemini_client
-                                        {
-                                            match qdrant_client
-                                                .build_context_for_query_with_gemini(
-                                                    query,
-                                                    session_id,
-                                                    gemini_client,
-                                                )
-                                                .await
-                                            {
-                                                Ok(context) => {
-                                                    if context.is_empty() {
-                                                        serde_json::json!({
-                                                            "found": false,
-                                                            "message": "No relevant memories found"
-                                                        })
-                                                    } else {
-                                                        serde_json::json!({
-                                                            "found": true,
-                                                            "context": context
-                                                        })
-                                                    }
-                                                }
-                                                Err(e) => serde_json::json!({
-                                                    "error": format!("Error searching memory: {}", e)
-                                                }),
+                                            Ok(None) => {
+                                                serde_json::json!({
+                                                    "error": "Memory search unavailable - no embedding client"
+                                                })
                                             }
-                                        } else {
-                                            serde_json::json!({
-                                                "error": "Memory search unavailable - no embedding client"
-                                            })
+                                            Err(e) => serde_json::json!({
+                                                "error": format!("Error searching memory: {}", e)
+                                            }),
                                         }
                                     } else {
                                         serde_json::json!({
@@ -1427,4 +1453,84 @@ where
     }
 
     Err(format!("Gemma 4 (NIM) exceeded max turns ({})", MAX_TURNS))
+}
+
+/// Multi-turn tool loop for DeepSeek V4.
+/// Same contract as `run_nim_tool_loop` — feeds tool results back to the model
+/// and keeps calling until a text answer is returned (or MAX_TURNS exhausted).
+async fn run_deepseek_tool_loop<F>(
+    ds_client: &crate::deepseek_client::DeepSeekClient,
+    messages: &mut Vec<serde_json::Value>,
+    tools: &[crate::gemini_client::FunctionDeclaration],
+    exec_context: &crate::agent::tool_executor::ToolExecutionContext,
+    send_progress: &F,
+) -> Result<String, String>
+where
+    F: Fn(&str),
+{
+    const MAX_TURNS: usize = 10;
+
+    for turn in 0..MAX_TURNS {
+        let response = ds_client
+            .generate_single(messages, tools)
+            .await
+            .map_err(|e| format!("DeepSeek API error: {}", e))?;
+
+        match response {
+            crate::deepseek_client::DeepSeekResponse::Text(text) => {
+                tracing::info!("✅ DeepSeek V4 final answer after {} turns", turn + 1);
+                return Ok(text);
+            }
+
+            crate::deepseek_client::DeepSeekResponse::ToolCalls(tool_calls) => {
+                let assistant_tool_calls: Vec<serde_json::Value> = tool_calls
+                    .iter()
+                    .map(|tc| {
+                        serde_json::json!({
+                            "id": tc.id,
+                            "type": "function",
+                            "function": {
+                                "name": tc.name,
+                                "arguments": tc.arguments.to_string(),
+                            }
+                        })
+                    })
+                    .collect();
+
+                messages.push(serde_json::json!({
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": assistant_tool_calls,
+                }));
+
+                for tc in &tool_calls {
+                    send_progress(&format!("🔧 DeepSeek calling: {}", tc.name));
+                    tracing::info!("🎬 DeepSeek V4 tool call: {}", tc.name);
+
+                    let args_map: std::collections::HashMap<String, serde_json::Value> = tc
+                        .arguments
+                        .as_object()
+                        .map(|o| o.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+                        .unwrap_or_default();
+
+                    let result = crate::agent::tool_executor::execute_tool_gemini_with_context(
+                        &tc.name,
+                        &args_map,
+                        exec_context,
+                    )
+                    .await;
+
+                    send_progress(&format!("✅ {} done", tc.name));
+
+                    messages.push(serde_json::json!({
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": result,
+                    }));
+                }
+            }
+        }
+    }
+
+    Err(format!("DeepSeek V4 exceeded max turns ({})", MAX_TURNS))
 }
