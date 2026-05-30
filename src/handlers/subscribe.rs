@@ -6,6 +6,7 @@
 //! subscription columns directly instead of a separate subscriptions
 //! table — because regular-user subscription state belongs on the user row.
 
+use crate::handlers::paypal::{self, paypal_credentials, get_paypal_env, paypal_base_url, get_paypal_access_token};
 use crate::middleware::auth::auth_middleware;
 use crate::models::auth::Claims;
 use crate::services::monetization::CREATOR_MONTHLY_USDC_CENTS;
@@ -18,7 +19,8 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use serde_json::json;
+use serde::Deserialize;
+use serde_json::{json, Value};
 use std::sync::Arc;
 
 /// Flat-rate USD price for the regular-user subscription. 15 USDC → 30 days.
@@ -32,6 +34,8 @@ pub fn subscribe_routes() -> Router {
     let protected = Router::new()
         .route("/api/subscribe/unlock-spec", get(subscribe_unlock_spec))
         .route("/api/subscribe/unlock", post(subscribe_unlock))
+        .route("/api/subscribe/paypal-order", post(subscribe_paypal_order))
+        .route("/api/subscribe/paypal-capture", post(subscribe_paypal_capture))
         .layer(axum::middleware::from_fn(auth_middleware));
 
     public.merge(protected)
@@ -188,4 +192,162 @@ async fn subscribe_unlock(
             "message":         "Welcome aboard — your access is unlocked for 30 days. Reload the app to clear the paywall.",
         })),
     )
+}
+
+/// POST /api/subscribe/paypal-order — creates a $15 PayPal order for subscription.
+async fn subscribe_paypal_order(
+    Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
+) -> (StatusCode, Json<Value>) {
+    let user_id: i32 = match claims.sub.parse() {
+        Ok(id) => id,
+        Err(_) => return (StatusCode::UNAUTHORIZED, Json(json!({"success": false, "error": "invalid_user_id"}))),
+    };
+
+    let env = get_paypal_env(&state).await;
+    let base_url = paypal_base_url(&env);
+    let (client_id, client_secret) = paypal_credentials(&env);
+    if client_id.is_empty() || client_secret.is_empty() {
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"success": false, "message": "PayPal not configured"})));
+    }
+
+    let token = match get_paypal_access_token(base_url, &client_id, &client_secret).await {
+        Ok(t) => t,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"success": false, "message": e}))),
+    };
+
+    let studio_url = std::env::var("PUBLIC_BASE_URL").unwrap_or_else(|_| "https://videosync.video".to_string());
+    let dollars = CREATOR_MONTHLY_USDC_CENTS as f64 / 100.0;
+
+    let resp = match reqwest::Client::new()
+        .post(format!("{}/v2/checkout/orders", base_url))
+        .header("Content-Type", "application/json")
+        .bearer_auth(&token)
+        .json(&json!({
+            "intent": "CAPTURE",
+            "purchase_units": [{
+                "reference_id": "subscription_monthly",
+                "description": "VideoSync monthly subscription",
+                "amount": { "currency_code": "USD", "value": format!("{:.2}", dollars) }
+            }],
+            "payment_source": {
+                "paypal": {
+                    "experience_context": {
+                        "payment_method_preference": "IMMEDIATE_PAYMENT_REQUIRED",
+                        "landing_page": "LOGIN",
+                        "user_action": "PAY_NOW",
+                        "return_url": format!("{}/subscribe?paypal_return=1", studio_url),
+                        "cancel_url": format!("{}/subscribe?paypal_cancel=1", studio_url)
+                    }
+                }
+            }
+        }))
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"success": false, "message": format!("PayPal order failed: {}", e)}))),
+    };
+
+    let body: Value = match resp.json().await {
+        Ok(b) => b,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"success": false, "message": format!("PayPal parse failed: {}", e)}))),
+    };
+
+    if !body.get("id").and_then(|v| v.as_str()).is_some() {
+        return (StatusCode::BAD_REQUEST, Json(json!({"success": false, "error": body})));
+    }
+
+    (StatusCode::OK, Json(body))
+}
+
+/// POST /api/subscribe/paypal-capture — captures the PayPal order and activates subscription.
+async fn subscribe_paypal_capture(
+    Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
+    axum::Json(payload): axum::Json<CaptureRequest>,
+) -> (StatusCode, Json<Value>) {
+    let user_id: i32 = match claims.sub.parse() {
+        Ok(id) => id,
+        Err(_) => return (StatusCode::UNAUTHORIZED, Json(json!({"success": false, "error": "invalid_user_id"}))),
+    };
+
+    let env = get_paypal_env(&state).await;
+    let base_url = paypal_base_url(&env);
+    let (client_id, client_secret) = paypal_credentials(&env);
+    if client_id.is_empty() || client_secret.is_empty() {
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"success": false, "message": "PayPal not configured"})));
+    }
+
+    let token = match get_paypal_access_token(base_url, &client_id, &client_secret).await {
+        Ok(t) => t,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"success": false, "message": e}))),
+    };
+
+    let resp = match reqwest::Client::new()
+        .post(format!("{}/v2/checkout/orders/{}/capture", base_url, payload.order_id))
+        .header("Content-Type", "application/json")
+        .bearer_auth(&token)
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"success": false, "message": format!("PayPal capture failed: {}", e)}))),
+    };
+
+    let body: Value = match resp.json().await {
+        Ok(b) => b,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"success": false, "message": format!("Capture parse failed: {}", e)}))),
+    };
+
+    let capture_status = body.get("status").and_then(|s| s.as_str()).unwrap_or("UNKNOWN");
+    let is_completed = capture_status == "COMPLETED";
+
+    if is_completed {
+        let payer_email = body.pointer("/payer/email_address").and_then(|v| v.as_str());
+        let capture_id = body.pointer("/purchase_units/0/payments/captures/0/id").and_then(|v| v.as_str());
+
+        // Flip the user to active
+        let _ = sqlx::query(
+            "UPDATE users
+             SET subscription_status       = 'active',
+                 subscription_tier         = 'monthly_15',
+                 subscription_active_until = NOW() + INTERVAL '30 days',
+                 last_payment_receipt_id   = $1,
+                 last_payment_at           = NOW(),
+                 updated_at                = NOW()
+             WHERE id = $2",
+        )
+        .bind(capture_id.unwrap_or("paypal"))
+        .bind(user_id)
+        .execute(&state.db_pool)
+        .await;
+
+        let _ = sqlx::query(
+            "INSERT INTO user_payment_events (user_id, event_type, amount_usdc, tx_hash)
+             VALUES ($1, 'paid_paypal', 1500, $2)",
+        )
+        .bind(user_id)
+        .bind(payload.order_id.clone())
+        .execute(&state.db_pool)
+        .await;
+
+        let notify_text = format!(
+            "💰 *New $15 PayPal subscription*\nUser id: {}\nPayer: {}\nOrder: {}\nActive until: 30 days from now",
+            user_id, payer_email.unwrap_or("unknown"), payload.order_id
+        );
+        tokio::spawn(async move {
+            crate::telegram_bot::notify_admin(&notify_text).await;
+        });
+    }
+
+    (StatusCode::OK, Json(json!({
+        "success": is_completed,
+        "status": capture_status,
+    })))
+}
+
+#[derive(Debug, Deserialize)]
+struct CaptureRequest {
+    order_id: String,
 }

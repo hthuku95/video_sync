@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Subscribe — VideoSync (Pay $15 USDC)</title>
+<title>Subscribe — VideoSync ($15/mo)</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
@@ -119,10 +119,10 @@
 <section class="hero">
   <div class="badges">
     <span class="badge green">🟢 7-day free trial included on signup</span>
-    <span class="badge">💰 Pay in USDC on Base</span>
+    <span class="badge">💳 Pay with Card / USDC</span>
   </div>
   <h1>Keep creating with <span class="accent">VideoSync</span></h1>
-  <p>Your 7-day free trial starts on signup. After that, $15/mo keeps everything running — AI thumbnails, Blender animations, full agent video pipeline. Pay in USDC on Base. Cancel any time.</p>
+  <p>Your 7-day free trial starts on signup. After that, $15/mo keeps everything running — AI thumbnails, Blender animations, full agent video pipeline. Pay with card (PayPal) or USDC on Base. Cancel any time.</p>
 </section>
 
 <section class="pricing">
@@ -151,12 +151,16 @@
 
 <div class="modal-bg" id="modal">
   <div class="modal">
-    <h2>Subscribe for $15 USDC</h2>
-    <div class="modal-sub">Pay on Base mainnet. Your access unlocks the second the transaction settles.</div>
-    <div class="modal-status" id="modal-status">Click Pay to open your wallet (Phantom EVM, MetaMask, or Coinbase Wallet).</div>
+    <h2>Subscribe — $15/mo</h2>
+    <div class="modal-sub">Choose your payment method. Access unlocks immediately.</div>
+    <div class="modal-status" id="modal-status">Select a payment method below.</div>
+    <div style="margin-top:1rem;display:flex;flex-direction:column;gap:0.75rem;">
+      <button class="buy-btn" id="pay-btn" onclick="executePay()">Pay $15 USDC (crypto wallet)</button>
+      <div style="text-align:center;font-size:12px;color:var(--dim);">— or —</div>
+      <div id="paypal-button-container" style="min-height:40px;"></div>
+    </div>
     <div class="modal-actions">
       <button class="btn-cancel" onclick="closePay()">Close</button>
-      <button class="buy-btn" id="pay-btn" onclick="executePay()">Pay $15 USDC</button>
     </div>
   </div>
 </div>
@@ -387,6 +391,63 @@ async function executePay() {
   } catch {
     clearAuthState();
     btn.textContent = 'Create account / log in to subscribe';
+  }
+})();
+
+// ── PayPal subscription flow ─────────────────────────────────────────
+(async function initPayPal() {
+  const token = getAuthToken();
+  if (!token) return;
+
+  try {
+    const configR = await fetch('/api/paypal/config');
+    const config = await configR.json();
+    if (!config.client_id || !config.success) return;
+
+    var script = document.createElement('script');
+    script.src = 'https://www.paypal.com/sdk/js?client-id=' + encodeURIComponent(config.client_id) + '&currency=USD&intent=capture';
+    document.body.appendChild(script);
+    script.onload = function() {
+      paypal.Buttons({
+        style: { layout: 'horizontal', label: 'subscribe', tagline: false, height: 40 },
+        createOrder: function() {
+          return fetch('/api/subscribe/paypal-order', {
+            method: 'POST',
+            headers: { 'Authorization': 'Bearer ' + token }
+          }).then(function(r) { return r.json(); }).then(function(d) {
+            if (!d.id) throw new Error('No order ID');
+            return d.id;
+          });
+        },
+        onApprove: function(data) {
+          var st = document.getElementById('modal-status');
+          st.textContent = 'Processing payment...';
+          st.className = 'modal-status';
+          return fetch('/api/subscribe/paypal-capture', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+            body: JSON.stringify({ order_id: data.orderID })
+          }).then(function(r) { return r.json(); }).then(function(d) {
+            if (d.success) {
+              st.textContent = '✅ Subscription active — 30 days unlocked. Redirecting...';
+              st.className = 'modal-status success';
+              setTimeout(function() { window.location.href = '/'; }, 1200);
+            } else {
+              st.textContent = 'Payment failed: ' + (d.message || 'unknown error');
+              st.className = 'modal-status error';
+            }
+          });
+        },
+        onError: function(err) {
+          console.error('PayPal error:', err);
+          var st = document.getElementById('modal-status');
+          st.textContent = 'PayPal error. Try USDC instead.';
+          st.className = 'modal-status error';
+        }
+      }).render('#paypal-button-container');
+    };
+  } catch(e) {
+    console.error('PayPal init failed:', e);
   }
 })();
 </script>
