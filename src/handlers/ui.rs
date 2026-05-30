@@ -358,8 +358,15 @@ pub async fn create_service_sample_request(
 }
 
 pub async fn landing_page() -> Html<String> {
-    let html = build_modern_landing_page_html();
-    Html(html.to_string())
+    let is_studio = std::env::var("STUDIO_MODE")
+        .ok()
+        .map(|v| v == "true" || v == "1")
+        .unwrap_or(false);
+    if is_studio {
+        Html(build_studio_landing_page_html())
+    } else {
+        Html(build_modern_landing_page_html().to_string())
+    }
 }
 
 pub async fn services_overview_page() -> Html<String> {
@@ -371,9 +378,9 @@ pub async fn saas_launch_pack_page() -> Html<String> {
         "saas-launch-pack",
         "SaaS/App Demo Rush Pack",
         "$399-$1,200+",
-        "Send your website or app URL. We turn it into a polished product demo/promo video in 24 hours. Most rush demos are 30-60s; longer explainers and walkthroughs are available.",
-        "Built for founders, product marketers, agencies, and sales teams that need polished product video without waiting on a traditional studio.",
-        "The simple offer: send a live product URL, screenshots, app recording, or launch brief and get a buyer-facing demo video package. The full pack can include the main video, 3 hooks/captions, a thumbnail or hero concept, and a delivery page with downloads.",
+        "Send your website or app URL. Our AI agent turns it into a polished product demo in hours — not weeks. One demo or a hundred: volume pricing makes multiple campaigns, hook variations, and localization affordable.",
+        "Built for founders, product marketers, agencies, and sales teams that need polished product video at volume — produce 5, 10, or 20 demos for the same cost a traditional studio would charge for one.",
+        "The simple offer: send a live product URL, screenshots, app recording, or launch brief and get a buyer-facing demo video package. The full pack includes the main video, 3 hooks/captions, a thumbnail or hero concept, and a delivery page with downloads. Our AI agent produces faster than any human editor — so you can run more launches, A/B test more angles, and produce more content for a fraction of agency cost.",
         "/subscribe",
         "Start 7-day trial",
         "/chat",
@@ -407,9 +414,9 @@ pub async fn clipper_enhancement_pack_page() -> Html<String> {
         "clipper-enhancement-pack",
         "Thumbnail & Motion Graphics Pack",
         "$250-$1,200+",
-        "High-converting thumbnails, title cards, lower thirds, mockups, and motion assets for creators, launches, and client campaigns.",
-        "Built for creators, marketers, agencies, and small teams that need premium visual packaging around their videos and campaigns.",
-        "This offer focuses on the platform's strongest visual add-ons: rendered thumbnails, title cards, lower thirds, device mockups, data visuals, and branded motion scenes. It is the fastest way to improve how a video package looks before someone clicks play.",
+        "High-converting thumbnails, title cards, lower thirds, mockups, and motion assets — produced in hours, not days. Generate 10 thumbnail variants or a full campaign's worth of visuals without hiring a designer.",
+        "Built for creators, marketers, agencies, and small teams that need premium visual packaging at volume — more thumbnails, more variants, more A/B tests, all for a fraction of what a designer would charge per asset.",
+        "This offer focuses on the platform's strongest visual add-ons: rendered thumbnails, title cards, lower thirds, device mockups, data visuals, and branded motion scenes. The AI agent handles production end-to-end — so you can order 3 variants or 30 and still get them back in the same timeframe.",
         "/manual-clipping",
         "Open video tools",
         "/chat",
@@ -442,9 +449,9 @@ pub async fn thumbnail_hero_pack_page() -> Html<String> {
         "thumbnail-hero-pack",
         "Thumbnail & Hero Visual Pack",
         "$75-$300+",
-        "Click-focused thumbnails, hero visuals, and campaign graphics for creators, launches, products, and ads.",
-        "Built for YouTubers, SaaS founders, course sellers, agencies, and operators who need stronger first impressions fast.",
-        "VideoSync can turn a product, video, or campaign brief into thumbnail variants, hero visuals, ad stills, and reusable visual directions with Gemini multimodal QA before delivery.",
+        "Click-focused thumbnails, hero visuals, and campaign graphics — delivered same day. Run multiple designs per video, A/B test thumbnails, and never wait on a designer again.",
+        "Built for YouTubers, SaaS founders, course sellers, agencies, and operators who need stronger first impressions at scale — more thumbnails, more variants, more campaigns for less.",
+        "VideoSync turns a product, video, or campaign brief into thumbnail variants, hero visuals, ad stills, and reusable visual directions — with Gemini multimodal QA before delivery. The AI agent handles volume effortlessly: order 3 thumbnails or 30, the turnaround stays the same.",
         "/chat",
         "Generate a hero visual",
         "/services",
@@ -477,9 +484,9 @@ pub async fn product_mockup_pack_page() -> Html<String> {
         "product-mockup-pack",
         "Product Mockup Video Pack",
         "$299-$900+",
-        "Send a website, screenshots, or app flow. We turn it into animated UI/product mockups that make the product easier to sell.",
-        "Built for SaaS founders, indie hackers, app owners, no-code builders, and agencies selling productized demos.",
-        "This is the visual upgrade for apps that look useful but do not yet feel premium. Send a URL, screenshots, Figma exports, or a written workflow; VideoSync turns it into browser/device scenes, motion callouts, and short product videos.",
+        "Send a website, screenshots, or app flow. Our AI agent turns it into animated UI mockups and short product videos — in hours, not weeks. Produce demo videos for every feature, every use case, every update.",
+        "Built for SaaS founders, indie hackers, app owners, no-code builders, and agencies selling productized demos at scale — more feature videos, more product angles, more campaigns for the same budget.",
+        "This is the visual upgrade for apps that look useful but do not yet feel premium. Send a URL, screenshots, Figma exports, or a written workflow; VideoSync turns it into browser/device scenes, motion callouts, and short product videos. The automated pipeline means you can produce a mockup for every major feature without the cost of a traditional video team.",
         "/chat",
         "Generate a mockup video",
         "/services/saas-launch-pack",
@@ -512,9 +519,9 @@ pub async fn education_explainer_pack_page() -> Html<String> {
         "education-explainer-pack",
         "Education Explainer Pack",
         "$300-$1,500+",
-        "Manim, LaTeX, diagrams, narration, and long-form explainers for lessons, courses, and technical content.",
-        "Built for educators, course creators, technical YouTubers, founders, and B2B teams that need concepts explained visually.",
-        "VideoSync can combine Manim/LaTeX renders, diagrams, stock footage, narration, and long-form assembly into lessons, explainer videos, and course modules.",
+        "Manim, LaTeX, diagrams, narration, and long-form explainers — automated end-to-end. Produce a full course curriculum's worth of lessons for the price an agency would charge for one video.",
+        "Built for educators, course creators, technical YouTubers, founders, and B2B teams that need concepts explained visually at volume — more lessons, more modules, more content for less.",
+        "VideoSync combines Manim/LaTeX renders, diagrams, stock footage, narration, and long-form assembly into lessons, explainer videos, and course modules. The AI agent produces each segment independently — so a 20-video course ships just as fast as a single explainer. No studio, no crew, no markup per video.",
         "/chat",
         "Generate an explainer",
         "/services/mixed-agency-bundle",
@@ -547,9 +554,9 @@ pub async fn blender_scene_pack_page() -> Html<String> {
         "blender-scene-pack",
         "Blender 2D/3D Scene Pack",
         "$500-$2,500+",
-        "Blender scenes, product animations, 3D explainers, animated models, and cinematic support visuals.",
-        "Built for product teams, creators, agencies, educators, and technical brands that need visuals beyond flat stock footage.",
-        "VideoSync can use BlenderMCP outputs alongside editing, narration, QA, thumbnails, and delivery pages to produce stronger demos and explainers.",
+        "Blender scenes, product animations, 3D explainers, and cinematic visuals — generated by AI agents in hours. Render multiple product angles and animation variants for the cost of a single studio shoot.",
+        "Built for product teams, creators, agencies, educators, and technical brands that need 3D visuals at volume — more scenes, more angles, more variations for the same budget.",
+        "VideoSync uses BlenderMCP outputs alongside editing, narration, QA, thumbnails, and delivery pages to produce stronger demos and explainers. The automated pipeline lets you order multiple product angles, animation styles, or scene variants without the per-scene overhead of a traditional 3D studio.",
         "/chat",
         "Generate a Blender scene",
         "/services/mixed-agency-bundle",
@@ -582,9 +589,9 @@ pub async fn voice_audio_pack_page() -> Html<String> {
         "voice-audio-pack",
         "Voice & Audio Production Pack",
         "$99-$750+",
-        "Narration, podcast-style audio, voiceovers, summaries, and audio-backed video packages.",
-        "Built for founders, creators, educators, agencies, and newsletter operators who need narration or audio content quickly.",
-        "VideoSync can generate scripts, voiceovers, narrated summaries, audio visualizers, and video packages that combine narration with motion assets.",
+        "Narration, podcast-style audio, voiceovers, summaries, and audio-backed video packages — produced same day. Generate 5, 10, or 50 voiceovers without a recording studio or voice talent budget.",
+        "Built for founders, creators, educators, agencies, and newsletter operators who need narration or audio content at scale — more scripts, more variations, more formats for less.",
+        "VideoSync generates scripts, voiceovers, narrated summaries, audio visualizers, and video packages that combine narration with motion assets. The AI agent handles script writing, voice generation, and assembly — so producing a batch of 20 narrated clips costs roughly the same as producing one.",
         "/chat",
         "Generate voice/audio",
         "/services/education-explainer-pack",
@@ -617,9 +624,9 @@ pub async fn mixed_agency_bundle_page() -> Html<String> {
         "mixed-agency-bundle",
         "Website-to-Video Agency Pack",
         "$1,500 for 3 client videos",
-        "For Webflow, Framer, SaaS, and marketing agencies: send 3 client websites and get 3 client-ready demo videos you can resell.",
-        "Built for agencies, freelancers, Webflow/Framer studios, no-code builders, and SaaS marketers who already have clients but need faster video fulfillment.",
-        "The plain offer: agencies send client websites or app URLs, and VideoSync produces demo/promo videos plus supporting assets they can deliver under their own brand. This is not vague backend infrastructure; it is website-to-video fulfillment for agencies.",
+        "For Webflow, Framer, SaaS, and marketing agencies: send 3 client websites and get 3 client-ready demo videos in hours. Scale from 3 to 30 clients without hiring a video team.",
+        "Built for agencies, freelancers, Webflow/Framer studios, no-code builders, and SaaS marketers who already have clients but need faster, higher-volume video fulfillment — fulfill more clients, produce more assets, charge less, keep more margin.",
+        "The plain offer: agencies send client websites or app URLs, and VideoSync produces demo/promo videos plus supporting assets they can deliver under their own brand. The automated pipeline means you can take on more clients without scaling your team — 3 videos or 30, the turnaround stays the same. No studio overhead, no per-video markup, just white-label video fulfillment at agency-friendly pricing.",
         "/chat",
         "Request 3 client videos",
         "/services/creator-manager-fulfillment",
@@ -652,9 +659,9 @@ pub async fn creator_manager_fulfillment_page() -> Html<String> {
         "creator-manager-fulfillment",
         "Agency Production Backend",
         "$999-$3,000+/month",
-        "A private production layer for agencies and operators selling recurring video deliverables to their own clients.",
-        "Built for boutique agencies, creator managers, consultants, and operators who already sell video services and need reliable fulfillment behind the scenes.",
-        "VideoSync works best here as a backend, not a personality. You keep the client relationship and use the platform to produce demos, thumbnails, motion graphics, narrated explainers, delivery pages, and repeatable monthly output under your own brand.",
+        "A private production backend — produce 10x more client deliverables without hiring editors. VideoSync handles the output; you keep the client and the brand.",
+        "Built for boutique agencies, creator managers, consultants, and operators who sell video services and need reliable, scalable fulfillment without the cost of an in-house production team.",
+        "VideoSync works best here as a backend, not a personality. You keep the client relationship and use the platform to produce demos, thumbnails, motion graphics, narrated explainers, delivery pages, and repeatable monthly output under your own brand. The AI agent pipeline means you can fulfill 30 client videos a month with the same effort it used to take to produce 3 — your margin scales with volume, not headcount.",
         "/dashboard",
         "Open the workspace",
         "/api-access",
@@ -1000,6 +1007,42 @@ fn build_services_overview_page_html() -> String {
     </div>
     <section class="grid">{cards}</section>
   </div>
+<script>
+class DynamicBackgroundManager {{
+    constructor() {{
+        this.lastUpdate = Date.now();
+        this.interval = 5 * 60 * 1000;
+        this.init();
+    }}
+    async init() {{
+        await this.updateBg();
+        setInterval(() => this.updateBg(), this.interval);
+    }}
+    async updateBg() {{
+        try {{
+            const r = await fetch('/api/background/image');
+            if (!r.ok) return;
+            const ct = r.headers.get('content-type') || '';
+            if (ct.includes('application/json')) {{
+                const d = await r.json();
+                if (d.fallback && d.gradient) document.body.style.background = d.gradient;
+                return;
+            }}
+            const blob = await r.blob();
+            const url = URL.createObjectURL(blob);
+            const o = document.createElement('div');
+            o.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background-image:url('+url+');background-size:cover;background-position:center;opacity:0;transition:opacity 1s;z-index:-1;pointer-events:none';
+            document.body.appendChild(o);
+            setTimeout(() => o.style.opacity = '0.3', 100);
+            setTimeout(() => {{
+                const old = document.querySelectorAll('div[style*="background-image"]');
+                old.forEach((e,i) => {{ if (i < old.length - 1) e.remove(); }});
+            }}, 1100);
+        }} catch(e) {{ console.error(e); }}
+    }}
+}}
+new DynamicBackgroundManager();
+</script>
 </body>
 </html>"#
     )
@@ -1368,6 +1411,18 @@ fn build_service_offer_page_html(
     @keyframes riseIn {{ from {{ opacity:0; transform:translateY(18px); }} to {{ opacity:1; transform:translateY(0); }} }}
     @keyframes softReveal {{ from {{ opacity:0; transform:translateY(12px); }} to {{ opacity:1; transform:translateY(0); }} }}
     @keyframes slowDrift {{ from {{ transform:translate3d(-1%, -1%, 0) scale(1.02); }} to {{ transform:translate3d(1.5%, 1%, 0) scale(1.06); }} }}
+    @keyframes fadeScale {{ from {{ opacity:0; transform:scale(0.96); }} to {{ opacity:1; transform:scale(1); }} }}
+    @keyframes slideUp {{ from {{ opacity:0; transform:translateY(24px); }} to {{ opacity:1; transform:translateY(0); }} }}
+    @keyframes pulseGlow {{ 0%,100% {{ box-shadow:0 0 8px rgba(96,165,250,0.08); }} 50% {{ box-shadow:0 0 20px rgba(96,165,250,0.22); }} }}
+    .panel {{ animation-delay:calc(var(--idx,0) * 0.08s); }}
+    .checklist li {{ animation:slideUp 0.5s ease both; animation-delay:calc(var(--i,0) * 0.06s); }}
+    .lead-card {{ animation:fadeScale 0.55s ease both; animation-delay:calc(var(--ci,0) * 0.07s); transition:transform 0.25s ease, border-color 0.25s ease, box-shadow 0.25s ease; }}
+    .lead-card:hover {{ transform:translateY(-4px); border-color:rgba(96,165,250,0.32); box-shadow:0 12px 40px rgba(2,6,23,0.3); }}
+    .step {{ animation:slideUp 0.5s ease both; animation-delay:calc(var(--si,0) * 0.07s); }}
+    .hero-highlight {{ transition:transform 0.25s ease, border-color 0.25s ease, box-shadow 0.25s ease; }}
+    .hero-highlight:hover {{ transform:translateY(-2px); border-color:rgba(96,165,250,0.35); box-shadow:0 8px 24px rgba(2,6,23,0.24); }}
+    .metric {{ transition:transform 0.25s ease, border-color 0.25s ease; }}
+    .metric:hover {{ transform:translateY(-3px); border-color:rgba(96,165,250,0.25); }}
     @media (max-width: 880px) {{
       .hero {{ grid-template-columns:1fr; }}
       h1 {{ font-size:2.4rem; }}
@@ -1834,7 +1889,14 @@ fn build_service_offer_page_html(
           const response = await fetch('/api/background/image');
           if (!response.ok) return;
           const contentType = response.headers.get('content-type') || '';
-          if (contentType.includes('application/json')) return;
+          if (contentType.includes('application/json')) {{
+            const data = await response.json();
+            if (data.fallback && data.gradient) {{
+              document.body.style.background = data.gradient;
+            }}
+            this.lastBackgroundUpdate = Date.now();
+            return;
+          }}
           const blob = await response.blob();
           const imageUrl = URL.createObjectURL(blob);
           let overlay = document.getElementById('serviceDynamicBg');
@@ -1854,6 +1916,32 @@ fn build_service_offer_page_html(
             this.lastBackgroundUpdate = Date.now() - this.updateInterval + this.retryDelay;
           }}, this.retryDelay);
         }} finally {{
+          this.isUpdating = false;
+        }}
+          this.lastBackgroundUpdate = Date.now();
+          return;
+        }}
+        const blob = await response.blob();
+          const blob = await response.blob();
+          const imageUrl = URL.createObjectURL(blob);
+          let overlay = document.getElementById('serviceDynamicBg');
+          if (!overlay) {{
+            overlay = document.createElement('div');
+            overlay.id = 'serviceDynamicBg';
+          overlay.style.cssText = 'position:fixed;inset:0;background-size:cover;background-position:center;background-attachment:fixed;opacity:0;transition:opacity 0.9s ease;z-index:0;pointer-events:none;mix-blend-mode:screen;';
+            document.body.appendChild(overlay);
+          }}
+          overlay.style.backgroundImage = 'url(' + imageUrl + ')';
+          requestAnimationFrame(() => {{
+            overlay.style.opacity = '0.16';
+          }});
+          this.lastBackgroundUpdate = Date.now();
+        }} catch (_) {{
+          setTimeout(() => {{
+            this.lastBackgroundUpdate = Date.now() - this.updateInterval + this.retryDelay;
+          }}, this.retryDelay);
+        }} finally {{
+          this.isAdvanced = false;
           this.isUpdating = false;
         }}
       }}
@@ -4444,6 +4532,157 @@ fn build_modern_landing_page_html() -> &'static str {
     "###
 }
 
+fn build_studio_landing_page_html() -> String {
+    format!(r###"<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Studio — VideoSync</title>
+<style>
+:root {{ --bg:#07111d; --panel:rgba(9,18,31,0.84); --line:rgba(148,163,184,0.16); --text:#e5eefb; --muted:#a8b8d3; --blue:#60a5fa; --green:#22c55e; }}
+* {{ margin:0; padding:0; box-sizing:border-box; }}
+body {{ font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; color:var(--text); background: radial-gradient(circle at top left, rgba(59,130,246,0.18), transparent 28%), linear-gradient(135deg,#0a1322 0%,#0d1728 55%,#07111d 100%); line-height:1.6; }}
+.container {{ max-width:1200px; margin:0 auto; padding:0 20px; }}
+.header {{ position:fixed; top:0; width:100%; z-index:1000; background:rgba(4,10,18,0.78); backdrop-filter:blur(18px); border-bottom:1px solid rgba(96,165,250,0.16); }}
+.nav {{ min-height:78px; display:flex; justify-content:space-between; align-items:center; gap:1rem; }}
+.logo {{ font-size:1.45rem; font-weight:800; text-decoration:none; letter-spacing:0.02em; color:var(--text); }}
+.nav-links a, .auth-buttons a {{ text-decoration:none; color:#dbeafe; padding:0.55rem 0.95rem; border-radius:999px; transition:background .25s; }}
+.nav-links a:hover, .auth-buttons a:hover {{ background:rgba(59,130,246,0.14); }}
+.auth-buttons .cta {{ background:var(--blue); color:#000!important; font-weight:600; }}
+.auth-buttons .cta:hover {{ background:#93bbfd!important; }}
+.hero {{ padding:140px 0 60px; text-align:center; }}
+.hero h1 {{ font-size:2.6rem; font-weight:800; line-height:1.2; background:linear-gradient(135deg,#e5eefb 0%,#60a5fa 100%); -webkit-background-clip:text; -webkit-text-fill-color:transparent; }}
+.hero p {{ font-size:1.15rem; color:var(--muted); max-width:680px; margin:20px auto 32px; }}
+.hero .sub {{ font-size:0.95rem; color:var(--muted); margin-top:8px; }}
+.cta-row {{ display:flex; gap:12px; justify-content:center; flex-wrap:wrap; }}
+.btn {{ display:inline-block; padding:12px 28px; border-radius:999px; font-weight:600; font-size:1rem; text-decoration:none; transition:all .2s; }}
+.btn-primary {{ background:var(--blue); color:#000!important; }}
+.btn-primary:hover {{ background:#93bbfd; transform:translateY(-1px); }}
+.btn-outline {{ border:1px solid var(--line); color:var(--text)!important; }}
+.btn-outline:hover {{ background:rgba(96,165,250,0.1); border-color:var(--blue); }}
+.services {{ padding:40px 0 80px; }}
+.services h2 {{ font-size:1.6rem; font-weight:700; margin-bottom:8px; }}
+.services .intro {{ color:var(--muted); margin-bottom:32px; }}
+.grid {{ display:grid; grid-template-columns:repeat(auto-fill,minmax(340px,1fr)); gap:16px; }}
+.card {{ background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:20px; transition:border .2s; }}
+.card:hover {{ border-color:rgba(96,165,250,0.4); }}
+.card h3 {{ font-size:1.05rem; font-weight:600; margin-bottom:4px; }}
+.card .price {{ color:var(--green); font-weight:700; font-size:1.1rem; margin-bottom:8px; }}
+.card p {{ color:var(--muted); font-size:0.9rem; margin-bottom:12px; }}
+.card .tags {{ display:flex; gap:4px; flex-wrap:wrap; margin-bottom:12px; }}
+.tag {{ background:rgba(96,165,250,0.12); color:var(--blue); padding:2px 8px; border-radius:999px; font-size:0.75rem; }}
+.card .btn {{ display:inline-block; padding:8px 18px; border-radius:999px; font-size:0.85rem; font-weight:600; text-decoration:none; background:var(--blue); color:#000!important; }}
+.footer {{ text-align:center; padding:40px 0; color:var(--muted); font-size:0.85rem; border-top:1px solid var(--line); }}
+</style>
+</head>
+<body>
+<div class="header">
+<div class="container"><div class="nav">
+<a href="/" class="logo">VideoSync Studio</a>
+<div class="nav-links">
+<a href="/services">All Services</a>
+<a href="/subscribe">Subscribe</a>
+<a href="/chat">Chat</a>
+</div>
+<div class="auth-buttons">
+<a href="/login">Sign In</a>
+<a href="/signup" class="cta">Get Started</a>
+</div>
+</div></div>
+</div>
+<div class="hero">
+<div class="container">
+<h1>Short-Term Services, AI-Produced in Hours</h1>
+<p>Thumbnails, demo videos, explainers, mockups, voiceovers, and 3D scenes — all produced by our AI agent pipeline. No studio, no crew, no waiting weeks.</p>
+<p class="sub">Produce more content for less. Our automated pipeline means 3 videos cost the same per-unit as 30. Traditional agencies charge 5-10x more for the same work.</p>
+<div class="cta-row" style="margin-top:24px;">
+<a href="/subscribe" class="btn btn-primary">Subscribe — $15/mo</a>
+<a href="/services" class="btn btn-outline">Browse All Services</a>
+</div>
+</div>
+</div>
+<div class="services">
+<div class="container">
+<h2>Available Services</h2>
+<p class="intro">Every service is available individually or through a subscription. AI-agent produced, delivered in hours, priced at a fraction of agency cost.</p>
+<div class="grid">
+<a href="/services/saas-launch-pack" class="card" style="text-decoration:none;color:inherit;">
+<h3>SaaS/App Demo Rush</h3>
+<div class="price">$399–$1,200</div>
+<p>Polished product demo videos from your URL. AI agent produces in hours.</p>
+<div class="tags"><span class="tag">Starter</span><span class="tag">Launch</span><span class="tag">Walkthrough</span></div>
+<span class="btn">Order demo</span>
+</a>
+<a href="/services/clipper-enhancement-pack" class="card" style="text-decoration:none;color:inherit;">
+<h3>Thumbnails & Motion Graphics</h3>
+<div class="price">$250–$1,200</div>
+<p>Thumbnails, title cards, lower thirds, device mockups — 10 variants in hours.</p>
+<div class="tags"><span class="tag">YouTube</span><span class="tag">Campaign</span><span class="tag">Social</span></div>
+<span class="btn">Order graphics</span>
+</a>
+<a href="/services/thumbnail-hero-pack" class="card" style="text-decoration:none;color:inherit;">
+<h3>Thumbnail & Hero Visuals</h3>
+<div class="price">$75–$300</div>
+<p>Click-optimized thumbnails and hero visuals. Same-day delivery.</p>
+<div class="tags"><span class="tag">Thumbnail</span><span class="tag">Hero</span><span class="tag">Ad</span></div>
+<span class="btn">Order thumbnail</span>
+</a>
+<a href="/services/product-mockup-pack" class="card" style="text-decoration:none;color:inherit;">
+<h3>Product Mockup Videos</h3>
+<div class="price">$299–$900</div>
+<p>Animated UI mockups and product walkthroughs from URLs or screenshots.</p>
+<div class="tags"><span class="tag">UI</span><span class="tag">Mockup</span><span class="tag">Demo</span></div>
+<span class="btn">Order mockup</span>
+</a>
+<a href="/services/education-explainer-pack" class="card" style="text-decoration:none;color:inherit;">
+<h3>Education Explainers</h3>
+<div class="price">$300–$1,500</div>
+<p>Manim, LaTeX, diagrams, narration — full course curriculum produced automatically.</p>
+<div class="tags"><span class="tag">Course</span><span class="tag">Explainer</span><span class="tag">Tutorial</span></div>
+<span class="btn">Order explainer</span>
+</a>
+<a href="/services/blender-scene-pack" class="card" style="text-decoration:none;color:inherit;">
+<h3>Blender 2D/3D Scenes</h3>
+<div class="price">$500–$2,500</div>
+<p>3D product scenes, animations, cinematic visuals — multiple angles in hours.</p>
+<div class="tags"><span class="tag">3D</span><span class="tag">Animation</span><span class="tag">Product</span></div>
+<span class="btn">Order scene</span>
+</a>
+<a href="/services/voice-audio-pack" class="card" style="text-decoration:none;color:inherit;">
+<h3>Voice & Audio Production</h3>
+<div class="price">$99–$750</div>
+<p>Narration, voiceovers, summaries — produce 20 clips in the time it takes to record one.</p>
+<div class="tags"><span class="tag">Voiceover</span><span class="tag">Audio</span><span class="tag">Narration</span></div>
+<span class="btn">Order audio</span>
+</a>
+<a href="/services/mixed-agency-bundle" class="card" style="text-decoration:none;color:inherit;">
+<h3>Agency 3-Pack</h3>
+<div class="price">$1,500</div>
+<p>3 client demo videos you can resell under your own brand. Scale to 30 clients.</p>
+<div class="tags"><span class="tag">Agency</span><span class="tag">Resell</span><span class="tag">Bundle</span></div>
+<span class="btn">Order 3-pack</span>
+</a>
+<a href="/services/creator-manager-fulfillment" class="card" style="text-decoration:none;color:inherit;">
+<h3>Agency Production Backend</h3>
+<div class="price">$999–$3,000/mo</div>
+<p>Recurring fulfillment backend. Fulfill 30 client videos with the effort it took to produce 3.</p>
+<div class="tags"><span class="tag">White-label</span><span class="tag">Recurring</span><span class="tag">API</span></div>
+<span class="btn">Explore backend</span>
+</a>
+</div>
+</div>
+</div>
+<div class="footer">
+<div class="container">
+<p>VideoSync Studio — AI-agent video production. Produce more content for less. No studio, no crew, no waiting.</p>
+<p style="margin-top:8px;"><a href="/terms" style="color:var(--muted);">Terms</a> · <a href="/privacy" style="color:var(--muted);">Privacy</a></p>
+</div>
+</div>
+</body>
+</html>"###)
+}
+
 pub async fn login_page() -> Html<String> {
     let html = r###"
 <!DOCTYPE html>
@@ -6015,6 +6254,35 @@ pub async fn dashboard_page() -> Html<String> {
 
         loadRecentChats();
     </script>
+<script>
+class DynamicBackgroundManager {
+    constructor() { this.lastUpdate = Date.now(); this.interval = 5*60*1000; this.init(); }
+    async init() { await this.updateBg(); setInterval(() => this.updateBg(), this.interval); }
+    async updateBg() {
+        try {
+            const r = await fetch('/api/background/image');
+            if (!r.ok) return;
+            const ct = r.headers.get('content-type') || '';
+            if (ct.includes('application/json')) {
+                const d = await r.json();
+                if (d.fallback && d.gradient) document.body.style.background = d.gradient;
+                return;
+            }
+            const blob = await r.blob();
+            const url = URL.createObjectURL(blob);
+            const o = document.createElement('div');
+            o.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background-image:url('+url+');background-size:cover;background-position:center;opacity:0;transition:opacity 1s;z-index:-1;pointer-events:none';
+            document.body.appendChild(o);
+            setTimeout(() => o.style.opacity = '0.3', 100);
+            setTimeout(() => {
+                const old = document.querySelectorAll('div[style*="background-image"]');
+                old.forEach((e,i) => { if (i < old.length - 1) e.remove(); });
+            }, 1100);
+        } catch(e) { console.error(e); }
+    }
+}
+new DynamicBackgroundManager();
+</script>
 </body>
 </html>
     "###;
@@ -9394,6 +9662,35 @@ pub async fn clipping_management_page() -> Html<String> {
         // Initial load
         loadSourceChannels();
     </script>
+<script>
+class DynamicBackgroundManager {
+    constructor() { this.lastUpdate = Date.now(); this.interval = 5*60*1000; this.init(); }
+    async init() { await this.updateBg(); setInterval(() => this.updateBg(), this.interval); }
+    async updateBg() {
+        try {
+            const r = await fetch('/api/background/image');
+            if (!r.ok) return;
+            const ct = r.headers.get('content-type') || '';
+            if (ct.includes('application/json')) {
+                const d = await r.json();
+                if (d.fallback && d.gradient) document.body.style.background = d.gradient;
+                return;
+            }
+            const blob = await r.blob();
+            const url = URL.createObjectURL(blob);
+            const o = document.createElement('div');
+            o.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background-image:url('+url+');background-size:cover;background-position:center;opacity:0;transition:opacity 1s;z-index:-1;pointer-events:none';
+            document.body.appendChild(o);
+            setTimeout(() => o.style.opacity = '0.3', 100);
+            setTimeout(() => {
+                const old = document.querySelectorAll('div[style*="background-image"]');
+                old.forEach((e,i) => { if (i < old.length - 1) e.remove(); });
+            }, 1100);
+        } catch(e) { console.error(e); }
+    }
+}
+new DynamicBackgroundManager();
+</script>
 </body>
 </html>
     "###;
@@ -9758,6 +10055,35 @@ pub async fn video_tools_page() -> Html<String> {
             postTool('/api/tools/workflow', body, 'wf-btn', 'wf-result');
         }
     </script>
+<script>
+class DynamicBackgroundManager {
+    constructor() { this.lastUpdate = Date.now(); this.interval = 5*60*1000; this.init(); }
+    async init() { await this.updateBg(); setInterval(() => this.updateBg(), this.interval); }
+    async updateBg() {
+        try {
+            const r = await fetch('/api/background/image');
+            if (!r.ok) return;
+            const ct = r.headers.get('content-type') || '';
+            if (ct.includes('application/json')) {
+                const d = await r.json();
+                if (d.fallback && d.gradient) document.body.style.background = d.gradient;
+                return;
+            }
+            const blob = await r.blob();
+            const url = URL.createObjectURL(blob);
+            const o = document.createElement('div');
+            o.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background-image:url('+url+');background-size:cover;background-position:center;opacity:0;transition:opacity 1s;z-index:-1;pointer-events:none';
+            document.body.appendChild(o);
+            setTimeout(() => o.style.opacity = '0.3', 100);
+            setTimeout(() => {
+                const old = document.querySelectorAll('div[style*="background-image"]');
+                old.forEach((e,i) => { if (i < old.length - 1) e.remove(); });
+            }, 1100);
+        } catch(e) { console.error(e); }
+    }
+}
+new DynamicBackgroundManager();
+</script>
 </body>
 </html>"###;
     Html(html.to_string())
@@ -10295,6 +10621,35 @@ async function loadClips(jobId){const res=await fetch(`/api/manual-clipping/jobs
 async function cancelJob(id){const res=await fetch(`/api/manual-clipping/jobs/${id}`,{method:'DELETE',headers:{'Authorization':'Bearer '+token}});const data=await res.json();if(data.success)loadJobs();else showMsg('Could not cancel',false);}
 loadJobs();
 </script>
+<script>
+class DynamicBackgroundManager {
+    constructor() { this.lastUpdate = Date.now(); this.interval = 5*60*1000; this.init(); }
+    async init() { await this.updateBg(); setInterval(() => this.updateBg(), this.interval); }
+    async updateBg() {
+        try {
+            const r = await fetch('/api/background/image');
+            if (!r.ok) return;
+            const ct = r.headers.get('content-type') || '';
+            if (ct.includes('application/json')) {
+                const d = await r.json();
+                if (d.fallback && d.gradient) document.body.style.background = d.gradient;
+                return;
+            }
+            const blob = await r.blob();
+            const url = URL.createObjectURL(blob);
+            const o = document.createElement('div');
+            o.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background-image:url('+url+');background-size:cover;background-position:center;opacity:0;transition:opacity 1s;z-index:-1;pointer-events:none';
+            document.body.appendChild(o);
+            setTimeout(() => o.style.opacity = '0.3', 100);
+            setTimeout(() => {
+                const old = document.querySelectorAll('div[style*="background-image"]');
+                old.forEach((e,i) => { if (i < old.length - 1) e.remove(); });
+            }, 1100);
+        } catch(e) { console.error(e); }
+    }
+}
+new DynamicBackgroundManager();
+</script>
 </body>
 </html>"#####;
 
@@ -10354,6 +10709,35 @@ const params=new URLSearchParams(window.location.search);
 if(params.get('token'))document.getElementById('token').value=params.get('token');
 function showMsg(text,ok=true){document.getElementById('msg').innerHTML=`<div class="msg ${ok?'msg-success':'msg-error'}">${text}</div>`;}
 async function register(e){e.preventDefault();const payload={token:document.getElementById('token').value.trim(),email:document.getElementById('email').value.trim(),username:document.getElementById('username').value.trim(),password:document.getElementById('password').value,confirm_password:document.getElementById('confirm_password').value};const res=await fetch('/api/auth/register/clipper',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});const data=await res.json();if(data.success){localStorage.setItem('authToken',data.token);localStorage.setItem('auth_token',data.token);localStorage.setItem('user',JSON.stringify(data.user));localStorage.setItem('auth_user',JSON.stringify(data.user));showMsg('Account created! Redirecting...');setTimeout(()=>window.location.href='/manual-clipping',1200);}else showMsg(data.message||'Registration failed',false);}
+</script>
+<script>
+class DynamicBackgroundManager {
+    constructor() { this.lastUpdate = Date.now(); this.interval = 5*60*1000; this.init(); }
+    async init() { await this.updateBg(); setInterval(() => this.updateBg(), this.interval); }
+    async updateBg() {
+        try {
+            const r = await fetch('/api/background/image');
+            if (!r.ok) return;
+            const ct = r.headers.get('content-type') || '';
+            if (ct.includes('application/json')) {
+                const d = await r.json();
+                if (d.fallback && d.gradient) document.body.style.background = d.gradient;
+                return;
+            }
+            const blob = await r.blob();
+            const url = URL.createObjectURL(blob);
+            const o = document.createElement('div');
+            o.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background-image:url('+url+');background-size:cover;background-position:center;opacity:0;transition:opacity 1s;z-index:-1;pointer-events:none';
+            document.body.appendChild(o);
+            setTimeout(() => o.style.opacity = '0.3', 100);
+            setTimeout(() => {
+                const old = document.querySelectorAll('div[style*="background-image"]');
+                old.forEach((e,i) => { if (i < old.length - 1) e.remove(); });
+            }, 1100);
+        } catch(e) { console.error(e); }
+    }
+}
+new DynamicBackgroundManager();
 </script>
 </body>
 </html>"#####;

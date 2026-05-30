@@ -93,7 +93,7 @@ pub fn get_offer_price_cents(offer_id: &str) -> Option<u64> {
 }
 
 /// Read paypal_env from app_config table, falling back to PAYPAL_ENV env var.
-async fn get_paypal_env(state: &AppState) -> String {
+pub async fn get_paypal_env(state: &AppState) -> String {
     let db_value: Option<String> = sqlx::query_scalar(
         "SELECT value FROM app_config WHERE key = 'paypal_env'"
     )
@@ -104,14 +104,14 @@ async fn get_paypal_env(state: &AppState) -> String {
     db_value.unwrap_or_else(|| std::env::var("PAYPAL_ENV").unwrap_or_else(|_| "sandbox".to_string()))
 }
 
-fn paypal_base_url(env: &str) -> &'static str {
+pub fn paypal_base_url(env: &str) -> &'static str {
     match env {
         "live" | "production" => "https://api-m.paypal.com",
         _ => "https://api-m.sandbox.paypal.com",
     }
 }
 
-fn paypal_credentials(env: &str) -> (String, String) {
+pub fn paypal_credentials(env: &str) -> (String, String) {
     let client_id = match env {
         "live" | "production" => std::env::var("PAYPAL_CLIENT_ID_LIVE")
             .or_else(|_| std::env::var("PAYPAL_LIVE_CLIENT_ID"))
@@ -135,7 +135,7 @@ fn paypal_credentials(env: &str) -> (String, String) {
     (client_id, client_secret)
 }
 
-async fn get_paypal_access_token(base_url: &str, client_id: &str, client_secret: &str) -> Result<String, String> {
+pub async fn get_paypal_access_token(base_url: &str, client_id: &str, client_secret: &str) -> Result<String, String> {
     let resp = reqwest::Client::new()
         .post(format!("{}/v1/oauth2/token", base_url))
         .header("Accept", "application/json")
