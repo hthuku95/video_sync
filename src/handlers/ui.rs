@@ -72,10 +72,10 @@ pub fn ui_private_routes() -> Router {
             "/api/service-samples/request",
             post(create_service_sample_request),
         )
-        .layer(axum::middleware::from_fn(auth_middleware))
         .layer(axum::middleware::from_fn(
             crate::middleware::subscription::subscription_middleware,
         ))
+        .layer(axum::middleware::from_fn(auth_middleware))
 }
 
 #[derive(Debug, Deserialize)]
