@@ -405,7 +405,7 @@ async function executePay() {
     if (!config.client_id || !config.success) return;
 
     var script = document.createElement('script');
-    script.src = 'https://www.paypal.com/sdk/js?client-id=' + encodeURIComponent(config.client_id) + '&currency=USD&intent=capture';
+    script.src = 'https://www.paypal.com/sdk/js?client-id=' + encodeURIComponent(config.client_id) + '&currency=USD&enable-funding=card&intent=capture';
     document.body.appendChild(script);
     script.onload = function() {
       paypal.Buttons({

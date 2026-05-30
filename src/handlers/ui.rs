@@ -1401,7 +1401,7 @@ fn build_service_offer_page_html(
           <a class="btn btn-secondary" href="{secondary_href}">{secondary_label}</a>
         </div>
         <div id="paypal-section" style="margin-top:1.2rem;border-top:1px solid var(--line);padding-top:1rem;">
-          <div style="font-size:0.85rem;color:var(--muted);margin-bottom:0.6rem;">Buy this service:</div>
+          <div style="font-size:0.85rem;color:var(--muted);margin-bottom:0.6rem;">Buy this service — Pay with PayPal or Credit Card:</div>
           <div id="paypal-buttons-container"></div>
         </div>
       </div>
@@ -2105,12 +2105,12 @@ fn build_service_offer_page_html(
         .then(function(config) {{
           if (!config.client_id) return;
           var script = document.createElement('script');
-          script.src = 'https://www.paypal.com/sdk/js?client-id=' + encodeURIComponent(config.client_id) + '&currency=USD';
+          script.src = 'https://www.paypal.com/sdk/js?client-id=' + encodeURIComponent(config.client_id) + '&currency=USD&enable-funding=card';
           document.body.appendChild(script);
           script.onload = function() {{
             offers.forEach(function(offerId) {{
               paypal.Buttons({{
-                style: {{ layout: 'horizontal', label: 'buynow', tagline: false, height: 40 }},
+                style: {{ layout: 'horizontal', label: 'paypal', tagline: false, height: 40 }},
                 createOrder: function(data, actions) {{
                   return fetch('/api/paypal/orders', {{
                     method: 'POST',
