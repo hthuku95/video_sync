@@ -1667,9 +1667,7 @@ impl ToolSelector {
             // Analysis
             "analyze_video".into(),
             // Export
-            "export_for_youtube".into(),
-            "export_for_tiktok".into(),
-            "export_for_instagram".into(),
+            "export_for_platform".into(),
         ]
     }
 

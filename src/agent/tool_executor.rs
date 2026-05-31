@@ -671,9 +671,28 @@ async fn execute_tool_claude_with_context_inner(
     }
 
     // generate_image needs ctx to upload directly to cloud storage
-    if name == "generate_image" {
-        let result = execute_generate_image_with_state_claude(args, ctx).await;
-        return finalize_special_tool_result_value(name, args, result, ctx).await;
+    if name == "generate_image" || name == "text_to_image" {
+        let mut args = args.clone();
+        if name == "text_to_image" {
+            if let Some(text) = args.get("text").and_then(|v| v.as_str()) {
+                args["prompt"] = serde_json::json!(text);
+            }
+            if let Some(img_count) = args.get("number_of_images").and_then(|v| v.as_i64()) {
+                if img_count > 1 {
+                    let current = args.get("prompt").and_then(|v| v.as_str()).unwrap_or("image");
+                    args["prompt"] = serde_json::json!(format!("{} x{}", current, img_count));
+                }
+            }
+            if args.get("output_file").and_then(|v| v.as_str()).is_none() {
+                args["output_file"] = serde_json::json!("outputs/text_to_image.png");
+            }
+            if let Some(obj) = args.as_object_mut() {
+                obj.remove("text");
+                obj.remove("number_of_images");
+            }
+        }
+        let result = execute_generate_image_with_state_claude(&args, ctx).await;
+        return finalize_special_tool_result_value("generate_image", &args, result, ctx).await;
     }
 
     // submit_final_answer needs ctx to return cloud URLs instead of local hash URLs
@@ -1042,9 +1061,24 @@ async fn execute_tool_gemini_with_context_inner(
     }
 
     // generate_image needs ctx to upload directly to cloud storage
-    if name == "generate_image" {
-        let result = execute_generate_image_with_state_gemini(args, ctx).await;
-        return finalize_special_tool_result_gemini(name, args, result, ctx).await;
+    if name == "generate_image" || name == "text_to_image" {
+        let mut args = args.clone();
+        // text_to_image may use different parameter names; normalize them
+        if name == "text_to_image" {
+            if let Some(text) = args.get("text").and_then(|v| v.as_str()) {
+                args.insert("prompt".to_string(), serde_json::json!(text));
+            }
+            if let Some(img_count) = args.get("number_of_images").and_then(|v| v.as_i64()) {
+                if img_count > 1 {
+                    args.insert("prompt".to_string(), serde_json::json!(format!("{} x{}", args.get("prompt").and_then(|v| v.as_str()).unwrap_or("image"), img_count)));
+                }
+            }
+            args.entry("output_file".to_string()).or_insert_with(|| serde_json::json!("outputs/text_to_image.png"));
+            args.remove("text");
+            args.remove("number_of_images");
+        }
+        let result = execute_generate_image_with_state_gemini(&args, ctx).await;
+        return finalize_special_tool_result_gemini("generate_image", &args, result, ctx).await;
     }
 
     // submit_final_answer needs ctx to return cloud URLs instead of local hash URLs
@@ -3867,7 +3901,8 @@ async fn execute_submit_final_answer_with_state_gemini(
                 None
             };
 
-            let file_id = generate_file_id_from_path(file_path);
+            let file_id =
+                crate::services::GeneratedArtifactService::legacy_file_id(file_name);
             response.push_str(&format!("**{}**\n", file_name));
             if let Some(url) = cloud_url {
                 response.push_str(&format!("Cloud URL: {}\n", url));
@@ -3947,7 +3982,8 @@ async fn execute_submit_final_answer_with_state_claude(
                 None
             };
 
-            let file_id = generate_file_id_from_path(file_path);
+            let file_id =
+                crate::services::GeneratedArtifactService::legacy_file_id(file_name);
             response.push_str(&format!("**{}**\n", file_name));
             if let Some(url) = cloud_url {
                 response.push_str(&format!("Cloud URL: {}\n", url));
@@ -4072,7 +4108,7 @@ async fn execute_generate_image_with_state_gemini(
                 "image/png"
             };
 
-            match crate::cloud_storage::upload_bytes_to_cloud(
+                    match crate::cloud_storage::upload_bytes_to_cloud(
                 image_bytes,
                 &object_key,
                 content_type,
@@ -4083,11 +4119,26 @@ async fn execute_generate_image_with_state_gemini(
             )
             .await
             {
-                Ok(url) => format!(
-                    "✅ Successfully generated image and uploaded to cloud: {}\nDownload: {}",
-                    file_name, url
-                ),
-                Err(e) => format!("✅ Image generated but cloud upload failed: {}", e),
+                Ok(url) => {
+                    let file_id =
+                        crate::services::GeneratedArtifactService::legacy_file_id(file_name);
+                    format!(
+                        "✅ Successfully generated image and uploaded to cloud: {}\n\
+                         Cloud URL: {}\n\
+                         Download: `/api/outputs/download/{}`",
+                        file_name, url, file_id
+                    )
+                }
+                Err(e) => {
+                    let file_id =
+                        crate::services::GeneratedArtifactService::legacy_file_id(file_name);
+                    format!(
+                        "✅ Image generated but cloud upload failed: {}\n\
+                         File: {}\n\
+                         Download: `/api/outputs/download/{}`",
+                        e, file_name, file_id
+                    )
+                }
             }
         }
         Err(e) => format!("❌ Failed to generate image: {}", e),
@@ -4158,11 +4209,26 @@ async fn execute_generate_image_with_state_claude(
             )
             .await
             {
-                Ok(url) => format!(
-                    "✅ Successfully generated image and uploaded to cloud: {}\nDownload: {}",
-                    file_name, url
-                ),
-                Err(e) => format!("✅ Image generated but cloud upload failed: {}", e),
+                Ok(url) => {
+                    let file_id =
+                        crate::services::GeneratedArtifactService::legacy_file_id(file_name);
+                    format!(
+                        "✅ Successfully generated image and uploaded to cloud: {}\n\
+                         Cloud URL: {}\n\
+                         Download: `/api/outputs/download/{}`",
+                        file_name, url, file_id
+                    )
+                }
+                Err(e) => {
+                    let file_id =
+                        crate::services::GeneratedArtifactService::legacy_file_id(file_name);
+                    format!(
+                        "✅ Image generated but cloud upload failed: {}\n\
+                         File: {}\n\
+                         Download: `/api/outputs/download/{}`",
+                        e, file_name, file_id
+                    )
+                }
             }
         }
         Err(e) => format!("❌ Failed to generate image: {}", e),

@@ -120,7 +120,10 @@ Trust your understanding of natural language to determine user intent:
 - When a job is running, you remain available for conversation and can check its status
 - Only start new jobs for new work requests, not for status inquiries about existing work
 - If the user's task is clearly defined, call `set_chat_title` early with a concise descriptive title
-- If tools created output files, finish with `submit_final_answer` so the user gets delivery/output links instead of internal file paths"#;
+- If tools created output files, finish with `submit_final_answer` so the user gets delivery/output links instead of internal file paths
+
+## CRITICAL: Only Use Declared Tools
+You MUST only call tools that are explicitly listed in the `tools` array of this request. Do NOT call tools like `imagen`, `imagen_generate`, `remove_background`, `expand_image`, `search_web`, `google_search`, `web_search`, `read_website`, `extract_content`, or `fetch_url` — these tools do NOT exist in this system. If a tool name isn't in the catalog, don't guess — pick the closest declared tool instead."#;
 
         // Save user message to conversation history
         let user_msg =
@@ -547,7 +550,7 @@ impl StatefulGeminiAgent {
             tracing::info!("{}", msg);
         };
 
-        let mut last_submit_final_answer_result: Option<String> = None;
+        let mut last_tool_result_with_output: Option<String> = None;
 
         send_progress("🧠 Loading the full production toolbelt for your request...");
         // Full-toolbelt mode: agents receive the full allowed video tool catalog by
@@ -655,7 +658,10 @@ Your tool catalog includes: image generation, video generation, audio generation
 - Use start_background_job only for multi-step workflows spanning 5+ operations
 - Call `set_chat_title` early with a concise descriptive title
 - When you create output files, end with `submit_final_answer` and include every generated output file path
-- Do NOT stop at a plan — actually generate the deliverable the user asked for"#;
+- Do NOT stop at a plan — actually generate the deliverable the user asked for
+
+## CRITICAL: Only Use Declared Tools
+You MUST only call tools that are explicitly listed in the `tools` array of this request. Do NOT call tools like `imagen`, `imagen_generate`, `remove_background`, `expand_image`, `search_web`, `google_search`, `web_search`, `read_website`, `extract_content`, or `fetch_url` — these tools do NOT exist in this system. If a tool name isn't in the catalog, don't guess — pick the closest declared tool instead."#;
 
         // Build contents array with conversation history
         let mut contents = Vec::new();
@@ -927,8 +933,53 @@ Your tool catalog includes: image generation, video generation, audio generation
                                                 |_| serde_json::json!({"result": tool_result}),
                                             );
 
-                                    if function_name == "submit_final_answer" {
-                                        last_submit_final_answer_result =
+                                    if function_name == "submit_final_answer"
+                                        || function_name == "generate_image"
+                                        || function_name == "text_to_image"
+                                        || function_name == "auto_generate_video"
+                                        || function_name == "edit_image"
+                                        || function_name == "blender_generate_scene"
+                                        || function_name == "blender_generate_thumbnail"
+                                        || function_name == "blender_generate_title_card"
+                                        || function_name == "blender_generate_data_viz"
+                                        || function_name == "blender_generate_lower_third"
+                                        || function_name == "blender_generate_latex"
+                                        || function_name == "blender_generate_ui_mockup"
+                                        || function_name == "blender_generate_animation"
+                                        || function_name == "blender_generate_chart"
+                                        || function_name == "blender_generate_flowchart"
+                                        || function_name == "blender_generate_3d_math"
+                                        || function_name == "blender_generate_code_animation"
+                                        || function_name == "blender_generate_timeline"
+                                        || function_name == "blender_generate_network_graph"
+                                        || function_name == "blender_generate_logo_reveal"
+                                        || function_name == "blender_generate_abstract_bg"
+                                        || function_name == "blender_generate_countdown"
+                                        || function_name == "blender_generate_particle_confetti"
+                                        || function_name == "blender_generate_rigid_body_drop"
+                                        || function_name == "blender_generate_camera_path"
+                                        || function_name == "blender_generate_toon_scene"
+                                        || function_name == "blender_generate_grease_pencil_reveal"
+                                        || function_name == "blender_generate_geometry_scatter"
+                                        || function_name == "blender_generate_text_animation"
+                                        || function_name == "blender_generate_vector_field"
+                                        || function_name == "blender_generate_matrix_transform"
+                                        || function_name == "blender_generate_polar_graph"
+                                        || function_name == "blender_generate_geometry_proof"
+                                        || function_name == "create_thumbnail"
+                                        || function_name == "create_thumbnail_hd"
+                                        || function_name == "generate_text_to_speech"
+                                        || function_name == "generate_sound_effect"
+                                        || function_name == "generate_music"
+                                        || function_name == "add_voiceover_to_video"
+                                        || function_name == "generate_long_form_video"
+                                        || function_name == "merge_videos"
+                                        || function_name == "convert_format"
+                                        || function_name == "extract_frames"
+                                        || function_name == "pexels_download_video"
+                                        || function_name == "pexels_download_photo"
+                                    {
+                                        last_tool_result_with_output =
                                             Some(tool_result.clone());
                                     }
 
@@ -1251,11 +1302,24 @@ Your tool catalog includes: image generation, video generation, audio generation
             // Continue loop - AI will process function results and respond naturally
         }
 
-        // If submit_final_answer was called, use its result as final_response
-        // so output links are present for response_output_links to find
-        if let Some(submit_result) = &last_submit_final_answer_result {
-            if !submit_result.is_empty() {
-                final_response = submit_result.clone();
+        // If the last media-generation tool produced output links but
+        // final_response has none, override so response_output_links can find them
+        if let Some(tool_result) = &last_tool_result_with_output {
+            let has_download = tool_result.contains("/api/outputs/download/");
+            let final_has_download = final_response.contains("/api/outputs/download/")
+                || final_response.contains("/api/outputs/stream/")
+                || final_response.contains("/delivery/");
+            tracing::info!(
+                "final_response_override: tool_result_len={}, final_response_len={}, tool_has_download={}, final_has_download={}, last_tool_result_first_100={}",
+                tool_result.len(),
+                final_response.len(),
+                has_download,
+                final_has_download,
+                &tool_result[..std::cmp::min(100, tool_result.len())]
+            );
+            if !tool_result.is_empty() && (final_response.is_empty() || !final_has_download) {
+                final_response = tool_result.clone();
+                tracing::info!("✅ Overrode final_response with tool result");
             }
         }
 

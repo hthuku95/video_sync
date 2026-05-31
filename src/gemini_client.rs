@@ -2253,6 +2253,53 @@ impl GeminiClient {
                 },
             },
             FunctionDeclaration {
+                name: "text_to_image".to_string(),
+                description: "Generates an image from a text prompt. Alias for generate_image — accepts 'text' instead of 'prompt' and supports 'number_of_images' for multiples. Produces a single image by default.".to_string(),
+                parameters: Parameters {
+                    param_type: "object".to_string(),
+                    properties: {
+                        let mut props = HashMap::new();
+                        props.insert("prompt".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Text prompt describing the image to generate.".to_string(),
+                            items: None,
+                        });
+                        props.insert("text".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Alternative to 'prompt' — text describing the image to generate.".to_string(),
+                            items: None,
+                        });
+                        props.insert("output_file".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Path where the generated image should be saved (default: 'outputs/text_to_image.png')".to_string(),
+                            items: None,
+                        });
+                        props.insert("number_of_images".to_string(), PropertyDefinition {
+                            prop_type: "integer".to_string(),
+                            description: "How many images to generate (default: 1). When >1, the prompt is repeated that many times.".to_string(),
+                            items: None,
+                        });
+                        props.insert("aspect_ratio".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Aspect ratio: '1:1', '16:9', '9:16', '4:3', '3:4' (default: '1:1')".to_string(),
+                            items: None,
+                        });
+                        props.insert("image_size".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Resolution: '1K' (1024px), '2K' (2048px), '4K' (4096px) (default: '2K')".to_string(),
+                            items: None,
+                        });
+                        props.insert("model".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Model: 'fast'/'nano' for speed, 'quality'/'pro' for best results (default: 'quality')".to_string(),
+                            items: None,
+                        });
+                        props
+                    },
+                    required: vec![],
+                },
+            },
+            FunctionDeclaration {
                 name: "edit_image".to_string(),
                 description: "Edit or transform an existing image using AI. Use when you need to: modify a downloaded Pexels photo, add text/graphics to a video frame, change the style of an image, remove or replace elements, or create a variant of an existing image. Requires a path to the source image on disk. Example: extract a frame with extract_frames, then call edit_image to add a title overlay.".to_string(),
                 parameters: Parameters {
