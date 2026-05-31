@@ -13,6 +13,7 @@ mod blender_mcp_client; // 🎨 BlenderMCPServer — 3D rendering + Manim
 mod blender_quality;
 mod claude_client;
 mod clipping; // 📹 YouTube clipping feature
+mod cloud_storage;
 mod db;
 mod deepseek_client;
 mod email;
@@ -79,6 +80,7 @@ pub struct AppState {
     pub vibevoice_client: Option<vibevoice_client::VibeVoiceClient>, // 🎤 Shared TTS + transcription microservice
     pub blender_mcp_client: Option<blender_mcp_client::BlenderMCPClient>, // 🎨 3D rendering + Manim
     pub r2_client: Option<Arc<r2_client::R2Client>>,                 // ☁️ Cloudflare R2 storage
+    pub gcs_client: Option<gcs_client::GcsClient>,                   // 🌐 Google Cloud Storage
     pub youtube_client: Option<youtube_client::YouTubeClient>,       // 📺 YouTube integration
     pub youtube_analytics_client: Option<youtube_analytics_client::YouTubeAnalyticsClient>, // 📊 YouTube Analytics
     pub google_oauth_client_id: Option<String>, // Google OAuth client ID
@@ -609,6 +611,12 @@ async fn main() {
         }
     };
 
+    // Initialize GCS client (Google Cloud Storage)
+    let gcs_client = gcs_client::GcsClient::from_env();
+    if gcs_client.is_some() {
+        tracing::info!("☁️ Initialized Google Cloud Storage client");
+    }
+
     // Create the shared state
     let shared_state = Arc::new(AppState {
         db_pool,
@@ -629,6 +637,7 @@ async fn main() {
         vibevoice_client,
         blender_mcp_client,
         r2_client,
+        gcs_client,
         youtube_client,
         youtube_analytics_client,
         google_oauth_client_id,

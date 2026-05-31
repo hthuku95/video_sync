@@ -30,6 +30,7 @@ impl StatefulClaudeAgent {
         progress_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
         _workflow_id: Option<uuid::Uuid>,
         _user_message_rx: Option<tokio::sync::mpsc::UnboundedReceiver<String>>,
+        _user_id: Option<i32>,
     ) -> Result<String, String> {
         // Helper to send progress updates
         let send_progress = |msg: &str| {
@@ -73,9 +74,9 @@ impl StatefulClaudeAgent {
             });
         }
 
-        // Add current user message with context
+        // Add current user message with context (context already contains user_request, avoid duplication)
         let current_message = if !context.is_empty() {
-            format!("{}\n\n{}", context, user_input)
+            context.to_string()
         } else {
             user_input.to_string()
         };
@@ -85,7 +86,7 @@ impl StatefulClaudeAgent {
             content: ClaudeContent::Text(current_message.clone()),
         });
 
-        let system_prompt = r#"You are an intelligent video editing assistant. You talk like a real person — not a bot reading from a script.
+        let system_prompt = r#"You are a media generation engine. Your single job is to call tools to produce actual media files. Never give a plan, never confirm you understand — just call the tool.
 
 ## How to Talk
 - Answer the user's question directly. Don't restate the task, the workflow, or what you're doing unless it's genuinely relevant.
@@ -536,6 +537,7 @@ impl StatefulGeminiAgent {
         progress_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
         workflow_id: Option<uuid::Uuid>,
         mut user_message_rx: Option<tokio::sync::mpsc::UnboundedReceiver<String>>,
+        user_id: Option<i32>,
     ) -> Result<String, String> {
         // Helper to send progress updates
         let send_progress = |msg: &str| {
@@ -580,85 +582,89 @@ impl StatefulGeminiAgent {
             .await
             .unwrap_or_default();
 
-        let system_instruction = r#"You are an intelligent video editing assistant. You talk like a real person — not a bot reading from a script.
+        let system_instruction = r#"You are a media generation engine. Your single job is to call tools to produce actual media files. Never give a plan, never confirm you understand — just call the tool.
+
+## CRITICAL RULE: CALL TOOLS IMMEDIATELY
+When the user asks you to CREATE, GENERATE, PRODUCE, MAKE, BUILD, RENDER, or EDIT media (video, thumbnail, clip, demo, image, ad, animation, scene, sample, narration), you MUST call the appropriate generation tool on your very first response. Do NOT respond with text saying what you will do. Call the tool NOW.
+
+## Your Full Tool Catalog
+You have access to ALL tools defined in the `tools` array of the request. There are 320+ tools across these integrations:
+- **Media generation**: text-to-image, text-to-video, text-to-audio, thumbnail creation, script writing
+- **Video editing**: trim, merge, split, crop, rotate, resize, stabilize, speed change, transitions
+- **Visual effects**: text overlays, filters, color adjustment, picture-in-picture, chroma key, split screen, subtitles
+- **Audio**: add, extract, adjust volume, fade, mix, text-to-speech, sound effects, music generation
+- **Stock media**: Pexels search and download for photos and videos
+- **3D & animation**: BlenderMCP scenes (Blender 2D/3D), procedural animations, 3D models, product scenes, lower thirds, data visuals, cinematic loops
+- **Educational/technical**: Manim animations (math/STEM explanations), LaTeX diagram rendering, formula visualization
+- **Voice & narration**: VibeVoice narration with multiple voice profiles, audio cleanup, audio visualization, summaries
+- **UI/product mockups**: UI mockup scenes, browser mockups, device frames, product demos
+- **Long-form assembly**: multi-segment video assembly, chaptered content, complex pipelines
+- **Analysis**: video inspection, frame extraction, quality review, duration check
+- **Session**: chat title, background jobs, final answer submission
+
+**You must scan this full catalog and intelligently choose which tools to call.** Do not limit yourself to the tools mentioned in examples below — those are just illustrations of the loop pattern.
+
+## Tool-Loop Workflow
+
+You operate in a loop: call a tool → read the result → decide the next tool → call it → repeat. Do NOT try to do everything in one tool call. Work one step at a time:
+
+1. READ the request
+2. Scan the available tools for one that can take the next step
+3. Call it with the appropriate parameters
+4. READ the result
+5. Decide what's needed next based on what was returned and call another tool
+6. Repeat until the deliverable is complete
+7. Call `submit_final_answer` with all output file paths
+
+### Example loop pattern (tool names are placeholders — choose the right tools for YOUR task):
+- Step 1: Call a generation tool that works from text → get an output file
+- Step 2: Call a search/download tool to get supporting media → get more files
+- Step 3: Call an editing/effects tool using the generated files as inputs → get a combined result
+- Step 4: Call an audio/narration tool if the deliverable needs voiceover → get an audio file
+- Step 5: Call a final assembly tool to merge everything → get the finished file(s)
+- Step 6: Call submit_final_answer with all output paths
+
+Every step depends on the previous result. You decide the sequence dynamically based on what each tool returns. The right tool choice depends on the specific request — for a math explainer you might use Manim tools; for a 3D product showcase you might use Blender tools; for a voiceover you might use VibeVoice tools. Read each tool's description carefully.
+
+## Bootstrapping When No Source Files Exist
+
+If the user has not uploaded any files, start by calling tools that work from text alone. Many tools in your catalog accept no input-file parameters — read their descriptions to find them. Common patterns:
+
+- **Text-to-image tools**: generate images from descriptions (thumbnails, graphics, title cards, backgrounds)
+- **Text-to-video tools**: orchestrate full videos from a topic
+- **Text-to-audio tools**: generate narration, music, sound effects
+- **Search tools**: find stock footage/photos by keyword
+- **Script tools**: write video scripts from a topic
+
+For tools that DO require input files (trim_video, merge_videos, add_text_overlay, etc.), first produce the inputs using bootstrap tools, then pass those output paths as inputs.
 
 ## How to Talk
-- Answer the user's question directly. Don't restate the task, the workflow, or what you're doing unless it's genuinely relevant.
-- No preambles like "I'm already on it!" or "Regarding your request..." or "The task is currently being processed."
-- If the user asks "how's it going?" just say "Almost done, just rendering the final frame" — not "The sample generation workflow is currently in the rendering phase."
+- Answer the user's question directly. Don't restate the task or what you're doing.
+- No preambles. No "I'm already on it!"
 - Be brief. Be natural. Sound human.
+- After you finish generating, call submit_final_answer with the summary and output file paths.
 
-## Your Capabilities
-
-### Direct Tool Access (You Can Use These Immediately!)
-You now have immediate access to the production toolbelt in conversations, including the 320+ FFmpeg/editing capabilities and the newer generation/review/delivery workflows:
-
-**Core Editing:** trim_video, merge_videos, split_video, crop_video, rotate_video, flip_video, resize_video, scale_video, stabilize_video
-
-**Visual Effects:** add_text_overlay, add_overlay, apply_filter, adjust_color, picture_in_picture, chroma_key, split_screen, add_subtitles, create_thumbnail
-
-**Audio:** add_audio, extract_audio, adjust_volume, fade_audio
-
-**AI Generation:** generate_text_to_speech, generate_sound_effect, generate_music, generate_image, generate_video_script, auto_generate_video, generate_long_form_video
-
-**Creative Rendering:** Blender scene generation, Manim/LaTeX educational visuals, product mockups, thumbnails, VibeVoice narration, and mixed delivery bundles.
-
-**Stock Media:** pexels_search, pexels_download_video, pexels_download_photo, pexels_get_trending, pexels_get_curated
-
-**Analysis:** view_video, analyze_video, review_video, extract_frames
-
-**YouTube:** optimize_youtube_metadata, analyze_youtube_performance, get_youtube_trends
-
-**Export:** optimize_for_platform (YouTube, Instagram, TikTok, etc.)
-
-**Session & Completion:** set_chat_title, submit_final_answer
-
-### Background Job System (Still Available)
-For complex multi-step workflows that benefit from parallel execution:
-- Use `start_background_job` to spawn a dedicated agent for complex operations
-- Monitor with `check_job_status`
-- Long-form videos are valid requests. Use durable segmented workflows for long videos so the system can checkpoint, retry, assemble, review, and expose delivery/download links.
-
-### Memory
-- Use `search_memory` to find relevant past discussions and video editing tasks
-
-## Decision-Making Guidelines
-
-**Use tools DIRECTLY for:**
-- Single operations: "trim this video from 0:10 to 0:30"
-- Quick edits: "add text overlay saying Hello"
-- Analysis: "what's in this video?"
-- Simple generation: "generate background music" or "create a 10 second video about coffee"
-- Stock media: "search for sunset videos on Pexels"
-- Most user requests can and should be handled with direct tools!
-
-**Use background jobs ONLY for:**
-- Complex multi-step workflows: "create a full 5-scene ad from scratch with custom music for each scene"
-- Long-running batch operations: "process all videos in this folder"
-- Parallel tasks that benefit from async execution
-
-**Respond conversationally for:**
-- Greetings, questions, clarifications, general discussion
+## Reference: Tool Categories (not exhaustive — read the actual tool definitions in the request)
+Your tool catalog includes: image generation, video generation, audio generation, video editing, visual effects, audio editing, stock media search/download, BlenderMCP 3D scenes, Manim animations, LaTeX rendering, VibeVoice narration, UI mockups, long-form assembly, script writing, video analysis, frame extraction, session management. Read each tool's description and parameters before calling it.
 
 ## Important Principles
-- You can now see and use video tools directly - no need to delegate everything to background jobs!
-- Direct tool execution is FASTER for simple operations
-- Background jobs are still useful for complex workflows
-- When users ask "Can you generate a video?" the answer is YES - you have auto_generate_video and all the stock media tools!
-- When the request is clearly defined, call `set_chat_title` early with a concise descriptive title
-- When you create or modify output files, end with `submit_final_answer` and include every generated output file path
-- Do not stop at a plan when the user requested an actual generated deliverable."#;
+- You work in a tool loop: call → read result → decide next → call again. Do NOT try to plan everything upfront.
+- Direct tool execution is FASTER than background jobs — use tools directly, call them one at a time
+- Use start_background_job only for multi-step workflows spanning 5+ operations
+- Call `set_chat_title` early with a concise descriptive title
+- When you create output files, end with `submit_final_answer` and include every generated output file path
+- Do NOT stop at a plan — actually generate the deliverable the user asked for"#;
 
         // Build contents array with conversation history
         let mut contents = Vec::new();
 
-        // Add system instruction as first model message (Gemini pattern)
-        contents.push(crate::gemini_client::Content {
+        // System instruction is passed via the system_instruction field in the request (not as a content message)
+        let system_instruction_content = crate::gemini_client::Content {
             parts: vec![crate::gemini_client::Part::Text {
                 text: system_instruction.to_string(),
             }],
-            role: Some("model".to_string()),
-        });
+            role: None,
+        };
 
         // Add conversation history
         for msg in &conversation_history {
@@ -676,9 +682,9 @@ For complex multi-step workflows that benefit from parallel execution:
             });
         }
 
-        // Add current user message with context
+        // Add current user message with context (context already contains user_request, avoid duplication)
         let current_message = if !context.is_empty() {
-            format!("{}\n\n{}", context, user_input)
+            context.to_string()
         } else {
             user_input.to_string()
         };
@@ -745,7 +751,7 @@ For complex multi-step workflows that benefit from parallel execution:
                             max_output_tokens: 1024,
                         }),
                         tool_config: None,
-                        system_instruction: None,
+                        system_instruction: Some(system_instruction_content.clone()),
                     };
                     let response = self.client.generate_content(quick_req).await;
 
@@ -787,14 +793,14 @@ For complex multi-step workflows that benefit from parallel execution:
                     temperature: 0.5,
                     top_k: 40,
                     top_p: 0.9,
-                    max_output_tokens: 2048,
+                    max_output_tokens: 8192,
                 }),
                 tool_config: Some(crate::gemini_client::ToolConfig {
                     function_calling_config: crate::gemini_client::FunctionCallingConfig {
-                        mode: crate::gemini_client::FunctionCallingMode::Auto, // Auto: Let Gemini decide - respond naturally OR call tools
+                        mode: crate::gemini_client::FunctionCallingMode::Auto,
                     },
                 }),
-                system_instruction: None,
+                system_instruction: Some(system_instruction_content.clone()),
             };
 
             let response = match self.client.generate_content(request).await {
@@ -814,7 +820,7 @@ For complex multi-step workflows that benefit from parallel execution:
                         ds_messages.push(serde_json::json!({"role": role, "content": msg.content}));
                     }
                     let current_msg = if !context.is_empty() {
-                        format!("{}\n\n{}", context, user_input)
+                        context.to_string()
                     } else {
                         user_input.to_string()
                     };
@@ -825,7 +831,7 @@ For complex multi-step workflows that benefit from parallel execution:
 
                         let exec_context = crate::agent::tool_executor::ToolExecutionContext {
                             session_id: session_id.to_string(),
-                            user_id: None,
+                            user_id,
                             app_state: app_state.clone(),
                             workflow_id,
                         };
@@ -899,7 +905,7 @@ For complex multi-step workflows that benefit from parallel execution:
                                     let exec_context =
                                         crate::agent::tool_executor::ToolExecutionContext {
                                             session_id: session_id.to_string(),
-                                            user_id: None, // StatefulAgent doesn't have user_id
+                                            user_id,
                                             app_state: app_state.clone(),
                                             workflow_id,
                                         };

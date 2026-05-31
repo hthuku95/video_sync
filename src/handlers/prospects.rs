@@ -6550,6 +6550,7 @@ Output file paths clearly in your final response so the delivery pipeline can fi
                 None,
                 None,
                 None,
+                None, // user_id not available in this context
             )
             .await;
 

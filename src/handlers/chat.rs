@@ -599,6 +599,7 @@ async fn websocket(
             let enhanced_query_bg = enhanced_query.clone();
             let job_manager_bg = state.job_manager.clone();
             let agent_tx_bg = agent_progress_tx.clone();
+            let user_id_bg = user_id; // Some(i32) from JWT
 
             // 🆕 Create agent channel for interactive messaging
             let (agent_user_tx, agent_user_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
@@ -620,6 +621,7 @@ async fn websocket(
                     job_manager_bg,
                     agent_tx_bg,
                     agent_user_rx,
+                    user_id_bg,
                 )
                 .await;
                 // Unregister agent channel on completion
@@ -2315,6 +2317,7 @@ async fn run_agent_background(
     job_manager: std::sync::Arc<crate::jobs::JobManager>,
     agent_progress_tx: tokio::sync::mpsc::UnboundedSender<String>,
     user_message_rx: tokio::sync::mpsc::UnboundedReceiver<String>,
+    user_id: Option<i32>,
 ) {
     tracing::info!(
         "🚀 Background agent task started for session: {}",
@@ -2380,6 +2383,7 @@ async fn run_agent_background(
                         Some(proxy_tx),
                         agent_workflow_id,
                         None, // Claude agent doesn't support interactivity yet
+                        user_id,
                     )
                     .await
             } else {
@@ -2401,6 +2405,7 @@ async fn run_agent_background(
                     Some(proxy_tx),
                     agent_workflow_id,
                     user_msg_rx_opt.take(),
+                    user_id,
                 )
                 .await
         } else {

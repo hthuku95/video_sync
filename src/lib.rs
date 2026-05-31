@@ -10,6 +10,7 @@ pub mod blender_mcp_client;
 pub mod blender_quality;
 pub mod claude_client;
 pub mod clipping;
+pub mod cloud_storage;
 pub mod db;
 pub mod deepseek_client;
 pub mod email;
@@ -86,6 +87,7 @@ pub struct AppState {
     pub vibevoice_client: Option<vibevoice_client::VibeVoiceClient>,
     pub blender_mcp_client: Option<blender_mcp_client::BlenderMCPClient>,
     pub r2_client: Option<std::sync::Arc<r2_client::R2Client>>,
+    pub gcs_client: Option<gcs_client::GcsClient>,
     pub youtube_client: Option<youtube_client::YouTubeClient>,
     pub youtube_analytics_client: Option<youtube_analytics_client::YouTubeAnalyticsClient>,
     pub google_oauth_client_id: Option<String>,

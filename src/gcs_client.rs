@@ -68,6 +68,44 @@ impl GcsClient {
         }
     }
 
+    pub async fn upload_bytes(
+        &self,
+        bytes: &[u8],
+        object_key: &str,
+        content_type: &str,
+    ) -> Result<String, String> {
+        let token = self.access_token().await?;
+        let body = reqwest::Body::from(bytes.to_vec());
+        let encoded_key = urlencoding::encode(object_key);
+        let url = format!(
+            "https://storage.googleapis.com/upload/storage/v1/b/{}/o?uploadType=media&name={}",
+            self.bucket, encoded_key
+        );
+
+        let response = self
+            .client
+            .post(url)
+            .bearer_auth(token)
+            .header(reqwest::header::CONTENT_TYPE, content_type)
+            .body(body)
+            .send()
+            .await
+            .map_err(|e| format!("GCS upload request failed: {e:?}"))?;
+
+        if response.status().is_success() {
+            // Return the public URL for the uploaded object
+            let download_url = format!(
+                "https://storage.googleapis.com/{}/{}",
+                self.bucket, encoded_key
+            );
+            Ok(download_url)
+        } else {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            Err(format!("GCS upload failed with {status}: {body}"))
+        }
+    }
+
     pub async fn download_bytes(&self, object_key: &str) -> Result<Vec<u8>, String> {
         let token = self.access_token().await?;
         let encoded_key = urlencoding::encode(object_key);

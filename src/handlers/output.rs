@@ -105,6 +105,23 @@ async fn download_video_output(
     Path(file_id): Path<String>,
     Extension(state): Extension<Arc<AppState>>,
 ) -> Result<Response, StatusCode> {
+    // Check for cloud URL first
+    if let Ok(Some(artifact)) =
+        crate::services::GeneratedArtifactService::find_by_legacy_file_id(&state.db_pool, &file_id)
+            .await
+    {
+        if let Some(ref url) = artifact.public_url {
+            if !url.starts_with('/') {
+                // External URL — redirect
+                return Ok(Response::builder()
+                    .status(StatusCode::FOUND)
+                    .header(header::LOCATION, url.as_str())
+                    .body(axum::body::Body::empty())
+                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?);
+            }
+        }
+    }
+
     let file_path = resolve_file_path(&state, &file_id).await?;
 
     if !file_path.exists() {
@@ -145,6 +162,22 @@ async fn stream_video_output(
     Path(file_id): Path<String>,
     Extension(state): Extension<Arc<AppState>>,
 ) -> Result<Response, StatusCode> {
+    // Check for cloud URL first
+    if let Ok(Some(artifact)) =
+        crate::services::GeneratedArtifactService::find_by_legacy_file_id(&state.db_pool, &file_id)
+            .await
+    {
+        if let Some(ref url) = artifact.public_url {
+            if !url.starts_with('/') {
+                return Ok(Response::builder()
+                    .status(StatusCode::FOUND)
+                    .header(header::LOCATION, url.as_str())
+                    .body(axum::body::Body::empty())
+                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?);
+            }
+        }
+    }
+
     let file_path = resolve_file_path(&state, &file_id).await?;
 
     if !file_path.exists() {
@@ -177,6 +210,31 @@ async fn get_output_info(
     Path(file_id): Path<String>,
     Extension(state): Extension<Arc<AppState>>,
 ) -> Result<axum::Json<VideoOutputResponse>, StatusCode> {
+    // Check for cloud artifact first
+    if let Ok(Some(artifact)) =
+        crate::services::GeneratedArtifactService::find_by_legacy_file_id(&state.db_pool, &file_id)
+            .await
+    {
+        if let Some(ref url) = artifact.public_url {
+            if !url.starts_with('/') {
+                let filename = std::path::Path::new(url)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("output")
+                    .to_string();
+                return Ok(axum::Json(VideoOutputResponse {
+                    file_id,
+                    filename,
+                    size_bytes: artifact.bytes.unwrap_or(0) as u64,
+                    download_url: url.clone(),
+                    stream_url: url.clone(),
+                    created_at: artifact.created_at.format("%Y-%m-%d %H:%M:%S UTC").to_string(),
+                    content_type: artifact.mime_type.unwrap_or_else(|| "application/octet-stream".to_string()),
+                }));
+            }
+        }
+    }
+
     let file_path = resolve_file_path(&state, &file_id).await?;
 
     if !file_path.exists() {

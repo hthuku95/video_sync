@@ -457,6 +457,40 @@ async fn persist_tool_output(
     }
 }
 
+/// Upload a Pexels download to cloud storage (best-effort, non-fatal)
+async fn upload_pexels_download_to_cloud(
+    local_path: &str,
+    ctx: &ToolExecutionContext,
+) {
+    let path = std::path::Path::new(local_path);
+    if !path.exists() {
+        return;
+    }
+    let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("pexels_download");
+    let content_type = if file_name.ends_with(".mp4") || file_name.ends_with(".webm") {
+        "video/mp4"
+    } else if file_name.ends_with(".jpg") || file_name.ends_with(".jpeg") {
+        "image/jpeg"
+    } else if file_name.ends_with(".png") {
+        "image/png"
+    } else {
+        "application/octet-stream"
+    };
+    match crate::cloud_storage::upload_local_file_to_cloud(
+        local_path,
+        content_type,
+        ctx.user_id.unwrap_or(0),
+        &ctx.session_id,
+        ctx.workflow_id,
+        &ctx.app_state,
+    )
+    .await
+    {
+        Ok(url) => tracing::info!("Pexels download uploaded to cloud: {url}"),
+        Err(e) => tracing::warn!("Failed to upload Pexels download to cloud: {e}"),
+    }
+}
+
 fn infer_output_mime_type(file_path: &str) -> String {
     match Path::new(file_path)
         .extension()
@@ -636,6 +670,18 @@ async fn execute_tool_claude_with_context_inner(
         return execute_search_youtube_channels_with_state_claude(args, ctx).await;
     }
 
+    // generate_image needs ctx to upload directly to cloud storage
+    if name == "generate_image" {
+        let result = execute_generate_image_with_state_claude(args, ctx).await;
+        return finalize_special_tool_result_value(name, args, result, ctx).await;
+    }
+
+    // submit_final_answer needs ctx to return cloud URLs instead of local hash URLs
+    if name == "submit_final_answer" {
+        let result = execute_submit_final_answer_with_state_claude(args, ctx).await;
+        return finalize_special_tool_result_value(name, args, result, ctx).await;
+    }
+
     // auto_generate_video needs ctx for BlenderMCPClient (video_source param)
     if name == "auto_generate_video" {
         let result = execute_auto_generate_video_with_state_claude(args, ctx).await;
@@ -780,17 +826,30 @@ async fn execute_tool_claude_with_context_inner(
         return finalize_special_tool_result_value(name, args, result, ctx).await;
     }
 
+    // pexels_download_video and pexels_download_photo with cloud upload (Claude)
+    if name == "pexels_download_video" {
+        let result = execute_pexels_download_video_claude(args).await;
+        if !result.starts_with("❌") && !result.starts_with("Error") {
+            if let Some(output_path) = extract_output_path_from_args(args) {
+                upload_pexels_download_to_cloud(&output_path, ctx).await;
+                persist_tool_output(name, &output_path, serde_json::to_string(args).ok(), &result, ctx).await;
+            }
+        }
+        return result;
+    }
+    if name == "pexels_download_photo" {
+        let result = execute_pexels_download_photo_claude(args).await;
+        if !result.starts_with("❌") && !result.starts_with("Error") {
+            if let Some(output_path) = extract_output_path_from_args(args) {
+                upload_pexels_download_to_cloud(&output_path, ctx).await;
+                persist_tool_output(name, &output_path, serde_json::to_string(args).ok(), &result, ctx).await;
+            }
+        }
+        return result;
+    }
+
     // Execute the tool first
     let result = execute_tool_claude(name, args).await;
-
-    // Auto-vectorize downloaded stock videos from Pexels
-    if name == "pexels_download_video" && !result.starts_with("❌") {
-        if let Some(_output_path) = extract_output_path_from_args(args) {
-            // Background vectorization temporarily disabled due to lifetime constraints
-            // Vectorization will happen on-demand when video is accessed
-            tracing::debug!("Stock video download successful, vectorization deferred");
-        }
-    }
 
     // If tool succeeded and created an output file, save it to DB
     if !result.starts_with("❌") && !result.starts_with("Error") {
@@ -982,6 +1041,18 @@ async fn execute_tool_gemini_with_context_inner(
         }
     }
 
+    // generate_image needs ctx to upload directly to cloud storage
+    if name == "generate_image" {
+        let result = execute_generate_image_with_state_gemini(args, ctx).await;
+        return finalize_special_tool_result_gemini(name, args, result, ctx).await;
+    }
+
+    // submit_final_answer needs ctx to return cloud URLs instead of local hash URLs
+    if name == "submit_final_answer" {
+        let result = execute_submit_final_answer_with_state_gemini(args, ctx).await;
+        return finalize_special_tool_result_gemini(name, args, result, ctx).await;
+    }
+
     // auto_generate_video needs ctx for BlenderMCPClient (video_source param)
     if name == "auto_generate_video" {
         let result = execute_auto_generate_video_with_state_gemini(args, ctx).await;
@@ -1005,17 +1076,30 @@ async fn execute_tool_gemini_with_context_inner(
         return execute_search_youtube_channels_with_state_gemini(args, ctx).await;
     }
 
+    // pexels_download_video and pexels_download_photo with cloud upload
+    if name == "pexels_download_video" {
+        let result = execute_pexels_download_video_gemini(args).await;
+        if !result.starts_with("❌") && !result.starts_with("Error") {
+            if let Some(output_path) = extract_output_path_from_gemini_args(args) {
+                upload_pexels_download_to_cloud(&output_path, ctx).await;
+                persist_tool_output(name, &output_path, serde_json::to_string(args).ok(), &result, ctx).await;
+            }
+        }
+        return result;
+    }
+    if name == "pexels_download_photo" {
+        let result = execute_pexels_download_photo_gemini(args).await;
+        if !result.starts_with("❌") && !result.starts_with("Error") {
+            if let Some(output_path) = extract_output_path_from_gemini_args(args) {
+                upload_pexels_download_to_cloud(&output_path, ctx).await;
+                persist_tool_output(name, &output_path, serde_json::to_string(args).ok(), &result, ctx).await;
+            }
+        }
+        return result;
+    }
+
     // Execute the tool first
     let result = execute_tool_gemini(name, args).await;
-
-    // Auto-vectorize downloaded stock videos from Pexels
-    if name == "pexels_download_video" && !result.starts_with("❌") {
-        if let Some(_output_path) = extract_output_path_from_gemini_args(args) {
-            // Background vectorization temporarily disabled due to lifetime constraints
-            // Vectorization will happen on-demand when video is accessed
-            tracing::debug!("Stock video download successful, vectorization deferred");
-        }
-    }
 
     // If tool succeeded and created an output file, save it to DB
     if !result.starts_with("❌") && !result.starts_with("Error") {
@@ -3721,6 +3805,165 @@ fn execute_create_blank_video_gemini(args: &HashMap<String, Value>) -> String {
     crate::utils::create_blank_video(output, duration, width, height, color).unwrap_or_else(|e| e)
 }
 
+async fn execute_submit_final_answer_with_state_gemini(
+    args: &HashMap<String, Value>,
+    ctx: &ToolExecutionContext,
+) -> String {
+    let summary = args
+        .get("summary")
+        .and_then(|v| v.as_str())
+        .unwrap_or("Task completed");
+    let output_files = args
+        .get("output_files")
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>())
+        .unwrap_or_default();
+
+    let mut response = format!("✅ {}\n\n", summary);
+
+    if !output_files.is_empty() {
+        tracing::info!(
+            output_count = output_files.len(),
+            summary = %summary,
+            "submit_final_answer emitted output artifacts (Gemini, cloud-aware)"
+        );
+        response.push_str("📥 **Your edited videos are ready!**\n\n");
+        for file_path in output_files {
+            let file_name = std::path::Path::new(file_path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("video.mp4");
+
+            // Try to get a cloud URL — upload the file if it exists locally
+            let cloud_url = if std::path::Path::new(file_path).exists() {
+                let content_type = if file_name.ends_with(".mp4") || file_name.ends_with(".webm") {
+                    "video/mp4"
+                } else if file_name.ends_with(".png") {
+                    "image/png"
+                } else if file_name.ends_with(".jpg") || file_name.ends_with(".jpeg") {
+                    "image/jpeg"
+                } else if file_name.ends_with(".mp3") {
+                    "audio/mpeg"
+                } else {
+                    "application/octet-stream"
+                };
+                match crate::cloud_storage::upload_local_file_to_cloud(
+                    file_path,
+                    content_type,
+                    ctx.user_id.unwrap_or(0),
+                    &ctx.session_id,
+                    ctx.workflow_id,
+                    &ctx.app_state,
+                )
+                .await
+                {
+                    Ok(url) => Some(url),
+                    Err(e) => {
+                        tracing::warn!("Failed to upload {} to cloud: {}", file_path, e);
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+
+            response.push_str(&format!("**{}**\n", file_name));
+            if let Some(url) = cloud_url {
+                response.push_str(&format!("Download: {}\n\n", url));
+            } else {
+                // Fallback to local hash URL if cloud upload failed
+                let file_id = generate_file_id_from_path(file_path);
+                response.push_str(&format!("Download: `/api/outputs/download/{}`\n", file_id));
+                response.push_str(&format!("Stream: `/api/outputs/stream/{}`\n\n", file_id));
+            }
+        }
+    } else {
+        tracing::warn!(
+            summary = %summary,
+            "submit_final_answer returned without output artifacts (Gemini, cloud-aware)"
+        );
+    }
+
+    response
+}
+
+async fn execute_submit_final_answer_with_state_claude(
+    args: &Value,
+    ctx: &ToolExecutionContext,
+) -> String {
+    let summary = args["summary"]
+        .as_str()
+        .unwrap_or("Task completed");
+    let output_files = args["output_files"]
+        .as_array()
+        .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>())
+        .unwrap_or_default();
+
+    let mut response = format!("✅ {}\n\n", summary);
+
+    if !output_files.is_empty() {
+        tracing::info!(
+            output_count = output_files.len(),
+            summary = %summary,
+            "submit_final_answer emitted output artifacts (Claude, cloud-aware)"
+        );
+        response.push_str("📥 **Your edited videos are ready!**\n\n");
+        for file_path in output_files {
+            let file_name = std::path::Path::new(file_path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("video.mp4");
+
+            let cloud_url = if std::path::Path::new(file_path).exists() {
+                let content_type = if file_name.ends_with(".mp4") || file_name.ends_with(".webm") {
+                    "video/mp4"
+                } else if file_name.ends_with(".png") {
+                    "image/png"
+                } else if file_name.ends_with(".jpg") || file_name.ends_with(".jpeg") {
+                    "image/jpeg"
+                } else if file_name.ends_with(".mp3") {
+                    "audio/mpeg"
+                } else {
+                    "application/octet-stream"
+                };
+                match crate::cloud_storage::upload_local_file_to_cloud(
+                    file_path,
+                    content_type,
+                    ctx.user_id.unwrap_or(0),
+                    &ctx.session_id,
+                    ctx.workflow_id,
+                    &ctx.app_state,
+                )
+                .await
+                {
+                    Ok(url) => Some(url),
+                    Err(e) => {
+                        tracing::warn!("Failed to upload {} to cloud: {}", file_path, e);
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+
+            response.push_str(&format!("**{}**\n", file_name));
+            if let Some(url) = cloud_url {
+                response.push_str(&format!("Download: {}\n\n", url));
+            } else {
+                let file_id = generate_file_id_from_path(file_path);
+                response.push_str(&format!("Download: `/api/outputs/download/{}`\n\n", file_id));
+            }
+        }
+    } else {
+        tracing::warn!(
+            summary = %summary,
+            "submit_final_answer returned without output artifacts (Claude, cloud-aware)"
+        );
+    }
+
+    response
+}
+
 fn execute_submit_final_answer_gemini(args: &HashMap<String, Value>) -> String {
     let summary = args
         .get("summary")
@@ -3772,6 +4015,157 @@ fn execute_submit_final_answer_gemini(args: &HashMap<String, Value>) -> String {
 // ============================================================================
 // NEW TOOLS: IMAGE GENERATION & VIDEO ORCHESTRATION
 // ============================================================================
+
+/// Generate image and upload directly to cloud storage (Gemini version, with ctx)
+async fn execute_generate_image_with_state_gemini(
+    args: &HashMap<String, Value>,
+    ctx: &ToolExecutionContext,
+) -> String {
+    let prompt = args.get("prompt").and_then(|v| v.as_str()).unwrap_or("");
+    let output_file_raw = args
+        .get("output_file")
+        .and_then(|v| v.as_str())
+        .unwrap_or("generated_image.png");
+    let aspect_ratio = args.get("aspect_ratio").and_then(|v| v.as_str());
+    let image_size = args.get("image_size").and_then(|v| v.as_str());
+    let model = args.get("model").and_then(|v| v.as_str());
+
+    if prompt.is_empty() {
+        return "❌ Error: prompt is required".to_string();
+    }
+
+    let api_key = std::env::var("VIDEO_GEMINI_API_KEY").unwrap_or_else(|_| {
+        std::env::var("GEMINI_API_KEY")
+            .unwrap_or_else(|_| std::env::var("GOOGLE_API_KEY").unwrap_or_default())
+    });
+
+    if api_key.is_empty() {
+        return "❌ Error: GEMINI_API_KEY or GOOGLE_API_KEY environment variable not set"
+            .to_string();
+    }
+
+    let client = crate::gemini_client::GeminiClient::new(api_key);
+
+    match client
+        .generate_image(prompt, aspect_ratio, image_size, model)
+        .await
+    {
+        Ok(image_bytes) => {
+            let file_name = std::path::Path::new(output_file_raw)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("generated_image.png");
+            let object_key = format!(
+                "generated/{}/images/{}",
+                ctx.user_id.unwrap_or(0),
+                file_name
+            );
+            let content_type = if file_name.ends_with(".png") {
+                "image/png"
+            } else if file_name.ends_with(".jpg") || file_name.ends_with(".jpeg") {
+                "image/jpeg"
+            } else if file_name.ends_with(".webp") {
+                "image/webp"
+            } else {
+                "image/png"
+            };
+
+            match crate::cloud_storage::upload_bytes_to_cloud(
+                image_bytes,
+                &object_key,
+                content_type,
+                ctx.user_id.unwrap_or(0),
+                &ctx.session_id,
+                ctx.workflow_id,
+                &ctx.app_state,
+            )
+            .await
+            {
+                Ok(url) => format!(
+                    "✅ Successfully generated image and uploaded to cloud: {}\nDownload: {}",
+                    file_name, url
+                ),
+                Err(e) => format!("✅ Image generated but cloud upload failed: {}", e),
+            }
+        }
+        Err(e) => format!("❌ Failed to generate image: {}", e),
+    }
+}
+
+/// Generate image and upload directly to cloud storage (Claude version, with ctx)
+async fn execute_generate_image_with_state_claude(
+    args: &Value,
+    ctx: &ToolExecutionContext,
+) -> String {
+    let prompt = args["prompt"].as_str().unwrap_or("");
+    let output_file_raw = args["output_file"]
+        .as_str()
+        .unwrap_or("generated_image.png");
+    let aspect_ratio = args.get("aspect_ratio").and_then(|v| v.as_str());
+    let image_size = args.get("image_size").and_then(|v| v.as_str());
+    let model = args.get("model").and_then(|v| v.as_str());
+
+    if prompt.is_empty() {
+        return "❌ Error: prompt and output_file are required".to_string();
+    }
+
+    let api_key = std::env::var("VIDEO_GEMINI_API_KEY").unwrap_or_else(|_| {
+        std::env::var("GEMINI_API_KEY")
+            .unwrap_or_else(|_| std::env::var("GOOGLE_API_KEY").unwrap_or_default())
+    });
+
+    if api_key.is_empty() {
+        return "❌ Error: GEMINI_API_KEY or GOOGLE_API_KEY environment variable not set"
+            .to_string();
+    }
+
+    let client = crate::gemini_client::GeminiClient::new(api_key);
+
+    match client
+        .generate_image(prompt, aspect_ratio, image_size, model)
+        .await
+    {
+        Ok(image_bytes) => {
+            let file_name = std::path::Path::new(output_file_raw)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("generated_image.png");
+            let object_key = format!(
+                "generated/{}/images/{}",
+                ctx.user_id.unwrap_or(0),
+                file_name
+            );
+            let content_type = if file_name.ends_with(".png") {
+                "image/png"
+            } else if file_name.ends_with(".jpg") || file_name.ends_with(".jpeg") {
+                "image/jpeg"
+            } else if file_name.ends_with(".webp") {
+                "image/webp"
+            } else {
+                "image/png"
+            };
+
+            match crate::cloud_storage::upload_bytes_to_cloud(
+                image_bytes,
+                &object_key,
+                content_type,
+                ctx.user_id.unwrap_or(0),
+                &ctx.session_id,
+                ctx.workflow_id,
+                &ctx.app_state,
+            )
+            .await
+            {
+                Ok(url) => format!(
+                    "✅ Successfully generated image and uploaded to cloud: {}\nDownload: {}",
+                    file_name, url
+                ),
+                Err(e) => format!("✅ Image generated but cloud upload failed: {}", e),
+            }
+        }
+        Err(e) => format!("❌ Failed to generate image: {}", e),
+    }
+}
 
 /// Generate image using Nano Banana Pro (Claude version)
 async fn execute_generate_image_claude(args: &Value) -> String {
@@ -4110,11 +4504,50 @@ async fn dispatch_auto_generate_video_gemini(
         video_source
     };
 
-    match effective_source {
+    let result = match effective_source {
         "blender" => execute_auto_generate_video_blender_gemini(args, ctx).await,
         "hybrid" => execute_auto_generate_video_hybrid_gemini(args, ctx).await,
         _ => execute_auto_generate_video_gemini(args).await,
+    };
+
+    // Upload generated video to cloud storage if successful
+    if !result.starts_with("❌") && !result.starts_with("Error") {
+        let output_file = args
+            .get("output_file")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if !output_file.is_empty() && std::path::Path::new(output_file).exists() {
+            let file_name = std::path::Path::new(output_file)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("video.mp4");
+            match crate::cloud_storage::upload_local_file_to_cloud(
+                output_file,
+                "video/mp4",
+                ctx.user_id.unwrap_or(0),
+                &ctx.session_id,
+                ctx.workflow_id,
+                &ctx.app_state,
+            )
+            .await
+            {
+                Ok(url) => {
+                    tracing::info!("auto_generate_video: uploaded to cloud → {url}");
+                    // Replace local path in result with cloud URL
+                    let updated = result.replace(
+                        &format!("📥 Output: {}", output_file),
+                        &format!("📥 Output: {url}"),
+                    );
+                    return updated;
+                }
+                Err(e) => {
+                    tracing::warn!("auto_generate_video: cloud upload failed: {e}");
+                }
+            }
+        }
     }
+
+    result
 }
 
 async fn execute_auto_generate_video_with_state_gemini_retrying(
@@ -4205,11 +4638,45 @@ async fn dispatch_auto_generate_video_claude(args: &Value, ctx: &ToolExecutionCo
         video_source
     };
 
-    match effective_source {
+    let result = match effective_source {
         "blender" => execute_auto_generate_video_blender_claude(args, ctx).await,
         "hybrid" => execute_auto_generate_video_hybrid_claude(args, ctx).await,
         _ => execute_auto_generate_video_claude(args).await,
+    };
+
+    // Upload generated video to cloud storage if successful
+    if !result.starts_with("❌") && !result.starts_with("Error") {
+        let output_file = args
+            .get("output_file")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if !output_file.is_empty() && std::path::Path::new(output_file).exists() {
+            match crate::cloud_storage::upload_local_file_to_cloud(
+                output_file,
+                "video/mp4",
+                ctx.user_id.unwrap_or(0),
+                &ctx.session_id,
+                ctx.workflow_id,
+                &ctx.app_state,
+            )
+            .await
+            {
+                Ok(url) => {
+                    tracing::info!("auto_generate_video (Claude): uploaded to cloud → {url}");
+                    let updated = result.replace(
+                        &format!("📥 Output: {}", output_file),
+                        &format!("📥 Output: {url}"),
+                    );
+                    return updated;
+                }
+                Err(e) => {
+                    tracing::warn!("auto_generate_video (Claude): cloud upload failed: {e}");
+                }
+            }
+        }
     }
+
+    result
 }
 
 async fn execute_auto_generate_video_with_state_claude_retrying(
