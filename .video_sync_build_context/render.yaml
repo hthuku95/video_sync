@@ -1,0 +1,138 @@
+services:
+  - type: web
+    name: videosync-vibevoice
+    runtime: docker
+    dockerfilePath: VibeVoiceService/Dockerfile
+    rootDir: VideoSyncIntegrations
+    dockerContext: .
+    region: oregon
+    plan: standard
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: PORT
+        value: 8015
+      - key: VIBEVOICE_OUTPUT_DIR
+        value: /tmp/videosync-vibevoice
+      - key: VIBEVOICE_TTS_MODEL
+        value: microsoft/VibeVoice-Realtime-0.5B
+      - key: VIBEVOICE_ASR_MODEL
+        value: microsoft/VibeVoice-ASR-7B
+  - type: web
+    name: video_sync
+    runtime: rust
+    buildCommand: pip3 install --upgrade yt-dlp && cargo build --release
+    startCommand: ./target/release/video_editor
+    region: oregon
+    plan: standard
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: PORT
+        value: 3000
+      - key: RUST_LOG
+        value: info
+      - key: FRONTEND_URL
+        value: https://cmachine.devthuku.io
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: GOOGLE_OAUTH_CLIENT_ID
+        sync: false
+      - key: GOOGLE_OAUTH_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_OAUTH_REDIRECT_URI
+        value: https://www.videosync.video/api/auth/google
+      - key: GOOGLE_OAUTH_REDIRECT_URI_AUTH
+        value: https://www.videosync.video/api/auth/google/callback
+      - key: ALLOWED_REDIRECT_ORIGINS
+        sync: false
+      - key: YOUTUBE_API_KEY
+        sync: false
+      - key: GOOGLE_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: MANUAL_CLIPPING_GEMINI_API_KEY
+        sync: false
+      - key: VIDEO_GEMINI_API_KEY
+        sync: false
+      - key: GEMMA_API_KEY
+        sync: false
+      - key: NVIDIA_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: ELEVEN_LABS_API_KEY
+        sync: false
+      - key: PEXELS_API_KEY
+        sync: false
+      - key: VOYAGEAI_API_KEY
+        sync: false
+      - key: APIFY_TOKEN
+        sync: false
+      - key: APIFY_YOUTUBE_CLIENT_ACTOR
+        sync: false
+      - key: APIFY_CIRCUIT_BREAKER_FAILURE_THRESHOLD
+        value: 5
+      - key: APIFY_CIRCUIT_BREAKER_SUCCESS_THRESHOLD
+        value: 2
+      - key: APIFY_CIRCUIT_BREAKER_TIMEOUT_SECONDS
+        value: 300
+      - key: TWITCH_TV_CLIENT_ID
+        sync: false
+      - key: TWITCH_TV_CLIENT_SECRET
+        sync: false
+      - key: QDRANT_URL
+        sync: false
+      - key: QDRANT_API_KEY
+        sync: false
+      - key: ASTRA_DB_API_ENDPOINT
+        sync: false
+      - key: ASTRA_DB_APPLICATION_TOKEN
+        sync: false
+      - key: R2_ACCOUNT_ID
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_BUCKET
+        sync: false
+      - key: R2_ENDPOINT
+        sync: false
+      - key: BLENDER_MCP_URL
+        sync: false
+      - key: BLENDER_MCP_API_KEY
+        sync: false
+      - key: YTDLP_API_URL
+        sync: false
+      - key: YTDLP_PROXY
+        sync: false
+      - key: YTDLP_COOKIES_B64
+        sync: false
+      - key: WEBSHARE_YTDLAPI_API_KEY
+        sync: false
+      - key: WEBSHARE_DOWNLOAD_LINK
+        sync: false
+      - key: DATABASE_MAX_CONNECTIONS
+        value: 20
+      - key: CLIPPING_WORKER_CONCURRENCY
+        value: 3
+      - key: CLIPPING_WORKER_POLL_INTERVAL
+        value: 30
+      - key: DOWNLOAD_SEMAPHORE_PERMITS
+        value: 2
+      - key: VECTORIZATION_TIMEOUT_SECONDS
+        value: 3600
+      - key: FRAME_ANALYSIS_TIMEOUT_SECONDS
+        value: 30
+      - key: FRAME_ANALYSIS_CONCURRENCY
+        value: 3
+      - key: MAX_FRAMES_PER_VIDEO
+        value: 100
+      - key: TEST_ADMIN_EMAIL
+        value: testadmin@videosync.test
+      - key: TEST_ADMIN_PASSWORD
+        sync: false

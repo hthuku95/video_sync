@@ -547,6 +547,8 @@ impl StatefulGeminiAgent {
             tracing::info!("{}", msg);
         };
 
+        let mut last_submit_final_answer_result: Option<String> = None;
+
         send_progress("🧠 Loading the full production toolbelt for your request...");
         // Full-toolbelt mode: agents receive the full allowed video tool catalog by
         // default and choose the right tools themselves at runtime.
@@ -925,6 +927,11 @@ Your tool catalog includes: image generation, video generation, audio generation
                                                 |_| serde_json::json!({"result": tool_result}),
                                             );
 
+                                    if function_name == "submit_final_answer" {
+                                        last_submit_final_answer_result =
+                                            Some(tool_result.clone());
+                                    }
+
                                     function_results.push((
                                         function_name.clone(),
                                         result_value,
@@ -1242,6 +1249,14 @@ Your tool catalog includes: image generation, video generation, audio generation
             });
 
             // Continue loop - AI will process function results and respond naturally
+        }
+
+        // If submit_final_answer was called, use its result as final_response
+        // so output links are present for response_output_links to find
+        if let Some(submit_result) = &last_submit_final_answer_result {
+            if !submit_result.is_empty() {
+                final_response = submit_result.clone();
+            }
         }
 
         // Save assistant's final conversational response to history

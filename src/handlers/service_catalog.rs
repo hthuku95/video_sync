@@ -59,7 +59,7 @@ pub fn build_service_sample_prompt(
         .unwrap_or_default();
 
     format!(
-        "Service page request for {service_label}.\n{focus}\n{production_stack}\n{url_line}{contact_line}Project brief: {brief}\n\nDeliver a concrete, buyer-facing plan and then use the full production stack to generate the requested output."
+        "Service page request for {service_label}.\n{focus}\n{production_stack}\n{url_line}{contact_line}Project brief: {brief}\n\n## Generation Instructions\nNo source files are provided. You must generate everything from scratch:\n- For thumbnails/hero images: call `generate_image` with the brief description as the prompt and output_file=\"outputs/{service_slug}.png\"\n- For videos: call `auto_generate_video` with the brief as the topic\n- For audio: call `generate_text_to_speech` with the script or content\n- Do NOT ask for uploaded files. Do NOT report that no files exist. Just generate.\n- After generating, call `submit_final_answer` with the output file paths."
     )
 }
 

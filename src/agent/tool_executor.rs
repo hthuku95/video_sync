@@ -3867,12 +3867,13 @@ async fn execute_submit_final_answer_with_state_gemini(
                 None
             };
 
+            let file_id = generate_file_id_from_path(file_path);
             response.push_str(&format!("**{}**\n", file_name));
             if let Some(url) = cloud_url {
-                response.push_str(&format!("Download: {}\n\n", url));
+                response.push_str(&format!("Cloud URL: {}\n", url));
+                response.push_str(&format!("Download: `/api/outputs/download/{}`\n", file_id));
             } else {
                 // Fallback to local hash URL if cloud upload failed
-                let file_id = generate_file_id_from_path(file_path);
                 response.push_str(&format!("Download: `/api/outputs/download/{}`\n", file_id));
                 response.push_str(&format!("Stream: `/api/outputs/stream/{}`\n\n", file_id));
             }
@@ -3946,11 +3947,12 @@ async fn execute_submit_final_answer_with_state_claude(
                 None
             };
 
+            let file_id = generate_file_id_from_path(file_path);
             response.push_str(&format!("**{}**\n", file_name));
             if let Some(url) = cloud_url {
-                response.push_str(&format!("Download: {}\n\n", url));
+                response.push_str(&format!("Cloud URL: {}\n", url));
+                response.push_str(&format!("Download: `/api/outputs/download/{}`\n\n", file_id));
             } else {
-                let file_id = generate_file_id_from_path(file_path);
                 response.push_str(&format!("Download: `/api/outputs/download/{}`\n\n", file_id));
             }
         }

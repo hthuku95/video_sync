@@ -1,0 +1,11 @@
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - VibeVoiceService/Dockerfile
+      - -t
+      - us-central1-docker.pkg.dev/videosync-481307/videosync/videosync-vibevoice:latest
+      - .
+images:
+  - us-central1-docker.pkg.dev/videosync-481307/videosync/videosync-vibevoice:latest

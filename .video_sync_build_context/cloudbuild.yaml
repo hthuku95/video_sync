@@ -1,0 +1,15 @@
+steps:
+- name: 'gcr.io/cloud-builders/docker'
+  args:
+    - 'build'
+    - '-t'
+    - 'us-central1-docker.pkg.dev/$PROJECT_ID/videosync/video-sync:latest'
+    - '-t'
+    - 'us-central1-docker.pkg.dev/$PROJECT_ID/videosync/video-sync:$BUILD_ID'
+    - '--build-arg'
+    - 'CARGO_JOBS=1'
+    - '.'
+timeout: 5400s
+images:
+- 'us-central1-docker.pkg.dev/$PROJECT_ID/videosync/video-sync:latest'
+- 'us-central1-docker.pkg.dev/$PROJECT_ID/videosync/video-sync:$BUILD_ID'

@@ -29,6 +29,7 @@ impl StatefulClaudeAgent {
         job_manager: Arc<crate::jobs::JobManager>,
         progress_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
         _workflow_id: Option<uuid::Uuid>,
+        _user_message_rx: Option<tokio::sync::mpsc::UnboundedReceiver<String>>,
     ) -> Result<String, String> {
         // Helper to send progress updates
         let send_progress = |msg: &str| {
@@ -72,9 +73,9 @@ impl StatefulClaudeAgent {
             });
         }
 
-        // Add current user message with context
+        // Add current user message with context (context already contains user_request, avoid duplication)
         let current_message = if !context.is_empty() {
-            format!("{}\n\n{}", context, user_input)
+            context.to_string()
         } else {
             user_input.to_string()
         };
@@ -84,10 +85,13 @@ impl StatefulClaudeAgent {
             content: ClaudeContent::Text(current_message.clone()),
         });
 
-        let system_prompt = r#"You are an intelligent video editing assistant with the ability to manage background processing workflows.
+        let system_prompt = r#"You are a media generation engine. Your single job is to call tools to produce actual media files. Never give a plan, never confirm you understand — just call the tool.
 
-## Your Role
-You engage in natural conversation with users while coordinating video editing tasks. You have access to a background job system that handles complex video processing operations in parallel while you continue chatting.
+## How to Talk
+- Answer the user's question directly. Don't restate the task, the workflow, or what you're doing unless it's genuinely relevant.
+- No preambles like "I'm already on it!" or "Regarding your request..." or "The task is currently being processed."
+- If the user asks "how's it going?" just say "Almost done, just rendering the final frame" — not "The sample generation workflow is currently in the rendering phase."
+- Be brief. Be natural. Sound human.
 
 ## Available Tools
 
@@ -114,7 +118,6 @@ Trust your understanding of natural language to determine user intent:
 - Use the broader creative stack when helpful: clipping/enhancement, thumbnails, product mockups, education visuals, 3D scenes, voice/audio, mixed bundles, and delivery pages.
 - When a job is running, you remain available for conversation and can check its status
 - Only start new jobs for new work requests, not for status inquiries about existing work
-- Be helpful, conversational, and context-aware in all interactions
 - If the user's task is clearly defined, call `set_chat_title` early with a concise descriptive title
 - If tools created output files, finish with `submit_final_answer` so the user gets delivery/output links instead of internal file paths"#;
 
@@ -344,48 +347,22 @@ Trust your understanding of natural language to determine user intent:
                             let tool_result = if let Some(ref qdrant_client) =
                                 app_state.qdrant_client
                             {
-                                if let Some(ref voyage_embeddings) = app_state.voyage_embeddings {
-                                    match qdrant_client
-                                        .build_context_for_query_with_voyage(
-                                            query,
-                                            session_id,
-                                            voyage_embeddings,
-                                        )
-                                        .await
-                                    {
-                                        Ok(context) => {
-                                            if context.is_empty() {
-                                                "No relevant memories found".to_string()
-                                            } else {
-                                                context
-                                            }
-                                        }
-                                        Err(e) => format!("Error searching memory: {}", e),
-                                    }
-                                } else if let Some(ref gemini_client) = app_state
-                                    .video_gemini_client
-                                    .as_ref()
-                                    .or(app_state.gemini_client.as_ref())
+                                match qdrant_client
+                                    .build_context_for_query(
+                                        query,
+                                        session_id,
+                                        app_state.voyage_embeddings.as_ref(),
+                                        app_state.video_gemini_client.as_ref().or(app_state.gemini_client.as_ref()),
+                                    )
+                                    .await
                                 {
-                                    match qdrant_client
-                                        .build_context_for_query_with_gemini(
-                                            query,
-                                            session_id,
-                                            gemini_client,
-                                        )
-                                        .await
-                                    {
-                                        Ok(context) => {
-                                            if context.is_empty() {
-                                                "No relevant memories found".to_string()
-                                            } else {
-                                                context
-                                            }
-                                        }
-                                        Err(e) => format!("Error searching memory: {}", e),
+                                    Ok(Some(context)) => {
+                                        context
                                     }
-                                } else {
-                                    "Memory search unavailable - no embedding client".to_string()
+                                    Ok(None) => {
+                                        "Memory search unavailable - no embedding client".to_string()
+                                    }
+                                    Err(e) => format!("Error searching memory: {}", e),
                                 }
                             } else {
                                 "Memory search unavailable - Qdrant not configured".to_string()
@@ -558,6 +535,7 @@ impl StatefulGeminiAgent {
         job_manager: Arc<crate::jobs::JobManager>,
         progress_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
         workflow_id: Option<uuid::Uuid>,
+        mut user_message_rx: Option<tokio::sync::mpsc::UnboundedReceiver<String>>,
     ) -> Result<String, String> {
         // Helper to send progress updates
         let send_progress = |msg: &str| {
@@ -602,80 +580,66 @@ impl StatefulGeminiAgent {
             .await
             .unwrap_or_default();
 
-        let system_instruction = r#"You are an intelligent video editing assistant with DIRECT access to the full VideoSync creative tool registry.
+        let system_instruction = r#"You are a media generation engine. Your single job is to call tools to produce actual media files. Never give a plan, never confirm you understand — just call the tool.
 
-## Your Capabilities
+## CRITICAL RULE: CALL TOOLS IMMEDIATELY
+When the user asks you to CREATE, GENERATE, PRODUCE, MAKE, BUILD, RENDER, or EDIT media (video, thumbnail, clip, demo, image, ad, animation, scene, sample, narration), you MUST call the appropriate generation tool on your very first response. Do NOT respond with text saying what you will do. Call the tool NOW.
 
-### Direct Tool Access (You Can Use These Immediately!)
-You now have immediate access to the production toolbelt in conversations, including the 320+ FFmpeg/editing capabilities and the newer generation/review/delivery workflows:
+Wrong: "I'll generate that video for you right away!"
+Right: Call auto_generate_video() directly
 
-**Core Editing:** trim_video, merge_videos, split_video, crop_video, rotate_video, flip_video, resize_video, scale_video, stabilize_video
+Wrong: "Let me create a thumbnail for your video."
+Right: Call create_thumbnail() directly
 
-**Visual Effects:** add_text_overlay, add_overlay, apply_filter, adjust_color, picture_in_picture, chroma_key, split_screen, add_subtitles, create_thumbnail
+Wrong: "Here's my plan for the sample..."
+Right: Call generate_image(), create_thumbnail(), or auto_generate_video() directly
+
+## How to Talk
+- Answer the user's question directly. Don't restate the task or what you're doing.
+- No preambles. No "I'm already on it!" No "Regarding your request..."
+- Be brief. Be natural. Sound human.
+- After you finish generating, call submit_final_answer with the summary and output file paths.
+
+## Available Tools Summary
+
+**Generation (call these FIRST):** create_thumbnail, generate_image, auto_generate_video, generate_long_form_video, generate_text_to_speech, generate_sound_effect, generate_music, generate_video_script
+
+**Editing:** trim_video, merge_videos, split_video, crop_video, rotate_video, flip_video, resize_video, scale_video, stabilize_video
+
+**Visual Effects:** add_text_overlay, add_overlay, apply_filter, adjust_color, picture_in_picture, chroma_key, split_screen, add_subtitles
 
 **Audio:** add_audio, extract_audio, adjust_volume, fade_audio
 
-**AI Generation:** generate_text_to_speech, generate_sound_effect, generate_music, generate_image, generate_video_script, auto_generate_video, generate_long_form_video
-
-**Creative Rendering:** Blender scene generation, Manim/LaTeX educational visuals, product mockups, thumbnails, VibeVoice narration, and mixed delivery bundles.
-
-**Stock Media:** pexels_search, pexels_download_video, pexels_download_photo, pexels_get_trending, pexels_get_curated
+**Stock Media:** pexels_search, pexels_download_video, pexels_download_photo
 
 **Analysis:** view_video, analyze_video, review_video, extract_frames
 
-**YouTube:** optimize_youtube_metadata, analyze_youtube_performance, get_youtube_trends
+**Session:** set_chat_title, submit_final_answer
 
-**Export:** optimize_for_platform (YouTube, Instagram, TikTok, etc.)
-
-**Session & Completion:** set_chat_title, submit_final_answer
-
-### Background Job System (Still Available)
-For complex multi-step workflows that benefit from parallel execution:
-- Use `start_background_job` to spawn a dedicated agent for complex operations
-- Monitor with `check_job_status`
-- Long-form videos are valid requests. Use durable segmented workflows for long videos so the system can checkpoint, retry, assemble, review, and expose delivery/download links.
-
-### Memory
-- Use `search_memory` to find relevant past discussions and video editing tasks
-
-## Decision-Making Guidelines
-
-**Use tools DIRECTLY for:**
-- Single operations: "trim this video from 0:10 to 0:30"
-- Quick edits: "add text overlay saying Hello"
-- Analysis: "what's in this video?"
-- Simple generation: "generate background music" or "create a 10 second video about coffee"
-- Stock media: "search for sunset videos on Pexels"
-- Most user requests can and should be handled with direct tools!
-
-**Use background jobs ONLY for:**
-- Complex multi-step workflows: "create a full 5-scene ad from scratch with custom music for each scene"
-- Long-running batch operations: "process all videos in this folder"
-- Parallel tasks that benefit from async execution
-
-**Respond conversationally for:**
-- Greetings, questions, clarifications, general discussion
+## Workflow
+1. READ the request carefully
+2. CALL the appropriate generation/editing tool immediately
+3. After the tool returns, check the result
+4. If more work is needed, call another tool
+5. When all work is complete, call submit_final_answer with the output files
 
 ## Important Principles
-- You can now see and use video tools directly - no need to delegate everything to background jobs!
-- Direct tool execution is FASTER for simple operations
-- Background jobs are still useful for complex workflows
-- Be helpful, conversational, and context-aware
-- When users ask "Can you generate a video?" the answer is YES - you have auto_generate_video and all the stock media tools!
-- When the request is clearly defined, call `set_chat_title` early with a concise descriptive title
-- When you create or modify output files, end with `submit_final_answer` and include every generated output file path
-- Do not stop at a plan when the user requested an actual generated deliverable."#;
+- Direct tool execution is FASTER than background jobs — use tools directly
+- Use start_background_job only for multi-step workflows spanning 5+ operations
+- Call `set_chat_title` early with a concise descriptive title
+- When you create output files, end with `submit_final_answer` and include every generated output file path
+- Do NOT stop at a plan — actually generate the deliverable the user asked for"#;
 
         // Build contents array with conversation history
         let mut contents = Vec::new();
 
-        // Add system instruction as first model message (Gemini pattern)
-        contents.push(crate::gemini_client::Content {
+        // System instruction is passed via the system_instruction field in the request (not as a content message)
+        let system_instruction_content = crate::gemini_client::Content {
             parts: vec![crate::gemini_client::Part::Text {
                 text: system_instruction.to_string(),
             }],
-            role: Some("model".to_string()),
-        });
+            role: None,
+        };
 
         // Add conversation history
         for msg in &conversation_history {
@@ -693,9 +657,9 @@ For complex multi-step workflows that benefit from parallel execution:
             });
         }
 
-        // Add current user message with context
+        // Add current user message with context (context already contains user_request, avoid duplication)
         let current_message = if !context.is_empty() {
-            format!("{}\n\n{}", context, user_input)
+            context.to_string()
         } else {
             user_input.to_string()
         };
@@ -715,71 +679,7 @@ For complex multi-step workflows that benefit from parallel execution:
             Err(e) => tracing::error!("❌ Failed to save user message: {}", e),
         }
 
-        // ── Gemma 4 via NVIDIA NIM (preferred — reduces load on Gemini quota) ──
-        // NVIDIA NIM uses the same OpenAI-compatible API as for text generation,
-        // just with the `tools` parameter added. Gemma 4 has NATIVE function calling
-        // via special tokens, so no prompt-engineering tricks needed.
-        // Falls back to Gemini below if NIM is unavailable or returns an error.
-        if let Some(ref nim_client) = app_state.nvidia_nim_client {
-            send_progress("🤖 Processing your message with Gemma 4...");
-
-            // Build OpenAI-format messages from the same conversation data
-            let mut nim_messages: Vec<serde_json::Value> =
-                vec![serde_json::json!({"role": "system", "content": system_instruction})];
-            for msg in &conversation_history {
-                let role = match msg.role {
-                    crate::agent::conversation_manager::MessageRole::Human => "user",
-                    crate::agent::conversation_manager::MessageRole::Assistant => "assistant",
-                    _ => continue,
-                };
-                nim_messages.push(serde_json::json!({"role": role, "content": msg.content}));
-            }
-            // Add current user message (with any extra context prepended)
-            let current_message = if !context.is_empty() {
-                format!("{}\n\n{}", context, user_input)
-            } else {
-                user_input.to_string()
-            };
-            nim_messages.push(serde_json::json!({"role": "user", "content": current_message}));
-
-            let exec_context = crate::agent::tool_executor::ToolExecutionContext {
-                session_id: session_id.to_string(),
-                user_id: None,
-                app_state: app_state.clone(),
-                workflow_id,
-            };
-
-            let nim_result = run_nim_tool_loop(
-                nim_client,
-                &mut nim_messages,
-                &all_tools,
-                &exec_context,
-                &send_progress,
-            )
-            .await;
-
-            match nim_result {
-                Ok(response) if !response.is_empty() => {
-                    // Save assistant response and return
-                    let assistant_msg = ConversationMessage::new_assistant(
-                        session_id.to_string(),
-                        response.clone(),
-                    );
-                    let _ = conversation_manager.save_message(&assistant_msg).await;
-                    tracing::info!("✅ Gemma 4 (NIM) completed task for session {}", session_id);
-                    return Ok(response);
-                }
-                Ok(_) => {
-                    tracing::warn!(
-                        "⚠️ Gemma 4 (NIM) returned empty response — falling back to Gemini"
-                    );
-                }
-                Err(e) => {
-                    tracing::warn!("⚠️ Gemma 4 (NIM) failed: {} — falling back to Gemini", e);
-                }
-            }
-        }
-        // ── Gemini fallback ───────────────────────────────────────────────────
+        // ── Gemini primary agent ─────────────────────────────────────────────
 
         let mut final_response = String::new();
         let mut conversation_contents = contents;
@@ -792,6 +692,73 @@ For complex multi-step workflows that benefit from parallel execution:
                 is_first_call = false;
             }
 
+            // 🆕 INTERACTIVE: Check for user follow-up messages between tool calls
+            if let Some(ref mut rx) = user_message_rx {
+                while let Ok(followup) = rx.try_recv() {
+                    tracing::info!("📨 Agent received follow-up message mid-work: session={}", session_id);
+                    send_progress("💬 Received your follow-up while working...");
+
+                    // Save user message to conversation history
+                    let user_msg = ConversationMessage::new_human(
+                        session_id.to_string(),
+                        followup.clone(),
+                    );
+                    let _ = conversation_manager.save_message(&user_msg).await;
+
+                    // Append to conversation history for the LLM
+                    conversation_contents.push(crate::gemini_client::Content {
+                        parts: vec![crate::gemini_client::Part::Text {
+                            text: followup,
+                        }],
+                        role: Some("user".to_string()),
+                    });
+
+                    // Call Gemini for a quick conversational response
+                    let quick_req = crate::gemini_client::GenerateContentRequest {
+                        contents: conversation_contents.clone(),
+                        tools: Some(vec![crate::gemini_client::Tool {
+                            function_declarations: all_tools.clone(),
+                        }]),
+                        generation_config: Some(crate::gemini_client::GenerationConfig {
+                            temperature: 0.7,
+                            top_k: 40,
+                            top_p: 0.9,
+                            max_output_tokens: 1024,
+                        }),
+                        tool_config: None,
+                        system_instruction: Some(system_instruction_content.clone()),
+                    };
+                    let response = self.client.generate_content(quick_req).await;
+
+                    if let Ok(response) = response {
+                        if let Some(candidate) = response.candidates.first() {
+                            if let Some(content) = &candidate.content {
+                                if let Some(text) = content.parts.first() {
+                                    if let crate::gemini_client::Part::Text { text } = text {
+                                        let reply = text.clone();
+                                        // Save assistant response
+                                        let assistant_msg = ConversationMessage::new_assistant(
+                                            session_id.to_string(),
+                                            reply.clone(),
+                                        );
+                                        let _ = conversation_manager.save_message(&assistant_msg).await;
+                                        // Push to conversation history
+                                        conversation_contents.push(crate::gemini_client::Content {
+                                            parts: vec![crate::gemini_client::Part::Text {
+                                                text: reply.clone(),
+                                            }],
+                                            role: Some("model".to_string()),
+                                        });
+                                        // Send to WebSocket via progress channel
+                                        send_progress(&format!("💬 {}", reply));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             let request = crate::gemini_client::GenerateContentRequest {
                 contents: conversation_contents.clone(),
                 tools: Some(vec![crate::gemini_client::Tool {
@@ -801,21 +768,82 @@ For complex multi-step workflows that benefit from parallel execution:
                     temperature: 0.5,
                     top_k: 40,
                     top_p: 0.9,
-                    max_output_tokens: 2048,
+                    max_output_tokens: 8192,
                 }),
                 tool_config: Some(crate::gemini_client::ToolConfig {
                     function_calling_config: crate::gemini_client::FunctionCallingConfig {
                         mode: crate::gemini_client::FunctionCallingMode::Auto, // Auto: Let Gemini decide - respond naturally OR call tools
                     },
                 }),
-                system_instruction: None,
+                system_instruction: Some(system_instruction_content.clone()),
             };
 
-            let response = self
-                .client
-                .generate_content(request)
-                .await
-                .map_err(|e| format!("Gemini API Error: {}", e))?;
+            let response = match self.client.generate_content(request).await {
+                Ok(r) => r,
+                Err(gemini_err) => {
+                    tracing::warn!("⚠️ Gemini failed, trying DeepSeek fallback: {}", gemini_err);
+                    // Build OpenAI-format messages from conversation history
+                    let mut ds_messages: Vec<serde_json::Value> = vec![
+                        serde_json::json!({"role": "system", "content": system_instruction})
+                    ];
+                    for msg in &conversation_history {
+                        let role = match msg.role {
+                            crate::agent::conversation_manager::MessageRole::Human => "user",
+                            crate::agent::conversation_manager::MessageRole::Assistant => "assistant",
+                            _ => continue,
+                        };
+                        ds_messages.push(serde_json::json!({"role": role, "content": msg.content}));
+                    }
+                    let current_msg = if !context.is_empty() {
+                        context.to_string()
+                    } else {
+                        user_input.to_string()
+                    };
+                    ds_messages.push(serde_json::json!({"role": "user", "content": current_msg}));
+
+                    if let Some(ref ds_client) = app_state.deepseek_client {
+                        send_progress("🤖 Gemini unavailable, trying DeepSeek V4...");
+
+                        let exec_context = crate::agent::tool_executor::ToolExecutionContext {
+                            session_id: session_id.to_string(),
+                            user_id: None,
+                            app_state: app_state.clone(),
+                            workflow_id,
+                        };
+
+                        match run_deepseek_tool_loop(
+                            ds_client,
+                            &mut ds_messages,
+                            &all_tools,
+                            &exec_context,
+                            &send_progress,
+                        )
+                        .await
+                        {
+                            Ok(response) => {
+                                let clean = response.trim().to_string();
+                                let msg = ConversationMessage::new_assistant(
+                                    session_id.to_string(),
+                                    clean.clone(),
+                                );
+                                let _ = conversation_manager.save_message(&msg).await;
+                                tracing::info!(
+                                    "✅ DeepSeek V4 completed task for session {}",
+                                    session_id
+                                );
+                                return Ok(clean);
+                            }
+                            Err(ds_err) => {
+                                return Err(format!(
+                                    "Gemini + DeepSeek both failed. Gemini: {} | DeepSeek: {}",
+                                    gemini_err, ds_err
+                                ));
+                            }
+                        }
+                    }
+                    return Err(format!("Gemini API Error: {}", gemini_err));
+                }
+            };
 
             let mut has_function_calls = false;
             let mut function_results: Vec<(String, serde_json::Value, Option<String>)> = Vec::new(); // (name, result, thought_signature)
@@ -1085,66 +1113,29 @@ For complex multi-step workflows that benefit from parallel execution:
                                     let tool_result = if let Some(ref qdrant_client) =
                                         app_state.qdrant_client
                                     {
-                                        if let Some(ref voyage_embeddings) =
-                                            app_state.voyage_embeddings
+                                        match qdrant_client
+                                            .build_context_for_query(
+                                                query,
+                                                session_id,
+                                                app_state.voyage_embeddings.as_ref(),
+                                                app_state.video_gemini_client.as_ref().or(app_state.gemini_client.as_ref()),
+                                            )
+                                            .await
                                         {
-                                            match qdrant_client
-                                                .build_context_for_query_with_voyage(
-                                                    query,
-                                                    session_id,
-                                                    voyage_embeddings,
-                                                )
-                                                .await
-                                            {
-                                                Ok(context) => {
-                                                    if context.is_empty() {
-                                                        serde_json::json!({
-                                                            "found": false,
-                                                            "message": "No relevant memories found"
-                                                        })
-                                                    } else {
-                                                        serde_json::json!({
-                                                            "found": true,
-                                                            "context": context
-                                                        })
-                                                    }
-                                                }
-                                                Err(e) => serde_json::json!({
-                                                    "error": format!("Error searching memory: {}", e)
-                                                }),
+                                            Ok(Some(context)) => {
+                                                serde_json::json!({
+                                                    "found": true,
+                                                    "context": context
+                                                })
                                             }
-                                        } else if let Some(ref gemini_client) =
-                                            app_state.gemini_client
-                                        {
-                                            match qdrant_client
-                                                .build_context_for_query_with_gemini(
-                                                    query,
-                                                    session_id,
-                                                    gemini_client,
-                                                )
-                                                .await
-                                            {
-                                                Ok(context) => {
-                                                    if context.is_empty() {
-                                                        serde_json::json!({
-                                                            "found": false,
-                                                            "message": "No relevant memories found"
-                                                        })
-                                                    } else {
-                                                        serde_json::json!({
-                                                            "found": true,
-                                                            "context": context
-                                                        })
-                                                    }
-                                                }
-                                                Err(e) => serde_json::json!({
-                                                    "error": format!("Error searching memory: {}", e)
-                                                }),
+                                            Ok(None) => {
+                                                serde_json::json!({
+                                                    "error": "Memory search unavailable - no embedding client"
+                                                })
                                             }
-                                        } else {
-                                            serde_json::json!({
-                                                "error": "Memory search unavailable - no embedding client"
-                                            })
+                                            Err(e) => serde_json::json!({
+                                                "error": format!("Error searching memory: {}", e)
+                                            }),
                                         }
                                     } else {
                                         serde_json::json!({
@@ -1349,8 +1340,11 @@ For complex multi-step workflows that benefit from parallel execution:
 // Tool results are added as { role: "tool", tool_call_id, content } messages.
 // Loop exits when `finish_reason` is not "tool_calls".
 
-async fn run_nim_tool_loop<F>(
-    nim_client: &crate::nvidia_nim_client::NvidiaNimClient,
+/// Multi-turn tool loop for DeepSeek V4.
+/// Same contract as `run_nim_tool_loop` — feeds tool results back to the model
+/// and keeps calling until a text answer is returned (or MAX_TURNS exhausted).
+async fn run_deepseek_tool_loop<F>(
+    ds_client: &crate::deepseek_client::DeepSeekClient,
     messages: &mut Vec<serde_json::Value>,
     tools: &[crate::gemini_client::FunctionDeclaration],
     exec_context: &crate::agent::tool_executor::ToolExecutionContext,
@@ -1359,22 +1353,21 @@ async fn run_nim_tool_loop<F>(
 where
     F: Fn(&str),
 {
-    const MAX_TURNS: usize = 10; // prevent infinite loops
+    const MAX_TURNS: usize = 10;
 
     for turn in 0..MAX_TURNS {
-        let response = nim_client
+        let response = ds_client
             .generate_single(messages, tools)
             .await
-            .map_err(|e| format!("NIM API error: {}", e))?;
+            .map_err(|e| format!("DeepSeek API error: {}", e))?;
 
         match response {
-            crate::nvidia_nim_client::NimResponse::Text(text) => {
-                tracing::info!("✅ Gemma 4 (NIM) final answer after {} turns", turn + 1);
+            crate::deepseek_client::DeepSeekResponse::Text(text) => {
+                tracing::info!("✅ DeepSeek V4 final answer after {} turns", turn + 1);
                 return Ok(text);
             }
 
-            crate::nvidia_nim_client::NimResponse::ToolCalls(tool_calls) => {
-                // Add Gemma's tool-call message to history
+            crate::deepseek_client::DeepSeekResponse::ToolCalls(tool_calls) => {
                 let assistant_tool_calls: Vec<serde_json::Value> = tool_calls
                     .iter()
                     .map(|tc| {
@@ -1395,12 +1388,10 @@ where
                     "tool_calls": assistant_tool_calls,
                 }));
 
-                // Execute each tool and collect results
                 for tc in &tool_calls {
-                    send_progress(&format!("🔧 Gemma calling: {}", tc.name));
-                    tracing::info!("🎬 Gemma 4 tool call: {}", tc.name);
+                    send_progress(&format!("🔧 DeepSeek calling: {}", tc.name));
+                    tracing::info!("🎬 DeepSeek V4 tool call: {}", tc.name);
 
-                    // Convert JSON args to the HashMap format tool_executor expects
                     let args_map: std::collections::HashMap<String, serde_json::Value> = tc
                         .arguments
                         .as_object()
@@ -1426,5 +1417,5 @@ where
         }
     }
 
-    Err(format!("Gemma 4 (NIM) exceeded max turns ({})", MAX_TURNS))
+    Err(format!("DeepSeek V4 exceeded max turns ({})", MAX_TURNS))
 }
