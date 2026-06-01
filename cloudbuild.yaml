@@ -10,7 +10,7 @@ steps:
     - 'CARGO_JOBS=1'
     - '.'
 options:
-  machineType: E2_HIGHCPU_8
+  machineType: E2_HIGHCPU_32
 timeout: 5400s
 images:
 - 'us-central1-docker.pkg.dev/$PROJECT_ID/videosync/video-sync:latest'
