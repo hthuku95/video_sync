@@ -27,7 +27,7 @@ RUN cargo build --release -j ${CARGO_JOBS}
 
 # Now copy real source — only the app crate recompiles
 COPY src ./src
-RUN cargo build --release -j ${CARGO_JOBS}
+RUN cargo build --release -j ${CARGO_JOBS} --bin video_editor
 
 # Stage 2: Runtime image — Debian Trixie to match the builder's glibc/OpenSSL ABI
 FROM debian:trixie-slim
