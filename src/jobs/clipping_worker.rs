@@ -86,10 +86,27 @@ pub async fn run_clipping_worker_loop(app_state: Arc<AppState>) {
 
 /// Process clipping jobs in parallel using JoinSet.
 /// Fill JoinSet to concurrency limit, drain one slot before claiming next job.
+/// If auto-clipping is disabled (via system_settings), skips all automatic processing.
+/// Manual clipping jobs are processed separately in process_manual_jobs().
 async fn process_clipping_jobs_parallel(
     app_state: &Arc<AppState>,
     config: &WorkerConfig,
 ) -> Result<(), String> {
+    // Check the auto-clipping toggle before processing any automatic jobs
+    let auto_clipping_enabled: bool = sqlx::query_scalar(
+        "SELECT setting_value FROM system_settings WHERE setting_key = 'auto_clipping_enabled'"
+    )
+    .fetch_optional(&app_state.db_pool)
+    .await
+    .map_err(|e| format!("Failed to check auto-clipping setting: {}", e))?
+    .map(|v: String| v == "true")
+    .unwrap_or(false);
+
+    if !auto_clipping_enabled {
+        tracing::debug!("Auto-clipping is disabled — skipping automatic job processing this cycle");
+        return Ok(());
+    }
+
     crate::jobs::clipping_supervisor::run_clipping_supervisor_once(app_state).await?;
     detect_stuck_jobs(app_state).await?;
     auto_retry_failed_jobs(app_state).await?;

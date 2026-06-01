@@ -94,6 +94,8 @@ pub fn admin_routes() -> Router {
         .route("/api/admin/default-model", post(update_default_model))
         .route("/api/admin/youtube/status", get(get_youtube_feature_status))
         .route("/api/admin/youtube/toggle", post(toggle_youtube_features))
+        .route("/api/admin/clipping/auto-toggle/status", get(get_auto_clipping_status))
+        .route("/api/admin/clipping/auto-toggle", post(toggle_auto_clipping))
         .route("/api/admin/clipping/stats", get(admin_clipping_stats))
         .route(
             "/api/admin/clipping/user/:user_id/details",
@@ -383,6 +385,7 @@ pub async fn admin_dashboard() -> Html<String> {
             <li><a href="/admin/how-it-works">📘 How We Work</a></li>
             <li><a href="#" onclick="showWhitelist()">🛡️ Whitelist</a></li>
             <li><a href="#" onclick="showYoutube()">🎥 YouTube Features</a></li>
+            <li><a href="#" onclick="showAutoClipping()">⏸️ Auto Clipping</a></li>
             <li><a href="#" onclick="showPricing()">💲 Model Pricing</a></li>
             <li><a href="/api/docs">📚 API Docs</a></li>
             <li><a href="/api/status">⚙️ System Status</a></li>
@@ -501,6 +504,25 @@ pub async fn admin_dashboard() -> Html<String> {
                 <strong>When Enabled:</strong> All authenticated users can access YouTube features.<br>
                 <strong>When Disabled:</strong> Only admins and whitelisted users have access (testing mode).<br><br>
                 <em style="color: #856404;">💡 Tip: Keep disabled during Google OAuth verification testing, then enable for all users after approval.</em>
+            </div>
+        </div>
+
+        <div id="autoClippingSection" class="whitelist-section" style="display: none;">
+            <h2>⏸️ Auto Clipping Control</h2>
+            <p style="color: #6c757d; margin-bottom: 1.5rem;">Pause or resume automatic background clipping. Manual clipping jobs are unaffected.</p>
+
+            <div style="display: flex; align-items: center; gap: 1rem; margin-bottom: 1rem;">
+                <label class="toggle-switch">
+                    <input type="checkbox" id="autoClippingToggle">
+                    <span class="slider"></span>
+                </label>
+                <span id="autoClippingStatus" style="font-weight: 600;">Loading...</span>
+            </div>
+
+            <div style="background: #fff3cd; border: 1px solid #ffeaa7; padding: 1rem; border-radius: 8px; margin-top: 1rem;">
+                <strong>When Enabled:</strong> The background worker will automatically discover, clip, and publish content from monitored channels.<br>
+                <strong>When Disabled:</strong> Only manually created clipping jobs will be processed. Existing auto-clipping jobs are preserved and will resume when re-enabled.<br><br>
+                <em style="color: #856404;">💡 Tip: Disable during short-term campaigns to free worker capacity, then re-enable after.</em>
             </div>
         </div>
 
@@ -879,6 +901,40 @@ pub async fn admin_dashboard() -> Html<String> {
             }
         });
 
+        // Auto Clipping Toggle
+        document.getElementById('autoClippingToggle').addEventListener('change', async (e) => {
+            const enabled = e.target.checked;
+
+            if (!confirm(`Are you sure you want to ${enabled ? 'enable' : 'disable'} automatic clipping? Existing jobs will ${enabled ? 'resume processing' : 'pause and resume later'}.`)) {
+                e.target.checked = !enabled;
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/admin/clipping/auto-toggle', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': 'Bearer ' + authToken,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ enabled })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    showNotification(data.message, 'success');
+                    await loadAutoClippingStatus();
+                } else {
+                    showNotification(data.message || 'Failed to toggle auto-clipping', 'error');
+                    e.target.checked = !enabled;
+                }
+            } catch (error) {
+                showNotification('Network error', 'error');
+                e.target.checked = !enabled;
+            }
+        });
+
         // Pricing Management Functions
         function showPricing() {
             document.getElementById('pricingSection').style.display = 'block';
@@ -913,6 +969,35 @@ pub async fn admin_dashboard() -> Html<String> {
                 }
             } catch (error) {
                 console.error('Failed to load YouTube feature status:', error);
+            }
+        }
+
+        function showAutoClipping() {
+            document.getElementById('autoClippingSection').style.display = 'block';
+            document.getElementById('whitelistSection').style.display = 'none';
+            document.getElementById('youtubeSection').style.display = 'none';
+            document.getElementById('pricingSection').style.display = 'none';
+            document.querySelector('.recent-section').style.display = 'none';
+            loadAutoClippingStatus();
+        }
+
+        async function loadAutoClippingStatus() {
+            try {
+                const response = await fetch('/api/admin/clipping/auto-toggle/status', {
+                    headers: { 'Authorization': 'Bearer ' + authToken }
+                });
+                const data = await response.json();
+
+                if (data.success) {
+                    const toggle = document.getElementById('autoClippingToggle');
+                    const status = document.getElementById('autoClippingStatus');
+
+                    toggle.checked = data.enabled;
+                    status.textContent = data.enabled ? '✅ Enabled (Auto worker active)' : '⏸️ Disabled (Manual only)';
+                    status.style.color = data.enabled ? '#28a745' : '#dc3545';
+                }
+            } catch (error) {
+                console.error('Failed to load auto-clipping status:', error);
             }
         }
 
@@ -3346,6 +3431,69 @@ pub async fn toggle_youtube_features(
     Ok(Json(json!({
         "success": true,
         "message": format!("YouTube features {}", if payload.enabled { "enabled for all users" } else { "disabled (testing mode)" }),
+        "enabled": payload.enabled
+    })))
+}
+
+// ============================================================================
+// Auto-Clipping Toggle — pause/resume automatic background clipping
+// (Manual clipping is unaffected and continues processing.)
+// ============================================================================
+
+pub async fn get_auto_clipping_status(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let setting = sqlx::query_as::<_, SystemSetting>(
+        "SELECT * FROM system_settings WHERE setting_key = 'auto_clipping_enabled'",
+    )
+    .fetch_optional(&state.db_pool)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let enabled = setting
+        .map(|s| s.as_bool().unwrap_or(false))
+        .unwrap_or(false);
+
+    Ok(Json(json!({
+        "success": true,
+        "enabled": enabled
+    })))
+}
+
+pub async fn toggle_auto_clipping(
+    Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
+    Json(payload): Json<YouTubeFeatureToggleRequest>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let setting_value = if payload.enabled { "true" } else { "false" };
+
+    sqlx::query(
+        "INSERT INTO system_settings (setting_key, setting_value, setting_type, description, updated_by, updated_at)
+         VALUES ('auto_clipping_enabled', $1, 'boolean',
+                 'Enables or disables automatic background clipping. When disabled, only manual clipping jobs are processed.',
+                 $2, NOW())
+         ON CONFLICT (setting_key)
+         DO UPDATE SET setting_value = $1, updated_by = $2, updated_at = NOW()"
+    )
+    .bind(setting_value)
+    .bind(claims.sub.parse::<i32>().unwrap_or(0))
+    .execute(&state.db_pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("Failed to toggle auto-clipping: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    tracing::info!(
+        "Auto-clipping {} by admin user {} ({})",
+        if payload.enabled { "enabled" } else { "disabled" },
+        claims.username,
+        claims.email
+    );
+
+    Ok(Json(json!({
+        "success": true,
+        "message": format!("Automatic clipping {}", if payload.enabled { "enabled" } else { "disabled" }),
         "enabled": payload.enabled
     })))
 }
