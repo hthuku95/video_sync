@@ -9,6 +9,8 @@ steps:
     - '--build-arg'
     - 'CARGO_JOBS=1'
     - '.'
+options:
+  machineType: 'N1_HIGHMEM_8'
 timeout: 5400s
 images:
 - 'us-central1-docker.pkg.dev/$PROJECT_ID/videosync/video-sync:latest'
