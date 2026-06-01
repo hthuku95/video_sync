@@ -1559,6 +1559,9 @@ pub async fn execute_tool_claude(name: &str, args: &Value) -> String {
         "measure_silence" => execute_measure_silence_claude(args),
         "measure_audio_spectrum" => execute_measure_audio_spectrum_claude(args),
 
+        // ── Cloud Storage Tools ───────────────────────────────────────────
+        "download_from_cloud" => execute_download_from_cloud_claude(args).await,
+
         // ── Workflow Recipes ──────────────────────────────────────────────
         "youtube_ready_export" => execute_youtube_ready_export_claude(args),
         "podcast_cleanup" => execute_podcast_cleanup_claude(args),
@@ -1567,6 +1570,23 @@ pub async fn execute_tool_claude(name: &str, args: &Value) -> String {
         "talking_head_cleanup" => execute_talking_head_cleanup_claude(args),
 
         _ => format!("❌ Unknown tool: {}", name),
+    }
+}
+
+async fn execute_download_from_cloud_claude(args: &Value) -> String {
+    let url = args["url"].as_str().unwrap_or("");
+    let output_path = args["output_path"].as_str().unwrap_or("");
+    if url.is_empty() || output_path.is_empty() {
+        return "❌ Error: url and output_path are required".to_string();
+    }
+    let path = if output_path.starts_with("outputs/") {
+        output_path.to_string()
+    } else {
+        format!("outputs/{}", output_path.trim_start_matches('/'))
+    };
+    match download_file_from_url(url, &path).await {
+        Ok(()) => format!("✅ Downloaded to {path}"),
+        Err(e) => format!("❌ Download failed: {e}"),
     }
 }
 
@@ -1950,6 +1970,9 @@ pub async fn execute_tool_gemini(name: &str, args: &HashMap<String, Value>) -> S
         "measure_silence" => execute_measure_silence_gemini(args),
         "measure_audio_spectrum" => execute_measure_audio_spectrum_gemini(args),
 
+        // ── Cloud Storage Tools ───────────────────────────────────────────
+        "download_from_cloud" => execute_download_from_cloud_gemini(args).await,
+
         // ── Workflow Recipes ──────────────────────────────────────────────
         "youtube_ready_export" => execute_youtube_ready_export_gemini(args),
         "podcast_cleanup" => execute_podcast_cleanup_gemini(args),
@@ -1958,6 +1981,23 @@ pub async fn execute_tool_gemini(name: &str, args: &HashMap<String, Value>) -> S
         "talking_head_cleanup" => execute_talking_head_cleanup_gemini(args),
 
         _ => format!("❌ Unknown tool: {}", name),
+    }
+}
+
+async fn execute_download_from_cloud_gemini(args: &HashMap<String, Value>) -> String {
+    let url = args.get("url").and_then(|v| v.as_str()).unwrap_or("");
+    let output_path = args.get("output_path").and_then(|v| v.as_str()).unwrap_or("");
+    if url.is_empty() || output_path.is_empty() {
+        return "❌ Error: url and output_path are required".to_string();
+    }
+    let path = if output_path.starts_with("outputs/") {
+        output_path.to_string()
+    } else {
+        format!("outputs/{}", output_path.trim_start_matches('/'))
+    };
+    match download_file_from_url(url, &path).await {
+        Ok(()) => format!("✅ Downloaded to {path}"),
+        Err(e) => format!("❌ Download failed: {e}"),
     }
 }
 
@@ -4560,17 +4600,13 @@ async fn dispatch_auto_generate_video_gemini(
     let video_source = args
         .get("video_source")
         .and_then(|v| v.as_str())
-        .unwrap_or("pexels");
-    let style = args
+        .unwrap_or("blender");
+    let _style = args
         .get("style")
         .and_then(|v| v.as_str())
         .unwrap_or("cinematic");
 
-    let effective_source = if style == "educational_math" && video_source == "pexels" {
-        "blender"
-    } else {
-        video_source
-    };
+    let effective_source = video_source;
 
     let result = match effective_source {
         "blender" => execute_auto_generate_video_blender_gemini(args, ctx).await,
@@ -4585,7 +4621,7 @@ async fn dispatch_auto_generate_video_gemini(
             .and_then(|v| v.as_str())
             .unwrap_or("");
         if !output_file.is_empty() && std::path::Path::new(output_file).exists() {
-            let file_name = std::path::Path::new(output_file)
+            let _file_name = std::path::Path::new(output_file)
                 .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or("video.mp4");
@@ -4694,17 +4730,13 @@ async fn dispatch_auto_generate_video_claude(args: &Value, ctx: &ToolExecutionCo
     let video_source = args
         .get("video_source")
         .and_then(|v| v.as_str())
-        .unwrap_or("pexels");
-    let style = args
+        .unwrap_or("blender");
+    let _style = args
         .get("style")
         .and_then(|v| v.as_str())
         .unwrap_or("cinematic");
 
-    let effective_source = if style == "educational_math" && video_source == "pexels" {
-        "blender"
-    } else {
-        video_source
-    };
+    let effective_source = video_source;
 
     let result = match effective_source {
         "blender" => execute_auto_generate_video_blender_claude(args, ctx).await,

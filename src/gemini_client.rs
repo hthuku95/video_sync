@@ -2512,6 +2512,32 @@ impl GeminiClient {
                 },
             },
 
+            // CLOUD STORAGE TOOL
+            // =====================================================================
+
+            FunctionDeclaration {
+                name: "download_from_cloud".to_string(),
+                description: "Download a file from a cloud storage URL (GCS presigned URL, R2 presigned URL, or any HTTP URL) to a local file in the outputs/ directory. Use this to retrieve previously generated videos, images, or assets from storage for re-editing, compositing, or quality review. The file is saved to outputs/ and can then be used with any video editing tool.".to_string(),
+                parameters: Parameters {
+                    param_type: "object".to_string(),
+                    properties: {
+                        let mut props = HashMap::new();
+                        props.insert("url".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "The presigned URL to download from (GCS or R2 presigned URL)".to_string(),
+                            items: None,
+                        });
+                        props.insert("output_path".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Desired output filename inside outputs/ (e.g. 'video.mp4' or 'outputs/video.mp4')".to_string(),
+                            items: None,
+                        });
+                        props
+                    },
+                    required: vec!["url".to_string(), "output_path".to_string()],
+                },
+            },
+
             // BLENDER MCP TOOLS — 3D rendering, Manim, thumbnails, data viz
             // =====================================================================
 

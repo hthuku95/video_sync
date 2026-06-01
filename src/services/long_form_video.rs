@@ -917,14 +917,60 @@ impl LongFormVideoWorkflow {
         let timeout_secs = std::env::var("LONG_FORM_PRIMARY_RENDER_TIMEOUT_SECS")
             .ok()
             .and_then(|value| value.parse::<u64>().ok())
-            .unwrap_or(90)
-            .clamp(20, 180);
+            .unwrap_or(300)
+            .clamp(60, 1800);
 
         let blender = blender.clone();
         let req_clone = req.clone();
         let plan_clone = plan.clone();
+        let gemini = state.gemini_client.clone();
+        let r2 = state.r2_client.clone();
         let mut render_task = tokio::spawn(async move {
             let duration = plan_clone.duration_seconds.clamp(8.0, 60.0);
+
+            // Generate a reference image via Gemini (NanoBanana) to guide Blender
+            let reference_image_url: Option<String> = if let Some(ref gem) = gemini {
+                let img_prompt = format!(
+                    "{} - {}. Style: {}. Product/website: {}",
+                    plan_clone.title,
+                    plan_clone.objective,
+                    req_clone.style,
+                    req_clone.reference_url.as_deref().unwrap_or("")
+                );
+                match gem.generate_image(&img_prompt, Some("16:9"), Some("1280x720"), None).await {
+                    Ok(bytes) => {
+                        // Upload to R2 for persistence
+                        let key = format!(
+                            "generated/{}/ref/segment_{}_{}.png",
+                            req_clone.user_id.unwrap_or(0),
+                            plan_clone.index,
+                            uuid::Uuid::new_v4()
+                        );
+                        match r2.as_ref() {
+                            Some(r) => {
+                                let tmp = format!("/tmp/long_form_ref_{}.png", uuid::Uuid::new_v4());
+                                match tokio::fs::write(&tmp, &bytes).await {
+                                    Ok(_) => {
+                                        match r.upload_file(&tmp, &key).await {
+                                            Ok(url) if !url.is_empty() => {
+                                                let _ = tokio::fs::remove_file(&tmp).await;
+                                                Some(url)
+                                            }
+                                            _ => { let _ = tokio::fs::remove_file(&tmp).await; None }
+                                        }
+                                    }
+                                    Err(_) => None
+                                }
+                            }
+                            None => None
+                        }
+                    }
+                    Err(_) => None
+                }
+            } else {
+                None
+            };
+
             match plan_clone.visual_tool.as_str() {
             "title_card" => {
                 blender
@@ -943,12 +989,13 @@ impl LongFormVideoWorkflow {
                     "screen_description": plan_clone.objective,
                     "workflow_id": workflow_id
                 });
+                let screenshot_url = reference_image_url.as_deref().unwrap_or("");
                 blender
                     .generate_ui_mockup(
                         "desktop",
                         "reveal",
                         duration,
-                        "",
+                        screenshot_url,
                         Some(&spec),
                         None,
                         None,
@@ -988,7 +1035,7 @@ impl LongFormVideoWorkflow {
                     req_clone.reference_url.as_deref().unwrap_or("")
                 );
                 blender
-                    .generate_scene(&prompt, duration, &req_clone.style, None)
+                    .generate_scene(&prompt, duration, &req_clone.style, reference_image_url.as_deref())
                     .await
             }
             }
