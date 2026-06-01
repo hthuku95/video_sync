@@ -15,13 +15,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy dependency manifests
+# Copy dependency manifests first
 COPY Cargo.toml Cargo.lock ./
-
-# Copy source code
-COPY src ./src
 COPY migrations ./migrations
 
-# Build release binary (links against Bookworm's libssl.so.3)
+# Build a dummy project so all 300+ dependencies get cached in a Docker layer
+RUN mkdir -p src && \
+    echo "pub fn dummy() {}" > src/lib.rs && \
+    echo "fn main() {}" > src/main.rs
+RUN cargo build --release -j ${CARGO_JOBS}
+
+# Now copy real source — only the app crate recompiles
+COPY src ./src
 RUN cargo build --release -j ${CARGO_JOBS}
 
 # Stage 2: Runtime image — Debian Trixie to match the builder's glibc/OpenSSL ABI
