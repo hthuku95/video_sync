@@ -7,8 +7,11 @@ steps:
     - '-t'
     - 'us-central1-docker.pkg.dev/$PROJECT_ID/videosync/video-sync:$BUILD_ID'
     - '--build-arg'
-    - 'CARGO_JOBS=2'
+    - 'CARGO_JOBS=1'
     - '.'
+  automapSubstitutions: true
+options:
+  machineType: 'N1_HIGHMEM_8'
 timeout: 5400s
 images:
 - 'us-central1-docker.pkg.dev/$PROJECT_ID/videosync/video-sync:latest'
