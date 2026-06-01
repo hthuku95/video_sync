@@ -14,26 +14,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy dependency manifests
-# Copy dependency manifests first
+# Copy source code and manifest
 COPY Cargo.toml Cargo.lock ./
+COPY src ./src
 COPY migrations ./migrations
 
-# Build a dummy project so all 300+ dependencies get cached in a Docker layer
-RUN mkdir -p src && \
-    echo "pub fn dummy() {}" > src/lib.rs && \
-    echo "fn main() {}" > src/main.rs
-RUN cargo build --release -j ${CARGO_JOBS}
-
-# Now copy real source — only the app crate recompiles
-COPY src ./src
-RUN touch src/main.rs src/lib.rs && cargo build --release -j ${CARGO_JOBS} --bin video_editor
+# Build only the main binary (skip broken experiments bin)
+RUN cargo build --release -j ${CARGO_JOBS} --bin video_editor
 
 # Stage 2: Runtime image — Debian Trixie to match the builder's glibc/OpenSSL ABI
 FROM debian:trixie-slim
 
 # Install system dependencies including Python and yt-dlp
-# yt-dlp is most reliable for bypassing YouTube bot detection
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     ca-certificates \
