@@ -978,7 +978,7 @@ fn build_services_overview_page_html() -> String {
   <div class="shell">
     <div class="topbar">
       <a class="brand" href="/">VideoSync</a>
-      <div class="toplinks">
+      <div class="toplinks" id="homepageAuthButtons">
         <a href="/dashboard">Dashboard</a>
         <a href="/chat">Chat</a>
         <a href="/subscribe">Subscribe</a>
@@ -1042,6 +1042,19 @@ class DynamicBackgroundManager {{
     }}
 }}
 new DynamicBackgroundManager();
+</script>
+<script>
+(async function(){
+  const t=localStorage.getItem('authToken')||localStorage.getItem('admin_token')||localStorage.getItem('auth_token');
+  const c=document.getElementById('homepageAuthButtons');
+  if(t&&c)try{
+    const r=await fetch('/api/auth/verify',{headers:{'Authorization':'Bearer '+t}});
+    if(r.ok){
+      const d=await r.json(),u=d.user||d;
+      c.innerHTML=`<span style="color:var(--muted);margin-right:8px">${u.email||u.username||'User'}</span><a href="/dashboard" class="btn btn-secondary">Dashboard</a><a href="#" onclick="localStorage.clear();location.reload()" class="btn btn-secondary">Logout</a>`;
+    }
+  }catch(e){}
+})();
 </script>
 </body>
 </html>"#
@@ -1138,7 +1151,7 @@ fn build_x402_docs_page_html() -> String {
   <div class="shell">
     <div class="topbar">
       <a class="brand" href="/">VideoSync</a>
-      <div class="toplinks">
+      <div class="toplinks" id="homepageAuthButtons">
         <a href="/services">All Services</a>
         <a href="/api-access">API Access</a>
         <a href="/subscribe">Subscribe</a>
@@ -1229,6 +1242,19 @@ POST /api/subscribe/unlock</pre>
       </ul>
     </section>
   </div>
+<script>
+(async function(){
+  const t=localStorage.getItem('authToken')||localStorage.getItem('admin_token')||localStorage.getItem('auth_token');
+  const c=document.getElementById('homepageAuthButtons');
+  if(t&&c)try{
+    const r=await fetch('/api/auth/verify',{headers:{'Authorization':'Bearer '+t}});
+    if(r.ok){
+      const d=await r.json(),u=d.user||d;
+      c.innerHTML=`<span style="color:var(--muted);margin-right:8px">${u.email||u.username||'User'}</span><a href="/dashboard" class="btn btn-secondary">Dashboard</a><a href="#" onclick="localStorage.clear();location.reload()" class="btn btn-secondary">Logout</a>`;
+    }
+  }catch(e){}
+})();
+</script>
 </body>
 </html>"#
     )
@@ -1435,7 +1461,7 @@ fn build_service_offer_page_html(
   <div class="shell page-content service-{service_slug}">
     <div class="topbar">
       <a class="brand" href="/">VideoSync</a>
-      <div class="toplinks">
+      <div class="toplinks" id="homepageAuthButtons">
         <a href="/services">All Services</a>
         <a href="/dashboard">Dashboard</a>
         <a href="/chat">Chat</a>
@@ -2226,6 +2252,19 @@ fn build_service_offer_page_html(
         }}).catch(function(e) {{ console.error('PayPal config fetch failed:', e); }});
     }})();
   </script>
+<script>
+(async function(){
+  const t=localStorage.getItem('authToken')||localStorage.getItem('admin_token')||localStorage.getItem('auth_token');
+  const c=document.getElementById('homepageAuthButtons');
+  if(t&&c)try{
+    const r=await fetch('/api/auth/verify',{headers:{'Authorization':'Bearer '+t}});
+    if(r.ok){
+      const d=await r.json(),u=d.user||d;
+      c.innerHTML=`<span style="color:var(--muted);margin-right:8px">${u.email||u.username||'User'}</span><a href="/dashboard" class="btn btn-secondary">Dashboard</a><a href="#" onclick="localStorage.clear();location.reload()" class="btn btn-secondary">Logout</a>`;
+    }
+  }catch(e){}
+})();
+</script>
 </body>
 </html>"#
     )
@@ -4059,7 +4098,7 @@ fn build_modern_landing_page_html() -> &'static str {
                     <a href="#features">Features</a>
                     <a href="#tools">Toolkit</a>
                 </div>
-                <div class="auth-buttons">
+                <div class="auth-buttons" id="homepageAuthButtons">
                     <a href="/login" class="btn btn-secondary">Login</a>
                     <a href="/signup" class="btn btn-primary">Sign Up</a>
                 </div>
@@ -4527,6 +4566,19 @@ fn build_modern_landing_page_html() -> &'static str {
 
         new DynamicBackgroundManager();
     </script>
+<script>
+(async function(){
+  const t=localStorage.getItem('authToken')||localStorage.getItem('admin_token')||localStorage.getItem('auth_token');
+  const c=document.getElementById('homepageAuthButtons');
+  if(t&&c)try{
+    const r=await fetch('/api/auth/verify',{headers:{'Authorization':'Bearer '+t}});
+    if(r.ok){
+      const d=await r.json(),u=d.user||d;
+      c.innerHTML=`<span style="color:var(--muted);margin-right:8px">${u.email||u.username||'User'}</span><a href="/dashboard" class="btn btn-secondary">Dashboard</a><a href="#" onclick="localStorage.clear();location.reload()" class="btn btn-secondary">Logout</a>`;
+    }
+  }catch(e){}
+})();
+</script>
 </body>
 </html>
     "###
@@ -4585,7 +4637,7 @@ body {{ font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; colo
 <a href="/subscribe">Subscribe</a>
 <a href="/chat">Chat</a>
 </div>
-<div class="auth-buttons">
+<div class="auth-buttons" id="homepageAuthButtons">
 <a href="/login">Sign In</a>
 <a href="/signup" class="cta">Get Started</a>
 </div>
@@ -4679,6 +4731,19 @@ body {{ font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; colo
 <p style="margin-top:8px;"><a href="/terms" style="color:var(--muted);">Terms</a> · <a href="/privacy" style="color:var(--muted);">Privacy</a></p>
 </div>
 </div>
+<script>
+(async function(){
+  const t=localStorage.getItem('authToken')||localStorage.getItem('admin_token')||localStorage.getItem('auth_token');
+  const c=document.getElementById('homepageAuthButtons');
+  if(t&&c)try{
+    const r=await fetch('/api/auth/verify',{headers:{'Authorization':'Bearer '+t}});
+    if(r.ok){
+      const d=await r.json(),u=d.user||d;
+      c.innerHTML=`<span style="color:var(--muted);margin-right:8px">${u.email||u.username||'User'}</span><a href="/dashboard" class="btn btn-secondary">Dashboard</a><a href="#" onclick="localStorage.clear();location.reload()" class="btn btn-secondary">Logout</a>`;
+    }
+  }catch(e){}
+})();
+</script>
 </body>
 </html>"###)
 }
