@@ -1044,17 +1044,17 @@ class DynamicBackgroundManager {{
 new DynamicBackgroundManager();
 </script>
 <script>
-(async function(){
+(async function(){{
   const t=localStorage.getItem('authToken')||localStorage.getItem('admin_token')||localStorage.getItem('auth_token');
   const c=document.getElementById('homepageAuthButtons');
-  if(t&&c)try{
-    const r=await fetch('/api/auth/verify',{headers:{'Authorization':'Bearer '+t}});
-    if(r.ok){
+  if(t&&c)try{{
+    const r=await fetch('/api/auth/verify',{{headers:{{'Authorization':'Bearer '+t}}}});
+    if(r.ok){{
       const d=await r.json(),u=d.user||d;
-      c.innerHTML=`<span style="color:var(--muted);margin-right:8px">${u.email||u.username||'User'}</span><a href="/dashboard" class="btn btn-secondary">Dashboard</a><a href="#" onclick="localStorage.clear();location.reload()" class="btn btn-secondary">Logout</a>`;
-    }
-  }catch(e){}
-})();
+      c.innerHTML='<span style="color:var(--muted);margin-right:8px">'+(u.email||u.username||'User')+'</span><a href="/dashboard" class="btn btn-secondary">Dashboard</a><a href='#' onclick="localStorage.clear();location.reload()" class="btn btn-secondary">Logout</a>';
+    }}
+  }}catch(e){{}}
+}})();
 </script>
 </body>
 </html>"#
@@ -1243,17 +1243,17 @@ POST /api/subscribe/unlock</pre>
     </section>
   </div>
 <script>
-(async function(){
+(async function(){{
   const t=localStorage.getItem('authToken')||localStorage.getItem('admin_token')||localStorage.getItem('auth_token');
   const c=document.getElementById('homepageAuthButtons');
-  if(t&&c)try{
-    const r=await fetch('/api/auth/verify',{headers:{'Authorization':'Bearer '+t}});
-    if(r.ok){
+  if(t&&c)try{{
+    const r=await fetch('/api/auth/verify',{{headers:{{'Authorization':'Bearer '+t}}}});
+    if(r.ok){{
       const d=await r.json(),u=d.user||d;
-      c.innerHTML=`<span style="color:var(--muted);margin-right:8px">${u.email||u.username||'User'}</span><a href="/dashboard" class="btn btn-secondary">Dashboard</a><a href="#" onclick="localStorage.clear();location.reload()" class="btn btn-secondary">Logout</a>`;
-    }
-  }catch(e){}
-})();
+      c.innerHTML='<span style="color:var(--muted);margin-right:8px">'+(u.email||u.username||'User')+'</span><a href="/dashboard" class="btn btn-secondary">Dashboard</a><a href='#' onclick="localStorage.clear();location.reload()" class="btn btn-secondary">Logout</a>';
+    }}
+  }}catch(e){{}}
+}})();
 </script>
 </body>
 </html>"#
@@ -2253,17 +2253,17 @@ fn build_service_offer_page_html(
     }})();
   </script>
 <script>
-(async function(){
+(async function(){{
   const t=localStorage.getItem('authToken')||localStorage.getItem('admin_token')||localStorage.getItem('auth_token');
   const c=document.getElementById('homepageAuthButtons');
-  if(t&&c)try{
-    const r=await fetch('/api/auth/verify',{headers:{'Authorization':'Bearer '+t}});
-    if(r.ok){
+  if(t&&c)try{{
+    const r=await fetch('/api/auth/verify',{{headers:{{'Authorization':'Bearer '+t}}}});
+    if(r.ok){{
       const d=await r.json(),u=d.user||d;
-      c.innerHTML=`<span style="color:var(--muted);margin-right:8px">${u.email||u.username||'User'}</span><a href="/dashboard" class="btn btn-secondary">Dashboard</a><a href="#" onclick="localStorage.clear();location.reload()" class="btn btn-secondary">Logout</a>`;
-    }
-  }catch(e){}
-})();
+      c.innerHTML='<span style="color:var(--muted);margin-right:8px">'+(u.email||u.username||'User')+'</span><a href="/dashboard" class="btn btn-secondary">Dashboard</a><a href='#' onclick="localStorage.clear();location.reload()" class="btn btn-secondary">Logout</a>';
+    }}
+  }}catch(e){{}}
+}})();
 </script>
 </body>
 </html>"#
@@ -4567,17 +4567,17 @@ fn build_modern_landing_page_html() -> &'static str {
         new DynamicBackgroundManager();
     </script>
 <script>
-(async function(){
+(async function(){{
   const t=localStorage.getItem('authToken')||localStorage.getItem('admin_token')||localStorage.getItem('auth_token');
   const c=document.getElementById('homepageAuthButtons');
-  if(t&&c)try{
-    const r=await fetch('/api/auth/verify',{headers:{'Authorization':'Bearer '+t}});
-    if(r.ok){
+  if(t&&c)try{{
+    const r=await fetch('/api/auth/verify',{{headers:{{'Authorization':'Bearer '+t}}}});
+    if(r.ok){{
       const d=await r.json(),u=d.user||d;
-      c.innerHTML=`<span style="color:var(--muted);margin-right:8px">${u.email||u.username||'User'}</span><a href="/dashboard" class="btn btn-secondary">Dashboard</a><a href="#" onclick="localStorage.clear();location.reload()" class="btn btn-secondary">Logout</a>`;
-    }
-  }catch(e){}
-})();
+      c.innerHTML='<span style="color:var(--muted);margin-right:8px">'+(u.email||u.username||'User')+'</span><a href="/dashboard" class="btn btn-secondary">Dashboard</a><a href='#' onclick="localStorage.clear();location.reload()" class="btn btn-secondary">Logout</a>';
+    }}
+  }}catch(e){{}}
+}})();
 </script>
 </body>
 </html>
@@ -4732,17 +4732,17 @@ body {{ font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; colo
 </div>
 </div>
 <script>
-(async function(){
+(async function(){{
   const t=localStorage.getItem('authToken')||localStorage.getItem('admin_token')||localStorage.getItem('auth_token');
   const c=document.getElementById('homepageAuthButtons');
-  if(t&&c)try{
-    const r=await fetch('/api/auth/verify',{headers:{'Authorization':'Bearer '+t}});
-    if(r.ok){
+  if(t&&c)try{{
+    const r=await fetch('/api/auth/verify',{{headers:{{'Authorization':'Bearer '+t}}}});
+    if(r.ok){{
       const d=await r.json(),u=d.user||d;
-      c.innerHTML=`<span style="color:var(--muted);margin-right:8px">${u.email||u.username||'User'}</span><a href="/dashboard" class="btn btn-secondary">Dashboard</a><a href="#" onclick="localStorage.clear();location.reload()" class="btn btn-secondary">Logout</a>`;
-    }
-  }catch(e){}
-})();
+      c.innerHTML='<span style="color:var(--muted);margin-right:8px">'+(u.email||u.username||'User')+'</span><a href="/dashboard" class="btn btn-secondary">Dashboard</a><a href='#' onclick="localStorage.clear();location.reload()" class="btn btn-secondary">Logout</a>';
+    }}
+  }}catch(e){{}}
+}})();
 </script>
 </body>
 </html>"###)
