@@ -17,8 +17,8 @@ pub async fn generate_text_fast(
     deepseek: Option<&DeepSeekClient>,
     prompt: &str,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-    try_provider!(deepseek, "DeepSeek V4 (fast path)", "trying Gemini");
-    try_provider!(gemini, "Gemini Flash (fast path)", "no more fallbacks");
+    try_provider!(deepseek, prompt, "DeepSeek V4 (fast path)", "trying Gemini");
+    try_provider!(gemini, prompt, "Gemini Flash (fast path)", "no more fallbacks");
 
     Err("No LLM client available for fast text generation".into())
 }
@@ -31,9 +31,9 @@ pub async fn generate_text_fast(
 const PROVIDER_TIMEOUT: Duration = Duration::from_secs(30);
 
 macro_rules! try_provider {
-    ($client:expr, $name:expr, $fallback_label:expr) => {{
+    ($client:expr, $prompt:expr, $name:expr, $fallback_label:expr) => {{
         if let Some(client) = $client {
-            match tokio::time::timeout(PROVIDER_TIMEOUT, client.generate_text(prompt)).await {
+            match tokio::time::timeout(PROVIDER_TIMEOUT, client.generate_text($prompt)).await {
                 Ok(Ok(result)) => {
                     tracing::debug!("✅ Text generated via {}", $name);
                     return Ok(result);
@@ -66,10 +66,10 @@ pub async fn generate_text_best_effort(
     deepseek: Option<&DeepSeekClient>,
     prompt: &str,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-    try_provider!(nvidia, "NVIDIA NIM (Gemma 4)", "trying Gemma fallback");
-    try_provider!(gemma, "Gemma 4 (Gemini API)", "trying Gemini Flash fallback");
-    try_provider!(gemini, "Gemini Flash", "trying DeepSeek fallback");
-    try_provider!(deepseek, "DeepSeek V4", "no more fallbacks");
+    try_provider!(nvidia, prompt, "NVIDIA NIM (Gemma 4)", "trying Gemma fallback");
+    try_provider!(gemma, prompt, "Gemma 4 (Gemini API)", "trying Gemini Flash fallback");
+    try_provider!(gemini, prompt, "Gemini Flash", "trying DeepSeek fallback");
+    try_provider!(deepseek, prompt, "DeepSeek V4", "no more fallbacks");
 
     Err("No LLM client configured for text generation".into())
 }
