@@ -10,24 +10,6 @@ use crate::gemini_client::GeminiClient;
 use crate::nvidia_nim_client::NvidiaNimClient;
 use std::time::Duration;
 
-/// Fast text generation — tries DeepSeek first, then Gemini, skipping NIM+Gemma.
-/// Use for bulk/scoring tasks where speed matters and DeepSeek is preferred.
-pub async fn generate_text_fast(
-    gemini: Option<&GeminiClient>,
-    deepseek: Option<&DeepSeekClient>,
-    prompt: &str,
-) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-    try_provider!(deepseek, prompt, "DeepSeek V4 (fast path)", "trying Gemini");
-    try_provider!(gemini, prompt, "Gemini Flash (fast path)", "no more fallbacks");
-
-    Err("No LLM client available for fast text generation".into())
-}
-
-/// Generate text using the best available LLM, with automatic fallback.
-///
-/// Use this for all text-only tasks (DM scripts, prospect scoring, outreach messages,
-/// code generation) to avoid hitting Gemini Flash quota limits.
-/// Do NOT use this for video analysis — call GeminiClient::analyze_video_from_url directly.
 const PROVIDER_TIMEOUT: Duration = Duration::from_secs(30);
 
 macro_rules! try_provider {
@@ -59,6 +41,24 @@ macro_rules! try_provider {
     }};
 }
 
+/// Fast text generation — tries DeepSeek first, then Gemini, skipping NIM+Gemma.
+/// Use for bulk/scoring tasks where speed matters and DeepSeek is preferred.
+pub async fn generate_text_fast(
+    gemini: Option<&GeminiClient>,
+    deepseek: Option<&DeepSeekClient>,
+    prompt: &str,
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    try_provider!(deepseek, prompt, "DeepSeek V4 (fast path)", "trying Gemini");
+    try_provider!(gemini, prompt, "Gemini Flash (fast path)", "no more fallbacks");
+
+    Err("No LLM client available for fast text generation".into())
+}
+
+/// Generate text using the best available LLM, with automatic fallback.
+///
+/// Use this for all text-only tasks (DM scripts, prospect scoring, outreach messages,
+/// code generation) to avoid hitting Gemini Flash quota limits.
+/// Do NOT use this for video analysis — call GeminiClient::analyze_video_from_url directly.
 pub async fn generate_text_best_effort(
     nvidia: Option<&NvidiaNimClient>,
     gemma: Option<&GeminiClient>,
