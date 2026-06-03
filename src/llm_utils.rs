@@ -8,6 +8,7 @@
 use crate::deepseek_client::DeepSeekClient;
 use crate::gemini_client::GeminiClient;
 use crate::nvidia_nim_client::NvidiaNimClient;
+use std::time::Duration;
 
 /// Fast text generation — tries DeepSeek first, then Gemini, skipping NIM+Gemma.
 /// Use for bulk/scoring tasks where speed matters and DeepSeek is preferred.
@@ -16,31 +17,8 @@ pub async fn generate_text_fast(
     deepseek: Option<&DeepSeekClient>,
     prompt: &str,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-    // Tier 1: DeepSeek V4 — fast, cheap, always-on
-    if let Some(client) = deepseek {
-        match client.generate_text(prompt).await {
-            Ok(result) => {
-                tracing::debug!("✅ Text generated via DeepSeek V4 (fast path)");
-                return Ok(result);
-            }
-            Err(e) => {
-                tracing::warn!("⚠️ DeepSeek (fast path) failed, trying Gemini: {}", e);
-            }
-        }
-    }
-
-    // Tier 2: Gemini Flash — fallback
-    if let Some(client) = gemini {
-        match client.generate_text(prompt).await {
-            Ok(result) => {
-                tracing::debug!("✅ Text generated via Gemini Flash (fast path)");
-                return Ok(result);
-            }
-            Err(e) => {
-                tracing::warn!("⚠️ Gemini (fast path) also failed: {}", e);
-            }
-        }
-    }
+    try_provider!(deepseek, "DeepSeek V4 (fast path)", "trying Gemini");
+    try_provider!(gemini, "Gemini Flash (fast path)", "no more fallbacks");
 
     Err("No LLM client available for fast text generation".into())
 }
@@ -50,6 +28,37 @@ pub async fn generate_text_fast(
 /// Use this for all text-only tasks (DM scripts, prospect scoring, outreach messages,
 /// code generation) to avoid hitting Gemini Flash quota limits.
 /// Do NOT use this for video analysis — call GeminiClient::analyze_video_from_url directly.
+const PROVIDER_TIMEOUT: Duration = Duration::from_secs(30);
+
+macro_rules! try_provider {
+    ($client:expr, $name:expr, $fallback_label:expr) => {{
+        if let Some(client) = $client {
+            match tokio::time::timeout(PROVIDER_TIMEOUT, client.generate_text(prompt)).await {
+                Ok(Ok(result)) => {
+                    tracing::debug!("✅ Text generated via {}", $name);
+                    return Ok(result);
+                }
+                Ok(Err(e)) => {
+                    tracing::warn!(
+                        "⚠️ {} failed ({}), {}",
+                        $name,
+                        e,
+                        $fallback_label
+                    );
+                }
+                Err(_) => {
+                    tracing::warn!(
+                        "⚠️ {} timed out after {:?}, {}",
+                        $name,
+                        PROVIDER_TIMEOUT,
+                        $fallback_label
+                    );
+                }
+            }
+        }
+    }};
+}
+
 pub async fn generate_text_best_effort(
     nvidia: Option<&NvidiaNimClient>,
     gemma: Option<&GeminiClient>,
@@ -57,60 +66,10 @@ pub async fn generate_text_best_effort(
     deepseek: Option<&DeepSeekClient>,
     prompt: &str,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-    // Tier 1: NVIDIA NIM — 40 RPM, dedicated quota
-    if let Some(client) = nvidia {
-        match client.generate_text(prompt).await {
-            Ok(result) => {
-                tracing::debug!("✅ Text generated via NVIDIA NIM (Gemma 4)");
-                return Ok(result);
-            }
-            Err(e) => {
-                tracing::warn!("⚠️ NVIDIA NIM failed, trying Gemma fallback: {}", e);
-            }
-        }
-    }
-
-    // Tier 2: Gemma 4 via Gemini API — own quota, separate from Gemini Flash
-    if let Some(client) = gemma {
-        match client.generate_text(prompt).await {
-            Ok(result) => {
-                tracing::debug!("✅ Text generated via Gemma 4 (Gemini API)");
-                return Ok(result);
-            }
-            Err(e) => {
-                tracing::warn!(
-                    "⚠️ Gemma client failed, trying Gemini Flash fallback: {}",
-                    e
-                );
-            }
-        }
-    }
-
-    // Tier 3: Primary Gemini Flash
-    if let Some(client) = gemini {
-        match client.generate_text(prompt).await {
-            Ok(result) => {
-                tracing::debug!("✅ Text generated via Gemini Flash");
-                return Ok(result);
-            }
-            Err(e) => {
-                tracing::warn!("⚠️ Gemini failed, trying DeepSeek fallback: {}", e);
-            }
-        }
-    }
-
-    // Tier 4: DeepSeek V4 — OpenAI-compatible, always-on fallback
-    if let Some(client) = deepseek {
-        match client.generate_text(prompt).await {
-            Ok(result) => {
-                tracing::debug!("✅ Text generated via DeepSeek V4");
-                return Ok(result);
-            }
-            Err(e) => {
-                tracing::warn!("⚠️ DeepSeek also failed: {}", e);
-            }
-        }
-    }
+    try_provider!(nvidia, "NVIDIA NIM (Gemma 4)", "trying Gemma fallback");
+    try_provider!(gemma, "Gemma 4 (Gemini API)", "trying Gemini Flash fallback");
+    try_provider!(gemini, "Gemini Flash", "trying DeepSeek fallback");
+    try_provider!(deepseek, "DeepSeek V4", "no more fallbacks");
 
     Err("No LLM client configured for text generation".into())
 }
