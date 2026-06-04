@@ -3318,20 +3318,19 @@ pub async fn update_default_model(
     Extension(state): Extension<Arc<AppState>>,
     Json(payload): Json<UpdateDefaultModelRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    // Validate model selection
     if payload.model != "claude" && payload.model != "gemini" {
         return Err((
             StatusCode::BAD_REQUEST,
             Json(json!({
                 "success": false,
-                "message": "Invalid model. Must be 'claude' or 'gemini'"
+                "message": "Invalid model. 'gemini' (auto-failover: Gemini → NVIDIA NIM → DeepSeek) or 'claude'"
             })),
         ));
     }
 
     sqlx::query(
         "INSERT INTO system_settings (setting_key, setting_value, setting_type, description, updated_at)
-         VALUES ('default_ai_model', $1, 'string', 'Default AI model for all users (claude or gemini)', NOW())
+         VALUES ('default_ai_model', $1, 'string', 'Default AI model for all users: gemini (Gemini → NIM → DeepSeek failover) or claude', NOW())
          ON CONFLICT (setting_key)
          DO UPDATE SET setting_value = $1, updated_at = NOW()"
     )
@@ -3348,7 +3347,7 @@ pub async fn update_default_model(
 
     let model_name = match payload.model.as_str() {
         "claude" => "Claude Sonnet 4.5",
-        "gemini" => "Gemini 2.5 Flash",
+        "gemini" => "Gemini → NVIDIA NIM → DeepSeek (auto-failover)",
         _ => &payload.model,
     };
 

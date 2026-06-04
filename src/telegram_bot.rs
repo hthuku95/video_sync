@@ -243,6 +243,7 @@ async fn handle_dm(
         text
     );
     let reply = match generate_text_best_effort(
+        state.ollama_client.as_ref(),
         state.nvidia_nim_client.as_ref(),
         state.gemma_client.as_ref(),
         state.gemini_client.as_ref(),

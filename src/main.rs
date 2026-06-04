@@ -27,6 +27,7 @@ mod llm_utils;
 mod middleware;
 mod models;
 mod nvidia_nim_client;
+mod ollama_client;
 mod pexels_client;
 mod phantombuster_client; // 🎯 PhantomBuster — LinkedIn Sales Navigator scraping
 mod portfolio_samples;
@@ -72,6 +73,7 @@ pub struct AppState {
     pub nvidia_nim_client: Option<nvidia_nim_client::NvidiaNimClient>, // NVIDIA NIM (text + tools, 40 RPM)
     pub nvidia_nim_vision_client: Option<nvidia_nim_client::NvidiaNimClient>, // NVIDIA NIM (vision + tools, Gemini fallback)
     pub deepseek_client: Option<deepseek_client::DeepSeekClient>, // DeepSeek V4 (OpenAI-compatible, tool calling)
+    pub ollama_client: Option<ollama_client::OllamaClient>, // Self-hosted Gemma 4B via Ollama (free, multimodal)
     pub claude_client: Option<claude_client::ClaudeClient>,
     pub vertex_multimodal_embeddings: Option<vertex_multimodal_embeddings::VertexMultimodalEmbeddingsClient>,
     pub voyage_embeddings: Option<voyage_embeddings::VoyageEmbeddings>,
@@ -373,7 +375,7 @@ async fn main() {
         .ok()
         .map(|k| {
             tracing::info!("Initializing Gemma 4 client (text tasks, own quota)...");
-            gemini_client::GeminiClient::new_with_model(k, "gemma-4-27b-it".to_string())
+            gemini_client::GeminiClient::new_with_model(k, std::env::var("GEMMA_MODEL").unwrap_or_else(|_| "gemma-4-26b-a4b-it".to_string()))
         });
 
     // NVIDIA NIM — text + tool-calling model (default: Gemma 4 31B, 40 RPM).
@@ -398,6 +400,13 @@ async fn main() {
             std::env::var("DEEPSEEK_MODEL").unwrap_or_else(|_| "deepseek-v4-flash".to_string()));
         deepseek_client::DeepSeekClient::new(k)
     });
+
+    // Ollama — self-hosted Gemma 4B (multimodal, free, on separate t3.xlarge).
+    // Used as the primary text generation provider before NVIDIA NIM.
+    let ollama_client = {
+        tracing::info!("Initializing Ollama client (gemma3:4b on http://172.31.42.118:11434)...");
+        Some(ollama_client::OllamaClient::new())
+    };
 
     let vertex_multimodal_embeddings =
         vertex_multimodal_embeddings::VertexMultimodalEmbeddingsClient::from_env().map(|client| {
@@ -629,6 +638,7 @@ async fn main() {
         nvidia_nim_client,
         nvidia_nim_vision_client,
         deepseek_client,
+        ollama_client,
         claude_client,
         vertex_multimodal_embeddings,
         voyage_embeddings,

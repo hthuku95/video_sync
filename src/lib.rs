@@ -24,6 +24,7 @@ pub mod llm_utils;
 pub mod middleware;
 pub mod models;
 pub mod nvidia_nim_client;
+pub mod ollama_client;
 pub mod pexels_client;
 pub mod phantombuster_client;
 pub mod portfolio_samples;
@@ -78,6 +79,7 @@ pub struct AppState {
     pub nvidia_nim_client: Option<nvidia_nim_client::NvidiaNimClient>,
     pub nvidia_nim_vision_client: Option<nvidia_nim_client::NvidiaNimClient>,
     pub deepseek_client: Option<deepseek_client::DeepSeekClient>,
+    pub ollama_client: Option<ollama_client::OllamaClient>,
     pub claude_client: Option<claude_client::ClaudeClient>,
     pub vertex_multimodal_embeddings:
         Option<vertex_multimodal_embeddings::VertexMultimodalEmbeddingsClient>,
