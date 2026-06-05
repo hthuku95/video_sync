@@ -1,10 +1,10 @@
 /// Ollama client — self-hosted LLM via Ollama OpenAI-compatible API.
-/// Default model: gemma3:4b (multimodal, fast, ~3.3GB).
+/// Default model: gemma4:e4b (multimodal, efficient, ~9.6GB).
 /// Configurable via OLLAMA_BASE_URL and OLLAMA_MODEL env vars.
 use reqwest::Client;
 
 const OLLAMA_DEFAULT_URL: &str = "http://172.31.42.118:11434";
-const OLLAMA_DEFAULT_MODEL: &str = "gemma3:4b";
+const OLLAMA_DEFAULT_MODEL: &str = "gemma4:e4b";
 
 #[derive(Debug, Clone)]
 pub struct OllamaClient {
