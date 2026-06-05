@@ -1,7 +1,7 @@
 /// LLM utility functions — multi-provider text generation with automatic fallback.
 ///
 /// Priority order for text-only tasks:
-///   1. Ollama (self-hosted Gemma 4 E4B, free, multimodal on t3.xlarge)
+///   1. Ollama (self-hosted Gemma 4 12B, encoder-free multimodal, vision+audio on t3.xlarge)
 ///   2. NVIDIA NIM (Gemma 4 31B, 40 RPM, own quota pool)
 ///   3. Gemma 4 via Gemini API (own quota pool, separate from Gemini Flash)
 ///   4. Primary Gemini client (last resort)

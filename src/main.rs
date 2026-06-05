@@ -404,7 +404,7 @@ async fn main() {
     // Ollama — self-hosted Gemma 4B (multimodal, free, on separate t3.xlarge).
     // Used as the primary text generation provider before NVIDIA NIM.
     let ollama_client = {
-        tracing::info!("Initializing Ollama client (gemma4:e4b on http://172.31.42.118:11434)...");
+        tracing::info!("Initializing Ollama client (gemma4:12b on http://172.31.42.118:11434)...");
         Some(ollama_client::OllamaClient::new())
     };
 
