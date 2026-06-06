@@ -2370,51 +2370,56 @@ async fn generate_prospect_sample_pack(
     .execute(&state.db_pool)
     .await;
 
-    let render_state = state.clone();
-    if use_long_form_workflow {
-        let workflow_id = crate::services::LongFormVideoWorkflow::start(
-            state.clone(),
-            crate::services::LongFormVideoRequest {
-                title: format!("Revenue sample pack for {}", display_name),
-                brief: format!(
-                    "{prompt}\n\nProspect description: {description}\n\nCreate a buyer-facing sample for this service: {service_offer}. It should be strong enough to send in an X DM or email, use the available public source/reference, include concise narration, and end with a clear CTA for the starter offer."
-                ),
-                target_duration_seconds: target_duration,
-                segment_duration_seconds: 15.0,
-                style: long_form_style.to_string(),
-                offer_type,
-                narration_speaker: "Emma".to_string(),
-                include_narration: true,
-                reference_url: Some(source_url.clone()),
-                session_uuid: None,
-                user_id: None,
-                source_table: Some("deliveries".to_string()),
-                source_record_id: Some(delivery_id),
-                idempotency_key: Some(format!("prospect-sample-long-form:{id}")),
-            },
-        )
-        .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    success: false,
-                    message: format!("Failed to start long-form sample workflow: {e}"),
-                }),
-            )
-        })?;
-
-        let _ = sqlx::query("UPDATE deliveries SET workflow_id = $1 WHERE id = $2")
-            .bind(workflow_id)
-            .bind(delivery_id)
-            .execute(&state.db_pool)
-            .await;
+    let service_type = crate::services::normalize_to_service_type(&service);
+    let agentic_style = if use_long_form_workflow {
+        long_form_style.to_string()
     } else {
-        let _ = crate::handlers::admin::ensure_delivery_workflow(&state, delivery_id).await;
-        tokio::spawn(async move {
-            crate::handlers::admin::run_delivery_job(delivery_id, render_state).await;
-        });
-    }
+        service_type.default_style().to_string()
+    };
+    let agentic_duration = if use_long_form_workflow {
+        target_duration
+    } else {
+        has_product_url.then(|| 15.0).unwrap_or(8.0)
+    };
+
+    let delivery_id_clone = delivery_id;
+    let workflow_id = crate::services::AgenticServicePipeline::start(
+        state.clone(),
+        service_type,
+        crate::services::ServiceInput {
+            title: format!("Revenue sample pack for {}", display_name),
+            brief: format!(
+                "{prompt}\n\nProspect description: {description}\n\nCreate a buyer-facing sample for this service: {service_offer}. It should be strong enough to send in an X DM or email, use the available public source/reference, include concise narration, and end with a clear CTA for the starter offer."
+            ),
+            source_url: if has_product_url { Some(source_url.clone()) } else { None },
+            style: agentic_style,
+            duration_seconds: agentic_duration,
+            delivery_id: delivery_id_clone,
+            prospect_id: Some(id),
+            session_uuid: None,
+            user_id: None,
+            source_table: Some("deliveries".to_string()),
+            source_record_id: Some(delivery_id),
+            idempotency_key: Some(format!("prospect-sample-agentic:{id}")),
+            reference_images: vec![],
+        },
+    )
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                success: false,
+                message: format!("Failed to start agentic sample workflow: {e}"),
+            }),
+        )
+    })?;
+
+    let _ = sqlx::query("UPDATE deliveries SET workflow_id = $1 WHERE id = $2")
+        .bind(workflow_id)
+        .bind(delivery_id)
+        .execute(&state.db_pool)
+        .await;
 
     let delivery_url = format!("/delivery/{delivery_id}");
     Ok(Json(json!({

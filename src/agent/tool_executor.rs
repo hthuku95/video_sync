@@ -4486,20 +4486,15 @@ async fn execute_generate_long_form_video_value(
     )
     .unwrap_or(600.0)
     .max(15.0);
-    let segment_duration_seconds = number_arg(
-        args,
-        &["segment_duration_seconds", "preferred_segment_seconds"],
-    )
-    .unwrap_or(30.0);
     let style = string_arg(args, &["style"])
         .unwrap_or_else(|| "premium SaaS explainer, cinematic, clean motion graphics".to_string());
     let offer_type = string_arg(args, &["offer_type", "workflow_type"])
         .unwrap_or_else(|| "long_form_video".to_string());
-    let narration_speaker =
-        string_arg(args, &["narration_speaker", "speaker"]).unwrap_or_else(|| "Emma".to_string());
-    let include_narration =
-        bool_arg(args, &["include_narration", "with_narration"]).unwrap_or(true);
     let reference_url = string_arg(args, &["reference_url", "url"]);
+
+    let service_type = crate::services::normalize_to_service_type(&offer_type);
+    let session_uuid = Some(ctx.session_id.clone());
+    let user_id = ctx.user_id;
 
     let idempotency_key = Some(format!(
         "agent-long-form:{}:{}:{:.0}",
@@ -4508,29 +4503,34 @@ async fn execute_generate_long_form_video_value(
         target_duration_seconds
     ));
 
-    let request = crate::services::LongFormVideoRequest {
-        title: title.clone(),
-        brief,
-        target_duration_seconds,
-        segment_duration_seconds,
-        style,
-        offer_type,
-        narration_speaker,
-        include_narration,
-        reference_url,
-        session_uuid: Some(ctx.session_id.clone()),
-        user_id: ctx.user_id,
-        source_table: None,
-        source_record_id: None,
-        idempotency_key,
-    };
+    let delivery_id = uuid::Uuid::new_v4();
 
-    match crate::services::LongFormVideoWorkflow::start(ctx.app_state.clone(), request).await {
+    match crate::services::AgenticServicePipeline::start(
+        ctx.app_state.clone(),
+        service_type,
+        crate::services::ServiceInput {
+            title: title.clone(),
+            brief,
+            source_url: reference_url,
+            style,
+            duration_seconds: target_duration_seconds,
+            delivery_id,
+            prospect_id: None,
+            session_uuid,
+            user_id,
+            source_table: None,
+            source_record_id: None,
+            idempotency_key,
+            reference_images: vec![],
+        },
+    )
+    .await
+    {
         Ok(workflow_id) => format!(
-            "✅ Started durable long-form video workflow for '{}'. Workflow ID: {}. Status URL: /api/workflows/{}/status. The system will plan the requested {:.0}s target as multiple bounded segments, generate/render each segment, add narration when available, and assemble the final video.",
-            title, workflow_id, workflow_id, target_duration_seconds
+            "✅ Started agentic long-form video workflow for '{}'. Workflow ID: {}. Status URL: /api/workflows/{}/status. The agent will autonomously understand the product, generate reference images, orchestrate Blender/M animations, assemble the final video, review quality, and iterate until the output meets standards.",
+            title, workflow_id, workflow_id
         ),
-        Err(error) => format!("❌ Failed to start long-form video workflow: {}", error),
+        Err(error) => format!("❌ Failed to start agentic long-form video workflow: {}", error),
     }
 }
 

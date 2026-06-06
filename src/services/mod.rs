@@ -1,4 +1,5 @@
 // src/services/mod.rs
+pub mod agentic_service_pipeline;
 pub mod artifact_verifier;
 pub mod generated_artifacts;
 pub mod media_review;
@@ -18,3 +19,4 @@ pub use artifact_verifier::{ArtifactVerificationResult, ArtifactVerifier};
 pub use generated_artifacts::GeneratedArtifactService;
 pub use workflow_runtime::{NewWorkflow, WorkflowRuntime, WorkflowStatus};
 pub use long_form_video::{LongFormVideoRequest, LongFormVideoWorkflow};
+pub use agentic_service_pipeline::{AgenticServicePipeline, ServiceInput, ServiceType, normalize_to_service_type};
