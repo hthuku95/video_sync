@@ -213,7 +213,6 @@ impl AgenticServicePipeline {
 
             let tools = crate::ai_tool_selector::select_tools_for_request(
                 &format!("{} {}", system_prompt, current_prompt),
-                state.ollama_client.as_ref(),
                 state.nvidia_nim_client.as_ref(),
                 Some(gemini_client.as_ref()),
             )
