@@ -384,21 +384,27 @@ IMPORTANT: You do NOT use AI to generate videos. Instead, you fetch stock media 
         workflow_id: Option<uuid::Uuid>,
     ) -> Result<String, String> {
         if let Some(ref ollama) = self.ollama_client {
-            return self
+            let ollama_result = self
                 .execute_with_custom_tools_via_ollama(
                     ollama.clone(),
                     user_input,
                     session_id,
                     user_id,
-                    app_state,
-                    progress_callback,
+                    app_state.clone(),
+                    progress_callback.clone(),
                     system_instruction,
-                    tools,
+                    tools.clone(),
                     completion_tool_name,
-                    tool_executor,
+                    tool_executor.clone(),
                     workflow_id,
                 )
                 .await;
+            match &ollama_result {
+                Ok(text) => return Ok(text.clone()),
+                Err(e) => {
+                    tracing::warn!("Gemma 4 12B via Ollama failed, falling back to Gemini: {}", e);
+                }
+            }
         }
         self.execute_with_custom_tools_via_gemini(
             user_input,
