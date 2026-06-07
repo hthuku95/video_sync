@@ -12,6 +12,7 @@
 /// `AI_TOOL_PRESELECTION_MODE=enabled` for experiments, but it is no longer the
 /// primary path anywhere in the app.
 use crate::gemini_client::FunctionDeclaration;
+use crate::ollama_client::OllamaClient;
 
 const ESSENTIAL_VIDEO_TOOL_NAMES: &[&str] = &["set_chat_title", "submit_final_answer"];
 
@@ -28,16 +29,14 @@ fn preselection_enabled() -> bool {
 }
 
 fn all_video_tools_with_essentials() -> Vec<FunctionDeclaration> {
-    let all_video_tools = crate::tool_registry::ToolRegistry::gemini_tools_for_profile(
+    let all_tools = crate::tool_registry::ToolRegistry::gemini_tools_for_profile(
         crate::tool_registry::AgentExecutionProfile::FullProduction,
     );
-    build_tool_list(
-        all_video_tools
-            .iter()
-            .map(|tool| tool.name.clone())
-            .collect(),
-        all_video_tools,
-    )
+    tracing::info!(
+        "🔓 Full toolbelt mode enabled: exposing {} video tools",
+        all_tools.len()
+    );
+    all_tools
 }
 
 /// Returns the full allowed video toolbelt by default.
@@ -46,6 +45,7 @@ fn all_video_tools_with_essentials() -> Vec<FunctionDeclaration> {
 /// `AI_TOOL_PRESELECTION_MODE=enabled`.
 pub async fn select_tools_for_request(
     user_request: &str,
+    ollama_client: Option<&OllamaClient>,
     nvidia_nim_client: Option<&crate::nvidia_nim_client::NvidiaNimClient>,
     gemini_client: Option<&crate::gemini_client::GeminiClient>,
 ) -> Vec<FunctionDeclaration> {

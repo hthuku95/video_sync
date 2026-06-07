@@ -179,6 +179,8 @@ impl AgenticServicePipeline {
             None => return Err("No Gemini client available for agentic workflow".to_string()),
         };
 
+        let ollama_client = state.ollama_client.clone().map(Arc::new);
+
         let output_dir = format!("outputs/agentic_{}", input.delivery_id);
         std::fs::create_dir_all(&output_dir).map_err(|e| format!("Failed to create output dir: {e}"))?;
 
@@ -208,11 +210,15 @@ impl AgenticServicePipeline {
                 )
                 .await;
 
-            let agent = SimpleGeminiAgent::new(gemini_client.clone());
+            let agent = SimpleGeminiAgent::new_with_ollama(
+                gemini_client.clone(),
+                ollama_client.clone(),
+            );
             let system_prompt = Self::system_prompt(service_type, &input);
 
             let tools = crate::ai_tool_selector::select_tools_for_request(
                 &format!("{} {}", system_prompt, current_prompt),
+                state.ollama_client.as_ref(),
                 state.nvidia_nim_client.as_ref(),
                 Some(gemini_client.as_ref()),
             )

@@ -7,6 +7,7 @@ use crate::gemini_client::{
     Content, FunctionCallingConfig, FunctionCallingMode, FunctionDeclaration, GeminiClient,
     GenerateContentRequest, GenerationConfig, Part, Tool, ToolConfig,
 };
+use crate::ollama_client::{OllamaClient, OllamaResponse, OllamaToolCall};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::future::Future;
@@ -25,11 +26,22 @@ pub type GeminiToolExecutor = Arc<
 
 pub struct SimpleGeminiAgent {
     client: Arc<GeminiClient>,
+    ollama_client: Option<Arc<OllamaClient>>,
 }
 
 impl SimpleGeminiAgent {
     pub fn new(client: Arc<GeminiClient>) -> Self {
-        Self { client }
+        Self {
+            client,
+            ollama_client: None,
+        }
+    }
+
+    pub fn new_with_ollama(client: Arc<GeminiClient>, ollama_client: Option<Arc<OllamaClient>>) -> Self {
+        Self {
+            client,
+            ollama_client,
+        }
     }
 
     pub async fn execute(
@@ -45,6 +57,7 @@ impl SimpleGeminiAgent {
         // simple/background agents can choose from the full production stack.
         let tools = crate::ai_tool_selector::select_tools_for_request(
             user_input,
+            app_state.ollama_client.as_ref(),
             app_state.nvidia_nim_client.as_ref(),
             Some(self.client.as_ref()),
         )
@@ -358,6 +371,162 @@ IMPORTANT: You do NOT use AI to generate videos. Instead, you fetch stock media 
 
     #[allow(clippy::too_many_arguments)]
     pub async fn execute_with_custom_tools(
+        &self,
+        user_input: &str,
+        session_id: &str,
+        user_id: Option<i32>,
+        app_state: Arc<crate::AppState>,
+        progress_callback: Option<Arc<dyn Fn(f32, &str) + Send + Sync>>,
+        system_instruction: &str,
+        tools: Vec<FunctionDeclaration>,
+        completion_tool_name: Option<&str>,
+        tool_executor: GeminiToolExecutor,
+        workflow_id: Option<uuid::Uuid>,
+    ) -> Result<String, String> {
+        if let Some(ref ollama) = self.ollama_client {
+            return self
+                .execute_with_custom_tools_via_ollama(
+                    ollama.clone(),
+                    user_input,
+                    session_id,
+                    user_id,
+                    app_state,
+                    progress_callback,
+                    system_instruction,
+                    tools,
+                    completion_tool_name,
+                    tool_executor,
+                    workflow_id,
+                )
+                .await;
+        }
+        self.execute_with_custom_tools_via_gemini(
+            user_input,
+            session_id,
+            user_id,
+            app_state,
+            progress_callback,
+            system_instruction,
+            tools,
+            completion_tool_name,
+            tool_executor,
+            workflow_id,
+        )
+        .await
+    }
+
+    async fn execute_with_custom_tools_via_ollama(
+        &self,
+        ollama: Arc<OllamaClient>,
+        user_input: &str,
+        session_id: &str,
+        user_id: Option<i32>,
+        app_state: Arc<crate::AppState>,
+        progress_callback: Option<Arc<dyn Fn(f32, &str) + Send + Sync>>,
+        system_instruction: &str,
+        tools: Vec<FunctionDeclaration>,
+        completion_tool_name: Option<&str>,
+        tool_executor: GeminiToolExecutor,
+        workflow_id: Option<uuid::Uuid>,
+    ) -> Result<String, String> {
+        let send_progress = |progress: f32, msg: &str| {
+            if let Some(ref callback) = progress_callback {
+                callback(progress, msg);
+            }
+        };
+        let exec_context = ToolExecutionContext {
+            session_id: session_id.to_string(),
+            user_id,
+            app_state: app_state.clone(),
+            workflow_id,
+        };
+
+        let mut messages: Vec<serde_json::Value> = vec![serde_json::json!({
+            "role": "user",
+            "content": format!("{}\n\nUser request: {}", system_instruction, user_input)
+        })];
+
+        let mut iterations = 0;
+        let max_iterations = 50;
+        let mut final_text = String::new();
+
+        while iterations < max_iterations {
+            iterations += 1;
+            send_progress(0.0, "🤖 Agent is thinking...");
+
+            let response = ollama
+                .generate_single(&messages, &tools)
+                .await
+                .map_err(|e| format!("Ollama/Gemma 4 12B API Error: {}", e))?;
+
+            match response {
+                OllamaResponse::Text(text) => {
+                    final_text = text;
+                    messages.push(serde_json::json!({
+                        "role": "assistant",
+                        "content": final_text
+                    }));
+                    break;
+                }
+                OllamaResponse::ToolCalls(tool_calls) => {
+                    let mut assistant_msg = serde_json::json!({
+                        "role": "assistant",
+                        "content": null,
+                        "tool_calls": []
+                    });
+                    if let Some(arr) = assistant_msg["tool_calls"].as_array_mut() {
+                        for tc in &tool_calls {
+                            arr.push(serde_json::json!({
+                                "id": tc.id,
+                                "type": "function",
+                                "function": {
+                                    "name": tc.name,
+                                    "arguments": tc.arguments.to_string()
+                                }
+                            }));
+                        }
+                    }
+                    messages.push(assistant_msg);
+
+                    let mut tool_results: Vec<serde_json::Value> = Vec::new();
+                    for tc in &tool_calls {
+                        tracing::info!("🔧 Ollama/Gemma calling: {}", tc.name);
+                        send_progress(0.0, &format!("🔧 {}...", tc.name));
+
+                        let args: HashMap<String, Value> = tc.arguments.as_object()
+                            .map(|obj| obj.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+                            .unwrap_or_default();
+
+                        let result = tool_executor(&tc.name, &args, &exec_context).await;
+
+                        if completion_tool_name == Some(tc.name.as_str()) {
+                            let result_text = match &result {
+                                Value::String(text) => text.clone(),
+                                other => serde_json::to_string_pretty(other)
+                                    .unwrap_or_else(|_| other.to_string()),
+                            };
+                            if !result_text.is_empty() {
+                                send_progress(0.0, "✅ Task completed!");
+                                return Ok(result_text);
+                            }
+                        }
+
+                        tool_results.push(serde_json::json!({
+                            "role": "tool",
+                            "tool_call_id": tc.id,
+                            "content": serde_json::to_string(&result).unwrap_or_default()
+                        }));
+                    }
+
+                    messages.extend(tool_results);
+                }
+            }
+        }
+
+        Ok(final_text)
+    }
+
+    async fn execute_with_custom_tools_via_gemini(
         &self,
         user_input: &str,
         session_id: &str,

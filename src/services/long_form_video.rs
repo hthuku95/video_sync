@@ -736,7 +736,7 @@ impl LongFormVideoWorkflow {
         }
 
         if public_url.is_none() {
-            let gcs = crate::gcs_client::GcsClient::from_env()
+            let gcs = crate::gcs_client::GcsClient::from_env().await
                 .ok_or_else(|| "No GCS fallback client is configured".to_string())?;
             gcs.upload_file(final_path, &generated_key, "video/mp4")
                 .await
@@ -853,7 +853,9 @@ impl LongFormVideoWorkflow {
             req.reference_url.as_deref().unwrap_or("")
         );
 
-        let text = if let Some(client) = state.gemma_client.as_ref() {
+        let text = if let Some(client) = state.ollama_client.as_ref() {
+            client.generate_text(&prompt).await.ok()
+        } else if let Some(client) = state.gemma_client.as_ref() {
             client.generate_text(&prompt).await.ok()
         } else if let Some(client) = state.nvidia_nim_client.as_ref() {
             client.generate_text(&prompt).await.ok()

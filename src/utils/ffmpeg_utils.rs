@@ -13,11 +13,79 @@ pub fn format_duration(seconds: f64) -> String {
     format!("{:02}:{:02}:{:02}.{:03}", hours, minutes, secs, millis)
 }
 
-/// Execute FFmpeg command with error handling and progress info
-/// NOTE: This function has no timeout! For long-running operations, use execute_ffmpeg_command_with_sync_timeout
-pub fn execute_ffmpeg_command(mut command: Command) -> Result<String, String> {
-    println!("Executing FFmpeg: {:?}", command);
+/// Extract `-i <input_url>` from args and separate output path from ffmpeg flags.
+fn parse_ffmpeg_args(args: &[String]) -> (bool, Option<String>, Vec<String>, Option<String>) {
+    let i_pos = match args.iter().position(|a| a == "-i") {
+        Some(p) => p,
+        None => return (false, None, vec![], None),
+    };
+    let input_url = match args.get(i_pos + 1) {
+        Some(url) => url,
+        None => return (false, None, vec![], None),
+    };
+    let is_cloud = is_cloud_url(input_url);
+    let rest: Vec<String> = args.iter().skip(i_pos + 2).cloned().collect();
+    let output_pos = rest.iter().rposition(|a| !a.starts_with('-'));
+    let output_path = output_pos.map(|p| rest[p].clone());
+    let end = output_pos.unwrap_or(rest.len());
+    let ffmpeg_args: Vec<String> = rest[..end].to_vec();
+    (is_cloud, Some(input_url.clone()), ffmpeg_args, output_path)
+}
 
+fn write_marker_file(path: &str, presigned_url: &str) -> Result<(), String> {
+    std::fs::write(path, format!("FFMPEG_MCP_OUTPUT_URL={presigned_url}\n"))
+        .map_err(|e| format!("Failed to write MCP marker file: {e}"))
+}
+
+pub fn read_marker_file(path: &str) -> Option<String> {
+    let content = std::fs::read_to_string(path).ok()?;
+    if let Some(line) = content.lines().next() {
+        if let Some(url) = line.strip_prefix("FFMPEG_MCP_OUTPUT_URL=") {
+            return Some(url.to_string());
+        }
+    }
+    None
+}
+
+/// Execute FFmpeg with MCP routing when input is a cloud URL.
+/// Falls back to local FFmpeg otherwise.
+fn execute_ffmpeg_maybe_via_mcp(
+    command: &mut Command,
+    generate_output_key: impl Fn(&str) -> String,
+) -> Result<String, String> {
+    if std::env::var("FFMPEG_MCP_URL").is_err() {
+        return run_local_ffmpeg(command);
+    }
+
+    let program = command.get_program().to_string_lossy().to_string();
+    let args: Vec<String> = command.get_args().map(|a| a.to_string_lossy().to_string()).collect();
+
+    let (is_cloud, input_url, ffmpeg_args, output_path) = parse_ffmpeg_args(&args);
+    if !is_cloud || input_url.is_none() || output_path.is_none() {
+        return run_local_ffmpeg(command);
+    }
+
+    let input_url = input_url.unwrap();
+    let output_path = output_path.unwrap();
+    let output_key = generate_output_key(&output_path);
+
+    // Call MCP using a one-shot Tokio runtime
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("Failed to build runtime: {e}"))?;
+
+    let output_url = rt.block_on(crate::ffmpeg_mcp_client::FfmpegMcpClient::from_env()
+        .ok_or("FFmpeg MCP not configured".to_string())?
+        .process(&input_url, &ffmpeg_args, &output_key)
+    ).map_err(|e| format!("FFmpeg MCP failed: {e}"))?;
+
+    write_marker_file(&output_path, &output_url)?;
+    tracing::info!("✅ FFmpeg MCP: {output_path} → {output_url}");
+    Ok(String::new())
+}
+
+fn run_local_ffmpeg(command: &mut Command) -> Result<String, String> {
     let output = command
         .output()
         .map_err(|e| format!("Failed to execute FFmpeg: {}", e))?;
@@ -30,28 +98,57 @@ pub fn execute_ffmpeg_command(mut command: Command) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
-/// Execute FFmpeg command synchronously with timeout to prevent hung processes
-/// This wraps the async version using a Tokio runtime.
-/// Safe to call from both async and sync contexts.
+/// Execute FFmpeg command with error handling and progress info
+/// Routes through MCP when input is a cloud URL.
+pub fn execute_ffmpeg_command(mut command: Command) -> Result<String, String> {
+    println!("Executing FFmpeg: {:?}", command);
+    execute_ffmpeg_maybe_via_mcp(&mut command, |path| {
+        let name = path.split('/').last().unwrap_or("output");
+        format!("processed/{}", name)
+    })
+}
+
+/// Execute FFmpeg command synchronously with timeout.
+/// Routes through MCP when input is a cloud URL.
 /// Default timeout is 5 minutes (300 seconds)
 pub fn execute_ffmpeg_command_with_sync_timeout(
     command: Command,
     timeout_secs: Option<u64>,
 ) -> Result<String, String> {
+    // Try MCP first if input is a cloud URL
+    let mut cmd = command;
+    let args: Vec<String> = cmd.get_args().map(|a| a.to_string_lossy().to_string()).collect();
+    let (is_cloud, input_url, ffmpeg_args, output_path) = parse_ffmpeg_args(&args);
+
+    if is_cloud && input_url.is_some() && output_path.is_some() && std::env::var("FFMPEG_MCP_URL").is_ok() {
+        let input_url = input_url.unwrap();
+        let output_path = output_path.unwrap();
+        let output_key = format!("processed/{}", output_path.split('/').last().unwrap_or("output"));
+
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build().map_err(|e| format!("Runtime: {e}"))?;
+
+        match rt.block_on(
+            crate::ffmpeg_mcp_client::FfmpegMcpClient::from_env()
+                .ok_or("MCP not configured")?
+                .process(&input_url, &ffmpeg_args, &output_key)
+        ) {
+            Ok(output_url) => {
+                write_marker_file(&output_path, &output_url)?;
+                return Ok(String::new());
+            }
+            Err(mcp_err) => {
+                tracing::warn!("FFmpeg MCP failed, falling back to local: {mcp_err}");
+                // Fall through to local processing
+            }
+        }
+    }
+
+    // Local FFmpeg path
     let timeout = std::time::Duration::from_secs(timeout_secs.unwrap_or(300));
+    let program = cmd.get_program().to_string_lossy().to_string();
 
-    // Extract program and args from the std::process::Command
-    let program = command.get_program().to_string_lossy().to_string();
-    let args: Vec<String> = command
-        .get_args()
-        .map(|a| a.to_string_lossy().to_string())
-        .collect();
-
-    // Spawn with stderr piped so we can capture errors on failure.
-    // Using std::process directly avoids the block_in_place-inside-spawn_blocking
-    // pitfall: block_in_place inside spawn_blocking stalls the Tokio runtime,
-    // preventing the async timeout future from ever being polled, so the process
-    // runs forever.  A polling loop with try_wait() works in any context.
     let mut child = std::process::Command::new(&program)
         .args(&args)
         .stdout(std::process::Stdio::null())
@@ -86,7 +183,6 @@ pub fn execute_ffmpeg_command_with_sync_timeout(
                 ));
             }
             Ok(None) => {
-                // Still running — check deadline
                 if std::time::Instant::now() >= deadline {
                     let _ = child.kill();
                     let _ = child.wait();
@@ -94,8 +190,7 @@ pub fn execute_ffmpeg_command_with_sync_timeout(
                         let _ = reader.join();
                     }
                     return Err(format!(
-                        "FFmpeg operation timed out after {} seconds. \
-                         Process has been terminated.",
+                        "FFmpeg operation timed out after {} seconds.",
                         timeout.as_secs()
                     ));
                 }
@@ -112,43 +207,105 @@ pub fn execute_ffmpeg_command_with_sync_timeout(
     }
 }
 
-/// Execute FFmpeg command asynchronously with timeout to prevent hung processes
+// ─── Cloud-aware FFmpeg via MCP microservice ──────────────────────────────
+
+/// Returns true if the path looks like an HTTP/HTTPS URL.
+pub fn is_cloud_url(path: &str) -> bool {
+    path.starts_with("http://") || path.starts_with("https://")
+}
+
+/// Extract args from a TokioCommand using its Debug output.
+fn extract_tokio_args(command: &TokioCommand) -> Vec<String> {
+    let dbg = format!("{:?}", command);
+    // Debug format: `"ffmpeg" "-y" "-i" "input" ...` (space-separated quoted strings)
+    let mut args = Vec::new();
+    let mut chars = dbg.chars().peekable();
+    while let Some(&c) = chars.peek() {
+        if c == '"' {
+            chars.next();
+            let mut s = String::new();
+            while let Some(&c2) = chars.peek() {
+                if c2 == '"' {
+                    chars.next();
+                    break;
+                }
+                s.push(c2);
+                chars.next();
+            }
+            args.push(s);
+        } else if c == ' ' {
+            chars.next();
+        } else {
+            chars.next();
+        }
+    }
+    args
+}
+
+/// Process media via the FFmpeg MCP microservice.
+/// Input is an R2 presigned URL. Returns the output presigned URL.
+/// Falls back to local FFmpeg if MCP is not configured.
+pub async fn process_via_mcp(
+    input_url: &str,
+    ffmpeg_args: &[String],
+    output_key: &str,
+) -> Result<String, String> {
+    let client = crate::ffmpeg_mcp_client::FfmpegMcpClient::from_env()
+        .ok_or("FFmpeg MCP not configured, install by setting FFMPEG_MCP_URL".to_string())?;
+    client.process(input_url, ffmpeg_args, output_key).await
+}
+
+/// Execute FFmpeg command asynchronously with timeout.
+/// Routes through MCP when input is a cloud URL.
 /// Timeout is 5 minutes (300 seconds) by default
 pub async fn execute_ffmpeg_command_with_timeout(
     mut command: TokioCommand,
     timeout_secs: Option<u64>,
 ) -> Result<String, String> {
-    let timeout_duration = Duration::from_secs(timeout_secs.unwrap_or(300));
+    // Try MCP first if input is a cloud URL
+    // Extract args from the TokioCommand Debug representation
+    let args: Vec<String> = extract_tokio_args(&command);
+    let (is_cloud, input_url, ffmpeg_args, output_path) = parse_ffmpeg_args(&args);
 
+    if is_cloud && input_url.is_some() && output_path.is_some() && std::env::var("FFMPEG_MCP_URL").is_ok() {
+        let input_url = input_url.unwrap();
+        let output_path = output_path.unwrap();
+        let output_key = format!("processed/{}", output_path.split('/').last().unwrap_or("output"));
+
+        match crate::ffmpeg_mcp_client::FfmpegMcpClient::from_env()
+            .ok_or("MCP not configured")?
+            .process(&input_url, &ffmpeg_args, &output_key)
+            .await
+        {
+            Ok(output_url) => {
+                write_marker_file(&output_path, &output_url)?;
+                return Ok(String::new());
+            }
+            Err(mcp_err) => {
+                tracing::warn!("FFmpeg MCP failed, falling back to local: {mcp_err}");
+            }
+        }
+    }
+
+    // Local FFmpeg path
+    let timeout_duration = Duration::from_secs(timeout_secs.unwrap_or(300));
     tracing::debug!(
         "Executing FFmpeg with {}s timeout: {:?}",
         timeout_duration.as_secs(),
         command
     );
 
-    // Spawn the FFmpeg process
     let child = command
-        .kill_on_drop(true) // Ensure cleanup if timeout occurs
+        .kill_on_drop(true)
         .spawn()
         .map_err(|e| format!("Failed to spawn FFmpeg process: {}", e))?;
 
-    // Wait with timeout
     let output = match tokio::time::timeout(timeout_duration, child.wait_with_output()).await {
         Ok(Ok(output)) => output,
-        Ok(Err(e)) => {
-            return Err(format!("FFmpeg process failed: {}", e));
-        }
+        Ok(Err(e)) => return Err(format!("FFmpeg process failed: {}", e)),
         Err(_) => {
-            tracing::error!(
-                "❌ FFmpeg command timed out after {}s - process killed",
-                timeout_duration.as_secs()
-            );
             return Err(format!(
-                "FFmpeg operation timed out after {} seconds. This usually happens when:\n\
-                - System went to sleep/wake cycle\n\
-                - Network download stalled\n\
-                - Complex filter taking too long\n\
-                Process has been terminated.",
+                "FFmpeg operation timed out after {} seconds. Process terminated.",
                 timeout_duration.as_secs()
             ));
         }

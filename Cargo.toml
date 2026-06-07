@@ -69,3 +69,8 @@ lettre = { version = "0.11", default-features = false, features = ["builder", "s
 grammers-client = "0.9"
 grammers-session = { version = "0.9", default-features = false, features = ["sqlite-storage"] }
 
+[profile.release]
+lto = false
+codegen-units = 16
+strip = "debuginfo"
+

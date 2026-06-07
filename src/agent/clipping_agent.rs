@@ -225,11 +225,10 @@ impl GeminiClippingAgent {
     /// All other phases (download, extract, vectorize, upload) run without Gemini.
     /// Crash-safe: state is checkpointed to PostgreSQL after every phase.
     pub async fn process_job(&self, job_id: i32) -> Result<String, String> {
-        // Gemini is needed for Phase A video analysis
-        self.app_state
-            .gemini_client
-            .as_ref()
-            .ok_or("Gemini client not configured — required for Phase A video analysis")?;
+        // Ollama or Gemini is needed for Phase A video analysis
+        if self.app_state.ollama_client.is_none() && self.app_state.gemini_client.is_none() {
+            return Err("Neither Ollama nor Gemini client configured — required for Phase A video analysis".to_string());
+        }
 
         // Load checkpoint (crash resumption) or create fresh state from resume_from
         let (mut state, _history) = self.load_or_init_state(job_id).await?;
@@ -805,11 +804,21 @@ impl GeminiClippingAgent {
 
         update_job_status(job_id, "analyzing", 10, None, &self.app_state.db_pool).await?;
 
-        let gemini = self
-            .app_state
-            .gemini_client
-            .as_ref()
-            .ok_or("Gemini client not configured")?;
+        // Fetch top-performing viral factors from performance tracker to bias selection
+        let learned_factors: Vec<String> = sqlx::query_scalar(
+            "SELECT viral_factor FROM viral_factor_performance \
+             WHERE total_clips >= 3 ORDER BY performance_score DESC LIMIT 5",
+        )
+        .fetch_all(&self.app_state.db_pool)
+        .await
+        .unwrap_or_default();
+
+        if !learned_factors.is_empty() {
+            tracing::info!(
+                "📈 Passing {} learned high-performing factors to analysis",
+                learned_factors.len()
+            );
+        }
 
         if let Some(analysis) =
             load_reusable_source_analysis(job_id, &job.source_video_id, &self.app_state.db_pool)
@@ -850,7 +859,7 @@ impl GeminiClippingAgent {
             }));
         }
 
-        // Emit heartbeat every 30s during Gemini analysis (up to 180s)
+        // Emit heartbeat every 30s during analysis (up to 300s for Ollama)
         let (stop_tx_a, stop_rx_a) = tokio::sync::watch::channel(false);
         let hb_db_a = self.app_state.db_pool.clone();
         let hb_job_id_a = job_id;
@@ -874,64 +883,124 @@ impl GeminiClippingAgent {
             }
         });
 
-        // Fetch top-performing viral factors from performance tracker to bias selection
-        let learned_factors: Vec<String> = sqlx::query_scalar(
-            "SELECT viral_factor FROM viral_factor_performance \
-             WHERE total_clips >= 3 ORDER BY performance_score DESC LIMIT 5",
-        )
-        .fetch_all(&self.app_state.db_pool)
-        .await
-        .unwrap_or_default();
+        // Tier 1: Ollama (self-hosted gemma4:12b — free, no rate limits)
+        let analysis = if let Some(ollama) = self.app_state.ollama_client.as_ref() {
+            let ollama_result = tokio::time::timeout(
+                tokio::time::Duration::from_secs(300),
+                ollama.analyze_video_from_url(
+                    &video_url,
+                    linkage.clips_per_video as usize,
+                    linkage.min_clip_duration_seconds as f64,
+                    linkage.max_clip_duration_seconds as f64,
+                    &learned_factors,
+                ),
+            )
+            .await;
 
-        if !learned_factors.is_empty() {
-            tracing::info!(
-                "📈 Passing {} learned high-performing factors to Gemini analysis",
-                learned_factors.len()
-            );
-        }
+            let ollama_analysis = match ollama_result {
+                Ok(Ok(a)) => Some(a),
+                Ok(Err(e)) => {
+                    tracing::warn!("⚠️ Ollama Phase A analysis failed (job {}), falling back to Gemini: {}", job_id, e);
+                    None
+                }
+                Err(_) => {
+                    tracing::warn!("⚠️ Ollama Phase A analysis timed out (job {}), falling back to Gemini", job_id);
+                    None
+                }
+            };
 
-        let gemini_result = tokio::time::timeout(
-            tokio::time::Duration::from_secs(180),
-            gemini.analyze_video_from_url(
-                &video_url,
-                linkage.clips_per_video as usize,
-                linkage.min_clip_duration_seconds as f64,
-                linkage.max_clip_duration_seconds as f64,
-                &learned_factors,
-            ),
-        )
-        .await
-        .map_err(|_| "Gemini analysis timed out after 180s".to_string())?;
+            match ollama_analysis {
+                Some(a) => a,
+                None => {
+                    // Tier 2: Gemini
+                    let gemini = self
+                        .app_state
+                        .gemini_client
+                        .as_ref()
+                        .ok_or("Gemini client not configured")?;
 
-        let _ = stop_tx_a.send(true);
-        let _ = heartbeat_handle_a.await;
-
-        let analysis = match gemini_result {
-            Ok(a) => a,
-            Err(e) if should_fallback_from_gemini_video_analysis_error(&e.to_string()) => {
-                tracing::warn!("⚠️ Gemini provider error on Phase A analysis (job {}), falling back to BlenderMCPServer: {}", job_id, e);
-                if let Some(blender) = self.app_state.blender_mcp_client.as_ref() {
-                    blender
-                        .analyze_video(
+                    let gemini_result = tokio::time::timeout(
+                        tokio::time::Duration::from_secs(180),
+                        gemini.analyze_video_from_url(
                             &video_url,
-                            linkage.clips_per_video as u32,
+                            linkage.clips_per_video as usize,
                             linkage.min_clip_duration_seconds as f64,
                             linkage.max_clip_duration_seconds as f64,
                             &learned_factors,
-                        )
-                        .await
-                        .map_err(|be| {
-                            format!(
-                                "Gemini provider analysis failed; BlenderMCP fallback also failed: {}",
-                                be
-                            )
-                        })?
-                } else {
-                    return Err(format!("Gemini analysis failed with provider error: {}. No BlenderMCP fallback configured.", e));
+                        ),
+                    )
+                    .await
+                    .map_err(|_| "Gemini analysis timed out after 180s".to_string())?;
+
+                    match gemini_result {
+                        Ok(a) => a,
+                        Err(e) if should_fallback_from_gemini_video_analysis_error(&e.to_string()) => {
+                            tracing::warn!("⚠️ Gemini provider error on Phase A analysis (job {}), falling back to BlenderMCPServer: {}", job_id, e);
+                            if let Some(blender) = self.app_state.blender_mcp_client.as_ref() {
+                                blender
+                                    .analyze_video(
+                                        &video_url,
+                                        linkage.clips_per_video as u32,
+                                        linkage.min_clip_duration_seconds as f64,
+                                        linkage.max_clip_duration_seconds as f64,
+                                        &learned_factors,
+                                    )
+                                    .await
+                                    .map_err(|be| format!("Gemini provider analysis failed; BlenderMCP fallback also failed: {}", be))?
+                            } else {
+                                return Err(format!("Gemini analysis failed with provider error: {}. No BlenderMCP fallback configured.", e));
+                            }
+                        }
+                        Err(e) => return Err(format!("Gemini analysis failed: {}", e)),
+                    }
                 }
             }
-            Err(e) => return Err(format!("Gemini analysis failed: {}", e)),
+        } else {
+            // No Ollama configured — use Gemini directly
+            let gemini = self
+                .app_state
+                .gemini_client
+                .as_ref()
+                .ok_or("Gemini client not configured")?;
+
+            let gemini_result = tokio::time::timeout(
+                tokio::time::Duration::from_secs(180),
+                gemini.analyze_video_from_url(
+                    &video_url,
+                    linkage.clips_per_video as usize,
+                    linkage.min_clip_duration_seconds as f64,
+                    linkage.max_clip_duration_seconds as f64,
+                    &learned_factors,
+                ),
+            )
+            .await
+            .map_err(|_| "Gemini analysis timed out after 180s".to_string())?;
+
+            match gemini_result {
+                Ok(a) => a,
+                Err(e) if should_fallback_from_gemini_video_analysis_error(&e.to_string()) => {
+                    tracing::warn!("⚠️ Gemini provider error on Phase A analysis (job {}), falling back to BlenderMCPServer: {}", job_id, e);
+                    if let Some(blender) = self.app_state.blender_mcp_client.as_ref() {
+                        blender
+                            .analyze_video(
+                                &video_url,
+                                linkage.clips_per_video as u32,
+                                linkage.min_clip_duration_seconds as f64,
+                                linkage.max_clip_duration_seconds as f64,
+                                &learned_factors,
+                            )
+                            .await
+                            .map_err(|be| format!("Gemini provider analysis failed; BlenderMCP fallback also failed: {}", be))?
+                    } else {
+                        return Err(format!("Gemini analysis failed with provider error: {}. No BlenderMCP fallback configured.", e));
+                    }
+                }
+                Err(e) => return Err(format!("Gemini analysis failed: {}", e)),
+            }
         };
+
+        let _ = stop_tx_a.send(true);
+        let _ = heartbeat_handle_a.await;
 
         let overall_quality = analysis.overall_quality;
         let moments_count = analysis.viral_moments.len();
@@ -1162,12 +1231,6 @@ impl GeminiClippingAgent {
 
         update_job_status(job_id, "analyzing", 10, None, &self.app_state.db_pool).await?;
 
-        let gemini = self
-            .app_state
-            .gemini_client
-            .as_ref()
-            .ok_or("Gemini client not configured")?;
-
         // Fetch learned high-performing viral factors to bias analysis
         let learned_factors: Vec<String> = sqlx::query_scalar(
             "SELECT viral_factor FROM viral_factor_performance \
@@ -1182,19 +1245,92 @@ impl GeminiClippingAgent {
             video_path
         );
 
-        let analysis = tokio::time::timeout(
-            tokio::time::Duration::from_secs(300), // 5 min — frame analysis can take longer
-            gemini.analyze_video_from_local_file(
-                &video_path,
-                linkage.clips_per_video as usize,
-                linkage.min_clip_duration_seconds as f64,
-                linkage.max_clip_duration_seconds as f64,
-                &learned_factors,
-            ),
-        )
-        .await
-        .map_err(|_| "Gemini local-file analysis timed out after 300s".to_string())?
-        .map_err(|e| format!("Gemini analysis failed: {}", e))?;
+        // Tier 1: Ollama (self-hosted gemma4:12b — free, no rate limits)
+        let analysis = if let Some(ollama) = self.app_state.ollama_client.as_ref() {
+            let ollama_result = tokio::time::timeout(
+                tokio::time::Duration::from_secs(300),
+                ollama.analyze_video_from_local_file(
+                    &video_path,
+                    linkage.clips_per_video as usize,
+                    linkage.min_clip_duration_seconds as f64,
+                    linkage.max_clip_duration_seconds as f64,
+                    &learned_factors,
+                ),
+            )
+            .await;
+
+            match ollama_result {
+                Ok(Ok(a)) => a,
+                Ok(Err(e)) => {
+                    tracing::warn!("⚠️ Ollama Twitch analysis failed (job {}), falling back to Gemini: {}", job_id, e);
+
+                    // Tier 2: Gemini
+                    let gemini = self
+                        .app_state
+                        .gemini_client
+                        .as_ref()
+                        .ok_or("Gemini client not configured")?;
+
+                    tokio::time::timeout(
+                        tokio::time::Duration::from_secs(300),
+                        gemini.analyze_video_from_local_file(
+                            &video_path,
+                            linkage.clips_per_video as usize,
+                            linkage.min_clip_duration_seconds as f64,
+                            linkage.max_clip_duration_seconds as f64,
+                            &learned_factors,
+                        ),
+                    )
+                    .await
+                    .map_err(|_| "Gemini local-file analysis timed out after 300s".to_string())?
+                    .map_err(|e| format!("Gemini analysis failed: {}", e))?
+                }
+                Err(_) => {
+                    tracing::warn!("⚠️ Ollama Twitch analysis timed out (job {}), falling back to Gemini", job_id);
+
+                    let gemini = self
+                        .app_state
+                        .gemini_client
+                        .as_ref()
+                        .ok_or("Gemini client not configured")?;
+
+                    tokio::time::timeout(
+                        tokio::time::Duration::from_secs(300),
+                        gemini.analyze_video_from_local_file(
+                            &video_path,
+                            linkage.clips_per_video as usize,
+                            linkage.min_clip_duration_seconds as f64,
+                            linkage.max_clip_duration_seconds as f64,
+                            &learned_factors,
+                        ),
+                    )
+                    .await
+                    .map_err(|_| "Gemini local-file analysis timed out after 300s".to_string())?
+                    .map_err(|e| format!("Gemini analysis failed: {}", e))?
+                }
+            }
+        } else {
+            // No Ollama — use Gemini directly
+            let gemini = self
+                .app_state
+                .gemini_client
+                .as_ref()
+                .ok_or("Gemini client not configured")?;
+
+            tokio::time::timeout(
+                tokio::time::Duration::from_secs(300),
+                gemini.analyze_video_from_local_file(
+                    &video_path,
+                    linkage.clips_per_video as usize,
+                    linkage.min_clip_duration_seconds as f64,
+                    linkage.max_clip_duration_seconds as f64,
+                    &learned_factors,
+                ),
+            )
+            .await
+            .map_err(|_| "Gemini local-file analysis timed out after 300s".to_string())?
+            .map_err(|e| format!("Gemini analysis failed: {}", e))?
+        };
 
         let overall_quality = analysis.overall_quality;
         let moments_count = analysis.viral_moments.len();

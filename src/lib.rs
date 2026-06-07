@@ -37,6 +37,7 @@ pub mod telegram_client;
 pub mod token_manager;
 pub mod tool_registry;
 pub mod twitch_client;
+pub mod ffmpeg_mcp_client;
 pub mod utils;
 pub mod vector_db;
 pub mod vertex_multimodal_embeddings;

@@ -43,6 +43,7 @@ impl SimpleClaudeAgent {
         // simple/background agents can choose from the full production stack.
         let selected_tool_names = crate::ai_tool_selector::select_tools_for_request(
             user_input,
+            app_state.ollama_client.as_ref(),
             app_state.nvidia_nim_client.as_ref(),
             app_state
                 .video_gemini_client

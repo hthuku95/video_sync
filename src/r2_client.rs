@@ -29,6 +29,7 @@ const PART_SIZE: usize = 50 * 1024 * 1024; // 50 MB parts
 #[derive(Clone)]
 pub struct R2Client {
     client: Client,
+    http: reqwest::Client,
     pub bucket: String,
     pub endpoint: String,
 }
@@ -62,9 +63,14 @@ impl R2Client {
             .build();
 
         let client = Client::from_conf(s3_config);
+        let http = reqwest::Client::builder()
+            .timeout(Duration::from_secs(120))
+            .build()
+            .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
 
         Ok(Self {
             client,
+            http,
             bucket: bucket.to_string(),
             endpoint,
         })
@@ -84,7 +90,9 @@ impl R2Client {
             let result = if metadata.len() > MULTIPART_THRESHOLD {
                 self.upload_multipart(local_path, key).await
             } else {
-                self.upload_simple(local_path, key).await
+                // Use presigned PUT + reqwest for simple uploads to avoid
+                // the AWS SDK HTTP client's connection-reset issues with R2.
+                self.upload_via_presigned_put(local_path, key).await
             };
 
             match result {
@@ -112,19 +120,42 @@ impl R2Client {
         self.presign_get(key, 7 * 24 * 3600).await
     }
 
-    async fn upload_simple(&self, local_path: &str, key: &str) -> Result<(), String> {
-        let body = ByteStream::from_path(Path::new(local_path))
-            .await
-            .map_err(|e| format!("Failed to read {local_path}: {e}"))?;
+    /// Upload via presigned PUT URL (sign with SDK, upload with reqwest).
+    /// Avoids the AWS SDK HTTP client's connectivity issues with R2.
+    async fn upload_via_presigned_put(&self, local_path: &str, key: &str) -> Result<(), String> {
+        let config = PresigningConfig::builder()
+            .expires_in(Duration::from_secs(3600))
+            .build()
+            .map_err(|e| format!("PresigningConfig error: {e}"))?;
 
-        self.client
+        let url = self
+            .client
             .put_object()
             .bucket(&self.bucket)
             .key(key)
+            .presigned(config)
+            .await
+            .map_err(|e| format!("Failed to presign PUT URL: {e}"))?
+            .uri()
+            .to_string();
+
+        let body = tokio::fs::read(local_path)
+            .await
+            .map_err(|e| format!("Failed to read {local_path}: {e}"))?;
+
+        let resp = self
+            .http
+            .put(&url)
             .body(body)
             .send()
             .await
-            .map_err(|e| format!("R2 upload failed for {key}: {e:?}"))?;
+            .map_err(|e| format!("R2 presigned PUT failed: {e}"))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(format!("R2 presigned PUT HTTP {status}: {text}"));
+        }
 
         tracing::info!("R2 upload: {local_path} → {key}");
         Ok(())

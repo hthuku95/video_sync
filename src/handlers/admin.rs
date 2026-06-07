@@ -7707,7 +7707,7 @@ pub async fn delivery_gcs_download(
         .key
         .filter(|key| key.starts_with("generated/") && key.ends_with(".mp4"))
         .unwrap_or_else(|| format!("generated/0/video/{filename}"));
-    let gcs = match crate::gcs_client::GcsClient::from_env() {
+    let gcs = match crate::gcs_client::GcsClient::from_env().await {
         Some(gcs) => gcs,
         None => {
             return (

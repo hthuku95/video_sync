@@ -146,6 +146,14 @@ pub async fn upload_local_file_to_cloud(
     workflow_id: Option<Uuid>,
     app_state: &Arc<AppState>,
 ) -> Result<String, String> {
+    // Check if this is an MCP marker file — if so, return the presigned URL directly
+    if let Some(presigned_url) = crate::utils::read_marker_file(local_path) {
+        tracing::info!(
+            "📎 MCP marker detected for {local_path}, using presigned URL directly (no re-upload)"
+        );
+        return Ok(presigned_url);
+    }
+
     let bytes = tokio::fs::read(local_path)
         .await
         .map_err(|e| format!("Failed to read local file {local_path}: {e}"))?;

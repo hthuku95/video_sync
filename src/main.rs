@@ -17,6 +17,7 @@ mod cloud_storage;
 mod db;
 mod deepseek_client;
 mod email;
+mod ffmpeg_mcp_client;
 mod elevenlabs_client; // 🎙️ Eleven Labs TTS, Sound Effects, Music
 mod gemini_client;
 mod gcs_client;
@@ -621,7 +622,7 @@ async fn main() {
     };
 
     // Initialize GCS client (Google Cloud Storage)
-    let gcs_client = gcs_client::GcsClient::from_env();
+    let gcs_client = gcs_client::GcsClient::from_env().await;
     if gcs_client.is_some() {
         tracing::info!("☁️ Initialized Google Cloud Storage client");
     }

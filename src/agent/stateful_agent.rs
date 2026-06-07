@@ -557,6 +557,7 @@ impl StatefulGeminiAgent {
         // default and choose the right tools themselves at runtime.
         let selected_video_tools = crate::ai_tool_selector::select_tools_for_request(
             user_input,
+            app_state.ollama_client.as_ref(),
             app_state.nvidia_nim_client.as_ref(),
             app_state
                 .video_gemini_client
@@ -811,11 +812,72 @@ You MUST only call tools that are explicitly listed in the `tools` array of this
                 system_instruction: Some(system_instruction_content.clone()),
             };
 
-            let response = match self.client.generate_content(request).await {
+            // Try Ollama first (self-hosted, free), then Gemini, then DeepSeek
+            let response = match app_state.ollama_client.as_ref() {
+                Some(ollama) => {
+                    // Build OpenAI-format messages from conversation history
+                    let mut oa_messages: Vec<serde_json::Value> = vec![
+                        serde_json::json!({"role": "system", "content": system_instruction})
+                    ];
+                    for msg in &conversation_history {
+                        let role = match msg.role {
+                            crate::agent::conversation_manager::MessageRole::Human => "user",
+                            crate::agent::conversation_manager::MessageRole::Assistant => "assistant",
+                            _ => continue,
+                        };
+                        oa_messages.push(serde_json::json!({"role": role, "content": msg.content}));
+                    }
+                    let current_msg = if !context.is_empty() {
+                        context.to_string()
+                    } else {
+                        user_input.to_string()
+                    };
+                    oa_messages.push(serde_json::json!({"role": "user", "content": current_msg}));
+
+                    send_progress("🤖 Trying Ollama Gemma 4 (self-hosted)...");
+
+                    let exec_context = crate::agent::tool_executor::ToolExecutionContext {
+                        session_id: session_id.to_string(),
+                        user_id,
+                        app_state: app_state.clone(),
+                        workflow_id,
+                    };
+
+                    match run_ollama_tool_loop(
+                        ollama,
+                        &mut oa_messages,
+                        &all_tools,
+                        &exec_context,
+                        &send_progress,
+                    )
+                    .await
+                    {
+                        Ok(response) => {
+                            let clean = response.trim().to_string();
+                            let msg = ConversationMessage::new_assistant(
+                                session_id.to_string(),
+                                clean.clone(),
+                            );
+                            let _ = conversation_manager.save_message(&msg).await;
+                            tracing::info!(
+                                "✅ Ollama completed task for session {}",
+                                session_id
+                            );
+                            return Ok(clean);
+                        }
+                        Err(ollama_err) => {
+                            tracing::warn!("⚠️ Ollama failed, trying Gemini: {}", ollama_err);
+                            self.client.generate_content(request).await
+                        }
+                    }
+                }
+                None => self.client.generate_content(request).await,
+            };
+
+            let response = match response {
                 Ok(r) => r,
                 Err(gemini_err) => {
                     tracing::warn!("⚠️ Gemini failed, trying DeepSeek fallback: {}", gemini_err);
-                    // Build OpenAI-format messages from conversation history
                     let mut ds_messages: Vec<serde_json::Value> = vec![
                         serde_json::json!({"role": "system", "content": system_instruction})
                     ];
@@ -1437,6 +1499,86 @@ You MUST only call tools that are explicitly listed in the `tools` array of this
 // ── Gemma 4 / NVIDIA NIM tool calling loop ────────────────────────────────────
 //
 // Runs the same multi-turn tool loop as the Gemini agent but using NVIDIA NIM's
+/// Multi-turn tool loop for Ollama (self-hosted Gemma 4).
+/// Same contract as `run_deepseek_tool_loop` — feeds tool results back to the model
+/// and keeps calling until a text answer is returned (or MAX_TURNS exhausted).
+async fn run_ollama_tool_loop<F>(
+    ollama_client: &crate::ollama_client::OllamaClient,
+    messages: &mut Vec<serde_json::Value>,
+    tools: &[crate::gemini_client::FunctionDeclaration],
+    exec_context: &crate::agent::tool_executor::ToolExecutionContext,
+    send_progress: &F,
+) -> Result<String, String>
+where
+    F: Fn(&str),
+{
+    const MAX_TURNS: usize = 10;
+
+    for turn in 0..MAX_TURNS {
+        let response = ollama_client
+            .generate_single(messages, tools)
+            .await
+            .map_err(|e| format!("Ollama API error: {}", e))?;
+
+        match response {
+            crate::ollama_client::OllamaResponse::Text(text) => {
+                tracing::info!("✅ Ollama final answer after {} turns", turn + 1);
+                return Ok(text);
+            }
+
+            crate::ollama_client::OllamaResponse::ToolCalls(tool_calls) => {
+                let assistant_tool_calls: Vec<serde_json::Value> = tool_calls
+                    .iter()
+                    .map(|tc| {
+                        serde_json::json!({
+                            "id": tc.id,
+                            "type": "function",
+                            "function": {
+                                "name": tc.name,
+                                "arguments": tc.arguments.to_string(),
+                            }
+                        })
+                    })
+                    .collect();
+
+                messages.push(serde_json::json!({
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": assistant_tool_calls,
+                }));
+
+                for tc in &tool_calls {
+                    send_progress(&format!("🔧 Ollama calling: {}", tc.name));
+                    tracing::info!("🎬 Ollama tool call: {}", tc.name);
+
+                    let args_map: std::collections::HashMap<String, serde_json::Value> = tc
+                        .arguments
+                        .as_object()
+                        .map(|o| o.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+                        .unwrap_or_default();
+
+                    let result = crate::agent::tool_executor::execute_tool_gemini_with_context(
+                        &tc.name,
+                        &args_map,
+                        exec_context,
+                    )
+                    .await;
+
+                    send_progress(&format!("✅ {} done", tc.name));
+
+                    messages.push(serde_json::json!({
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": result,
+                    }));
+                }
+            }
+        }
+    }
+
+    Err(format!("Ollama exceeded max turns ({})", MAX_TURNS))
+}
+
 // OpenAI-compatible API. Gemma 4 has NATIVE function calling (special tokens,
 // not prompt engineering), so this is a first-class supported path.
 //
