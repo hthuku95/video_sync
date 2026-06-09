@@ -562,6 +562,49 @@ async fn finalize_special_tool_result_value(
     result
 }
 
+/// After a tool creates a local file, upload it to R2 and return the cloud URL.
+/// The local file is kept for pipeline QA review and cleaned up by the pipeline afterwards.
+async fn upload_tool_output_to_cloud(local_path: &str, ctx: &ToolExecutionContext) -> Option<String> {
+    let file_name = std::path::Path::new(local_path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("output");
+
+    let content_type = if file_name.ends_with(".mp4") || file_name.ends_with(".webm") || file_name.ends_with(".mov") {
+        "video/mp4"
+    } else if file_name.ends_with(".png") {
+        "image/png"
+    } else if file_name.ends_with(".jpg") || file_name.ends_with(".jpeg") {
+        "image/jpeg"
+    } else if file_name.ends_with(".mp3") || file_name.ends_with(".wav") || file_name.ends_with(".aac") {
+        "audio/mpeg"
+    } else if file_name.ends_with(".gif") {
+        "image/gif"
+    } else {
+        "application/octet-stream"
+    };
+
+    match crate::cloud_storage::upload_local_file_to_cloud(
+        local_path,
+        content_type,
+        ctx.user_id.unwrap_or(0),
+        &ctx.session_id,
+        ctx.workflow_id,
+        &ctx.app_state,
+    )
+    .await
+    {
+        Ok(url) => {
+            tracing::info!(local_path, cloud_url = %url, "upload_tool_output_to_cloud: uploaded to R2");
+            Some(url)
+        }
+        Err(e) => {
+            tracing::warn!(local_path, error = %e, "upload_tool_output_to_cloud: failed");
+            None
+        }
+    }
+}
+
 async fn finalize_special_tool_result_gemini(
     tool_name: &str,
     args: &HashMap<String, Value>,
@@ -580,6 +623,11 @@ async fn finalize_special_tool_result_gemini(
                 ctx,
             )
             .await;
+
+            // Upload to R2 immediately so no media stays on disk
+            if let Some(cloud_url) = upload_tool_output_to_cloud(&output_path, ctx).await {
+                return format!("{}\n📤 Cloud URL: {}", result.trim(), cloud_url);
+            }
         }
     }
     result
@@ -870,7 +918,7 @@ async fn execute_tool_claude_with_context_inner(
     // Execute the tool first
     let result = execute_tool_claude(name, args).await;
 
-    // If tool succeeded and created an output file, save it to DB
+    // If tool succeeded and created an output file, save it to DB and upload to R2
     if !result.starts_with("❌") && !result.starts_with("Error") {
         if let Some(output_path) = extract_output_path_from_args(args) {
             persist_tool_output(
@@ -881,6 +929,9 @@ async fn execute_tool_claude_with_context_inner(
                 ctx,
             )
             .await;
+
+            // Upload to R2 — the file is now in the cloud
+            upload_tool_output_to_cloud(&output_path, ctx).await;
         }
     }
 
@@ -1135,7 +1186,7 @@ async fn execute_tool_gemini_with_context_inner(
     // Execute the tool first
     let result = execute_tool_gemini(name, args).await;
 
-    // If tool succeeded and created an output file, save it to DB
+    // If tool succeeded and created an output file, save it to DB and upload to R2
     if !result.starts_with("❌") && !result.starts_with("Error") {
         if let Some(output_path) = extract_output_path_from_gemini_args(args) {
             persist_tool_output(
@@ -1146,6 +1197,9 @@ async fn execute_tool_gemini_with_context_inner(
                 ctx,
             )
             .await;
+
+            // Upload to R2 — the cloud URL is available in the result for the LLM
+            upload_tool_output_to_cloud(&output_path, ctx).await;
         }
     }
 
@@ -3887,11 +3941,52 @@ async fn execute_submit_final_answer_with_state_gemini(
         .get("summary")
         .and_then(|v| v.as_str())
         .unwrap_or("Task completed");
-    let output_files = args
+    let mut output_files: Vec<String> = args
         .get("output_files")
         .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>())
+        .map(|arr| arr.iter().filter_map(|v| v.as_str()).map(|s| s.to_string()).collect())
         .unwrap_or_default();
+
+    // If no output_files provided, scan disk as fallback and check previous tool results
+    if output_files.is_empty() {
+        let parts: Vec<&str> = ctx.session_id.split('-').collect();
+        let delivery_id: Option<String> = if parts.len() >= 7 {
+            Some(parts[1..parts.len()-1].join("-"))
+        } else {
+            None
+        };
+        let mut scan_dirs = vec!["outputs".to_string()];
+        if let Some(ref delivery_id) = delivery_id {
+            scan_dirs.push(format!("outputs/agentic_{}", delivery_id));
+        }
+        for dir in &scan_dirs {
+            if let Ok(entries) = std::fs::read_dir(dir) {
+                let mut found: Vec<String> = entries
+                    .flatten()
+                    .filter_map(|e| {
+                        let p = e.path();
+                        let ext = p.extension()?.to_str()?;
+                        if matches!(ext, "mp4" | "webm" | "png" | "jpg" | "jpeg" | "mp3" | "wav" | "aac" | "gif") {
+                            Some(p.to_string_lossy().to_string())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                found.sort_by_key(|p| std::fs::metadata(p).ok().and_then(|m| m.modified().ok()));
+                found.reverse();
+                if !found.is_empty() {
+                    tracing::warn!(
+                        auto_detected = found.len(),
+                        dir = %dir,
+                        "submit_final_answer found local files — should use cloud URLs"
+                    );
+                    output_files = found;
+                    break;
+                }
+            }
+        }
+    }
 
     let mut response = format!("✅ {}\n\n", summary);
 
@@ -3902,14 +3997,19 @@ async fn execute_submit_final_answer_with_state_gemini(
             "submit_final_answer emitted output artifacts (Gemini, cloud-aware)"
         );
         response.push_str("📥 **Your edited videos are ready!**\n\n");
-        for file_path in output_files {
+        for file_path in &output_files {
             let file_name = std::path::Path::new(file_path)
                 .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or("video.mp4");
 
-            // Try to get a cloud URL — upload the file if it exists locally
-            let cloud_url = if std::path::Path::new(file_path).exists() {
+            // Try to get a cloud URL
+            let cloud_url = if file_path.starts_with("https://") {
+                // Already a cloud URL from a previous tool — use it directly
+                tracing::info!(url = %file_path, "submit_final_answer: using existing cloud URL");
+                Some(file_path.clone())
+            } else if std::path::Path::new(file_path).exists() {
+                // Local file — upload to cloud
                 let content_type = if file_name.ends_with(".mp4") || file_name.ends_with(".webm") {
                     "video/mp4"
                 } else if file_name.ends_with(".png") {
@@ -3943,7 +4043,7 @@ async fn execute_submit_final_answer_with_state_gemini(
 
             let file_id =
                 crate::services::GeneratedArtifactService::legacy_file_id(file_name);
-            response.push_str(&format!("**{}**\n", file_name));
+            response.push_str(&format!("**{}**\n", file_path));
             if let Some(url) = cloud_url {
                 response.push_str(&format!("Cloud URL: {}\n", url));
                 response.push_str(&format!("Download: `/api/outputs/download/{}`\n", file_id));

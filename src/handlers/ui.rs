@@ -807,7 +807,7 @@ fn build_services_overview_page_html() -> String {
             "Best first offer",
             "For SaaS founders, indie hackers, app owners, and startups that need a launch-ready product video fast.",
             "You send a website/app URL, screenshots, loom, or short brief.",
-            "We deliver a polished demo, promo, or walkthrough video. 30-120s is standard; longer videos are available.",
+            "Our AI agent produces a polished demo, promo, or walkthrough video autonomously. 30-120s is standard; longer videos are available.",
         ),
         (
             "Website-to-Video Agency Pack",
@@ -816,7 +816,7 @@ fn build_services_overview_page_html() -> String {
             "Fast agency resale",
             "For Webflow, Framer, SaaS, and marketing agencies that want to resell video deliverables to existing clients.",
             "You send 3 client websites, offers, or landing pages.",
-            "We deliver 3 client-ready demo/promo videos with delivery pages and download links.",
+            "Our AI agent produces 3 client-ready demo/promo videos with delivery pages and download links.",
         ),
         (
             "Product Mockup Video Pack",
@@ -987,8 +987,8 @@ fn build_services_overview_page_html() -> String {
     </div>
     <section class="hero">
       <div class="eyebrow">Services</div>
-      <h1>Done-for-you video production packs for launches, creators, courses, and agencies</h1>
-      <p>Send a website, app, screenshots, raw clips, a lesson topic, or a short brief. VideoSync turns it into a client-ready video, mockup, thumbnail, explainer, voiceover, or delivery page with download links. The $15/month AI workspace is separate; this page is for premium done-for-you work.</p>
+      <h1>AI-agent-driven video production for launches, creators, courses, and agencies</h1>
+      <p>Send a website, app, screenshots, raw clips, a lesson topic, or a short brief. VideoSync's AI agent autonomously produces your deliverable — no human editor, no back-and-forth, no waiting. The $15/month AI workspace is separate; this page is for premium agent-produced work.</p>
       <div class="hero-actions">
         <a class="hero-action primary" href="/services/saas-launch-pack">Start with a SaaS demo</a>
         <a class="hero-action" href="/services/mixed-agency-bundle">See agency pack</a>
@@ -1002,8 +1002,8 @@ fn build_services_overview_page_html() -> String {
       </div>
     </section>
     <div class="section-intro">
-      <h2>Pick the outcome you want to sell or publish</h2>
-      <p>Every pack is designed around a concrete buyer outcome: launch faster, make the product easier to understand, package creator content, or fulfill agency work.</p>
+      <h2>Pick the outcome — our AI agent handles the rest</h2>
+      <p>Every pack is agent-driven: the AI plans, produces, QA-reviews, and publishes the final asset autonomously. No human in the loop means faster turnaround and consistent quality across all packs.</p>
     </div>
     <section class="grid">{cards}</section>
   </div>
@@ -1483,6 +1483,30 @@ fn build_service_offer_page_html(
         </div>
         <div id="paypal-section" style="margin-top:1.2rem;border-top:1px solid var(--line);padding-top:1rem;">
           <div style="font-size:0.85rem;color:var(--muted);margin-bottom:0.6rem;">Buy this service — Pay with PayPal or Credit Card:</div>
+          <details style="margin-bottom:0.8rem;">
+            <summary style="cursor:pointer;font-size:0.8rem;color:var(--muted);padding:0.3rem 0;">Billing address (optional)</summary>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem;margin-top:0.5rem;">
+              <input type="text" id="billing-name" placeholder="Full name" style="grid-column:1/-1;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:0.5rem 0.7rem;color:var(--text);font-family:inherit;font-size:0.85rem;">
+              <input type="text" id="billing-address1" placeholder="Address line 1" style="grid-column:1/-1;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:0.5rem 0.7rem;color:var(--text);font-family:inherit;font-size:0.85rem;">
+              <input type="text" id="billing-address2" placeholder="Address line 2 (optional)" style="grid-column:1/-1;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:0.5rem 0.7rem;color:var(--text);font-family:inherit;font-size:0.85rem;">
+              <input type="text" id="billing-city" placeholder="City" style="background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:0.5rem 0.7rem;color:var(--text);font-family:inherit;font-size:0.85rem;">
+              <input type="text" id="billing-state" placeholder="State / Province" style="background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:0.5rem 0.7rem;color:var(--text);font-family:inherit;font-size:0.85rem;">
+              <input type="text" id="billing-zip" placeholder="ZIP / Postal code" style="background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:0.5rem 0.7rem;color:var(--text);font-family:inherit;font-size:0.85rem;">
+              <select id="billing-country" style="grid-column:1/-1;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:0.5rem 0.7rem;color:var(--text);font-family:inherit;font-size:0.85rem;">
+                <option value="US">United States</option>
+                <option value="KE">Kenya</option>
+                <option value="GB">United Kingdom</option>
+                <option value="CA">Canada</option>
+                <option value="AU">Australia</option>
+                <option value="DE">Germany</option>
+                <option value="FR">France</option>
+                <option value="IN">India</option>
+                <option value="NG">Nigeria</option>
+                <option value="ZA">South Africa</option>
+                <option value="OTHER">Other</option>
+              </select>
+            </div>
+          </details>
           <div id="paypal-buttons-container"></div>
         </div>
       </div>
@@ -2224,7 +2248,7 @@ fn build_service_offer_page_html(
           script.onload = function() {{
             offers.forEach(function(offerId) {{
               paypal.Buttons({{
-                style: {{ layout: 'horizontal', label: 'paypal', tagline: false, height: 40 }},
+                style: {{ layout: 'horizontal', label: 'paypal', tagline: false, height: 40, color: 'blue', shape: 'pill' }},
                 createOrder: function(data, actions) {{
                   return fetch('/api/paypal/orders', {{
                     method: 'POST',
@@ -2889,8 +2913,8 @@ fn build_landing_page_html() -> &'static str {
     <!-- Hero Section -->
     <section class="hero">
         <div class="container">
-            <h1>AI-Powered Video Editing and Generation</h1>
-            <p>Describe the video you want in natural language. VideoSync helps you edit existing footage or generate new videos of any length with AI planning, FFmpeg editing tools, Blender/Manim/LaTeX visuals, voice generation, thumbnails, and review built into one workflow.</p>
+            <h1>AI Agent-Powered Video Production</h1>
+            <p>Describe the video you want in natural language. The AI agent plans the work, chooses the right tools, edits or generates footage, runs quality review, and publishes the result — all autonomously. FFmpeg, Blender, Manim, LaTeX, voice, thumbnails, captions, and delivery built into one agentic workflow.</p>
             <div style="background:rgba(122,76,255,0.15);border:1px solid rgba(122,76,255,0.4);border-radius:10px;padding:12px 18px;display:inline-block;margin:18px 0 14px;font-size:14px;color:#fff;font-weight:500">
                 <strong>Edit clips</strong>, <strong>generate long-form videos</strong>, <strong>create thumbnails</strong>, and <strong>produce visuals</strong> from one chat-based workspace
             </div>
@@ -3401,7 +3425,7 @@ fn build_modern_landing_page_html() -> &'static str {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VideoSync - AI-Powered Video Editing</title>
+    <title>VideoSync - AI Agent-Powered Video Production</title>
     <style>
         :root {
             --bg: #07111d;
@@ -4113,7 +4137,7 @@ fn build_modern_landing_page_html() -> &'static str {
                     <path d="M12 3l7 4v10l-7 4-7-4V7l7-4Z"></path>
                     <path d="m8.5 12 2.2 2.2 4.8-4.8"></path>
                 </svg>
-                <span>AI video editing and generation from natural language</span>
+                <span>Agent-driven video editing and production from natural language</span>
             </div>
             <h1>Generate and Edit Videos of Any Length With AI</h1>
             <p class="hero-copy">VideoSync is an <strong>AI-powered video editing and generation workspace</strong>. Tell the agent what you want in natural language: edit clips, create thumbnails, generate short promos, build long-form videos, add voice, render animations, and package the result for download or delivery.</p>

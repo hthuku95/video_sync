@@ -7,7 +7,7 @@
 use base64::prelude::*;
 use reqwest::Client;
 
-const OLLAMA_DEFAULT_URL: &str = "http://172.31.42.118:11434";
+pub const OLLAMA_DEFAULT_URL: &str = "http://172.31.44.240:11434";
 const OLLAMA_DEFAULT_MODEL: &str = "gemma4:12b";
 
 #[derive(Debug, Clone)]
@@ -37,7 +37,10 @@ impl OllamaClient {
         let model = std::env::var("OLLAMA_MODEL")
             .unwrap_or_else(|_| OLLAMA_DEFAULT_MODEL.to_string());
         Self {
-            client: Client::new(),
+            client: Client::builder()
+                .timeout(std::time::Duration::from_secs(60))
+                .build()
+                .unwrap_or_default(),
             base_url,
             model,
         }

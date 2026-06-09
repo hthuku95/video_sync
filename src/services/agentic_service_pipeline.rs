@@ -210,8 +210,9 @@ impl AgenticServicePipeline {
                 )
                 .await;
 
-            let agent = SimpleGeminiAgent::new_with_ollama(
+            let agent = SimpleGeminiAgent::new_with_nvidia(
                 gemini_client.clone(),
+                state.nvidia_nim_client.clone().map(Arc::new),
                 ollama_client.clone(),
             );
             let system_prompt = Self::system_prompt(service_type, &input);
@@ -246,7 +247,7 @@ impl AgenticServicePipeline {
                 )
                 .await;
 
-            let produced_path = locate_output_on_disk(&agent_result, &output_dir);
+            let produced = locate_output_from_result(&agent_result, &output_dir);
             retries_used = attempt as i32;
 
             let template_name = match service_type {
@@ -254,10 +255,12 @@ impl AgenticServicePipeline {
                 _ => "agentic_service_video",
             };
 
-            let review = if let Some(ref path) = produced_path {
+            let review = if let Some(ref loc) = produced {
+                // Use local path for review if available; otherwise skip review
+                let review_target = loc.review_path.as_deref().unwrap_or(&loc.canonical);
                 review_render(
                     &state,
-                    path,
+                    review_target,
                     &input.brief,
                     template_name,
                     Some(input.delivery_id),
@@ -276,7 +279,7 @@ impl AgenticServicePipeline {
 
             if review.score > best_score {
                 best_score = review.score;
-                best_output_path = produced_path.clone();
+                best_output_path = produced.map(|loc| loc.canonical);
                 best_feedback = review.feedback.clone();
             }
 
@@ -326,6 +329,9 @@ impl AgenticServicePipeline {
         )
         .await?;
 
+        // Clean up local files — all media lives in R2 now
+        let _ = std::fs::remove_dir_all(&output_dir);
+
         runtime
             .mark_completed(
                 workflow_id,
@@ -355,16 +361,25 @@ impl AgenticServicePipeline {
         qa_feedback: &str,
         retries_used: i32,
     ) -> Result<(), String> {
-        let r2 = state
-            .r2_client
-            .as_ref()
-            .ok_or("R2 not configured for publishing")?;
-
         let output_key = format!("agentic_output/{}/{}.mp4", input.delivery_id, input.service_filename());
-        let public_url = r2
-            .upload_file(output_path, &output_key)
-            .await
-            .map_err(|e| format!("R2 upload failed: {e}"))?;
+
+        // If the agent already uploaded to R2, use that URL directly — no re-upload
+        let public_url = if output_path.starts_with("https://") {
+            let url = output_path.to_string();
+            tracing::info!(url = %url, "publish_output: output already in cloud, skipping re-upload");
+            url
+        } else {
+            let r2 = state
+                .r2_client
+                .as_ref()
+                .ok_or("R2 not configured for publishing")?;
+
+            let url = r2
+                .upload_file(output_path, &output_key)
+                .await
+                .map_err(|e| format!("R2 upload failed: {e}"))?;
+            url
+        };
 
         let qa_note: Option<String> = if qa_score < 6 {
             Some(format!("QA final score {} after {} retries: {}", qa_score, retries_used, qa_feedback))
@@ -373,18 +388,20 @@ impl AgenticServicePipeline {
         };
 
         if input.source_table.as_deref() == Some("deliveries") {
-            let _ = sqlx::query(
+            let update_result = sqlx::query(
                 "UPDATE deliveries SET status = 'completed', output_r2_url = $1, \
-                 output_filename = $2, qa_score = $3, qa_note = $4, completed_at = NOW() \
-                 WHERE id = $5",
+                 output_filename = $2, final_qa_score = $3, completed_at = NOW() \
+                 WHERE id = $4",
             )
             .bind(&public_url)
             .bind(&output_key)
             .bind(qa_score)
-            .bind(qa_note)
             .bind(input.delivery_id)
             .execute(&state.db_pool)
             .await;
+            if let Err(e) = update_result {
+                tracing::warn!("publish_output: failed to update delivery {}: {e}", input.delivery_id);
+            }
 
             if let Some(prospect_id) = input.prospect_id {
                 let _ = sqlx::query(
@@ -655,9 +672,10 @@ fn spawn_agentic_pipeline_run(
     service_type: ServiceType,
     input: ServiceInput,
 ) {
-    let error_state = state.clone();
     let delivery_id = input.delivery_id;
-    tokio::spawn(async move {
+    let error_state = state.clone();
+    let panic_state = state.clone();
+    let handle = tokio::spawn(async move {
         if let Err(error) = AgenticServicePipeline::run(state, workflow_id, service_type, input).await {
             tracing::error!("Agentic workflow {} failed: {}", workflow_id, error);
             let runtime = WorkflowRuntime::new(error_state.db_pool.clone());
@@ -673,37 +691,117 @@ fn spawn_agentic_pipeline_run(
             .await;
         }
     });
+
+    tokio::spawn(async move {
+        if let Err(join_error) = handle.await {
+            let msg = format!("Agentic workflow {} panicked: {}", workflow_id, join_error);
+            tracing::error!("{}", msg);
+            let runtime = WorkflowRuntime::new(panic_state.db_pool.clone());
+            let _ = runtime
+                .mark_failed(workflow_id, Some("agentic_workflow"), &msg, None)
+                .await;
+            let _ = sqlx::query(
+                "UPDATE deliveries SET status = 'failed', error_message = $1 WHERE id = $2",
+            )
+            .bind(&msg)
+            .bind(delivery_id)
+            .execute(&panic_state.db_pool)
+            .await;
+        }
+    });
 }
 
-fn locate_output_on_disk(agent_result: &Result<String, String>, output_dir: &str) -> Option<String> {
+struct LocatedOutput {
+    /// The canonical output path — may be a cloud URL or a local path.
+    canonical: String,
+    /// A local path suitable for QA review (None if only a cloud URL exists).
+    review_path: Option<String>,
+}
+
+/// Extract the output location from the agent result.
+/// Returns a LocatedOutput with a canonical path (cloud URL preferred) and
+/// a review path (local file for QA review).
+fn locate_output_from_result(agent_result: &Result<String, String>, output_dir: &str) -> Option<LocatedOutput> {
     let text = match agent_result {
         Ok(t) => t.as_str(),
         Err(t) => t.as_str(),
     };
 
+    tracing::debug!(len = text.len(), output_dir, "locate_output_from_result");
+
+    let mut cloud_url: Option<String> = None;
+    let mut local_path: Option<String> = None;
+
     for line in text.lines() {
         let trimmed = line.trim();
-        if trimmed.contains(output_dir) || trimmed.contains(".mp4") || trimmed.contains(".png") {
+        // Cloud URL via "📤 Cloud URL:" or "Cloud URL:"
+        if let Some(url) = trimmed.strip_prefix("📤 Cloud URL: ")
+            .or_else(|| trimmed.strip_prefix("Cloud URL: "))
+        {
+            cloud_url = Some(url.trim().to_string());
+        }
+        // Raw https:// URL
+        if trimmed.starts_with("https://") && (trimmed.contains(".mp4") || trimmed.contains(".png") || trimmed.contains(".mp3") || trimmed.contains(".webm") || trimmed.contains(".jpg")) {
+            if cloud_url.is_none() {
+                cloud_url = Some(trimmed.to_string());
+            }
+        }
+        // Local file path that exists
+        if trimmed.contains(output_dir) || trimmed.contains(".mp4") || trimmed.contains(".png") || trimmed.contains(".mp3") || trimmed.contains(".wav") || trimmed.contains(".webm") {
             let path = trimmed
                 .trim_start_matches('`')
                 .trim_end_matches('`')
+                .trim_start_matches("**")
+                .trim_end_matches("**")
                 .trim();
-            if std::path::Path::new(path).exists() {
-                return Some(path.to_string());
+            if std::path::Path::new(path).exists() && local_path.is_none() {
+                local_path = Some(path.to_string());
             }
         }
     }
 
-    if let Ok(entries) = std::fs::read_dir(output_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().map_or(false, |e| e == "mp4" || e == "png" || e == "jpg") {
-                return Some(path.to_string_lossy().to_string());
+    // Fallback: scan output directories for local files
+    if local_path.is_none() {
+        for dir in &[output_dir, "outputs"] {
+            if let Ok(entries) = std::fs::read_dir(dir) {
+                let mut candidates: Vec<_> = entries
+                    .flatten()
+                    .filter_map(|e| {
+                        let p = e.path();
+                        let ext = p.extension()?.to_str()?;
+                        if matches!(ext, "mp4" | "webm" | "png" | "jpg" | "jpeg" | "mp3" | "wav" | "aac" | "gif") {
+                            Some(p)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                if !candidates.is_empty() {
+                    candidates.sort_by_key(|p| std::fs::metadata(p).ok().and_then(|m| m.modified().ok()));
+                    if let Some(latest) = candidates.pop() {
+                        let p = latest.to_string_lossy().to_string();
+                        tracing::warn!(path = %p, dir = %dir, "locate_output_from_result found local file via dir scan");
+                        local_path = Some(p);
+                        break;
+                    }
+                }
             }
         }
     }
 
-    None
+    // Prefer cloud URL as canonical, fall back to local path
+    let canonical = cloud_url.clone().or_else(|| local_path.clone())?;
+
+    tracing::info!(
+        canonical = %canonical,
+        has_review_path = local_path.is_some(),
+        "locate_output_from_result: found output"
+    );
+
+    Some(LocatedOutput {
+        canonical,
+        review_path: local_path,
+    })
 }
 
 pub fn normalize_to_service_type(s: &str) -> ServiceType {

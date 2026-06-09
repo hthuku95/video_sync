@@ -69,16 +69,23 @@ fn execute_ffmpeg_maybe_via_mcp(
     let output_path = output_path.unwrap();
     let output_key = generate_output_key(&output_path);
 
-    // Call MCP using a one-shot Tokio runtime
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|e| format!("Failed to build runtime: {e}"))?;
+    let mcp_future = async {
+        crate::ffmpeg_mcp_client::FfmpegMcpClient::from_env()
+            .ok_or("FFmpeg MCP not configured".to_string())?
+            .process(&input_url, &ffmpeg_args, &output_key)
+            .await
+    };
 
-    let output_url = rt.block_on(crate::ffmpeg_mcp_client::FfmpegMcpClient::from_env()
-        .ok_or("FFmpeg MCP not configured".to_string())?
-        .process(&input_url, &ffmpeg_args, &output_key)
-    ).map_err(|e| format!("FFmpeg MCP failed: {e}"))?;
+    let output_url = match tokio::runtime::Handle::try_current() {
+        Ok(handle) => tokio::task::block_in_place(|| handle.block_on(mcp_future)),
+        Err(_) => {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| format!("Failed to build runtime: {e}"))?;
+            rt.block_on(mcp_future)
+        }
+    }.map_err(|e| format!("FFmpeg MCP failed: {e}"))?;
 
     write_marker_file(&output_path, &output_url)?;
     tracing::info!("✅ FFmpeg MCP: {output_path} → {output_url}");
@@ -125,15 +132,24 @@ pub fn execute_ffmpeg_command_with_sync_timeout(
         let output_path = output_path.unwrap();
         let output_key = format!("processed/{}", output_path.split('/').last().unwrap_or("output"));
 
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build().map_err(|e| format!("Runtime: {e}"))?;
-
-        match rt.block_on(
+        let mcp_future = async {
             crate::ffmpeg_mcp_client::FfmpegMcpClient::from_env()
                 .ok_or("MCP not configured")?
                 .process(&input_url, &ffmpeg_args, &output_key)
-        ) {
+                .await
+        };
+
+        let result = match tokio::runtime::Handle::try_current() {
+            Ok(handle) => tokio::task::block_in_place(|| handle.block_on(mcp_future)),
+            Err(_) => {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build().map_err(|e| format!("Runtime: {e}"))?;
+                rt.block_on(mcp_future)
+            }
+        };
+
+        match result {
             Ok(output_url) => {
                 write_marker_file(&output_path, &output_url)?;
                 return Ok(String::new());

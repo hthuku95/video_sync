@@ -25,7 +25,7 @@ use base64::Engine as _;
 use reqwest::Client;
 
 const NVIDIA_NIM_ENDPOINT: &str = "https://integrate.api.nvidia.com/v1/chat/completions";
-const NVIDIA_DEFAULT_MODEL: &str = "google/gemma-4-31b-it";
+const NVIDIA_DEFAULT_MODEL: &str = "meta/llama-3.3-70b-instruct";
 const NVIDIA_DEFAULT_VISION_MODEL: &str = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning";
 
 // ─── Model capabilities ─────────────────────────────────────────────────────
@@ -113,7 +113,10 @@ impl NvidiaNimClient {
             model, capabilities.tool_calling, capabilities.vision, capabilities.audio
         );
         Self {
-            client: Client::new(),
+            client: Client::builder()
+                .timeout(std::time::Duration::from_secs(60))
+                .build()
+                .unwrap_or_default(),
             api_key,
             model,
             capabilities,
@@ -128,7 +131,10 @@ impl NvidiaNimClient {
             model, capabilities.tool_calling, capabilities.vision, capabilities.audio
         );
         Self {
-            client: Client::new(),
+            client: Client::builder()
+                .timeout(std::time::Duration::from_secs(60))
+                .build()
+                .unwrap_or_default(),
             api_key,
             model,
             capabilities,
@@ -204,23 +210,49 @@ impl NvidiaNimClient {
             "NVIDIA NIM: no attempts made".into();
 
         for attempt in 0..max_attempts {
-            let resp = self
+            let resp = match self
                 .client
                 .post(NVIDIA_NIM_ENDPOINT)
                 .header("Authorization", format!("Bearer {}", self.api_key))
                 .header("Content-Type", "application/json")
                 .json(&body)
                 .send()
-                .await?;
+                .await
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    let is_last = attempt == max_attempts - 1;
+                    if is_last {
+                        return Err(format!("NVIDIA NIM connection error: {e}").into());
+                    }
+                    let backoff = 5u64 * (attempt as u64 + 1);
+                    tracing::warn!(
+                        "NVIDIA NIM connection error (attempt {}/{}, retry in {}s): {e}",
+                        attempt + 1, max_attempts, backoff
+                    );
+                    tokio::time::sleep(tokio::time::Duration::from_secs(backoff)).await;
+                    last_err = format!("NVIDIA NIM connection error: {e}").into();
+                    continue;
+                }
+            };
 
             let status = resp.status();
 
             if status.is_success() {
-                let json: serde_json::Value = resp.json().await?;
+                let json: serde_json::Value = match resp.json().await {
+                    Ok(j) => j,
+                    Err(e) => {
+                        last_err = format!("NVIDIA NIM parse error: {e}").into();
+                        if attempt < max_attempts - 1 {
+                            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                        }
+                        continue;
+                    }
+                };
                 let text = json["choices"][0]["message"]["content"]
                     .as_str()
-                    .ok_or("NVIDIA NIM: no content in response")?
-                    .to_string();
+                    .map(|s| s.to_string())
+                    .unwrap_or_default();
                 return Ok(text);
             }
 
@@ -405,19 +437,45 @@ impl NvidiaNimClient {
             "NVIDIA NIM: no attempts made".into();
 
         for attempt in 0..max_attempts {
-            let resp = self
+            let resp = match self
                 .client
                 .post(NVIDIA_NIM_ENDPOINT)
                 .header("Authorization", format!("Bearer {}", self.api_key))
                 .header("Content-Type", "application/json")
                 .json(&body)
                 .send()
-                .await?;
+                .await
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    let is_last = attempt == max_attempts - 1;
+                    if is_last {
+                        return Err(format!("NVIDIA NIM connection error: {e}").into());
+                    }
+                    let backoff = 5u64 * (attempt as u64 + 1);
+                    tracing::warn!(
+                        "NVIDIA NIM connection error (attempt {}/{}, retry in {}s): {e}",
+                        attempt + 1, max_attempts, backoff
+                    );
+                    tokio::time::sleep(tokio::time::Duration::from_secs(backoff)).await;
+                    last_err = format!("NVIDIA NIM connection error: {e}").into();
+                    continue;
+                }
+            };
 
             let status = resp.status();
 
             if status.is_success() {
-                let json: serde_json::Value = resp.json().await?;
+                let json: serde_json::Value = match resp.json().await {
+                    Ok(j) => j,
+                    Err(e) => {
+                        last_err = format!("NVIDIA NIM parse error: {e}").into();
+                        if attempt < max_attempts - 1 {
+                            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                        }
+                        continue;
+                    }
+                };
                 let choice = &json["choices"][0];
                 let finish_reason = choice["finish_reason"].as_str().unwrap_or("");
 

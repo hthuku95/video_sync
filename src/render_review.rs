@@ -3,16 +3,21 @@
 //! produces a file we hand back to a user or paying client.
 //!
 //! Runs after render, before return. Flow:
-//!   render_complete(url, prompt, tool) → Gemini scores 1-10, returns
-//!   `{pass: bool, score, feedback, retry_hint}` → if pass, caller hands
-//!   the URL to the user; if fail + first attempt, caller retries with
+//!   render_complete(url, prompt, tool) → NVIDIA NIM vision model scores 1-10,
+//!   returns `{pass: bool, score, feedback, retry_hint}` → if pass, caller
+//!   hands the URL to the user; if fail + first attempt, caller retries with
 //!   the hint appended to the prompt; if fail after retry, caller still
 //!   returns the URL but with a warning flag the UI surfaces.
+//!
+//! Uses NVIDIA NIM vision model (nemotron-3-nano-omni) as the primary reviewer
+//! to avoid Gemini free-tier rate limits. Falls back to Gemini if NIM is
+//! unavailable.
 //!
 //! Also writes one row per review to `blender_render_reviews` so the
 //! admin dashboard can see pass/fail rate per tool over time.
 
 use crate::gemini_client::GeminiClient;
+use crate::nvidia_nim_client::NvidiaNimClient;
 use crate::AppState;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -31,7 +36,11 @@ pub struct ReviewResult {
 }
 
 /// Review a rendered output. Best-effort — never blocks the pipeline;
-/// returns a "pass with score 0" result if Gemini is unavailable.
+/// returns a "pass with score 0" result if no reviewer is available.
+///
+/// Primary reviewer: NVIDIA NIM vision model (nemotron-3-nano-omni) to
+/// avoid Gemini free-tier rate limits. Falls back to Gemini if NIM is
+/// unavailable.
 pub async fn review_render(
     state: &Arc<AppState>,
     output_url: &str,
@@ -39,8 +48,18 @@ pub async fn review_render(
     tool_name: &str,
     delivery_id: Option<uuid::Uuid>,
 ) -> ReviewResult {
-    // Prefer the dedicated video_gemini client (separate quota) so we
-    // don't eat into the main agent's rate limit.
+    let prompt = review_prompt(original_prompt, tool_name, output_url);
+
+    // 1. Try NVIDIA NIM vision model first
+    if let Some(nim) = state.nvidia_nim_vision_client.as_ref() {
+        let review = run_review_via_nim(nim, output_url, &prompt).await;
+        if review.score > 0 {
+            persist_review(state, tool_name, &review, delivery_id, output_url).await;
+            return review;
+        }
+    }
+
+    // 2. Fall back to Gemini
     let gemini = match state
         .video_gemini_client
         .as_ref()
@@ -49,39 +68,62 @@ pub async fn review_render(
         Some(g) => g,
         None => {
             return ReviewResult {
-                pass: true, // fail-open — no reviewer ≠ blocked render
+                pass: true,
                 score: 0,
-                feedback: "Gemini not configured — QA review skipped".to_string(),
+                feedback: "No reviewer (NIM or Gemini) configured — QA review skipped".to_string(),
                 retry_hint: None,
             };
         }
     };
 
-    let review = run_review(gemini, output_url, original_prompt, tool_name).await;
+    let review = run_review_via_gemini(gemini, output_url, &prompt).await;
     persist_review(state, tool_name, &review, delivery_id, output_url).await;
     review
 }
 
-/// The actual Gemini call. Returns a fresh ReviewResult.
-async fn run_review(
-    gemini: &GeminiClient,
+/// Run review via NVIDIA NIM vision model (primary path).
+async fn run_review_via_nim(
+    nim: &NvidiaNimClient,
     output_url: &str,
-    original_prompt: &str,
-    tool_name: &str,
+    prompt: &str,
 ) -> ReviewResult {
-    let prompt = review_prompt(original_prompt, tool_name, output_url);
-    let response = match multimodal_review_response(gemini, output_url, &prompt).await {
+    let response = match multimodal_review_via_nim(nim, output_url, prompt).await {
         Ok(r) => r,
         Err(e) => {
             return ReviewResult {
-                pass: true, // fail-open if Gemini errors
+                pass: true,
                 score: 0,
-                feedback: format!("Review call failed: {}", e),
+                feedback: format!("NIM review call failed: {}", e),
                 retry_hint: None,
             };
         }
     };
 
+    parse_review_response(&response)
+}
+
+/// Run review via Gemini (fallback path).
+async fn run_review_via_gemini(
+    gemini: &GeminiClient,
+    output_url: &str,
+    prompt: &str,
+) -> ReviewResult {
+    let response = match multimodal_review_via_gemini(gemini, output_url, prompt).await {
+        Ok(r) => r,
+        Err(e) => {
+            return ReviewResult {
+                pass: true,
+                score: 0,
+                feedback: format!("Gemini review call failed: {}", e),
+                retry_hint: None,
+            };
+        }
+    };
+
+    parse_review_response(&response)
+}
+
+fn parse_review_response(response: &str) -> ReviewResult {
     let cleaned = response
         .trim()
         .trim_start_matches("```json")
@@ -160,7 +202,59 @@ or
     )
 }
 
-async fn multimodal_review_response(
+/// Analyze media via NVIDIA NIM vision model (images, audio, or video frames).
+async fn multimodal_review_via_nim(
+    nim: &NvidiaNimClient,
+    output_url: &str,
+    prompt: &str,
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    let path = Path::new(output_url);
+    if !path.exists() {
+        return nim.generate_text(prompt).await.map_err(Into::into);
+    }
+
+    let ext = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.to_ascii_lowercase())
+        .unwrap_or_default();
+
+    if is_image_extension(&ext) {
+        let bytes = std::fs::read(path)?;
+        return nim.analyze_image_bytes(&bytes, prompt).await.map_err(Into::into);
+    }
+
+    if is_video_extension(&ext) {
+        let frame_path = format!("{}.review_frame.png", output_url);
+        let status = std::process::Command::new("ffmpeg")
+            .args([
+                "-y", "-i", output_url,
+                "-vframes", "1",
+                "-q:v", "2",
+                &frame_path,
+            ])
+            .status()
+            .map_err(|e| format!("ffmpeg not found: {}", e))?;
+        if status.success() {
+            if let Ok(bytes) = std::fs::read(&frame_path) {
+                let result = nim.analyze_image_bytes(&bytes, prompt).await.map_err(Into::into);
+                let _ = std::fs::remove_file(&frame_path);
+                return result;
+            }
+        }
+        return Err("Failed to extract video frame for NIM review".into());
+    }
+
+    if let Some(mime_type) = audio_mime_type(&ext) {
+        let bytes = std::fs::read(path)?;
+        return nim.analyze_audio_bytes(&bytes, mime_type, prompt).await.map_err(Into::into);
+    }
+
+    nim.generate_text(prompt).await.map_err(Into::into)
+}
+
+/// Analyze media via Gemini (fallback path).
+async fn multimodal_review_via_gemini(
     gemini: &GeminiClient,
     output_url: &str,
     prompt: &str,
