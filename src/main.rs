@@ -429,7 +429,13 @@ async fn main() {
     // Used as the primary text generation provider before NVIDIA NIM.
     let ollama_client = {
         tracing::info!("Initializing Ollama client (gemma4:12b on {})...", ollama_client::OLLAMA_DEFAULT_URL);
-        Some(ollama_client::OllamaClient::new())
+        let client = ollama_client::OllamaClient::new();
+        // Warm up the model in background — non-blocking, non-fatal.
+        let warmup_client = client.clone();
+        tokio::spawn(async move {
+            warmup_client.warmup().await;
+        });
+        Some(client)
     };
 
     let vertex_multimodal_embeddings =

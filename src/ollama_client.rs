@@ -74,11 +74,49 @@ impl OllamaClient {
             .unwrap_or_else(|_| OLLAMA_DEFAULT_MODEL.to_string());
         Self {
             client: Client::builder()
-                .timeout(std::time::Duration::from_secs(60))
+                .timeout(std::time::Duration::from_secs(300))
                 .build()
                 .unwrap_or_default(),
             base_url,
             model,
+        }
+    }
+
+    /// Warm up the Ollama model by sending a lightweight chat request.
+    /// This forces the model to load into memory so subsequent calls are fast.
+    /// Should be called once at server startup. Non-fatal on failure.
+    pub async fn warmup(&self) {
+        tracing::info!("Ollama warmup: loading model '{}' from {}...", self.model, self.base_url);
+        let body = serde_json::json!({
+            "model": self.model,
+            "messages": [{"role": "user", "content": "Hello — respond with exactly 'OK'."}],
+            "options": {"num_predict": 10, "temperature": 0.0},
+            "stream": false,
+        });
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(180),
+            self.client
+                .post(format!("{}/api/chat", self.base_url))
+                .header("Content-Type", "application/json")
+                .json(&body)
+                .send(),
+        )
+        .await
+        {
+            Ok(Ok(resp)) => {
+                if resp.status().is_success() {
+                    tracing::info!("Ollama warmup complete — model '{}' is loaded", self.model);
+                } else {
+                    let err_body = resp.text().await.unwrap_or_default();
+                    tracing::warn!("Ollama warmup returned {} (non-fatal): {}", resp.status(), err_body);
+                }
+            }
+            Ok(Err(e)) => {
+                tracing::warn!("Ollama warmup request failed (non-fatal): {}", e);
+            }
+            Err(_) => {
+                tracing::warn!("Ollama warmup timed out after 180s (non-fatal)");
+            }
         }
     }
 
