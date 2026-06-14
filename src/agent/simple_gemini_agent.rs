@@ -27,6 +27,7 @@ pub type GeminiToolExecutor = Arc<
 
 pub struct SimpleGeminiAgent {
     client: Arc<GeminiClient>,
+    bedrock_client: Option<Arc<crate::bedrock_client::BedrockClient>>,
     ollama_client: Option<Arc<OllamaClient>>,
     nvidia_nim_client: Option<Arc<crate::nvidia_nim_client::NvidiaNimClient>>,
 }
@@ -35,6 +36,7 @@ impl SimpleGeminiAgent {
     pub fn new(client: Arc<GeminiClient>) -> Self {
         Self {
             client,
+            bedrock_client: None,
             ollama_client: None,
             nvidia_nim_client: None,
         }
@@ -43,6 +45,7 @@ impl SimpleGeminiAgent {
     pub fn new_with_ollama(client: Arc<GeminiClient>, ollama_client: Option<Arc<OllamaClient>>) -> Self {
         Self {
             client,
+            bedrock_client: None,
             ollama_client,
             nvidia_nim_client: None,
         }
@@ -50,11 +53,13 @@ impl SimpleGeminiAgent {
 
     pub fn new_with_nvidia(
         client: Arc<GeminiClient>,
+        bedrock_client: Option<Arc<crate::bedrock_client::BedrockClient>>,
         nvidia_nim_client: Option<Arc<crate::nvidia_nim_client::NvidiaNimClient>>,
         ollama_client: Option<Arc<OllamaClient>>,
     ) -> Self {
         Self {
             client,
+            bedrock_client,
             ollama_client,
             nvidia_nim_client,
         }
@@ -133,28 +138,24 @@ impl SimpleGeminiAgent {
 5. **User requests COMPLETELY DIFFERENT content** → GENERATE NEW video
    - Only when topic/theme is fundamentally different
 
-### How to Check for Existing Videos:
-Look for this in your context:
-```
-PREVIOUSLY GENERATED OUTPUT VIDEOS IN THIS SESSION:
-1. "video_name.mp4" - USE THIS PATH: outputs/video_name.mp4
-   - Watch link: /api/outputs/stream/<file_id>
-   - Download link: /api/outputs/download/<file_id>
-```
+### How to Find Previous Outputs:
+Each tool that creates a file returns a cloud URL (prefixed with `📤 Cloud URL:`) in its result. Use that cloud URL as input to review tools (`view_video`, `review_video`) and for delivery to the user.
+Use `get_output_videos`, `get_generated_artifacts`, or `get_extracted_clips` tools to search across sessions for previously generated files. Each result includes the cloud URL.
 
 ### Re-Editing Example:
 ```
 // User: "add voiceover to my video"
 // DON'T: Call auto_generate_video again (wastes time and money!)
-// DO: Use the existing video:
-view_video({ video_path: "outputs/shilereads_ad.mp4" })  // Verify what's in it
+// DO: Query for the previous output, then use its cloud URL:
+get_output_videos({ query: "shilereads" })
+// Result shows: Cloud URL: https://r2.../shilereads_ad.mp4
+view_video({ video_path: "outputs/shilereads_ad.mp4" })  // Local path works for analysis
 generate_text_to_speech({ text: "Welcome to ShileReads...", voice: "Rachel", output_file: "voiceover.mp3" })
 add_voiceover_to_video({ video_path: "outputs/shilereads_ad.mp4", voiceover_path: "voiceover.mp3", ... })
 ```
 
 ### User Delivery Rule:
-- Internal file paths are for tool execution, not for user delivery
-- If context includes a watch or download link for an output, share that link with the user
+- Each tool returns a `📤 Cloud URL:` — use that as the download/share link for the user
 - Do not tell the user to fetch files from internal directories like `outputs/...`
 
 ## YOUR CAPABILITIES
@@ -419,11 +420,35 @@ IMPORTANT: You do NOT use AI to generate videos. Instead, you fetch stock media 
             match &nim_result {
                 Ok(text) => return Ok(text.clone()),
                 Err(e) => {
-                    tracing::warn!("NVIDIA NIM Gemma 4 31B failed, falling back to Ollama/Gemma: {}", e);
+                    tracing::warn!("NVIDIA NIM failed, falling back to AWS Bedrock: {}", e);
                 }
             }
         }
-        // 2. Try Ollama (self-hosted Gemma 4 12B on CPU) second
+        // 2. Try AWS Bedrock (Meta Llama 3.2 90B) second
+        if let Some(ref bedrock) = self.bedrock_client {
+            let bedrock_result = self
+                .execute_with_custom_tools_via_bedrock(
+                    bedrock.clone(),
+                    user_input,
+                    session_id,
+                    user_id,
+                    app_state.clone(),
+                    progress_callback.clone(),
+                    system_instruction,
+                    tools.clone(),
+                    completion_tool_name,
+                    tool_executor.clone(),
+                    workflow_id,
+                )
+                .await;
+            match &bedrock_result {
+                Ok(text) => return Ok(text.clone()),
+                Err(e) => {
+                    tracing::warn!("AWS Bedrock failed, falling back to Ollama/Gemma: {}", e);
+                }
+            }
+        }
+        // 3. Try Ollama (self-hosted Gemma 4 12B on CPU) third
         if let Some(ref ollama) = self.ollama_client {
             let ollama_result = self
                 .execute_with_custom_tools_via_ollama(
@@ -685,6 +710,118 @@ IMPORTANT: You do NOT use AI to generate videos. Instead, you fetch stock media 
         Ok(final_text)
     }
 
+    async fn execute_with_custom_tools_via_bedrock(
+        &self,
+        bedrock: Arc<crate::bedrock_client::BedrockClient>,
+        user_input: &str,
+        session_id: &str,
+        user_id: Option<i32>,
+        app_state: Arc<crate::AppState>,
+        progress_callback: Option<Arc<dyn Fn(f32, &str) + Send + Sync>>,
+        system_instruction: &str,
+        tools: Vec<FunctionDeclaration>,
+        completion_tool_name: Option<&str>,
+        tool_executor: GeminiToolExecutor,
+        workflow_id: Option<uuid::Uuid>,
+    ) -> Result<String, String> {
+        let send_progress = |progress: f32, msg: &str| {
+            if let Some(ref callback) = progress_callback {
+                callback(progress, msg);
+            }
+        };
+        let exec_context = ToolExecutionContext {
+            session_id: session_id.to_string(),
+            user_id,
+            app_state: app_state.clone(),
+            workflow_id,
+        };
+
+        let mut messages: Vec<aws_sdk_bedrockruntime::types::Message> = {
+            let msg = build_text_message(
+                aws_sdk_bedrockruntime::types::ConversationRole::User,
+                &format!("{}\n\nUser request: {}", system_instruction, user_input),
+            )?;
+            vec![msg]
+        };
+
+        let mut iterations = 0;
+        let max_iterations = 50;
+        let mut final_text = String::new();
+
+        while iterations < max_iterations {
+            iterations += 1;
+            send_progress(0.0, "🤖 Agent is thinking...");
+
+            let response = bedrock
+                .generate_single("", &messages, &tools)
+                .await?;
+
+            match response {
+                crate::bedrock_client::BedrockResponse::Text(text) => {
+                    final_text = text;
+                    messages.push(build_text_message(
+                        aws_sdk_bedrockruntime::types::ConversationRole::Assistant,
+                        &final_text,
+                    )?);
+                    break;
+                }
+                crate::bedrock_client::BedrockResponse::ToolCalls(tool_calls) => {
+                    let mut content_blocks = Vec::new();
+                    for tc in &tool_calls {
+                        content_blocks.push(
+                            crate::bedrock_client::tool_call_to_content_block(tc),
+                        );
+                    }
+                    messages.push(
+                        aws_sdk_bedrockruntime::types::Message::builder()
+                            .role(aws_sdk_bedrockruntime::types::ConversationRole::Assistant)
+                            .set_content(Some(content_blocks))
+                            .build()
+                            .map_err(|e| format!("Bedrock build error: {e}"))?,
+                    );
+
+                    let mut result_blocks = Vec::new();
+                    for tc in &tool_calls {
+                        tracing::info!("🔧 Bedrock calling: {}", tc.name);
+                        send_progress(0.0, &format!("🔧 {}...", tc.name));
+
+                        let args: HashMap<String, Value> = tc.arguments.as_object()
+                            .map(|obj| obj.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+                            .unwrap_or_default();
+
+                        let result = tool_executor(&tc.name, &args, &exec_context).await;
+
+                        if completion_tool_name == Some(tc.name.as_str()) {
+                            let result_text = match &result {
+                                Value::String(text) => text.clone(),
+                                other => serde_json::to_string_pretty(other)
+                                    .unwrap_or_else(|_| other.to_string()),
+                            };
+                            if !result_text.is_empty() {
+                                send_progress(0.0, "✅ Task completed!");
+                                return Ok(result_text);
+                            }
+                        }
+
+                        let result_str = serde_json::to_string(&result).unwrap_or_default();
+                        result_blocks.push(
+                            crate::bedrock_client::tool_result_to_content_block(tc, &result_str),
+                        );
+                    }
+                    messages.push(
+                        aws_sdk_bedrockruntime::types::Message::builder()
+                            .role(aws_sdk_bedrockruntime::types::ConversationRole::User)
+                            .set_content(Some(result_blocks))
+                            .build()
+                            .map_err(|e| format!("Bedrock build error: {e}"))?,
+                    );
+                }
+            }
+        }
+
+        Ok(final_text)
+    }
+
     async fn execute_with_custom_tools_via_gemini(
         &self,
         user_input: &str,
@@ -862,4 +999,15 @@ IMPORTANT: You do NOT use AI to generate videos. Instead, you fetch stock media 
 
         Ok(final_text)
     }
+}
+
+fn build_text_message(
+    role: aws_sdk_bedrockruntime::types::ConversationRole,
+    text: &str,
+) -> Result<aws_sdk_bedrockruntime::types::Message, String> {
+    aws_sdk_bedrockruntime::types::Message::builder()
+        .role(role)
+        .content(aws_sdk_bedrockruntime::types::ContentBlock::Text(text.to_string()))
+        .build()
+        .map_err(|e| format!("Bedrock build message error: {e}"))
 }

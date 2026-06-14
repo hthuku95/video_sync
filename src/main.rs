@@ -71,6 +71,7 @@ pub struct AppState {
     pub manual_clipping_gemini_client: Option<gemini_client::GeminiClient>, // Manual clipping only
     pub video_gemini_client: Option<gemini_client::GeminiClient>, // Video editing, generation, agents, Blender MCP
     pub gemma_client: Option<gemini_client::GeminiClient>, // Gemma 4 via Google AI Studio (text tasks, own quota)
+    pub bedrock_client: Option<std::sync::Arc<crate::bedrock_client::BedrockClient>>, // AWS Bedrock (Meta Llama 3.2 90B, open-source)
     pub nvidia_nim_client: Option<nvidia_nim_client::NvidiaNimClient>, // NVIDIA NIM (text + tools, 40 RPM)
     pub nvidia_nim_vision_client: Option<nvidia_nim_client::NvidiaNimClient>, // NVIDIA NIM (vision + tools, Gemini fallback)
     pub deepseek_client: Option<deepseek_client::DeepSeekClient>, // DeepSeek V4 (OpenAI-compatible, tool calling)
@@ -395,6 +396,27 @@ async fn main() {
         nvidia_nim_client::NvidiaNimClient::with_model(k, model)
     });
 
+    // AWS Bedrock — Meta Llama 3.2 90B via Converse API (pay-per-token, no GPU needed).
+    let bedrock_client = {
+        let region = std::env::var("AWS_REGION").unwrap_or_else(|_| "us-east-1".to_string());
+        let model = std::env::var("BEDROCK_MODEL_ID").ok();
+        let has_creds = std::env::var("AWS_ACCESS_KEY_ID").is_ok()
+            && std::env::var("AWS_SECRET_ACCESS_KEY").is_ok();
+        if has_creds {
+            tracing::info!(
+                "Initializing AWS Bedrock client (region: {}, model: {})...",
+                region,
+                model.as_deref().unwrap_or("meta.llama3-2-90b-vision-instruct-maas")
+            );
+            Some(std::sync::Arc::new(
+                crate::bedrock_client::BedrockClient::new_async(&region, model).await,
+            ))
+        } else {
+            tracing::warn!("AWS Bedrock not configured (missing AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY)");
+            None
+        }
+    };
+
     // DeepSeek V4 — OpenAI-compatible, fallback when Gemini/NIM are unavailable.
     let deepseek_client = std::env::var("DEEPSEEK_API_KEY").ok().map(|k| {
         tracing::info!("Initializing DeepSeek V4 client (model: {})...",
@@ -636,6 +658,7 @@ async fn main() {
         manual_clipping_gemini_client,
         video_gemini_client,
         gemma_client,
+        bedrock_client,
         nvidia_nim_client,
         nvidia_nim_vision_client,
         deepseek_client,

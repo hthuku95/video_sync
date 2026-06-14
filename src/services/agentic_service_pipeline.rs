@@ -212,6 +212,7 @@ impl AgenticServicePipeline {
 
             let agent = SimpleGeminiAgent::new_with_nvidia(
                 gemini_client.clone(),
+                state.bedrock_client.clone(),
                 state.nvidia_nim_client.clone().map(Arc::new),
                 ollama_client.clone(),
             );

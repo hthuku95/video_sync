@@ -14,8 +14,11 @@ use bcrypt::{hash, DEFAULT_COST};
 use serde::Deserialize;
 use serde_json::json;
 use sqlx::{FromRow, Row};
+use std::collections::HashMap;
 use std::sync::Arc;
 use uuid::Uuid;
+
+use crate::agent::tool_executor::execute_tool_gemini_with_context;
 
 #[derive(Debug, Deserialize, Default)]
 pub struct DeliveryViewQuery {
@@ -54,6 +57,7 @@ pub fn admin_routes() -> Router {
         )
         .route("/admin/revenue-ledger", get(admin_revenue_ledger_page))
         .route("/admin/how-it-works", get(admin_how_it_works_page))
+        .route("/admin/service-samples", get(admin_service_samples_page))
         .route("/delivery/:id", get(delivery_page))
         .route("/delivery/:id/download-gcs", get(delivery_gcs_download))
         .route("/api/portfolio-samples", get(api_list_portfolio_samples))
@@ -156,6 +160,14 @@ pub fn admin_routes() -> Router {
         .route(
             "/api/admin/portfolio-samples/crypto-saas",
             post(api_generate_crypto_saas_portfolio_samples),
+        )
+        .route(
+            "/api/admin/service-samples",
+            get(api_list_service_portfolio_samples).post(api_trigger_service_portfolio_sample),
+        )
+        .route(
+            "/api/admin/service-samples/briefs",
+            get(api_list_service_portfolio_briefs),
         )
         .route("/api/admin/revenue-ledger", get(api_revenue_ledger))
         .route("/api/admin/payments", get(api_studio_payments))
@@ -4943,6 +4955,7 @@ pub async fn admin_get_job_clips(
                 "views_24h": row.get::<i32, _>("views_24h"),
                 "likes_24h": row.get::<i32, _>("likes_24h"),
                 "comments_24h": row.get::<i32, _>("comments_24h"),
+                "download_url": row.get::<Option<String>, _>("r2_clip_url"),
             })
         })
         .collect();
@@ -8716,6 +8729,376 @@ pub async fn api_normalize_reference_asset(
         Some(url) => Json(json!({"normalized_url": url})),
         None => Json(json!({"normalized_url": source_url})),
     }
+}
+
+pub async fn api_list_service_portfolio_briefs(
+    Extension(_state): Extension<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    let all = crate::handlers::service_catalog::all_service_portfolio_briefs();
+    let mut services: Vec<serde_json::Value> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for brief in &all {
+        if seen.insert(brief.service_slug) {
+            let briefs_for_service = crate::handlers::service_catalog::get_service_portfolio_briefs(brief.service_slug);
+            let briefs_json: Vec<serde_json::Value> = briefs_for_service.iter().map(|b| {
+                json!({
+                    "name": b.name,
+                    "description": b.description,
+                    "brief": b.brief,
+                })
+            }).collect();
+            services.push(json!({
+                "service_slug": brief.service_slug,
+                "briefs": briefs_json,
+            }));
+        }
+    }
+    Json(json!({ "success": true, "services": services }))
+}
+
+pub async fn api_trigger_service_portfolio_sample(
+    Extension(state): Extension<Arc<AppState>>,
+    axum::Json(body): axum::Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let service_slug = body.get("service_slug").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let brief_name = body.get("brief_name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    if service_slug.is_empty() || brief_name.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, Json(json!({ "error": "service_slug and brief_name required" }))));
+    }
+    let briefs = crate::handlers::service_catalog::get_service_portfolio_briefs(&service_slug);
+    let brief = briefs.into_iter().find(|b| b.name == brief_name);
+    let brief = match brief {
+        Some(b) => b,
+        None => return Err((StatusCode::NOT_FOUND, Json(json!({ "error": "Brief not found for this service" })))),
+    };
+
+    let sample_id = uuid::Uuid::new_v4();
+    let _ = sqlx::query(
+        "INSERT INTO service_portfolio_samples (id, service_slug, sample_name, brief, description, status) VALUES ($1, $2, $3, $4, $5, 'pending')"
+    )
+    .bind(sample_id)
+    .bind(&service_slug)
+    .bind(brief.name)
+    .bind(brief.brief)
+    .bind(brief.description)
+    .execute(&state.db_pool)
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": format!("DB insert failed: {e}") }))))?;
+
+    let state_clone = state.clone();
+    let sample_id_clone = sample_id;
+    let brief_text = brief.brief.to_string();
+    let service_slug_clone = service_slug.clone();
+
+    tokio::spawn(async move {
+        run_service_portfolio_sample_agent(state_clone, sample_id_clone, &service_slug_clone, &brief_text).await;
+    });
+
+    Ok(Json(json!({
+        "success": true,
+        "sample_id": sample_id,
+        "service_slug": service_slug,
+        "brief_name": brief_name,
+        "status": "queued",
+    })))
+}
+
+pub async fn api_list_service_portfolio_samples(
+    Extension(state): Extension<Arc<AppState>>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Json<serde_json::Value> {
+    let service_slug = params.get("service_slug").map(|s| s.as_str()).unwrap_or("%");
+    let rows = sqlx::query(
+        "SELECT id, service_slug, sample_name, brief, description, status, session_id, output_r2_url, output_thumbnail_url, llm_review_score, llm_review_feedback, error_message, created_at, started_at, completed_at \
+         FROM service_portfolio_samples \
+         WHERE service_slug LIKE $1 \
+         ORDER BY created_at DESC"
+    )
+    .bind(service_slug)
+    .fetch_all(&state.db_pool)
+    .await
+    .unwrap_or_default();
+
+    let samples: Vec<serde_json::Value> = rows.into_iter().map(|row| {
+        json!({
+            "id": row.get::<uuid::Uuid, _>("id"),
+            "service_slug": row.get::<String, _>("service_slug"),
+            "sample_name": row.get::<String, _>("sample_name"),
+            "status": row.get::<String, _>("status"),
+            "output_r2_url": row.get::<Option<String>, _>("output_r2_url"),
+            "output_thumbnail_url": row.get::<Option<String>, _>("output_thumbnail_url"),
+            "llm_review_score": row.get::<Option<i32>, _>("llm_review_score"),
+            "llm_review_feedback": row.get::<Option<String>, _>("llm_review_feedback"),
+            "error_message": row.get::<Option<String>, _>("error_message"),
+            "created_at": row.get::<chrono::DateTime<chrono::Utc>, _>("created_at"),
+            "completed_at": row.get::<Option<chrono::DateTime<chrono::Utc>>, _>("completed_at"),
+        })
+    }).collect();
+
+    Json(json!({ "success": true, "samples": samples }))
+}
+
+async fn run_service_portfolio_sample_agent(
+    state: Arc<AppState>,
+    sample_id: uuid::Uuid,
+    service_slug: &str,
+    brief: &str,
+) {
+    let _ = sqlx::query("UPDATE service_portfolio_samples SET status = 'running', started_at = NOW() WHERE id = $1")
+        .bind(sample_id)
+        .execute(&state.db_pool)
+        .await;
+
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let _ = sqlx::query("UPDATE service_portfolio_samples SET session_id = $1 WHERE id = $2")
+        .bind(&session_id)
+        .bind(sample_id)
+        .execute(&state.db_pool)
+        .await;
+
+    let gemini_client = state.video_gemini_client.clone()
+        .or_else(|| state.gemini_client.clone());
+    let gemini_client = match gemini_client {
+        Some(c) => c,
+        None => {
+            let _ = sqlx::query("UPDATE service_portfolio_samples SET status = 'failed', error_message = 'No Gemini client configured', completed_at = NOW() WHERE id = $1")
+                .bind(sample_id)
+                .execute(&state.db_pool)
+                .await;
+            return;
+        }
+    };
+
+    let tools = crate::ai_tool_selector::select_tools_for_request(
+        brief,
+        state.ollama_client.as_ref(),
+        state.nvidia_nim_client.as_ref(),
+        Some(&gemini_client),
+    )
+    .await;
+
+    let agent = crate::agent::simple_gemini_agent::SimpleGeminiAgent::new_with_nvidia(
+        Arc::new(gemini_client),
+        state.bedrock_client.clone(),
+        state.nvidia_nim_client.clone().map(Arc::new),
+        state.ollama_client.clone().map(Arc::new),
+    );
+
+    let system_instruction = format!(
+        r#"You are a VideoSync AI agent creating a REAL portfolio sample for the '{slug}' done-for-you service. This sample will be shown to potential customers as proof of quality. It MUST be a polished, complete video that could be sold to a paying customer for $75–$500.
+
+REQUIREMENTS:
+1. Produce a FULL video (match the duration from the brief — typically 15–90 seconds)
+2. Resolution MUST be 1080p (1920x1080) or at minimum 720p (1280x720)
+3. DO NOT call any tool just once and submit_final_answer — build the complete piece step by step
+4. Compose scenes together using concat_videos, overlay_video, add_text_overlay, add_background_music
+5. Include background music, title card/end card, and voiceover narration where appropriate
+6. Generate and overlay captions or lower thirds for clarity
+7. If the brief mentions thumbnails, generate them via thumbnail generation tools
+8. Upload EVERY intermediate asset to cloud (tools do this automatically)
+9. Only call submit_final_answer AFTER you have a fully composed, polished video with audio
+10. DO NOT use test/smoke tools — use the real production tools
+
+Your final submit_final_answer MUST include the R2 URL of the final polished video.
+Create everything from scratch. Do NOT ask for uploaded files or reference URLs."#,
+        slug = service_slug
+    );
+
+    let tool_executor: crate::agent::simple_gemini_agent::GeminiToolExecutor = Arc::new(|name, args, ctx| {
+        Box::pin(async move {
+            serde_json::Value::String(execute_tool_gemini_with_context(name, args, ctx).await)
+        })
+    });
+
+    let result = agent.execute_with_custom_tools(
+        brief,
+        &session_id,
+        None,
+        state.clone(),
+        None,
+        &system_instruction,
+        tools,
+        Some("submit_final_answer"),
+        tool_executor,
+        None,
+    )
+    .await;
+
+    match result {
+        Ok(response) => {
+            // Query generated_artifacts for this session's outputs
+            let outputs = sqlx::query(
+                "SELECT kind, public_url, file_path FROM generated_artifacts WHERE session_uuid = $1 ORDER BY created_at DESC LIMIT 20"
+            )
+            .bind(&session_id)
+            .fetch_all(&state.db_pool)
+            .await
+            .unwrap_or_default();
+
+            let video_url = outputs.iter()
+                .find(|r| r.get::<String, _>("kind") == "video")
+                .and_then(|r| r.get::<Option<String>, _>("public_url"));
+
+            let thumbnail_url = outputs.iter()
+                .find(|r| r.get::<String, _>("kind") == "image")
+                .and_then(|r| r.get::<Option<String>, _>("public_url"));
+
+            let _ = sqlx::query(
+                "UPDATE service_portfolio_samples SET status = 'completed', output_r2_url = $1, output_thumbnail_url = $2, completed_at = NOW() WHERE id = $3"
+            )
+            .bind(&video_url)
+            .bind(&thumbnail_url)
+            .bind(sample_id)
+            .execute(&state.db_pool)
+            .await;
+
+            tracing::info!("✅ Service portfolio sample {sample_id} completed for {service_slug}");
+        }
+        Err(e) => {
+            let _ = sqlx::query(
+                "UPDATE service_portfolio_samples SET status = 'failed', error_message = $1, completed_at = NOW() WHERE id = $2"
+            )
+            .bind(&e)
+            .bind(sample_id)
+            .execute(&state.db_pool)
+            .await;
+
+            tracing::error!("❌ Service portfolio sample {sample_id} failed for {service_slug}: {e}");
+        }
+    }
+}
+
+pub async fn admin_service_samples_page() -> Html<String> {
+    Html(r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Service Portfolio Samples | Admin</title>
+  <style>
+    :root{--bg:#0b1120;--panel:rgba(9,18,31,0.86);--line:rgba(148,163,184,0.16);--text:#e5eefb;--muted:#94a3b8;--blue:#3b82f6;--green:#22c55e;--red:#ef4444;--amber:#f59e0b}
+    *{box-sizing:border-box}
+    body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:var(--bg);color:var(--text)}
+    .shell{max-width:1200px;margin:0 auto;padding:28px 20px}
+    h1{font-size:1.8rem;margin:0}
+    .nav{display:flex;gap:1rem;flex-wrap:wrap;margin:1rem 0;padding:0;list-style:none}
+    .nav a{color:#93c5fd;text-decoration:none;padding:0.5rem 1rem;border-radius:6px;border:1px solid var(--line);background:rgba(15,23,42,0.6)}
+    .nav a.active{border-color:rgba(96,165,250,0.4);background:rgba(59,130,246,0.15)}
+    .service-section{margin:2rem 0;padding:1.5rem;border-radius:16px;background:var(--panel);border:1px solid var(--line)}
+    .service-section h2{margin:0 0 0.5rem;font-size:1.3rem}
+    .service-section p{color:var(--muted);margin:0 0 1rem}
+    .briefs{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:1rem}
+    .brief-card{padding:1rem;border-radius:12px;background:rgba(15,23,42,0.7);border:1px solid rgba(148,163,184,0.12)}
+    .brief-card h3{margin:0 0 0.3rem;font-size:1.05rem}
+    .brief-card p{font-size:0.88rem;color:var(--muted);margin:0 0 0.8rem}
+    .btn{display:inline-flex;padding:0.5rem 1rem;border-radius:6px;border:none;font-weight:700;cursor:pointer;color:#fff}
+    .btn-primary{background:linear-gradient(135deg,#3b82f6,#2563eb)}
+    .btn-sm{font-size:0.82rem;padding:0.4rem 0.7rem}
+    .samples-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:1rem;margin-top:1rem}
+    .sample-card{padding:1rem;border-radius:12px;background:rgba(15,23,42,0.7);border:1px solid rgba(148,163,184,0.12)}
+    .sample-card video{width:100%;aspect-ratio:16/9;object-fit:cover;border-radius:8px;background:#020617}
+    .sample-card h4{margin:0.5rem 0 0.2rem;font-size:1rem}
+    .badge{display:inline-block;padding:0.2rem 0.5rem;border-radius:999px;font-size:0.75rem;font-weight:700}
+    .badge-completed{background:rgba(34,197,94,0.15);color:#86efac}
+    .badge-running{background:rgba(59,130,246,0.15);color:#93c5fd}
+    .badge-failed{background:rgba(239,68,68,0.15);color:#fca5a5}
+    .badge-pending{background:rgba(148,163,184,0.15);color:#cbd5e1}
+    .score{font-size:1.5rem;font-weight:900}
+    .score-good{color:#86efac}
+    .score-ok{color:#fbbf24}
+    .score-bad{color:#f87171}
+    .feedback{font-size:0.85rem;color:var(--muted);margin-top:0.3rem}
+    .error-msg{color:#f87171;font-size:0.85rem}
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <h1>Service Portfolio Samples</h1>
+    <ul class="nav">
+      <li><a href="/admin">Dashboard</a></li>
+      <li><a href="/admin/portfolio-samples">Crypto SaaS Samples</a></li>
+      <li><a href="/admin/test-runs">Blender Tool Tests</a></li>
+      <li><a class="active" href="/admin/service-samples">DFY Service Samples</a></li>
+    </ul>
+    <p style="color:var(--muted)">Generate agent-produced portfolio samples for each done-for-you service. Each sample runs the full agent pipeline — the same flow a paying customer would use.</p>
+    <div id="services-container"></div>
+  </div>
+  <script>
+  const token = localStorage.getItem('auth_token') || localStorage.getItem('authToken') || localStorage.getItem('admin_token');
+  const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
+
+  async function load() {
+    const [briefsRes, samplesRes] = await Promise.all([
+      fetch('/api/admin/service-samples/briefs', { headers }),
+      fetch('/api/admin/service-samples', { headers })
+    ]);
+    const briefs = (await briefsRes.json()).services || [];
+    const samples = (await samplesRes.json()).samples || [];
+
+    const container = document.getElementById('services-container');
+    container.innerHTML = '';
+
+    for (const svc of briefs) {
+      const svcSamples = samples.filter(s => s.service_slug === svc.service_slug);
+      const section = document.createElement('div');
+      section.className = 'service-section';
+      section.innerHTML = `
+        <h2>${esc(svc.service_slug.replace(/-/g, ' ').replace(/\\b\\w/g, c => c.toUpperCase()))}</h2>
+        <p>${svc.briefs.length} brief(s) available · ${svcSamples.length} sample(s) generated</p>
+        <div class="briefs">${svc.briefs.map(b => `
+          <div class="brief-card">
+            <h3>${esc(b.name)}</h3>
+            <p>${esc(b.description)}</p>
+            <button class="btn btn-primary btn-sm" onclick="generateSample('${esc(svc.service_slug)}', '${esc(b.name)}', this)">Generate Sample</button>
+          </div>
+        `).join('')}</div>
+        ${svcSamples.length > 0 ? `
+          <div class="samples-grid">${svcSamples.map(s => `
+            <div class="sample-card">
+              ${s.output_r2_url ? `<video src="${esc(s.output_r2_url)}" controls preload="metadata"></video>` : '<div style="aspect-ratio:16/9;background:rgba(15,23,42,0.5);border-radius:8px;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:0.85rem">No preview</div>'}
+              <h4>${esc(s.sample_name)}</h4>
+              <div><span class="badge badge-${s.status}">${s.status}</span></div>
+              ${s.llm_review_score ? `<div class="score ${s.llm_review_score >= 7 ? 'score-good' : s.llm_review_score >= 4 ? 'score-ok' : 'score-bad'}">${s.llm_review_score}/10</div>` : ''}
+              ${s.llm_review_feedback ? `<div class="feedback">${esc(s.llm_review_feedback)}</div>` : ''}
+              ${s.error_message ? `<div class="error-msg">${esc(s.error_message)}</div>` : ''}
+            </div>
+          `).join('')}</div>
+        ` : '<p style="color:var(--muted);margin-top:1rem">No samples yet. Click "Generate Sample" to create one.</p>'}
+      `;
+      container.appendChild(section);
+    }
+  }
+
+  function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+  async function generateSample(slug, name, btn) {
+    btn.disabled = true;
+    btn.textContent = 'Queuing...';
+    try {
+      const r = await fetch('/api/admin/service-samples', {
+        method: 'POST',
+        headers: Object.assign({'Content-Type': 'application/json'}, headers),
+        body: JSON.stringify({service_slug: slug, brief_name: name})
+      });
+      const d = await r.json();
+      if (d.success) {
+        btn.textContent = 'Queued ✓';
+        setTimeout(load, 2000);
+      } else {
+        btn.textContent = 'Failed';
+        alert(d.error || 'Generation failed');
+      }
+    } catch(e) {
+      btn.textContent = 'Error';
+      alert(e);
+    }
+  }
+
+  load();
+  setInterval(load, 10000);
+  </script>
+</body>
+</html>"#.to_string())
 }
 
 pub async fn admin_portfolio_samples_page() -> Html<String> {

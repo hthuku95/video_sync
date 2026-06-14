@@ -6,6 +6,7 @@ use tokio::sync::Semaphore;
 // Core modules
 pub mod agent;
 pub mod ai_tool_selector;
+pub mod bedrock_client;
 pub mod blender_mcp_client;
 pub mod blender_quality;
 pub mod claude_client;
@@ -77,6 +78,7 @@ pub struct AppState {
     pub manual_clipping_gemini_client: Option<gemini_client::GeminiClient>,
     pub video_gemini_client: Option<gemini_client::GeminiClient>,
     pub gemma_client: Option<gemini_client::GeminiClient>,
+    pub bedrock_client: Option<Arc<bedrock_client::BedrockClient>>,
     pub nvidia_nim_client: Option<nvidia_nim_client::NvidiaNimClient>,
     pub nvidia_nim_vision_client: Option<nvidia_nim_client::NvidiaNimClient>,
     pub deepseek_client: Option<deepseek_client::DeepSeekClient>,

@@ -54,8 +54,10 @@ hostname = "0.4"                     # Worker ID generation for parallel process
 # clash with openssl-sys's dynamic libssl.so.3 (pulled in by qdrant-client →
 # native-tls) causing a nonZeroExit:101 Rust panic on startup in production.
 aws-sdk-s3 = "1"
+aws-sdk-bedrockruntime = "1"
 aws-config = "1"
 aws-credential-types = "1"
+aws-smithy-types = "1"
 # rustls 0.23 (pulled in by qdrant-client 1.15+) requires an explicit CryptoProvider
 # when both ring and aws-lc-rs features are active. We declare rustls directly so
 # we can call install_default() at startup before any TLS connection is made.
