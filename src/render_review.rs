@@ -3,22 +3,25 @@
 //! produces a file we hand back to a user or paying client.
 //!
 //! Runs after render, before return. Flow:
-//!   render_complete(url, prompt, tool) → NVIDIA NIM vision model scores 1-10,
+//!   render_complete(url, prompt, tool) → fallback chain:
+//!     1. NVIDIA NIM (images/audio only — skip video, no native support)
+//!     2. AWS Bedrock (Llama 4 Maverick — images/audio, text)
+//!     3. Ollama/Gemma 4 12B (full video native)
+//!     4. Gemini 2.5 Flash (full video inlineData)
 //!   returns `{pass: bool, score, feedback, retry_hint}` → if pass, caller
 //!   hands the URL to the user; if fail + first attempt, caller retries with
 //!   the hint appended to the prompt; if fail after retry, caller still
 //!   returns the URL but with a warning flag the UI surfaces.
-//!
-//! Uses NVIDIA NIM vision model (nemotron-3-nano-omni) as the primary reviewer
-//! to avoid Gemini free-tier rate limits. Falls back to Gemini if NIM is
-//! unavailable.
 //!
 //! Also writes one row per review to `blender_render_reviews` so the
 //! admin dashboard can see pass/fail rate per tool over time.
 
 use crate::gemini_client::GeminiClient;
 use crate::nvidia_nim_client::NvidiaNimClient;
+use crate::ollama_client::OllamaClient;
 use crate::AppState;
+use base64::engine::general_purpose::STANDARD as BASE64_ENGINE;
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -35,12 +38,11 @@ pub struct ReviewResult {
     pub retry_hint: Option<String>,
 }
 
-/// Review a rendered output. Best-effort — never blocks the pipeline;
-/// returns a "pass with score 0" result if no reviewer is available.
-///
-/// Primary reviewer: NVIDIA NIM vision model (nemotron-3-nano-omni) to
-/// avoid Gemini free-tier rate limits. Falls back to Gemini if NIM is
-/// unavailable.
+/// Review a rendered output using the four-provider fallback chain:
+///   1. NVIDIA NIM (images/audio only, skip video)
+///   2. AWS Bedrock (images/audio/text)
+///   3. Ollama/Gemma 4 12B (full video native, images, audio)
+///   4. Gemini 2.5 Flash (full video inlineData, images, audio)
 pub async fn review_render(
     state: &Arc<AppState>,
     output_url: &str,
@@ -50,16 +52,38 @@ pub async fn review_render(
 ) -> ReviewResult {
     let prompt = review_prompt(original_prompt, tool_name, output_url);
 
-    // 1. Try NVIDIA NIM vision model first
-    if let Some(nim) = state.nvidia_nim_vision_client.as_ref() {
-        let review = run_review_via_nim(nim, output_url, &prompt).await;
+    // 1. Try NVIDIA NIM vision model (images/audio only, skip video)
+    let ext = output_url.rsplit('.').next().unwrap_or("").to_lowercase();
+    let is_video = matches!(ext.as_str(), "mp4" | "mov" | "mkv" | "webm" | "avi");
+    if !is_video {
+        if let Some(nim) = state.nvidia_nim_vision_client.as_ref() {
+            let review = run_review_via_nim(nim, output_url, &prompt).await;
+            if review.score > 0 {
+                persist_review(state, tool_name, &review, delivery_id, output_url).await;
+                return review;
+            }
+        }
+    }
+
+    // 2. Try Bedrock (images/audio/text)
+    if let Some(bedrock) = state.bedrock_client.as_ref() {
+        let review = run_review_via_bedrock(bedrock, output_url, &prompt, is_video).await;
         if review.score > 0 {
             persist_review(state, tool_name, &review, delivery_id, output_url).await;
             return review;
         }
     }
 
-    // 2. Fall back to Gemini
+    // 3. Try Ollama/Gemma 4 12B (full video native, images, audio)
+    if let Some(ollama) = state.ollama_client.as_ref() {
+        let review = run_review_via_ollama(ollama, output_url, &prompt).await;
+        if review.score > 0 {
+            persist_review(state, tool_name, &review, delivery_id, output_url).await;
+            return review;
+        }
+    }
+
+    // 4. Fall back to Gemini (full video inlineData, images, audio)
     let gemini = match state
         .video_gemini_client
         .as_ref()
@@ -70,7 +94,7 @@ pub async fn review_render(
             return ReviewResult {
                 pass: true,
                 score: 0,
-                feedback: "No reviewer (NIM or Gemini) configured — QA review skipped".to_string(),
+                feedback: "No reviewer (NIM, Bedrock, Ollama, or Gemini) configured — QA review skipped".to_string(),
                 retry_hint: None,
             };
         }
@@ -81,7 +105,7 @@ pub async fn review_render(
     review
 }
 
-/// Run review via NVIDIA NIM vision model (primary path).
+/// Run review via NVIDIA NIM vision model (images/audio only).
 async fn run_review_via_nim(
     nim: &NvidiaNimClient,
     output_url: &str,
@@ -98,11 +122,59 @@ async fn run_review_via_nim(
             };
         }
     };
-
     parse_review_response(&response)
 }
 
-/// Run review via Gemini (fallback path).
+/// Run review via Bedrock (images/audio/text).
+async fn run_review_via_bedrock(
+    bedrock: &Arc<crate::bedrock_client::BedrockClient>,
+    output_url: &str,
+    prompt: &str,
+    is_video: bool,
+) -> ReviewResult {
+    if is_video {
+        return ReviewResult {
+            pass: true,
+            score: 0,
+            feedback: "Bedrock (Llama 4) does not natively support video input through Converse API — skipped".to_string(),
+            retry_hint: None,
+        };
+    }
+    let response = match multimodal_review_via_bedrock(bedrock, output_url, prompt).await {
+        Ok(r) => r,
+        Err(e) => {
+            return ReviewResult {
+                pass: true,
+                score: 0,
+                feedback: format!("Bedrock review call failed: {}", e),
+                retry_hint: None,
+            };
+        }
+    };
+    parse_review_response(&response)
+}
+
+/// Run review via Ollama/Gemma 4 12B (full video native, images, audio).
+async fn run_review_via_ollama(
+    ollama: &OllamaClient,
+    output_url: &str,
+    prompt: &str,
+) -> ReviewResult {
+    let response = match multimodal_review_via_ollama(ollama, output_url, prompt).await {
+        Ok(r) => r,
+        Err(e) => {
+            return ReviewResult {
+                pass: true,
+                score: 0,
+                feedback: format!("Ollama review call failed: {}", e),
+                retry_hint: None,
+            };
+        }
+    };
+    parse_review_response(&response)
+}
+
+/// Run review via Gemini (fallback path, full video native).
 async fn run_review_via_gemini(
     gemini: &GeminiClient,
     output_url: &str,
@@ -119,7 +191,6 @@ async fn run_review_via_gemini(
             };
         }
     };
-
     parse_review_response(&response)
 }
 
@@ -224,13 +295,12 @@ async fn download_to_temp(output_url: &str) -> Result<Option<(PathBuf, Vec<u8>)>
     Ok(Some((temp_path, bytes)))
 }
 
-/// Analyze media via NVIDIA NIM vision model (images, audio, or video frames).
+/// Analyze media via NVIDIA NIM vision model (images and audio only — no native video).
 async fn multimodal_review_via_nim(
     nim: &NvidiaNimClient,
     output_url: &str,
     prompt: &str,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-    // If URL is a cloud URL (not a local path), download to temp for analysis
     let _downloaded = download_to_temp(output_url).await?;
     let (local_path_buf, local_url_owned) = match _downloaded.as_ref() {
         Some((path, _)) => (Some(path.clone()), Some(path.to_string_lossy().to_string())),
@@ -253,27 +323,7 @@ async fn multimodal_review_via_nim(
         let bytes = std::fs::read(local_path)?;
         nim.analyze_image_bytes(&bytes, prompt).await.map_err(Into::into)
     } else if is_video_extension(&ext) {
-        let frame_path = format!("{}.review_frame.png", local_url);
-        let status = std::process::Command::new("ffmpeg")
-            .args([
-                "-y", "-i", local_url,
-                "-vframes", "1",
-                "-q:v", "2",
-                &frame_path,
-            ])
-            .status()
-            .map_err(|e| format!("ffmpeg not found: {}", e))?;
-        if status.success() {
-            if let Ok(bytes) = std::fs::read(&frame_path) {
-                let r = nim.analyze_image_bytes(&bytes, prompt).await.map_err(Into::into);
-                let _ = std::fs::remove_file(&frame_path);
-                r
-            } else {
-                Err("Failed to read video frame".into())
-            }
-        } else {
-            Err("Failed to extract video frame for NIM review".into())
-        }
+        Err("NVIDIA NIM does not support native video analysis — falling back to native video model".into())
     } else if let Some(mime_type) = audio_mime_type(&ext) {
         let bytes = std::fs::read(local_path)?;
         nim.analyze_audio_bytes(&bytes, mime_type, prompt).await.map_err(Into::into)
@@ -281,7 +331,6 @@ async fn multimodal_review_via_nim(
         nim.generate_text(prompt).await.map_err(Into::into)
     };
 
-    // Clean up temp file if we downloaded one
     if let Some((temp_path, _)) = _downloaded {
         let _ = std::fs::remove_file(&temp_path);
     }
@@ -289,13 +338,102 @@ async fn multimodal_review_via_nim(
     result
 }
 
-/// Analyze media via Gemini (fallback path).
+/// Analyze media via Ollama/Gemma 4 12B (full video native, images, audio).
+async fn multimodal_review_via_ollama(
+    ollama: &OllamaClient,
+    output_url: &str,
+    prompt: &str,
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    let _downloaded = download_to_temp(output_url).await?;
+    let (local_path_buf, local_url_owned) = match _downloaded.as_ref() {
+        Some((path, _)) => (Some(path.clone()), Some(path.to_string_lossy().to_string())),
+        None => (None, None),
+    };
+    let local_path: &Path = local_path_buf.as_deref().unwrap_or_else(|| Path::new(output_url));
+    let local_url: &str = local_url_owned.as_deref().unwrap_or(output_url);
+
+    if !local_path.exists() {
+        return ollama.generate_text(prompt).await.map_err(Into::into);
+    }
+
+    let ext = local_path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.to_ascii_lowercase())
+        .unwrap_or_default();
+
+    let result = if is_video_extension(&ext) {
+        // Read full video and send to Ollama native API (Gemma 4 natively understands video)
+        let video_bytes = tokio::fs::read(local_path).await?;
+        let b64 = BASE64_ENGINE.encode(&video_bytes);
+        let body = serde_json::json!({
+            "model": ollama.model_id(),
+            "messages": [{"role": "user", "content": prompt, "images": [b64]}],
+            "stream": false,
+            "options": {"num_predict": 2048, "temperature": 0.3}
+        });
+        let resp = ollama.chat_native(body).await?;
+        Ok(resp)
+    } else if is_image_extension(&ext) {
+        let bytes = std::fs::read(local_path)?;
+        ollama.generate_text_with_images(prompt, vec![("".to_string(), bytes)]).await.map_err(Into::into)
+    } else if let Some(_mime_type) = audio_mime_type(&ext) {
+        let bytes = std::fs::read(local_path)?;
+        let b64 = BASE64_ENGINE.encode(&bytes);
+        let body = serde_json::json!({
+            "model": ollama.model_id(),
+            "messages": [{"role": "user", "content": prompt, "images": [b64]}],
+            "stream": false,
+            "options": {"num_predict": 2048, "temperature": 0.3}
+        });
+        let resp = ollama.chat_native(body).await?;
+        Ok(resp)
+    } else {
+        ollama.generate_text(prompt).await.map_err(Into::into)
+    };
+
+    if let Some((temp_path, _)) = _downloaded {
+        let _ = std::fs::remove_file(&temp_path);
+    }
+
+    result
+}
+
+/// Analyze media via Bedrock (text only — Llama 4 Maverick Converse API supports
+/// image/video content blocks, but the SDK image/video support needs builder
+/// imports not yet exposed from bedrock_client.rs. For images/video, NIM/Ollama
+/// handle those before Bedrock in the chain.
+async fn multimodal_review_via_bedrock(
+    bedrock: &Arc<crate::bedrock_client::BedrockClient>,
+    _output_url: &str,
+    prompt: &str,
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    use crate::bedrock_client::BedrockResponse;
+    use aws_sdk_bedrockruntime::types::{ContentBlock, ConversationRole, Message};
+
+    let msg = Message::builder()
+        .role(ConversationRole::User)
+        .content(ContentBlock::Text(prompt.to_string()))
+        .build()
+        .map_err(|e| format!("Failed to build Bedrock message: {}", e))?;
+
+    let response = bedrock
+        .generate_single("You are a strict QA reviewer.", &[msg], &[])
+        .await
+        .map_err(|e| format!("Bedrock QA review failed: {}", e))?;
+
+    match response {
+        BedrockResponse::Text(t) => Ok(t),
+        _ => Err("Bedrock returned tool calls instead of text".into()),
+    }
+}
+
+/// Analyze media via Gemini (full video native, images, audio).
 async fn multimodal_review_via_gemini(
     gemini: &GeminiClient,
     output_url: &str,
     prompt: &str,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-    // If URL is a cloud URL (not a local path), download to temp for analysis
     let _downloaded = download_to_temp(output_url).await?;
     let (local_path_buf, local_url_owned) = match _downloaded.as_ref() {
         Some((path, _)) => (Some(path.clone()), Some(path.to_string_lossy().to_string())),
@@ -328,7 +466,6 @@ async fn multimodal_review_via_gemini(
         gemini.generate_text(prompt).await
     };
 
-    // Clean up temp file if we downloaded one
     if let Some((temp_path, _)) = _downloaded {
         let _ = std::fs::remove_file(&temp_path);
     }

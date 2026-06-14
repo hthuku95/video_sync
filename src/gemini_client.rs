@@ -9266,18 +9266,19 @@ Provide ONLY the JSON object, no markdown, no code blocks, no other text."#,
         Err(last_error)
     }
 
-    /// Analyze a locally downloaded video file by extracting JPEG frames and sending them
-    /// to Gemini as a multi-image request.
+    /// Analyze a video from any source (local path or cloud URL) by sending the full
+    /// video file as base64 inlineData to Gemini for NATIVE video understanding with
+    /// full motion, audio, pacing, and temporal analysis.
     ///
-    /// Used for Twitch VODs (and any non-YouTube source) where Gemini's fileData URI path
-    /// only supports YouTube URLs. Produces the same `VideoAnalysis` schema as
-    /// `analyze_video_from_url`.
+    /// This replaces the old frame-extraction approach with true full-video processing.
+    /// Gemini's base64 inlineData works well for files up to ~10MB (typical edit outputs).
+    /// For larger videos without Gemini File API, the caller should use the Claude or
+    /// Bedrock path instead (both support direct URL video input).
     ///
-    /// Frame count: 1 frame per 2 minutes of footage, clamped 8–20.
-    /// Each frame is labeled with its timestamp so Gemini can report accurate `start_sec`/`end_sec`.
+    /// Produces the same `VideoAnalysis` schema as `analyze_video_from_url`.
     pub async fn analyze_video_from_local_file(
         &self,
-        video_path: &str,
+        video_source: &str,
         clips_per_video: usize,
         min_duration_secs: f64,
         max_duration_secs: f64,
@@ -9293,76 +9294,59 @@ Provide ONLY the JSON object, no markdown, no code blocks, no other text."#,
             .map_err(|e| format!("Gemini semaphore error: {}", e))?;
 
         tracing::info!(
-            "🎬 Analyzing local video via extracted frames: {}",
-            video_path
+            "Analyzing video via Gemini native full-video API: {}",
+            video_source
         );
 
-        // Get total duration via ffprobe
-        let total_dur = crate::core::get_video_duration(video_path)
-            .map_err(|e| format!("Failed to get video duration for '{}': {}", video_path, e))?;
+        // --- Step 1: Get the video bytes ---
+        // Download from cloud URL if needed, or read local file directly.
+        let video_bytes = if video_source.starts_with("http://")
+            || video_source.starts_with("https://")
+        {
+            tracing::debug!("Downloading cloud video for Gemini analysis: {}", video_source);
+            let response = reqwest::get(video_source)
+                .await
+                .map_err(|e| format!("Failed to download video for analysis: {}", e))?;
+            response.bytes().await?.to_vec()
+        } else {
+            tracing::debug!("Reading local video for Gemini analysis: {}", video_source);
+            tokio::fs::read(video_source)
+                .await
+                .map_err(|e| format!("Failed to read video file '{}': {}", video_source, e))?
+        };
 
-        // 1 frame per 2 minutes, clamped 8–20
-        let num_frames = ((total_dur / 120.0).round() as usize).clamp(8, 20);
-
-        // Extract frames at evenly spaced timestamps
-        let mut frame_paths: Vec<String> = Vec::new();
-        let mut frame_timestamps: Vec<f64> = Vec::new();
-        for i in 0..num_frames {
-            let ts = if num_frames == 1 {
-                total_dur * 0.5
-            } else {
-                total_dur * (i as f64 / (num_frames - 1) as f64)
-            };
-            let ts = ts.clamp(0.1, total_dur - 0.1);
-            let path = crate::utils::ffmpeg_utils::create_temp_file(
-                &format!("local_analysis_frame_{}", i),
-                "jpg",
-            );
-            match crate::utils::ffmpeg_utils::extract_frame_at_timestamp(video_path, ts, &path) {
-                Ok(p) => {
-                    frame_paths.push(p);
-                    frame_timestamps.push(ts);
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        "Frame {}/{} extraction at {:.1}s failed (skipping): {}",
-                        i + 1,
-                        num_frames,
-                        ts,
-                        e
-                    );
-                }
-            }
+        if video_bytes.is_empty() {
+            return Err(format!("Video source '{}' produced zero bytes", video_source).into());
         }
 
-        if frame_paths.is_empty() {
+        let total_len_mb = video_bytes.len() as f64 / 1_048_576.0;
+        if total_len_mb > 12.0 {
             return Err(format!(
-                "Failed to extract any frames from '{}' ({:.0}s)",
-                video_path, total_dur
-            )
-            .into());
+                "Video too large for Gemini inline analysis ({:.1}MB > 10MB limit). \
+                 Use Claude (direct URL) or Bedrock (S3 reference) for large video analysis.",
+                total_len_mb
+            ).into());
         }
 
-        // Read frame bytes then immediately clean up temp files
-        let mut frame_data: Vec<(f64, Vec<u8>)> = Vec::new();
-        for (path, ts) in frame_paths.iter().zip(frame_timestamps.iter()) {
-            match tokio::fs::read(path).await {
-                Ok(bytes) => frame_data.push((*ts, bytes)),
-                Err(e) => tracing::warn!("Failed to read frame {}: {}", path, e),
-            }
-        }
-        crate::utils::ffmpeg_utils::cleanup_temp_files(&frame_paths);
+        // Get total duration via ffprobe (download to temp, probe, clean up)
+        let total_dur = {
+            let temp_probe = std::env::temp_dir().join(format!("gemini_probe_{}.mp4", uuid::Uuid::new_v4()));
+            tokio::fs::write(&temp_probe, &video_bytes).await?;
+            let dur = crate::core::get_video_duration(&temp_probe.to_string_lossy())
+                .unwrap_or(30.0);
+            let _ = tokio::fs::remove_file(&temp_probe).await;
+            dur
+        };
 
-        if frame_data.is_empty() {
-            return Err("Failed to read any frame data from extracted frames".into());
-        }
-
-        tracing::info!(
-            "📸 Extracted {}/{} frames for Gemini analysis (video: {:.0}s)",
-            frame_data.len(),
-            num_frames,
-            total_dur
-        );
+        // Detect MIME type from extension
+        let ext = video_source.rsplit('.').next().unwrap_or("mp4").to_lowercase();
+        let mime_type = match ext.as_str() {
+            "avi" => "video/avi",
+            "mov" | "qt" => "video/quicktime",
+            "mkv" => "video/x-matroska",
+            "webm" => "video/webm",
+            _ => "video/mp4",
+        };
 
         let learned_factors_hint = if !high_performing_factors.is_empty() {
             format!(
@@ -9373,10 +9357,11 @@ Provide ONLY the JSON object, no markdown, no code blocks, no other text."#,
             String::new()
         };
 
+        // --- Step 2: Send full video as base64 inlineData for native Gemini video analysis ---
         let prompt = format!(
-            r#"You are analyzing a video via {n} sampled frames. Total duration: {total_dur:.0}s ({total_min:.1} minutes).
+            r#"Analyze this video natively — you see the FULL video with motion, audio, pacing, and timing.
 
-Each frame is labeled with its exact timestamp [t=Xs]. Use these timestamps to estimate accurate start/end times for viral clips.
+Total duration: {total_dur:.0}s ({total_min:.1} minutes).
 
 Identify exactly {clips_per_video} viral clip opportunities for YouTube Shorts.
 
@@ -9407,7 +9392,6 @@ Return ONLY a valid JSON object matching this exact schema:
 }}
 
 Provide ONLY the JSON object, no markdown, no code blocks, no other text."#,
-            n = frame_data.len(),
             total_dur = total_dur,
             total_min = total_dur / 60.0,
             clips_per_video = clips_per_video,
@@ -9416,31 +9400,16 @@ Provide ONLY the JSON object, no markdown, no code blocks, no other text."#,
             learned_hint = learned_factors_hint,
         );
 
-        // Build parts array: timestamp context, then interleaved [label, image] pairs, then prompt
-        let mut parts: Vec<serde_json::Value> = Vec::new();
-
-        let frame_label_list: Vec<String> = frame_data
-            .iter()
-            .map(|(ts, _)| format!("[t={:.1}s]", ts))
-            .collect();
-        parts.push(serde_json::json!({
-            "text": format!("Frame timestamps in order: {}", frame_label_list.join(", "))
-        }));
-
-        for (ts, bytes) in &frame_data {
-            parts.push(serde_json::json!({ "text": format!("[t={:.1}s]", ts) }));
-            parts.push(serde_json::json!({
-                "inlineData": {
-                    "mimeType": "image/jpeg",
-                    "data": BASE64_STANDARD.encode(bytes)
-                }
-            }));
-        }
-
-        parts.push(serde_json::json!({ "text": prompt }));
+        let encoded_data = BASE64_STANDARD.encode(&video_bytes);
 
         let request_body = serde_json::json!({
-            "contents": [{"role": "user", "parts": parts}],
+            "contents": [{
+                "role": "user",
+                "parts": [
+                    {"text": prompt},
+                    {"inlineData": {"mimeType": mime_type, "data": encoded_data}}
+                ]
+            }],
             "generationConfig": {
                 "temperature": 0.3,
                 "maxOutputTokens": 8192,
@@ -9480,14 +9449,14 @@ Provide ONLY the JSON object, no markdown, no code blocks, no other text."#,
                 let analysis: crate::clipping::gemini_video_analyzer::VideoAnalysis =
                     serde_json::from_str(text).map_err(|e| {
                         format!(
-                            "Failed to parse VideoAnalysis JSON from local-file analysis: {} — text: {}",
+                            "Failed to parse VideoAnalysis JSON from native video analysis: {} — text: {}",
                             e,
                             &text[..text.len().min(500)]
                         )
                     })?;
 
                 tracing::info!(
-                    "✅ Local-file analysis complete: {} viral moments (quality: {:.2})",
+                    "✅ Native video analysis complete: {} viral moments (quality: {:.2})",
                     analysis.viral_moments.len(),
                     analysis.overall_quality
                 );
@@ -9503,7 +9472,7 @@ Provide ONLY the JSON object, no markdown, no code blocks, no other text."#,
             if status.as_u16() == 429 && attempt < max_attempts - 1 {
                 let wait_secs = (parse_gemini_retry_delay(&error_text, 30.0) + 5.0) as u64;
                 tracing::warn!(
-                    "⏳ Gemini rate limited (local-file analysis, attempt {}/{}). Waiting {}s…",
+                    "⏳ Gemini rate limited (native video analysis, attempt {}/{}). Waiting {}s…",
                     attempt + 1,
                     max_attempts,
                     wait_secs
@@ -9517,7 +9486,7 @@ Provide ONLY the JSON object, no markdown, no code blocks, no other text."#,
 
             if attempt < max_attempts - 1 {
                 tracing::warn!(
-                    "Local-file analysis attempt {}/{} failed, retrying: {}",
+                    "Native video analysis attempt {}/{} failed, retrying: {}",
                     attempt + 1,
                     max_attempts,
                     last_error

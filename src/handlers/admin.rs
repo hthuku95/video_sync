@@ -8882,21 +8882,26 @@ async fn run_service_portfolio_sample_agent(
     );
 
     let system_instruction = format!(
-        r#"You are a VideoSync AI agent creating a REAL portfolio sample for the '{slug}' done-for-you service. This sample will be shown to potential customers as proof of quality. It MUST be a polished, complete video that could be sold to a paying customer for $75–$500.
+        r#"You are a VideoSync AI agent creating a REAL portfolio sample for the '{slug}' done-for-you service. This sample will be shown to potential customers as proof of quality. It MUST be a polished, complete deliverable that could be sold to a paying customer for $75–$500.
+
+CRITICAL RULE — YOU MUST ACTUALLY GENERATE THE MEDIA:
+- You MUST call the real generation tools (generate_image, blender_generate_scene, generate_text_to_speech, concat_videos, etc.) to produce actual media files
+- Do NOT just describe what you would do — actually DO it
+- Do NOT call submit_final_answer until you have produced real files that are uploaded to R2
+- If you need thumbnails, CALL generate_image with specific prompts
+- If you need video, CALL blender_generate_scene or concat_videos with actual clips
+- If you need audio, CALL generate_text_to_speech
 
 REQUIREMENTS:
-1. Produce a FULL video (match the duration from the brief — typically 15–90 seconds)
+1. Produce a FULL video matching the brief duration (typically 15–90 seconds)
 2. Resolution MUST be 1080p (1920x1080) or at minimum 720p (1280x720)
-3. DO NOT call any tool just once and submit_final_answer — build the complete piece step by step
-4. Compose scenes together using concat_videos, overlay_video, add_text_overlay, add_background_music
-5. Include background music, title card/end card, and voiceover narration where appropriate
-6. Generate and overlay captions or lower thirds for clarity
-7. If the brief mentions thumbnails, generate them via thumbnail generation tools
-8. Upload EVERY intermediate asset to cloud (tools do this automatically)
-9. Only call submit_final_answer AFTER you have a fully composed, polished video with audio
-10. DO NOT use test/smoke tools — use the real production tools
+3. Compose scenes together using concat_videos, overlay_video, add_text_overlay, add_background_music
+4. Include background music, title card/end card, and voiceover narration where appropriate
+5. Upload EVERY intermediate asset to cloud (tools do this automatically)
+6. Only call submit_final_answer AFTER you have real output files with R2 URLs
+7. DO NOT use test/smoke tools — use the real production tools
 
-Your final submit_final_answer MUST include the R2 URL of the final polished video.
+Your final submit_final_answer MUST include the R2 URL of the final deliverable.
 Create everything from scratch. Do NOT ask for uploaded files or reference URLs."#,
         slug = service_slug
     );

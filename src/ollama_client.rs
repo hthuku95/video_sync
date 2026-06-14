@@ -31,6 +31,42 @@ pub struct OllamaClient {
 }
 
 impl OllamaClient {
+    /// Return the configured model ID.
+    pub fn model_id(&self) -> &str {
+        &self.model
+    }
+
+    /// Send a raw JSON body to Ollama's native `/api/chat` endpoint.
+    /// Used for native video analysis (Gemma 4) where the full video is sent
+    /// as base64 in the `images` field.
+    pub async fn chat_native(
+        &self,
+        body: serde_json::Value,
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        let resp = self
+            .client
+            .post(format!("{}/api/chat", self.base_url))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| format!("Ollama native chat request failed: {}", e))?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let err_body = resp.text().await.unwrap_or_default();
+            return Err(format!("Ollama native chat error {}: {}", status, err_body).into());
+        }
+
+        let json: serde_json::Value = resp.json().await
+            .map_err(|e| format!("Ollama native chat parse error: {}", e))?;
+
+        json["message"]["content"]
+            .as_str()
+            .map(|s| s.to_string())
+            .ok_or_else(|| "Ollama native chat: no content in response".into())
+    }
+
     pub fn new() -> Self {
         let base_url = std::env::var("OLLAMA_BASE_URL")
             .unwrap_or_else(|_| OLLAMA_DEFAULT_URL.to_string());
@@ -242,14 +278,16 @@ impl OllamaClient {
         Ok(OllamaResponse::Text(text))
     }
 
-    /// Analyze a locally downloaded video file by extracting JPEG frames and
-    /// sending them to Gemma 4 12B as a multimodal request.
+    /// Analyze a video by sending the FULL video bytes to Gemma 4 12B's native
+    /// multimodal API. Gemma 4 natively understands video including motion, audio,
+    /// pacing, and timing across the full timeline — this sends the entire video
+    /// file, NOT extracted frames.
     ///
-    /// Mirrors `GeminiClient::analyze_video_from_local_file` but uses Ollama's
-    /// vision capability instead of Gemini. Produces the same `VideoAnalysis`
-    /// schema so callers are interchangeable.
+    /// Uses Ollama's native `/api/chat` endpoint with the complete video file as
+    /// base64-encoded binary data. The model handles internal frame processing
+    /// and temporal reasoning natively.
     ///
-    /// Frame count: 1 frame per 2 minutes of footage, clamped 8–20.
+    /// Produces the same `VideoAnalysis` schema as `GeminiClient::analyze_video_from_url`.
     pub async fn analyze_video_from_local_file(
         &self,
         video_path: &str,
@@ -262,74 +300,24 @@ impl OllamaClient {
         Box<dyn std::error::Error + Send + Sync>,
     > {
         tracing::info!(
-            "🎬 Ollama: analyzing local video via frames — {}",
+            "Ollama: analyzing video via native full-video API — {}",
             video_path
         );
+
+        // Read the full video file bytes
+        let video_bytes = tokio::fs::read(video_path)
+            .await
+            .map_err(|e| format!("Ollama: failed to read video '{}': {}", video_path, e))?;
+
+        if video_bytes.is_empty() {
+            return Err(format!("Ollama: video '{}' is empty", video_path).into());
+        }
+
+        let total_len_mb = video_bytes.len() as f64 / 1_048_576.0;
 
         // Get total duration via ffprobe
         let total_dur = crate::core::get_video_duration(video_path)
             .map_err(|e| format!("Ollama: failed to get video duration: {}", e))?;
-
-        // 1 frame per 2 minutes, clamped 8–20
-        let num_frames = ((total_dur / 120.0).round() as usize).clamp(8, 20);
-
-        // Extract frames at evenly spaced timestamps
-        let mut frame_paths: Vec<String> = Vec::new();
-        let mut frame_timestamps: Vec<f64> = Vec::new();
-        for i in 0..num_frames {
-            let ts = if num_frames == 1 {
-                total_dur * 0.5
-            } else {
-                total_dur * (i as f64 / (num_frames - 1) as f64)
-            };
-            let ts = ts.clamp(0.1, total_dur - 0.1);
-            let path = crate::utils::ffmpeg_utils::create_temp_file(
-                &format!("ollama_frame_{}", i),
-                "jpg",
-            );
-            match crate::utils::ffmpeg_utils::extract_frame_at_timestamp(video_path, ts, &path) {
-                Ok(p) => {
-                    frame_paths.push(p);
-                    frame_timestamps.push(ts);
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        "Ollama: frame {}/{} at {:.1}s failed (skipping): {}",
-                        i + 1,
-                        num_frames,
-                        ts,
-                        e
-                    );
-                }
-            }
-        }
-
-        if frame_paths.is_empty() {
-            return Err(
-                format!("Ollama: failed to extract any frames from '{}'", video_path).into(),
-            );
-        }
-
-        // Read frame bytes then clean up temp files
-        let mut frame_data: Vec<(f64, Vec<u8>)> = Vec::new();
-        for (path, ts) in frame_paths.iter().zip(frame_timestamps.iter()) {
-            match tokio::fs::read(path).await {
-                Ok(bytes) => frame_data.push((*ts, bytes)),
-                Err(e) => tracing::warn!("Ollama: failed to read frame {}: {}", path, e),
-            }
-        }
-        crate::utils::ffmpeg_utils::cleanup_temp_files(&frame_paths);
-
-        if frame_data.is_empty() {
-            return Err("Ollama: failed to read any frame data".into());
-        }
-
-        tracing::info!(
-            "📸 Ollama: extracted {}/{} frames for analysis (video: {:.0}s)",
-            frame_data.len(),
-            num_frames,
-            total_dur
-        );
 
         let learned_factors_hint = if !high_performing_factors.is_empty() {
             format!(
@@ -341,9 +329,9 @@ impl OllamaClient {
         };
 
         let prompt = format!(
-            r#"You are analyzing a video via {n} sampled frames. Total duration: {total_dur:.0}s ({total_min:.1} minutes).
+            r#"Analyze this video natively — Gemma 4 sees the FULL video with motion, audio, pacing, and timing.
 
-Each frame is labeled with its exact timestamp [t=Xs]. Use these timestamps to estimate accurate start/end times for viral clips.
+Total duration: {total_dur:.0}s ({total_min:.1} minutes). File size: {total_len_mb:.1}MB.
 
 Identify exactly {clips_per_video} viral clip opportunities for YouTube Shorts.
 
@@ -374,24 +362,59 @@ Return ONLY a valid JSON object matching this exact schema:
 }}
 
 Provide ONLY the JSON object, no markdown, no code blocks, no other text."#,
-            n = frame_data.len(),
             total_dur = total_dur,
             total_min = total_dur / 60.0,
+            total_len_mb = total_len_mb,
             clips_per_video = clips_per_video,
             min_dur = min_duration_secs,
             max_dur = max_duration_secs,
             learned_hint = learned_factors_hint,
         );
 
-        // Build images array: each image gets a text label with timestamp
-        let mut images: Vec<(String, Vec<u8>)> = Vec::new();
-        for (ts, bytes) in frame_data.iter() {
-            images.push((format!("[t={:.1}s]", ts), bytes.clone()));
+        // Send the full video to Ollama's native api/chat endpoint.
+        // The video bytes are base64-encoded and sent as the sole media element.
+        // Gemma 4 natively processes the full video internally.
+        let b64 = BASE64_STANDARD.encode(&video_bytes);
+        let body = serde_json::json!({
+            "model": self.model,
+            "messages": [{
+                "role": "user",
+                "content": prompt,
+                "images": [b64]
+            }],
+            "stream": false,
+            "options": {
+                "num_predict": 8192,
+                "temperature": 0.3
+            }
+        });
+
+        let resp = self
+            .client
+            .post(format!("{}/api/chat", self.base_url))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| format!("Ollama video analysis request failed: {}", e))?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let err_body = resp.text().await.unwrap_or_default();
+            return Err(format!("Ollama video analysis error {}: {}", status, err_body).into());
         }
 
-        let raw = self
-            .generate_text_with_images(&prompt, images)
-            .await?;
+        let json: serde_json::Value = resp.json().await
+            .map_err(|e| format!("Ollama video analysis parse error: {}", e))?;
+
+        let raw = json["message"]["content"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+
+        if raw.is_empty() {
+            return Err("Ollama video analysis returned empty response".into());
+        }
 
         // Clean markdown code fences if present
         let cleaned = raw
@@ -410,7 +433,7 @@ Provide ONLY the JSON object, no markdown, no code blocks, no other text."#,
             })?;
 
         tracing::info!(
-            "✅ Ollama analysis complete: {} viral moments (quality: {:.2})",
+            "Ollama native video analysis complete: {} viral moments (quality: {:.2})",
             analysis.viral_moments.len(),
             analysis.overall_quality
         );
@@ -419,10 +442,7 @@ Provide ONLY the JSON object, no markdown, no code blocks, no other text."#,
     }
 
     /// Analyze a YouTube (or any) video URL by downloading it first via Apify,
-    /// then running local frame analysis through Ollama.
-    ///
-    /// Mirrors the Twitch fallback path in Gemini — Ollama (and Gemma 4) cannot
-    /// directly fetch YouTube URLs, so we download and analyze frames locally.
+    /// then sending the full video to Ollama/Gemma 4 for native video analysis.
     pub async fn analyze_video_from_url(
         &self,
         video_url: &str,
@@ -434,7 +454,7 @@ Provide ONLY the JSON object, no markdown, no code blocks, no other text."#,
         crate::clipping::gemini_video_analyzer::VideoAnalysis,
         Box<dyn std::error::Error + Send + Sync>,
     > {
-        tracing::info!("🎬 Ollama: analyzing video URL via download+frames — {}", video_url);
+        tracing::info!("Ollama: analyzing video URL — {}", video_url);
 
         // Create a temporary download path
         let dl_path = crate::utils::ffmpeg_utils::create_temp_file("ollama_url_analysis", "mp4");
@@ -447,7 +467,7 @@ Provide ONLY the JSON object, no markdown, no code blocks, no other text."#,
         let apify_client =
             crate::clipping::apify_client::ApifyClient::new(apify_token, apify_actor);
 
-        tracing::info!("⬇️ Ollama: downloading {} for frame analysis", video_url);
+        tracing::info!("Downloading {} for Ollama video analysis", video_url);
         apify_client
             .download_video(video_url, &dl_path)
             .await

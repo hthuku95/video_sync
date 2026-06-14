@@ -7117,7 +7117,9 @@ async fn execute_view_video_gemini(_args: &HashMap<String, Value>) -> String {
     format!("❌ Internal error: view_video must be called with context")
 }
 
-/// Review video against original requirements - WITH AppState (Claude version)
+/// Review video against original requirements - WITH AppState (Claude version).
+/// Uses the 4-model fallback chain (NIM → Bedrock → Ollama/Gemma 4 → Gemini)
+/// for full native video analysis via render_review, plus FFmpeg-based QA.
 async fn execute_review_video_with_state_claude(
     args: &Value,
     ctx: &ToolExecutionContext,
@@ -7133,6 +7135,8 @@ async fn execute_review_video_with_state_claude(
     if video_path_input.is_empty() || original_request.is_empty() {
         return "❌ Error: video_path and original_request are required".to_string();
     }
+
+    let app_state = &ctx.app_state;
 
     // Resolve file path - try as-is first, then try uploads/, outputs/ directories
     let video_path = if tokio::fs::metadata(video_path_input).await.is_ok() {
@@ -7154,84 +7158,68 @@ async fn execute_review_video_with_state_claude(
         );
     };
 
-    // Check if file exists and is valid before attempting vectorization check
     if let Err(_) = tokio::fs::metadata(&video_path).await {
         return format!("❌ Error: Video file does not exist: {}", video_path);
     }
 
-    // Retry logic for vectorization with exponential backoff
-    let app_state = ctx.app_state.clone();
-    let video_path_clone = video_path.clone();
+    let mut review = String::new();
 
-    let analysis = retry_with_exponential_backoff(
-        || {
-            let path = video_path_clone.clone();
-            let state = app_state.clone();
-            async move {
-                crate::services::VideoVectorizationService::retrieve_video_analysis(&path, &state)
-                    .await
-            }
-        },
-        5,    // Max 5 retries
-        2000, // Start with 2 second delay (2s, 4s, 8s, 16s, 32s)
+    // 1. Run FFmpeg-based QA on the full video
+    review.push_str(&run_final_qa(&video_path));
+    review.push_str("\n");
+
+    // 2. Use the 4-model fallback chain for LLM-based review
+    let expected_hint = if !expected_features.is_empty() {
+        format!("\nEXPECTED FEATURES to verify: {}", expected_features.join(", "))
+    } else {
+        String::new()
+    };
+    let qa_prompt = format!(
+        "{}. Check if the video meets these requirements.\n\
+         Rate 1-10, return JSON with 'score', 'feedback', and 'retry_hint'.{}",
+        original_request,
+        expected_hint
+    );
+
+    let llm_review = crate::render_review::review_render(
+        app_state,
+        &video_path,
+        &qa_prompt,
+        "review_video",
+        None,
     )
     .await;
 
-    let analysis = match analysis {
-        Ok(data) => data,
-        Err(e) => {
-            return format!(
-                "❌ Failed to retrieve video analysis after multiple retries: {}.\n\n\
-                 💡 Possible reasons:\n\
-                 1. Video is still being vectorized (usually takes 5-15 seconds)\n\
-                 2. Video file is corrupted or invalid\n\
-                 3. Qdrant vector database is unavailable\n\n\
-                 Try waiting a bit longer and calling review_video again.",
-                e
-            );
+    let full_video_analysis = if let Some(gemini) = app_state.video_gemini_client.as_ref()
+        .or(app_state.gemini_client.as_ref())
+    {
+        // Try Gemini full video analysis for rich content description
+        match gemini.analyze_video_content(&video_path, None).await {
+            Ok(desc) => desc.chars().take(500).collect::<String>(),
+            Err(e) => format!("Content analysis unavailable: {}", e),
         }
+    } else {
+        "Content analysis unavailable (no Gemini client)".to_string()
     };
 
-    // Build comprehensive review
-    let mut review = format!("🔍 **Video Quality Review**\n\n");
-    review.push_str(&format!("**Video:** {}\n", video_path));
-    review.push_str(&format!("**Original Request:** {}\n\n", original_request));
+    review.push_str(&format!("**LLM Review (4-model chain):**\n"));
+    review.push_str(&format!("  • Score: {}/10\n", llm_review.score));
+    review.push_str(&format!("  • Verdict: {}\n", if llm_review.pass { "✅ PASS" } else { "⚠️ FAIL" }));
+    review.push_str(&format!("  • Feedback: {}\n", llm_review.feedback));
+    if let Some(hint) = &llm_review.retry_hint {
+        review.push_str(&format!("  • Retry Hint: {}\n", hint));
+    }
+    review.push_str("\n");
 
-    // Video summary
-    let summary = analysis
-        .get("video_summary")
-        .and_then(|v| v.as_str())
-        .unwrap_or("No summary");
-    review.push_str(&format!("**What's in the video:**\n{}\n\n", summary));
-
-    // Check expected features
-    let mut features_found = 0;
-    let total_features = expected_features.len();
-
+    // Check expected features via the LLM review's feedback text
     if !expected_features.is_empty() {
         review.push_str("**Expected Features Check:**\n");
         for feature in &expected_features {
-            // Check if feature is mentioned in summary or frame descriptions
             let feature_lower = feature.to_lowercase();
-            let summary_lower = summary.to_lowercase();
-
-            let found = summary_lower.contains(&feature_lower)
-                || analysis
-                    .get("frames")
-                    .and_then(|v| v.as_array())
-                    .map(|frames| {
-                        frames.iter().any(|f| {
-                            f.get("description")
-                                .and_then(|d| d.as_str())
-                                .map(|desc| desc.to_lowercase().contains(&feature_lower))
-                                .unwrap_or(false)
-                        })
-                    })
-                    .unwrap_or(false);
-
-            if found {
-                features_found += 1;
-            }
+            let feedback_lower = llm_review.feedback.to_lowercase();
+            let summary_lower = full_video_analysis.to_lowercase();
+            let found = feedback_lower.contains(&feature_lower)
+                || summary_lower.contains(&feature_lower);
 
             let status = if found { "✅" } else { "⚠️" };
             review.push_str(&format!("  {} {}\n", status, feature));
@@ -7239,38 +7227,8 @@ async fn execute_review_video_with_state_claude(
         review.push_str("\n");
     }
 
-    // Technical verification
-    let duration = analysis
-        .get("duration_seconds")
-        .and_then(|v| v.as_f64())
-        .unwrap_or(0.0);
-    let frame_count = analysis
-        .get("frame_count")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-
-    review.push_str("**Technical Details:**\n");
-    review.push_str(&format!("  • Duration: {:.1}s\n", duration));
-    review.push_str(&format!("  • Frames analyzed: {}\n", frame_count));
-    review.push_str(&format!("  • Vectorization: Complete ✅\n\n"));
-
-    // Calculate pass/fail
-    let all_features_found = expected_features.is_empty() || features_found == total_features;
-
-    review.push_str("**Review Result:**\n");
-    if all_features_found {
-        review.push_str(&format!(
-            "✅ **PASS** - All requirements met ({}/{})\n",
-            features_found, total_features
-        ));
-        review.push_str("This video is ready to present to the user.\n");
-    } else {
-        review.push_str(&format!(
-            "⚠️ **FAIL** - Missing requirements ({}/{} found)\n",
-            features_found, total_features
-        ));
-        review.push_str("**Recommended Action:** Re-edit the video to include missing features or explain to user what cannot be achieved.\n");
-    }
+    review.push_str(&format!("**Full Video Analysis:**\n{}\n", full_video_analysis));
+    review.push_str(&format!("\n**Review Result:** {}\n", if llm_review.pass { "✅ PASS" } else { "⚠️ FAIL" }));
 
     review
 }
@@ -7280,7 +7238,8 @@ async fn execute_review_video_claude(_args: &Value) -> String {
     format!("❌ Internal error: review_video must be called with context")
 }
 
-/// Review video against original requirements - WITH AppState (Gemini version)
+/// Review video against original requirements - WITH AppState (Gemini/Agent version).
+/// Uses the 4-model fallback chain for full native video analysis.
 async fn execute_review_video_with_state_gemini(
     args: &HashMap<String, Value>,
     ctx: &ToolExecutionContext,
@@ -7303,7 +7262,8 @@ async fn execute_review_video_with_state_gemini(
         return "❌ Error: video_path and original_request are required".to_string();
     }
 
-    // Resolve file path - try as-is first, then try uploads/, outputs/ directories
+    let app_state = &ctx.app_state;
+
     let video_path = if tokio::fs::metadata(video_path_input).await.is_ok() {
         video_path_input.to_string()
     } else if tokio::fs::metadata(format!("uploads/{}", video_path_input))
@@ -7323,84 +7283,66 @@ async fn execute_review_video_with_state_gemini(
         );
     };
 
-    // Check if file exists and is valid
     if let Err(_) = tokio::fs::metadata(&video_path).await {
         return format!("❌ Error: Video file does not exist: {}", video_path);
     }
 
-    // Retry logic with exponential backoff
-    let app_state = ctx.app_state.clone();
-    let video_path_clone = video_path.clone();
+    let mut review = String::new();
 
-    let analysis = retry_with_exponential_backoff(
-        || {
-            let path = video_path_clone.clone();
-            let state = app_state.clone();
-            async move {
-                crate::services::VideoVectorizationService::retrieve_video_analysis(&path, &state)
-                    .await
-            }
-        },
-        5,
-        2000,
+    // 1. Run FFmpeg-based QA on the full video
+    review.push_str(&run_final_qa(&video_path));
+    review.push_str("\n");
+
+    // 2. Use the 4-model fallback chain for LLM-based review
+    let expected_hint = if !expected_features.is_empty() {
+        format!("\nEXPECTED FEATURES to verify: {}", expected_features.join(", "))
+    } else {
+        String::new()
+    };
+    let qa_prompt = format!(
+        "{}. Check if the video meets these requirements.\n\
+         Rate 1-10, return JSON with 'score', 'feedback', and 'retry_hint'.{}",
+        original_request,
+        expected_hint
+    );
+
+    let llm_review = crate::render_review::review_render(
+        app_state,
+        &video_path,
+        &qa_prompt,
+        "review_video",
+        None,
     )
     .await;
 
-    let analysis = match analysis {
-        Ok(data) => data,
-        Err(e) => {
-            return format!(
-                "❌ Failed to retrieve video analysis after multiple retries: {}.\n\n\
-                 💡 Possible reasons:\n\
-                 1. Video is still being vectorized (usually takes 5-15 seconds)\n\
-                 2. Video file is corrupted or invalid\n\
-                 3. Qdrant vector database is unavailable\n\n\
-                 Try waiting a bit longer and calling review_video again.",
-                e
-            );
+    let full_video_analysis = if let Some(gemini) = app_state.video_gemini_client.as_ref()
+        .or(app_state.gemini_client.as_ref())
+    {
+        match gemini.analyze_video_content(&video_path, None).await {
+            Ok(desc) => desc.chars().take(500).collect::<String>(),
+            Err(e) => format!("Content analysis unavailable: {}", e),
         }
+    } else {
+        "Content analysis unavailable (no Gemini client)".to_string()
     };
 
-    // Build comprehensive review
-    let mut review = format!("🔍 **Video Quality Review**\n\n");
-    review.push_str(&format!("**Video:** {}\n", video_path));
-    review.push_str(&format!("**Original Request:** {}\n\n", original_request));
-
-    // Video summary
-    let summary = analysis
-        .get("video_summary")
-        .and_then(|v| v.as_str())
-        .unwrap_or("No summary");
-    review.push_str(&format!("**What's in the video:**\n{}\n\n", summary));
-
-    // Check expected features
-    let mut features_found = 0;
-    let total_features = expected_features.len();
+    review.push_str(&format!("**LLM Review (4-model chain):**\n"));
+    review.push_str(&format!("  • Score: {}/10\n", llm_review.score));
+    review.push_str(&format!("  • Verdict: {}\n", if llm_review.pass { "✅ PASS" } else { "⚠️ FAIL" }));
+    review.push_str(&format!("  • Feedback: {}\n", llm_review.feedback));
+    if let Some(hint) = &llm_review.retry_hint {
+        review.push_str(&format!("  • Retry Hint: {}\n", hint));
+    }
+    review.push_str("\n");
 
     if !expected_features.is_empty() {
         review.push_str("**Expected Features Check:**\n");
         for feature in &expected_features {
-            // Check if feature is mentioned in summary or frame descriptions
             let feature_lower = feature.to_lowercase();
-            let summary_lower = summary.to_lowercase();
-
-            let found = summary_lower.contains(&feature_lower)
-                || analysis
-                    .get("frames")
-                    .and_then(|v| v.as_array())
-                    .map(|frames| {
-                        frames.iter().any(|f| {
-                            f.get("description")
-                                .and_then(|d| d.as_str())
-                                .map(|desc| desc.to_lowercase().contains(&feature_lower))
-                                .unwrap_or(false)
-                        })
-                    })
-                    .unwrap_or(false);
-
-            if found {
-                features_found += 1;
-            }
+            let feedback_lower = llm_review.feedback.to_lowercase();
+            let summary_lower = full_video_analysis.to_lowercase();
+            let found = feedback_lower.contains(&feature_lower)
+                || summary_lower.contains(&feature_lower);
 
             let status = if found { "✅" } else { "⚠️" };
             review.push_str(&format!("  {} {}\n", status, feature));
@@ -7408,38 +7350,8 @@ async fn execute_review_video_with_state_gemini(
         review.push_str("\n");
     }
 
-    // Technical verification
-    let duration = analysis
-        .get("duration_seconds")
-        .and_then(|v| v.as_f64())
-        .unwrap_or(0.0);
-    let frame_count = analysis
-        .get("frame_count")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-
-    review.push_str("**Technical Details:**\n");
-    review.push_str(&format!("  • Duration: {:.1}s\n", duration));
-    review.push_str(&format!("  • Frames analyzed: {}\n", frame_count));
-    review.push_str(&format!("  • Vectorization: Complete ✅\n\n"));
-
-    // Calculate pass/fail
-    let all_features_found = expected_features.is_empty() || features_found == total_features;
-
-    review.push_str("**Review Result:**\n");
-    if all_features_found {
-        review.push_str(&format!(
-            "✅ **PASS** - All requirements met ({}/{})\n",
-            features_found, total_features
-        ));
-        review.push_str("This video is ready to present to the user.\n");
-    } else {
-        review.push_str(&format!(
-            "⚠️ **FAIL** - Missing requirements ({}/{} found)\n",
-            features_found, total_features
-        ));
-        review.push_str("**Recommended Action:** Re-edit the video to include missing features or explain to user what cannot be achieved.\n");
-    }
+    review.push_str(&format!("**Full Video Analysis:**\n{}\n", full_video_analysis));
+    review.push_str(&format!("\n**Review Result:** {}\n", if llm_review.pass { "✅ PASS" } else { "⚠️ FAIL" }));
 
     review
 }
@@ -18089,13 +18001,18 @@ async fn blender_render_with_review(
 ) -> String {
     let mut current_args = args;
     let original_prompt = serde_json::to_string(&current_args).unwrap_or_default();
+    let mut best_path = String::new();
+    let mut best_score = 0i32;
+    let mut best_feedback = String::new();
+    let mut had_any_render = false;
 
-    for attempt in 0..2u8 {
+    for attempt in 0..4u8 {
         match client
             .render_async(tool, current_args.clone(), url_key, ext)
             .await
         {
             Ok(path) => {
+                had_any_render = true;
                 let review = crate::render_review::review_render(
                     &ctx.app_state,
                     &path,
@@ -18105,22 +18022,30 @@ async fn blender_render_with_review(
                 )
                 .await;
 
+                // Track best
+                if review.score > best_score {
+                    best_score = review.score;
+                    best_path = path.clone();
+                    best_feedback = review.feedback.clone();
+                }
+
                 if review.pass {
                     return if attempt == 0 {
                         format!("✅ {label}: {path}")
                     } else {
-                        format!("✅ {label} after QA retry: {path}")
+                        format!("✅ {label} after QA retry ({}/10): {path}", review.score)
                     };
                 }
 
-                if attempt == 0 {
+                if attempt < 3 {
                     if let Some(retry_hint) = review.retry_hint.as_deref() {
                         tracing::warn!(
                             tool = tool,
                             score = review.score,
                             feedback = %review.feedback,
                             retry_hint = retry_hint,
-                            "Blender-family render failed QA; retrying once with reviewer hint"
+                            attempt = attempt,
+                            "Blender render failed QA; retrying with reviewer hint"
                         );
                         current_args = append_retry_hint_to_blender_args(&current_args, retry_hint);
                         continue;
@@ -18131,18 +18056,29 @@ async fn blender_render_with_review(
                     tool = tool,
                     score = review.score,
                     feedback = %review.feedback,
-                    "Blender-family render returned with QA warning after retry budget exhausted"
-                );
-                return format!(
-                    "✅ {label}: {path}\n⚠️ QA warning (score {}/10): {}",
-                    review.score, review.feedback
+                    attempt = attempt,
+                    "Blender render failed QA, no retry hint available"
                 );
             }
-            Err(error) => return format!("❌ {tool} failed: {error}"),
+            Err(error) => {
+                tracing::error!(tool = tool, attempt = attempt, error = %error, "Blender render failed");
+                // If we have a previous successful render, don't give up
+                if had_any_render {
+                    continue;
+                }
+                return format!("❌ {tool} failed: {error}");
+            }
         }
     }
 
-    format!("❌ {tool} failed after QA retry loop")
+    if had_any_render {
+        format!(
+            "✅ {label}: {best_path}\n⚠️ QA warning (best score {}/10): {}",
+            best_score, best_feedback
+        )
+    } else {
+        format!("❌ {tool} failed after all retries")
+    }
 }
 
 async fn normalize_reference_image_url_for_blender(
