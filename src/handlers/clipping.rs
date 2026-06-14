@@ -1524,6 +1524,7 @@ async fn list_pending_review_clips(
                 "qa_retry_hint": r.try_get::<Option<String>, _>("qa_retry_hint").ok().flatten(),
                 "source_video_title": r.try_get::<Option<String>, _>("source_video_title").ok().flatten(),
                 "created_at": r.try_get::<DateTime<Utc>, _>("created_at").ok(),
+                "download_url": r.try_get::<Option<String>, _>("r2_clip_url").ok().flatten(),
             })
         })
         .collect();

@@ -125,6 +125,28 @@ async fn download_video_output(
     let file_path = resolve_file_path(&state, &file_id).await?;
 
     if !file_path.exists() {
+        // Fallback: check extracted_clips for an R2 URL matching this file_id
+        if let Ok(clips) = sqlx::query(
+            "SELECT local_clip_path, r2_clip_url FROM extracted_clips WHERE r2_clip_url IS NOT NULL"
+        )
+            .fetch_all(&state.db_pool)
+            .await
+        {
+            use sqlx::Row;
+            for clip in &clips {
+                let clip_path: String = clip.get("local_clip_path");
+                let clip_file_id = crate::services::GeneratedArtifactService::legacy_file_id(&clip_path);
+                if clip_file_id == file_id {
+                    if let Some(url) = clip.try_get::<Option<String>, _>("r2_clip_url").ok().flatten() {
+                        return Ok(Response::builder()
+                            .status(StatusCode::FOUND)
+                            .header(header::LOCATION, url.as_str())
+                            .body(axum::body::Body::empty())
+                            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?);
+                    }
+                }
+            }
+        }
         return Err(StatusCode::NOT_FOUND);
     }
 
@@ -181,6 +203,28 @@ async fn stream_video_output(
     let file_path = resolve_file_path(&state, &file_id).await?;
 
     if !file_path.exists() {
+        // Fallback: check extracted_clips for an R2 URL matching this file_id
+        if let Ok(clips) = sqlx::query(
+            "SELECT local_clip_path, r2_clip_url FROM extracted_clips WHERE r2_clip_url IS NOT NULL"
+        )
+            .fetch_all(&state.db_pool)
+            .await
+        {
+            use sqlx::Row;
+            for clip in &clips {
+                let clip_path: String = clip.get("local_clip_path");
+                let clip_file_id = crate::services::GeneratedArtifactService::legacy_file_id(&clip_path);
+                if clip_file_id == file_id {
+                    if let Some(url) = clip.try_get::<Option<String>, _>("r2_clip_url").ok().flatten() {
+                        return Ok(Response::builder()
+                            .status(StatusCode::FOUND)
+                            .header(header::LOCATION, url.as_str())
+                            .body(axum::body::Body::empty())
+                            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?);
+                    }
+                }
+            }
+        }
         return Err(StatusCode::NOT_FOUND);
     }
 
@@ -238,6 +282,37 @@ async fn get_output_info(
     let file_path = resolve_file_path(&state, &file_id).await?;
 
     if !file_path.exists() {
+        // Fallback: check extracted_clips for an R2 URL matching this file_id
+        if let Ok(clips) = sqlx::query(
+            "SELECT local_clip_path, r2_clip_url FROM extracted_clips WHERE r2_clip_url IS NOT NULL"
+        )
+            .fetch_all(&state.db_pool)
+            .await
+        {
+            use sqlx::Row;
+            for clip in &clips {
+                let clip_path: String = clip.get("local_clip_path");
+                let clip_file_id = crate::services::GeneratedArtifactService::legacy_file_id(&clip_path);
+                if clip_file_id == file_id {
+                    if let Some(url) = clip.try_get::<Option<String>, _>("r2_clip_url").ok().flatten() {
+                        let filename = std::path::Path::new(&url)
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or("output")
+                            .to_string();
+                        return Ok(axum::Json(VideoOutputResponse {
+                            file_id: file_id.clone(),
+                            filename,
+                            size_bytes: 0,
+                            download_url: url.clone(),
+                            stream_url: url.clone(),
+                            created_at: String::new(),
+                            content_type: "application/octet-stream".to_string(),
+                        }));
+                    }
+                }
+            }
+        }
         return Err(StatusCode::NOT_FOUND);
     }
 

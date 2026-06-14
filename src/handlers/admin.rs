@@ -4338,7 +4338,6 @@ pub async fn admin_clipping_activity_page() -> Html<String> {
                     document.getElementById('userDetails').style.display = 'block';
                     document.getElementById('detailUsername').textContent = username;
 
-                    // --- Linkages ---
                     const linkagesGrid = document.getElementById('linkagesGrid');
                     if (!data.linkages || data.linkages.length === 0) {
                         linkagesGrid.innerHTML = '<p style="color:#6c757d;">No channel linkages set up.</p>';
@@ -4368,14 +4367,12 @@ pub async fn admin_clipping_activity_page() -> Html<String> {
                         `).join('');
                     }
 
-                    // --- Build clips lookup by job_id ---
                     const clipsByJob = {};
                     (data.clips || []).forEach(c => {
                         if (!clipsByJob[c.clipping_job_id]) clipsByJob[c.clipping_job_id] = [];
                         clipsByJob[c.clipping_job_id].push(c);
                     });
 
-                    // --- Jobs ---
                     const jobsContainer = document.getElementById('jobsContainer');
                     if (!data.recent_jobs || data.recent_jobs.length === 0) {
                         jobsContainer.innerHTML = '<p style="color:#6c757d;padding:1rem;">No jobs found for this user.</p>';

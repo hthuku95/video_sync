@@ -2152,14 +2152,14 @@ impl GeminiClient {
             },
             FunctionDeclaration {
                 name: "view_video".to_string(),
-                description: "Views/analyzes a video by retrieving its vectorized embeddings from the database. This allows you to 'see' what's in a video without re-processing it. Use this to understand video content, verify edits, or check what a previously generated video contains. Returns detailed frame-by-frame analysis and overall summary.".to_string(),
+                description: "Views/analyzes a video by retrieving its vectorized embeddings from the database. This allows you to 'see' what's in a video without re-processing it. Use this to understand video content, verify edits, or check what a previously generated video contains. Returns detailed frame-by-frame analysis and overall summary. Accepts either a local path or a cloud URL (prefixed with https://).".to_string(),
                 parameters: Parameters {
                     param_type: "object".to_string(),
                     properties: {
                         let mut props = HashMap::new();
                         props.insert("video_path".to_string(), PropertyDefinition {
                             prop_type: "string".to_string(),
-                            description: "Path to the video file to view/analyze (e.g., 'outputs/edited_video.mp4')".to_string(),
+                            description: "Path or cloud URL to the video file to view/analyze (e.g., 'outputs/edited_video.mp4' or an https:// cloud URL)".to_string(),
                             items: None,
                         });
                         props
@@ -2176,7 +2176,7 @@ impl GeminiClient {
                         let mut props = HashMap::new();
                         props.insert("video_path".to_string(), PropertyDefinition {
                             prop_type: "string".to_string(),
-                            description: "Path to the output video to review".to_string(),
+                            description: "Path or cloud URL to the output video to review (e.g., local path or https:// cloud URL)".to_string(),
                             items: None,
                         });
                         props.insert("original_request".to_string(), PropertyDefinition {
@@ -2200,14 +2200,14 @@ impl GeminiClient {
             },
             FunctionDeclaration {
                 name: "view_image".to_string(),
-                description: "Views/analyzes an image file using AI vision. Use this to verify generated images, inspect stock photos from Pexels, or check overlay images before using them in videos. Returns detailed analysis of content, colors, composition, style, and suitability for video use.".to_string(),
+                description: "Views/analyzes an image file using AI vision. Use this to verify generated images, inspect stock photos from Pexels, or check overlay images before using them in videos. Returns detailed analysis of content, colors, composition, style, and suitability for video use. Accepts either a local path or a cloud URL (prefixed with https://).".to_string(),
                 parameters: Parameters {
                     param_type: "object".to_string(),
                     properties: {
                         let mut props = HashMap::new();
                         props.insert("image_path".to_string(), PropertyDefinition {
                             prop_type: "string".to_string(),
-                            description: "Path to the image file to view/analyze (e.g., 'outputs/generated_logo.png' or 'outputs/stock_photo.jpg')".to_string(),
+                            description: "Path or cloud URL to the image file to view/analyze (e.g., 'outputs/generated_logo.png' or an https:// cloud URL)".to_string(),
                             items: None,
                         });
                         props
@@ -7850,6 +7850,106 @@ impl GeminiClient {
                 name: "talking_head_cleanup".to_string(),
                 description: "Multi-step talking head video cleanup: stabilize → denoise speech → de-ess sibilance → loudnorm to −16 LUFS. Use for YouTube talking head footage, interviews, or screen recordings.".to_string(),
                 parameters: { let mut p = HashMap::new(); p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to the input video file".to_string(), items: None }); p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to save the cleaned video".to_string(), items: None }); Parameters { param_type: "object".to_string(), properties: p, required: vec!["input_file".to_string(), "output_file".to_string()] } },
+            },
+            
+            // =====================================================================
+            // QUERY TOOLS — read-only DB lookups for re-editing across pipeline runs
+            // =====================================================================
+            FunctionDeclaration {
+                name: "get_output_videos".to_string(),
+                description: "Queries the output_videos table. Returns video outputs matching the search query with pagination support. Use this to discover previously generated video files for re-editing.".to_string(),
+                parameters: Parameters {
+                    param_type: "object".to_string(),
+                    properties: {
+                        let mut props = HashMap::new();
+                        props.insert("query".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Search term to filter by filename, tool name, or session ID (optional)".to_string(),
+                            items: None,
+                        });
+                        props.insert("session_filter".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Session UUID to filter by (optional; defaults to current session)".to_string(),
+                            items: None,
+                        });
+                        props.insert("limit".to_string(), PropertyDefinition {
+                            prop_type: "integer".to_string(),
+                            description: "Maximum number of results to return (default: 20, max: 100)".to_string(),
+                            items: None,
+                        });
+                        props.insert("offset".to_string(), PropertyDefinition {
+                            prop_type: "integer".to_string(),
+                            description: "Number of results to skip for pagination (default: 0)".to_string(),
+                            items: None,
+                        });
+                        props
+                    },
+                    required: vec![],
+                },
+            },
+            FunctionDeclaration {
+                name: "get_generated_artifacts".to_string(),
+                description: "Queries the generated_artifacts table. Returns generated assets (images, audio, files) matching the search query, optionally filtered by artifact kind. Use this to discover previously generated images, audio files, and other assets.".to_string(),
+                parameters: Parameters {
+                    param_type: "object".to_string(),
+                    properties: {
+                        let mut props = HashMap::new();
+                        props.insert("query".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Search term to filter by filename, source, or session (optional)".to_string(),
+                            items: None,
+                        });
+                        props.insert("kind".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Filter by artifact kind: 'generated_image', 'generated_audio', 'generated_file', or leave blank for all".to_string(),
+                            items: None,
+                        });
+                        props.insert("session_filter".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Session UUID to filter by (optional; defaults to current session)".to_string(),
+                            items: None,
+                        });
+                        props.insert("limit".to_string(), PropertyDefinition {
+                            prop_type: "integer".to_string(),
+                            description: "Maximum number of results to return (default: 20, max: 100)".to_string(),
+                            items: None,
+                        });
+                        props.insert("offset".to_string(), PropertyDefinition {
+                            prop_type: "integer".to_string(),
+                            description: "Number of results to skip for pagination (default: 0)".to_string(),
+                            items: None,
+                        });
+                        props
+                    },
+                    required: vec![],
+                },
+            },
+            FunctionDeclaration {
+                name: "get_extracted_clips".to_string(),
+                description: "Queries the extracted_clips table (from YouTube channels). Returns clips associated with a specific clipping job ID with pagination support.".to_string(),
+                parameters: Parameters {
+                    param_type: "object".to_string(),
+                    properties: {
+                        let mut props = HashMap::new();
+                        props.insert("job_id".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "The clipping job ID (UUID string) to filter clips by".to_string(),
+                            items: None,
+                        });
+                        props.insert("limit".to_string(), PropertyDefinition {
+                            prop_type: "integer".to_string(),
+                            description: "Maximum number of results to return (default: 50, max: 200)".to_string(),
+                            items: None,
+                        });
+                        props.insert("offset".to_string(), PropertyDefinition {
+                            prop_type: "integer".to_string(),
+                            description: "Number of results to skip for pagination (default: 0)".to_string(),
+                            items: None,
+                        });
+                        props
+                    },
+                    required: vec!["job_id".to_string()],
+                },
             },
         ]
     }

@@ -17,6 +17,7 @@ impl OutputVideoService {
         session_uuid: Option<&str>,
         original_input_file_id: Option<String>,
         file_path: &str,
+        r2_url: Option<String>,
         operation_type: &str,
         operation_params: Option<&str>,
         tool_used: &str,
@@ -42,11 +43,11 @@ impl OutputVideoService {
         let result = sqlx::query_as::<_, OutputVideo>(
             r#"
             INSERT INTO output_videos (
-                session_id, user_id, original_input_file_id, file_name, file_path, file_size, 
+                session_id, user_id, original_input_file_id, file_name, file_path, r2_url, file_size, 
                 mime_type, duration_seconds, width, height, frame_rate, operation_type, 
                 operation_params, processing_status, tool_used, ai_response_message, 
                 created_at, updated_at
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $17)
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
             RETURNING *
             "#,
         )
@@ -55,6 +56,7 @@ impl OutputVideoService {
         .bind(original_input_file_id)
         .bind(file_name)
         .bind(file_path)
+        .bind(&r2_url)
         .bind(file_size)
         .bind(mime_type)
         .bind(duration)
@@ -66,6 +68,7 @@ impl OutputVideoService {
         .bind("completed") // processing_status
         .bind(tool_used)
         .bind(ai_response_message)
+        .bind(Utc::now())
         .bind(Utc::now())
         .fetch_one(pool).await?;
 
@@ -91,7 +94,7 @@ impl OutputVideoService {
             source_type: "chat_generation".to_string(),
             service_slug: None,
             owner_user_id: Some(video.user_id),
-            output_url: Some(video.file_path.clone()),
+            output_url: Some(video.r2_url.clone().unwrap_or_else(|| video.file_path.clone())),
             source_url: None,
             prompt: video.ai_response_message.clone(),
             title: Some(video.file_name.clone()),

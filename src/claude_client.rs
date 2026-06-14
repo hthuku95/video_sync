@@ -1455,13 +1455,13 @@ impl ClaudeClient {
             },
             ClaudeTool {
                 name: "view_video".to_string(),
-                description: "Views/analyzes a video by retrieving its vectorized embeddings from the database. This allows you to 'see' what's in a video without re-processing it. Use this to understand video content, verify edits, or check what a previously generated video contains. Returns detailed frame-by-frame analysis and overall summary.".to_string(),
+                description: "Views/analyzes a video by retrieving its vectorized embeddings from the database. This allows you to 'see' what's in a video without re-processing it. Use this to understand video content, verify edits, or check what a previously generated video contains. Returns detailed frame-by-frame analysis and overall summary. Accepts either a local path or a cloud URL (prefixed with https://).".to_string(),
                 input_schema: InputSchema {
                     schema_type: "object".to_string(),
                     properties: HashMap::from([
                         ("video_path".to_string(), PropertyDefinition {
                             prop_type: "string".to_string(),
-                            description: "Path to the video file to view/analyze (e.g., 'outputs/edited_video.mp4')".to_string(),
+                            description: "Path or cloud URL to the video file to view/analyze (e.g., 'outputs/edited_video.mp4' or an https:// cloud URL)".to_string(),
                             items: None,
                         }),
                     ]),
@@ -1470,13 +1470,13 @@ impl ClaudeClient {
             },
             ClaudeTool {
                 name: "review_video".to_string(),
-                description: "Reviews an output video to verify it meets the user's original requirements. Use this in the final stage of video editing/generation to confirm quality before presenting to the user. Compares the video's vectorized analysis against the user's request to check if edits were applied correctly.".to_string(),
+                description: "Reviews an output video to verify it meets the user's original requirements. Use this in the final stage of video editing/generation to confirm quality before presenting to the user. Compares the video's vectorized analysis against the user's request to check if edits were applied correctly. Accepts either a local path or a cloud URL.".to_string(),
                 input_schema: InputSchema {
                     schema_type: "object".to_string(),
                     properties: HashMap::from([
                         ("video_path".to_string(), PropertyDefinition {
                             prop_type: "string".to_string(),
-                            description: "Path to the output video to review".to_string(),
+                            description: "Path or cloud URL to the output video to review (e.g., local path or https:// cloud URL)".to_string(),
                             items: None,
                         }),
                         ("original_request".to_string(), PropertyDefinition {
@@ -1499,13 +1499,13 @@ impl ClaudeClient {
             },
             ClaudeTool {
                 name: "view_image".to_string(),
-                description: "Views/analyzes an image file using AI vision. Use this to verify generated images, inspect stock photos from Pexels, or check overlay images before using them in videos. Returns detailed analysis of content, colors, composition, style, and suitability for video use.".to_string(),
+                description: "Views/analyzes an image file using AI vision. Use this to verify generated images, inspect stock photos from Pexels, or check overlay images before using them in videos. Returns detailed analysis of content, colors, composition, style, and suitability for video use. Accepts either a local path or a cloud URL (prefixed with https://).".to_string(),
                 input_schema: InputSchema {
                     schema_type: "object".to_string(),
                     properties: HashMap::from([
                         ("image_path".to_string(), PropertyDefinition {
                             prop_type: "string".to_string(),
-                            description: "Path to the image file to view/analyze (e.g., 'outputs/generated_logo.png' or 'outputs/stock_photo.jpg')".to_string(),
+                            description: "Path or cloud URL to the image file to view/analyze (e.g., 'outputs/generated_logo.png' or an https:// cloud URL)".to_string(),
                             items: None,
                         }),
                     ]),

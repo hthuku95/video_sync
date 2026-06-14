@@ -20,7 +20,7 @@ use crate::gemini_client::GeminiClient;
 use crate::nvidia_nim_client::NvidiaNimClient;
 use crate::AppState;
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 /// Minimum acceptable score to pass the render. Chosen at 6 because our
@@ -202,33 +202,61 @@ or
     )
 }
 
+/// Download a cloud URL to a temp file and return its path.
+/// Returns `None` if the URL doesn't look like a remote URL.
+async fn download_to_temp(output_url: &str) -> Result<Option<(PathBuf, Vec<u8>)>, Box<dyn std::error::Error + Send + Sync>> {
+    if !output_url.starts_with("http://") && !output_url.starts_with("https://") {
+        return Ok(None);
+    }
+    let response = reqwest::get(output_url).await?;
+    let bytes = response.bytes().await.unwrap_or_default().to_vec();
+    if bytes.is_empty() {
+        return Ok(None);
+    }
+    let ext = output_url
+        .rsplit('.')
+        .next()
+        .and_then(|s| if s.len() <= 5 { Some(s) } else { None })
+        .unwrap_or("mp4");
+    let temp_path = std::env::temp_dir().join(format!("review_{}.{}", uuid::Uuid::new_v4(), ext));
+    std::fs::write(&temp_path, &bytes)?;
+    tracing::debug!(url = %output_url, path = %temp_path.display(), "Downloaded cloud URL to temp file for QA review");
+    Ok(Some((temp_path, bytes)))
+}
+
 /// Analyze media via NVIDIA NIM vision model (images, audio, or video frames).
 async fn multimodal_review_via_nim(
     nim: &NvidiaNimClient,
     output_url: &str,
     prompt: &str,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-    let path = Path::new(output_url);
-    if !path.exists() {
+    // If URL is a cloud URL (not a local path), download to temp for analysis
+    let _downloaded = download_to_temp(output_url).await?;
+    let (local_path_buf, local_url_owned) = match _downloaded.as_ref() {
+        Some((path, _)) => (Some(path.clone()), Some(path.to_string_lossy().to_string())),
+        None => (None, None),
+    };
+    let local_path: &Path = local_path_buf.as_deref().unwrap_or_else(|| Path::new(output_url));
+    let local_url: &str = local_url_owned.as_deref().unwrap_or(output_url);
+
+    if !local_path.exists() {
         return nim.generate_text(prompt).await.map_err(Into::into);
     }
 
-    let ext = path
+    let ext = local_path
         .extension()
         .and_then(|ext| ext.to_str())
         .map(|ext| ext.to_ascii_lowercase())
         .unwrap_or_default();
 
-    if is_image_extension(&ext) {
-        let bytes = std::fs::read(path)?;
-        return nim.analyze_image_bytes(&bytes, prompt).await.map_err(Into::into);
-    }
-
-    if is_video_extension(&ext) {
-        let frame_path = format!("{}.review_frame.png", output_url);
+    let result = if is_image_extension(&ext) {
+        let bytes = std::fs::read(local_path)?;
+        nim.analyze_image_bytes(&bytes, prompt).await.map_err(Into::into)
+    } else if is_video_extension(&ext) {
+        let frame_path = format!("{}.review_frame.png", local_url);
         let status = std::process::Command::new("ffmpeg")
             .args([
-                "-y", "-i", output_url,
+                "-y", "-i", local_url,
                 "-vframes", "1",
                 "-q:v", "2",
                 &frame_path,
@@ -237,20 +265,28 @@ async fn multimodal_review_via_nim(
             .map_err(|e| format!("ffmpeg not found: {}", e))?;
         if status.success() {
             if let Ok(bytes) = std::fs::read(&frame_path) {
-                let result = nim.analyze_image_bytes(&bytes, prompt).await.map_err(Into::into);
+                let r = nim.analyze_image_bytes(&bytes, prompt).await.map_err(Into::into);
                 let _ = std::fs::remove_file(&frame_path);
-                return result;
+                r
+            } else {
+                Err("Failed to read video frame".into())
             }
+        } else {
+            Err("Failed to extract video frame for NIM review".into())
         }
-        return Err("Failed to extract video frame for NIM review".into());
+    } else if let Some(mime_type) = audio_mime_type(&ext) {
+        let bytes = std::fs::read(local_path)?;
+        nim.analyze_audio_bytes(&bytes, mime_type, prompt).await.map_err(Into::into)
+    } else {
+        nim.generate_text(prompt).await.map_err(Into::into)
+    };
+
+    // Clean up temp file if we downloaded one
+    if let Some((temp_path, _)) = _downloaded {
+        let _ = std::fs::remove_file(&temp_path);
     }
 
-    if let Some(mime_type) = audio_mime_type(&ext) {
-        let bytes = std::fs::read(path)?;
-        return nim.analyze_audio_bytes(&bytes, mime_type, prompt).await.map_err(Into::into);
-    }
-
-    nim.generate_text(prompt).await.map_err(Into::into)
+    result
 }
 
 /// Analyze media via Gemini (fallback path).
@@ -259,32 +295,45 @@ async fn multimodal_review_via_gemini(
     output_url: &str,
     prompt: &str,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-    let path = Path::new(output_url);
-    if path.exists() {
-        let ext = path
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .map(|ext| ext.to_ascii_lowercase())
-            .unwrap_or_default();
+    // If URL is a cloud URL (not a local path), download to temp for analysis
+    let _downloaded = download_to_temp(output_url).await?;
+    let (local_path_buf, local_url_owned) = match _downloaded.as_ref() {
+        Some((path, _)) => (Some(path.clone()), Some(path.to_string_lossy().to_string())),
+        None => (None, None),
+    };
+    let local_path: &Path = local_path_buf.as_deref().unwrap_or_else(|| Path::new(output_url));
+    let local_url: &str = local_url_owned.as_deref().unwrap_or(output_url);
 
-        if is_image_extension(&ext) {
-            let bytes = std::fs::read(path)?;
-            return gemini.analyze_image_bytes(&bytes, prompt).await;
-        }
-
-        if is_video_extension(&ext) {
-            return gemini
-                .analyze_video_content(path.to_string_lossy().as_ref(), Some(prompt.to_string()))
-                .await;
-        }
-
-        if let Some(mime_type) = audio_mime_type(&ext) {
-            let bytes = std::fs::read(path)?;
-            return gemini.analyze_audio_bytes(&bytes, mime_type, prompt).await;
-        }
+    if !local_path.exists() {
+        return gemini.generate_text(prompt).await;
     }
 
-    gemini.generate_text(prompt).await
+    let ext = local_path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.to_ascii_lowercase())
+        .unwrap_or_default();
+
+    let result = if is_image_extension(&ext) {
+        let bytes = std::fs::read(local_path)?;
+        gemini.analyze_image_bytes(&bytes, prompt).await
+    } else if is_video_extension(&ext) {
+        gemini
+            .analyze_video_content(local_url, Some(prompt.to_string()))
+            .await
+    } else if let Some(mime_type) = audio_mime_type(&ext) {
+        let bytes = std::fs::read(local_path)?;
+        gemini.analyze_audio_bytes(&bytes, mime_type, prompt).await
+    } else {
+        gemini.generate_text(prompt).await
+    };
+
+    // Clean up temp file if we downloaded one
+    if let Some((temp_path, _)) = _downloaded {
+        let _ = std::fs::remove_file(&temp_path);
+    }
+
+    result
 }
 
 fn is_image_extension(ext: &str) -> bool {

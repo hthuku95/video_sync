@@ -42,6 +42,7 @@ pub struct OutputVideo {
     pub original_input_file_id: Option<String>,
     pub file_name: String,
     pub file_path: String,
+    pub r2_url: Option<String>,
     pub file_size: i64,
     pub mime_type: String,
     pub duration_seconds: Option<f64>,

@@ -842,13 +842,14 @@ fn build_file_context(
         for (index, video) in output_videos.iter().enumerate() {
             let file_id = output_file_id_from_path(&video.file_path);
             context.push_str(&format!(
-                "{}. \"{}\" - USE THIS PATH: {}\n   - Operation: {} using {}\n   - Size: {:.2} MB\n   - Watch link: /api/outputs/stream/{}\n   - Download link: /api/outputs/download/{}\n   - Created: {}\n\n",
+                "{}. \"{}\" - USE THIS PATH: {}\n   - Operation: {} using {}\n   - Size: {:.2} MB\n   - Cloud URL: {}\n   - Watch link: /api/outputs/stream/{}\n   - Download link: /api/outputs/download/{}\n   - Created: {}\n\n",
                 index + 1,
                 video.file_name,
                 video.file_path,
                 video.operation_type,
                 video.tool_used,
                 video.file_size as f64 / (1024.0 * 1024.0),
+                video.r2_url.as_deref().unwrap_or("(none)"),
                 file_id,
                 file_id,
                 video.created_at.format("%Y-%m-%d %H:%M:%S UTC")
@@ -858,7 +859,7 @@ fn build_file_context(
 
     if !files.is_empty() || !output_videos.is_empty() {
         context.push_str("CRITICAL INSTRUCTION: When using ANY video editing tool, you MUST use the PATH shown above (the path after 'USE THIS PATH:'). NEVER use just the filename like 'GothamChess.mp4' - always use the full path like 'uploads/uuid_files.mp4'. The tools will FAIL if you use only the filename!\n");
-        context.push_str("CRITICAL USER-FACING INSTRUCTION: Internal server paths are for tool execution only. NEVER expose, quote, or recommend raw internal paths like 'outputs/...', 'uploads/...', or filesystem paths in user-facing responses. When telling the user where to watch or download a completed output video, use the Watch link or Download link shown above instead.\n\n");
+        context.push_str("CRITICAL USER-FACING INSTRUCTION: Use the Cloud URL shown above for delivery to the user. Never expose internal paths like 'outputs/...' in user-facing responses.\n\n");
     }
 
     context

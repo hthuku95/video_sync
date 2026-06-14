@@ -714,7 +714,9 @@ pub async fn initiate_google_oauth(
     }
 
     // Detect source app from redirect URL to ensure proper redirection
-    let source_app = if redirect_to.contains("cmachine.devthuku.io") {
+    let source_app = if redirect_to.contains("cmachine.devthuku.io")
+        || redirect_to.contains("content-machine-pbjp.vercel.app")
+    {
         "content_machine"
     } else if redirect_to.contains("localhost:5173") || redirect_to.contains("localhost:4173") {
         "content_machine_local"
@@ -823,7 +825,7 @@ pub async fn google_oauth_callback(
     } else {
         // Provide appropriate fallback based on source app
         let fallback = match source_app {
-            "content_machine" => "https://cmachine.devthuku.io/",
+            "content_machine" => "https://content-machine-pbjp.vercel.app/",
             "content_machine_local" => "http://localhost:5173/",
             _ => "/dashboard",
         };

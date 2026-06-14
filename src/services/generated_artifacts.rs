@@ -114,6 +114,8 @@ impl GeneratedArtifactService {
 
         let legacy_file_id = Some(Self::legacy_file_id(&output_video.file_path));
         let now = Utc::now();
+        let storage_backend = if output_video.r2_url.is_some() { "r2" } else { "local" };
+        let storage_key = output_video.r2_url.clone().unwrap_or_else(|| output_video.file_path.clone());
         let artifact = sqlx::query_as::<_, GeneratedArtifact>(
             r#"
             INSERT INTO generated_artifacts (
@@ -134,7 +136,7 @@ impl GeneratedArtifactService {
                 created_at,
                 updated_at
             ) VALUES (
-                $1, $2, 'output_video', 'local', $3, $4, $5, $6, $7, $8, $9, NULL, 'output_videos', $10, $11, $11
+                $1, $2, 'output_video', $3, $4, $5, $6, $7, $8, $9, $10, $11, NULL, 'output_videos', $12, $13, $13
             )
             ON CONFLICT (source_table, source_record_key)
             WHERE source_table IS NOT NULL AND source_record_key IS NOT NULL
@@ -155,18 +157,22 @@ impl GeneratedArtifactService {
         )
         .bind(workflow_id)
         .bind(session_uuid)
+        .bind(&storage_backend)
+        .bind(&storage_key)
         .bind(&output_video.file_path)
         .bind(&output_video.file_path)
         .bind(legacy_file_id.clone())
         .bind(
-            legacy_file_id
-                .as_ref()
-                .map(|file_id| format!("/api/outputs/download/{file_id}")),
+            output_video
+                .r2_url
+                .clone()
+                .or_else(|| legacy_file_id.as_ref().map(|file_id| format!("/api/outputs/download/{file_id}"))),
         )
         .bind(
-            legacy_file_id
-                .as_ref()
-                .map(|file_id| format!("/api/outputs/stream/{file_id}")),
+            output_video
+                .r2_url
+                .clone()
+                .or_else(|| legacy_file_id.as_ref().map(|file_id| format!("/api/outputs/stream/{file_id}"))),
         )
         .bind(&output_video.mime_type)
         .bind(output_video.file_size)

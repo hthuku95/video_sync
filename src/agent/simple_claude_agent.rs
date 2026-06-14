@@ -107,28 +107,24 @@ impl SimpleClaudeAgent {
 5. **User requests COMPLETELY DIFFERENT content** → GENERATE NEW video
    - Only when topic/theme is fundamentally different
 
-### How to Check for Existing Videos:
-Look for this in your context:
-```
-PREVIOUSLY GENERATED OUTPUT VIDEOS IN THIS SESSION:
-1. "video_name.mp4" - USE THIS PATH: outputs/video_name.mp4
-   - Watch link: /api/outputs/stream/<file_id>
-   - Download link: /api/outputs/download/<file_id>
-```
+### How to Find Previous Outputs:
+Each tool that creates a file returns a cloud URL (prefixed with `📤 Cloud URL:`) in its result. Use that cloud URL as input to review tools (`view_video`, `review_video`) and for delivery to the user.
+Use `get_output_videos`, `get_generated_artifacts`, or `get_extracted_clips` tools to search across sessions for previously generated files. Each result includes the cloud URL.
 
 ### Re-Editing Example:
 ```
 // User: "add voiceover to my video"
 // DON'T: Call auto_generate_video again (wastes time and money!)
-// DO: Use the existing video:
-view_video({ video_path: "outputs/shilereads_ad.mp4" })  // Verify what's in it
+// DO: Query for the previous output, then use its cloud URL:
+get_output_videos({ query: "shilereads" })
+// Result shows: Cloud URL: https://r2.../shilereads_ad.mp4
+view_video({ video_path: "outputs/shilereads_ad.mp4" })  // Local path works for analysis
 generate_text_to_speech({ text: "Welcome to ShileReads...", voice: "Rachel", output_file: "voiceover.mp3" })
 add_voiceover_to_video({ video_path: "outputs/shilereads_ad.mp4", voiceover_path: "voiceover.mp3", ... })
 ```
 
 ### User Delivery Rule:
-- Internal file paths are for tool execution, not for user delivery
-- If context includes a watch or download link for an output, share that link with the user
+- Each tool returns a `📤 Cloud URL:` — use that as the download/share link for the user
 - Do not tell the user to fetch files from internal directories like `outputs/...`
 
 ## YOUR CAPABILITIES

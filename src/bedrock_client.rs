@@ -79,7 +79,7 @@ impl BedrockClient {
     pub async fn new_async(region: &str, model_id: Option<String>) -> Self {
         let region = region.to_string();
         let config = aws_config::from_env()
-            .region(&region)
+            .region(aws_config::Region::new(region))
             .load()
             .await;
         let client = aws_sdk_bedrockruntime::Client::new(&config);

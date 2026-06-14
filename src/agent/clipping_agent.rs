@@ -1605,7 +1605,7 @@ impl GeminiClippingAgent {
             .map_err(|e| format!("Failed to create outputs directory: {}", e))?;
 
         let clipper = AiClipper::new(self.app_state.clone());
-        let clips = clipper
+        let mut clips = clipper
             .extract_clips_from_moments(job_id, &video_path, &moments, &analysis.content_type)
             .await?;
 
@@ -1614,6 +1614,45 @@ impl GeminiClippingAgent {
         }
 
         update_job_status(job_id, "clips_extracted", 60, None, &self.app_state.db_pool).await?;
+
+        // Upload clips to R2 before saving to DB so r2_clip_url is populated
+        if let Some(r2) = self.app_state.r2_client.as_ref() {
+            for clip in clips.iter_mut() {
+                let clip_n = clip.clip_number as usize;
+                let clip_key = crate::r2_client::R2Client::key_clip(job_id, clip_n);
+                match r2.upload(&clip.local_clip_path, &clip_key).await {
+                    Ok(()) => {
+                        match r2.presign_get(&clip_key, 86400).await {
+                            Ok(url) => {
+                                clip.r2_clip_key = Some(clip_key.clone());
+                                clip.r2_clip_url = Some(url);
+                                tracing::info!(
+                                    job_id = job_id,
+                                    clip_number = clip_n,
+                                    "Uploaded clip to R2"
+                                );
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    job_id = job_id,
+                                    clip_number = clip_n,
+                                    error = %e,
+                                    "Failed to presign R2 clip URL (non-fatal)"
+                                );
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            job_id = job_id,
+                            clip_number = clip_n,
+                            error = %e,
+                            "Failed to upload clip to R2 (non-fatal)"
+                        );
+                    }
+                }
+            }
+        }
 
         let clip_ids =
             save_clips_to_database(job_id, &clips, &linkage, &self.app_state.db_pool).await?;

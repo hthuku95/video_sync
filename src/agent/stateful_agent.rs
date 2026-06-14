@@ -834,7 +834,7 @@ You MUST only call tools that are explicitly listed in the `tools` array of this
                     };
                     oa_messages.push(serde_json::json!({"role": "user", "content": current_msg}));
 
-                    send_progress("🤖 Trying Ollama Gemma 4 (self-hosted)...");
+                    send_progress("🤖 Processing your request...");
 
                     let exec_context = crate::agent::tool_executor::ToolExecutionContext {
                         session_id: session_id.to_string(),
@@ -897,7 +897,7 @@ You MUST only call tools that are explicitly listed in the `tools` array of this
                     ds_messages.push(serde_json::json!({"role": "user", "content": current_msg}));
 
                     if let Some(ref ds_client) = app_state.deepseek_client {
-                        send_progress("🤖 Gemini unavailable, trying DeepSeek V4...");
+                        send_progress("🤖 Processing your request...");
 
                         let exec_context = crate::agent::tool_executor::ToolExecutionContext {
                             session_id: session_id.to_string(),

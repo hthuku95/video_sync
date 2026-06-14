@@ -1,0 +1,1 @@
+ALTER TABLE output_videos ADD COLUMN IF NOT EXISTS r2_url TEXT;

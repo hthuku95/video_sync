@@ -322,6 +322,9 @@ async fn persist_tool_output(
         return;
     }
 
+    // Check for MCP marker file — if MCP wrote the output directly to R2, the cloud URL is in the marker
+    let r2_url = crate::utils::read_marker_file(&normalized_output_path);
+
     let session_db_id = match get_session_db_id(&ctx.session_id, &ctx.app_state).await {
         Ok(id) => id,
         Err(error) => {
@@ -356,6 +359,7 @@ async fn persist_tool_output(
             Some(&ctx.session_id),
             None,
             &normalized_output_path,
+            r2_url.clone(),
             tool_name,
             operation_params.as_deref(),
             tool_name,
@@ -423,7 +427,7 @@ async fn persist_tool_output(
         source_type: format!("tool_output:{tool_name}"),
         service_slug: None,
         owner_user_id: Some(user_id),
-        output_url: Some(normalized_output_path.clone()),
+        output_url: Some(r2_url.clone().unwrap_or_else(|| normalized_output_path.clone())),
         source_url: None,
         prompt: Some(review_prompt),
         title: Path::new(&normalized_output_path)
@@ -557,6 +561,11 @@ async fn finalize_special_tool_result_value(
                 ctx,
             )
             .await;
+
+            // Upload to R2 immediately so no media stays on disk
+            if let Some(cloud_url) = upload_tool_output_to_cloud(&output_path, ctx).await {
+                return format!("{}\n📤 Cloud URL: {}", result.trim(), cloud_url);
+            }
         }
     }
     result
@@ -696,6 +705,18 @@ async fn execute_tool_claude_with_context_inner(
     if name == "set_chat_title" {
         return execute_set_chat_title_with_state_claude(args, ctx).await;
     }
+
+    // ── Query Tools (read-only DB lookups for re-editing) ────────────
+    if name == "get_output_videos" {
+        return execute_get_output_videos(args, ctx).await;
+    }
+    if name == "get_generated_artifacts" {
+        return execute_get_generated_artifacts(args, ctx).await;
+    }
+    if name == "get_extracted_clips" {
+        return execute_get_extracted_clips(args, ctx).await;
+    }
+
     if name == "generate_long_form_video" {
         let result = execute_generate_long_form_video_claude(args, ctx).await;
         return finalize_special_tool_result_value(name, args, result, ctx).await;
@@ -930,8 +951,16 @@ async fn execute_tool_claude_with_context_inner(
             )
             .await;
 
-            // Upload to R2 — the file is now in the cloud
-            upload_tool_output_to_cloud(&output_path, ctx).await;
+            // Upload to R2 immediately and return cloud URL so the agent can use it
+            if let Some(cloud_url) = upload_tool_output_to_cloud(&output_path, ctx).await {
+                // Update DB record with cloud URL (in case persist didn't find a marker file)
+                let _ = sqlx::query("UPDATE output_videos SET r2_url = $1 WHERE file_path = $2")
+                    .bind(&cloud_url)
+                    .bind(&output_path)
+                    .execute(&ctx.app_state.db_pool)
+                    .await;
+                return format!("{}\n📤 Cloud URL: {}", result.trim(), cloud_url);
+            }
         }
     }
 
@@ -1042,6 +1071,18 @@ async fn execute_tool_gemini_with_context_inner(
     if name == "set_chat_title" {
         return execute_set_chat_title_with_state_gemini(args, ctx).await;
     }
+
+    // ── Query Tools (read-only DB lookups for re-editing) ────────────
+    if name == "get_output_videos" {
+        return execute_get_output_videos(&serde_json::to_value(args).unwrap_or_default(), ctx).await;
+    }
+    if name == "get_generated_artifacts" {
+        return execute_get_generated_artifacts(&serde_json::to_value(args).unwrap_or_default(), ctx).await;
+    }
+    if name == "get_extracted_clips" {
+        return execute_get_extracted_clips(&serde_json::to_value(args).unwrap_or_default(), ctx).await;
+    }
+
     if name == "generate_long_form_video" {
         let result = execute_generate_long_form_video_gemini(args, ctx).await;
         return finalize_special_tool_result_gemini(name, args, result, ctx).await;
@@ -1198,8 +1239,16 @@ async fn execute_tool_gemini_with_context_inner(
             )
             .await;
 
-            // Upload to R2 — the cloud URL is available in the result for the LLM
-            upload_tool_output_to_cloud(&output_path, ctx).await;
+            // Upload to R2 immediately and return cloud URL so the agent can use it
+            if let Some(cloud_url) = upload_tool_output_to_cloud(&output_path, ctx).await {
+                // Update DB record with cloud URL (in case persist didn't find a marker file)
+                let _ = sqlx::query("UPDATE output_videos SET r2_url = $1 WHERE file_path = $2")
+                    .bind(&cloud_url)
+                    .bind(&output_path)
+                    .execute(&ctx.app_state.db_pool)
+                    .await;
+                return format!("{}\n📤 Cloud URL: {}", result.trim(), cloud_url);
+            }
         }
     }
 
@@ -6852,8 +6901,27 @@ async fn execute_view_video_with_state_claude(args: &Value, ctx: &ToolExecutionC
         return "❌ Error: video_path is required".to_string();
     }
 
-    // Resolve file path - try as-is first, then try uploads/ directory
-    let video_path = if tokio::fs::metadata(video_path_input).await.is_ok() {
+    // Resolve file path - cloud URL → lookup original local path, else try local paths
+    let video_path = if video_path_input.starts_with("http://") || video_path_input.starts_with("https://") {
+        match sqlx::query_scalar::<_, String>(
+            "SELECT file_path FROM output_videos WHERE r2_url = $1 LIMIT 1"
+        )
+        .bind(video_path_input)
+        .fetch_optional(&ctx.app_state.db_pool)
+        .await
+        {
+            Ok(Some(original_path)) => {
+                tracing::debug!(cloud_url = %video_path_input, original_path = %original_path, "view_video: resolved cloud URL to local path");
+                original_path
+            }
+            Ok(None) => {
+                return format!("❌ Error: Cloud URL not found in database: {}. Try using get_output_videos to find the correct file.", video_path_input);
+            }
+            Err(e) => {
+                return format!("❌ Error: Database lookup failed: {}", e);
+            }
+        }
+    } else if tokio::fs::metadata(video_path_input).await.is_ok() {
         video_path_input.to_string()
     } else if tokio::fs::metadata(format!("uploads/{}", video_path_input))
         .await
@@ -6948,8 +7016,27 @@ async fn execute_view_video_with_state_gemini(
         return "❌ Error: video_path is required".to_string();
     }
 
-    // Resolve file path - try as-is first, then try uploads/ directory
-    let video_path = if tokio::fs::metadata(video_path_input).await.is_ok() {
+    // Resolve file path - cloud URL → lookup original local path, else try local paths
+    let video_path = if video_path_input.starts_with("http://") || video_path_input.starts_with("https://") {
+        match sqlx::query_scalar::<_, String>(
+            "SELECT file_path FROM output_videos WHERE r2_url = $1 LIMIT 1"
+        )
+        .bind(video_path_input)
+        .fetch_optional(&ctx.app_state.db_pool)
+        .await
+        {
+            Ok(Some(original_path)) => {
+                tracing::debug!(cloud_url = %video_path_input, original_path = %original_path, "view_video (Gemini): resolved cloud URL");
+                original_path
+            }
+            Ok(None) => {
+                return format!("❌ Error: Cloud URL not found in database: {}. Try using get_output_videos to find the correct file.", video_path_input);
+            }
+            Err(e) => {
+                return format!("❌ Error: Database lookup failed: {}", e);
+            }
+        }
+    } else if tokio::fs::metadata(video_path_input).await.is_ok() {
         video_path_input.to_string()
     } else if tokio::fs::metadata(format!("uploads/{}", video_path_input))
         .await
@@ -7384,26 +7471,36 @@ async fn execute_view_image_with_state_claude(args: &Value, ctx: &ToolExecutionC
         return "❌ Error: image_path is required".to_string();
     }
 
-    // Resolve file path - try as-is first, then try outputs/ directory
-    let image_path = if tokio::fs::metadata(image_path_input).await.is_ok() {
-        image_path_input.to_string()
-    } else if tokio::fs::metadata(format!("outputs/{}", image_path_input))
-        .await
-        .is_ok()
-    {
-        format!("outputs/{}", image_path_input)
+    // Read image bytes — from local file or download cloud URL
+    let image_bytes = if image_path_input.starts_with("http://") || image_path_input.starts_with("https://") {
+        match reqwest::get(image_path_input).await {
+            Ok(resp) => resp.bytes().await.unwrap_or_default().to_vec(),
+            Err(e) => return format!("❌ Error: Failed to download image from URL: {}", e),
+        }
     } else {
-        return format!(
-            "❌ Error: Image file not found: {}. Tried both '{}' and 'outputs/{}'",
-            image_path_input, image_path_input, image_path_input
-        );
+        // Resolve local file path — try as-is first, then try outputs/
+        let local_path = if tokio::fs::metadata(image_path_input).await.is_ok() {
+            image_path_input.to_string()
+        } else if tokio::fs::metadata(format!("outputs/{}", image_path_input))
+            .await
+            .is_ok()
+        {
+            format!("outputs/{}", image_path_input)
+        } else {
+            return format!(
+                "❌ Error: Image file not found: {}. Tried both '{}' and 'outputs/{}'",
+                image_path_input, image_path_input, image_path_input
+            );
+        };
+        match tokio::fs::read(&local_path).await {
+            Ok(bytes) => bytes,
+            Err(e) => return format!("❌ Failed to read image file: {}", e),
+        }
     };
 
-    // Read image file
-    let image_bytes = match tokio::fs::read(&image_path).await {
-        Ok(bytes) => bytes,
-        Err(e) => return format!("❌ Failed to read image file: {}", e),
-    };
+    if image_bytes.is_empty() {
+        return "❌ Error: Downloaded or read image is empty".to_string();
+    }
 
     // Use Gemini (or NIM vision fallback) to analyze the image
     let analysis = analyze_image_gemini_nim_fallback(
@@ -7411,7 +7508,7 @@ async fn execute_view_image_with_state_claude(args: &Value, ctx: &ToolExecutionC
         "Analyze this image in detail. Describe what you see, colors, composition, style, text if any, and whether it would work well as a video overlay or background.",
         ctx.app_state.nvidia_nim_vision_client.as_ref(),
     ).await;
-    format!("🖼️ **Image Analysis: {}**\n\n{}", image_path, analysis)
+    format!("🖼️ **Image Analysis: {}**\n\n{}", image_path_input, analysis)
 }
 
 /// View/analyze an image using Gemini (or NIM vision) capabilities - WITH AppState (Gemini version)
@@ -7428,33 +7525,42 @@ async fn execute_view_image_with_state_gemini(
         return "❌ Error: image_path is required".to_string();
     }
 
-    // Resolve file path - try as-is first, then try outputs/ directory
-    let image_path = if tokio::fs::metadata(image_path_input).await.is_ok() {
-        image_path_input.to_string()
-    } else if tokio::fs::metadata(format!("outputs/{}", image_path_input))
-        .await
-        .is_ok()
-    {
-        format!("outputs/{}", image_path_input)
+    // Read image bytes — from local file or download cloud URL
+    let image_bytes = if image_path_input.starts_with("http://") || image_path_input.starts_with("https://") {
+        match reqwest::get(image_path_input).await {
+            Ok(resp) => resp.bytes().await.unwrap_or_default().to_vec(),
+            Err(e) => return format!("❌ Error: Failed to download image from URL: {}", e),
+        }
     } else {
-        return format!(
-            "❌ Error: Image file not found: {}. Tried both '{}' and 'outputs/{}'",
-            image_path_input, image_path_input, image_path_input
-        );
+        let local_path = if tokio::fs::metadata(image_path_input).await.is_ok() {
+            image_path_input.to_string()
+        } else if tokio::fs::metadata(format!("outputs/{}", image_path_input))
+            .await
+            .is_ok()
+        {
+            format!("outputs/{}", image_path_input)
+        } else {
+            return format!(
+                "❌ Error: Image file not found: {}. Tried both '{}' and 'outputs/{}'",
+                image_path_input, image_path_input, image_path_input
+            );
+        };
+        match tokio::fs::read(&local_path).await {
+            Ok(bytes) => bytes,
+            Err(e) => return format!("❌ Failed to read image file: {}", e),
+        }
     };
 
-    // Read image file
-    let image_bytes = match tokio::fs::read(&image_path).await {
-        Ok(bytes) => bytes,
-        Err(e) => return format!("❌ Failed to read image file: {}", e),
-    };
+    if image_bytes.is_empty() {
+        return "❌ Error: Downloaded or read image is empty".to_string();
+    }
 
     let analysis = analyze_image_gemini_nim_fallback(
         &image_bytes,
         "Analyze this image in detail. Describe what you see, colors, composition, style, text if any, and whether it would work well as a video overlay or background.",
         ctx.app_state.nvidia_nim_vision_client.as_ref(),
     ).await;
-    format!("🖼️ **Image Analysis: {}**\n\n{}", image_path, analysis)
+    format!("🖼️ **Image Analysis: {}**\n\n{}", image_path_input, analysis)
 }
 
 // ============================================================================
@@ -18983,6 +19089,118 @@ fn strip_html_tags(html: &str) -> String {
         }
     }
     result
+}
+
+// ============================================================================
+// QUERY TOOL EXECUTORS — read-only DB lookups for re-editing across pipeline runs
+// ============================================================================
+
+/// Query output_videos via generated_artifacts — returns output_video-kind artifacts for the session
+async fn execute_get_output_videos(_args: &Value, ctx: &ToolExecutionContext) -> String {
+    let db = &ctx.app_state.db_pool;
+    match sqlx::query_as::<_, (String, String, Option<String>, Option<String>, chrono::NaiveDateTime)>(
+        r#"SELECT artifact_id::text, file_path, public_url, mime_type, created_at
+           FROM generated_artifacts
+           WHERE session_uuid = $1 AND kind = 'output_video'
+           ORDER BY created_at DESC
+           LIMIT 20"#
+    )
+    .bind(&ctx.session_id)
+    .fetch_all(db)
+    .await
+    {
+        Ok(rows) => {
+            if rows.is_empty() {
+                return "ℹ️ No output videos found for this session.".to_string();
+            }
+            let mut result = format!("📹 Found {} output video(s):\n", rows.len());
+            for (id, path, r2_url, mime, created_at) in &rows {
+                let mime_str = mime.as_deref().unwrap_or("unknown");
+                result.push_str(&format!(
+                    "  - ID: {}, File: {}, Type: {}, Created: {}\n",
+                    id, path, mime_str, created_at.format("%Y-%m-%d %H:%M")
+                ));
+                if let Some(url) = r2_url {
+                    result.push_str(&format!("    Cloud URL: {}\n", url));
+                }
+            }
+            result
+        }
+        Err(e) => format!("❌ Database error querying output_videos: {}", e),
+    }
+}
+
+/// Query generated_artifacts table — returns generated assets for the current session
+async fn execute_get_generated_artifacts(_args: &Value, ctx: &ToolExecutionContext) -> String {
+    let db = &ctx.app_state.db_pool;
+    match sqlx::query_as::<_, (String, String, Option<String>, Option<String>, String, chrono::NaiveDateTime)>(
+        r#"SELECT artifact_id::text, file_path, mime_type, public_url, kind, created_at
+           FROM generated_artifacts
+           WHERE session_uuid = $1
+           ORDER BY created_at DESC
+           LIMIT 20"#
+    )
+    .bind(&ctx.session_id)
+    .fetch_all(db)
+    .await
+    {
+        Ok(rows) => {
+            if rows.is_empty() {
+                return "ℹ️ No generated artifacts found for this session.".to_string();
+            }
+            let mut result = format!("📦 Found {} artifact(s):\n", rows.len());
+            for (id, path, mime, url, kind, created_at) in &rows {
+                let mime_str = mime.as_deref().unwrap_or("unknown");
+                result.push_str(&format!(
+                    "  - ID: {}, File: {}, Kind: {}, Type: {}, Created: {}\n",
+                    id, path, kind, mime_str, created_at.format("%Y-%m-%d %H:%M")
+                ));
+                if let Some(public_url) = url {
+                    result.push_str(&format!("    Public URL: {}\n", public_url));
+                }
+            }
+            result
+        }
+        Err(e) => format!("❌ Database error querying generated_artifacts: {}", e),
+    }
+}
+
+/// Query extracted_clips table — returns clips for the session via workflow join
+async fn execute_get_extracted_clips(_args: &Value, ctx: &ToolExecutionContext) -> String {
+    let db = &ctx.app_state.db_pool;
+    match sqlx::query_as::<_, (i32, i32, String, Option<String>, Option<String>, chrono::NaiveDateTime)>(
+        r#"SELECT ec.id, ec.clip_number, COALESCE(ec.ai_title, ''), ec.local_clip_path, ec.r2_clip_url, ec.created_at
+           FROM extracted_clips ec
+           JOIN clipping_jobs cj ON cj.id = ec.clipping_job_id
+           JOIN generated_artifacts ga ON ga.workflow_id = cj.workflow_id
+           WHERE ga.session_uuid = $1
+           ORDER BY ec.clip_number ASC
+           LIMIT 50"#
+    )
+    .bind(&ctx.session_id)
+    .fetch_all(db)
+    .await
+    {
+        Ok(rows) => {
+            if rows.is_empty() {
+                return "ℹ️ No extracted clips found for this session.".to_string();
+            }
+            let mut result = format!("🎬 Found {} extracted clip(s):\n", rows.len());
+            for (id, clip_num, title, local_path, r2_url, created_at) in &rows {
+                result.push_str(&format!(
+                    "  - Clip #{}: ID {}, Title: \"{}\", Created: {}\n",
+                    clip_num, id, title, created_at.format("%Y-%m-%d %H:%M")
+                ));
+                if let Some(url) = r2_url {
+                    result.push_str(&format!("    Cloud URL: {}\n", url));
+                } else {
+                    result.push_str(&format!("    Local path: {}\n", local_path.as_deref().unwrap_or("(none)")));
+                }
+            }
+            result
+        }
+        Err(e) => format!("❌ Database error querying extracted_clips: {}", e),
+    }
 }
 
 async fn execute_fetch_website_image_inner(url: &str) -> String {
