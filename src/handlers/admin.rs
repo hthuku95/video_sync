@@ -8933,11 +8933,16 @@ Create everything from scratch. Do NOT ask for uploaded files or reference URLs.
             .unwrap_or_default();
 
             let video_url = outputs.iter()
-                .find(|r| r.get::<String, _>("kind") == "video")
+                .find(|r| matches!(r.get::<String, _>("kind").as_str(), "video" | "long_form_video"))
+                .or_else(|| outputs.iter().find(|r| r.get::<String, _>("kind") == "image"))
+                .or_else(|| outputs.iter().find(|r| r.get::<String, _>("kind") == "audio"))
+                .or_else(|| outputs.iter().find(|r| r.get::<String, _>("kind") == "file"))
                 .and_then(|r| r.get::<Option<String>, _>("public_url"));
 
             let thumbnail_url = outputs.iter()
                 .find(|r| r.get::<String, _>("kind") == "image")
+                .or_else(|| outputs.iter().find(|r| r.get::<String, _>("kind") == "video"))
+                .or_else(|| outputs.iter().find(|r| r.get::<String, _>("kind") == "long_form_video"))
                 .and_then(|r| r.get::<Option<String>, _>("public_url"));
 
             let _ = sqlx::query(

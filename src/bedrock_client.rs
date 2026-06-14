@@ -7,7 +7,7 @@ use aws_smithy_types::Number as DocNumber;
 use serde_json::Value;
 use std::collections::HashMap;
 
-const DEFAULT_MODEL: &str = "meta.llama3-2-90b-vision-instruct-maas";
+const DEFAULT_MODEL: &str = "meta.llama4-maverick-17b-instruct-v1:0";
 
 #[derive(Debug, Clone)]
 pub struct BedrockToolCall {
