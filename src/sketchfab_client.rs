@@ -1,7 +1,8 @@
-/// Sketchfab client — Data API v3 for searching 3D models.
+/// Sketchfab client — Data API v3 for searching and downloading 3D models.
 /// API: https://docs.sketchfab.com/data-api/v3/index.html
 ///
 /// Configurable via SKETCHFAB_API_KEY env var (API Token or OAuth2).
+/// Download works with API Token for CC-licensed models.
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -122,6 +123,22 @@ pub struct SketchfabModelDetail {
     pub is_purchased: Option<bool>,
     pub is_published: Option<bool>,
     pub password_protected: Option<bool>,
+}
+
+// ── Download Response Types ──────────────────────────────────────────
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct SketchfabDownloadResponse {
+    pub gltf: Option<SketchfabDownloadArchive>,
+    pub usdz: Option<SketchfabDownloadArchive>,
+    pub source: Option<SketchfabDownloadArchive>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct SketchfabDownloadArchive {
+    pub url: String,
+    pub size: Option<i64>,
+    pub expires: Option<i64>,
 }
 
 // ── Error Types ───────────────────────────────────────────────────────
@@ -262,6 +279,35 @@ impl SketchfabClient {
         }
 
         resp.json::<SketchfabModelDetail>()
+            .await
+            .map_err(|e| SketchfabError::Parse(e.to_string()))
+    }
+
+    /// Request a download link for a model by UID.
+    /// Returns a JSON response with temporary S3 URLs (glTF/USDZ).
+    /// The links expire in 300 seconds — call download right after.
+    pub async fn request_download_url(
+        &self,
+        uid: &str,
+    ) -> Result<SketchfabDownloadResponse, SketchfabError> {
+        let resp = self
+            .client
+            .get(format!("{}/models/{}/download", SKETCHFAB_API_URL, uid))
+            .header("Authorization", format!("Token {}", self.api_key))
+            .send()
+            .await
+            .map_err(|e| SketchfabError::Network(e.to_string()))?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(SketchfabError::Api {
+                status: status.as_u16(),
+                body,
+            });
+        }
+
+        resp.json::<SketchfabDownloadResponse>()
             .await
             .map_err(|e| SketchfabError::Parse(e.to_string()))
     }

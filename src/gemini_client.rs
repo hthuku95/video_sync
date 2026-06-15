@@ -1867,6 +1867,28 @@ impl GeminiClient {
                 },
             },
             FunctionDeclaration {
+                name: "sketchfab_download".to_string(),
+                description: "Downloads a 3D model from Sketchfab by UID and uploads it to R2 cloud storage. Returns a permanent cloud URL for use in Blender scenes.".to_string(),
+                parameters: Parameters {
+                    param_type: "object".to_string(),
+                    properties: {
+                        let mut props = HashMap::new();
+                        props.insert("uid".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "The model UID from a previous sketchfab_search result".to_string(),
+                            items: None,
+                        });
+                        props.insert("format".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Optional. Download format: 'gltf' (ZIP with .gltf + textures, default), 'usdz', or 'source' (original format if available)".to_string(),
+                            items: None,
+                        });
+                        props
+                    },
+                    required: vec!["uid".to_string()],
+                },
+            },
+            FunctionDeclaration {
                 name: "analyze_image".to_string(),
                 description: "Analyzes an image and provides detailed description using AI".to_string(),
                 parameters: Parameters {

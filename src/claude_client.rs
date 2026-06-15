@@ -1190,6 +1190,26 @@ impl ClaudeClient {
                 },
             },
             ClaudeTool {
+                name: "sketchfab_download".to_string(),
+                description: "Downloads a 3D model from Sketchfab by UID and uploads it to R2 cloud storage. Returns a permanent cloud URL for use in Blender scenes.".to_string(),
+                input_schema: InputSchema {
+                    schema_type: "object".to_string(),
+                    properties: HashMap::from([
+                        ("uid".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "The model UID from a previous sketchfab_search result".to_string(),
+                            items: None,
+                        }),
+                        ("format".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Optional. Download format: 'gltf' (ZIP with .gltf + textures, default), 'usdz', or 'source'".to_string(),
+                            items: None,
+                        }),
+                    ]),
+                    required: vec!["uid".to_string()],
+                },
+            },
+            ClaudeTool {
                 name: "analyze_image".to_string(),
                 description: "Analyzes an image and provides detailed description using AI".to_string(),
                 input_schema: InputSchema {

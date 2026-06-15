@@ -1353,6 +1353,7 @@ pub async fn execute_tool_claude(name: &str, args: &Value) -> String {
         "generate_video_queries" => execute_generate_video_queries_claude(args),
         "sketchfab_search" => execute_sketchfab_search_claude(args).await,
         "sketchfab_get_model" => execute_sketchfab_get_model_claude(args).await,
+        "sketchfab_download" => execute_sketchfab_download_claude(args).await,
         "analyze_pexels_thumbnail" => execute_analyze_pexels_thumbnail_claude(args).await,
         "verify_clip_quality_tool" => execute_verify_clip_quality_tool_claude(args),
         "run_video_qa" => execute_run_video_qa_claude(args),
@@ -1766,6 +1767,7 @@ pub async fn execute_tool_gemini(name: &str, args: &HashMap<String, Value>) -> S
         "generate_video_queries" => execute_generate_video_queries_gemini(args),
         "sketchfab_search" => execute_sketchfab_search_gemini(args).await,
         "sketchfab_get_model" => execute_sketchfab_get_model_gemini(args).await,
+        "sketchfab_download" => execute_sketchfab_download_gemini(args).await,
         "analyze_pexels_thumbnail" => execute_analyze_pexels_thumbnail_gemini(args).await,
         "verify_clip_quality_tool" => execute_verify_clip_quality_tool_gemini(args),
         "run_video_qa" => execute_run_video_qa_gemini(args),
@@ -2587,6 +2589,19 @@ async fn execute_sketchfab_search_claude(args: &Value) -> String {
     }
 }
 
+/// Download a file from a URL to a local path. Used by sketchfab_download.
+async fn download_file_to_path(url: &str, path: &str) -> Result<(), String> {
+    let resp = reqwest::get(url).await.map_err(|e| format!("download failed: {}", e))?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("HTTP {}: {}", status, body));
+    }
+    let bytes = resp.bytes().await.map_err(|e| format!("read response failed: {}", e))?;
+    tokio::fs::write(path, &bytes).await.map_err(|e| format!("write file failed: {}", e))?;
+    Ok(())
+}
+
 async fn execute_sketchfab_get_model_claude(args: &Value) -> String {
     let uid = args["uid"].as_str().unwrap_or("");
 
@@ -2603,6 +2618,86 @@ async fn execute_sketchfab_get_model_claude(args: &Value) -> String {
         Ok(detail) => serde_json::to_string_pretty(&detail)
             .unwrap_or_else(|_| "❌ Failed to serialize model detail".to_string()),
         Err(e) => format!("❌ Sketchfab get model failed: {}", e),
+    }
+}
+
+async fn execute_sketchfab_download_claude(args: &Value) -> String {
+    let uid = args["uid"].as_str().unwrap_or("");
+    let format = args.get("format").and_then(|v| v.as_str()).unwrap_or("gltf");
+    if uid.is_empty() {
+        return "❌ Error: uid is required for sketchfab_download".to_string();
+    }
+
+    let client = match crate::sketchfab_client::SketchfabClient::from_env() {
+        Ok(c) => c,
+        Err(e) => return format!("❌ Sketchfab download failed: {}", e),
+    };
+
+    match client.request_download_url(uid).await {
+        Ok(download_resp) => {
+            let archive = match format {
+                "usdz" => download_resp.usdz.as_ref(),
+                "source" => download_resp.source.as_ref(),
+                _ => download_resp.gltf.as_ref(),
+            };
+            let archive = match archive {
+                Some(a) => a,
+                None => {
+                    // Fallback: try gltf if requested format not available
+                    match download_resp.gltf.as_ref() {
+                        Some(g) => g,
+                        None => return format!("❌ No downloadable archive available for model '{}'", uid),
+                    }
+                }
+            };
+
+            let url = &archive.url;
+            let ext = if format == "usdz" { "usdz" } else { "zip" };
+
+            // Download to temp
+            let temp_dir = std::env::temp_dir();
+            let temp_path = temp_dir.join(format!("sketchfab_{}_{}.{}", uid, std::process::id(), ext));
+            let temp_str = temp_path.to_string_lossy().to_string();
+
+            match tokio::fs::write(&temp_path, Vec::new()).await {
+                Ok(_) => {}
+                Err(e) => return format!("❌ Failed creating temp file: {}", e),
+            }
+
+            match download_file_to_path(url, &temp_str).await {
+                Ok(()) => {
+                    let r2_key = format!("models/sketchfab/{}.{}", uid, ext);
+                    match crate::cloud_storage::upload_local_file_to_cloud(
+                        &temp_str, &r2_key,
+                    ).await {
+                        Ok(r2_url) => {
+                            let _ = tokio::fs::remove_file(&temp_path).await;
+                            format!(
+                                "✅ Downloaded Sketchfab model '{}' ({}): {}\nStored in R2 for use in Blender scenes.",
+                                uid, format, r2_url
+                            )
+                        }
+                        Err(e) => {
+                            let _ = tokio::fs::remove_file(&temp_path).await;
+                            format!("❌ Sketchfab download failed to upload to R2: {}", e)
+                        }
+                    }
+                }
+                Err(e) => format!("❌ Sketchfab download failed: {}", e),
+            }
+        }
+        Err(crate::sketchfab_client::SketchfabError::Api { status: 403, body }) => {
+            // 403 = OAuth2 required (API Token doesn't have download permissions for this model)
+            format!(
+                "❌ Download requires OAuth2 authentication for this model.\n\
+                 The API Token works for search and model info, but this model requires the user\n\
+                 to be logged in with a Sketchfab account (OAuth2). To enable automated downloads,\n\
+                 contact Sketchfab at https://forms.unrealengine.com/s/lead?sourcepage=Sketchfab\n\n\
+                 Model UID: {}\nError: {}",
+                uid, body
+            )
+        }
+        Err(e) => format!("❌ Sketchfab download failed: {}", e),
     }
 }
 
@@ -3736,6 +3831,82 @@ async fn execute_sketchfab_get_model_gemini(args: &HashMap<String, Value>) -> St
         Ok(detail) => serde_json::to_string_pretty(&detail)
             .unwrap_or_else(|_| "❌ Failed to serialize model detail".to_string()),
         Err(e) => format!("❌ Sketchfab get model failed: {}", e),
+    }
+}
+
+async fn execute_sketchfab_download_gemini(args: &HashMap<String, Value>) -> String {
+    let uid = args.get("uid").and_then(|v| v.as_str()).unwrap_or("");
+    let format = args.get("format").and_then(|v| v.as_str()).unwrap_or("gltf");
+    if uid.is_empty() {
+        return "❌ Error: uid is required for sketchfab_download".to_string();
+    }
+
+    let client = match crate::sketchfab_client::SketchfabClient::from_env() {
+        Ok(c) => c,
+        Err(e) => return format!("❌ Sketchfab download failed: {}", e),
+    };
+
+    match client.request_download_url(uid).await {
+        Ok(download_resp) => {
+            let archive = match format {
+                "usdz" => download_resp.usdz.as_ref(),
+                "source" => download_resp.source.as_ref(),
+                _ => download_resp.gltf.as_ref(),
+            };
+            let archive = match archive {
+                Some(a) => a,
+                None => {
+                    match download_resp.gltf.as_ref() {
+                        Some(g) => g,
+                        None => return format!("❌ No downloadable archive available for model '{}'", uid),
+                    }
+                }
+            };
+
+            let url = &archive.url;
+            let ext = if format == "usdz" { "usdz" } else { "zip" };
+
+            let temp_dir = std::env::temp_dir();
+            let temp_path = temp_dir.join(format!("sketchfab_{}_{}.{}", uid, std::process::id(), ext));
+            let temp_str = temp_path.to_string_lossy().to_string();
+
+            match tokio::fs::write(&temp_path, Vec::new()).await {
+                Ok(_) => {}
+                Err(e) => return format!("❌ Failed creating temp file: {}", e),
+            }
+
+            match download_file_to_path(url, &temp_str).await {
+                Ok(()) => {
+                    let r2_key = format!("models/sketchfab/{}.{}", uid, ext);
+                    match crate::cloud_storage::upload_local_file_to_cloud(
+                        &temp_str, &r2_key,
+                    ).await {
+                        Ok(r2_url) => {
+                            let _ = tokio::fs::remove_file(&temp_path).await;
+                            format!(
+                                "✅ Downloaded Sketchfab model '{}' ({}): {}\nStored in R2 for use in Blender scenes.",
+                                uid, format, r2_url
+                            )
+                        }
+                        Err(e) => {
+                            let _ = tokio::fs::remove_file(&temp_path).await;
+                            format!("❌ Sketchfab download failed to upload to R2: {}", e)
+                        }
+                    }
+                }
+                Err(e) => format!("❌ Sketchfab download failed: {}", e),
+            }
+        }
+        Err(crate::sketchfab_client::SketchfabError::Api { status: 403, body }) => {
+            format!(
+                "❌ Download requires OAuth2 authentication for this model.\n\
+                 The API Token works for search and model info, but this model requires the user\n\
+                 to be logged in with a Sketchfab account (OAuth2).\n\
+                 Model UID: {}\nError: {}",
+                uid, body
+            )
+        }
+        Err(e) => format!("❌ Sketchfab download failed: {}", e),
     }
 }
 
