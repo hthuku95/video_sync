@@ -143,9 +143,12 @@ impl R2Client {
             .await
             .map_err(|e| format!("Failed to read {local_path}: {e}"))?;
 
+        let body_len = body.len();
+
         let resp = self
             .http
             .put(&url)
+            .header("Content-Length", body_len.to_string())
             .body(body)
             .send()
             .await
