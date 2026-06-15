@@ -104,11 +104,12 @@ impl OllamaClient {
         .await
         {
             Ok(Ok(resp)) => {
-                if resp.status().is_success() {
+                let status = resp.status();
+                if status.is_success() {
                     tracing::info!("Ollama warmup complete — model '{}' is loaded", self.model);
                 } else {
                     let err_body = resp.text().await.unwrap_or_default();
-                    tracing::warn!("Ollama warmup returned {} (non-fatal): {}", resp.status(), err_body);
+                    tracing::warn!("Ollama warmup returned {} (non-fatal): {}", status, err_body);
                 }
             }
             Ok(Err(e)) => {

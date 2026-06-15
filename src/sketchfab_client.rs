@@ -277,7 +277,7 @@ impl SketchfabClient {
                 "  - {} (UID: {})\n    by {}\n    {} likes | {} views\n    {}\n\n",
                 model.name,
                 model.uid,
-                model.user.as_ref().map(|u| &u.username).unwrap_or("unknown"),
+                model.user.as_ref().map(|u| u.username.as_str()).unwrap_or("unknown"),
                 model.like_count.unwrap_or(0),
                 model.view_count.unwrap_or(0),
                 model.viewer_url.as_deref().unwrap_or("no URL"),
