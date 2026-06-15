@@ -198,6 +198,7 @@ impl ToolRegistry {
             || name.starts_with("add_voiceover")
             || name.starts_with("transcribe_")
             || name.starts_with("pexels_")
+            || name.starts_with("sketchfab_")
             || name.starts_with("search_youtube")
             || name.starts_with("analyze_youtube")
             || name.starts_with("optimize_youtube")

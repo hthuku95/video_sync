@@ -359,6 +359,8 @@ impl ToolCategory {
                 "pexels_download_photo",
                 "pexels_get_trending",
                 "pexels_get_curated",
+                "sketchfab_search",
+                "sketchfab_get_model",
                 "create_blank_video",
                 "generate_video_queries",
                 "analyze_pexels_thumbnail",

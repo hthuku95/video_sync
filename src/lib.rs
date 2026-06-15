@@ -33,6 +33,7 @@ pub mod qdrant_client;
 pub mod r2_client;
 pub mod render_review;
 pub mod services;
+pub mod sketchfab_client;
 pub mod telegram_bot;
 pub mod telegram_client;
 pub mod token_manager;

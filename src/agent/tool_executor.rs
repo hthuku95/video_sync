@@ -1351,6 +1351,8 @@ pub async fn execute_tool_claude(name: &str, args: &Value) -> String {
         "read_website_content" => execute_read_website_content_claude(args).await,
         "auto_generate_video" => execute_auto_generate_video_claude(args).await,
         "generate_video_queries" => execute_generate_video_queries_claude(args),
+        "sketchfab_search" => execute_sketchfab_search_claude(args).await,
+        "sketchfab_get_model" => execute_sketchfab_get_model_claude(args).await,
         "analyze_pexels_thumbnail" => execute_analyze_pexels_thumbnail_claude(args).await,
         "verify_clip_quality_tool" => execute_verify_clip_quality_tool_claude(args),
         "run_video_qa" => execute_run_video_qa_claude(args),
@@ -1762,6 +1764,8 @@ pub async fn execute_tool_gemini(name: &str, args: &HashMap<String, Value>) -> S
         "read_website_content" => execute_read_website_content_gemini(args).await,
         "auto_generate_video" => execute_auto_generate_video_gemini(args).await,
         "generate_video_queries" => execute_generate_video_queries_gemini(args),
+        "sketchfab_search" => execute_sketchfab_search_gemini(args).await,
+        "sketchfab_get_model" => execute_sketchfab_get_model_gemini(args).await,
         "analyze_pexels_thumbnail" => execute_analyze_pexels_thumbnail_gemini(args).await,
         "verify_clip_quality_tool" => execute_verify_clip_quality_tool_gemini(args),
         "run_video_qa" => execute_run_video_qa_gemini(args),
@@ -2559,6 +2563,46 @@ async fn execute_pexels_search_claude(args: &Value) -> String {
             "❌ Invalid media_type: {}. Use 'videos' or 'photos'",
             media_type
         ),
+    }
+}
+
+async fn execute_sketchfab_search_claude(args: &Value) -> String {
+    let query = args["query"].as_str().unwrap_or("");
+    let categories = args.get("categories").and_then(|v| v.as_str());
+    let animated = args.get("animated").and_then(|v| v.as_bool());
+    let sort_by = args.get("sort_by").and_then(|v| v.as_str());
+
+    if query.is_empty() {
+        return "❌ Error: query is required for Sketchfab search".to_string();
+    }
+
+    let client = match crate::sketchfab_client::SketchfabClient::from_env() {
+        Ok(c) => c,
+        Err(e) => return format!("❌ Sketchfab search failed: {}", e),
+    };
+
+    match client.search(query, categories, sort_by, None, animated, None, None, None).await {
+        Ok(response) => crate::sketchfab_client::SketchfabClient::format_search_results(&response),
+        Err(e) => format!("❌ Sketchfab search failed: {}", e),
+    }
+}
+
+async fn execute_sketchfab_get_model_claude(args: &Value) -> String {
+    let uid = args["uid"].as_str().unwrap_or("");
+
+    if uid.is_empty() {
+        return "❌ Error: uid is required for sketchfab_get_model".to_string();
+    }
+
+    let client = match crate::sketchfab_client::SketchfabClient::from_env() {
+        Ok(c) => c,
+        Err(e) => return format!("❌ Sketchfab get model failed: {}", e),
+    };
+
+    match client.get_model(uid).await {
+        Ok(detail) => serde_json::to_string_pretty(&detail)
+            .unwrap_or_else(|_| "❌ Failed to serialize model detail".to_string()),
+        Err(e) => format!("❌ Sketchfab get model failed: {}", e),
     }
 }
 
@@ -3652,6 +3696,46 @@ async fn execute_pexels_search_gemini(args: &HashMap<String, Value>) -> String {
             "❌ Invalid media_type: {}. Use 'videos' or 'photos'",
             media_type
         ),
+    }
+}
+
+async fn execute_sketchfab_search_gemini(args: &HashMap<String, Value>) -> String {
+    let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("");
+    let categories = args.get("categories").and_then(|v| v.as_str());
+    let animated = args.get("animated").and_then(|v| v.as_bool());
+    let sort_by = args.get("sort_by").and_then(|v| v.as_str());
+
+    if query.is_empty() {
+        return "❌ Error: query is required for Sketchfab search".to_string();
+    }
+
+    let client = match crate::sketchfab_client::SketchfabClient::from_env() {
+        Ok(c) => c,
+        Err(e) => return format!("❌ Sketchfab search failed: {}", e),
+    };
+
+    match client.search(query, categories, sort_by, None, animated, None, None, None).await {
+        Ok(response) => crate::sketchfab_client::SketchfabClient::format_search_results(&response),
+        Err(e) => format!("❌ Sketchfab search failed: {}", e),
+    }
+}
+
+async fn execute_sketchfab_get_model_gemini(args: &HashMap<String, Value>) -> String {
+    let uid = args.get("uid").and_then(|v| v.as_str()).unwrap_or("");
+
+    if uid.is_empty() {
+        return "❌ Error: uid is required for sketchfab_get_model".to_string();
+    }
+
+    let client = match crate::sketchfab_client::SketchfabClient::from_env() {
+        Ok(c) => c,
+        Err(e) => return format!("❌ Sketchfab get model failed: {}", e),
+    };
+
+    match client.get_model(uid).await {
+        Ok(detail) => serde_json::to_string_pretty(&detail)
+            .unwrap_or_else(|_| "❌ Failed to serialize model detail".to_string()),
+        Err(e) => format!("❌ Sketchfab get model failed: {}", e),
     }
 }
 

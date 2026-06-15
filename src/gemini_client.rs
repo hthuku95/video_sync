@@ -1818,6 +1818,55 @@ impl GeminiClient {
                 },
             },
             FunctionDeclaration {
+                name: "sketchfab_search".to_string(),
+                description: "Searches Sketchfab for 3D models by keyword. Use to find glTF/GLB models for Blender scenes, backgrounds, and props. Returns model UID, name, author, likes, and viewer URL.".to_string(),
+                parameters: Parameters {
+                    param_type: "object".to_string(),
+                    properties: {
+                        let mut props = HashMap::new();
+                        props.insert("query".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Search keyword for 3D models (e.g. 'robot', 'ocean', 'medieval castle')".to_string(),
+                            items: None,
+                        });
+                        props.insert("categories".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Optional. Filter by category slug (comma-separated). E.g. 'animals-pets,architecture,characters,science-technology,transport'.".to_string(),
+                            items: None,
+                        });
+                        props.insert("animated".to_string(), PropertyDefinition {
+                            prop_type: "boolean".to_string(),
+                            description: "Optional. Filter for animated models only (true/false)".to_string(),
+                            items: None,
+                        });
+                        props.insert("sort_by".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Optional. Sort order: '-likeCount' (most liked), '-viewCount' (most viewed), '-createdAt' (newest), '-publishedAt' (recently published)".to_string(),
+                            items: None,
+                        });
+                        props
+                    },
+                    required: vec!["query".to_string()],
+                },
+            },
+            FunctionDeclaration {
+                name: "sketchfab_get_model".to_string(),
+                description: "Gets detailed information about a specific Sketchfab 3D model by UID. Returns full metadata including vertex/face count, tags, license, and animation info.".to_string(),
+                parameters: Parameters {
+                    param_type: "object".to_string(),
+                    properties: {
+                        let mut props = HashMap::new();
+                        props.insert("uid".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "The model UID from a previous sketchfab_search result".to_string(),
+                            items: None,
+                        });
+                        props
+                    },
+                    required: vec!["uid".to_string()],
+                },
+            },
+            FunctionDeclaration {
                 name: "analyze_image".to_string(),
                 description: "Analyzes an image and provides detailed description using AI".to_string(),
                 parameters: Parameters {
