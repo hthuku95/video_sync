@@ -2602,6 +2602,17 @@ async fn download_file_to_path(url: &str, path: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Upload a file to R2 using a fresh R2Client (no AppState dependency).
+async fn upload_to_r2_raw(local_path: &str, key: &str) -> Result<String, String> {
+    let account_id = std::env::var("R2_ACCOUNT_ID").map_err(|_| "R2_ACCOUNT_ID not set".to_string())?;
+    let access_key_id = std::env::var("R2_ACCESS_KEY_ID").map_err(|_| "R2_ACCESS_KEY_ID not set".to_string())?;
+    let secret_access_key = std::env::var("R2_SECRET_ACCESS_KEY").map_err(|_| "R2_SECRET_ACCESS_KEY not set".to_string())?;
+    let bucket = std::env::var("R2_BUCKET").unwrap_or_else(|_| "video-editor".to_string());
+
+    let r2 = crate::r2_client::R2Client::new(&account_id, &access_key_id, &secret_access_key, &bucket).await?;
+    r2.upload_file(local_path, key).await
+}
+
 async fn execute_sketchfab_get_model_claude(args: &Value) -> String {
     let uid = args["uid"].as_str().unwrap_or("");
 
@@ -2667,9 +2678,7 @@ async fn execute_sketchfab_download_claude(args: &Value) -> String {
             match download_file_to_path(url, &temp_str).await {
                 Ok(()) => {
                     let r2_key = format!("models/sketchfab/{}.{}", uid, ext);
-                    match crate::cloud_storage::upload_local_file_to_cloud(
-                        &temp_str, &r2_key,
-                    ).await {
+                    match upload_to_r2_raw(&temp_str, &r2_key).await {
                         Ok(r2_url) => {
                             let _ = tokio::fs::remove_file(&temp_path).await;
                             format!(
@@ -2687,12 +2696,10 @@ async fn execute_sketchfab_download_claude(args: &Value) -> String {
             }
         }
         Err(crate::sketchfab_client::SketchfabError::Api { status: 403, body }) => {
-            // 403 = OAuth2 required (API Token doesn't have download permissions for this model)
             format!(
                 "❌ Download requires OAuth2 authentication for this model.\n\
                  The API Token works for search and model info, but this model requires the user\n\
-                 to be logged in with a Sketchfab account (OAuth2). To enable automated downloads,\n\
-                 contact Sketchfab at https://forms.unrealengine.com/s/lead?sourcepage=Sketchfab\n\n\
+                 to be logged in with a Sketchfab account (OAuth2).\n\
                  Model UID: {}\nError: {}",
                 uid, body
             )
@@ -3878,9 +3885,7 @@ async fn execute_sketchfab_download_gemini(args: &HashMap<String, Value>) -> Str
             match download_file_to_path(url, &temp_str).await {
                 Ok(()) => {
                     let r2_key = format!("models/sketchfab/{}.{}", uid, ext);
-                    match crate::cloud_storage::upload_local_file_to_cloud(
-                        &temp_str, &r2_key,
-                    ).await {
+                    match upload_to_r2_raw(&temp_str, &r2_key).await {
                         Ok(r2_url) => {
                             let _ = tokio::fs::remove_file(&temp_path).await;
                             format!(
