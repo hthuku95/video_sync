@@ -37,6 +37,7 @@ mod qdrant_client;
 mod r2_client; // ☁️ Cloudflare R2 object storage
 mod render_review; // 🔍 LLM QA review of every render before handoff
 mod services;
+mod sketchfab_client;
 mod telegram_bot; // ✈️ Telegram Bot API — admin pings + AI sales DM replies
 mod telegram_client; // 🛰️ Telegram MTProto userbot — channel watcher for paid-gig leads
 mod token_manager; // 🔧 Centralized YouTube OAuth token refresh
