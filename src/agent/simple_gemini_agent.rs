@@ -633,6 +633,7 @@ IMPORTANT: You do NOT use AI to generate videos. Instead, you fetch stock media 
         let mut iterations = 0;
         let max_iterations = 50;
         let mut final_text = String::new();
+        let mut tool_calls_made = false;
 
         while iterations < max_iterations {
             iterations += 1;
@@ -645,6 +646,12 @@ IMPORTANT: You do NOT use AI to generate videos. Instead, you fetch stock media 
 
             match response {
                 NvidiaNimResponse::Text(text) => {
+                    if !tool_calls_made {
+                        // NIM returned text-only without calling any tools.
+                        // Treat as "model doesn't support tool calling" and
+                        // fall through to the next provider in the chain.
+                        return Err("NVIDIA NIM: text-only response, no tool calls made — falling through to Bedrock/Ollama/Gemini".to_string());
+                    }
                     final_text = text;
                     messages.push(serde_json::json!({
                         "role": "assistant",
@@ -653,6 +660,7 @@ IMPORTANT: You do NOT use AI to generate videos. Instead, you fetch stock media 
                     break;
                 }
                 NvidiaNimResponse::ToolCalls(tool_calls) => {
+                    tool_calls_made = true;
                     let mut assistant_msg = serde_json::json!({
                         "role": "assistant",
                         "content": null,
