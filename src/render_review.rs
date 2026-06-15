@@ -24,7 +24,15 @@ use base64::engine::general_purpose::STANDARD as BASE64_ENGINE;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
+
+/// Global counter for Gemini API calls this server session.
+/// Resets on server restart. Free tier: 20 requests/day for gemini-2.5-flash.
+/// We stop at 18 to leave buffer.
+static GEMINI_VIDEO_CALLS: AtomicU32 = AtomicU32::new(0);
+const GEMINI_DAILY_LIMIT: u32 = 18;
 
 /// Minimum acceptable score to pass the render. Chosen at 6 because our
 /// review prompt scores 1-10; 6+ means "buyer-quality", 5- means "redo".
@@ -180,18 +188,76 @@ async fn run_review_via_gemini(
     output_url: &str,
     prompt: &str,
 ) -> ReviewResult {
+    let calls = GEMINI_VIDEO_CALLS.fetch_add(1, Ordering::Relaxed) + 1;
+    if calls > GEMINI_DAILY_LIMIT {
+        return ReviewResult {
+            pass: true,
+            score: 0,
+            feedback: format!(
+                "Gemini daily quota reached ({}/20 calls this session) — QA skipped. \
+                 The render was accepted without Gemini review.",
+                GEMINI_DAILY_LIMIT
+            ),
+            retry_hint: None,
+        };
+    }
+
     let response = match multimodal_review_via_gemini(gemini, output_url, prompt).await {
         Ok(r) => r,
         Err(e) => {
+            let err_text = e.to_string();
+            let is_429 = err_text.contains("429") || err_text.contains("RESOURCE_EXHAUSTED") || err_text.contains("quota");
+
+            if is_429 {
+                if let Some(delay_secs) = parse_gemini_retry_delay(&err_text) {
+                    tracing::warn!(
+                        "Gemini 429 (call #{}/20). Retrying after {}s delay...",
+                        calls, delay_secs
+                    );
+                    tokio::time::sleep(Duration::from_secs(delay_secs)).await;
+
+                    match multimodal_review_via_gemini(gemini, output_url, prompt).await {
+                        Ok(r) => return parse_review_response(&r),
+                        Err(retry_err) => {
+                            return ReviewResult {
+                                pass: true,
+                                score: 0,
+                                feedback: format!(
+                                    "Gemini review failed on retry (call #{}/20): {}",
+                                    calls, retry_err
+                                ),
+                                retry_hint: None,
+                            };
+                        }
+                    }
+                }
+            }
+
             return ReviewResult {
                 pass: true,
                 score: 0,
-                feedback: format!("Gemini review call failed: {}", e),
+                feedback: format!("Gemini review call failed (call #{}/20): {}", calls, err_text),
                 retry_hint: None,
             };
         }
     };
     parse_review_response(&response)
+}
+
+/// Parse retryDelay seconds from a Gemini 429 error response JSON.
+/// The API returns: "retryDelay": "54.852817327s"
+fn parse_gemini_retry_delay(err_text: &str) -> Option<u64> {
+    // Look for pattern: "retryDelay": "XYZs"
+    let start = err_text.find(r#""retryDelay":"#)?;
+    let after = &err_text[start + 14..];
+    let quote_start = after.find('"')?;
+    let after_quote = &after[quote_start + 1..];
+    let quote_end = after_quote.find('"')?;
+    let delay_str = &after_quote[..quote_end];
+    let delay_str = delay_str.trim_end_matches('s');
+    let secs: f64 = delay_str.parse().ok()?;
+    // Clamp to reasonable range
+    Some((secs.ceil() as u64).clamp(1, 120))
 }
 
 fn parse_review_response(response: &str) -> ReviewResult {
