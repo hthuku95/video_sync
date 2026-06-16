@@ -782,6 +782,47 @@ impl GeminiClient {
             }
 
             Err("No image data found in response".into())
+        } else if response.status().as_u16() == 429 {
+            let error_json: serde_json::Value = serde_json::from_str(&response.text().await.unwrap_or_default()).unwrap_or_default();
+            let retry_seconds = error_json["error"]["details"]
+                .as_array()
+                .and_then(|details| {
+                    details.iter().find_map(|d| {
+                        d["retryDelay"]
+                            .as_str()
+                            .and_then(|s| s.trim_end_matches('s').parse::<u64>().ok())
+                    })
+                })
+                .unwrap_or(30);
+            tracing::warn!("Gemini image generation hit 429 quota, retrying after {}s", retry_seconds);
+            tokio::time::sleep(std::time::Duration::from_secs(retry_seconds)).await;
+            let retry_response = self.client.post(&url)
+                .header("Content-Type", "application/json")
+                .json(&request)
+                .send()
+                .await?;
+            if retry_response.status().is_success() {
+                let response_text = retry_response.text().await?;
+                let response_json: serde_json::Value = serde_json::from_str(&response_text)?;
+                if let Some(candidates) = response_json["candidates"].as_array() {
+                    if let Some(candidate) = candidates.first() {
+                        if let Some(content) = candidate.get("content") {
+                            if let Some(parts) = content["parts"].as_array() {
+                                for part in parts {
+                                    if let Some(inline_data) = part.get("inlineData") {
+                                        if let Some(data) = inline_data["data"].as_str() {
+                                            let image_bytes = BASE64_STANDARD.decode(data).map_err(|e| format!("Failed to decode base64 image: {}", e))?;
+                                            return Ok(image_bytes);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            let error_text = retry_response.text().await.unwrap_or_default();
+            Err(format!("Gemini image generation 429 even after retry ({}): {}", model_id, error_text).into())
         } else {
             let error_text = response.text().await?;
             Err(format!(

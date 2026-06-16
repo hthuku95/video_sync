@@ -4538,7 +4538,8 @@ async fn execute_generate_image_with_state_gemini(
         .await
     {
         Ok(image_bytes) => {
-            let file_name = std::path::Path::new(output_file_raw)
+            let output_file = ensure_outputs_directory(output_file_raw);
+            let file_name = std::path::Path::new(&output_file)
                 .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or("generated_image.png");
@@ -4557,7 +4558,15 @@ async fn execute_generate_image_with_state_gemini(
                 "image/png"
             };
 
-                    match crate::cloud_storage::upload_bytes_to_cloud(
+            // Write local file first so persist_tool_output can find it
+            if let Some(parent) = std::path::Path::new(&output_file).parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            if let Err(e) = tokio::fs::write(&output_file, &image_bytes).await {
+                tracing::warn!("Failed to write local image file {}: {}", output_file, e);
+            }
+
+            match crate::cloud_storage::upload_bytes_to_cloud(
                 image_bytes,
                 &object_key,
                 content_type,
@@ -4579,13 +4588,10 @@ async fn execute_generate_image_with_state_gemini(
                     )
                 }
                 Err(e) => {
-                    let file_id =
-                        crate::services::GeneratedArtifactService::legacy_file_id(file_name);
                     format!(
                         "✅ Image generated but cloud upload failed: {}\n\
-                         File: {}\n\
-                         Download: `/api/outputs/download/{}`",
-                        e, file_name, file_id
+                         File: {}",
+                        e, output_file
                     )
                 }
             }

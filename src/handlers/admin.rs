@@ -8885,10 +8885,10 @@ async fn run_service_portfolio_sample_agent(
         r#"You are a VideoSync AI agent creating a REAL portfolio sample for the '{slug}' done-for-you service. This sample will be shown to potential customers as proof of quality. It MUST be a polished, complete deliverable that could be sold to a paying customer for $75–$500.
 
 CRITICAL RULE — YOU MUST ACTUALLY GENERATE THE MEDIA:
-- You MUST call the real generation tools (generate_image, blender_generate_scene, generate_text_to_speech, concat_videos, etc.) to produce actual media files
+- You MUST call the real generation tools (generate_image, blender_generate_thumbnail, blender_generate_scene, generate_text_to_speech, concat_videos, etc.) to produce actual media files
 - Do NOT just describe what you would do — actually DO it
 - Do NOT call submit_final_answer until you have produced real files that are uploaded to R2
-- If you need thumbnails, CALL generate_image with specific prompts
+- If you need thumbnails, CALL generate_image (Gemini Imagen) or blender_generate_thumbnail (BlenderMCP) with specific prompts
 - If you need video, CALL blender_generate_scene or concat_videos with actual clips
 - If you need audio, CALL generate_text_to_speech
 
