@@ -7526,6 +7526,25 @@ impl ClaudeClient {
                     required: vec!["chart_type".to_string(), "title".to_string(), "data".to_string()],
                 },
             },
+            // ── Director orchestrator agent ────────────────────────────────────
+            ClaudeTool {
+                name: "run_director".to_string(),
+                description: "Run the Director agent with a high-level creative brief. The Director is an orchestrator agent that plans and calls multiple tools (3D scene rendering, thumbnails, title cards, data visualizations, UI mockups, LaTeX animations) to produce a complete set of video assets. Use this for complex multi-step production requests instead of calling individual blender_generate_* tools. The Director returns a JSON list of produced asset URLs and a summary. After receiving assets, apply FFmpeg tools for post-processing.".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "brief": {
+                            "type": "string",
+                            "description": "Natural language description of what to produce. Be descriptive and informative about the desired style, mood, content, duration, and any specific requirements — just like a customer brief. Do NOT hardcode tool names, as the Director handles tool selection internally."
+                        },
+                        "feedback": {
+                            "type": "string",
+                            "description": "Optional revision feedback from a previous Director run. If the Director's previous output needs changes, describe what to improve."
+                        }
+                    },
+                    "required": ["brief"]
+                }),
+            },
         ]
     }
 

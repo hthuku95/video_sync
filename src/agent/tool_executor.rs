@@ -914,6 +914,11 @@ async fn execute_tool_claude_with_context_inner(
         return finalize_special_tool_result_value(name, args, result, ctx).await;
     }
 
+    if name == "run_director" {
+        let result = execute_run_director_claude(args, ctx).await;
+        return finalize_special_tool_result_value(name, args, result, ctx).await;
+    }
+
     // pexels_download_video and pexels_download_photo with cloud upload (Claude)
     if name == "pexels_download_video" {
         let result = execute_pexels_download_video_claude(args).await;
@@ -1123,6 +1128,10 @@ async fn execute_tool_gemini_with_context_inner(
     }
     if name == "blender_generate_chart" {
         let result = execute_blender_generate_chart_gemini(args, ctx).await;
+        return finalize_special_tool_result_gemini(name, args, result, ctx).await;
+    }
+    if name == "run_director" {
+        let result = execute_run_director_gemini(args, ctx).await;
         return finalize_special_tool_result_gemini(name, args, result, ctx).await;
     }
     for tool_name in &[
@@ -18555,6 +18564,44 @@ fn maybe_insert_blender_narration_args_from_claude(tool_args: &mut Value, args: 
     }
 }
 
+// ── Shared Director executor ────────────────────────────────────────────────
+
+async fn execute_run_director_impl(
+    brief: &str,
+    feedback: Option<&str>,
+    ctx: &ToolExecutionContext,
+) -> String {
+    let client = match blender_client_or_err(ctx) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+
+    let mut tool_args = json!({"brief": brief});
+    if let Some(fb) = feedback {
+        if !fb.is_empty() {
+            tool_args["feedback"] = json!(fb);
+        }
+    }
+
+    let result = match client.call_tool("run_director", tool_args).await {
+        Ok(r) => r,
+        Err(e) => return format!("❌ Director agent failed: {}", e),
+    };
+
+    let result_str = match result.as_str() {
+        Some(s) if !s.is_empty() => s,
+        _ => return "✅ Director agent completed with no output summary.".to_string(),
+    };
+
+    if let Ok(inner) = serde_json::from_str::<Value>(result_str) {
+        let summary = inner.get("summary").and_then(|v| v.as_str()).unwrap_or("");
+        let assets = inner.get("assets").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0);
+        format!("✅ Director completed: {}\nProduced {} assets.\n{}", summary, assets, result_str)
+    } else {
+        format!("✅ Director result: {}", result_str)
+    }
+}
+
 // ── Gemini blender tool executors ─────────────────────────────────────────────
 
 async fn execute_blender_generate_scene_gemini(
@@ -18840,6 +18887,15 @@ async fn execute_blender_generate_chart_gemini(
         "Manim chart rendered",
     )
     .await
+}
+
+async fn execute_run_director_gemini(
+    args: &HashMap<String, Value>,
+    ctx: &ToolExecutionContext,
+) -> String {
+    let brief = args.get("brief").and_then(|v| v.as_str()).unwrap_or("");
+    let feedback = args.get("feedback").and_then(|v| v.as_str());
+    execute_run_director_impl(brief, feedback, ctx).await
 }
 
 // ── Claude blender tool executors ──────────────────────────────────────────────
@@ -19164,6 +19220,15 @@ async fn execute_blender_simple_manim_claude(
         &format!("{} rendered", tool_name),
     )
     .await
+}
+
+async fn execute_run_director_claude(
+    args: &Value,
+    ctx: &ToolExecutionContext,
+) -> String {
+    let brief = args.get("brief").and_then(|v| v.as_str()).unwrap_or("");
+    let feedback = args.get("feedback").and_then(|v| v.as_str());
+    execute_run_director_impl(brief, feedback, ctx).await
 }
 
 // ── fetch_website_image ─────────────────────────────────────────────────

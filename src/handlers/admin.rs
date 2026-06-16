@@ -8885,11 +8885,13 @@ async fn run_service_portfolio_sample_agent(
         r#"You are a VideoSync AI agent creating a REAL portfolio sample for the '{slug}' done-for-you service. This sample will be shown to potential customers as proof of quality. It MUST be a polished, complete deliverable that could be sold to a paying customer for $75–$500.
 
 CRITICAL RULE — YOU MUST ACTUALLY GENERATE THE MEDIA:
-- You MUST call the real generation tools (generate_image, blender_generate_thumbnail, blender_generate_scene, generate_text_to_speech, concat_videos, etc.) to produce actual media files
+- You MUST call the real generation tools to produce actual media files
+- For VIDEO ASSETS, call run_director with a descriptive creative brief describing the style, mood, content, and requirements. The Director agent will plan and call the appropriate rendering tools internally.
+- For THUMBNAILS, call run_director with a brief describing the thumbnail style — the Director handles generating them.
+- Do NOT call individual blender_generate_* tools directly — always use run_director for asset generation
+- After the Director returns assets, use FFmpeg tools (concat_videos, overlay_video, add_text_overlay, add_audio) for post-processing into the final deliverable
 - Do NOT just describe what you would do — actually DO it
 - Do NOT call submit_final_answer until you have produced real files that are uploaded to R2
-- If you need thumbnails, CALL generate_image (Gemini Imagen) or blender_generate_thumbnail (BlenderMCP) with specific prompts
-- If you need video, CALL blender_generate_scene or concat_videos with actual clips
 - If you need audio, CALL generate_text_to_speech
 
 REQUIREMENTS:
@@ -8902,7 +8904,8 @@ REQUIREMENTS:
 7. DO NOT use test/smoke tools — use the real production tools
 
 Your final submit_final_answer MUST include the R2 URL of the final deliverable.
-Create everything from scratch. Do NOT ask for uploaded files or reference URLs."#,
+Create everything from scratch. Do NOT ask for uploaded files or reference URLs.
+Be descriptive in your run_director brief — describe what the customer wants as if you were writing a creative brief, not a technical specification. Do not hardcode tool names, durations, or styles in your brief."#,
         slug = service_slug
     );
 

@@ -3431,6 +3431,19 @@ impl GeminiClient {
                     required: vec!["video_id".to_string()],
                 },
             },
+            // ── Director orchestrator agent ────────────────────────────────────
+            FunctionDeclaration {
+                name: "run_director".to_string(),
+                description: "Run the Director agent with a high-level creative brief. The Director is an orchestrator agent that plans and calls multiple tools (3D scene rendering, thumbnails, title cards, data visualizations, UI mockups, LaTeX animations) to produce a complete set of video assets. Use this for complex multi-step production requests instead of calling individual blender_generate_* tools. The Director returns a JSON list of produced asset URLs and a summary. After receiving assets, use FFmpeg tools (concat_videos, overlay_video, add_text_overlay, add_audio) for post-processing.".to_string(),
+                parameters: Some(OpenJsonSchemaObject {
+                    schema_type: "object".to_string(),
+                    properties: vec![
+                        ("brief".to_string(), json_schema!({ "type": "string", "description": "Natural language description of what to produce. Be descriptive and informative about the desired style, mood, content, duration, and any specific requirements — just like a customer brief. Do NOT hardcode tool names, as the Director handles tool selection internally." })),
+                        ("feedback".to_string(), json_schema!({ "type": "string", "description": "Optional revision feedback from a previous Director run. If the Director's previous output needs changes, describe what to improve. The Director will incorporate this feedback." })),
+                    ],
+                    required: vec!["brief".to_string()],
+                }),
+            },
             FunctionDeclaration {
                 name: "suggest_content_ideas".to_string(),
                 description: "Analyzes the user's YouTube channel performance and trending topics to suggest data-driven content ideas. Provides 5-10 specific video ideas with rationale. READ-ONLY research tool.".to_string(),

@@ -327,6 +327,7 @@ impl ToolCategory {
                 "analyze_pexels_thumbnail",
             ],
             ToolCategory::SceneGeneration => vec![
+                "run_director",
                 "blender_generate_scene",
                 "blender_generate_data_viz",
                 "blender_generate_lower_third",
@@ -1658,6 +1659,7 @@ impl ToolSelector {
             "generate_image".into(),
             "generate_text_to_speech".into(),
             "generate_music".into(),
+            "run_director".into(),
             "blender_generate_scene".into(),
             "blender_generate_animation".into(),
             "blender_generate_latex".into(),
