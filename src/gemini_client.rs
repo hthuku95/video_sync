@@ -801,9 +801,10 @@ impl GeminiClient {
                 .json(&request)
                 .send()
                 .await?;
-            if retry_response.status().is_success() {
-                let response_text = retry_response.text().await?;
-                let response_json: serde_json::Value = serde_json::from_str(&response_text)?;
+            let retry_status = retry_response.status();
+            let retry_text = retry_response.text().await.unwrap_or_default();
+            if retry_status.is_success() {
+                let response_json: serde_json::Value = serde_json::from_str(&retry_text)?;
                 if let Some(candidates) = response_json["candidates"].as_array() {
                     if let Some(candidate) = candidates.first() {
                         if let Some(content) = candidate.get("content") {
@@ -821,8 +822,7 @@ impl GeminiClient {
                     }
                 }
             }
-            let error_text = retry_response.text().await.unwrap_or_default();
-            Err(format!("Gemini image generation 429 even after retry ({}): {}", model_id, error_text).into())
+            Err(format!("Gemini image generation 429 even after retry ({}): {}", model_id, retry_text).into())
         } else {
             let error_text = response.text().await?;
             Err(format!(
