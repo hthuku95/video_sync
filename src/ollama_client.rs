@@ -270,14 +270,17 @@ impl OllamaClient {
             "model": self.model,
             "messages": messages,
             "tools": openai_tools,
-            "tool_choice": "auto",
-            "max_tokens": 8192,
-            "temperature": 0.5,
+            "think": false,
+            "stream": false,
+            "options": {
+                "num_predict": 8192,
+                "temperature": 0.5,
+            },
         });
 
         let resp = self
             .client
-            .post(format!("{}/v1/chat/completions", self.base_url))
+            .post(format!("{}/api/chat", self.base_url))
             .header("Content-Type", "application/json")
             .json(&body)
             .send()
@@ -286,31 +289,31 @@ impl OllamaClient {
         let status = resp.status();
         if !status.is_success() {
             let err = resp.text().await.unwrap_or_default();
-            return Err(format!("Ollama tool call error {}: {}", status, err).into());
+            return Err(format!("Ollama API error {}: {}", status, err).into());
         }
 
         let json: serde_json::Value = resp.json().await?;
-        let choice = &json["choices"][0];
-        let finish_reason = choice["finish_reason"].as_str().unwrap_or("");
+        let msg = &json["message"];
 
-        if finish_reason == "tool_calls" {
-            let tool_calls: Vec<OllamaToolCall> = choice["message"]["tool_calls"]
-                .as_array()
-                .unwrap_or(&vec![])
-                .iter()
-                .filter_map(|tc| {
-                    let id = tc["id"].as_str()?.to_string();
-                    let name = tc["function"]["name"].as_str()?.to_string();
-                    let args_str = tc["function"]["arguments"].as_str().unwrap_or("{}");
-                    let arguments =
-                        serde_json::from_str(args_str).unwrap_or(serde_json::json!({}));
-                    Some(OllamaToolCall { id, name, arguments })
-                })
-                .collect();
-            return Ok(OllamaResponse::ToolCalls(tool_calls));
+        // Check for tool calls first
+        if let Some(tool_calls) = msg["tool_calls"].as_array() {
+            if !tool_calls.is_empty() {
+                let calls: Vec<OllamaToolCall> = tool_calls
+                    .iter()
+                    .filter_map(|tc| {
+                        let id = tc["id"].as_str()?.to_string();
+                        let name = tc["function"]["name"].as_str()?.to_string();
+                        let arguments = tc["function"]["arguments"].clone();
+                        Some(OllamaToolCall { id, name, arguments })
+                    })
+                    .collect();
+                if !calls.is_empty() {
+                    return Ok(OllamaResponse::ToolCalls(calls));
+                }
+            }
         }
 
-        let text = choice["message"]["content"]
+        let text = msg["content"]
             .as_str()
             .unwrap_or("")
             .to_string();
