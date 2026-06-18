@@ -74,7 +74,7 @@ impl OllamaClient {
             .unwrap_or_else(|_| OLLAMA_DEFAULT_MODEL.to_string());
         Self {
             client: Client::builder()
-                .timeout(std::time::Duration::from_secs(300))
+                .timeout(std::time::Duration::from_secs(900))
                 .build()
                 .unwrap_or_default(),
             base_url,
@@ -273,8 +273,8 @@ impl OllamaClient {
             "think": false,
             "stream": false,
             "options": {
-                "num_predict": 8192,
-                "temperature": 0.5,
+                "num_predict": 1024,
+                "temperature": 0.3,
             },
         });
 
