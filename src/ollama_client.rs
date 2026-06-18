@@ -7,7 +7,7 @@
 use base64::prelude::*;
 use reqwest::Client;
 
-pub const OLLAMA_DEFAULT_URL: &str = "http://172.31.44.240:11434";
+pub const OLLAMA_DEFAULT_URL: &str = "http://172.31.43.45:11434";
 const OLLAMA_DEFAULT_MODEL: &str = "gemma4:12b";
 
 #[derive(Debug, Clone)]
@@ -90,6 +90,7 @@ impl OllamaClient {
         let body = serde_json::json!({
             "model": self.model,
             "messages": [{"role": "user", "content": "Hello — respond with exactly 'OK'."}],
+            "think": false,
             "options": {"num_predict": 10, "temperature": 0.0},
             "stream": false,
         });
@@ -424,6 +425,7 @@ Provide ONLY the JSON object, no markdown, no code blocks, no other text."#,
                 "content": prompt,
                 "images": [b64]
             }],
+            "think": false,
             "stream": false,
             "options": {
                 "num_predict": 8192,
