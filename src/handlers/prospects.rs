@@ -991,22 +991,36 @@ async fn search_kick_prospects(
             continue;
         }
 
+        let category = payload
+            .category
+            .clone()
+            .unwrap_or_else(|| "general".to_string());
         let _ = sqlx::query(
             r#"INSERT INTO prospects
-               (source, channel_name, channel_url, description, platform,
-                ai_score, dm_script_creator, dm_script_clipper,
-                recommended_service, x_dm, email_dm)
-               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-               ON CONFLICT (channel_url) DO UPDATE SET
+               (platform, channel_id, display_name, platform_url,
+                channel_description, avg_viewer_count, content_category,
+                prospect_type, ai_score, ai_reasoning,
+                dm_script_creator, dm_script_clipper,
+                service_type, x_dm_script, email_script)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+               ON CONFLICT (platform, channel_id) DO UPDATE SET
                 ai_score = EXCLUDED.ai_score,
+                avg_viewer_count = EXCLUDED.avg_viewer_count,
+                ai_reasoning = EXCLUDED.ai_reasoning,
+                x_dm_script = EXCLUDED.x_dm_script,
+                email_script = EXCLUDED.email_script,
                 updated_at = NOW()"#,
         )
         .bind("kick")
         .bind(&stream.slug)
+        .bind(&stream.slug)
         .bind(&channel_url)
         .bind(&description)
-        .bind("kick")
+        .bind(stream.viewer_count.unwrap_or(0))
+        .bind(&category)
+        .bind(&payload.prospect_type)
         .bind(ai_score)
+        .bind(&_reasoning)
         .bind(&dm_creator)
         .bind(&dm_clipper)
         .bind(&service)
