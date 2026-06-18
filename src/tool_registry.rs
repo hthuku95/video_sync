@@ -271,7 +271,7 @@ impl ToolRegistry {
             "offer_type".to_string(),
             gemini_property(
                 "string",
-                "Business lane or generation type, for example saas_demo_pack, fallback_summary, product_explainer, course_lesson, or agency_ad.",
+                "Business lane: landing_page, education, product_mockup, clipping, ugc, thumbnails, or full_stack.",
             ),
         );
         properties.insert(

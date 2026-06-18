@@ -24,13 +24,14 @@ pub enum ServiceType {
 impl ServiceType {
     pub fn from_normalized(s: &str) -> Self {
         match s {
-            "landing_page" | "saas_demo" => Self::LandingPage,
-            "product_mockup" => Self::ProductMockup,
-            "thumbnails" => Self::Thumbnails,
-            "education" => Self::Education,
-            "clipping" => Self::Clipping,
-            "ugc" | "voice_audio" | "voice" => Self::VoiceAudio,
-            "full_stack" | "agency_bundle" | "agency" => Self::FullStack,
+            "landing_page" | "saas_demo" | "saas_demo_pack" | "long_form_video" | "saas_launch_pack" => Self::LandingPage,
+            "product_mockup" | "product_explainer" | "product_mockup_pack" | "three_d_scene" | "blender_scene_pack" => Self::ProductMockup,
+            "thumbnails" | "thumbnail" | "thumbnail_hero_pack" => Self::Thumbnails,
+            "education" | "course_lesson" | "explainer" | "tutorial" | "education_explainer_pack" => Self::Education,
+            "clipping" | "clip" | "short" | "clip_pack" => Self::Clipping,
+            "ugc" | "ugc_ad_pack" | "voice_audio" | "voice" | "voice_audio_pack" | "narration" | "podcast" => Self::VoiceAudio,
+            "full_stack" | "agency_bundle" | "agency" | "fullstack" | "full_stack_production_pack" | "agency_bundle_pack" => Self::FullStack,
+            "fallback_summary" | "summary" | "ad" | "advert" => Self::LandingPage,
             _ => Self::LandingPage,
         }
     }
