@@ -514,6 +514,14 @@ IMPORTANT: You do NOT use AI to generate videos. Instead, you fetch stock media 
             workflow_id,
         };
 
+        const RENDERING_TOOLS: &[&str] = &[
+            "blender_generate_scene", "merge_videos", "trim_video", "add_text_overlay",
+            "add_voiceover_to_video", "add_audio", "generate_image", "generate_text_to_speech",
+            "generate_music", "generate_sound_effect", "apply_filter", "crop_video",
+            "resize_video", "concat_videos", "add_transition", "add_captions",
+            "create_blank_video", "create_thumbnail", "add_subtitles",
+        ];
+
         let mut messages: Vec<serde_json::Value> = vec![serde_json::json!({
             "role": "user",
             "content": format!("{}\n\nUser request: {}", system_instruction, user_input)
@@ -522,6 +530,7 @@ IMPORTANT: You do NOT use AI to generate videos. Instead, you fetch stock media 
         let mut iterations = 0;
         let max_iterations = 50;
         let mut final_text = String::new();
+        let mut rendered = false;
 
         while iterations < max_iterations {
             iterations += 1;
@@ -573,6 +582,15 @@ IMPORTANT: You do NOT use AI to generate videos. Instead, you fetch stock media 
                         let result = tool_executor(&tc.name, &args, &exec_context).await;
 
                         if completion_tool_name == Some(tc.name.as_str()) {
+                            if !rendered {
+                                let msg = "❌ Cannot submit yet — you have not called any rendering tools (e.g. blender_generate_scene, generate_image, merge_videos, add_text_overlay, add_voiceover_to_video). Generating a script is not sufficient. You MUST call at least one rendering tool to produce actual media files before calling submit_final_answer.";
+                                tool_results.push(serde_json::json!({
+                                    "role": "tool",
+                                    "tool_call_id": tc.id,
+                                    "content": msg
+                                }));
+                                continue;
+                            }
                             let result_text = match &result {
                                 Value::String(text) => text.clone(),
                                 other => serde_json::to_string_pretty(other)
@@ -582,6 +600,10 @@ IMPORTANT: You do NOT use AI to generate videos. Instead, you fetch stock media 
                                 send_progress(0.0, "✅ Task completed!");
                                 return Ok(result_text);
                             }
+                        }
+
+                        if RENDERING_TOOLS.contains(&tc.name.as_str()) {
+                            rendered = true;
                         }
 
                         tool_results.push(serde_json::json!({
@@ -862,9 +884,18 @@ IMPORTANT: You do NOT use AI to generate videos. Instead, you fetch stock media 
             role: Some("user".to_string()),
         }];
 
+        const GEMINI_RENDERING_TOOLS: &[&str] = &[
+            "blender_generate_scene", "merge_videos", "trim_video", "add_text_overlay",
+            "add_voiceover_to_video", "add_audio", "generate_image", "generate_text_to_speech",
+            "generate_music", "generate_sound_effect", "apply_filter", "crop_video",
+            "resize_video", "concat_videos", "add_transition", "add_captions",
+            "create_blank_video", "create_thumbnail", "add_subtitles",
+        ];
+
         let mut iterations = 0;
         let max_iterations = 50;
         let mut final_text = String::new();
+        let mut rendered = false;
 
         while iterations < max_iterations {
             iterations += 1;
@@ -955,6 +986,20 @@ IMPORTANT: You do NOT use AI to generate videos. Instead, you fetch stock media 
                                 .await;
 
                                 if completion_tool_name == Some(function_call.name.as_str()) {
+                                    if !rendered {
+                                        let msg = serde_json::json!({"result": "❌ Cannot submit yet — you have not called any rendering tools (e.g. blender_generate_scene, generate_image, merge_videos, add_text_overlay, add_voiceover_to_video). Generating a script is not sufficient. You MUST call at least one rendering tool to produce actual media files before calling submit_final_answer."});
+                                        tool_results.push(Part::FunctionResponse {
+                                            function_response: crate::gemini_client::FunctionResponse {
+                                                name: function_call.name.clone(),
+                                                response: {
+                                                    let mut map = std::collections::HashMap::new();
+                                                    map.insert("result".to_string(), serde_json::json!({"error": msg}));
+                                                    map
+                                                },
+                                            },
+                                        });
+                                        continue;
+                                    }
                                     let result_text = match &result {
                                         Value::String(text) => text.clone(),
                                         other => serde_json::to_string_pretty(other)
@@ -965,6 +1010,10 @@ IMPORTANT: You do NOT use AI to generate videos. Instead, you fetch stock media 
                                         send_progress(0.0, "✅ Task completed!");
                                         return Ok(result_text);
                                     }
+                                }
+
+                                if GEMINI_RENDERING_TOOLS.contains(&function_call.name.as_str()) {
+                                    rendered = true;
                                 }
 
                                 tool_results.push(Part::FunctionResponse {
