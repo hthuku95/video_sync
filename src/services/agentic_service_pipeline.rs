@@ -559,6 +559,7 @@ Save as .png or .jpg"#,
 
     fn education_prompt(input: &ServiceInput) -> String {
         let url = input.source_url.as_deref().unwrap_or("");
+        let delivery_id = input.delivery_id;
         format!(
             r#"## SERVICE: Education Explainer Video
 GOAL: Create a narrated {duration_seconds}s educational explainer video.
@@ -581,7 +582,8 @@ Save final video as .mp4"#,
             title = input.title,
             style = input.style,
             duration_seconds = input.duration_seconds as i32,
-            output_dir = format!("outputs/agentic_{}", input.delivery_id),
+            delivery_id = delivery_id,
+            output_dir = format!("outputs/agentic_{}", delivery_id),
         )
     }
 
