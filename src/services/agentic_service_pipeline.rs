@@ -434,34 +434,20 @@ impl AgenticServicePipeline {
     }
 
     fn system_prompt(service_type: ServiceType, input: &ServiceInput) -> String {
-        let base = r#"You are VideoSync's AI video production agent. Your job is to create professional media assets by calling tools.
+        let base = r#"You are a video production agent. Produce actual media files by calling tools.
 
-## MANDATORY WORKFLOW - YOU MUST FOLLOW THESE STEPS IN ORDER
-Step 1: generate_video_script(topic, duration, style, tone) — plan your content
-Step 2: Call a RENDERING tool to produce actual media files:
-  - blender_generate_scene(scene_type, prompt) for 3D scenes, animations, lower thirds, title cards, charts, LaTeX equations, manim lessons
-  - generate_image(prompt, aspect_ratio, image_size) for still images
-  - create_blank_video(output_file, duration, width, height, color) for base colored video
-Step 3: add_voiceover_to_video(video_path, script) or generate_text_to_speech(text, voice) for narration
-Step 4: Call review_video(video_path_or_url) to check your output quality
-Step 5: Iterate if review fails (re-render with fixes)
-Step 6: Call submit_final_answer(summary, output_files=[path_to_your_video]) ONLY after review passes
+## MANDATORY TOOL SEQUENCE
+1. generate_video_script(topic, duration, style, tone) — plan the content
+2. blender_generate_scene(scene_type, prompt) — render the core animation/scene
+3. add_voiceover_to_video(video_path, script) or generate_text_to_speech(text, voice) — narrate
+4. review_video(video_path_or_url) — check quality
+5. submit_final_answer(summary, output_files=[path]) — only after review passes
 
-## CRITICAL RULES
-- DO call the rendering tools (Step 2) to produce actual video/image files on disk
-- DO save output files to the specified output directory
-- DO NOT skip to submit_final_answer until you have rendered a video file AND reviewed it
-- DO NOT use generate_long_form_video or run_director — call the rendering tools directly
-- When calling submit_final_answer, list the main video MP4/WEBM before thumbnails or audio files
-
-## YOUR CAPABILITIES
-You have access to 376 tools across these categories:
-1. Web Tools: read_website_content(url), fetch_website_image(url)
-2. Image Generation: generate_image(prompt, aspect_ratio, image_size)
-3. BlenderMCP Tools (27 tools): blender_generate_scene, blender_create_ui_mockup, blender_create_lower_third, blender_create_title_card, blender_create_chart, blender_create_data_viz, blender_render_latex, blender_manim_animation, blender_create_text_animation, and more
-4. Audio Tools: generate_text_to_speech, generate_music, generate_sound_effect, add_voiceover_to_video, add_audio
-5. Video Editing (320+ FFmpeg tools): trim_video, merge_videos, add_text_overlay, apply_filter, crop, resize, concat_videos, add_transition, add_captions, add_subtitles, and more
-6. Review Tools: review_video, analyze_video, view_video, run_video_qa"#;
+## RULES
+- Generate actual media files on disk, not just text
+- Save output to the specified directory
+- Call submit_final_answer ONLY after rendering AND reviewing
+- The 376 available tools are listed in the API — pick the right ones for each step"#;
 
         let service_specific = match service_type {
             ServiceType::LandingPage => Self::landing_page_prompt(input),
@@ -559,31 +545,28 @@ Save as .png or .jpg"#,
 
     fn education_prompt(input: &ServiceInput) -> String {
         let url = input.source_url.as_deref().unwrap_or("");
-        let delivery_id = input.delivery_id;
+        let out = format!("outputs/agentic_{}", input.delivery_id);
         format!(
             r#"## SERVICE: Education Explainer Video
-GOAL: Create a narrated {duration_seconds}s educational explainer video.
+GOAL: {duration_seconds}s narrated educational video.
 
 Topic: {url}
 Title: {title}
 Style: {style}
 
-## YOUR PRODUCTION PLAN (follow this exactly)
-1. generate_video_script(topic="{url}", duration={duration_seconds}, style="{style}", tone="professional") — plan the lesson
-2. blender_generate_scene(scene_type="education", prompt="animated explainer about {title} in {style} style, {duration_seconds}s duration") — render the core animation
-3. add_voiceover_to_video(video_path="outputs/agentic_{delivery_id}/output.mp4", script="use the generated script text") — add professional narration
-4. review_video(video_path_or_url="outputs/agentic_{delivery_id}/output.mp4") — check quality
-5. Fix any issues and re-render if review fails
-6. submit_final_answer(summary="Created educational video about {title}", output_files=["outputs/agentic_{delivery_id}/output.mp4"])
+## TO CALL
+1. generate_video_script(topic="{url}", duration={duration_seconds}, style="{style}", tone="professional")
+2. blender_generate_scene(scene_type="education", prompt="explainer {title} {style}")
+3. add_voiceover_to_video(video_path="{out}/output.mp4", script="from script above")
+4. review_video(video_path_or_url="{out}/output.mp4")
+5. submit_final_answer(summary="education video {title}", output_files=["{out}/output.mp4"])
 
-OUTPUT to: {output_dir}/
-Save final video as .mp4"#,
+OUTPUT dir: {out}/"#,
+            duration_seconds = input.duration_seconds as i32,
             url = url,
             title = input.title,
             style = input.style,
-            duration_seconds = input.duration_seconds as i32,
-            delivery_id = delivery_id,
-            output_dir = format!("outputs/agentic_{}", delivery_id),
+            out = out,
         )
     }
 
