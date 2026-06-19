@@ -443,6 +443,7 @@ impl AgenticServicePipeline {
 - DO iterate if the review fails — fix the issue and try again
 - use submit_final_answer ONLY when you have a completed, reviewed output
 - DO NOT use generate_long_form_video or run_director — you are already inside a production agent, call the actual rendering tools directly
+- When calling submit_final_answer, list the main video MP4/WEBM before anything else (thumbnails, audio) in the output_files list
 
 ## YOUR CAPABILITIES
 You have access to all of these tools:
@@ -724,6 +725,14 @@ struct LocatedOutput {
 /// Extract the output location from the agent result.
 /// Returns a LocatedOutput with a canonical path (cloud URL preferred) and
 /// a review path (local file for QA review).
+fn is_video_url(url: &str) -> bool {
+    url.contains(".mp4") || url.contains(".webm") || url.contains(".mov") || url.contains(".avi")
+}
+
+fn is_image_url(url: &str) -> bool {
+    url.contains(".jpg") || url.contains(".jpeg") || url.contains(".png") || url.contains(".gif") || url.contains(".webp")
+}
+
 fn locate_output_from_result(agent_result: &Result<String, String>, output_dir: &str) -> Option<LocatedOutput> {
     let text = match agent_result {
         Ok(t) => t.as_str(),
@@ -741,12 +750,23 @@ fn locate_output_from_result(agent_result: &Result<String, String>, output_dir: 
         if let Some(url) = trimmed.strip_prefix("📤 Cloud URL: ")
             .or_else(|| trimmed.strip_prefix("Cloud URL: "))
         {
-            cloud_url = Some(url.trim().to_string());
+            let url = url.trim().to_string();
+            let should_replace = match &cloud_url {
+                None => true,
+                Some(current) => is_image_url(current) && is_video_url(&url),
+            };
+            if should_replace {
+                cloud_url = Some(url);
+            }
         }
         // Raw https:// URL
         if trimmed.starts_with("https://") && (trimmed.contains(".mp4") || trimmed.contains(".png") || trimmed.contains(".mp3") || trimmed.contains(".webm") || trimmed.contains(".jpg")) {
             if cloud_url.is_none() {
                 cloud_url = Some(trimmed.to_string());
+            } else if let Some(ref current) = cloud_url {
+                if is_image_url(current) && is_video_url(trimmed) {
+                    cloud_url = Some(trimmed.to_string());
+                }
             }
         }
         // Local file path that exists
@@ -772,17 +792,26 @@ fn locate_output_from_result(agent_result: &Result<String, String>, output_dir: 
                     .filter_map(|e| {
                         let p = e.path();
                         let ext = p.extension()?.to_str()?;
-                        if matches!(ext, "mp4" | "webm" | "png" | "jpg" | "jpeg" | "mp3" | "wav" | "aac" | "gif") {
-                            Some(p)
+                        if matches!(ext, "mp4" | "webm" | "mov" | "avi" | "mkv") {
+                            Some((p, 2))
+                        } else if matches!(ext, "png" | "jpg" | "jpeg" | "gif") {
+                            Some((p, 1))
+                        } else if matches!(ext, "mp3" | "wav" | "aac") {
+                            Some((p, 0))
                         } else {
                             None
                         }
                     })
                     .collect();
                 if !candidates.is_empty() {
-                    candidates.sort_by_key(|p| std::fs::metadata(p).ok().and_then(|m| m.modified().ok()));
-                    if let Some(latest) = candidates.pop() {
-                        let p = latest.to_string_lossy().to_string();
+                    // Prefer video > image > audio, then by modification time (newest first)
+                    candidates.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| {
+                        std::fs::metadata(&b.0).ok()
+                            .and_then(|m| m.modified().ok())
+                            .cmp(&std::fs::metadata(&a.0).ok().and_then(|m| m.modified().ok()))
+                    }));
+                    if let Some((p, _)) = candidates.first() {
+                        let p = p.to_string_lossy().to_string();
                         tracing::warn!(path = %p, dir = %dir, "locate_output_from_result found local file via dir scan");
                         local_path = Some(p);
                         break;
