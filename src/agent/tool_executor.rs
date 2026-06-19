@@ -2340,7 +2340,7 @@ fn execute_add_audio_claude(args: &Value) -> String {
     let output = ensure_outputs_directory(output_raw);
     let audio_file = args["audio_file"].as_str().unwrap_or("");
     // Note: add_audio signature is (video, audio, output) - no replace parameter
-    crate::audio::add_audio(input, audio_file, &output).unwrap_or_else(|e| e)
+    crate::audio::add_audio(input, audio_file, &output).unwrap_or_else(|e| format!("❌ {}", e))
 }
 
 fn execute_adjust_volume_claude(args: &Value) -> String {
@@ -3415,8 +3415,10 @@ fn execute_add_audio_gemini(args: &HashMap<String, Value>) -> String {
         .and_then(|v| v.as_str())
         .unwrap_or("");
     // Note: add_audio signature is (video, audio, output) - no replace parameter
-    crate::audio::add_audio(input, audio_file, output).unwrap_or_else(|e| e)
+    crate::audio::add_audio(input, audio_file, output).unwrap_or_else(|e| format!("❌ {}", e))
 }
+
+
 
 fn execute_adjust_volume_gemini(args: &HashMap<String, Value>) -> String {
     let input = args
@@ -7413,8 +7415,12 @@ async fn execute_review_video_with_state_claude(
 
     let app_state = &ctx.app_state;
 
-    // Resolve file path - try as-is first, then try uploads/, outputs/ directories
-    let video_path = if tokio::fs::metadata(video_path_input).await.is_ok() {
+    // Resolve file path - try cloud URL first (pass through to review_render),
+    // then as-is, uploads/, outputs/ directories
+    let video_path = if video_path_input.starts_with("http://") || video_path_input.starts_with("https://") {
+        // Cloud URL — review_render handles download internally via download_to_temp
+        video_path_input.to_string()
+    } else if tokio::fs::metadata(video_path_input).await.is_ok() {
         video_path_input.to_string()
     } else if tokio::fs::metadata(format!("uploads/{}", video_path_input))
         .await
@@ -7428,19 +7434,25 @@ async fn execute_review_video_with_state_claude(
         format!("outputs/{}", video_path_input)
     } else {
         return format!(
-            "❌ Error: Video file not found: {}. Tried 'uploads/', 'outputs/', and as-is",
+            "❌ Error: Video file not found: {}. Tried cloud URL, 'uploads/', 'outputs/', and as-is",
             video_path_input
         );
     };
 
-    if let Err(_) = tokio::fs::metadata(&video_path).await {
-        return format!("❌ Error: Video file does not exist: {}", video_path);
+    if !video_path.starts_with("http") {
+        if let Err(_) = tokio::fs::metadata(&video_path).await {
+            return format!("❌ Error: Video file does not exist: {}", video_path);
+        }
     }
 
     let mut review = String::new();
 
     // 1. Run FFmpeg-based QA on the full video
-    review.push_str(&run_final_qa(&video_path));
+    if !video_path.starts_with("http") {
+        review.push_str(&run_final_qa(&video_path));
+    } else {
+        review.push_str("⏭️ FFmpeg QA skipped (cloud URL — not available locally)\n");
+    }
     review.push_str("\n");
 
     // 2. Use the 4-model fallback chain for LLM-based review
@@ -7539,7 +7551,10 @@ async fn execute_review_video_with_state_gemini(
 
     let app_state = &ctx.app_state;
 
-    let video_path = if tokio::fs::metadata(video_path_input).await.is_ok() {
+    let video_path = if video_path_input.starts_with("http://") || video_path_input.starts_with("https://") {
+        // Cloud URL — review_render handles download internally via download_to_temp
+        video_path_input.to_string()
+    } else if tokio::fs::metadata(video_path_input).await.is_ok() {
         video_path_input.to_string()
     } else if tokio::fs::metadata(format!("uploads/{}", video_path_input))
         .await
@@ -7553,19 +7568,25 @@ async fn execute_review_video_with_state_gemini(
         format!("outputs/{}", video_path_input)
     } else {
         return format!(
-            "❌ Error: Video file not found: {}. Tried 'uploads/', 'outputs/', and as-is",
+            "❌ Error: Video file not found: {}. Tried cloud URL, 'uploads/', 'outputs/', and as-is",
             video_path_input
         );
     };
 
-    if let Err(_) = tokio::fs::metadata(&video_path).await {
-        return format!("❌ Error: Video file does not exist: {}", video_path);
+    if !video_path.starts_with("http") {
+        if let Err(_) = tokio::fs::metadata(&video_path).await {
+            return format!("❌ Error: Video file does not exist: {}", video_path);
+        }
     }
 
     let mut review = String::new();
 
     // 1. Run FFmpeg-based QA on the full video
-    review.push_str(&run_final_qa(&video_path));
+    if !video_path.starts_with("http") {
+        review.push_str(&run_final_qa(&video_path));
+    } else {
+        review.push_str("⏭️ FFmpeg QA skipped (cloud URL — not available locally)\n");
+    }
     review.push_str("\n");
 
     // 2. Use the 4-model fallback chain for LLM-based review
@@ -8324,6 +8345,15 @@ async fn execute_add_voiceover_to_video_with_state_claude(
             result
         );
         format!("❌ Failed to add voiceover to video: {}", result)
+    } else if !std::path::Path::new(&output_video).exists() {
+        tracing::error!(
+            "❌ add_voiceover_to_video: Output file was not created at: {}",
+            output_video
+        );
+        format!(
+            "❌ Failed to add voiceover to video: output file was not created at {}",
+            output_video
+        )
     } else {
         tracing::info!(
             "✅ add_voiceover_to_video: Successfully completed - Output: {}",
@@ -8409,6 +8439,15 @@ async fn execute_add_voiceover_to_video_with_state_gemini(
             result
         );
         format!("❌ Failed to add voiceover to video: {}", result)
+    } else if !std::path::Path::new(&output_video).exists() {
+        tracing::error!(
+            "❌ add_voiceover_to_video: Output file was not created at: {}",
+            output_video
+        );
+        format!(
+            "❌ Failed to add voiceover to video: output file was not created at {}",
+            output_video
+        )
     } else {
         tracing::info!(
             "✅ add_voiceover_to_video: Successfully completed - Output: {}",
