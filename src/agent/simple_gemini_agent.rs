@@ -987,15 +987,16 @@ IMPORTANT: You do NOT use AI to generate videos. Instead, you fetch stock media 
 
                                 if completion_tool_name == Some(function_call.name.as_str()) {
                                     if !rendered {
-                                        let msg = serde_json::json!({"result": "❌ Cannot submit yet — you have not called any rendering tools (e.g. blender_generate_scene, generate_image, merge_videos, add_text_overlay, add_voiceover_to_video). Generating a script is not sufficient. You MUST call at least one rendering tool to produce actual media files before calling submit_final_answer."});
+                                        let err_map = {
+                                            let mut map = std::collections::HashMap::new();
+                                            map.insert("result".to_string(), serde_json::json!("❌ Cannot submit yet — you have not called any rendering tools (e.g. blender_generate_scene, generate_image, merge_videos, add_text_overlay, add_voiceover_to_video). Generating a script is not sufficient. You MUST call at least one rendering tool to produce actual media files before calling submit_final_answer."));
+                                            map
+                                        };
                                         tool_results.push(Part::FunctionResponse {
                                             function_response: crate::gemini_client::FunctionResponse {
                                                 name: function_call.name.clone(),
-                                                response: {
-                                                    let mut map = std::collections::HashMap::new();
-                                                    map.insert("result".to_string(), serde_json::json!({"error": msg}));
-                                                    map
-                                                },
+                                                response: err_map,
+                                                thought_signature: None,
                                             },
                                         });
                                         continue;
