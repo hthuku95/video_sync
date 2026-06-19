@@ -442,6 +442,7 @@ impl AgenticServicePipeline {
 - DO review your output before submitting
 - DO iterate if the review fails — fix the issue and try again
 - use submit_final_answer ONLY when you have a completed, reviewed output
+- DO NOT use generate_long_form_video or run_director — you are already inside a production agent, call the actual rendering tools directly
 
 ## YOUR CAPABILITIES
 You have access to all of these tools:
