@@ -556,7 +556,7 @@ Style: {style}
 
 ## TO CALL
 1. generate_video_script(topic="{url}", duration={duration_seconds}, style="{style}", tone="professional")
-2. blender_generate_scene_type(prompt="explainer {title} {style}", params={"scene_type": "education", "style": "{style}"})
+2. blender_generate_scene_type(prompt="explainer {title} {style}", params={{"scene_type": "education", "style": "{style}"}})
 3. add_voiceover_to_video(video_path="{out}/output.mp4", script="from script above")
 4. review_video(video_path_or_url="{out}/output.mp4")
 5. submit_final_answer(summary="education video {title}", output_files=["{out}/output.mp4"])
