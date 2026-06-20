@@ -291,6 +291,52 @@ impl BlenderMCPClient {
             .await
     }
 
+    /// Consolidated bpy script execution — replaces all individual blender_generate_* tools.
+    pub async fn execute_bpy_script(
+        &self,
+        prompt: &str,
+        duration: f64,
+        style: &str,
+        reference_image_url: &str,
+    ) -> Result<String, String> {
+        self.render_async(
+            "blender_execute_bpy_script",
+            json!({
+                "prompt": prompt,
+                "duration": duration,
+                "style": style,
+                "reference_image_url": reference_image_url,
+            }),
+            "video_url",
+            "mp4",
+        )
+        .await
+    }
+
+    /// Consolidated Manim script execution — replaces all individual blender_generate_* Manim tools.
+    pub async fn execute_manim_script(
+        &self,
+        description: &str,
+        duration: f64,
+        background: &str,
+        transparent: bool,
+        quality: &str,
+    ) -> Result<String, String> {
+        self.render_async(
+            "manim_execute_script",
+            json!({
+                "description": description,
+                "duration": duration,
+                "background": background,
+                "transparent": transparent,
+                "quality": quality,
+            }),
+            "video_url",
+            if transparent { "mov" } else { "mp4" },
+        )
+        .await
+    }
+
     /// Submit a render job and poll until completion, then download the result.
     /// Use this for all renders — it is safe for any duration because it never
     /// holds an HTTP connection open during the actual render.

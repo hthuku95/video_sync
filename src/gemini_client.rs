@@ -1065,21 +1065,16 @@ impl GeminiClient {
     pub fn blender_generate_scene_type_tool() -> FunctionDeclaration {
         FunctionDeclaration {
             name: "blender_generate_scene_type".to_string(),
-            description: "Generate ANY 3D Blender scene or animation via LLM-generated bpy Python code. \
+            description: "Generate ANY 3D Blender scene, thumbnail, title card, lower-third, \
+                or UI device mockup via LLM-generated bpy Python code. \
                 This single tool replaces blender_generate_scene, blender_generate_thumbnail, \
                 blender_generate_title_card, blender_generate_logo_reveal, blender_generate_countdown, \
                 blender_generate_abstract_bg, blender_generate_particle_confetti, \
                 blender_generate_rigid_body_drop, blender_generate_camera_path, \
                 blender_generate_toon_scene, blender_generate_grease_pencil_reveal, \
-                blender_generate_geometry_scatter, blender_generate_text_animation, \
-                blender_generate_vector_field, blender_generate_matrix_transform, \
-                blender_generate_polar_graph, blender_generate_geometry_proof, \
-                blender_generate_ui_mockup, blender_generate_latex, \
-                blender_generate_animation, blender_generate_chart, \
-                blender_generate_flowchart, blender_generate_3d_math, \
-                blender_generate_code_animation, blender_generate_timeline, \
-                blender_generate_network_graph, blender_generate_data_viz, \
-                blender_generate_lower_third, and 25+ other individual tools. \
+                blender_generate_geometry_scatter, blender_generate_ui_mockup, \
+                blender_generate_lower_third, and 18+ other Blender template tools. \
+                For Manim animations (math, charts, code, diagrams, etc.) use manim_execute_script instead. \
                 The LLM writes Blender Python code from scratch for any scene type. \
                 Pass the scene description in `prompt`, visual style in `params.style`, \
                 and reference images in `params.reference_image_url`. \

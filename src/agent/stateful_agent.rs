@@ -1001,6 +1001,8 @@ You MUST only call tools that are explicitly listed in the `tools` array of this
                                         || function_name == "auto_generate_video"
                                         || function_name == "edit_image"
                                         || function_name == "blender_generate_scene"
+                                        || function_name == "blender_generate_scene_type"
+                                        || function_name == "manim_execute_script"
                                         || function_name == "blender_generate_thumbnail"
                                         || function_name == "blender_generate_title_card"
                                         || function_name == "blender_generate_data_viz"

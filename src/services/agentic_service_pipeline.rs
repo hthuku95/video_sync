@@ -438,7 +438,7 @@ impl AgenticServicePipeline {
 
 ## MANDATORY TOOL SEQUENCE
 1. generate_video_script(topic, duration, style, tone) — plan the content
-2. blender_generate_scene(scene_type, prompt) — render the core animation/scene
+2. blender_generate_scene_type(prompt, params) — render the core animation/scene (replaces 28 individual blender tools)
 3. add_voiceover_to_video(video_path, script) or generate_text_to_speech(text, voice) — narrate
 4. review_video(video_path_or_url) — check quality
 5. submit_final_answer(summary, output_files=[path]) — only after review passes
@@ -556,7 +556,7 @@ Style: {style}
 
 ## TO CALL
 1. generate_video_script(topic="{url}", duration={duration_seconds}, style="{style}", tone="professional")
-2. blender_generate_scene(scene_type="education", prompt="explainer {title} {style}")
+2. blender_generate_scene_type(prompt="explainer {title} {style}", params={"scene_type": "education", "style": "{style}"})
 3. add_voiceover_to_video(video_path="{out}/output.mp4", script="from script above")
 4. review_video(video_path_or_url="{out}/output.mp4")
 5. submit_final_answer(summary="education video {title}", output_files=["{out}/output.mp4"])

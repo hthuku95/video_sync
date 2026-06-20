@@ -975,57 +975,49 @@ impl LongFormVideoWorkflow {
 
             match plan_clone.visual_tool.as_str() {
             "title_card" => {
+                let prompt = format!(
+                    "Title card for '{}'. Subtitle: {}. Style: {}.",
+                    plan_clone.title, plan_clone.objective, req_clone.style
+                );
                 blender
-                    .generate_title_card(
-                        &plan_clone.title,
-                        &plan_clone.objective,
-                        duration,
-                        &req_clone.style,
-                    )
+                    .execute_bpy_script(&prompt, duration, &req_clone.style, "")
                     .await
             }
             "ui_mockup" => {
-                let spec = json!({
-                    "app_name": req_clone.title,
-                    "screen_title": plan_clone.title,
-                    "screen_description": plan_clone.objective,
-                    "workflow_id": workflow_id
-                });
                 let screenshot_url = reference_image_url.as_deref().unwrap_or("");
+                let prompt = format!(
+                    "UI mockup for '{}': {}. Device: desktop, animation: reveal, style: {}.",
+                    req_clone.title, plan_clone.objective, req_clone.style
+                );
                 blender
-                    .generate_ui_mockup(
-                        "desktop",
-                        "reveal",
-                        duration,
-                        screenshot_url,
-                        Some(&spec),
-                        None,
-                        None,
-                    )
+                    .execute_bpy_script(&prompt, duration, &req_clone.style, screenshot_url)
                     .await
             }
             "data_viz" => {
-                let data = json!({
-                    "labels": ["Problem", "Proof", "CTA"],
-                    "values": [75, 54, 31]
-                });
                 blender
-                    .generate_data_viz(
-                        &data.to_string(),
-                        "bar",
-                        &plan_clone.title,
+                    .execute_manim_script(
+                        &format!("Bar chart showing '{}': Problem 75%, Proof 54%, CTA 31%", plan_clone.title),
                         duration,
+                        "dark",
+                        false,
+                        "m",
                     )
                     .await
             }
             "latex" => {
                 blender
-                    .generate_latex("Outcome = Clarity + Proof + CTA", "write", duration, "dark")
+                    .execute_manim_script(
+                        "LaTeX equation: Outcome = Clarity + Proof + CTA, written with animation",
+                        duration,
+                        "dark",
+                        false,
+                        "m",
+                    )
                     .await
             }
             "manim" => {
                 blender
-                    .generate_animation(&plan_clone.objective, duration, "dark", true)
+                    .execute_manim_script(&plan_clone.objective, duration, "dark", false, "m")
                     .await
             }
             _ => {
@@ -1037,7 +1029,7 @@ impl LongFormVideoWorkflow {
                     req_clone.reference_url.as_deref().unwrap_or("")
                 );
                 blender
-                    .generate_scene(&prompt, duration, &req_clone.style, reference_image_url.as_deref())
+                    .execute_bpy_script(&prompt, duration, &req_clone.style, reference_image_url.as_deref().unwrap_or(""))
                     .await
             }
             }

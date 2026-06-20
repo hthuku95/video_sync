@@ -515,7 +515,7 @@ IMPORTANT: You do NOT use AI to generate videos. Instead, you fetch stock media 
         };
 
         const RENDERING_TOOLS: &[&str] = &[
-            "blender_generate_scene", "merge_videos", "trim_video", "add_text_overlay",
+            "blender_generate_scene", "blender_generate_scene_type", "manim_execute_script", "merge_videos", "trim_video", "add_text_overlay",
             "add_voiceover_to_video", "add_audio", "generate_image", "generate_text_to_speech",
             "generate_music", "generate_sound_effect", "apply_filter", "crop_video",
             "resize_video", "concat_videos", "add_transition", "add_captions",
@@ -885,7 +885,7 @@ IMPORTANT: You do NOT use AI to generate videos. Instead, you fetch stock media 
         }];
 
         const GEMINI_RENDERING_TOOLS: &[&str] = &[
-            "blender_generate_scene", "merge_videos", "trim_video", "add_text_overlay",
+            "blender_generate_scene", "blender_generate_scene_type", "manim_execute_script", "merge_videos", "trim_video", "add_text_overlay",
             "add_voiceover_to_video", "add_audio", "generate_image", "generate_text_to_speech",
             "generate_music", "generate_sound_effect", "apply_filter", "crop_video",
             "resize_video", "concat_videos", "add_transition", "add_captions",
