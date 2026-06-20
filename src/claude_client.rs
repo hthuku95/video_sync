@@ -3633,7 +3633,7 @@ impl ClaudeClient {
                     required: vec!["input_file".to_string(), "output_file".to_string()],
                 },
             },
-        ];
+        ]
     }
 
     /// Filter tools by name (for dynamic tool selection)
