@@ -121,7 +121,7 @@ impl BlenderMCPClient {
         if let Some(url) = reference_image_url {
             args["reference_image_url"] = Value::String(url.to_string());
         }
-        self.render_async("blender_generate_scene", args, "video_url", "mp4")
+        self.render_async("blender_execute_bpy_script", args, "video_url", "mp4")
             .await
     }
 
@@ -132,12 +132,14 @@ impl BlenderMCPClient {
         title_text: &str,
         style: &str,
     ) -> Result<String, String> {
+        let combined_prompt = format!("Generate a 3D thumbnail image. Scene: {}. Title text: {}", prompt, title_text);
         let args = json!({
-            "prompt": prompt,
-            "title_text": title_text,
+            "prompt": combined_prompt,
+            "duration": 0,
             "style": style,
+            "reference_image_url": "",
         });
-        self.render_async("blender_generate_thumbnail", args, "image_url", "png")
+        self.render_async("blender_execute_bpy_script", args, "image_url", "png")
             .await
     }
 
@@ -149,13 +151,14 @@ impl BlenderMCPClient {
         duration: f64,
         style: &str,
     ) -> Result<String, String> {
+        let combined_prompt = format!("Generate an animated title card. Title: {}. Subtitle: {}. Style: {}", title, subtitle, style);
         let args = json!({
-            "title": title,
-            "subtitle": subtitle,
+            "prompt": combined_prompt,
             "duration": duration,
             "style": style,
+            "reference_image_url": "",
         });
-        self.render_async("blender_generate_title_card", args, "video_url", "mp4")
+        self.render_async("blender_execute_bpy_script", args, "video_url", "mp4")
             .await
     }
 
@@ -167,13 +170,14 @@ impl BlenderMCPClient {
         title: &str,
         duration: f64,
     ) -> Result<String, String> {
+        let combined_prompt = format!("Generate a data visualization chart. Type: {}. Title: {}. Data: {}", chart_type, title, data_json);
         let args = json!({
-            "data_json": data_json,
-            "chart_type": chart_type,
-            "title": title,
+            "prompt": combined_prompt,
             "duration": duration,
+            "style": "default",
+            "reference_image_url": "",
         });
-        self.render_async("blender_generate_data_viz", args, "video_url", "mp4")
+        self.render_async("blender_execute_bpy_script", args, "video_url", "mp4")
             .await
     }
 
@@ -185,17 +189,18 @@ impl BlenderMCPClient {
         style: &str,
         duration: f64,
     ) -> Result<String, String> {
+        let combined_prompt = format!("Generate an animated lower-third overlay. Name: {}. Subtitle: {}. Style: {}", name_text, subtitle_text, style);
         let args = json!({
-            "name_text": name_text,
-            "subtitle_text": subtitle_text,
-            "style": style,
+            "prompt": combined_prompt,
             "duration": duration,
+            "style": style,
+            "reference_image_url": "",
         });
-        self.render_async("blender_generate_lower_third", args, "video_url", "mp4")
+        self.render_async("blender_execute_bpy_script", args, "video_url", "mp4")
             .await
     }
 
-    /// Generate a LaTeX/Manim equation animation clip. Returns local path inside outputs/.
+    /// Generate a LaTeX equation animation clip. Returns local path inside outputs/.
     pub async fn generate_latex(
         &self,
         latex_expression: &str,
@@ -203,13 +208,14 @@ impl BlenderMCPClient {
         duration: f64,
         background_style: &str,
     ) -> Result<String, String> {
+        let combined_prompt = format!("Generate a LaTeX equation animation. Expression: {}. Animation type: {}. Background style: {}", latex_expression, animation_type, background_style);
         let args = json!({
-            "latex_expression": latex_expression,
-            "animation_type": animation_type,
+            "prompt": combined_prompt,
             "duration": duration,
-            "background_style": background_style,
+            "style": background_style,
+            "reference_image_url": "",
         });
-        self.render_async("blender_generate_latex", args, "video_url", "mp4")
+        self.render_async("blender_execute_bpy_script", args, "video_url", "mp4")
             .await
     }
 
@@ -225,27 +231,28 @@ impl BlenderMCPClient {
         background_color: Option<&[f64; 3]>,
         accent_color: Option<&[f64; 3]>,
     ) -> Result<String, String> {
-        let mut args = json!({
-            "device": device,
-            "animation": animation,
-            "duration": duration,
-            "screenshot_url": screenshot_url,
-        });
+        let mut desc = format!("Generate a UI mockup on a {}. Animation: {}. Screenshot URL: {}", device, animation, screenshot_url);
         if let Some(spec) = screenshot_spec {
-            args["screenshot_spec"] = spec.clone();
+            desc.push_str(&format!(". Screenshot spec: {}", spec));
         }
-        if let Some(bg) = background_color {
-            args["background_color"] = json!(bg);
+        if let Some(_bg) = background_color {
+            desc.push_str(". With custom background color");
         }
-        if let Some(acc) = accent_color {
-            args["accent_color"] = json!(acc);
+        if let Some(_acc) = accent_color {
+            desc.push_str(". With custom accent color");
         }
         let (url_key, ext) = if animation == "static" {
             ("image_url", "png")
         } else {
             ("video_url", "mp4")
         };
-        self.render_async("blender_generate_ui_mockup", args, url_key, ext)
+        let args = json!({
+            "prompt": desc,
+            "duration": duration,
+            "style": "default",
+            "reference_image_url": screenshot_url,
+        });
+        self.render_async("blender_execute_bpy_script", args, url_key, ext)
             .await
     }
 
@@ -258,13 +265,14 @@ impl BlenderMCPClient {
         background_style: &str,
         composite_over_scene: bool,
     ) -> Result<String, String> {
+        let combined_prompt = format!("Generate a Manim animation. Description: {}. Background style: {}. Composite over scene: {}", description, background_style, composite_over_scene);
         let args = json!({
-            "description": description,
+            "prompt": combined_prompt,
             "duration": duration,
-            "background_style": background_style,
-            "composite_over_scene": composite_over_scene,
+            "style": background_style,
+            "reference_image_url": "",
         });
-        self.render_async("blender_generate_animation", args, "video_url", "mp4")
+        self.render_async("blender_execute_bpy_script", args, "video_url", "mp4")
             .await
     }
 
@@ -279,15 +287,14 @@ impl BlenderMCPClient {
         duration: f64,
         colors: serde_json::Value,
     ) -> Result<String, String> {
+        let combined_prompt = format!("Generate a {} chart. Title: {}. Data: {}. Labels: {}. Colors: {}", chart_type, title, data, labels, colors);
         let args = json!({
-            "chart_type": chart_type,
-            "title":      title,
-            "data":       data,
-            "labels":     labels,
-            "duration":   duration,
-            "colors":     colors,
+            "prompt": combined_prompt,
+            "duration": duration,
+            "style": "default",
+            "reference_image_url": "",
         });
-        self.render_async("blender_generate_chart", args, "video_url", "mp4")
+        self.render_async("blender_execute_bpy_script", args, "video_url", "mp4")
             .await
     }
 
@@ -341,7 +348,7 @@ impl BlenderMCPClient {
     /// Use this for all renders — it is safe for any duration because it never
     /// holds an HTTP connection open during the actual render.
     ///
-    /// * `tool`    — e.g. "blender_generate_scene"
+    /// * `tool`    — e.g. "blender_execute_bpy_script"
     /// * `args`    — tool-specific args JSON
     /// * `url_key` — field in the result object that holds the file URL
     ///               ("video_url" for MP4 tools, "image_url" for thumbnail)
@@ -357,8 +364,7 @@ impl BlenderMCPClient {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        let prefix = tool.replace("blender_generate_", "blender_");
-        let filename = format!("{prefix}_{ts}.{ext}");
+        let filename = format!("{tool}_{ts}.{ext}");
 
         let job_id = self.submit_job(tool, args).await?;
 
