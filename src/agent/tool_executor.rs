@@ -1685,6 +1685,8 @@ pub async fn execute_tool_claude(name: &str, args: &Value) -> String {
         "cinematic_grade" => execute_cinematic_grade_claude(args),
         "create_gif_workflow" => execute_create_gif_workflow_claude(args),
         "talking_head_cleanup" => execute_talking_head_cleanup_claude(args),
+        "export_video" => execute_export_video_claude(args),
+        "blender_generate_scene_type" => execute_blender_generate_scene_type_claude(args).await,
 
         _ => format!("❌ Unknown tool: {}", name),
     }
@@ -2101,6 +2103,8 @@ pub async fn execute_tool_gemini(name: &str, args: &HashMap<String, Value>) -> S
         "cinematic_grade" => execute_cinematic_grade_gemini(args),
         "create_gif_workflow" => execute_create_gif_workflow_gemini(args),
         "talking_head_cleanup" => execute_talking_head_cleanup_gemini(args),
+        "export_video" => execute_export_video_gemini(args),
+        "blender_generate_scene_type" => execute_blender_generate_scene_type_gemini(args).await,
 
         _ => format!("❌ Unknown tool: {}", name),
     }
@@ -19604,5 +19608,105 @@ async fn execute_apply_audio_ffmpeg_filter_gemini(args: &HashMap<String, Value>)
     match crate::visual::apply_audio_ffmpeg_filter(input, output, filter_name, &param_refs) {
         Ok(s) => s,
         Err(e) => format!("❌ apply_audio_ffmpeg_filter failed: {}", e),
+    }
+}
+
+fn execute_export_video_claude(args: &Value) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let codec = args.get("codec").and_then(|v| v.as_str()).unwrap_or("");
+    if input.is_empty() || output.is_empty() || codec.is_empty() {
+        return "❌ Error: input_file, output_file, and codec are required".to_string();
+    }
+    let params: Vec<(String, String)> = match args.get("params") {
+        Some(Value::Object(map)) => {
+            map.iter().map(|(k, v)| (k.clone(), v.to_string())).collect()
+        }
+        _ => vec![],
+    };
+    let mut command = std::process::Command::new("ffmpeg");
+    command.arg("-i").arg(input);
+    for (k, v) in &params {
+        command.arg(format!("-{k}")).arg(v);
+    }
+    command.arg("-c:v").arg(&codec).arg("-y").arg(output);
+    match crate::utils::ffmpeg_utils::execute_ffmpeg_command(command) {
+        Ok(s) => s,
+        Err(e) => format!("❌ export_video failed: {}", e),
+    }
+}
+
+fn execute_export_video_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let codec = args.get("codec").and_then(|v| v.as_str()).unwrap_or("");
+    if input.is_empty() || output.is_empty() || codec.is_empty() {
+        return "❌ Error: input_file, output_file, and codec are required".to_string();
+    }
+    let params: Vec<(String, String)> = match args.get("params") {
+        Some(Value::Object(map)) => {
+            map.iter().map(|(k, v)| (k.clone(), v.to_string())).collect()
+        }
+        _ => vec![],
+    };
+    let mut command = std::process::Command::new("ffmpeg");
+    command.arg("-i").arg(input);
+    for (k, v) in &params {
+        command.arg(format!("-{k}")).arg(v);
+    }
+    command.arg("-c:v").arg(&codec).arg("-y").arg(output);
+    match crate::utils::ffmpeg_utils::execute_ffmpeg_command(command) {
+        Ok(s) => s,
+        Err(e) => format!("❌ export_video failed: {}", e),
+    }
+}
+
+async fn execute_blender_generate_scene_type_claude(args: &Value) -> String {
+    let prompt = args.get("prompt").and_then(|v| v.as_str()).unwrap_or("");
+    if prompt.is_empty() {
+        return "❌ Error: prompt is required".to_string();
+    }
+    let params = args.get("params");
+    let style = params.and_then(|p| p.get("style")).and_then(|v| v.as_str()).unwrap_or("cinematic");
+    let duration = params.and_then(|p| p.get("duration")).and_then(|v| v.as_f64()).unwrap_or(10.0);
+    let reference_image_url = params.and_then(|p| p.get("reference_image_url")).and_then(|v| v.as_str()).unwrap_or("");
+
+    let client = crate::blender_mcp_client::BlenderMCPClient::new();
+    match client.call_tool(
+        "blender_execute_bpy_script",
+        &serde_json::json!({
+            "prompt": prompt,
+            "style": style,
+            "duration": duration,
+            "reference_image_url": reference_image_url,
+        }),
+    ).await {
+        Ok(result) => result,
+        Err(e) => format!("❌ blender_generate_scene_type failed: {}", e),
+    }
+}
+
+async fn execute_blender_generate_scene_type_gemini(args: &HashMap<String, Value>) -> String {
+    let prompt = args.get("prompt").and_then(|v| v.as_str()).unwrap_or("");
+    if prompt.is_empty() {
+        return "❌ Error: prompt is required".to_string();
+    }
+    let params = args.get("params");
+    let style = params.and_then(|p| p.get("style")).and_then(|v| v.as_str()).unwrap_or("cinematic");
+    let duration = params.and_then(|p| p.get("duration")).and_then(|v| v.as_f64()).unwrap_or(10.0);
+    let reference_image_url = params.and_then(|p| p.get("reference_image_url")).and_then(|v| v.as_str()).unwrap_or("");
+
+    let client = crate::blender_mcp_client::BlenderMCPClient::new();
+    match client.call_tool(
+        "blender_execute_bpy_script",
+        &serde_json::json!({
+            "prompt": prompt,
+            "style": style,
+            "duration": duration,
+            "reference_image_url": reference_image_url,
+        }),
+    ).await {
+        Ok(result) => result,
+        Err(e) => format!("❌ blender_generate_scene_type failed: {}", e),
     }
 }

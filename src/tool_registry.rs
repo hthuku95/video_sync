@@ -123,48 +123,97 @@ impl ToolRegistry {
         "apply_xfade_transition", "apply_maskedmerge",
     ];
 
-    pub fn gemini_tools_for_profile(profile: AgentExecutionProfile) -> Vec<FunctionDeclaration> {
-        let mut tools: Vec<FunctionDeclaration> = Self::tools_for_profile(profile)
+    /// Tool name prefixes whose individual variants are consolidated into parameterized tools.
+    const CONSOLIDATED_PREFIXES: &'static [&'static str] = &[
+        "blender_generate_",
+        "encode_",
+        "detect_",
+        "measure_",
+        "compare_",
+        "extract_",
+        "apply_",
+    ];
+
+    fn _is_consolidated(tool_name: &str) -> bool {
+        // Keep these specific consolidated tools, filter out individual variants
+        let keep = [
+            "blender_generate_scene_type",
+            "export_video",
+            "analyze_video",
+            "extract_audio",
+            "extract_frames",
+            "apply_filter", "apply_filter_chain", "apply_audio_effect",
+            "apply_lut", "apply_lut3d", "apply_lut_rgb", "apply_lut_yuv",
+            "apply_xfade_transition", "apply_maskedmerge",
+            "apply_ffmpeg_filter", "apply_audio_ffmpeg_filter",
+        ];
+        if keep.contains(&tool_name) {
+            return false; // don't filter out these consolidated tools
+        }
+        for prefix in Self::CONSOLIDATED_PREFIXES {
+            if tool_name.starts_with(prefix) {
+                return true; // filter out individual wrappers under these prefixes
+            }
+        }
+        false // keep everything else
+    }
+
+    fn _filter_tools(tools: Vec<FunctionDeclaration>) -> Vec<FunctionDeclaration> {
+        let mut filtered: Vec<FunctionDeclaration> = tools
             .into_iter()
-            .map(|tool| tool.declaration)
-            .filter(|t| {
-                // Keep tools that don't start with apply_, OR are in the keep list
-                !t.name.starts_with("apply_")
-                    || Self::KEEP_APPLY_TOOLS.contains(&t.name.as_str())
-            })
+            .filter(|t| !Self::_is_consolidated(&t.name))
             .collect();
 
         // Add consolidated parameterized tools
-        tools.push(crate::gemini_client::GeminiClient::apply_ffmpeg_filter_tool());
-        tools.push(crate::gemini_client::GeminiClient::apply_audio_ffmpeg_filter_tool());
+        filtered.push(crate::gemini_client::GeminiClient::apply_ffmpeg_filter_tool());
+        filtered.push(crate::gemini_client::GeminiClient::apply_audio_ffmpeg_filter_tool());
+        filtered.push(crate::gemini_client::GeminiClient::blender_generate_scene_type_tool());
+        filtered.push(crate::gemini_client::GeminiClient::export_video_tool());
 
-        tools
+        filtered
     }
 
-    pub fn claude_tools_for_profile(profile: AgentExecutionProfile) -> Vec<ClaudeTool> {
-        let tools: Vec<FunctionDeclaration> = Self::tools_for_profile(profile)
+    fn _filter_claude_tools(tools: Vec<FunctionDeclaration>) -> Vec<ClaudeTool> {
+        let filtered: Vec<FunctionDeclaration> = tools
             .into_iter()
-            .map(|tool| tool.declaration)
-            .filter(|t| {
-                !t.name.starts_with("apply_")
-                    || Self::KEEP_APPLY_TOOLS.contains(&t.name.as_str())
-            })
+            .filter(|t| !Self::_is_consolidated(&t.name))
             .collect();
 
-        let mut claude_tools: Vec<ClaudeTool> = tools
+        let mut claude_tools: Vec<ClaudeTool> = filtered
             .into_iter()
             .map(gemini_to_claude_tool)
             .collect();
 
-        // Add consolidated parameterized tools
         claude_tools.push(gemini_to_claude_tool(
             crate::gemini_client::GeminiClient::apply_ffmpeg_filter_tool()
         ));
         claude_tools.push(gemini_to_claude_tool(
             crate::gemini_client::GeminiClient::apply_audio_ffmpeg_filter_tool()
         ));
+        claude_tools.push(gemini_to_claude_tool(
+            crate::gemini_client::GeminiClient::blender_generate_scene_type_tool()
+        ));
+        claude_tools.push(gemini_to_claude_tool(
+            crate::gemini_client::GeminiClient::export_video_tool()
+        ));
 
         claude_tools
+    }
+
+    pub fn gemini_tools_for_profile(profile: AgentExecutionProfile) -> Vec<FunctionDeclaration> {
+        let tools: Vec<FunctionDeclaration> = Self::tools_for_profile(profile)
+            .into_iter()
+            .map(|tool| tool.declaration)
+            .collect();
+        Self::_filter_tools(tools)
+    }
+
+    pub fn claude_tools_for_profile(profile: AgentExecutionProfile) -> Vec<ClaudeTool> {
+        let tools: Vec<FunctionDeclaration> = Self::tools_for_profile(profile)
+            .into_iter()
+            .map(|tool| tool.declaration)
+            .collect();
+        Self::_filter_claude_tools(tools)
     }
 
     pub fn filter_gemini_tools_for_profile(

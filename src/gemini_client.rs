@@ -1061,6 +1061,100 @@ impl GeminiClient {
         }
     }
 
+    /// Consolidated blender_generate_scene_type — replaces 28 individual blender_generate_* tools.
+    pub fn blender_generate_scene_type_tool() -> FunctionDeclaration {
+        FunctionDeclaration {
+            name: "blender_generate_scene_type".to_string(),
+            description: "Generate ANY 3D Blender scene or animation via LLM-generated bpy Python code. \
+                This single tool replaces blender_generate_scene, blender_generate_thumbnail, \
+                blender_generate_title_card, blender_generate_logo_reveal, blender_generate_countdown, \
+                blender_generate_abstract_bg, blender_generate_particle_confetti, \
+                blender_generate_rigid_body_drop, blender_generate_camera_path, \
+                blender_generate_toon_scene, blender_generate_grease_pencil_reveal, \
+                blender_generate_geometry_scatter, blender_generate_text_animation, \
+                blender_generate_vector_field, blender_generate_matrix_transform, \
+                blender_generate_polar_graph, blender_generate_geometry_proof, \
+                blender_generate_ui_mockup, blender_generate_latex, \
+                blender_generate_animation, blender_generate_chart, \
+                blender_generate_flowchart, blender_generate_3d_math, \
+                blender_generate_code_animation, blender_generate_timeline, \
+                blender_generate_network_graph, blender_generate_data_viz, \
+                blender_generate_lower_third, and 25+ other individual tools. \
+                The LLM writes Blender Python code from scratch for any scene type. \
+                Pass the scene description in `prompt`, visual style in `params.style`, \
+                and reference images in `params.reference_image_url`. \
+                Covers 100% of Blender's bpy API: geometry nodes, physics, materials, \
+                cameras, lighting, particles, Grease Pencil, and more.".to_string(),
+            parameters: Parameters {
+                param_type: "object".to_string(),
+                properties: {
+                    let mut props = std::collections::HashMap::new();
+                    props.insert("prompt".to_string(), PropertyDefinition {
+                        prop_type: "string".to_string(),
+                        description: "Natural language description of the scene. Be specific about objects, materials, lighting, camera angles, animations, and mood.".to_string(),
+                        items: None,
+                    });
+                    props.insert("params".to_string(), PropertyDefinition {
+                        prop_type: "object".to_string(),
+                        description: "JSON object with optional keys: style (cinematic|minimal|energetic|calm|neon|toon), reference_image_url (URL), duration (float, seconds)".to_string(),
+                        items: None,
+                    });
+                    props.insert("output_type".to_string(), PropertyDefinition {
+                        prop_type: "string".to_string(),
+                        description: "\"video\" (MP4, default) | \"image\" (PNG thumbnail)".to_string(),
+                        items: None,
+                    });
+                    props
+                },
+                required: vec!["prompt".to_string()],
+            },
+        }
+    }
+
+    /// Consolidated export_video — replaces 12 individual encode_* tools.
+    pub fn export_video_tool() -> FunctionDeclaration {
+        FunctionDeclaration {
+            name: "export_video".to_string(),
+            description: "Export/transcode a video to any codec and format. \
+                Replaces encode_h264, encode_hevc, encode_vp9, encode_av1, encode_prores, \
+                encode_dnxhd, encode_nvenc, encode_vaapi, encode_qsv, encode_gif, \
+                encode_webm, encode_hdr10, and 10+ other individual encode tools. \
+                Pass the codec name in `codec` and encoding parameters in `params`. \
+                Examples: export_video(input=\"video.mp4\", output=\"out.mp4\", \
+                codec=\"libx264\", params={\"crf\": 23, \"preset\": \"medium\"}). \
+                Common codecs: libx264, libx265, libvpx-vp9, libaom-av1, prores_ks, \
+                dnxhd, h264_nvenc, h264_vaapi, h264_qsv, gif, webm.".to_string(),
+            parameters: Parameters {
+                param_type: "object".to_string(),
+                properties: {
+                    let mut props = std::collections::HashMap::new();
+                    props.insert("input_file".to_string(), PropertyDefinition {
+                        prop_type: "string".to_string(),
+                        description: "Path to the input video file".to_string(),
+                        items: None,
+                    });
+                    props.insert("output_file".to_string(), PropertyDefinition {
+                        prop_type: "string".to_string(),
+                        description: "Path to save the encoded output".to_string(),
+                        items: None,
+                    });
+                    props.insert("codec".to_string(), PropertyDefinition {
+                        prop_type: "string".to_string(),
+                        description: "FFmpeg encoder name: libx264, libx265, libvpx-vp9, libaom-av1, prores_ks, dnxhd, h264_nvenc, h264_vaapi, h264_qsv, gif".to_string(),
+                        items: None,
+                    });
+                    props.insert("params".to_string(), PropertyDefinition {
+                        prop_type: "object".to_string(),
+                        description: "Encoder-specific parameters as key-value pairs. Example: {\"crf\": 23, \"preset\": \"medium\", \"pix_fmt\": \"yuv420p\"}".to_string(),
+                        items: None,
+                    });
+                    props
+                },
+                required: vec!["input_file".to_string(), "output_file".to_string(), "codec".to_string()],
+            },
+        }
+    }
+
     pub fn create_video_editing_tools() -> Vec<FunctionDeclaration> {
         vec![
             FunctionDeclaration {
