@@ -450,7 +450,7 @@ impl AgenticServicePipeline {
 - Generate actual media files on disk, not just text
 - Save output to the specified directory
 - Call submit_final_answer ONLY after rendering AND reviewing
-- The 376 available tools are listed in the API — pick the right ones for each step"#;
+- The available editing, animation, and generation tools are listed in the API — pick the right ones for each step"#;
 
         let service_specific = match service_type {
             ServiceType::LandingPage => Self::landing_page_prompt(input),
@@ -477,7 +477,7 @@ Style: {style}
 
 ## WHAT TO DO
 1. First understand the product by reading the website
-2. Plan your creative approach — you have 320+ tools available, use whatever combination you think will produce the best result
+2. Plan your creative approach — you have editing, animation, voiceover, and review tools available. Use whatever combination you think will produce the best result
 3. Generate any reference images you need
 4. Produce the video — you decide which tools to use and how to combine them
 5. Review your output — check quality, fix issues, iterate
@@ -506,7 +506,7 @@ Style: {style}
 ## WHAT TO DO
 1. Understand the product (read the website if URL provided, or use the brief)
 2. Generate any reference images you might need
-3. Plan and produce the mockup video using whatever combination of tools you think works best — device mockups, animations, text reveals, any of the 320+ tools
+3. Plan and produce the mockup video using whatever combination of tools you think works best — device mockups, animations, text reveals, and more
 4. Add audio if it improves the result
 5. Review your output and iterate until it's solid
 6. submit_final_answer
@@ -587,7 +587,7 @@ Brief: {brief}
 ## WHAT TO DO
 1. If a video URL is provided, analyze it to understand the content and find the best moments
 2. Extract clips — you decide what length, what moments, what style
-3. Enhance each clip however you see fit: captions, color grading, transitions, overlays, effects, speed adjustments, stabilization, sound design — you have 320+ tools
+3. Enhance each clip however you see fit: captions, color grading, transitions, overlays, effects, speed adjustments, stabilization, sound design — the full editing and effects toolset is at your disposal
 4. Each clip should feel complete and professional
 5. Review each clip, iterate on any that fall short
 6. submit_final_answer with all clip paths
@@ -640,7 +640,7 @@ This is a multi-format deliverable. Produce ALL of:
 2. A THUMBNAIL — optimized for click-through on the platform
 3. AUDIO highlights or a standalone audio version
 
-You have 320+ tools at your disposal. Use them creatively. Each output should be independently reviewed before you finalize.
+The full toolset — editing, animation, voiceover, review — is at your disposal. Use them creatively. Each output should be independently reviewed before you finalize.
 
 OUTPUT to: {output_dir}/
 Save main_video.mp4, thumbnail.png, audio.mp3"#,

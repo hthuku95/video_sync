@@ -594,7 +594,7 @@ impl StatefulGeminiAgent {
 When the user asks you to CREATE, GENERATE, PRODUCE, MAKE, BUILD, RENDER, or EDIT media (video, thumbnail, clip, demo, image, ad, animation, scene, sample, narration), you MUST call the appropriate generation tool on your very first response. Do NOT respond with text saying what you will do. Call the tool NOW.
 
 ## Your Full Tool Catalog
-You have access to ALL tools defined in the `tools` array of the request. There are 320+ tools across these integrations:
+You have access to ALL tools defined in the `tools` array. Use them to edit, generate, and produce professional video content of any length.
 - **Media generation**: text-to-image, text-to-video, text-to-audio, thumbnail creation, script writing
 - **Video editing**: trim, merge, split, crop, rotate, resize, stabilize, speed change, transitions
 - **Visual effects**: text overlays, filters, color adjustment, picture-in-picture, chroma key, split screen, subtitles

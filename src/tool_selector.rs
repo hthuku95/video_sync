@@ -1574,13 +1574,13 @@ impl ToolSelector {
         // No arbitrary cap — pass all matched tools to the AI.
         // Claude and Gemini comfortably handle 200+ tool schemas; the old
         // 20-tool limit was written when we had ~35 tools and would silently
-        // hide 280+ tools from the model with the current 320-tool suite.
+        // hide individual tool variants from the model, exposing only consolidated tools.
         let mut tool_list: Vec<String> = tools.into_iter().collect();
         tool_list.sort(); // Sort for consistency
 
         // Catch-all: if nothing matched beyond the always-included categories,
         // return a curated set of the ~25 most universally-needed tools instead of
-        // all 320. Sending 320 tools to Gemini hits the "too many schema states"
+        // Sending all individual tool variants to Gemini hits the "too many schema states"
         // INVALID_ARGUMENT error (see https://github.com/googleapis/python-genai/issues/660).
         // The general set covers 90%+ of real user requests without schema overflow.
         if tool_list.len()
@@ -1727,7 +1727,7 @@ mod tests {
     #[test]
     fn test_all_tools() {
         let tools = ToolSelector::all_tools();
-        assert!(tools.len() > 300); // Should have all 320+ tools
+        assert!(tools.len() > 50); // Should have all consolidated + kept tools
     }
 
     #[test]

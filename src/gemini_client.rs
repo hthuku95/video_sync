@@ -947,41 +947,7 @@ impl GeminiClient {
     pub fn apply_ffmpeg_filter_tool() -> FunctionDeclaration {
         FunctionDeclaration {
             name: "apply_ffmpeg_filter".to_string(),
-            description: "Apply any FFmpeg video filter by its filter name. Replaces all individual \
-                apply_gaussian_blur, apply_box_blur, apply_smart_blur, apply_color_key, apply_monochrome, \
-                apply_colormatrix, apply_edgedetect, apply_fade_video, and 60+ other one-to-one FFmpeg \
-                filter wrappers. Use this ONE tool instead. Pass the exact FFmpeg filter name in \
-                `filter_name` and its parameters as key-value pairs in `params`. \
-                Example: apply_ffmpeg_filter(input=\"video.mp4\", output=\"blurred.mp4\", \
-                filter_name=\"gblur\", params={\"sigma\": 3.0, \"steps\": 1, \"planes\": 15}). \
-                See FFmpeg documentation for available filter names and their parameters. \
-                Common filters: gblur (gaussian blur), avgblur (box blur), smartblur, \
-                colorbalance, colorchannelmixer, colorkey, edgedetect, fade, negate, \
-                hflip, vflip, scale, crop, rotate, drawtext, lut, curves, eq, \
-                unsharp, nlmeans (denoise), hqdn3d (denoise), estdif (deinterlace), \
-                yadif (deinterlace), fieldmatch, pullup, bwdif, w3fdif, \
-                atadenoise, vaguedenoiser, fftdnoiz, spp, pp, mplayer2, \
-                sab, smartblur, gblur, avgblur, boxblur, denoise_va, nlmeans, \
-                hqdn3d, owdenoise, dctdnoiz, bilateral, unsharp, uspp, \
-                lagfun, perspective, lenscorrection, cas, chromashift, \
-                prewitt, roberts, sobel, kirsch, dilation, erosion, \
-                deflate, inflate, convolution, edgedetect, fre0r, \
-                colorlevels, rgblevels, gblur, avgblur, boxblur, \
-                pseudocolor, colorhold, shuffleplanes, swaprect, \
-                framestep, fillborders, chromanr, weave, interlace, \
-                fieldorder, hsvkey, lutrgb, lutyuv, freezeframes, \
-                random, setdar, setsar, stereo3d, telecine, pullup, \
-                yadif, bwdif, w3fdif, estdif, kerndeint, \
-                mcdeint, nededeint, ivtc, tinterlace, \
-                vstack, hstack, xstack, crop, pad, scale, \
-                rotate, hflip, vflip, transpose, drawbox, \
-                drawgrid, drawtext, subtitles, \
-                fade, negate, colorize, fill, \
-                amplify, threshold, maskedclamp, \
-                histeq, histogram, vectorscope, waveform, \
-                graticule, datascope, pixscope, oscilloscope, \
-                showinfo, showwaves, showspectrum, \
-                volume, loudnorm, dynaudnorm, silenceremove".to_string(),
+            description: "A single parameterized tool for ALL video/audio filter operations. Pass the exact FFmpeg filter name (e.g. 'gblur', 'colorkey', 'fade', 'edgedetect', 'hflip', 'negate', 'eq', 'curves', 'lut', 'colorbalance', 'unsharp', 'nlmeans', 'hqdn3d') plus filter-specific parameters as a JSON object. Covers hundreds of FFmpeg filters: blur/sharpen, color grading, keying, transforms, denoise, deinterlace, scaling, cropping, rotation, audio filters, and more.".to_string(),
             parameters: Parameters {
                 param_type: "object".to_string(),
                 properties: {
@@ -1017,19 +983,7 @@ impl GeminiClient {
     pub fn apply_audio_ffmpeg_filter_tool() -> FunctionDeclaration {
         FunctionDeclaration {
             name: "apply_audio_ffmpeg_filter".to_string(),
-            description: "Apply any FFmpeg audio filter by its filter name. Replaces all individual \
-                audio effect wrappers (apply_echo, apply_chorus, apply_highshelf, apply_lowshelf, etc.) \
-                with one unified tool. Pass the exact FFmpeg audio filter name in `filter_name` and \
-                its parameters as key-value pairs in `params`. \
-                Example: apply_audio_ffmpeg_filter(input=\"audio.mp3\", output=\"eq.mp3\", \
-                filter_name=\"equalizer\", params={\"frequency\": 1000, \"width\": 200, \"gain\": 3}). \
-                Common audio filters: volume, equalizer, bass, treble, bandpass, bandreject, \
-                lowshelf, highshelf, allpass, aecho, chorus, flanger, phaser, tremolo, vibrato, \
-                dynaudnorm, loudnorm, silenceremove, afftdn, anlmdn, arnndn, \
-                acompressor, alimiter, adynamics, aexpander, agate, \
-                adelay, apad, atrim, asetrate, atempo, \
-                stereowiden, surround, extrastereo, earwax, \
-                crossfeed, haas, aemphasis, afir, anlms".to_string(),
+            description: "A single parameterized tool for ALL audio filter and audio processing operations. Pass the exact FFmpeg audio filter name (e.g. 'volume', 'equalizer', 'bass', 'treble', 'aecho', 'chorus', 'dynaudnorm', 'loudnorm', 'afftdn', 'acompressor', 'silenceremove', 'atempo', 'asetrate') plus filter-specific parameters as a JSON object. Covers all FFmpeg audio filters: volume/level adjustment, EQ and tone shaping, dynamics processing (compressor/limiter/gate), noise reduction, time/pitch stretching, echo/reverb/modulation effects, audio normalization, silence detection/removal, channel mixing, and delay/padding/trimming.".to_string(),
             parameters: Parameters {
                 param_type: "object".to_string(),
                 properties: {
@@ -1065,21 +1019,7 @@ impl GeminiClient {
     pub fn blender_generate_scene_type_tool() -> FunctionDeclaration {
         FunctionDeclaration {
             name: "blender_generate_scene_type".to_string(),
-            description: "Generate ANY 3D Blender scene, thumbnail, title card, lower-third, \
-                or UI device mockup via LLM-generated bpy Python code. \
-                This single tool replaces blender_generate_scene, blender_generate_thumbnail, \
-                blender_generate_title_card, blender_generate_logo_reveal, blender_generate_countdown, \
-                blender_generate_abstract_bg, blender_generate_particle_confetti, \
-                blender_generate_rigid_body_drop, blender_generate_camera_path, \
-                blender_generate_toon_scene, blender_generate_grease_pencil_reveal, \
-                blender_generate_geometry_scatter, blender_generate_ui_mockup, \
-                blender_generate_lower_third, and 18+ other Blender template tools. \
-                For Manim animations (math, charts, code, diagrams, etc.) use manim_execute_script instead. \
-                The LLM writes Blender Python code from scratch for any scene type. \
-                Pass the scene description in `prompt`, visual style in `params.style`, \
-                and reference images in `params.reference_image_url`. \
-                Covers 100% of Blender's bpy API: geometry nodes, physics, materials, \
-                cameras, lighting, particles, Grease Pencil, and more.".to_string(),
+            description: "Generate 3D/2D animated scenes of any length using natural language. Use for: product mockups and device UI mockups, title cards and intro/outro sequences, explainer scenes and motion graphics, lower-thirds and text overlays, abstract backgrounds and particle effects, thumbnail images, logos and reveals, cinematic B-roll. Describe exactly what you want in the prompt and pass optional style/duration/reference_image_url params.".to_string(),
             parameters: Parameters {
                 param_type: "object".to_string(),
                 properties: {
@@ -1110,15 +1050,7 @@ impl GeminiClient {
     pub fn export_video_tool() -> FunctionDeclaration {
         FunctionDeclaration {
             name: "export_video".to_string(),
-            description: "Export/transcode a video to any codec and format. \
-                Replaces encode_h264, encode_hevc, encode_vp9, encode_av1, encode_prores, \
-                encode_dnxhd, encode_nvenc, encode_vaapi, encode_qsv, encode_gif, \
-                encode_webm, encode_hdr10, and 10+ other individual encode tools. \
-                Pass the codec name in `codec` and encoding parameters in `params`. \
-                Examples: export_video(input=\"video.mp4\", output=\"out.mp4\", \
-                codec=\"libx264\", params={\"crf\": 23, \"preset\": \"medium\"}). \
-                Common codecs: libx264, libx265, libvpx-vp9, libaom-av1, prores_ks, \
-                dnxhd, h264_nvenc, h264_vaapi, h264_qsv, gif, webm.".to_string(),
+            description: "Export/re-encode a video to the desired format, codec, resolution, and quality. Use this instead of individual encode tools. Supports H.264, H.265/HEVC, VP9, AV1, ProRes, DNxHD, GIF, WebM, and more. Configurable: codec, bitrate, resolution, framerate, pixel format, color range, HDR metadata, hardware acceleration (NVENC/VAAPI/QSV).".to_string(),
             parameters: Parameters {
                 param_type: "object".to_string(),
                 properties: {
@@ -1154,19 +1086,7 @@ impl GeminiClient {
     pub fn manim_execute_script_tool() -> FunctionDeclaration {
         FunctionDeclaration {
             name: "manim_execute_script".to_string(),
-            description: "Generate ANY Manim animation from a natural language description. \
-                This single tool replaces blender_generate_animation, blender_generate_latex, \
-                blender_generate_chart, blender_generate_flowchart, blender_generate_3d_math, \
-                blender_generate_code_animation, blender_generate_timeline, \
-                blender_generate_network_graph, blender_generate_text_animation, \
-                blender_generate_vector_field, blender_generate_matrix_transform, \
-                blender_generate_polar_graph, blender_generate_geometry_proof, \
-                blender_generate_data_viz, and 14+ other individual Manim tools. \
-                The LLM writes Manim Python code from scratch for any animation type. \
-                Pass the animation description in `description`, background style in `background`, \
-                and quality level in `quality`. \
-                Covers 100% of Manim's API: animations, 3D scenes, graphs, LaTeX, \
-                geometry, network graphs, timelines, code highlighting, and more.".to_string(),
+            description: "Generate animated math/science explainer visuals of any length using natural language. Use for: mathematical equation animations and LaTeX formulas, data visualizations (bar, line, pie, scatter charts), code animations and algorithm visualizations, network graphs and flowcharts, geometric proofs and vector fields, timelines and process diagrams, animated text and titles, 3D math scene rotations, matrix transformations. Pass the description, duration, background style, and quality settings.".to_string(),
             parameters: Parameters {
                 param_type: "object".to_string(),
                 properties: {
@@ -1650,33 +1570,6 @@ impl GeminiClient {
                 },
             },
             FunctionDeclaration {
-                name: "extract_audio".to_string(),
-                description: "Extracts audio track from a video file".to_string(),
-                parameters: Parameters {
-                    param_type: "object".to_string(),
-                    properties: {
-                        let mut props = HashMap::new();
-                        props.insert("input_file".to_string(), PropertyDefinition {
-                            prop_type: "string".to_string(),
-                            description: "Path to the input video file".to_string(),
-                            items: None,
-                        });
-                        props.insert("output_file".to_string(), PropertyDefinition {
-                            prop_type: "string".to_string(),
-                            description: "Path to save the extracted audio".to_string(),
-                            items: None,
-                        });
-                        props.insert("format".to_string(), PropertyDefinition {
-                            prop_type: "string".to_string(),
-                            description: "Audio format (mp3, wav, aac, etc.)".to_string(),
-                            items: None,
-                        });
-                        props
-                    },
-                    required: vec!["input_file".to_string(), "output_file".to_string(), "format".to_string()],
-                },
-            },
-            FunctionDeclaration {
                 name: "add_audio".to_string(),
                 description: "Adds an audio track to a video or replaces existing audio".to_string(),
                 parameters: Parameters {
@@ -2073,38 +1966,6 @@ impl GeminiClient {
                         props
                     },
                     required: vec!["input_file".to_string(), "output_file".to_string(), "subtitle_text".to_string()],
-                },
-            },
-            FunctionDeclaration {
-                name: "extract_frames".to_string(),
-                description: "Extracts individual frames from a video as image files".to_string(),
-                parameters: Parameters {
-                    param_type: "object".to_string(),
-                    properties: {
-                        let mut props = HashMap::new();
-                        props.insert("input_file".to_string(), PropertyDefinition {
-                            prop_type: "string".to_string(),
-                            description: "Path to the input video file".to_string(),
-                            items: None,
-                        });
-                        props.insert("output_dir".to_string(), PropertyDefinition {
-                            prop_type: "string".to_string(),
-                            description: "Directory to save extracted frames".to_string(),
-                            items: None,
-                        });
-                        props.insert("frame_rate".to_string(), PropertyDefinition {
-                            prop_type: "number".to_string(),
-                            description: "Extract one frame every N seconds (default: 1)".to_string(),
-                            items: None,
-                        });
-                        props.insert("format".to_string(), PropertyDefinition {
-                            prop_type: "string".to_string(),
-                            description: "Image format for frames (png, jpg, etc.)".to_string(),
-                            items: None,
-                        });
-                        props
-                    },
-                    required: vec!["input_file".to_string(), "output_dir".to_string()],
                 },
             },
             FunctionDeclaration {
@@ -3737,48 +3598,6 @@ impl GeminiClient {
             // BATCH 7 — Media Analysis Tools
             // ================================================================
             FunctionDeclaration {
-                name: "detect_scene_changes".to_string(),
-                description: "Detects scene changes in a video and returns timestamps of each cut".to_string(),
-                parameters: Parameters {
-                    param_type: "object".to_string(),
-                    properties: {
-                        let mut props = HashMap::new();
-                        props.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to the input video file".to_string(), items: None });
-                        props.insert("threshold".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Detection threshold 0–100 (default 40)".to_string(), items: None });
-                        props
-                    },
-                    required: vec!["input_file".to_string()],
-                },
-            },
-            FunctionDeclaration {
-                name: "measure_loudness".to_string(),
-                description: "Measures the audio loudness (mean and max volume) of a media file".to_string(),
-                parameters: Parameters {
-                    param_type: "object".to_string(),
-                    properties: {
-                        let mut props = HashMap::new();
-                        props.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to the video or audio file to analyze".to_string(), items: None });
-                        props
-                    },
-                    required: vec!["input_file".to_string()],
-                },
-            },
-            FunctionDeclaration {
-                name: "detect_silence".to_string(),
-                description: "Detects silent segments in audio/video and returns timestamps and durations".to_string(),
-                parameters: Parameters {
-                    param_type: "object".to_string(),
-                    properties: {
-                        let mut props = HashMap::new();
-                        props.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to the video or audio file".to_string(), items: None });
-                        props.insert("noise_tolerance_db".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Noise floor in dB (default -60)".to_string(), items: None });
-                        props.insert("min_duration_sec".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Minimum silence duration in seconds (default 0.1)".to_string(), items: None });
-                        props
-                    },
-                    required: vec!["input_file".to_string()],
-                },
-            },
-            FunctionDeclaration {
                 name: "export_custom_quality".to_string(),
                 description: "Exports a video with custom quality, resolution, and bitrate settings".to_string(),
                 parameters: Parameters {
@@ -4109,34 +3928,6 @@ impl GeminiClient {
             // BATCH 11 — Quality Metrics
             // ================================================================
             FunctionDeclaration {
-                name: "compare_ssim".to_string(),
-                description: "Computes SSIM between a reference and distorted video.".to_string(),
-                parameters: Parameters {
-                    param_type: "object".to_string(),
-                    properties: {
-                        let mut props = HashMap::new();
-                        props.insert("reference_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to the original/reference video".to_string(), items: None });
-                        props.insert("distorted_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to the processed/distorted video".to_string(), items: None });
-                        props
-                    },
-                    required: vec!["reference_file".to_string(), "distorted_file".to_string()],
-                },
-            },
-            FunctionDeclaration {
-                name: "compare_psnr".to_string(),
-                description: "Computes PSNR between a reference and distorted video.".to_string(),
-                parameters: Parameters {
-                    param_type: "object".to_string(),
-                    properties: {
-                        let mut props = HashMap::new();
-                        props.insert("reference_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to the original/reference video".to_string(), items: None });
-                        props.insert("distorted_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to the processed/distorted video".to_string(), items: None });
-                        props
-                    },
-                    required: vec!["reference_file".to_string(), "distorted_file".to_string()],
-                },
-            },
-            FunctionDeclaration {
                 name: "analyze_audio_stats".to_string(),
                 description: "Analyzes audio statistics (RMS, peak, crest factor) using the FFmpeg astats filter.".to_string(),
                 parameters: Parameters {
@@ -4206,24 +3997,6 @@ impl GeminiClient {
                         props
                     },
                     required: vec!["input_file".to_string(), "output_file".to_string(), "k1".to_string()],
-                },
-            },
-            FunctionDeclaration {
-                name: "apply_shear".to_string(),
-                description: "Applies horizontal and/or vertical shear transformation using the FFmpeg shear filter.".to_string(),
-                parameters: Parameters {
-                    param_type: "object".to_string(),
-                    properties: {
-                        let mut props = HashMap::new();
-                        props.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to the input video file".to_string(), items: None });
-                        props.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to save the output video".to_string(), items: None });
-                        props.insert("shear_x".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Horizontal shear factor (-2.0 to 2.0)".to_string(), items: None });
-                        props.insert("shear_y".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Vertical shear factor (-2.0 to 2.0)".to_string(), items: None });
-                        props.insert("fill_color".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Fill color for empty areas (default 'black')".to_string(), items: None });
-                        props.insert("interpolation".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Interpolation: nearest/bilinear/bicubic (default bilinear)".to_string(), items: None });
-                        props
-                    },
-                    required: vec!["input_file".to_string(), "output_file".to_string()],
                 },
             },
             // ================================================================
@@ -4308,24 +4081,6 @@ impl GeminiClient {
                         props.insert("width".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Stereo width (0=mono, 1=unchanged, 2=wide, range 0–4)".to_string(), items: None });
                         props.insert("balance".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Balance left/right (-1.0 to 1.0, default 0.0)".to_string(), items: None });
                         props.insert("mode".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Stereo mode: lr>lr/lr>ms/ms>lr/lr>ll/lr>rr (default lr>lr)".to_string(), items: None });
-                        props
-                    },
-                    required: vec!["input_file".to_string(), "output_file".to_string()],
-                },
-            },
-            FunctionDeclaration {
-                name: "apply_stereo_widen".to_string(),
-                description: "Widens stereo image using Haas effect via the FFmpeg stereowiden filter.".to_string(),
-                parameters: Parameters {
-                    param_type: "object".to_string(),
-                    properties: {
-                        let mut props = HashMap::new();
-                        props.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to the input file".to_string(), items: None });
-                        props.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to save the output file".to_string(), items: None });
-                        props.insert("delay_ms".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Delay in milliseconds (1–100, default 20)".to_string(), items: None });
-                        props.insert("feedback".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Feedback amount (0–0.9, default 0.3)".to_string(), items: None });
-                        props.insert("crossfeed".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Crossfeed amount (0–1, default 0.3)".to_string(), items: None });
-                        props.insert("drymix".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Dry mix amount (0–1, default 0.8)".to_string(), items: None });
                         props
                     },
                     required: vec!["input_file".to_string(), "output_file".to_string()],
@@ -4444,20 +4199,6 @@ impl GeminiClient {
                 },
             },
 
-            FunctionDeclaration {
-                name: "measure_lufs".to_string(),
-                description: "Measures integrated loudness (LUFS), loudness range (LRA), and true peak using EBU R128. Analysis only — no output file produced. YouTube target: -14 LUFS; broadcast: -23 LUFS.".to_string(),
-                parameters: Parameters {
-                    param_type: "object".to_string(),
-                    properties: {
-                        let mut props = HashMap::new();
-                        props.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to the audio or video file to analyse".to_string(), items: None });
-                        props.insert("target_lufs".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Reference target loudness (default -23 LUFS).".to_string(), items: None });
-                        props
-                    },
-                    required: vec!["input_file".to_string()],
-                },
-            },
 
             FunctionDeclaration {
                 name: "parametric_eq".to_string(),
@@ -4639,21 +4380,6 @@ impl GeminiClient {
                 },
             },
 
-            FunctionDeclaration {
-                name: "measure_vmaf".to_string(),
-                description: "Measures VMAF perceptual quality score between distorted and reference video. Analysis only.".to_string(),
-                parameters: Parameters {
-                    param_type: "object".to_string(),
-                    properties: {
-                        let mut props = HashMap::new();
-                        props.insert("distorted_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to the distorted video to evaluate".to_string(), items: None });
-                        props.insert("reference_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to the reference/original video".to_string(), items: None });
-                        props.insert("model_path".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Optional VMAF model .json path. Empty = default.".to_string(), items: None });
-                        props
-                    },
-                    required: vec!["distorted_file".to_string(), "reference_file".to_string()],
-                },
-            },
 
             FunctionDeclaration {
                 name: "shift_audio_frequency".to_string(),
@@ -4671,25 +4397,6 @@ impl GeminiClient {
                 },
             },
 
-            FunctionDeclaration {
-                name: "apply_audio_pulsator".to_string(),
-                description: "Adds a rhythmic amplitude pulsation to stereo audio (apulsator filter).".to_string(),
-                parameters: Parameters {
-                    param_type: "object".to_string(),
-                    properties: {
-                        let mut props = HashMap::new();
-                        props.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to the input audio/video file".to_string(), items: None });
-                        props.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to save the output".to_string(), items: None });
-                        props.insert("hz".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Pulse rate Hz. Default 2.".to_string(), items: None });
-                        props.insert("amount".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Modulation depth (0–1). Default 1.".to_string(), items: None });
-                        props.insert("offset_l".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Left phase offset (0–1). Default 0.".to_string(), items: None });
-                        props.insert("offset_r".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Right phase offset (0–1). Default 0.5.".to_string(), items: None });
-                        props.insert("mode".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "LFO: sine/triangle/square/sawup/sawdown. Default sine.".to_string(), items: None });
-                        props
-                    },
-                    required: vec!["input_file".to_string(), "output_file".to_string()],
-                },
-            },
 
             FunctionDeclaration {
                 name: "enhance_dialogue".to_string(),
@@ -4757,78 +4464,9 @@ impl GeminiClient {
                 },
             },
 
-            FunctionDeclaration {
-                name: "apply_crossfeed".to_string(),
-                description: "Crossfeed processing for comfortable headphone listening — reduces stereo width and adds inter-aural crosstalk.".to_string(),
-                parameters: Parameters {
-                    param_type: "object".to_string(),
-                    properties: {
-                        let mut props = HashMap::new();
-                        props.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to the input audio/video file".to_string(), items: None });
-                        props.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to save the output".to_string(), items: None });
-                        props.insert("strength".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Strength (0–1). Default 0.5.".to_string(), items: None });
-                        props.insert("slope".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Slope (0.01–1.0). Default 0.5.".to_string(), items: None });
-                        props.insert("level_in".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Input gain. Default 1.".to_string(), items: None });
-                        props.insert("level_out".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Output gain. Default 1.".to_string(), items: None });
-                        props
-                    },
-                    required: vec!["input_file".to_string(), "output_file".to_string()],
-                },
-            },
 
-            FunctionDeclaration {
-                name: "apply_extrastereo".to_string(),
-                description: "Increases stereo separation beyond the original recording (extrastereo filter).".to_string(),
-                parameters: Parameters {
-                    param_type: "object".to_string(),
-                    properties: {
-                        let mut props = HashMap::new();
-                        props.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to the input audio/video file".to_string(), items: None });
-                        props.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to save the output".to_string(), items: None });
-                        props.insert("multiplier".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Separation multiplier (-10–10). Default 2.5.".to_string(), items: None });
-                        props.insert("clipping".to_string(), PropertyDefinition { prop_type: "boolean".to_string(), description: "Enable clipping prevention. Default false.".to_string(), items: None });
-                        props
-                    },
-                    required: vec!["input_file".to_string(), "output_file".to_string()],
-                },
-            },
 
-            FunctionDeclaration {
-                name: "apply_firequalizer".to_string(),
-                description: "Linear-phase FIR equalizer with arbitrary frequency/gain entries (firequalizer).".to_string(),
-                parameters: Parameters {
-                    param_type: "object".to_string(),
-                    properties: {
-                        let mut props = HashMap::new();
-                        props.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to the input audio/video file".to_string(), items: None });
-                        props.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to save the output".to_string(), items: None });
-                        props.insert("gain_entry".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Semicolon-separated entries e.g. 'entry(0,0);entry(1000,-6);entry(4000,0)'.".to_string(), items: None });
-                        props
-                    },
-                    required: vec!["input_file".to_string(), "output_file".to_string(), "gain_entry".to_string()],
-                },
-            },
 
-            FunctionDeclaration {
-                name: "apply_biquad".to_string(),
-                description: "Biquad IIR filter with user-supplied coefficients. For advanced DSP filter design.".to_string(),
-                parameters: Parameters {
-                    param_type: "object".to_string(),
-                    properties: {
-                        let mut props = HashMap::new();
-                        props.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to the input audio/video file".to_string(), items: None });
-                        props.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to save the output".to_string(), items: None });
-                        props.insert("b0".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "b0. Default 1.".to_string(), items: None });
-                        props.insert("b1".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "b1. Default 0.".to_string(), items: None });
-                        props.insert("b2".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "b2. Default 0.".to_string(), items: None });
-                        props.insert("a0".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "a0. Default 1.".to_string(), items: None });
-                        props.insert("a1".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "a1. Default 0.".to_string(), items: None });
-                        props.insert("a2".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "a2. Default 0.".to_string(), items: None });
-                        props
-                    },
-                    required: vec!["input_file".to_string(), "output_file".to_string()],
-                },
-            },
 
             FunctionDeclaration {
                 name: "filter_bandpass".to_string(),
@@ -5301,29 +4939,6 @@ impl GeminiClient {
                 },
             },
             FunctionDeclaration {
-                name: "apply_setsar".to_string(),
-                description: "Set sample aspect ratio (SAR/PAR) of video without re-encoding. Fix anamorphic footage or set broadcast display ratio.".to_string(),
-                parameters: {
-                    let mut p = HashMap::new();
-                    p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to input video file".to_string(), items: None });
-                    p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to output video file".to_string(), items: None });
-                    p.insert("sar".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Sample aspect ratio as fraction (default: 1/1). E.g. '16/15' for NTSC".to_string(), items: None });
-                    Parameters { param_type: "object".to_string(), properties: p, required: vec!["input_file".to_string(), "output_file".to_string()] }
-                },
-            },
-            FunctionDeclaration {
-                name: "apply_random_frames".to_string(),
-                description: "Randomly reorder frames using FFmpeg random filter. Creates glitch/scrambled visual effect.".to_string(),
-                parameters: {
-                    let mut p = HashMap::new();
-                    p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to input video file".to_string(), items: None });
-                    p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to output video file".to_string(), items: None });
-                    p.insert("frames".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Size of random window in frames (default 30)".to_string(), items: None });
-                    p.insert("seed".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Random seed (-1 for random, default -1)".to_string(), items: None });
-                    Parameters { param_type: "object".to_string(), properties: p, required: vec!["input_file".to_string(), "output_file".to_string()] }
-                },
-            },
-            FunctionDeclaration {
                 name: "visualize_cqt".to_string(),
                 description: "Render Constant-Q Transform (CQT) spectrum visualization video from audio using showcqt.".to_string(),
                 parameters: {
@@ -5352,30 +4967,6 @@ impl GeminiClient {
                 },
             },
             FunctionDeclaration {
-                name: "apply_audio_iir".to_string(),
-                description: "Apply custom IIR filter to audio using aiir. Design arbitrary digital filters by specifying zeros, poles, and gains.".to_string(),
-                parameters: {
-                    let mut p = HashMap::new();
-                    p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to input audio or video file".to_string(), items: None });
-                    p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to output file".to_string(), items: None });
-                    p.insert("zeros".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "IIR filter zeros coefficients (default 1)".to_string(), items: None });
-                    p.insert("poles".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "IIR filter poles coefficients (default 1)".to_string(), items: None });
-                    p.insert("gains".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "IIR filter gain coefficients (default 1)".to_string(), items: None });
-                    Parameters { param_type: "object".to_string(), properties: p, required: vec!["input_file".to_string(), "output_file".to_string()] }
-                },
-            },
-            FunctionDeclaration {
-                name: "apply_audio_expression".to_string(),
-                description: "Apply per-sample audio expression using aeval. Transform audio with math expressions for ring modulation, distortion, bit manipulation.".to_string(),
-                parameters: {
-                    let mut p = HashMap::new();
-                    p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to input audio or video file".to_string(), items: None });
-                    p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to output file".to_string(), items: None });
-                    p.insert("exprs".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Per-sample expression. E.g. 'val*0.5' for -6dB, 'val*sin(2*PI*440*t)' for ring mod".to_string(), items: None });
-                    Parameters { param_type: "object".to_string(), properties: p, required: vec!["input_file".to_string(), "output_file".to_string()] }
-                },
-            },
-            FunctionDeclaration {
                 name: "convert_audio_format".to_string(),
                 description: "Force specific audio sample format, sample rate, and channel layout using aformat for codec compatibility.".to_string(),
                 parameters: {
@@ -5385,41 +4976,6 @@ impl GeminiClient {
                     p.insert("sample_fmts".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Target sample format (e.g. s16, s32, fltp). Leave empty to keep current".to_string(), items: None });
                     p.insert("sample_rates".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Target sample rate in Hz (e.g. 44100, 48000). Leave empty to keep current".to_string(), items: None });
                     p.insert("channel_layouts".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Target channel layout (e.g. stereo, mono, 5.1). Leave empty to keep current".to_string(), items: None });
-                    Parameters { param_type: "object".to_string(), properties: p, required: vec!["input_file".to_string(), "output_file".to_string()] }
-                },
-            },
-            FunctionDeclaration {
-                name: "apply_cross_correlate".to_string(),
-                description: "Cross-correlate two audio streams using axcorrelate. Measure similarity, find time alignment, or mix correlated audio.".to_string(),
-                parameters: {
-                    let mut p = HashMap::new();
-                    p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to first input audio file".to_string(), items: None });
-                    p.insert("secondary_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to second input audio file".to_string(), items: None });
-                    p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to output file".to_string(), items: None });
-                    p.insert("size".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Segment size in samples (default 256)".to_string(), items: None });
-                    p.insert("algo".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Algorithm: slow or fast (default fast)".to_string(), items: None });
-                    Parameters { param_type: "object".to_string(), properties: p, required: vec!["input_file".to_string(), "secondary_file".to_string(), "output_file".to_string()] }
-                },
-            },
-            FunctionDeclaration {
-                name: "apply_audio_multiply".to_string(),
-                description: "Ring modulation — multiply two audio streams sample by sample using amultiply. Creates metallic, robotic, bell-like timbres.".to_string(),
-                parameters: {
-                    let mut p = HashMap::new();
-                    p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to first input audio file (carrier)".to_string(), items: None });
-                    p.insert("secondary_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to second input audio file (modulator)".to_string(), items: None });
-                    p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to output file".to_string(), items: None });
-                    Parameters { param_type: "object".to_string(), properties: p, required: vec!["input_file".to_string(), "secondary_file".to_string(), "output_file".to_string()] }
-                },
-            },
-            FunctionDeclaration {
-                name: "apply_audio_contrast".to_string(),
-                description: "Enhance audio contrast using acontrast filter. Increases perceived loudness and punch without clipping.".to_string(),
-                parameters: {
-                    let mut p = HashMap::new();
-                    p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to input audio or video file".to_string(), items: None });
-                    p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to output file".to_string(), items: None });
-                    p.insert("contrast".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Contrast level 0-100 (default 33)".to_string(), items: None });
                     Parameters { param_type: "object".to_string(), properties: p, required: vec!["input_file".to_string(), "output_file".to_string()] }
                 },
             },
@@ -5456,17 +5012,6 @@ impl GeminiClient {
                 },
             },
 
-            FunctionDeclaration {
-                name: "apply_fieldorder".to_string(),
-                description: "Changes field order of interlaced video using FFmpeg fieldorder. Converts between TFF and BFF to fix combing artifacts.".to_string(),
-                parameters: {
-                    let mut p = HashMap::new();
-                    p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to input interlaced video".to_string(), items: None });
-                    p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path for output video".to_string(), items: None });
-                    p.insert("order".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Target field order: tff (default) or bff".to_string(), items: None });
-                    Parameters { param_type: "object".to_string(), properties: p, required: vec!["input_file".to_string(), "output_file".to_string()] }
-                },
-            },
 
             FunctionDeclaration {
                 name: "optimize_gif_palette".to_string(),
@@ -5512,19 +5057,6 @@ impl GeminiClient {
                 },
             },
 
-            FunctionDeclaration {
-                name: "apply_freezeframes".to_string(),
-                description: "Replaces a range of video frames with a freeze frame using FFmpeg freezeframes. Use to freeze a moment, create a pause effect, or replace damaged frames.".to_string(),
-                parameters: {
-                    let mut p = HashMap::new();
-                    p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to input video file".to_string(), items: None });
-                    p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path for output video file".to_string(), items: None });
-                    p.insert("first".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "First frame number to replace (0-indexed)".to_string(), items: None });
-                    p.insert("last".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Last frame number to replace (inclusive)".to_string(), items: None });
-                    p.insert("replace".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Frame number to use as freeze source (default: 0)".to_string(), items: None });
-                    Parameters { param_type: "object".to_string(), properties: p, required: vec!["input_file".to_string(), "output_file".to_string(), "first".to_string(), "last".to_string()] }
-                },
-            },
 
             FunctionDeclaration {
                 name: "draw_signal_graph".to_string(),
@@ -5540,115 +5072,13 @@ impl GeminiClient {
                 },
             },
 
-            FunctionDeclaration {
-                name: "measure_video_entropy".to_string(),
-                description: "Measures frame entropy using FFmpeg entropy filter. Higher = more detail/complexity. Analysis only, no output file.".to_string(),
-                parameters: {
-                    let mut p = HashMap::new();
-                    p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to input video file".to_string(), items: None });
-                    Parameters { param_type: "object".to_string(), properties: p, required: vec!["input_file".to_string()] }
-                },
-            },
 
-            FunctionDeclaration {
-                name: "apply_compensation_delay".to_string(),
-                description: "Precise time-alignment delay using FFmpeg compensationdelay. Specified in physical distance (mm/cm/m) at a given temperature. Essential for microphone time alignment.".to_string(),
-                parameters: {
-                    let mut p = HashMap::new();
-                    p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to input audio/video file".to_string(), items: None });
-                    p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path for output file".to_string(), items: None });
-                    p.insert("mm".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Delay distance millimetres (default: 0)".to_string(), items: None });
-                    p.insert("cm".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Delay distance centimetres (default: 0)".to_string(), items: None });
-                    p.insert("m".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Delay distance metres (default: 0)".to_string(), items: None });
-                    p.insert("dry".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Dry signal mix 0–1 (default: 0)".to_string(), items: None });
-                    p.insert("wet".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Wet signal mix 0–1 (default: 1)".to_string(), items: None });
-                    p.insert("temp".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Temperature Celsius for speed of sound (default: 20)".to_string(), items: None });
-                    Parameters { param_type: "object".to_string(), properties: p, required: vec!["input_file".to_string(), "output_file".to_string()] }
-                },
-            },
 
-            FunctionDeclaration {
-                name: "apply_earwax".to_string(),
-                description: "Applies earwax 3D audio enhancement using FFmpeg earwax for more immersive headphone listening.".to_string(),
-                parameters: {
-                    let mut p = HashMap::new();
-                    p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to input audio/video file".to_string(), items: None });
-                    p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path for output file".to_string(), items: None });
-                    Parameters { param_type: "object".to_string(), properties: p, required: vec!["input_file".to_string(), "output_file".to_string()] }
-                },
-            },
 
-            FunctionDeclaration {
-                name: "apply_allpass_filter".to_string(),
-                description: "Two-pole all-pass filter using FFmpeg allpass. Passes all frequencies unchanged in amplitude but alters phase. Use for phase correction between microphones.".to_string(),
-                parameters: {
-                    let mut p = HashMap::new();
-                    p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to input audio/video file".to_string(), items: None });
-                    p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path for output file".to_string(), items: None });
-                    p.insert("frequency".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Centre frequency Hz for maximum phase shift (default: 3000)".to_string(), items: None });
-                    p.insert("width".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Filter width (default: 0.707 for Q mode)".to_string(), items: None });
-                    p.insert("width_type".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Width type: q=Q (default), h=Hz, o=octaves, s=slope".to_string(), items: None });
-                    p.insert("mix".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Wet/dry mix 0–1 (default: 1.0)".to_string(), items: None });
-                    Parameters { param_type: "object".to_string(), properties: p, required: vec!["input_file".to_string(), "output_file".to_string(), "frequency".to_string()] }
-                },
-            },
 
-            FunctionDeclaration {
-                name: "apply_highshelf".to_string(),
-                description: "High-shelf EQ using FFmpeg highshelf. Boosts/cuts all frequencies above the shelf. Use for adding air (boost >8kHz) or rolling off harsh highs.".to_string(),
-                parameters: {
-                    let mut p = HashMap::new();
-                    p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to input audio/video file".to_string(), items: None });
-                    p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path for output file".to_string(), items: None });
-                    p.insert("frequency".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Shelf frequency Hz (e.g. 8000, 12000)".to_string(), items: None });
-                    p.insert("gain".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Gain in dB (positive=boost, negative=cut)".to_string(), items: None });
-                    p.insert("width".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Shelf slope/width (default: 0.5)".to_string(), items: None });
-                    p.insert("width_type".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Width type: s=slope (default), h=Hz, q=Q, o=octaves".to_string(), items: None });
-                    p.insert("poles".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Filter poles 1 or 2 (default: 2)".to_string(), items: None });
-                    Parameters { param_type: "object".to_string(), properties: p, required: vec!["input_file".to_string(), "output_file".to_string(), "frequency".to_string(), "gain".to_string()] }
-                },
-            },
 
-            FunctionDeclaration {
-                name: "apply_lowshelf".to_string(),
-                description: "Low-shelf EQ using FFmpeg lowshelf. Boosts/cuts all frequencies below the shelf. Use for adding warmth (boost <200Hz) or removing rumble.".to_string(),
-                parameters: {
-                    let mut p = HashMap::new();
-                    p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to input audio/video file".to_string(), items: None });
-                    p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path for output file".to_string(), items: None });
-                    p.insert("frequency".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Shelf frequency Hz (e.g. 80, 120, 200)".to_string(), items: None });
-                    p.insert("gain".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Gain in dB (positive=boost bass, negative=cut)".to_string(), items: None });
-                    p.insert("width".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Shelf slope/width (default: 0.5)".to_string(), items: None });
-                    p.insert("width_type".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Width type: s=slope (default), h=Hz, q=Q, o=octaves".to_string(), items: None });
-                    p.insert("poles".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Filter poles 1 or 2 (default: 2)".to_string(), items: None });
-                    Parameters { param_type: "object".to_string(), properties: p, required: vec!["input_file".to_string(), "output_file".to_string(), "frequency".to_string(), "gain".to_string()] }
-                },
-            },
 
-            FunctionDeclaration {
-                name: "apply_surround_upmix".to_string(),
-                description: "Upmixes stereo audio to 5.1 or 7.1 surround using FFmpeg surround filter.".to_string(),
-                parameters: {
-                    let mut p = HashMap::new();
-                    p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to input stereo audio/video".to_string(), items: None });
-                    p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path for output surround file".to_string(), items: None });
-                    p.insert("chl_out".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Output channel layout (default: 5.1). Options: 5.1, 7.1, quadrature".to_string(), items: None });
-                    p.insert("chl_in".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Input channel layout (default: stereo)".to_string(), items: None });
-                    p.insert("level_in".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Input gain (default: 1.0)".to_string(), items: None });
-                    p.insert("level_out".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Output gain (default: 1.0)".to_string(), items: None });
-                    Parameters { param_type: "object".to_string(), properties: p, required: vec!["input_file".to_string(), "output_file".to_string()] }
-                },
-            },
 
-            FunctionDeclaration {
-                name: "detect_volume_levels".to_string(),
-                description: "Measures max and mean volume levels using FFmpeg volumedetect. Reports peak and RMS values. Analysis only — no output file.".to_string(),
-                parameters: {
-                    let mut p = HashMap::new();
-                    p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to input audio/video file".to_string(), items: None });
-                    Parameters { param_type: "object".to_string(), properties: p, required: vec!["input_file".to_string()] }
-                },
-            },
 
             // ================================================================
             // PHASE I BATCH 8 — extract_alpha, merge_alpha, framestep, swaprect,
@@ -5657,16 +5087,6 @@ impl GeminiClient {
             //                   single_eq_band, stereotools, asetrate
             // ================================================================
 
-            FunctionDeclaration {
-                name: "extract_alpha_channel".to_string(),
-                description: "Extracts the alpha (transparency) channel from a video as greyscale using FFmpeg alphaextract.".to_string(),
-                parameters: {
-                    let mut p = HashMap::new();
-                    p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to input video with alpha channel".to_string(), items: None });
-                    p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path for output greyscale video/image".to_string(), items: None });
-                    Parameters { param_type: "object".to_string(), properties: p, required: vec!["input_file".to_string(), "output_file".to_string()] }
-                },
-            },
 
             FunctionDeclaration {
                 name: "merge_alpha_channel".to_string(),
@@ -5680,92 +5100,11 @@ impl GeminiClient {
                 },
             },
 
-            FunctionDeclaration {
-                name: "apply_framestep".to_string(),
-                description: "Outputs every Nth frame from video using FFmpeg framestep. step=2 = half frame rate, step=3 = third frame rate. Use for time-lapse from normal footage.".to_string(),
-                parameters: {
-                    let mut p = HashMap::new();
-                    p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to input video file".to_string(), items: None });
-                    p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path for output video file".to_string(), items: None });
-                    p.insert("step".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Keep every Nth frame (default: 1)".to_string(), items: None });
-                    Parameters { param_type: "object".to_string(), properties: p, required: vec!["input_file".to_string(), "output_file".to_string()] }
-                },
-            },
 
-            FunctionDeclaration {
-                name: "apply_swaprect".to_string(),
-                description: "Swaps two rectangular regions within a video frame using FFmpeg swaprect.".to_string(),
-                parameters: {
-                    let mut p = HashMap::new();
-                    p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to input video file".to_string(), items: None });
-                    p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path for output video file".to_string(), items: None });
-                    p.insert("x1".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "X of first rectangle".to_string(), items: None });
-                    p.insert("y1".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Y of first rectangle".to_string(), items: None });
-                    p.insert("x2".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "X of second rectangle".to_string(), items: None });
-                    p.insert("y2".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Y of second rectangle".to_string(), items: None });
-                    p.insert("w".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Width of both rectangles".to_string(), items: None });
-                    p.insert("h".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Height of both rectangles".to_string(), items: None });
-                    Parameters { param_type: "object".to_string(), properties: p, required: vec!["input_file".to_string(), "output_file".to_string(), "w".to_string(), "h".to_string()] }
-                },
-            },
 
-            FunctionDeclaration {
-                name: "apply_fillborders".to_string(),
-                description: "Fills video border pixels using FFmpeg fillborders. Modes: smear (extend edge), mirror, wrap, fixed (solid color). Use to remove thin black borders or extend content to fill edges.".to_string(),
-                parameters: {
-                    let mut p = HashMap::new();
-                    p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to input video file".to_string(), items: None });
-                    p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path for output video file".to_string(), items: None });
-                    p.insert("left".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Pixels to fill on left (default: 0)".to_string(), items: None });
-                    p.insert("right".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Pixels to fill on right (default: 0)".to_string(), items: None });
-                    p.insert("top".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Pixels to fill on top (default: 0)".to_string(), items: None });
-                    p.insert("bottom".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Pixels to fill on bottom (default: 0)".to_string(), items: None });
-                    p.insert("mode".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Fill mode: smear (default), mirror, wrap, fixed".to_string(), items: None });
-                    p.insert("color".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Color for fixed mode (default: black)".to_string(), items: None });
-                    Parameters { param_type: "object".to_string(), properties: p, required: vec!["input_file".to_string(), "output_file".to_string()] }
-                },
-            },
 
-            FunctionDeclaration {
-                name: "apply_chromanr".to_string(),
-                description: "Reduces chroma noise using FFmpeg chromanr. Averages chroma in spatial windows where values are similar. Preserves luma sharpness.".to_string(),
-                parameters: {
-                    let mut p = HashMap::new();
-                    p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to input video file".to_string(), items: None });
-                    p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path for output video file".to_string(), items: None });
-                    p.insert("thres".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Chroma threshold 1.0–200.0 (default: 30.0)".to_string(), items: None });
-                    p.insert("sizew".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Window width pixels (default: 5)".to_string(), items: None });
-                    p.insert("sizeh".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Window height pixels (default: 5)".to_string(), items: None });
-                    p.insert("stepw".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Horizontal step (default: 1)".to_string(), items: None });
-                    p.insert("steph".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Vertical step (default: 1)".to_string(), items: None });
-                    Parameters { param_type: "object".to_string(), properties: p, required: vec!["input_file".to_string(), "output_file".to_string()] }
-                },
-            },
 
-            FunctionDeclaration {
-                name: "apply_weave".to_string(),
-                description: "Weaves separate fields into interlaced frames using FFmpeg weave. Inverse of deinterlacing.".to_string(),
-                parameters: {
-                    let mut p = HashMap::new();
-                    p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to input video (stream of fields)".to_string(), items: None });
-                    p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path for output interlaced video".to_string(), items: None });
-                    p.insert("first_field".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "First field: top (default) or bottom".to_string(), items: None });
-                    Parameters { param_type: "object".to_string(), properties: p, required: vec!["input_file".to_string(), "output_file".to_string()] }
-                },
-            },
 
-            FunctionDeclaration {
-                name: "apply_interlace".to_string(),
-                description: "Creates interlaced video from progressive input using FFmpeg interlace. For broadcast delivery (PAL 50i, NTSC 29.97i).".to_string(),
-                parameters: {
-                    let mut p = HashMap::new();
-                    p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to input progressive video".to_string(), items: None });
-                    p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path for output interlaced video".to_string(), items: None });
-                    p.insert("scan".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Field order: tff (top first, default) or bff".to_string(), items: None });
-                    p.insert("lowpass".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Vertical low-pass 0–2 (default: 1). 0=off, 1=linear, 2=complex".to_string(), items: None });
-                    Parameters { param_type: "object".to_string(), properties: p, required: vec!["input_file".to_string(), "output_file".to_string()] }
-                },
-            },
 
             FunctionDeclaration {
                 name: "denoise_audio_fft".to_string(),
@@ -5795,76 +5134,10 @@ impl GeminiClient {
                 },
             },
 
-            FunctionDeclaration {
-                name: "apply_dc_shift".to_string(),
-                description: "Applies DC offset correction to audio using FFmpeg dcshift. Fixes recordings with DC offset from cheap microphones or interfaces.".to_string(),
-                parameters: {
-                    let mut p = HashMap::new();
-                    p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to input audio/video file".to_string(), items: None });
-                    p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path for output file".to_string(), items: None });
-                    p.insert("shift".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "DC shift to apply -1.0–1.0. Negative to cancel positive DC offset".to_string(), items: None });
-                    p.insert("limitergain".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Limiter gain 0.0–1.0 to prevent clipping (0=disabled, default: 0)".to_string(), items: None });
-                    Parameters { param_type: "object".to_string(), properties: p, required: vec!["input_file".to_string(), "output_file".to_string(), "shift".to_string()] }
-                },
-            },
 
-            FunctionDeclaration {
-                name: "measure_dynamic_range".to_string(),
-                description: "Measures audio dynamic range using FFmpeg drmeter. Reports DR (crest factor), peak, and RMS values. Analysis only — no output file.".to_string(),
-                parameters: {
-                    let mut p = HashMap::new();
-                    p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to input audio/video file".to_string(), items: None });
-                    Parameters { param_type: "object".to_string(), properties: p, required: vec!["input_file".to_string()] }
-                },
-            },
 
-            FunctionDeclaration {
-                name: "apply_single_eq_band".to_string(),
-                description: "Single-band parametric EQ using FFmpeg equalizer. One targeted correction at a chosen frequency, width, and gain.".to_string(),
-                parameters: {
-                    let mut p = HashMap::new();
-                    p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to input audio/video file".to_string(), items: None });
-                    p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path for output file".to_string(), items: None });
-                    p.insert("frequency".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Centre frequency in Hz (e.g. 1000)".to_string(), items: None });
-                    p.insert("width".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Band width (default: 1.0 octave)".to_string(), items: None });
-                    p.insert("gain".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Gain in dB (positive=boost, negative=cut)".to_string(), items: None });
-                    p.insert("width_type".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Width type: h=Hz, q=Q, o=octaves (default), s=slope, k=kHz".to_string(), items: None });
-                    Parameters { param_type: "object".to_string(), properties: p, required: vec!["input_file".to_string(), "output_file".to_string(), "frequency".to_string(), "gain".to_string()] }
-                },
-            },
 
-            FunctionDeclaration {
-                name: "apply_stereotools".to_string(),
-                description: "Professional stereo field manipulation using FFmpeg stereotools. Independent levels, balance, phase inversion, muting, and mode switching (LR/MS/mono/swap).".to_string(),
-                parameters: {
-                    let mut p = HashMap::new();
-                    p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to input audio/video file".to_string(), items: None });
-                    p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path for output file".to_string(), items: None });
-                    p.insert("level_in".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Input gain 0.015–64.0 (default: 1.0)".to_string(), items: None });
-                    p.insert("level_out".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Output gain 0.015–64.0 (default: 1.0)".to_string(), items: None });
-                    p.insert("balance_in".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Input balance -1.0–1.0 (default: 0.0)".to_string(), items: None });
-                    p.insert("balance_out".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Output balance -1.0–1.0 (default: 0.0)".to_string(), items: None });
-                    p.insert("softclip".to_string(), PropertyDefinition { prop_type: "boolean".to_string(), description: "Soft clip output (default: false)".to_string(), items: None });
-                    p.insert("mutel".to_string(), PropertyDefinition { prop_type: "boolean".to_string(), description: "Mute left channel (default: false)".to_string(), items: None });
-                    p.insert("muter".to_string(), PropertyDefinition { prop_type: "boolean".to_string(), description: "Mute right channel (default: false)".to_string(), items: None });
-                    p.insert("phasel".to_string(), PropertyDefinition { prop_type: "boolean".to_string(), description: "Invert left phase (default: false)".to_string(), items: None });
-                    p.insert("phaser".to_string(), PropertyDefinition { prop_type: "boolean".to_string(), description: "Invert right phase (default: false)".to_string(), items: None });
-                    p.insert("mode".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Mode: lr>lr (default), lr>ms, ms>lr, lr>ll, lr>rr, lr>l+r, lr>rl, ms>ll, ms>rr, ms>l+r".to_string(), items: None });
-                    Parameters { param_type: "object".to_string(), properties: p, required: vec!["input_file".to_string(), "output_file".to_string()] }
-                },
-            },
 
-            FunctionDeclaration {
-                name: "apply_asetrate".to_string(),
-                description: "Changes audio sample rate metadata without resampling (FFmpeg asetrate). Shifts pitch and speed together like tape speed. Use for lo-fi/chipmunk/slowed effects or fixing mistagged rates.".to_string(),
-                parameters: {
-                    let mut p = HashMap::new();
-                    p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to input audio/video file".to_string(), items: None });
-                    p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path for output file".to_string(), items: None });
-                    p.insert("sample_rate".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "New sample rate Hz. Higher=slower/lower pitch, lower=faster/higher. Default: 44100".to_string(), items: None });
-                    Parameters { param_type: "object".to_string(), properties: p, required: vec!["input_file".to_string(), "output_file".to_string()] }
-                },
-            },
 
             // ================================================================
             // PHASE I BATCH 7 — xfade_transition, color_key, monochrome, maskedmerge,
@@ -5888,33 +5161,7 @@ impl GeminiClient {
                 },
             },
 
-            FunctionDeclaration {
-                name: "apply_color_key".to_string(),
-                description: "Removes a specific colour from video making it transparent using FFmpeg colorkey. Use to key out flat colour backgrounds.".to_string(),
-                parameters: {
-                    let mut p = HashMap::new();
-                    p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to input video file".to_string(), items: None });
-                    p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path for output video file".to_string(), items: None });
-                    p.insert("color".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Colour to key out as hex (default: 0x00FF00 green)".to_string(), items: None });
-                    p.insert("similarity".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Similarity radius 0.0–1.0 (default: 0.1)".to_string(), items: None });
-                    p.insert("blend".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Blend factor 0.0–1.0 (default: 0.0)".to_string(), items: None });
-                    Parameters { param_type: "object".to_string(), properties: p, required: vec!["input_file".to_string(), "output_file".to_string()] }
-                },
-            },
 
-            FunctionDeclaration {
-                name: "apply_monochrome".to_string(),
-                description: "Converts video to stylised B&W using FFmpeg monochrome with chroma bias controls for cinematic looks.".to_string(),
-                parameters: {
-                    let mut p = HashMap::new();
-                    p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to input video file".to_string(), items: None });
-                    p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path for output video file".to_string(), items: None });
-                    p.insert("cb".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Blue-yellow chroma bias -1.0–1.0 (default: 0.0)".to_string(), items: None });
-                    p.insert("cr".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Red-green chroma bias -1.0–1.0 (default: 0.0)".to_string(), items: None });
-                    p.insert("size".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Colour band size 0.0–1.0 (default: 1.0)".to_string(), items: None });
-                    Parameters { param_type: "object".to_string(), properties: p, required: vec!["input_file".to_string(), "output_file".to_string()] }
-                },
-            },
 
             FunctionDeclaration {
                 name: "apply_maskedmerge".to_string(),
@@ -5960,34 +5207,7 @@ impl GeminiClient {
                 },
             },
 
-            FunctionDeclaration {
-                name: "apply_greyedge".to_string(),
-                description: "Auto white-balances video using FFmpeg greyedge (grey edge assumption). Analyses edges to estimate scene illuminant and corrects colour cast.".to_string(),
-                parameters: {
-                    let mut p = HashMap::new();
-                    p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to input video file".to_string(), items: None });
-                    p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path for output video file".to_string(), items: None });
-                    p.insert("difford".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Differentiation order 0–2 (default: 1). 0=grey world, 1=grey edge 1st, 2=grey edge 2nd".to_string(), items: None });
-                    p.insert("minknorm".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Minkowski norm 0–20 (default: 1). 0=max norm, 1=L1, 2=L2".to_string(), items: None });
-                    p.insert("sigma".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Gaussian blur sigma 0.0–200.0 (default: 1.0)".to_string(), items: None });
-                    Parameters { param_type: "object".to_string(), properties: p, required: vec!["input_file".to_string(), "output_file".to_string()] }
-                },
-            },
 
-            FunctionDeclaration {
-                name: "apply_fade_video".to_string(),
-                description: "Applies video fade-in or fade-out using FFmpeg fade. Fades from/to any colour (default black). Use for intros, outros, scene transitions.".to_string(),
-                parameters: {
-                    let mut p = HashMap::new();
-                    p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to input video file".to_string(), items: None });
-                    p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path for output video file".to_string(), items: None });
-                    p.insert("fade_type".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Fade direction: in or out (default: in)".to_string(), items: None });
-                    p.insert("start_time".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Timestamp in seconds where fade starts (default: 0.0)".to_string(), items: None });
-                    p.insert("duration".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Duration of the fade in seconds (default: 1.0)".to_string(), items: None });
-                    p.insert("color".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Colour to fade from/to (default: black). e.g. black, white".to_string(), items: None });
-                    Parameters { param_type: "object".to_string(), properties: p, required: vec!["input_file".to_string(), "output_file".to_string()] }
-                },
-            },
 
             FunctionDeclaration {
                 name: "normalize_loudness".to_string(),
@@ -6047,18 +5267,6 @@ impl GeminiClient {
                 },
             },
 
-            FunctionDeclaration {
-                name: "apply_crystalizer".to_string(),
-                description: "Enhances audio transients and detail using FFmpeg crystalizer. Creates a hyper-detailed glassy texture by boosting frequency contrasts.".to_string(),
-                parameters: {
-                    let mut p = HashMap::new();
-                    p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to input audio/video file".to_string(), items: None });
-                    p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path for output file".to_string(), items: None });
-                    p.insert("i".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Intensity 0.0–10.0 (default: 2.0)".to_string(), items: None });
-                    p.insert("clip".to_string(), PropertyDefinition { prop_type: "boolean".to_string(), description: "Clip output to prevent distortion (default: false)".to_string(), items: None });
-                    Parameters { param_type: "object".to_string(), properties: p, required: vec!["input_file".to_string(), "output_file".to_string()] }
-                },
-            },
 
             FunctionDeclaration {
                 name: "multiband_compress".to_string(),
@@ -6072,17 +5280,6 @@ impl GeminiClient {
                 },
             },
 
-            FunctionDeclaration {
-                name: "apply_super_equalizer".to_string(),
-                description: "18-band graphic equalizer using FFmpeg superequalizer. Bands from 65Hz to 24kHz. Gain 0.0–20.0, unity = 10.0.".to_string(),
-                parameters: {
-                    let mut p = HashMap::new();
-                    p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to input audio/video file".to_string(), items: None });
-                    p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path for output file".to_string(), items: None });
-                    p.insert("bands".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "18-band gain string. Format: '1b=V:2b=V:...:18b=V' where 10.0=unity. Example bass boost: '1b=14:2b=13:3b=12:4b=11:5b=10:...:18b=10'".to_string(), items: None });
-                    Parameters { param_type: "object".to_string(), properties: p, required: vec!["input_file".to_string(), "output_file".to_string()] }
-                },
-            },
 
             // ================================================================
             // PHASE I BATCH 6 — colormatrix, chromashift, cas, nlmeans_video, spp, pp,
@@ -6090,17 +5287,7 @@ impl GeminiClient {
             //                   acrusher, atempo, asetnsamples, apad, asubcut, asupercut
             // ================================================================
 
-            FunctionDeclaration {
-                name: "apply_colormatrix".to_string(),
-                description: "Converts video between colour matrix standards (bt601, bt709, bt2020, etc.) to fix colour space mismatches.".to_string(),
-                parameters: Parameters { param_type: "object".to_string(), properties: { let mut p = HashMap::new(); p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Input video".to_string(), items: None }); p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Output path".to_string(), items: None }); p.insert("src".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Source matrix: bt601,bt709,smpte240m,fcc,bt2020 (default bt601)".to_string(), items: None }); p.insert("dst".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Target matrix: bt601,bt709,smpte240m,fcc,bt2020 (default bt709)".to_string(), items: None }); p }, required: vec!["input_file".to_string(), "output_file".to_string()] },
-            },
 
-            FunctionDeclaration {
-                name: "apply_chromashift".to_string(),
-                description: "Shifts chroma channels horizontally and vertically for chromatic aberration or colour-fringing effects.".to_string(),
-                parameters: Parameters { param_type: "object".to_string(), properties: { let mut p = HashMap::new(); p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Input video".to_string(), items: None }); p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Output path".to_string(), items: None }); p.insert("cbh".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Cb horizontal shift px (default 0)".to_string(), items: None }); p.insert("cbv".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Cb vertical shift px (default 0)".to_string(), items: None }); p.insert("crh".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Cr horizontal shift px (default 0)".to_string(), items: None }); p.insert("crv".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Cr vertical shift px (default 0)".to_string(), items: None }); p }, required: vec!["input_file".to_string(), "output_file".to_string()] },
-            },
 
             FunctionDeclaration {
                 name: "apply_cas".to_string(),
@@ -6158,61 +5345,11 @@ impl GeminiClient {
                 parameters: Parameters { param_type: "object".to_string(), properties: { let mut p = HashMap::new(); p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Input video".to_string(), items: None }); p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Output path".to_string(), items: None }); p.insert("radius".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Spatial radius 1-127 (default 1)".to_string(), items: None }); p.insert("radiusV".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Vertical radius (default = radius)".to_string(), items: None }); p.insert("percentile".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Percentile 0.0-1.0 (default 0.5=median)".to_string(), items: None }); p.insert("planes".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Bitmask of planes (default 15)".to_string(), items: None }); p }, required: vec!["input_file".to_string(), "output_file".to_string()] },
             },
 
-            FunctionDeclaration {
-                name: "apply_acrusher".to_string(),
-                description: "Applies bit-crusher/lo-fi distortion using acrusher filter for vintage, lo-fi, or glitch audio effects.".to_string(),
-                parameters: Parameters {
-                    param_type: "object".to_string(),
-                    properties: {
-                        let mut p = HashMap::new();
-                        p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Input audio/video".to_string(), items: None });
-                        p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Output path".to_string(), items: None });
-                        p.insert("level_in".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Input gain (default 1.0)".to_string(), items: None });
-                        p.insert("level_out".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Output gain (default 1.0)".to_string(), items: None });
-                        p.insert("bits".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Target bit depth 1-64 (default 8)".to_string(), items: None });
-                        p.insert("mix".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Dry/wet 0.0-1.0 (default 0.5)".to_string(), items: None });
-                        p.insert("mode".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "lin or log (default log)".to_string(), items: None });
-                        p.insert("dc".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "DC bias (default 1.0)".to_string(), items: None });
-                        p.insert("aa".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Antialiasing 0.0-1.0 (default 0.5)".to_string(), items: None });
-                        p.insert("samples".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Sample reduction factor (default 1.0)".to_string(), items: None });
-                        p.insert("lfo".to_string(), PropertyDefinition { prop_type: "boolean".to_string(), description: "LFO modulation on bits (default false)".to_string(), items: None });
-                        p.insert("lforange".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "LFO range in bits (default 20.0)".to_string(), items: None });
-                        p.insert("lforate".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "LFO rate Hz (default 0.3)".to_string(), items: None });
-                        p
-                    },
-                    required: vec!["input_file".to_string(), "output_file".to_string()],
-                },
-            },
 
-            FunctionDeclaration {
-                name: "apply_atempo".to_string(),
-                description: "Changes audio tempo without pitch shift using atempo. Supports 0.5x-100x; chains filters automatically for extreme values.".to_string(),
-                parameters: Parameters { param_type: "object".to_string(), properties: { let mut p = HashMap::new(); p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Input audio/video".to_string(), items: None }); p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Output path".to_string(), items: None }); p.insert("tempo".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Speed multiplier: 0.5=half,2.0=double (default 1.0)".to_string(), items: None }); p }, required: vec!["input_file".to_string(), "output_file".to_string(), "tempo".to_string()] },
-            },
 
-            FunctionDeclaration {
-                name: "apply_asetnsamples".to_string(),
-                description: "Sets a fixed number of audio samples per output frame using asetnsamples for consistent downstream processing.".to_string(),
-                parameters: Parameters { param_type: "object".to_string(), properties: { let mut p = HashMap::new(); p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Input audio/video".to_string(), items: None }); p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Output path".to_string(), items: None }); p.insert("nb_samples".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Samples per frame (default 1024)".to_string(), items: None }); p.insert("pad".to_string(), PropertyDefinition { prop_type: "boolean".to_string(), description: "Pad last frame with silence (default true)".to_string(), items: None }); p }, required: vec!["input_file".to_string(), "output_file".to_string()] },
-            },
 
-            FunctionDeclaration {
-                name: "apply_apad".to_string(),
-                description: "Pads audio with silence at the end using apad to ensure minimum duration or add a silence tail.".to_string(),
-                parameters: Parameters { param_type: "object".to_string(), properties: { let mut p = HashMap::new(); p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Input audio/video".to_string(), items: None }); p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Output path".to_string(), items: None }); p.insert("pad_dur".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Seconds of silence to add (default 0)".to_string(), items: None }); p.insert("whole_dur".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Pad until total duration in seconds (default 0)".to_string(), items: None }); p.insert("pad_len".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Sample count to add (default 0)".to_string(), items: None }); p.insert("whole_len".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Pad until total sample count (default 0)".to_string(), items: None }); p }, required: vec!["input_file".to_string(), "output_file".to_string()] },
-            },
 
-            FunctionDeclaration {
-                name: "apply_asubcut".to_string(),
-                description: "Cuts sub-bass frequencies below a cutoff using asubcut high-pass filter — removes rumble and low-end handling noise.".to_string(),
-                parameters: Parameters { param_type: "object".to_string(), properties: { let mut p = HashMap::new(); p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Input audio/video".to_string(), items: None }); p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Output path".to_string(), items: None }); p.insert("cutoff".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Cutoff Hz (default 20.0)".to_string(), items: None }); p.insert("order".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Filter order 3-20 (default 10)".to_string(), items: None }); p.insert("level".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Output level (default 1.0)".to_string(), items: None }); p }, required: vec!["input_file".to_string(), "output_file".to_string()] },
-            },
 
-            FunctionDeclaration {
-                name: "apply_asupercut".to_string(),
-                description: "Cuts super-treble frequencies above a cutoff using asupercut low-pass filter — removes ultrasonic artefacts.".to_string(),
-                parameters: Parameters { param_type: "object".to_string(), properties: { let mut p = HashMap::new(); p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Input audio/video".to_string(), items: None }); p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Output path".to_string(), items: None }); p.insert("cutoff".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Cutoff Hz (default 20000.0)".to_string(), items: None }); p.insert("order".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Filter order 3-20 (default 10)".to_string(), items: None }); p.insert("level".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Output level (default 1.0)".to_string(), items: None }); p }, required: vec!["input_file".to_string(), "output_file".to_string()] },
-            },
 
             // ================================================================
             // PHASE I BATCH 5 — threshold, maskedclamp, roberts, sobel, prewitt, kirsch,
@@ -6220,249 +5357,39 @@ impl GeminiClient {
             //                   datascope, fspp, haas, aemphasis
             // ================================================================
 
-            FunctionDeclaration {
-                name: "apply_threshold".to_string(),
-                description: "Applies pixel-value thresholding to a video — pixels below a floor clip to black, above a ceiling clip to max.".to_string(),
-                parameters: Parameters { param_type: "object".to_string(), properties: { let mut p = HashMap::new(); p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Input video file".to_string(), items: None }); p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Output file path".to_string(), items: None }); p.insert("planes".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Bitmask of planes (default 15)".to_string(), items: None }); p }, required: vec!["input_file".to_string(), "output_file".to_string()] },
-            },
 
-            FunctionDeclaration {
-                name: "apply_maskedclamp".to_string(),
-                description: "Clamps each pixel between a dark and bright reference stream using maskedclamp filter.".to_string(),
-                parameters: Parameters { param_type: "object".to_string(), properties: { let mut p = HashMap::new(); p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Input video file".to_string(), items: None }); p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Output file path".to_string(), items: None }); p.insert("undershoot".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Allowed undershoot below min (default 0)".to_string(), items: None }); p.insert("overshoot".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Allowed overshoot above max (default 0)".to_string(), items: None }); p.insert("planes".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Bitmask of planes (default 15)".to_string(), items: None }); p }, required: vec!["input_file".to_string(), "output_file".to_string()] },
-            },
 
-            FunctionDeclaration {
-                name: "apply_roberts".to_string(),
-                description: "Applies Roberts cross edge detection operator to a video.".to_string(),
-                parameters: Parameters { param_type: "object".to_string(), properties: { let mut p = HashMap::new(); p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Input video file".to_string(), items: None }); p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Output file path".to_string(), items: None }); p.insert("planes".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Bitmask of planes (default 15)".to_string(), items: None }); p.insert("scale".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Amplification scale (default 1.0)".to_string(), items: None }); p.insert("delta".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Offset (default 0.0)".to_string(), items: None }); p }, required: vec!["input_file".to_string(), "output_file".to_string()] },
-            },
 
-            FunctionDeclaration {
-                name: "apply_sobel".to_string(),
-                description: "Applies Sobel edge detection to a video.".to_string(),
-                parameters: Parameters { param_type: "object".to_string(), properties: { let mut p = HashMap::new(); p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Input video file".to_string(), items: None }); p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Output file path".to_string(), items: None }); p.insert("planes".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Bitmask of planes (default 15)".to_string(), items: None }); p.insert("scale".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Amplification scale (default 1.0)".to_string(), items: None }); p.insert("delta".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Offset (default 0.0)".to_string(), items: None }); p }, required: vec!["input_file".to_string(), "output_file".to_string()] },
-            },
 
-            FunctionDeclaration {
-                name: "apply_prewitt".to_string(),
-                description: "Applies Prewitt edge detection operator to a video.".to_string(),
-                parameters: Parameters { param_type: "object".to_string(), properties: { let mut p = HashMap::new(); p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Input video file".to_string(), items: None }); p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Output file path".to_string(), items: None }); p.insert("planes".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Bitmask of planes (default 15)".to_string(), items: None }); p.insert("scale".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Amplification scale (default 1.0)".to_string(), items: None }); p.insert("delta".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Offset (default 0.0)".to_string(), items: None }); p }, required: vec!["input_file".to_string(), "output_file".to_string()] },
-            },
 
-            FunctionDeclaration {
-                name: "apply_kirsch".to_string(),
-                description: "Applies Kirsch edge detection compass operator to a video.".to_string(),
-                parameters: Parameters { param_type: "object".to_string(), properties: { let mut p = HashMap::new(); p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Input video file".to_string(), items: None }); p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Output file path".to_string(), items: None }); p.insert("planes".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Bitmask of planes (default 15)".to_string(), items: None }); p.insert("scale".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Amplification scale (default 1.0)".to_string(), items: None }); p.insert("delta".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Offset (default 0.0)".to_string(), items: None }); p }, required: vec!["input_file".to_string(), "output_file".to_string()] },
-            },
 
-            FunctionDeclaration {
-                name: "apply_video_limiter".to_string(),
-                description: "Clamps video pixel values to [min, max] range for broadcast-legal signal enforcement.".to_string(),
-                parameters: Parameters { param_type: "object".to_string(), properties: { let mut p = HashMap::new(); p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Input video file".to_string(), items: None }); p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Output file path".to_string(), items: None }); p.insert("min".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Minimum pixel value (default 0)".to_string(), items: None }); p.insert("max".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Maximum pixel value (default 65535)".to_string(), items: None }); p.insert("planes".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Bitmask of planes (default 15)".to_string(), items: None }); p }, required: vec!["input_file".to_string(), "output_file".to_string()] },
-            },
 
-            FunctionDeclaration {
-                name: "apply_bilateral".to_string(),
-                description: "Applies bilateral filter for edge-preserving noise reduction — smooths uniform areas while keeping sharp edges.".to_string(),
-                parameters: Parameters { param_type: "object".to_string(), properties: { let mut p = HashMap::new(); p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Input video file".to_string(), items: None }); p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Output file path".to_string(), items: None }); p.insert("sigmaS".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Spatial sigma (0.1-512, default 0.1)".to_string(), items: None }); p.insert("sigmaR".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Range sigma (0.1-1.0, default 0.1)".to_string(), items: None }); p.insert("planes".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Bitmask of planes (default 1=luma)".to_string(), items: None }); p }, required: vec!["input_file".to_string(), "output_file".to_string()] },
-            },
 
-            FunctionDeclaration {
-                name: "apply_unsharp_mask".to_string(),
-                description: "Applies unsharp mask for precise sharpening or blurring of luma and chroma planes independently.".to_string(),
-                parameters: Parameters {
-                    param_type: "object".to_string(),
-                    properties: {
-                        let mut p = HashMap::new();
-                        p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Input video file".to_string(), items: None });
-                        p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Output file path".to_string(), items: None });
-                        p.insert("luma_x".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Luma kernel width (odd 3-23, default 5)".to_string(), items: None });
-                        p.insert("luma_y".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Luma kernel height (odd 3-23, default 5)".to_string(), items: None });
-                        p.insert("luma_amount".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Luma amount; positive=sharpen, negative=blur (default 1.0)".to_string(), items: None });
-                        p.insert("chroma_x".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Chroma kernel width (default 5)".to_string(), items: None });
-                        p.insert("chroma_y".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Chroma kernel height (default 5)".to_string(), items: None });
-                        p.insert("chroma_amount".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Chroma amount (default 0.0)".to_string(), items: None });
-                        p
-                    },
-                    required: vec!["input_file".to_string(), "output_file".to_string()],
-                },
-            },
 
-            FunctionDeclaration {
-                name: "apply_lagfun".to_string(),
-                description: "Applies lagfun EMA for slow ghost trails and motion blur effect by blending frames over time with a decay factor.".to_string(),
-                parameters: Parameters { param_type: "object".to_string(), properties: { let mut p = HashMap::new(); p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Input video file".to_string(), items: None }); p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Output file path".to_string(), items: None }); p.insert("decay".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "EMA decay 0.0-1.0; higher=longer trail (default 0.95)".to_string(), items: None }); p.insert("planes".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Bitmask of planes (default 15)".to_string(), items: None }); p }, required: vec!["input_file".to_string(), "output_file".to_string()] },
-            },
 
-            FunctionDeclaration {
-                name: "apply_tinterlace".to_string(),
-                description: "Applies temporal field interlacing for broadcast output using tinterlace filter.".to_string(),
-                parameters: Parameters { param_type: "object".to_string(), properties: { let mut p = HashMap::new(); p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Input video file".to_string(), items: None }); p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Output file path".to_string(), items: None }); p.insert("mode".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Interlace mode 0-7 (default 0=merge)".to_string(), items: None }); p.insert("flags".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Flags: vlpf or cvlpf (default vlpf)".to_string(), items: None }); p }, required: vec!["input_file".to_string(), "output_file".to_string()] },
-            },
 
-            FunctionDeclaration {
-                name: "apply_datascope".to_string(),
-                description: "Renders a datascope showing raw pixel values at a region — useful for colour accuracy analysis and broadcast QC.".to_string(),
-                parameters: Parameters {
-                    param_type: "object".to_string(),
-                    properties: {
-                        let mut p = HashMap::new();
-                        p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Input video file".to_string(), items: None });
-                        p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Output file path".to_string(), items: None });
-                        p.insert("size".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Output size (default hd720)".to_string(), items: None });
-                        p.insert("x".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "X position of pixel region (default 0)".to_string(), items: None });
-                        p.insert("y".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Y position of pixel region (default 0)".to_string(), items: None });
-                        p.insert("mode".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Display mode: 0=mono,1=color,2=color2 (default 0)".to_string(), items: None });
-                        p.insert("opacity".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Overlay opacity 0.0-1.0 (default 0.75)".to_string(), items: None });
-                        p.insert("axis".to_string(), PropertyDefinition { prop_type: "boolean".to_string(), description: "Show axis labels (default false)".to_string(), items: None });
-                        p
-                    },
-                    required: vec!["input_file".to_string(), "output_file".to_string()],
-                },
-            },
 
-            FunctionDeclaration {
-                name: "apply_fspp".to_string(),
-                description: "Applies Fast Super Pixel (fspp) frequency-domain denoising for smooth noise removal while preserving detail.".to_string(),
-                parameters: Parameters { param_type: "object".to_string(), properties: { let mut p = HashMap::new(); p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Input video file".to_string(), items: None }); p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Output file path".to_string(), items: None }); p.insert("quality".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Quality iterations (4-5, default 4)".to_string(), items: None }); p.insert("strength".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Denoising strength (-15 to 32, default 0)".to_string(), items: None }); p.insert("use_bframe_qp".to_string(), PropertyDefinition { prop_type: "boolean".to_string(), description: "Use B-frame QP (default false)".to_string(), items: None }); p }, required: vec!["input_file".to_string(), "output_file".to_string()] },
-            },
 
-            FunctionDeclaration {
-                name: "apply_haas".to_string(),
-                description: "Applies Haas effect for stereo widening by delaying one channel to create perceived spatial width.".to_string(),
-                parameters: Parameters {
-                    param_type: "object".to_string(),
-                    properties: {
-                        let mut p = HashMap::new();
-                        p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Input audio/video file".to_string(), items: None });
-                        p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Output file path".to_string(), items: None });
-                        p.insert("level_in".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Input gain (default 1.0)".to_string(), items: None });
-                        p.insert("level_out".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Output gain (default 1.0)".to_string(), items: None });
-                        p.insert("side_gain".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Side channel gain (default 1.0)".to_string(), items: None });
-                        p.insert("middle_source".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Middle source: mid/left/right/side (default mid)".to_string(), items: None });
-                        p.insert("middle_phase".to_string(), PropertyDefinition { prop_type: "boolean".to_string(), description: "Invert middle phase (default false)".to_string(), items: None });
-                        p.insert("left_delay".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Left delay ms 0-40 (default 2.5)".to_string(), items: None });
-                        p.insert("left_balance".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Left balance -1.0-1.0 (default -1.0)".to_string(), items: None });
-                        p.insert("right_delay".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Right delay ms 0-40 (default 2.5)".to_string(), items: None });
-                        p.insert("right_balance".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Right balance -1.0-1.0 (default 1.0)".to_string(), items: None });
-                        p
-                    },
-                    required: vec!["input_file".to_string(), "output_file".to_string()],
-                },
-            },
 
-            FunctionDeclaration {
-                name: "apply_aemphasis".to_string(),
-                description: "Applies audio emphasis/de-emphasis curves (RIAA, CD, FM) for vinyl/tape/FM pre-emphasis or de-emphasis.".to_string(),
-                parameters: Parameters { param_type: "object".to_string(), properties: { let mut p = HashMap::new(); p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Input audio/video file".to_string(), items: None }); p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Output file path".to_string(), items: None }); p.insert("level_in".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Input gain (default 1.0)".to_string(), items: None }); p.insert("level_out".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Output gain (default 1.0)".to_string(), items: None }); p.insert("mode".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "reproduction or production (default reproduction)".to_string(), items: None }); p.insert("emph_type".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Curve: riaa, cd, 50fm, 75fm, 50kf, 75kf (default cd)".to_string(), items: None }); p }, required: vec!["input_file".to_string(), "output_file".to_string()] },
-            },
 
             // ================================================================
             // PHASE I BATCH 4 — negate, pixelize, colorlevels, pseudocolor, colorhold, shuffleplanes,
             //                   blackdetect, idet, vstack, hstack, setdar, stereo3d, telecine, pullup, thumbnail
             // ================================================================
 
-            FunctionDeclaration {
-                name: "apply_negate".to_string(),
-                description: "Inverts video colours (negative) via FFmpeg negate. Can target individual R/G/B channels.".to_string(),
-                parameters: Parameters { param_type: "object".to_string(), properties: { let mut p = HashMap::new(); p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Input video file".to_string(), items: None }); p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Output file path".to_string(), items: None }); p.insert("components".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Bitmask 1=R,2=G,4=B. Default 7 (RGB).".to_string(), items: None }); p }, required: vec!["input_file".to_string(), "output_file".to_string()] },
-            },
 
-            FunctionDeclaration {
-                name: "apply_pixelize".to_string(),
-                description: "Pixelates/mosaics video via FFmpeg pixelize. Block-based mosaic for censorship or artistic style.".to_string(),
-                parameters: Parameters { param_type: "object".to_string(), properties: { let mut p = HashMap::new(); p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Input video file".to_string(), items: None }); p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Output file path".to_string(), items: None }); p.insert("width".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Block width px. Default 16.".to_string(), items: None }); p.insert("height".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Block height px. Default same as width.".to_string(), items: None }); p.insert("mode".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "0=avg (default), 1=blocks.".to_string(), items: None }); p }, required: vec!["input_file".to_string(), "output_file".to_string()] },
-            },
 
-            FunctionDeclaration {
-                name: "apply_colorlevels".to_string(),
-                description: "Clips and remaps colour levels per channel via FFmpeg colorlevels. Set input/output black and white points.".to_string(),
-                parameters: Parameters {
-                    param_type: "object".to_string(),
-                    properties: {
-                        let mut props = HashMap::new();
-                        props.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Input video file".to_string(), items: None });
-                        props.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Output file path".to_string(), items: None });
-                        props.insert("rimin".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Red input min 0–1. Default 0.".to_string(), items: None });
-                        props.insert("rimax".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Red input max 0–1. Default 1.".to_string(), items: None });
-                        props.insert("gimin".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Green input min. Default 0.".to_string(), items: None });
-                        props.insert("gimax".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Green input max. Default 1.".to_string(), items: None });
-                        props.insert("bimin".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Blue input min. Default 0.".to_string(), items: None });
-                        props.insert("bimax".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Blue input max. Default 1.".to_string(), items: None });
-                        props.insert("romin".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Output min all channels. Default 0.".to_string(), items: None });
-                        props.insert("romax".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Output max all channels. Default 1.".to_string(), items: None });
-                        props
-                    },
-                    required: vec!["input_file".to_string(), "output_file".to_string()],
-                },
-            },
 
-            FunctionDeclaration {
-                name: "apply_pseudocolor".to_string(),
-                description: "False-colour visualisation via FFmpeg pseudocolor. Maps luminance to scientific palettes (magma, viridis, turbo, etc).".to_string(),
-                parameters: Parameters { param_type: "object".to_string(), properties: { let mut p = HashMap::new(); p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Input video file".to_string(), items: None }); p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Output file path".to_string(), items: None }); p.insert("preset".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Palette 0=magma,1=inferno,2=plasma,3=viridis,4=turbo. Default 0.".to_string(), items: None }); p.insert("opacity".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Effect opacity 0–1. Default 1.".to_string(), items: None }); p }, required: vec!["input_file".to_string(), "output_file".to_string()] },
-            },
 
-            FunctionDeclaration {
-                name: "apply_colorhold".to_string(),
-                description: "Selective colour via FFmpeg colorhold: keeps one colour, desaturates rest. Classic movie-poster effect.".to_string(),
-                parameters: Parameters { param_type: "object".to_string(), properties: { let mut p = HashMap::new(); p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Input video file".to_string(), items: None }); p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Output file path".to_string(), items: None }); p.insert("color".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Colour to preserve. Default 'red'.".to_string(), items: None }); p.insert("similarity".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Match range 0–1. Default 0.1.".to_string(), items: None }); p.insert("blend".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Boundary blend 0–1. Default 0.".to_string(), items: None }); p }, required: vec!["input_file".to_string(), "output_file".to_string()] },
-            },
 
-            FunctionDeclaration {
-                name: "apply_shuffleplanes".to_string(),
-                description: "Reorders video colour planes via FFmpeg shuffleplanes. Enables R↔B swap, channel isolation, and false-colour effects.".to_string(),
-                parameters: Parameters { param_type: "object".to_string(), properties: { let mut p = HashMap::new(); p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Input video file".to_string(), items: None }); p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Output file path".to_string(), items: None }); p.insert("map0".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Source for output plane 0. Default 0.".to_string(), items: None }); p.insert("map1".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Source for output plane 1. Default 1.".to_string(), items: None }); p.insert("map2".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Source for output plane 2. Default 2.".to_string(), items: None }); p.insert("map3".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Source for output plane 3. Default 3.".to_string(), items: None }); p }, required: vec!["input_file".to_string(), "output_file".to_string()] },
-            },
 
-            FunctionDeclaration {
-                name: "detect_black_frames".to_string(),
-                description: "Detects black/near-black frame segments via FFmpeg blackdetect. Returns timestamps. Analysis only.".to_string(),
-                parameters: Parameters { param_type: "object".to_string(), properties: { let mut p = HashMap::new(); p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Input video file".to_string(), items: None }); p.insert("black_min_duration".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Min black segment duration s. Default 2.0.".to_string(), items: None }); p.insert("picture_black_ratio_th".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Fraction of frame that must be black. Default 0.98.".to_string(), items: None }); p.insert("pixel_black_th".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Pixel luminance black threshold 0–1. Default 0.10.".to_string(), items: None }); p }, required: vec!["input_file".to_string()] },
-            },
 
-            FunctionDeclaration {
-                name: "detect_interlace_type".to_string(),
-                description: "Detects progressive/TFF/BFF interlacing via FFmpeg idet. Analysis only.".to_string(),
-                parameters: Parameters { param_type: "object".to_string(), properties: { let mut p = HashMap::new(); p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Input video file".to_string(), items: None }); p }, required: vec!["input_file".to_string()] },
-            },
 
-            FunctionDeclaration {
-                name: "apply_vstack".to_string(),
-                description: "Stacks two videos vertically via FFmpeg vstack. Both must have same width.".to_string(),
-                parameters: Parameters { param_type: "object".to_string(), properties: { let mut p = HashMap::new(); p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Top video file".to_string(), items: None }); p.insert("secondary_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Bottom video file".to_string(), items: None }); p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Output file path".to_string(), items: None }); p.insert("shortest".to_string(), PropertyDefinition { prop_type: "boolean".to_string(), description: "End on shorter clip. Default false.".to_string(), items: None }); p }, required: vec!["input_file".to_string(), "secondary_file".to_string(), "output_file".to_string()] },
-            },
 
-            FunctionDeclaration {
-                name: "apply_hstack".to_string(),
-                description: "Stacks two videos horizontally (side by side) via FFmpeg hstack. Both must have same height.".to_string(),
-                parameters: Parameters { param_type: "object".to_string(), properties: { let mut p = HashMap::new(); p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Left video file".to_string(), items: None }); p.insert("secondary_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Right video file".to_string(), items: None }); p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Output file path".to_string(), items: None }); p.insert("shortest".to_string(), PropertyDefinition { prop_type: "boolean".to_string(), description: "End on shorter clip. Default false.".to_string(), items: None }); p }, required: vec!["input_file".to_string(), "secondary_file".to_string(), "output_file".to_string()] },
-            },
 
-            FunctionDeclaration {
-                name: "apply_setdar".to_string(),
-                description: "Sets display aspect ratio via FFmpeg setdar without re-encoding. Corrects anamorphic/mis-tagged footage.".to_string(),
-                parameters: Parameters { param_type: "object".to_string(), properties: { let mut p = HashMap::new(); p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Input video file".to_string(), items: None }); p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Output file path".to_string(), items: None }); p.insert("dar".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Aspect ratio e.g. '16/9', '4/3'. Default '16/9'.".to_string(), items: None }); p }, required: vec!["input_file".to_string(), "output_file".to_string()] },
-            },
 
-            FunctionDeclaration {
-                name: "apply_stereo3d".to_string(),
-                description: "Converts between stereoscopic 3D formats via FFmpeg stereo3d (SBS, over-under, anaglyph, mono).".to_string(),
-                parameters: Parameters { param_type: "object".to_string(), properties: { let mut p = HashMap::new(); p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Input stereo 3D video file".to_string(), items: None }); p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Output file path".to_string(), items: None }); p.insert("input_format".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Input format: sbsl, sbsr, abl, abr. Default 'sbsl'.".to_string(), items: None }); p.insert("output_format".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Output format: arcd=red-cyan anaglyph, ml=mono left, mr=mono right. Default 'arcd'.".to_string(), items: None }); p }, required: vec!["input_file".to_string(), "output_file".to_string()] },
-            },
 
-            FunctionDeclaration {
-                name: "apply_telecine".to_string(),
-                description: "Applies 3:2 pulldown telecine (24fps→29.97fps) via FFmpeg telecine.".to_string(),
-                parameters: Parameters { param_type: "object".to_string(), properties: { let mut p = HashMap::new(); p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Input 24fps video file".to_string(), items: None }); p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Output 29.97fps file path".to_string(), items: None }); p.insert("pattern".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Pulldown pattern. Default '23'.".to_string(), items: None }); p.insert("first_field".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "0=top, 1=bottom. Default 0.".to_string(), items: None }); p }, required: vec!["input_file".to_string(), "output_file".to_string()] },
-            },
 
-            FunctionDeclaration {
-                name: "apply_pullup".to_string(),
-                description: "Removes 3:2 pulldown (inverse telecine) via FFmpeg pullup. Recovers 24fps from 29.97fps telecined content.".to_string(),
-                parameters: Parameters { param_type: "object".to_string(), properties: { let mut p = HashMap::new(); p.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Input telecined 29.97fps video file".to_string(), items: None }); p.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Output 24fps file path".to_string(), items: None }); p }, required: vec!["input_file".to_string(), "output_file".to_string()] },
-            },
 
             FunctionDeclaration {
                 name: "select_thumbnail_frame".to_string(),
@@ -6474,59 +5401,8 @@ impl GeminiClient {
             // PHASE I BATCH 3 — Blur variants, grain, rotation, geq, CCM, denoisers, LUT3D, SITI, amplify
             // ================================================================
 
-            FunctionDeclaration {
-                name: "apply_gaussian_blur".to_string(),
-                description: "Gaussian blur via FFmpeg gblur filter. Smooth natural blur with configurable sigma.".to_string(),
-                parameters: Parameters {
-                    param_type: "object".to_string(),
-                    properties: {
-                        let mut props = HashMap::new();
-                        props.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Input video file".to_string(), items: None });
-                        props.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Output file path".to_string(), items: None });
-                        props.insert("sigma".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Blur sigma. Default 3.".to_string(), items: None });
-                        props.insert("steps".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Blur passes 1–6. Default 1.".to_string(), items: None });
-                        props.insert("planes".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Planes bitmask. Default 15.".to_string(), items: None });
-                        props
-                    },
-                    required: vec!["input_file".to_string(), "output_file".to_string()],
-                },
-            },
 
-            FunctionDeclaration {
-                name: "apply_box_blur".to_string(),
-                description: "Box (average) blur via FFmpeg avgblur. Fast rectangular blur.".to_string(),
-                parameters: Parameters {
-                    param_type: "object".to_string(),
-                    properties: {
-                        let mut props = HashMap::new();
-                        props.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Input video file".to_string(), items: None });
-                        props.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Output file path".to_string(), items: None });
-                        props.insert("size_x".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Horizontal kernel size px. Default 3.".to_string(), items: None });
-                        props.insert("size_y".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Vertical kernel size px. Default same as size_x.".to_string(), items: None });
-                        props.insert("planes".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Planes bitmask. Default 15.".to_string(), items: None });
-                        props
-                    },
-                    required: vec!["input_file".to_string(), "output_file".to_string()],
-                },
-            },
 
-            FunctionDeclaration {
-                name: "apply_smart_blur".to_string(),
-                description: "Smart blur via FFmpeg smartblur. Blurs flat areas while preserving edges.".to_string(),
-                parameters: Parameters {
-                    param_type: "object".to_string(),
-                    properties: {
-                        let mut props = HashMap::new();
-                        props.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Input video file".to_string(), items: None });
-                        props.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Output file path".to_string(), items: None });
-                        props.insert("luma_radius".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Luma blur radius 0.1–5.0. Default 1.0.".to_string(), items: None });
-                        props.insert("luma_strength".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Strength -1 to 1. Negative = blur, positive = sharpen. Default -0.3.".to_string(), items: None });
-                        props.insert("luma_threshold".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Edge threshold -30 to 30. Default 0.".to_string(), items: None });
-                        props
-                    },
-                    required: vec!["input_file".to_string(), "output_file".to_string()],
-                },
-            },
 
             FunctionDeclaration {
                 name: "add_film_grain".to_string(),
@@ -6545,124 +5421,11 @@ impl GeminiClient {
                 },
             },
 
-            FunctionDeclaration {
-                name: "apply_rotate_angle".to_string(),
-                description: "Rotates video by arbitrary radians via FFmpeg rotate filter. Unlike rotate_video, supports any angle.".to_string(),
-                parameters: Parameters {
-                    param_type: "object".to_string(),
-                    properties: {
-                        let mut props = HashMap::new();
-                        props.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Input video file".to_string(), items: None });
-                        props.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Output file path".to_string(), items: None });
-                        props.insert("angle_rad".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Angle in radians. PI/6=30°, PI/4=45°, PI/2=90°.".to_string(), items: None });
-                        props.insert("fillcolor".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Fill colour for exposed corners. Default 'black'.".to_string(), items: None });
-                        props.insert("expand".to_string(), PropertyDefinition { prop_type: "boolean".to_string(), description: "Expand canvas to fit content. Default false.".to_string(), items: None });
-                        props
-                    },
-                    required: vec!["input_file".to_string(), "output_file".to_string(), "angle_rad".to_string()],
-                },
-            },
 
-            FunctionDeclaration {
-                name: "apply_geq".to_string(),
-                description: "Per-pixel formula manipulation via FFmpeg geq. Write math expressions for luma/chroma using X,Y,W,H and functions like lum(),r(),g(),b().".to_string(),
-                parameters: Parameters {
-                    param_type: "object".to_string(),
-                    properties: {
-                        let mut props = HashMap::new();
-                        props.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Input video file".to_string(), items: None });
-                        props.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Output file path".to_string(), items: None });
-                        props.insert("lum_expr".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Luma expression. Default 'lum(X,Y)'. Example: 'lum(W-X,Y)' mirrors horizontally.".to_string(), items: None });
-                        props.insert("cb_expr".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Cb chroma expression. Default 'cb(X,Y)'.".to_string(), items: None });
-                        props.insert("cr_expr".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Cr chroma expression. Default 'cr(X,Y)'.".to_string(), items: None });
-                        props
-                    },
-                    required: vec!["input_file".to_string(), "output_file".to_string()],
-                },
-            },
 
-            FunctionDeclaration {
-                name: "apply_colorchannelmixer".to_string(),
-                description: "Colour channel matrix mixer via FFmpeg colorchannelmixer. Control R/G/B cross-channel contributions for grading, channel swap, or precise greyscale.".to_string(),
-                parameters: Parameters {
-                    param_type: "object".to_string(),
-                    properties: {
-                        let mut props = HashMap::new();
-                        props.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Input video file".to_string(), items: None });
-                        props.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Output file path".to_string(), items: None });
-                        props.insert("rr".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "R→R contribution. Default 1.0.".to_string(), items: None });
-                        props.insert("rg".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "G→R contribution. Default 0.0.".to_string(), items: None });
-                        props.insert("rb".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "B→R contribution. Default 0.0.".to_string(), items: None });
-                        props.insert("gr".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "R→G contribution. Default 0.0.".to_string(), items: None });
-                        props.insert("gg".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "G→G contribution. Default 1.0.".to_string(), items: None });
-                        props.insert("gb".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "B→G contribution. Default 0.0.".to_string(), items: None });
-                        props.insert("br".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "R→B contribution. Default 0.0.".to_string(), items: None });
-                        props.insert("bg".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "G→B contribution. Default 0.0.".to_string(), items: None });
-                        props.insert("bb".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "B→B contribution. Default 1.0.".to_string(), items: None });
-                        props
-                    },
-                    required: vec!["input_file".to_string(), "output_file".to_string()],
-                },
-            },
 
-            FunctionDeclaration {
-                name: "apply_atadenoise".to_string(),
-                description: "Adaptive temporal averaging denoiser via FFmpeg atadenoise. Great for consistent temporal noise without blurring motion.".to_string(),
-                parameters: Parameters {
-                    param_type: "object".to_string(),
-                    properties: {
-                        let mut props = HashMap::new();
-                        props.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Input video file".to_string(), items: None });
-                        props.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Output file path".to_string(), items: None });
-                        props.insert("window_size".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Temporal window (odd, 5–129). Default 9.".to_string(), items: None });
-                        props.insert("threshold_a".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Low threshold 0–1. Default 0.02.".to_string(), items: None });
-                        props.insert("threshold_b".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "High threshold 0–1. Default 0.04.".to_string(), items: None });
-                        props.insert("planes".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Planes bitmask. Default 7 (YUV).".to_string(), items: None });
-                        props
-                    },
-                    required: vec!["input_file".to_string(), "output_file".to_string()],
-                },
-            },
 
-            FunctionDeclaration {
-                name: "apply_vaguedenoiser".to_string(),
-                description: "Wavelet-based video denoiser via FFmpeg vaguedenoiser. Preserves fine detail. Good for broadcast and archival.".to_string(),
-                parameters: Parameters {
-                    param_type: "object".to_string(),
-                    properties: {
-                        let mut props = HashMap::new();
-                        props.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Input video file".to_string(), items: None });
-                        props.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Output file path".to_string(), items: None });
-                        props.insert("threshold".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Denoising threshold. Default 2.0.".to_string(), items: None });
-                        props.insert("method".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Method: 0=soft, 1=hard, 2=garrote. Default 0.".to_string(), items: None });
-                        props.insert("nsteps".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Wavelet steps. Default 6.".to_string(), items: None });
-                        props.insert("percent".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Denoising percent 0–100. Default 85.".to_string(), items: None });
-                        props.insert("planes".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Planes bitmask. Default 7.".to_string(), items: None });
-                        props
-                    },
-                    required: vec!["input_file".to_string(), "output_file".to_string()],
-                },
-            },
 
-            FunctionDeclaration {
-                name: "apply_fftdnoiz".to_string(),
-                description: "FFT-based video denoiser via FFmpeg fftdnoiz. Excellent for uniform additive noise. Works in frequency domain.".to_string(),
-                parameters: Parameters {
-                    param_type: "object".to_string(),
-                    properties: {
-                        let mut props = HashMap::new();
-                        props.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Input video file".to_string(), items: None });
-                        props.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Output file path".to_string(), items: None });
-                        props.insert("sigma".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Noise sigma 0.1–30. Default 1.0.".to_string(), items: None });
-                        props.insert("amount".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Denoising amount 0–1. Default 0.96.".to_string(), items: None });
-                        props.insert("block_size".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "FFT block size (power of 2). Default 32.".to_string(), items: None });
-                        props.insert("overlap".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Block overlap 0.2–0.8. Default 0.5.".to_string(), items: None });
-                        props.insert("planes".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Planes bitmask. Default 7.".to_string(), items: None });
-                        props
-                    },
-                    required: vec!["input_file".to_string(), "output_file".to_string()],
-                },
-            },
 
             FunctionDeclaration {
                 name: "generate_waveform_video".to_string(),
@@ -6700,19 +5463,6 @@ impl GeminiClient {
                 },
             },
 
-            FunctionDeclaration {
-                name: "measure_siti".to_string(),
-                description: "Measures Spatial Information (SI) and Temporal Information (TI) via FFmpeg siti. Analysis only — no output file.".to_string(),
-                parameters: Parameters {
-                    param_type: "object".to_string(),
-                    properties: {
-                        let mut props = HashMap::new();
-                        props.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Input video file".to_string(), items: None });
-                        props
-                    },
-                    required: vec!["input_file".to_string()],
-                },
-            },
 
             FunctionDeclaration {
                 name: "create_test_pattern".to_string(),
@@ -6733,24 +5483,6 @@ impl GeminiClient {
                 },
             },
 
-            FunctionDeclaration {
-                name: "apply_amplify".to_string(),
-                description: "Amplifies pixel changes between frames via FFmpeg amplify. Makes subtle temporal motion visible.".to_string(),
-                parameters: Parameters {
-                    param_type: "object".to_string(),
-                    properties: {
-                        let mut props = HashMap::new();
-                        props.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Input video file".to_string(), items: None });
-                        props.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Output file path".to_string(), items: None });
-                        props.insert("radius".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Temporal radius frames. Default 2.".to_string(), items: None });
-                        props.insert("factor".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Amplification factor. Default 2.0.".to_string(), items: None });
-                        props.insert("threshold".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Min change threshold. Default 10.".to_string(), items: None });
-                        props.insert("planes".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Planes bitmask. Default 7 (YUV).".to_string(), items: None });
-                        props
-                    },
-                    required: vec!["input_file".to_string(), "output_file".to_string()],
-                },
-            },
 
             // ================================================================
             // PHASE I BATCH 2 — Long-tail: morphology, histogram, convolution
@@ -6805,117 +5537,11 @@ impl GeminiClient {
                 },
             },
 
-            FunctionDeclaration {
-                name: "apply_dilation".to_string(),
-                description: "Morphological dilation: expands bright regions via FFmpeg dilation filter.".to_string(),
-                parameters: Parameters {
-                    param_type: "object".to_string(),
-                    properties: {
-                        let mut props = HashMap::new();
-                        props.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to the input video file".to_string(), items: None });
-                        props.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to save the dilation output".to_string(), items: None });
-                        props.insert("threshold0".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Max change for plane 0. Default 65535.".to_string(), items: None });
-                        props.insert("threshold1".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Max change for plane 1. Default 65535.".to_string(), items: None });
-                        props.insert("threshold2".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Max change for plane 2. Default 65535.".to_string(), items: None });
-                        props.insert("threshold3".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Max change for plane 3. Default 65535.".to_string(), items: None });
-                        props.insert("coordinates".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "8-bit neighbour bitmask. Default 255.".to_string(), items: None });
-                        props
-                    },
-                    required: vec!["input_file".to_string(), "output_file".to_string()],
-                },
-            },
 
-            FunctionDeclaration {
-                name: "apply_erosion".to_string(),
-                description: "Morphological erosion: shrinks bright regions via FFmpeg erosion filter.".to_string(),
-                parameters: Parameters {
-                    param_type: "object".to_string(),
-                    properties: {
-                        let mut props = HashMap::new();
-                        props.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to the input video file".to_string(), items: None });
-                        props.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to save the erosion output".to_string(), items: None });
-                        props.insert("threshold0".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Max change for plane 0. Default 65535.".to_string(), items: None });
-                        props.insert("threshold1".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Max change for plane 1. Default 65535.".to_string(), items: None });
-                        props.insert("threshold2".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Max change for plane 2. Default 65535.".to_string(), items: None });
-                        props.insert("threshold3".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Max change for plane 3. Default 65535.".to_string(), items: None });
-                        props.insert("coordinates".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "8-bit neighbour bitmask. Default 255.".to_string(), items: None });
-                        props
-                    },
-                    required: vec!["input_file".to_string(), "output_file".to_string()],
-                },
-            },
 
-            FunctionDeclaration {
-                name: "apply_median_filter".to_string(),
-                description: "Median filter for salt-and-pepper noise removal via FFmpeg median. Edge-preserving non-linear filter.".to_string(),
-                parameters: Parameters {
-                    param_type: "object".to_string(),
-                    properties: {
-                        let mut props = HashMap::new();
-                        props.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to the input video file".to_string(), items: None });
-                        props.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to save the filtered output".to_string(), items: None });
-                        props.insert("radius".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Kernel radius 1–127. Default 1.".to_string(), items: None });
-                        props.insert("planes".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Planes bitmask. Default 15 (all).".to_string(), items: None });
-                        props
-                    },
-                    required: vec!["input_file".to_string(), "output_file".to_string()],
-                },
-            },
 
-            FunctionDeclaration {
-                name: "apply_histogram_eq".to_string(),
-                description: "Global histogram equalisation via FFmpeg histeq. Improves contrast by stretching the luminance range.".to_string(),
-                parameters: Parameters {
-                    param_type: "object".to_string(),
-                    properties: {
-                        let mut props = HashMap::new();
-                        props.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to the input video file".to_string(), items: None });
-                        props.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to save the equalised output".to_string(), items: None });
-                        props.insert("strength".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Strength 0–1. Default 0.2.".to_string(), items: None });
-                        props.insert("intensity".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Intensity 0–1. Default 0.21.".to_string(), items: None });
-                        props.insert("antibanding".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Anti-banding: none (default), weak, strong.".to_string(), items: None });
-                        props
-                    },
-                    required: vec!["input_file".to_string(), "output_file".to_string()],
-                },
-            },
 
-            FunctionDeclaration {
-                name: "apply_clahe".to_string(),
-                description: "CLAHE local contrast enhancement via FFmpeg clahe. Avoids overexposing highlights compared to global histeq.".to_string(),
-                parameters: Parameters {
-                    param_type: "object".to_string(),
-                    properties: {
-                        let mut props = HashMap::new();
-                        props.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to the input video file".to_string(), items: None });
-                        props.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to save the CLAHE output".to_string(), items: None });
-                        props.insert("clip_limit".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Clip limit 1–100. Default 25.".to_string(), items: None });
-                        props.insert("nb_tiles_x".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Horizontal tile count. Default 8.".to_string(), items: None });
-                        props.insert("nb_tiles_y".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Vertical tile count. Default 8.".to_string(), items: None });
-                        props
-                    },
-                    required: vec!["input_file".to_string(), "output_file".to_string()],
-                },
-            },
 
-            FunctionDeclaration {
-                name: "apply_deblock".to_string(),
-                description: "Removes DCT block artefacts from compressed video via FFmpeg deblock. Improves quality of old H.264/MPEG footage.".to_string(),
-                parameters: Parameters {
-                    param_type: "object".to_string(),
-                    properties: {
-                        let mut props = HashMap::new();
-                        props.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to the input video file".to_string(), items: None });
-                        props.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to save the deblocked output".to_string(), items: None });
-                        props.insert("filter_type".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Strength level 1–4. Default 4.".to_string(), items: None });
-                        props.insert("block_size".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Block size px. Default 8.".to_string(), items: None });
-                        props.insert("strength".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Alpha/beta/gamma/delta 0–1. Default 0.5.".to_string(), items: None });
-                        props.insert("planes".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Planes bitmask. Default 15 (all).".to_string(), items: None });
-                        props
-                    },
-                    required: vec!["input_file".to_string(), "output_file".to_string()],
-                },
-            },
 
             FunctionDeclaration {
                 name: "adjust_hue_saturation".to_string(),
@@ -6936,24 +5562,6 @@ impl GeminiClient {
                 },
             },
 
-            FunctionDeclaration {
-                name: "apply_convolution".to_string(),
-                description: "Custom convolution kernel via FFmpeg convolution filter. Sharpen, blur, emboss, or edge-detect with any NxN matrix.".to_string(),
-                parameters: Parameters {
-                    param_type: "object".to_string(),
-                    properties: {
-                        let mut props = HashMap::new();
-                        props.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to the input video file".to_string(), items: None });
-                        props.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to save the filtered output".to_string(), items: None });
-                        props.insert("matrix".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Space-separated kernel values (9 or 25). Default: '0 -1 0 -1 5 -1 0 -1 0' (sharpen).".to_string(), items: None });
-                        props.insert("rdiv".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Normalisation divisor. Default 1.0.".to_string(), items: None });
-                        props.insert("bias".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Bias added after convolution. Default 0.".to_string(), items: None });
-                        props.insert("planes".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Planes bitmask. Default 15 (all).".to_string(), items: None });
-                        props
-                    },
-                    required: vec!["input_file".to_string(), "output_file".to_string()],
-                },
-            },
 
             FunctionDeclaration {
                 name: "reverse_audio".to_string(),
@@ -6988,285 +5596,28 @@ impl GeminiClient {
                 },
             },
 
-            FunctionDeclaration {
-                name: "measure_silence".to_string(),
-                description: "Detects silent segments via FFmpeg silencedetect. Returns silence_start/end/duration timestamps. Analysis only.".to_string(),
-                parameters: Parameters {
-                    param_type: "object".to_string(),
-                    properties: {
-                        let mut props = HashMap::new();
-                        props.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to the input audio/video file".to_string(), items: None });
-                        props.insert("noise_db".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Noise floor dBFS (negative). Default -30.".to_string(), items: None });
-                        props.insert("duration_s".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Min silence duration seconds. Default 0.5.".to_string(), items: None });
-                        props
-                    },
-                    required: vec!["input_file".to_string()],
-                },
-            },
 
-            FunctionDeclaration {
-                name: "measure_audio_spectrum".to_string(),
-                description: "Renders audio frequency spectrum as a video via FFmpeg showspectrum. Visualise frequency content for EQ decisions.".to_string(),
-                parameters: Parameters {
-                    param_type: "object".to_string(),
-                    properties: {
-                        let mut props = HashMap::new();
-                        props.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to the input audio/video file".to_string(), items: None });
-                        props.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to save the spectrum video".to_string(), items: None });
-                        props.insert("width".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Output width px. Default 1024.".to_string(), items: None });
-                        props.insert("height".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Output height px. Default 512.".to_string(), items: None });
-                        props.insert("mode".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Display mode: combined (default), separate.".to_string(), items: None });
-                        props.insert("color".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Colour scheme: intensity (default), fire, moreland, rainbow.".to_string(), items: None });
-                        props
-                    },
-                    required: vec!["input_file".to_string(), "output_file".to_string()],
-                },
-            },
 
             // ================================================================
             // PHASE H — Codec / Format Depth
             // ================================================================
 
-            FunctionDeclaration {
-                name: "encode_vp9".to_string(),
-                description: "Encodes video to VP9 via libvpx-vp9 with Opus audio. Best open codec for web delivery.".to_string(),
-                parameters: Parameters {
-                    param_type: "object".to_string(),
-                    properties: {
-                        let mut props = HashMap::new();
-                        props.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to the input video file".to_string(), items: None });
-                        props.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to save the VP9 output (.webm or .mkv)".to_string(), items: None });
-                        props.insert("crf".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Constant quality (0–63). Default 31.".to_string(), items: None });
-                        props.insert("bitrate".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Target bitrate e.g. '2M'. Leave empty for CRF-only.".to_string(), items: None });
-                        props.insert("speed".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "CPU speed preset (0–5). Default 2.".to_string(), items: None });
-                        props.insert("threads".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Thread count. Default 4.".to_string(), items: None });
-                        props
-                    },
-                    required: vec!["input_file".to_string(), "output_file".to_string()],
-                },
-            },
 
-            FunctionDeclaration {
-                name: "encode_av1".to_string(),
-                description: "Encodes video to AV1 via libaom-av1 or libsvtav1. ~30% better compression than VP9/H.265.".to_string(),
-                parameters: Parameters {
-                    param_type: "object".to_string(),
-                    properties: {
-                        let mut props = HashMap::new();
-                        props.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to the input video file".to_string(), items: None });
-                        props.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to save the AV1 output (.webm or .mkv)".to_string(), items: None });
-                        props.insert("crf".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Constant quality (0–63). Default 30.".to_string(), items: None });
-                        props.insert("speed".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "CPU speed preset (0–8 libaom, 0–12 svtav1). Default 4.".to_string(), items: None });
-                        props.insert("threads".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Thread count. Default 4.".to_string(), items: None });
-                        props.insert("encoder".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "AV1 encoder: libaom-av1 or libsvtav1. Default libaom-av1.".to_string(), items: None });
-                        props
-                    },
-                    required: vec!["input_file".to_string(), "output_file".to_string()],
-                },
-            },
 
-            FunctionDeclaration {
-                name: "encode_hevc".to_string(),
-                description: "Encodes video to H.265/HEVC via libx265. ~50% better compression than H.264 at equivalent quality.".to_string(),
-                parameters: Parameters {
-                    param_type: "object".to_string(),
-                    properties: {
-                        let mut props = HashMap::new();
-                        props.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to the input video file".to_string(), items: None });
-                        props.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to save the HEVC output (.mp4 or .mkv)".to_string(), items: None });
-                        props.insert("crf".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Constant Rate Factor (0–51). Default 28.".to_string(), items: None });
-                        props.insert("preset".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Speed preset: ultrafast…veryslow. Default medium.".to_string(), items: None });
-                        props.insert("tune".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Tuning: grain, zerolatency, fastdecode, animation. Leave empty for default.".to_string(), items: None });
-                        props
-                    },
-                    required: vec!["input_file".to_string(), "output_file".to_string()],
-                },
-            },
 
-            FunctionDeclaration {
-                name: "encode_opus".to_string(),
-                description: "Encodes audio to Opus via libopus. Best-in-class lossy audio codec for streaming and music.".to_string(),
-                parameters: Parameters {
-                    param_type: "object".to_string(),
-                    properties: {
-                        let mut props = HashMap::new();
-                        props.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to the input audio or video file".to_string(), items: None });
-                        props.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to save the Opus audio output (.opus or .ogg)".to_string(), items: None });
-                        props.insert("bitrate_kbps".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Target bitrate kbps (6–510). Default 128.".to_string(), items: None });
-                        props.insert("vbr".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "VBR mode: true or false. Default true.".to_string(), items: None });
-                        props.insert("compression".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Compression level (0–10). Default 10.".to_string(), items: None });
-                        props
-                    },
-                    required: vec!["input_file".to_string(), "output_file".to_string()],
-                },
-            },
 
-            FunctionDeclaration {
-                name: "encode_hdr10".to_string(),
-                description: "Encodes video to HDR10 via libx265 with mastering display and MaxCLL/MaxFALL metadata.".to_string(),
-                parameters: Parameters {
-                    param_type: "object".to_string(),
-                    properties: {
-                        let mut props = HashMap::new();
-                        props.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to the input HDR video file".to_string(), items: None });
-                        props.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to save the HDR10 output".to_string(), items: None });
-                        props.insert("crf".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "CRF (0–51). Default 22.".to_string(), items: None });
-                        props.insert("preset".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "x265 preset. Default slow.".to_string(), items: None });
-                        props.insert("master_display".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Mastering display primaries string. Leave empty for Rec.2020 defaults.".to_string(), items: None });
-                        props.insert("max_cll".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "MaxCLL,MaxFALL e.g. '1000,400'. Leave empty for default.".to_string(), items: None });
-                        props
-                    },
-                    required: vec!["input_file".to_string(), "output_file".to_string()],
-                },
-            },
 
-            FunctionDeclaration {
-                name: "encode_nvenc".to_string(),
-                description: "Hardware-accelerated encoding via NVIDIA NVENC (CUDA GPU). Extremely fast with near-software quality.".to_string(),
-                parameters: Parameters {
-                    param_type: "object".to_string(),
-                    properties: {
-                        let mut props = HashMap::new();
-                        props.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to the input video file".to_string(), items: None });
-                        props.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to save the NVENC output".to_string(), items: None });
-                        props.insert("codec".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Codec: h264 (default), hevc, av1.".to_string(), items: None });
-                        props.insert("preset".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "NVENC preset p1 (fastest)–p7 (best). Default p4.".to_string(), items: None });
-                        props.insert("bitrate".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Target bitrate e.g. '8M'. Leave empty to use CQ only.".to_string(), items: None });
-                        props.insert("cq".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Constant quality (0–51). Default 23.".to_string(), items: None });
-                        props
-                    },
-                    required: vec!["input_file".to_string(), "output_file".to_string()],
-                },
-            },
 
-            FunctionDeclaration {
-                name: "encode_vaapi".to_string(),
-                description: "Hardware-accelerated encoding via Intel/AMD VAAPI GPU on Linux.".to_string(),
-                parameters: Parameters {
-                    param_type: "object".to_string(),
-                    properties: {
-                        let mut props = HashMap::new();
-                        props.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to the input video file".to_string(), items: None });
-                        props.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to save the VAAPI output".to_string(), items: None });
-                        props.insert("codec".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Codec: h264 (default), hevc, vp9, av1.".to_string(), items: None });
-                        props.insert("quality".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "QP value (1–51). Lower = better. Default 23.".to_string(), items: None });
-                        props.insert("profile".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Encoding profile: high (default), main, baseline.".to_string(), items: None });
-                        props
-                    },
-                    required: vec!["input_file".to_string(), "output_file".to_string()],
-                },
-            },
 
-            FunctionDeclaration {
-                name: "encode_qsv".to_string(),
-                description: "Hardware-accelerated encoding via Intel Quick Sync Video (QSV). Very fast on Intel integrated and Arc GPUs.".to_string(),
-                parameters: Parameters {
-                    param_type: "object".to_string(),
-                    properties: {
-                        let mut props = HashMap::new();
-                        props.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to the input video file".to_string(), items: None });
-                        props.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to save the QSV output".to_string(), items: None });
-                        props.insert("codec".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Codec: h264 (default), hevc, av1, vp9.".to_string(), items: None });
-                        props.insert("preset".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Speed preset: veryfast…veryslow. Default medium.".to_string(), items: None });
-                        props.insert("bitrate".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Target bitrate e.g. '6M'. Leave empty for auto.".to_string(), items: None });
-                        props
-                    },
-                    required: vec!["input_file".to_string(), "output_file".to_string()],
-                },
-            },
 
-            FunctionDeclaration {
-                name: "encode_prores".to_string(),
-                description: "Encodes video to Apple ProRes via prores_ks. Professional intermediate codec for editing workflows.".to_string(),
-                parameters: Parameters {
-                    param_type: "object".to_string(),
-                    properties: {
-                        let mut props = HashMap::new();
-                        props.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to the input video file".to_string(), items: None });
-                        props.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to save the ProRes output (.mov)".to_string(), items: None });
-                        props.insert("profile".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "ProRes profile: 0=Proxy, 1=LT, 2=Standard, 3=HQ (default), 4=4444, 5=4444XQ.".to_string(), items: None });
-                        props.insert("vendor".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "4-char vendor tag. Default 'apl0'.".to_string(), items: None });
-                        props
-                    },
-                    required: vec!["input_file".to_string(), "output_file".to_string()],
-                },
-            },
 
-            FunctionDeclaration {
-                name: "encode_dnxhd".to_string(),
-                description: "Encodes video to Avid DNxHD/DNxHR. Professional intermediate codec for Avid Media Composer and post-production.".to_string(),
-                parameters: Parameters {
-                    param_type: "object".to_string(),
-                    properties: {
-                        let mut props = HashMap::new();
-                        props.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to the input video file".to_string(), items: None });
-                        props.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to save the DNxHD/DNxHR output (.mxf or .mov)".to_string(), items: None });
-                        props.insert("profile".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "DNxHR profile: dnxhr_lb, dnxhr_sq (default), dnxhr_hq, dnxhr_hqx, dnxhr_444.".to_string(), items: None });
-                        props
-                    },
-                    required: vec!["input_file".to_string(), "output_file".to_string()],
-                },
-            },
 
-            FunctionDeclaration {
-                name: "encode_gif".to_string(),
-                description: "Creates high-quality animated GIF using FFmpeg 2-pass palette optimisation. Much better quality than naive GIF conversion.".to_string(),
-                parameters: Parameters {
-                    param_type: "object".to_string(),
-                    properties: {
-                        let mut props = HashMap::new();
-                        props.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to the input video file".to_string(), items: None });
-                        props.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to save the animated GIF".to_string(), items: None });
-                        props.insert("fps".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Frames per second. Default 15.".to_string(), items: None });
-                        props.insert("scale".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Output width in pixels. Default 480.".to_string(), items: None });
-                        props.insert("loop_count".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Loop count: 0=infinite (default), -1=no loop, N=loop N times.".to_string(), items: None });
-                        props
-                    },
-                    required: vec!["input_file".to_string(), "output_file".to_string()],
-                },
-            },
 
-            FunctionDeclaration {
-                name: "encode_webm".to_string(),
-                description: "Encodes video to WebM container (VP8/VP9 + Vorbis/Opus). Open web format supported by all modern browsers.".to_string(),
-                parameters: Parameters {
-                    param_type: "object".to_string(),
-                    properties: {
-                        let mut props = HashMap::new();
-                        props.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to the input video file".to_string(), items: None });
-                        props.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to save the WebM output".to_string(), items: None });
-                        props.insert("video_codec".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Video codec: vp8 (default, fast) or vp9 (better quality).".to_string(), items: None });
-                        props.insert("audio_codec".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Audio codec: vorbis (default) or opus.".to_string(), items: None });
-                        props.insert("crf".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "CRF quality. VP8: 4–63 (default 10), VP9: 0–63 (default 31).".to_string(), items: None });
-                        props.insert("bitrate".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Target bitrate e.g. '1M'. Leave empty for CRF-only.".to_string(), items: None });
-                        props
-                    },
-                    required: vec!["input_file".to_string(), "output_file".to_string()],
-                },
-            },
 
             // ================================================================
             // PHASE G — AI/ML Filters
             // ================================================================
 
-            FunctionDeclaration {
-                name: "detect_objects_dnn".to_string(),
-                description: "Runs DNN-based object detection on a video using FFmpeg dnn_detect. Draws bounding boxes around detected objects.".to_string(),
-                parameters: Parameters {
-                    param_type: "object".to_string(),
-                    properties: {
-                        let mut props = HashMap::new();
-                        props.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to the input video file".to_string(), items: None });
-                        props.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to save the annotated output video".to_string(), items: None });
-                        props.insert("model".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to DNN model file (yolov3.weights or model.onnx)".to_string(), items: None });
-                        props.insert("backend".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "DNN backend: native, openvino, tensorflow, pytorch, onnx. Default 'native'.".to_string(), items: None });
-                        props.insert("confidence".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Minimum confidence threshold (0–1). Default 0.5.".to_string(), items: None });
-                        props.insert("labels".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Optional path to labels file".to_string(), items: None });
-                        props
-                    },
-                    required: vec!["input_file".to_string(), "output_file".to_string(), "model".to_string()],
-                },
-            },
 
             FunctionDeclaration {
                 name: "classify_frames_dnn".to_string(),
@@ -7321,39 +5672,7 @@ impl GeminiClient {
                 },
             },
 
-            FunctionDeclaration {
-                name: "detect_frozen_frames".to_string(),
-                description: "Detects frozen/stuck frames in a video using FFmpeg freezedetect. Returns timestamps and durations of freeze events. Analysis-only.".to_string(),
-                parameters: Parameters {
-                    param_type: "object".to_string(),
-                    properties: {
-                        let mut props = HashMap::new();
-                        props.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to the input video file to analyze".to_string(), items: None });
-                        props.insert("noise_db".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Noise threshold in dB (negative). Default -60.".to_string(), items: None });
-                        props.insert("duration".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Minimum freeze duration in seconds. Default 2.0.".to_string(), items: None });
-                        props
-                    },
-                    required: vec!["input_file".to_string()],
-                },
-            },
 
-            FunctionDeclaration {
-                name: "apply_edgedetect".to_string(),
-                description: "Detects and visualises edges in a video using FFmpeg edgedetect filter. Useful for stylised looks, motion analysis, and visual effects.".to_string(),
-                parameters: Parameters {
-                    param_type: "object".to_string(),
-                    properties: {
-                        let mut props = HashMap::new();
-                        props.insert("input_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to the input video file".to_string(), items: None });
-                        props.insert("output_file".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Path to save the edge-detected output video".to_string(), items: None });
-                        props.insert("low".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "Low hysteresis threshold (0–1). Default 0.0625.".to_string(), items: None });
-                        props.insert("high".to_string(), PropertyDefinition { prop_type: "number".to_string(), description: "High hysteresis threshold (0–1). Default 0.1875.".to_string(), items: None });
-                        props.insert("mode".to_string(), PropertyDefinition { prop_type: "string".to_string(), description: "Edge mode: wires, colormix, canny. Default 'wires'.".to_string(), items: None });
-                        props
-                    },
-                    required: vec!["input_file".to_string(), "output_file".to_string()],
-                },
-            },
 
             // ================================================================
             // PHASE E — Vectorscope, Waveform, Grid, LumaKey, Binaural, Modulation

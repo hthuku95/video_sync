@@ -38,7 +38,7 @@ enum StartingPhase {
 /// Execute clipping job workflow
 ///
 /// Replaced the 5-phase procedural pipeline with an agentic workflow.
-/// The agent has all 320+ tools and decides how to analyze, extract,
+/// The agent has the full editing and analysis toolset and decides how to analyze, extract,
 /// enhance, and publish clips.
 pub async fn execute_clipping_job(job_id: i32, app_state: Arc<AppState>) -> Result<String, String> {
     tracing::info!("🎬 Starting agentic clipping job {}", job_id);
