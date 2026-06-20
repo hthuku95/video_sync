@@ -1669,6 +1669,8 @@ pub async fn execute_tool_claude(name: &str, args: &Value) -> String {
         "apply_deblock" => execute_apply_deblock_claude(args),
         "adjust_hue_saturation" => execute_adjust_hue_saturation_claude(args),
         "apply_convolution" => execute_apply_convolution_claude(args),
+        "apply_ffmpeg_filter" => execute_apply_ffmpeg_filter_claude(args).await,
+        "apply_audio_ffmpeg_filter" => execute_apply_audio_ffmpeg_filter_claude(args).await,
         "reverse_audio" => execute_reverse_audio_claude(args),
         "blend_audio_streams" => execute_blend_audio_streams_claude(args),
         "measure_silence" => execute_measure_silence_claude(args),
@@ -2083,6 +2085,8 @@ pub async fn execute_tool_gemini(name: &str, args: &HashMap<String, Value>) -> S
         "apply_deblock" => execute_apply_deblock_gemini(args),
         "adjust_hue_saturation" => execute_adjust_hue_saturation_gemini(args),
         "apply_convolution" => execute_apply_convolution_gemini(args),
+        "apply_ffmpeg_filter" => execute_apply_ffmpeg_filter_gemini(args).await,
+        "apply_audio_ffmpeg_filter" => execute_apply_audio_ffmpeg_filter_gemini(args).await,
         "reverse_audio" => execute_reverse_audio_gemini(args),
         "blend_audio_streams" => execute_blend_audio_streams_gemini(args),
         "measure_silence" => execute_measure_silence_gemini(args),
@@ -19520,5 +19524,85 @@ async fn execute_fetch_website_image_inner(url: &str) -> String {
         None => {
             format!("Could not extract a hero image from {url} (no og:image or twitter:image meta tag found). You can still use generate_image to create a visual inspired by the website, then pass that to blender_generate_scene.")
         }
+    }
+}
+
+async fn execute_apply_ffmpeg_filter_claude(args: &Value) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let filter_name = args.get("filter_name").and_then(|v| v.as_str()).unwrap_or("");
+    if input.is_empty() || output.is_empty() || filter_name.is_empty() {
+        return "❌ Error: input_file, output_file, and filter_name are required".to_string();
+    }
+    let params: Vec<(String, String)> = match args.get("params") {
+        Some(Value::Object(map)) => {
+            map.iter().map(|(k, v)| (k.clone(), v.to_string())).collect()
+        }
+        _ => vec![],
+    };
+    let param_refs: Vec<(&str, &str)> = params.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+    match crate::visual::apply_ffmpeg_filter(input, output, filter_name, &param_refs) {
+        Ok(s) => s,
+        Err(e) => format!("❌ apply_ffmpeg_filter failed: {}", e),
+    }
+}
+
+async fn execute_apply_ffmpeg_filter_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let filter_name = args.get("filter_name").and_then(|v| v.as_str()).unwrap_or("");
+    if input.is_empty() || output.is_empty() || filter_name.is_empty() {
+        return "❌ Error: input_file, output_file, and filter_name are required".to_string();
+    }
+    let params: Vec<(String, String)> = match args.get("params") {
+        Some(Value::Object(map)) => {
+            map.iter().map(|(k, v)| (k.clone(), v.to_string())).collect()
+        }
+        _ => vec![],
+    };
+    let param_refs: Vec<(&str, &str)> = params.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+    match crate::visual::apply_ffmpeg_filter(input, output, filter_name, &param_refs) {
+        Ok(s) => s,
+        Err(e) => format!("❌ apply_ffmpeg_filter failed: {}", e),
+    }
+}
+
+async fn execute_apply_audio_ffmpeg_filter_claude(args: &Value) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let filter_name = args.get("filter_name").and_then(|v| v.as_str()).unwrap_or("");
+    if input.is_empty() || output.is_empty() || filter_name.is_empty() {
+        return "❌ Error: input_file, output_file, and filter_name are required".to_string();
+    }
+    let params: Vec<(String, String)> = match args.get("params") {
+        Some(Value::Object(map)) => {
+            map.iter().map(|(k, v)| (k.clone(), v.to_string())).collect()
+        }
+        _ => vec![],
+    };
+    let param_refs: Vec<(&str, &str)> = params.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+    match crate::visual::apply_audio_ffmpeg_filter(input, output, filter_name, &param_refs) {
+        Ok(s) => s,
+        Err(e) => format!("❌ apply_audio_ffmpeg_filter failed: {}", e),
+    }
+}
+
+async fn execute_apply_audio_ffmpeg_filter_gemini(args: &HashMap<String, Value>) -> String {
+    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let filter_name = args.get("filter_name").and_then(|v| v.as_str()).unwrap_or("");
+    if input.is_empty() || output.is_empty() || filter_name.is_empty() {
+        return "❌ Error: input_file, output_file, and filter_name are required".to_string();
+    }
+    let params: Vec<(String, String)> = match args.get("params") {
+        Some(Value::Object(map)) => {
+            map.iter().map(|(k, v)| (k.clone(), v.to_string())).collect()
+        }
+        _ => vec![],
+    };
+    let param_refs: Vec<(&str, &str)> = params.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+    match crate::visual::apply_audio_ffmpeg_filter(input, output, filter_name, &param_refs) {
+        Ok(s) => s,
+        Err(e) => format!("❌ apply_audio_ffmpeg_filter failed: {}", e),
     }
 }

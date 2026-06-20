@@ -116,18 +116,55 @@ impl ToolRegistry {
         }
     }
 
+    /// Tools to KEEP as separate tools despite starting with `apply_` prefix.
+    const KEEP_APPLY_TOOLS: &'static [&'static str] = &[
+        "apply_filter", "apply_filter_chain", "apply_audio_effect",
+        "apply_lut", "apply_lut3d", "apply_lut_rgb", "apply_lut_yuv",
+        "apply_xfade_transition", "apply_maskedmerge",
+    ];
+
     pub fn gemini_tools_for_profile(profile: AgentExecutionProfile) -> Vec<FunctionDeclaration> {
-        Self::tools_for_profile(profile)
+        let mut tools: Vec<FunctionDeclaration> = Self::tools_for_profile(profile)
             .into_iter()
             .map(|tool| tool.declaration)
-            .collect()
+            .filter(|t| {
+                // Keep tools that don't start with apply_, OR are in the keep list
+                !t.name.starts_with("apply_")
+                    || Self::KEEP_APPLY_TOOLS.contains(&t.name.as_str())
+            })
+            .collect();
+
+        // Add consolidated parameterized tools
+        tools.push(crate::gemini_client::GeminiClient::apply_ffmpeg_filter_tool());
+        tools.push(crate::gemini_client::GeminiClient::apply_audio_ffmpeg_filter_tool());
+
+        tools
     }
 
     pub fn claude_tools_for_profile(profile: AgentExecutionProfile) -> Vec<ClaudeTool> {
-        Self::tools_for_profile(profile)
+        let tools: Vec<FunctionDeclaration> = Self::tools_for_profile(profile)
             .into_iter()
-            .map(|tool| gemini_to_claude_tool(tool.declaration))
-            .collect()
+            .map(|tool| tool.declaration)
+            .filter(|t| {
+                !t.name.starts_with("apply_")
+                    || Self::KEEP_APPLY_TOOLS.contains(&t.name.as_str())
+            })
+            .collect();
+
+        let mut claude_tools: Vec<ClaudeTool> = tools
+            .into_iter()
+            .map(gemini_to_claude_tool)
+            .collect();
+
+        // Add consolidated parameterized tools
+        claude_tools.push(gemini_to_claude_tool(
+            crate::gemini_client::GeminiClient::apply_ffmpeg_filter_tool()
+        ));
+        claude_tools.push(gemini_to_claude_tool(
+            crate::gemini_client::GeminiClient::apply_audio_ffmpeg_filter_tool()
+        ));
+
+        claude_tools
     }
 
     pub fn filter_gemini_tools_for_profile(

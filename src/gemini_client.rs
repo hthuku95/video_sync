@@ -942,6 +942,125 @@ impl GeminiClient {
             .await
     }
 
+    /// Consolidated apply_ffmpeg_filter tool — replaces 60+ individual one-to-one FFmpeg filter wrappers.
+    /// The model passes any FFmpeg video filter name with parameters as a key-value object.
+    pub fn apply_ffmpeg_filter_tool() -> FunctionDeclaration {
+        FunctionDeclaration {
+            name: "apply_ffmpeg_filter".to_string(),
+            description: "Apply any FFmpeg video filter by its filter name. Replaces all individual \
+                apply_gaussian_blur, apply_box_blur, apply_smart_blur, apply_color_key, apply_monochrome, \
+                apply_colormatrix, apply_edgedetect, apply_fade_video, and 60+ other one-to-one FFmpeg \
+                filter wrappers. Use this ONE tool instead. Pass the exact FFmpeg filter name in \
+                `filter_name` and its parameters as key-value pairs in `params`. \
+                Example: apply_ffmpeg_filter(input=\"video.mp4\", output=\"blurred.mp4\", \
+                filter_name=\"gblur\", params={\"sigma\": 3.0, \"steps\": 1, \"planes\": 15}). \
+                See FFmpeg documentation for available filter names and their parameters. \
+                Common filters: gblur (gaussian blur), avgblur (box blur), smartblur, \
+                colorbalance, colorchannelmixer, colorkey, edgedetect, fade, negate, \
+                hflip, vflip, scale, crop, rotate, drawtext, lut, curves, eq, \
+                unsharp, nlmeans (denoise), hqdn3d (denoise), estdif (deinterlace), \
+                yadif (deinterlace), fieldmatch, pullup, bwdif, w3fdif, \
+                atadenoise, vaguedenoiser, fftdnoiz, spp, pp, mplayer2, \
+                sab, smartblur, gblur, avgblur, boxblur, denoise_va, nlmeans, \
+                hqdn3d, owdenoise, dctdnoiz, bilateral, unsharp, uspp, \
+                lagfun, perspective, lenscorrection, cas, chromashift, \
+                prewitt, roberts, sobel, kirsch, dilation, erosion, \
+                deflate, inflate, convolution, edgedetect, fre0r, \
+                colorlevels, rgblevels, gblur, avgblur, boxblur, \
+                pseudocolor, colorhold, shuffleplanes, swaprect, \
+                framestep, fillborders, chromanr, weave, interlace, \
+                fieldorder, hsvkey, lutrgb, lutyuv, freezeframes, \
+                random, setdar, setsar, stereo3d, telecine, pullup, \
+                yadif, bwdif, w3fdif, estdif, kerndeint, \
+                mcdeint, nededeint, ivtc, tinterlace, \
+                vstack, hstack, xstack, crop, pad, scale, \
+                rotate, hflip, vflip, transpose, drawbox, \
+                drawgrid, drawtext, subtitles, \
+                fade, negate, colorize, fill, \
+                amplify, threshold, maskedclamp, \
+                histeq, histogram, vectorscope, waveform, \
+                graticule, datascope, pixscope, oscilloscope, \
+                showinfo, showwaves, showspectrum, \
+                volume, loudnorm, dynaudnorm, silenceremove".to_string(),
+            parameters: Parameters {
+                param_type: "object".to_string(),
+                properties: {
+                    let mut props = std::collections::HashMap::new();
+                    props.insert("input_file".to_string(), PropertyDefinition {
+                        prop_type: "string".to_string(),
+                        description: "Path to the input video file".to_string(),
+                        items: None,
+                    });
+                    props.insert("output_file".to_string(), PropertyDefinition {
+                        prop_type: "string".to_string(),
+                        description: "Path to save the filtered output video".to_string(),
+                        items: None,
+                    });
+                    props.insert("filter_name".to_string(), PropertyDefinition {
+                        prop_type: "string".to_string(),
+                        description: "FFmpeg filter name (e.g., gblur, avgblur, smartblur, colorbalance, edgedetect, negate, fade, hflip, colorkey, etc.)".to_string(),
+                        items: None,
+                    });
+                    props.insert("params".to_string(), PropertyDefinition {
+                        prop_type: "object".to_string(),
+                        description: "Filter-specific parameters as key-value pairs. Example: {\"sigma\": 3.0, \"steps\": 1}".to_string(),
+                        items: None,
+                    });
+                    props
+                },
+                required: vec!["input_file".to_string(), "output_file".to_string(), "filter_name".to_string()],
+            },
+        }
+    }
+
+    /// Consolidated apply_audio_ffmpeg_filter tool — replaces 30+ individual one-to-one FFmpeg audio filter wrappers.
+    pub fn apply_audio_ffmpeg_filter_tool() -> FunctionDeclaration {
+        FunctionDeclaration {
+            name: "apply_audio_ffmpeg_filter".to_string(),
+            description: "Apply any FFmpeg audio filter by its filter name. Replaces all individual \
+                audio effect wrappers (apply_echo, apply_chorus, apply_highshelf, apply_lowshelf, etc.) \
+                with one unified tool. Pass the exact FFmpeg audio filter name in `filter_name` and \
+                its parameters as key-value pairs in `params`. \
+                Example: apply_audio_ffmpeg_filter(input=\"audio.mp3\", output=\"eq.mp3\", \
+                filter_name=\"equalizer\", params={\"frequency\": 1000, \"width\": 200, \"gain\": 3}). \
+                Common audio filters: volume, equalizer, bass, treble, bandpass, bandreject, \
+                lowshelf, highshelf, allpass, aecho, chorus, flanger, phaser, tremolo, vibrato, \
+                dynaudnorm, loudnorm, silenceremove, afftdn, anlmdn, arnndn, \
+                acompressor, alimiter, adynamics, aexpander, agate, \
+                adelay, apad, atrim, asetrate, atempo, \
+                stereowiden, surround, extrastereo, earwax, \
+                crossfeed, haas, aemphasis, afir, anlms".to_string(),
+            parameters: Parameters {
+                param_type: "object".to_string(),
+                properties: {
+                    let mut props = std::collections::HashMap::new();
+                    props.insert("input_file".to_string(), PropertyDefinition {
+                        prop_type: "string".to_string(),
+                        description: "Path to the input audio or video file".to_string(),
+                        items: None,
+                    });
+                    props.insert("output_file".to_string(), PropertyDefinition {
+                        prop_type: "string".to_string(),
+                        description: "Path to save the filtered output".to_string(),
+                        items: None,
+                    });
+                    props.insert("filter_name".to_string(), PropertyDefinition {
+                        prop_type: "string".to_string(),
+                        description: "FFmpeg audio filter name (e.g., volume, equalizer, bass, treble, aecho, chorus, dynaudnorm, afftdn, etc.)".to_string(),
+                        items: None,
+                    });
+                    props.insert("params".to_string(), PropertyDefinition {
+                        prop_type: "object".to_string(),
+                        description: "Filter-specific parameters as key-value pairs. Example: {\"frequency\": 1000, \"width\": 200, \"gain\": 3}".to_string(),
+                        items: None,
+                    });
+                    props
+                },
+                required: vec!["input_file".to_string(), "output_file".to_string(), "filter_name".to_string()],
+            },
+        }
+    }
+
     pub fn create_video_editing_tools() -> Vec<FunctionDeclaration> {
         vec![
             FunctionDeclaration {
