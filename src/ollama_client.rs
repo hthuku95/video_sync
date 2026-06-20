@@ -129,9 +129,14 @@ impl OllamaClient {
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         let body = serde_json::json!({
             "model": self.model,
-            "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 2048,
+            "messages": [
+                {"role": "system", "content": "You are a helpful assistant. Respond directly without thinking or reasoning. Never use reasoning tags."},
+                {"role": "user", "content": prompt}
+            ],
+            "max_tokens": 4096,
             "temperature": 0.1,
+            "think": false,
+            "options": {"num_predict": 4096},
             "stream": false,
         });
 
@@ -150,9 +155,12 @@ impl OllamaClient {
         }
 
         let json: serde_json::Value = resp.json().await?;
-        let text = json["choices"][0]["message"]["content"]
+        let msg = &json["choices"][0]["message"];
+        let text = msg["content"]
             .as_str()
-            .ok_or("Ollama: no content in response")?
+            .filter(|s| !s.is_empty())
+            .or_else(|| msg["reasoning"].as_str().filter(|s| !s.is_empty()))
+            .ok_or("Ollama: no content or reasoning in response")?
             .to_string();
         Ok(text)
     }

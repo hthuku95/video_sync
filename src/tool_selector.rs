@@ -1727,7 +1727,7 @@ mod tests {
     #[test]
     fn test_all_tools() {
         let tools = ToolSelector::all_tools();
-        assert!(tools.len() > 50); // Should have all consolidated + kept tools
+        assert!(tools.len() > 50); // Should have all consolidated tools
     }
 
     #[test]
