@@ -438,7 +438,10 @@ impl AgenticServicePipeline {
 
 ## MANDATORY TOOL SEQUENCE
 1. generate_video_script(topic, duration, style, tone) — plan the content
-2. blender_generate_scene_type(prompt, params) — render the core animation/scene (replaces 28 individual blender tools)
+2. Choose the right renderer:
+   - blender_generate_scene_type(prompt, params) — for 3D scenes, product mockups, title cards, UI mockups, thumbnails, logos, lower thirds, abstract backgrounds, particle effects, and any other Blender 3D content
+   - manim_execute_script(description, ...) — for math/STEM explainers, data visualizations, LaTeX equations, code animations, timelines, network graphs, vector fields, geometry proofs, and any other Manim/animated diagram content
+   - Both can be used together in one video — render separate clips then merge with merge_videos
 3. add_voiceover_to_video(video_path, script) or generate_text_to_speech(text, voice) — narrate
 4. review_video(video_path_or_url) — check quality
 5. submit_final_answer(summary, output_files=[path]) — only after review passes
@@ -556,7 +559,10 @@ Style: {style}
 
 ## TO CALL
 1. generate_video_script(topic="{url}", duration={duration_seconds}, style="{style}", tone="professional")
-2. blender_generate_scene_type(prompt="explainer {title} {style}", params={{"scene_type": "education", "style": "{style}"}})
+2. Render scenes using the right tool for each visual:
+   - blender_generate_scene_type(prompt=..., params=...) — for 3D backgrounds, animated props, intro/outro sequences
+   - manim_execute_script(description=..., quality="h") — for math equations, diagrams, code animations, data charts, LaTeX formulas
+   - Use both together for mixed Blender+Manim scenes, then merge with merge_videos
 3. add_voiceover_to_video(video_path="{out}/output.mp4", script="from script above")
 4. review_video(video_path_or_url="{out}/output.mp4")
 5. submit_final_answer(summary="education video {title}", output_files=["{out}/output.mp4"])

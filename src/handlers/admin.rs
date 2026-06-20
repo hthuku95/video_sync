@@ -9620,16 +9620,20 @@ async fn normalize_blender_reference_args(
     tool: &str,
     args: serde_json::Value,
 ) -> serde_json::Value {
-    if tool != "blender_generate_scene" {
+    // Support both old individual tool and consolidated tool
+    let reference_image_url = if tool == "blender_generate_scene_type" {
+        args.get("params")
+            .and_then(|v| v.as_object())
+            .and_then(|p| p.get("reference_image_url"))
+            .and_then(|v| v.as_str())
+    } else if tool == "blender_generate_scene" {
+        args.get("reference_image_url")
+            .and_then(|v| v.as_str())
+    } else {
         return args;
-    }
+    };
 
-    let Some(source_url) = args
-        .get("reference_image_url")
-        .and_then(|v| v.as_str())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
+    let Some(source_url) = reference_image_url.map(str::trim).filter(|v| !v.is_empty()) else {
         return args;
     };
 
@@ -10214,7 +10218,8 @@ fn maybe_insert_delivery_narration_args(
 ) {
     let supports_narration = matches!(
         tool_name,
-        "blender_generate_scene" | "blender_generate_latex" | "blender_generate_animation"
+        "blender_generate_scene_type" | "manim_execute_script"
+            | "blender_generate_scene" | "blender_generate_latex" | "blender_generate_animation"
     );
 
     if !supports_narration {
@@ -10260,36 +10265,35 @@ fn build_delivery_tool_args(
     let get = |key: &str| extra.get(key).and_then(|v| v.as_str()).unwrap_or("");
     match gig_type {
         "thumbnail" => (
-            "blender_generate_thumbnail".to_string(),
-            json!({"prompt": prompt, "title_text": get("title_text"), "style": style}),
+            "blender_generate_scene_type".to_string(),
+            json!({"prompt": prompt, "params": {"style": style, "duration": duration}, "output_type": "image"}),
             "image_url",
             "png",
         ),
         "title_card" => (
-            "blender_generate_title_card".to_string(),
-            json!({"title": prompt, "subtitle": get("subtitle"), "duration": duration, "style": style}),
+            "blender_generate_scene_type".to_string(),
+            json!({"prompt": format!("Title card: {}", prompt), "params": {"style": style, "duration": duration}}),
             "video_url",
             "mp4",
         ),
         "data_viz" => (
-            "blender_generate_data_viz".to_string(),
-            json!({"data_json": get("data_json"), "chart_type": get("chart_type"), "title": prompt, "duration": duration}),
+            "manim_execute_script".to_string(),
+            json!({"description": format!("Data visualization: {} with data {}", prompt, get("data_json")), "quality": "h", "duration": duration}),
             "video_url",
             "mp4",
         ),
         "lower_third" => (
-            "blender_generate_lower_third".to_string(),
-            json!({"name_text": prompt, "subtitle_text": get("subtitle"), "style": style, "duration": duration}),
+            "blender_generate_scene_type".to_string(),
+            json!({"prompt": format!("Lower third: {} — {}", prompt, get("subtitle")), "params": {"style": style, "duration": duration}}),
             "video_url",
             "mp4",
         ),
         "latex" => {
-            let tool_name = "blender_generate_latex".to_string();
+            let tool_name = "manim_execute_script".to_string();
             let mut args = json!({
-                "latex_expression": prompt,
-                "animation_type": get("animation_type"),
+                "description": format!("LaTeX equation animation: {}", prompt),
+                "background": get("background_style"),
                 "duration": duration,
-                "background_style": get("background_style")
             });
             maybe_insert_delivery_narration_args(&tool_name, &mut args, extra);
             (tool_name, args, "video_url", "mp4")
@@ -10303,20 +10307,21 @@ fn build_delivery_tool_args(
             };
             let ext = if animation == "static" { "png" } else { "mp4" };
             (
-                "blender_generate_ui_mockup".to_string(),
-                json!({"device": get("device"), "animation": animation, "duration": duration, "screenshot_url": get("screenshot_url")}),
+                "blender_generate_scene_type".to_string(),
+                json!({"prompt": format!("UI mockup: device={} animation={}", get("device"), animation), "params": {"style": style, "duration": duration}}),
                 url_key,
                 ext,
             )
         }
         _ => {
             // "scene" + default — includes landing_page service type
-            let tool_name = "blender_generate_scene".to_string();
-            let mut scene_args = json!({"prompt": prompt, "duration": duration, "style": style});
+            let tool_name = "blender_generate_scene_type".to_string();
+            let mut params = json!({"style": style, "duration": duration});
             let ref_url = get("reference_image_url");
             if !ref_url.is_empty() {
-                scene_args["reference_image_url"] = serde_json::Value::String(ref_url.to_string());
+                params["reference_image_url"] = serde_json::Value::String(ref_url.to_string());
             }
+            let mut scene_args = json!({"prompt": prompt, "params": params});
             maybe_insert_delivery_narration_args(&tool_name, &mut scene_args, extra);
             (tool_name, scene_args, "video_url", "mp4")
         }

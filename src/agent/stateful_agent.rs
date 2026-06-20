@@ -630,7 +630,11 @@ You operate in a loop: call a tool → read the result → decide the next tool 
 - Step 5: Call a final assembly tool to merge everything → get the finished file(s)
 - Step 6: Call submit_final_answer with all output paths
 
-Every step depends on the previous result. You decide the sequence dynamically based on what each tool returns. The right tool choice depends on the specific request — for a math explainer you might use Manim tools; for a 3D product showcase you might use Blender tools; for a voiceover you might use VibeVoice tools. Read each tool's description carefully.
+Every step depends on the previous result. You decide the sequence dynamically based on what each tool returns. The right tool choice depends on the specific request:
+- blender_generate_scene_type — for ALL 3D Blender content: scenes, thumbnails, title cards, UI mockups, lower thirds, logos, abstract backgrounds, particle effects, product mockups
+- manim_execute_script — for ALL Manim/animated diagram content: math/STEM explanations, data visualizations, LaTeX equations, code animations, timelines, network graphs, geometry proofs, vector fields, matrix transforms
+- Both can be used in one video — render clips separately, then merge with merge_videos
+- For a math explainer you might use Manim tools; for a 3D product showcase you might use Blender tools; for a voiceover you might use VibeVoice tools. Read each tool's description carefully.
 
 ## Bootstrapping When No Source Files Exist
 
@@ -1000,36 +1004,8 @@ You MUST only call tools that are explicitly listed in the `tools` array of this
                                         || function_name == "text_to_image"
                                         || function_name == "auto_generate_video"
                                         || function_name == "edit_image"
-                                        || function_name == "blender_generate_scene"
                                         || function_name == "blender_generate_scene_type"
                                         || function_name == "manim_execute_script"
-                                        || function_name == "blender_generate_thumbnail"
-                                        || function_name == "blender_generate_title_card"
-                                        || function_name == "blender_generate_data_viz"
-                                        || function_name == "blender_generate_lower_third"
-                                        || function_name == "blender_generate_latex"
-                                        || function_name == "blender_generate_ui_mockup"
-                                        || function_name == "blender_generate_animation"
-                                        || function_name == "blender_generate_chart"
-                                        || function_name == "blender_generate_flowchart"
-                                        || function_name == "blender_generate_3d_math"
-                                        || function_name == "blender_generate_code_animation"
-                                        || function_name == "blender_generate_timeline"
-                                        || function_name == "blender_generate_network_graph"
-                                        || function_name == "blender_generate_logo_reveal"
-                                        || function_name == "blender_generate_abstract_bg"
-                                        || function_name == "blender_generate_countdown"
-                                        || function_name == "blender_generate_particle_confetti"
-                                        || function_name == "blender_generate_rigid_body_drop"
-                                        || function_name == "blender_generate_camera_path"
-                                        || function_name == "blender_generate_toon_scene"
-                                        || function_name == "blender_generate_grease_pencil_reveal"
-                                        || function_name == "blender_generate_geometry_scatter"
-                                        || function_name == "blender_generate_text_animation"
-                                        || function_name == "blender_generate_vector_field"
-                                        || function_name == "blender_generate_matrix_transform"
-                                        || function_name == "blender_generate_polar_graph"
-                                        || function_name == "blender_generate_geometry_proof"
                                         || function_name == "create_thumbnail"
                                         || function_name == "create_thumbnail_hd"
                                         || function_name == "generate_text_to_speech"

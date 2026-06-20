@@ -6476,9 +6476,10 @@ PHASE 2 — Write a comprehensive script (3-4 minutes of narration):
     intro → problem → solution (their product) → features → social proof → CTA
 
 PHASE 3 — Produce the full video:
-  - Multiple blender_generate_scene calls using reference_image_url for branded scenes
-  - blender_generate_title_card for the intro/outro
-  - blender_generate_lower_third for feature callouts
+  - blender_generate_scene_type(prompt="intro scene with title card", params={...}) for intro/outro with title cards
+  - blender_generate_scene_type(prompt="product feature callout with lower third", params={...}) for feature callouts
+  - manim_execute_script(description="data chart showing growth metrics") for data visualization scenes
+  - Multiple blender_generate_scene_type calls with reference_image_url for branded scenes throughout
   - add_voiceover_to_video to narrate the full script with ElevenLabs TTS
   - Composite / concatenate the scenes into ONE final video at: {full_path}
 

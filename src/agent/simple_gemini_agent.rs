@@ -515,7 +515,7 @@ IMPORTANT: You do NOT use AI to generate videos. Instead, you fetch stock media 
         };
 
         const RENDERING_TOOLS: &[&str] = &[
-            "blender_generate_scene", "blender_generate_scene_type", "manim_execute_script", "merge_videos", "trim_video", "add_text_overlay",
+            "blender_generate_scene_type", "manim_execute_script", "merge_videos", "trim_video", "add_text_overlay",
             "add_voiceover_to_video", "add_audio", "generate_image", "generate_text_to_speech",
             "generate_music", "generate_sound_effect", "apply_filter", "crop_video",
             "resize_video", "concat_videos", "add_transition", "add_captions",
@@ -583,7 +583,7 @@ IMPORTANT: You do NOT use AI to generate videos. Instead, you fetch stock media 
 
                         if completion_tool_name == Some(tc.name.as_str()) {
                             if !rendered {
-                                let msg = "❌ Cannot submit yet — you have not called any rendering tools (e.g. blender_generate_scene, generate_image, merge_videos, add_text_overlay, add_voiceover_to_video). Generating a script is not sufficient. You MUST call at least one rendering tool to produce actual media files before calling submit_final_answer.";
+                                let msg = "❌ Cannot submit yet — you have not called any rendering tools (e.g. blender_generate_scene_type, manim_execute_script, generate_image, merge_videos, add_text_overlay, add_voiceover_to_video). Generating a script is not sufficient. You MUST call at least one rendering tool to produce actual media files before calling submit_final_answer.";
                                 tool_results.push(serde_json::json!({
                                     "role": "tool",
                                     "tool_call_id": tc.id,
@@ -885,7 +885,7 @@ IMPORTANT: You do NOT use AI to generate videos. Instead, you fetch stock media 
         }];
 
         const GEMINI_RENDERING_TOOLS: &[&str] = &[
-            "blender_generate_scene", "blender_generate_scene_type", "manim_execute_script", "merge_videos", "trim_video", "add_text_overlay",
+            "blender_generate_scene_type", "manim_execute_script", "merge_videos", "trim_video", "add_text_overlay",
             "add_voiceover_to_video", "add_audio", "generate_image", "generate_text_to_speech",
             "generate_music", "generate_sound_effect", "apply_filter", "crop_video",
             "resize_video", "concat_videos", "add_transition", "add_captions",
@@ -989,7 +989,7 @@ IMPORTANT: You do NOT use AI to generate videos. Instead, you fetch stock media 
                                     if !rendered {
                                         let err_map = {
                                             let mut map = std::collections::HashMap::new();
-                                            map.insert("result".to_string(), serde_json::json!("❌ Cannot submit yet — you have not called any rendering tools (e.g. blender_generate_scene, generate_image, merge_videos, add_text_overlay, add_voiceover_to_video). Generating a script is not sufficient. You MUST call at least one rendering tool to produce actual media files before calling submit_final_answer."));
+                                            map.insert("result".to_string(), serde_json::json!("❌ Cannot submit yet — you have not called any rendering tools (e.g. blender_generate_scene_type, manim_execute_script, generate_image, merge_videos, add_text_overlay, add_voiceover_to_video). Generating a script is not sufficient. You MUST call at least one rendering tool to produce actual media files before calling submit_final_answer."));
                                             map
                                         };
                                         tool_results.push(Part::FunctionResponse {
