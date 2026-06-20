@@ -18466,6 +18466,14 @@ async fn execute_run_director_impl(
     }
 }
 
+async fn execute_run_director_gemini(
+    args: &HashMap<String, Value>,
+    ctx: &ToolExecutionContext,
+) -> String {
+    let brief = args.get("brief").and_then(|v| v.as_str()).unwrap_or("");
+    let feedback = args.get("feedback").and_then(|v| v.as_str());
+    execute_run_director_impl(brief, feedback, ctx).await
+}
 
 /// Generic passthrough for new tools — forwards all args to BlenderMCPServer as-is.
 async fn execute_blender_passthrough_gemini(
