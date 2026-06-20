@@ -12,7 +12,7 @@ pub fn build_service_sample_prompt(
         "thumbnail-hero-pack" => "Thumbnail & Hero Visual Pack",
         "product-mockup-pack" => "Product Mockup Video Pack",
         "education-explainer-pack" => "Education Explainer Pack",
-        "blender-scene-pack" => "Blender 2D/3D Scene Pack",
+        "blender-scene-pack" => "3D/2D Animation Scene Pack",
         "voice-audio-pack" => "Voice & Audio Production Pack",
         "mixed-agency-bundle" => "Mixed Agency Production Bundle",
         "creator-manager-fulfillment" => "Agency Production Backend",
@@ -26,8 +26,8 @@ pub fn build_service_sample_prompt(
         "clipper-enhancement-pack" => "Create a premium visual-packaging sample with stronger thumbnails, motion graphics, mockups, overlays, narration support, or branded polish that improves how the final offer looks before anyone clicks play.",
         "thumbnail-hero-pack" => "Create click-focused thumbnail and hero visual concepts with hooks, variants, and QA so the buyer can test stronger first impressions quickly.",
         "product-mockup-pack" => "Create UI mockup scenes and short product videos from a URL, screenshots, Figma exports, app recordings, or a written workflow.",
-        "education-explainer-pack" => "Create a lesson or explainer using Manim, LaTeX, diagrams, narration, and long-form assembly when the topic needs more than a static asset.",
-        "blender-scene-pack" => "Create Blender 2D/3D support visuals, animated models, product scenes, lower thirds, data visuals, or cinematic loops.",
+        "education-explainer-pack" => "Create a lesson or explainer using animated math/science visuals, diagrams, narration, and long-form assembly when the topic needs more than a static asset.",
+        "blender-scene-pack" => "Create animated 2D/3D support visuals, product scenes, motion graphics, data visualizations, or cinematic loops.",
         "voice-audio-pack" => "Create voice/audio assets with scripts, VibeVoice narration, summaries, audio visualizers, or narration-backed videos.",
         "mixed-agency-bundle" => "Create a website-to-video agency package: agencies send client websites or app URLs, and VideoSync produces client-ready demo/promo videos they can resell with delivery/download links.",
         "creator-manager-fulfillment" => "Create an agency-backend sample that shows how repeatable client video deliverables could be produced through VideoSync without exposing internal operations language to the buyer.",
@@ -36,18 +36,18 @@ pub fn build_service_sample_prompt(
         _ => "Create a high-quality custom sample that matches the requested service.",
     };
     let production_stack = match service_slug {
-        "saas-launch-pack" => "Use long-form assembly when the brief asks for a 30s+ product story, demo, explainer, launch trailer, or multi-cutdown campaign. Pull from UI mockups, product screenshots, Blender scenes, VibeVoice narration, Pexels support footage, captions, thumbnails, and Gemini multimodal QA as needed. Default deliverable split: $299 basic rush demo = one tightly scoped short demo, usually 30-60s; $499 full pack = longer or more polished video when needed plus hooks/captions, thumbnail or hero concept, and delivery/download page.",
+        "saas-launch-pack" => "Use long-form assembly when the brief asks for a 30s+ product story, demo, explainer, launch trailer, or multi-cutdown campaign. Pull from UI mockups, product screenshots, animated scenes, VibeVoice narration, Pexels support footage, captions, thumbnails, and Gemini multimodal QA as needed. Default deliverable split: $299 basic rush demo = one tightly scoped short demo, usually 30-60s; $499 full pack = longer or more polished video when needed plus hooks/captions, thumbnail or hero concept, and delivery/download page.",
         "clipper-enhancement-pack" => "Use long-form assembly when the request asks for a clip pack, recap, narrated summary, or multiple enhanced cutdowns. Combine clipping/enhancement tools with captions, thumbnail/hero assets, motion graphics, audio cleanup, and QA instead of treating it as a single raw clip.",
         "thumbnail-hero-pack" => "Use thumbnail/hero generation first, then add short motion loops or product mockups when a static visual alone will not sell the offer.",
         "product-mockup-pack" => "Use UI mockup and long-form assembly when the buyer needs browser/device scenes, app walkthroughs, launch cutdowns, or homepage hero video.",
-        "education-explainer-pack" => "Use Manim/LaTeX, narration, diagrams, and resumable long-form segments for lessons, tutorials, formulas, and technical explanations.",
-        "blender-scene-pack" => "Use BlenderMCP scenes, render QA, and optional video assembly when 2D/3D motion can make the result more premium than stock footage.",
+        "education-explainer-pack" => "Use animated math/science visuals, narration, diagrams, and resumable long-form segments for lessons, tutorials, formulas, and technical explanations.",
+        "blender-scene-pack" => "Use animated 3D/2D scenes, render QA, and optional video assembly when 2D/3D motion can make the result more premium than stock footage.",
         "voice-audio-pack" => "Use VibeVoice narration, audio cleanup/visualization, summaries, and optional video assembly depending on whether the deliverable is audio-only or narrated media.",
         "mixed-agency-bundle" => "Use the full canonical tool stack only where it helps the agency deliver client websites as videos. Default package: $999 for 3 client website/app demo videos, each with a delivery/download page and optional hooks, thumbnail/hero concept, mockups, or narration.",
         "creator-manager-fulfillment" => "Use bundle-style long-form assembly for mixed agency packages: demos, clips, thumbnails, product mockups, narration, delivery pages, and review artifacts. The agent should choose the right tool mix instead of forcing one asset type.",
         "x402-asset-api" => "Use long-form assembly for buyer-facing technical demos when a walkthrough needs script, UI mockup, narration, diagrams, and delivery-page proof. Keep the story commercial, not just architectural.",
         "kick-com-clipping" => "Use the manual clipping pipeline with platform detection for Kick.com VODs. Download the VOD via yt-dlp (Kick URLs are supported), detect highlight moments, extract clips, add captions/thumbnails, and assemble into a final deliverable with a delivery page. The agent can also clip highlights from live Kick streams when the VOD becomes available. Use `generate_image` for thumbnails if no existing thumbnail is suitable.",
-        _ => "Use long-form assembly whenever the buyer asks for a longer video, a multi-part asset pack, or a package that combines editing, Blender/Manim/LaTeX, thumbnails, mockups, voice/audio, QA, and delivery-page output.",
+        _ => "Use long-form assembly whenever the buyer asks for a longer video, a multi-part asset pack, or a package that combines editing, animated 3D/2D scenes, math/science visuals, thumbnails, mockups, voice/audio, QA, and delivery-page output.",
     };
 
     let url_line = reference_url
@@ -77,7 +77,7 @@ pub fn build_service_sample_chat_title(
         "thumbnail-hero-pack" => "Thumbnail Pack",
         "product-mockup-pack" => "Product Mockup",
         "education-explainer-pack" => "Education Explainer",
-        "blender-scene-pack" => "Blender Scene",
+        "blender-scene-pack" => "Animation Scene",
         "voice-audio-pack" => "Voice Audio",
         "mixed-agency-bundle" => "Agency Bundle",
         "creator-manager-fulfillment" => "Agency Backend",
@@ -240,7 +240,7 @@ pub fn service_sample_ui_config(service_slug: &str) -> serde_json::Value {
         }),
         "education-explainer-pack" => json!({
             "section_title": "Request an explainer or lesson video",
-            "section_copy": "Describe the topic, lesson outline, or concept you want explained. No URL needed — our agent uses Manim, LaTeX, diagrams, narration, and visuals to turn any topic into a clear educational video.",
+            "section_copy": "Describe the topic, lesson outline, or concept you want explained. No URL needed — our agent uses animated math/science visuals, diagrams, narration, and custom graphics to turn any topic into a clear educational video.",
             "source_label": "Topic, lesson, or concept to explain",
             "source_placeholder": "e.g. How blockchain works, quadratic formula proof, Python decorators tutorial",
             "contact_label": "Course or channel name",
@@ -250,7 +250,7 @@ pub fn service_sample_ui_config(service_slug: &str) -> serde_json::Value {
             "outcome_label": "Who this is for",
             "outcome_placeholder": "YouTube audience, course students, B2B buyers, technical team",
             "brief_label": "Describe the lesson or explainer you want",
-            "brief_placeholder": "Example: create a 5-minute narrated explainer on how transformers work in machine learning — open with a simple analogy, show the attention mechanism with Manim animations, include LaTeX formulas, and end with a real-world use case.",
+            "brief_placeholder": "Example: create a 5-minute narrated explainer on how transformers work in machine learning — open with a simple analogy, show the attention mechanism with animated math/science visuals, include formula visuals, and end with a real-world use case.",
             "launch_label": "Generate explainer video",
             "status_idle": "Your request opens the AI workspace so the agent can generate a real educational video from your topic description.",
             "anon_badge": "Sign in to generate your first explainer.",
@@ -258,7 +258,7 @@ pub fn service_sample_ui_config(service_slug: &str) -> serde_json::Value {
             "helper_copy": "Use this to test whether the agent can produce a clear, engaging educational video from just a topic description — no source media needed.",
             "helper_bullets": [
                 "No URL or media required — just describe the topic.",
-                "Uses Manim for math/technical animations, LaTeX for formulas.",
+                "Uses animated math/science visuals for technical animations and formulas.",
                 "Supports narration, diagrams, stock footage, and long-form assembly.",
                 "Your included explainers stay available before checkout appears."
             ],
@@ -266,13 +266,13 @@ pub fn service_sample_ui_config(service_slug: &str) -> serde_json::Value {
             "included_unit_plural": "explainers",
             "limit_reached_badge": "Your included explainers are used up. Upgrade to keep generating.",
             "example_heading": "Example explainer request",
-            "example_request": "Create a 4-minute narrated explainer on how GPT models work — start with the concept of next-token prediction using a simple sentence completion example, show the transformer architecture with Manim diagram animations, display the attention formula with LaTeX, and end with real applications like chat and code generation.",
+            "example_request": "Create a 4-minute narrated explainer on how GPT models work — start with the concept of next-token prediction using a simple sentence completion example, show the transformer architecture with animated math/science diagram animations, display the attention formula with formula visuals, and end with real applications like chat and code generation.",
             "upgrade_href": "/subscribe",
             "upgrade_label": "Continue with paid explainers"
         }),
         "blender-scene-pack" => json!({
-            "section_title": "Request a Blender scene",
-            "section_copy": "Describe the 3D scene, product animation, or visual you need. No URL needed — our agent generates Blender renders from your description. Product animations, abstract visuals, cinematic scenes, and explainer support assets.",
+            "section_title": "Request an animated scene",
+            "section_copy": "Describe the 3D scene, product animation, or visual you need. No URL needed — our agent generates professional animated scenes from your description. Product animations, abstract visuals, cinematic scenes, and explainer support assets.",
             "source_label": "Scene description or style reference",
             "source_placeholder": "e.g. futuristic city skyline at night, product rotation of a sneaker, abstract network visualization",
             "contact_label": "Project or brand name",
@@ -283,9 +283,9 @@ pub fn service_sample_ui_config(service_slug: &str) -> serde_json::Value {
             "outcome_placeholder": "Video background, product demo, title sequence, social media asset",
             "brief_label": "Describe the 3D scene you want rendered",
             "brief_placeholder": "Example: create a cinematic product animation of a luxury watch floating in a dark studio with soft rim lighting — slow 360 rotation, shallow depth of field, with a subtle particle sparkle background. 10-second loop.",
-            "launch_label": "Generate Blender scene",
-            "status_idle": "Your request opens the AI workspace so the agent can generate a real Blender-rendered scene from your description.",
-            "anon_badge": "Sign in to generate your first Blender scene.",
+            "launch_label": "Generate animated scene",
+            "status_idle": "Your request opens the AI workspace so the agent can generate a professional animated scene from your description.",
+            "anon_badge": "Sign in to generate your first animated scene.",
             "helper_title": "What this scene should prove",
             "helper_copy": "Use this to test whether the agent can produce production-ready 3D renders from a text description alone — no 3D modeling experience needed.",
             "helper_bullets": [
@@ -296,8 +296,8 @@ pub fn service_sample_ui_config(service_slug: &str) -> serde_json::Value {
             ],
             "included_unit_singular": "scene",
             "included_unit_plural": "scenes",
-            "limit_reached_badge": "Your included Blender scenes are used up. Upgrade to keep generating.",
-            "example_heading": "Example Blender request",
+            "limit_reached_badge": "Your included animated scenes are used up. Upgrade to keep generating.",
+            "example_heading": "Example animated scene request",
             "example_request": "Create a 15-second cinematic product animation of a modern smartwatch — floating in a dark studio with blue LED rim lighting, smooth 360 rotation, brushed metal texture, with floating UI elements fading in around the watch face. 4K resolution.",
             "upgrade_href": "/subscribe",
             "upgrade_label": "Continue with paid scenes"
@@ -419,7 +419,7 @@ pub fn service_sample_ui_config(service_slug: &str) -> serde_json::Value {
             "helper_bullets": [
                 "Best for developer products, partner demos, and wallet-native commercial flows.",
                 "Turns API/payment logic into a buyer-facing narrative instead of raw internal architecture language.",
-                "Technical demos can use UI mockups, Manim/LaTeX diagrams, narration, and long-form assembly when needed.",
+                "Technical demos can use UI mockups, animated math/science diagrams, narration, and long-form assembly when needed.",
                 "Your included demos stay available before checkout appears."
             ],
             "included_unit_singular": "demo",
@@ -483,7 +483,7 @@ pub fn service_sample_ui_config(service_slug: &str) -> serde_json::Value {
             "helper_bullets": [
                 "Works for custom production experiments and buyer-facing samples.",
                 "The agent still uses the same full production stack.",
-                "Supports clip packs, thumbnails, product mockups, education videos, Blender scenes, voice/audio, and bundles.",
+                "Supports clip packs, thumbnails, product mockups, education videos, animated 3D/2D scenes, voice/audio, and bundles.",
                 "Your included outputs stay available before checkout appears."
             ],
             "included_unit_singular": "output",
@@ -540,14 +540,14 @@ pub fn get_service_portfolio_briefs(service_slug: &str) -> Vec<ServicePortfolioB
             ServicePortfolioBrief {
                 service_slug: "education-explainer-pack",
                 name: "Machine Learning Explainer",
-                description: "A 4-minute narrated explainer on how neural networks work, using Manim animations and LaTeX formulas.",
-                brief: "Create a 4-minute narrated educational explainer on how neural networks work. Start with a simple analogy (brain neurons vs artificial neurons), show the network architecture with Manim animations (input layer → hidden layers → output layer), display key formulas with LaTeX (activation function, weight update), include a real example of digit recognition with visual demonstrations, and end with practical applications. The video should have: clear voiceover narration, background music, on-screen captions, and Manim/LaTeX diagrams. Suitable for a YouTube educational channel or course module.",
+                description: "A 4-minute narrated explainer on how neural networks work, using animated math/science visuals and formula visuals.",
+                brief: "Create a 4-minute narrated educational explainer on how neural networks work. Start with a simple analogy (brain neurons vs artificial neurons), show the network architecture with animated math/science visuals (input layer → hidden layers → output layer), display key formulas with formula visuals (activation function, weight update), include a real example of digit recognition with visual demonstrations, and end with practical applications. The video should have: clear voiceover narration, background music, on-screen captions, and animated math/science diagrams. Suitable for a YouTube educational channel or course module.",
             },
             ServicePortfolioBrief {
                 service_slug: "education-explainer-pack",
                 name: "Math Formula Proof",
-                description: "Step-by-step animated proof of the quadratic formula using LaTeX and Manim.",
-                brief: "Create a 3-minute animated math lesson proving the quadratic formula. Start with the standard form ax²+bx+c=0, walk through completing the square step by step with LaTeX formulas, derive the final formula x = (-b±√(b²-4ac))/2a, and show a concrete example. Use Manim for smooth math animations, color-coded steps, and a clean educational style. Include voiceover narration and background music. Deliver as a complete video with delivery page.",
+                description: "Step-by-step animated proof of the quadratic formula using formula and animated visuals.",
+                brief: "Create a 3-minute animated math lesson proving the quadratic formula. Start with the standard form ax²+bx+c=0, walk through completing the square step by step with formula visuals, derive the final formula x = (-b±√(b²-4ac))/2a, and show a concrete example. Use animated math/science visuals for smooth math animations, color-coded steps, and a clean educational style. Include voiceover narration and background music. Deliver as a complete video with delivery page.",
             },
         ],
         "blender-scene-pack" => vec![

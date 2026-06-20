@@ -6792,7 +6792,7 @@ pub async fn admin_test_runs_page() -> Html<String> {
     <button class="btn btn-primary" onclick="openModal()">+ New Test Run</button>
   </div>
   <div class="info-banner">
-    Each run executes 12 Fiverr gig scenarios (7 Blender tools × 2 variants + thumbnails),
+    Each run executes 12 Fiverr gig scenarios (7 animation tools × 2 variants + thumbnails),
     uploads outputs to R2, and gets a Gemini quality review. Each run takes ~30–40 minutes.
   </div>
   <div id="runs-container" class="runs-grid">
@@ -9027,7 +9027,7 @@ pub async fn admin_service_samples_page() -> Html<String> {
     <ul class="nav">
       <li><a href="/admin">Dashboard</a></li>
       <li><a href="/admin/portfolio-samples">Crypto SaaS Samples</a></li>
-      <li><a href="/admin/test-runs">Blender Tool Tests</a></li>
+      <li><a href="/admin/test-runs">Animation Tool Tests</a></li>
       <li><a class="active" href="/admin/service-samples">DFY Service Samples</a></li>
     </ul>
     <p style="color:var(--muted)">Generate agent-produced portfolio samples for each done-for-you service. Each sample runs the full agent pipeline — the same flow a paying customer would use.</p>
@@ -10876,8 +10876,8 @@ td{padding:8px 12px;border-bottom:1px solid #0f3460;color:#e0e0e0}
         <tr><td>Growth</td><td>50 clips</td><td class="highlight">$497/month</td><td>"Post daily Shorts without lifting a finger"</td></tr>
         <tr><td>Agency</td><td>100 clips + thumbnails</td><td class="highlight">$997/month</td><td>"Full content team, AI-powered"</td></tr>
         <tr><td>Podcast per-episode</td><td>5-10 clips/episode</td><td class="highlight">$150-$350/episode</td><td>Auto-clip every new episode within 24hr</td></tr>
-        <tr><td>Course Visual Kit</td><td>5 Manim + 3 titles + 5 thumbs</td><td class="highlight">$497/kit</td><td>AI-generated course visuals, 24hr turnaround</td></tr>
-        <tr><td>Product Demo Video</td><td>60-90s SaaS/e-com demo</td><td class="highlight">$497-$997</td><td>Manim + Blender pipeline, 48hr delivery</td></tr>
+        <tr><td>Course Visual Kit</td><td>5 animated scenes + 3 titles + 5 thumbs</td><td class="highlight">$497/kit</td><td>AI-generated course visuals, 24hr turnaround</td></tr>
+        <tr><td>Product Demo Video</td><td>Any length — 30s to 3+ min SaaS/e-com demo</td><td class="highlight">$497-$997</td><td>AI animation pipeline, 48hr delivery</td></tr>
       </tbody>
     </table>
     <p><span class="highlight">Volume moat:</span> Manual clippers offer 5-10 clips/month. Your AI does 50+ at zero marginal cost. Lead with that number in every pitch.</p>
@@ -10917,7 +10917,7 @@ td{padding:8px 12px;border-bottom:1px solid #0f3460;color:#e0e0e0}
     <h3>Revenue Stream B: Course Creator Visual Kit</h3>
     <p>Target STEM YouTubers, online educators, corporate trainers.</p>
     <ul>
-      <li>What you deliver: 5 Manim animations (30s each) + 3 Blender title cards + 5 AI thumbnails</li>
+      <li>What you deliver: 5 animated explainer scenes (30s each) + 3 title cards + 5 AI thumbnails</li>
       <li>Price: <span class="highlight">$497/kit</span> (market rate individually is $150-$500 per piece)</li>
       <li>Find them: LinkedIn, r/elearning, r/OnlineCourses, Twitter/X</li>
     </ul>
@@ -10946,7 +10946,7 @@ td{padding:8px 12px;border-bottom:1px solid #0f3460;color:#e0e0e0}
 
   <div class="card">
     <h2>Product Demo Video Vertical</h2>
-    <p>Your Manim + Blender pipeline can produce professional product demos for businesses. High-ticket market.</p>
+    <p>Your animation pipeline can produce professional product demos for businesses. High-ticket market.</p>
     <table>
       <thead><tr><th>Client Type</th><th>What You Deliver</th><th>Price Range</th></tr></thead>
       <tbody>
@@ -10992,10 +10992,10 @@ delivered within 24 hours of publish. $200/episode or $497/month unlimited.
 Want the rest of last week's clips free?</div>
     <button class="btn-copy" onclick="navigator.clipboard.writeText(document.getElementById('dm2').textContent).then(()=>this.textContent='Copied!').then(()=>setTimeout(()=>this.textContent='Copy',1500))">Copy</button>
 
-    <h3>Educator / Manim Visual DM</h3>
+    <h3>Educator / Animated Visuals DM</h3>
     <div class="dm-box" id="dm3">Hey [Name] — I watched your [topic] video. The concepts would hit way harder with animated visuals.
 
-I generate Manim-style math/data animations and Blender title cards using AI.
+I generate animated math/data visualizations and title cards using AI.
 
 $497 for a full kit: 5 animations + 3 title cards + 5 thumbnails, delivered in 24 hours.
 Here's a sample: [portfolio link]
@@ -11006,7 +11006,7 @@ Worth a quick chat?</div>
     <h3>Product Demo (Business) DM</h3>
     <div class="dm-box" id="dm4">Hey [Name] — I noticed [Company] doesn't have a product demo video on their site.
 
-I build AI-generated animated demos using Manim + Blender — same quality as $10k agency work.
+I build AI-generated animated demos — same quality as $10k agency work.
 I can deliver a 60-second walkthrough in 48 hours for $997.
 
 Here's a sample: [portfolio link]
@@ -11576,7 +11576,7 @@ const HOW_WE_WORK_HTML: &str = r###"<!DOCTYPE html>
     <div class="service-card">
       <div class="name">🎞️ Animations</div>
       <span class="price">$50 – $150 each</span>
-      <p class="desc">Blender explainer scenes, data visualisations, LaTeX equations, lower-thirds, title cards. Best for educators + crypto / finance.</p>
+      <p class="desc">Animated explainer scenes, data visualizations, math visuals, motion graphics, title cards. Best for educators + crypto / finance.</p>
     </div>
     <div class="service-card">
       <div class="name">🖼️ AI Thumbnails</div>
@@ -11591,7 +11591,7 @@ const HOW_WE_WORK_HTML: &str = r###"<!DOCTYPE html>
     <div class="service-card">
       <div class="name">📦 Product Mockups</div>
       <span class="price">$100 – $300 each</span>
-      <p class="desc">3D Blender product renders on device or lifestyle scenes. Gemini synthesises the product shot.</p>
+      <p class="desc">3D product renders on device or lifestyle scenes. AI synthesizes the product shot.</p>
     </div>
     <div class="service-card">
       <div class="name">🚀 Landing-Page Animations</div>
@@ -11655,7 +11655,7 @@ const HOW_WE_WORK_HTML: &str = r###"<!DOCTYPE html>
     <div class="step-num">6</div>
     <div class="step-body">
       <strong>DM top-scored IG / LinkedIn leads</strong>
-      Click each lead → generate DM → attach sample (Blender render or URL-driven landing-page mockup) → the DM body automatically includes the <code>/delivery/:id</code> link. One-tap "Copy &amp; Open Instagram" handles the rest.
+      Click each lead → generate DM → attach sample (animated render or URL-driven landing-page mockup) → the DM body automatically includes the <code>/delivery/:id</code> link. One-tap "Copy &amp; Open Instagram" handles the rest.
     </div>
   </div>
   <div class="step">
@@ -11727,7 +11727,7 @@ const HOW_WE_WORK_HTML: &str = r###"<!DOCTYPE html>
 <!-- ═══════ QA ═══════ -->
 <section id="qa">
   <h2>6. LLM QA review on every render</h2>
-  <p>Before any rendered output (Blender thumbnail, animation, landing-page scene, or <code>auto_generate_video</code> pipeline) is returned to a client, Gemini reviews it against the original prompt.</p>
+  <p>Before any rendered output (thumbnail, animation, landing-page scene, or <code>auto_generate_video</code> pipeline) is returned to a client, AI reviews it against the original prompt.</p>
   <ul>
     <li>Review scores <strong>1–10</strong>. ≥6 = ships cleanly. ≤5 = flags a QA warning on the delivery row.</li>
     <li>Low-score renders STILL return the URL (fail-open) — they just get stamped with a warning in <code>deliveries.error_message</code> so you can spot them in <a href="/admin/deliveries">/admin/deliveries</a>.</li>
@@ -11743,9 +11743,9 @@ const HOW_WE_WORK_HTML: &str = r###"<!DOCTYPE html>
   <h3>What's paywalled (for regular users)</h3>
   <ul>
     <li>AI thumbnails (<code>/api/tools/*</code>)</li>
-    <li>Blender animations (title cards, data viz, lower thirds, LaTeX, UI mockups)</li>
+    <li>Animated scenes (title cards, data visualizations, motion graphics, math visuals, UI mockups)</li>
     <li>Full <code>auto_generate_video</code> pipeline (<code>/ws</code> WebSocket chat)</li>
-    <li>FFmpeg tool API</li>
+    <li>Professional video editing — trim, merge, effects, color, audio, and more</li>
     <li>Delivery page viewing + generation</li>
   </ul>
 
@@ -11772,7 +11772,7 @@ const HOW_WE_WORK_HTML: &str = r###"<!DOCTYPE html>
   <p>POST to <code>/api/admin/telegram/channels</code> or edit the <code>telegram_watch_channels</code> table directly. Default list: cryptojobslist, cryptojobs, web3_jobs, SaaSFounders, directoryofmarketers, contentcreators_hub.</p>
 
   <h3>How do I price custom deliveries?</h3>
-  <p>On <a href="/admin/deliveries">/admin/deliveries</a> set <code>unlock_price_usdc</code> per delivery. New lead-generated samples default to market-aligned pricing: lightweight Blender samples start around $19, while website-driven presentation videos start around $197 and can go much higher.</p>
+  <p>On <a href="/admin/deliveries">/admin/deliveries</a> set <code>unlock_price_usdc</code> per delivery. New lead-generated samples default to market-aligned pricing: lightweight animated samples start around $19, while website-driven presentation videos start around $197 and can go much higher.</p>
 
   <h3>A team member sourced a lead that paid $500. What do I owe them?</h3>
   <p>$250 (50%). The <a href="/admin/revenue-ledger">Revenue Ledger</a> shows this as "Pending payout".</p>

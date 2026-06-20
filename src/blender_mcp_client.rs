@@ -208,15 +208,19 @@ impl BlenderMCPClient {
         duration: f64,
         background_style: &str,
     ) -> Result<String, String> {
-        let combined_prompt = format!("Generate a LaTeX equation animation. Expression: {}. Animation type: {}. Background style: {}", latex_expression, animation_type, background_style);
-        let args = json!({
-            "prompt": combined_prompt,
-            "duration": duration,
-            "style": background_style,
-            "reference_image_url": "",
-        });
-        self.render_async("blender_execute_bpy_script", args, "video_url", "mp4")
-            .await
+        let description = format!("Create a LaTeX equation animation. Expression: {}. Animation type: {}. Background style: {}", latex_expression, animation_type, background_style);
+        self.render_async(
+            "manim_execute_script",
+            json!({
+                "description": description,
+                "duration": duration,
+                "background": background_style,
+                "transparent": false,
+                "quality": "m",
+            }),
+            "video_url",
+            "mp4",
+        ).await
     }
 
     /// Generate a device UI mockup (iPhone/MacBook/browser/iPad) with optional animation.
@@ -265,15 +269,18 @@ impl BlenderMCPClient {
         background_style: &str,
         composite_over_scene: bool,
     ) -> Result<String, String> {
-        let combined_prompt = format!("Generate a Manim animation. Description: {}. Background style: {}. Composite over scene: {}", description, background_style, composite_over_scene);
-        let args = json!({
-            "prompt": combined_prompt,
-            "duration": duration,
-            "style": background_style,
-            "reference_image_url": "",
-        });
-        self.render_async("blender_execute_bpy_script", args, "video_url", "mp4")
-            .await
+        self.render_async(
+            "manim_execute_script",
+            json!({
+                "description": description,
+                "duration": duration,
+                "background": background_style,
+                "transparent": composite_over_scene,
+                "quality": "m",
+            }),
+            "video_url",
+            "mp4",
+        ).await
     }
 
     /// Generate an animated data visualisation (bar/line/pie/counter/scatter).
@@ -287,15 +294,19 @@ impl BlenderMCPClient {
         duration: f64,
         colors: serde_json::Value,
     ) -> Result<String, String> {
-        let combined_prompt = format!("Generate a {} chart. Title: {}. Data: {}. Labels: {}. Colors: {}", chart_type, title, data, labels, colors);
-        let args = json!({
-            "prompt": combined_prompt,
-            "duration": duration,
-            "style": "default",
-            "reference_image_url": "",
-        });
-        self.render_async("blender_execute_bpy_script", args, "video_url", "mp4")
-            .await
+        let description = format!("Create a {} chart titled '{}'. Data: {}. Labels: {}. Colors: {}", chart_type, title, data, labels, colors);
+        self.render_async(
+            "manim_execute_script",
+            json!({
+                "description": description,
+                "duration": duration,
+                "background": "dark",
+                "transparent": false,
+                "quality": "m",
+            }),
+            "video_url",
+            "mp4",
+        ).await
     }
 
     /// Consolidated bpy script execution — replaces all individual blender_generate_* tools.
