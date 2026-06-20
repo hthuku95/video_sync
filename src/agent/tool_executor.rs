@@ -19671,17 +19671,22 @@ async fn execute_blender_generate_scene_type_claude(args: &Value) -> String {
     let duration = params.and_then(|p| p.get("duration")).and_then(|v| v.as_f64()).unwrap_or(10.0);
     let reference_image_url = params.and_then(|p| p.get("reference_image_url")).and_then(|v| v.as_str()).unwrap_or("");
 
-    let client = crate::blender_mcp_client::BlenderMCPClient::new();
+    let base_url = std::env::var("BLENDER_MCP_URL").unwrap_or_default();
+    let api_key = std::env::var("BLENDER_MCP_API_KEY").unwrap_or_default();
+    if base_url.is_empty() {
+        return "❌ BlenderMCPServer not configured. Set BLENDER_MCP_URL in .env.".to_string();
+    }
+    let client = crate::blender_mcp_client::BlenderMCPClient::new(base_url, api_key);
     match client.call_tool(
         "blender_execute_bpy_script",
-        &serde_json::json!({
+        serde_json::json!({
             "prompt": prompt,
             "style": style,
             "duration": duration,
             "reference_image_url": reference_image_url,
         }),
     ).await {
-        Ok(result) => result,
+        Ok(result) => result.to_string(),
         Err(e) => format!("❌ blender_generate_scene_type failed: {}", e),
     }
 }
@@ -19696,17 +19701,22 @@ async fn execute_blender_generate_scene_type_gemini(args: &HashMap<String, Value
     let duration = params.and_then(|p| p.get("duration")).and_then(|v| v.as_f64()).unwrap_or(10.0);
     let reference_image_url = params.and_then(|p| p.get("reference_image_url")).and_then(|v| v.as_str()).unwrap_or("");
 
-    let client = crate::blender_mcp_client::BlenderMCPClient::new();
+    let base_url = std::env::var("BLENDER_MCP_URL").unwrap_or_default();
+    let api_key = std::env::var("BLENDER_MCP_API_KEY").unwrap_or_default();
+    if base_url.is_empty() {
+        return "❌ BlenderMCPServer not configured. Set BLENDER_MCP_URL in .env.".to_string();
+    }
+    let client = crate::blender_mcp_client::BlenderMCPClient::new(base_url, api_key);
     match client.call_tool(
         "blender_execute_bpy_script",
-        &serde_json::json!({
+        serde_json::json!({
             "prompt": prompt,
             "style": style,
             "duration": duration,
             "reference_image_url": reference_image_url,
         }),
     ).await {
-        Ok(result) => result,
+        Ok(result) => result.to_string(),
         Err(e) => format!("❌ blender_generate_scene_type failed: {}", e),
     }
 }
