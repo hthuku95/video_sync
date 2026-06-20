@@ -914,6 +914,13 @@ async fn execute_tool_claude_with_context_inner(
         return finalize_special_tool_result_value(name, args, result, ctx).await;
     }
 
+    if name == "blender_generate_scene_type" {
+        return execute_blender_generate_scene_type_claude(args).await;
+    }
+    if name == "manim_execute_script" {
+        return execute_manim_execute_script_claude(args).await;
+    }
+
     if name == "run_director" {
         let result = execute_run_director_claude(args, ctx).await;
         return finalize_special_tool_result_value(name, args, result, ctx).await;
@@ -1129,6 +1136,12 @@ async fn execute_tool_gemini_with_context_inner(
     if name == "blender_generate_chart" {
         let result = execute_blender_generate_chart_gemini(args, ctx).await;
         return finalize_special_tool_result_gemini(name, args, result, ctx).await;
+    }
+    if name == "blender_generate_scene_type" {
+        return execute_blender_generate_scene_type_gemini(args).await;
+    }
+    if name == "manim_execute_script" {
+        return execute_manim_execute_script_gemini(args).await;
     }
     if name == "run_director" {
         let result = execute_run_director_gemini(args, ctx).await;
@@ -1687,6 +1700,7 @@ pub async fn execute_tool_claude(name: &str, args: &Value) -> String {
         "talking_head_cleanup" => execute_talking_head_cleanup_claude(args),
         "export_video" => execute_export_video_claude(args),
         "blender_generate_scene_type" => execute_blender_generate_scene_type_claude(args).await,
+        "manim_execute_script" => execute_manim_execute_script_claude(args).await,
 
         _ => format!("❌ Unknown tool: {}", name),
     }
@@ -2105,6 +2119,7 @@ pub async fn execute_tool_gemini(name: &str, args: &HashMap<String, Value>) -> S
         "talking_head_cleanup" => execute_talking_head_cleanup_gemini(args),
         "export_video" => execute_export_video_gemini(args),
         "blender_generate_scene_type" => execute_blender_generate_scene_type_gemini(args).await,
+        "manim_execute_script" => execute_manim_execute_script_gemini(args).await,
 
         _ => format!("❌ Unknown tool: {}", name),
     }
@@ -19718,5 +19733,83 @@ async fn execute_blender_generate_scene_type_gemini(args: &HashMap<String, Value
     ).await {
         Ok(result) => result.to_string(),
         Err(e) => format!("❌ blender_generate_scene_type failed: {}", e),
+    }
+}
+
+// =============================================================================
+// MANIM EXECUTE SCRIPT — consolidated Manim tool
+// =============================================================================
+
+async fn execute_manim_execute_script_claude(args: &Value) -> String {
+    let description = args.get("description").and_then(|v| v.as_str()).unwrap_or("");
+    if description.is_empty() {
+        return "❌ Error: description is required".to_string();
+    }
+    let duration = args.get("duration").and_then(|v| v.as_f64()).unwrap_or(10.0);
+    let background = args.get("background").and_then(|v| v.as_str()).unwrap_or("dark");
+    let transparent = args.get("transparent").and_then(|v| v.as_bool()).unwrap_or(false);
+    let quality = args.get("quality").and_then(|v| v.as_str()).unwrap_or("m");
+    let include_narration = args.get("include_narration").and_then(|v| v.as_bool()).unwrap_or(false);
+    let narration_text = args.get("narration_text").and_then(|v| v.as_str()).unwrap_or("");
+    let narration_speaker = args.get("narration_speaker").and_then(|v| v.as_str()).unwrap_or("Emma");
+
+    let base_url = std::env::var("BLENDER_MCP_URL").unwrap_or_default();
+    let api_key = std::env::var("BLENDER_MCP_API_KEY").unwrap_or_default();
+    if base_url.is_empty() {
+        return "❌ BlenderMCPServer not configured. Set BLENDER_MCP_URL in .env.".to_string();
+    }
+    let client = crate::blender_mcp_client::BlenderMCPClient::new(base_url, api_key);
+    match client.call_tool(
+        "manim_execute_script",
+        serde_json::json!({
+            "description": description,
+            "duration": duration,
+            "background": background,
+            "transparent": transparent,
+            "quality": quality,
+            "include_narration": include_narration,
+            "narration_text": narration_text,
+            "narration_speaker": narration_speaker,
+        }),
+    ).await {
+        Ok(result) => result.to_string(),
+        Err(e) => format!("❌ manim_execute_script failed: {}", e),
+    }
+}
+
+async fn execute_manim_execute_script_gemini(args: &HashMap<String, Value>) -> String {
+    let description = args.get("description").and_then(|v| v.as_str()).unwrap_or("");
+    if description.is_empty() {
+        return "❌ Error: description is required".to_string();
+    }
+    let duration = args.get("duration").and_then(|v| v.as_f64()).unwrap_or(10.0);
+    let background = args.get("background").and_then(|v| v.as_str()).unwrap_or("dark");
+    let transparent = args.get("transparent").and_then(|v| v.as_bool()).unwrap_or(false);
+    let quality = args.get("quality").and_then(|v| v.as_str()).unwrap_or("m");
+    let include_narration = args.get("include_narration").and_then(|v| v.as_bool()).unwrap_or(false);
+    let narration_text = args.get("narration_text").and_then(|v| v.as_str()).unwrap_or("");
+    let narration_speaker = args.get("narration_speaker").and_then(|v| v.as_str()).unwrap_or("Emma");
+
+    let base_url = std::env::var("BLENDER_MCP_URL").unwrap_or_default();
+    let api_key = std::env::var("BLENDER_MCP_API_KEY").unwrap_or_default();
+    if base_url.is_empty() {
+        return "❌ BlenderMCPServer not configured. Set BLENDER_MCP_URL in .env.".to_string();
+    }
+    let client = crate::blender_mcp_client::BlenderMCPClient::new(base_url, api_key);
+    match client.call_tool(
+        "manim_execute_script",
+        serde_json::json!({
+            "description": description,
+            "duration": duration,
+            "background": background,
+            "transparent": transparent,
+            "quality": quality,
+            "include_narration": include_narration,
+            "narration_text": narration_text,
+            "narration_speaker": narration_speaker,
+        }),
+    ).await {
+        Ok(result) => result.to_string(),
+        Err(e) => format!("❌ manim_execute_script failed: {}", e),
     }
 }

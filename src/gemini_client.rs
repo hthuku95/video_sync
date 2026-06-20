@@ -1155,6 +1155,74 @@ impl GeminiClient {
         }
     }
 
+    /// Consolidated manim_execute_script — replaces 14+ individual blender_generate_* Manim tools.
+    pub fn manim_execute_script_tool() -> FunctionDeclaration {
+        FunctionDeclaration {
+            name: "manim_execute_script".to_string(),
+            description: "Generate ANY Manim animation from a natural language description. \
+                This single tool replaces blender_generate_animation, blender_generate_latex, \
+                blender_generate_chart, blender_generate_flowchart, blender_generate_3d_math, \
+                blender_generate_code_animation, blender_generate_timeline, \
+                blender_generate_network_graph, blender_generate_text_animation, \
+                blender_generate_vector_field, blender_generate_matrix_transform, \
+                blender_generate_polar_graph, blender_generate_geometry_proof, \
+                blender_generate_data_viz, and 14+ other individual Manim tools. \
+                The LLM writes Manim Python code from scratch for any animation type. \
+                Pass the animation description in `description`, background style in `background`, \
+                and quality level in `quality`. \
+                Covers 100% of Manim's API: animations, 3D scenes, graphs, LaTeX, \
+                geometry, network graphs, timelines, code highlighting, and more.".to_string(),
+            parameters: Parameters {
+                param_type: "object".to_string(),
+                properties: {
+                    let mut props = std::collections::HashMap::new();
+                    props.insert("description".to_string(), PropertyDefinition {
+                        prop_type: "string".to_string(),
+                        description: "Natural language description of the desired animation. Be specific about scene content, objects, colors, transforms, and text.".to_string(),
+                        items: None,
+                    });
+                    props.insert("duration".to_string(), PropertyDefinition {
+                        prop_type: "number".to_string(),
+                        description: "Target clip duration in seconds (default 10)".to_string(),
+                        items: None,
+                    });
+                    props.insert("background".to_string(), PropertyDefinition {
+                        prop_type: "string".to_string(),
+                        description: "Background style: \"dark\" | \"light\" | \"transparent\" (default \"dark\")".to_string(),
+                        items: None,
+                    });
+                    props.insert("transparent".to_string(), PropertyDefinition {
+                        prop_type: "boolean".to_string(),
+                        description: "If true, render with alpha channel (ProRes .mov)".to_string(),
+                        items: None,
+                    });
+                    props.insert("quality".to_string(), PropertyDefinition {
+                        prop_type: "string".to_string(),
+                        description: "Render quality: \"l\" (480p) | \"m\" (720p) | \"h\" (1080p) (default \"m\")".to_string(),
+                        items: None,
+                    });
+                    props.insert("include_narration".to_string(), PropertyDefinition {
+                        prop_type: "boolean".to_string(),
+                        description: "If true, generate and attach VibeVoice narration".to_string(),
+                        items: None,
+                    });
+                    props.insert("narration_text".to_string(), PropertyDefinition {
+                        prop_type: "string".to_string(),
+                        description: "Custom narration text (auto-generated from prompt if empty)".to_string(),
+                        items: None,
+                    });
+                    props.insert("narration_speaker".to_string(), PropertyDefinition {
+                        prop_type: "string".to_string(),
+                        description: "VibeVoice speaker name (default \"Emma\")".to_string(),
+                        items: None,
+                    });
+                    props
+                },
+                required: vec!["description".to_string()],
+            },
+        }
+    }
+
     pub fn create_video_editing_tools() -> Vec<FunctionDeclaration> {
         vec![
             FunctionDeclaration {
