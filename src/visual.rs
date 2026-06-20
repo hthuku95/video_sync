@@ -37,6 +37,68 @@ pub fn apply_filter(
     execute_ffmpeg_command(command)
 }
 
+/// Apply any FFmpeg video filter by name with dynamic parameters.
+/// This is the consolidated replacement for 60+ individual apply_* functions.
+/// Example: apply_ffmpeg_filter("in.mp4", "out.mp4", "gblur", &[("sigma", "3.0"), ("steps", "1")])
+pub fn apply_ffmpeg_filter(
+    input_file: &str,
+    output_file: &str,
+    filter_name: &str,
+    params: &[(&str, &str)],
+) -> Result<String, String> {
+    let filter_string = if params.is_empty() {
+        filter_name.to_string()
+    } else {
+        let args: Vec<String> = params
+            .iter()
+            .map(|(k, v)| format!("{}={}", k, v))
+            .collect();
+        format!("{}={}", filter_name, args.join(":"))
+    };
+
+    let mut command = Command::new("ffmpeg");
+    command
+        .arg("-i")
+        .arg(input_file)
+        .arg("-vf")
+        .arg(&filter_string)
+        .arg("-c:a")
+        .arg("copy")
+        .arg("-y")
+        .arg(output_file);
+    execute_ffmpeg_command(command)
+}
+
+/// Apply any FFmpeg audio filter by name with dynamic parameters.
+pub fn apply_audio_ffmpeg_filter(
+    input_file: &str,
+    output_file: &str,
+    filter_name: &str,
+    params: &[(&str, &str)],
+) -> Result<String, String> {
+    let filter_string = if params.is_empty() {
+        filter_name.to_string()
+    } else {
+        let args: Vec<String> = params
+            .iter()
+            .map(|(k, v)| format!("{}={}", k, v))
+            .collect();
+        format!("{}={}", filter_name, args.join(":"))
+    };
+
+    let mut command = Command::new("ffmpeg");
+    command
+        .arg("-i")
+        .arg(input_file)
+        .arg("-af")
+        .arg(&filter_string)
+        .arg("-c:v")
+        .arg("copy")
+        .arg("-y")
+        .arg(output_file);
+    execute_ffmpeg_command(command)
+}
+
 pub fn adjust_color(
     input_file: &str,
     output_file: &str,
