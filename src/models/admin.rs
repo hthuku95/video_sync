@@ -45,6 +45,11 @@ pub struct ToggleActiveRequest {
     pub is_active: bool,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ToggleDfyCustomerRequest {
+    pub is_dfy_customer: bool,
+}
+
 impl From<WhitelistEmail> for WhitelistEmailResponse {
     fn from(whitelist: WhitelistEmail) -> Self {
         WhitelistEmailResponse {

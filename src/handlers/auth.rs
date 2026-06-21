@@ -199,7 +199,8 @@ async fn register(
                             subscription_status, trial_ends_at)
          VALUES ($1, $2, $3, true, false, false, false, NOW(), NOW(),
                  'trial', NOW() + INTERVAL '7 days')
-         RETURNING id, email, username, password_hash, is_active, is_superuser, is_staff, is_clipper, created_at, updated_at"
+         RETURNING id, email, username, password_hash, is_active, is_superuser, is_staff, is_clipper, created_at, updated_at,
+                   subscription_status, trial_ends_at, subscription_active_until, subscription_tier, last_payment_at, is_dfy_customer"
     )
     .bind(&payload.email)
     .bind(&payload.username)
@@ -476,7 +477,8 @@ async fn verify_token(
 
     // Get user from database
     let user_row = sqlx::query(
-        "SELECT id, email, username, password_hash, is_active, is_superuser, is_staff, is_clipper, created_at, updated_at
+        "SELECT id, email, username, password_hash, is_active, is_superuser, is_staff, is_clipper, created_at, updated_at,
+                subscription_status, trial_ends_at, subscription_active_until, subscription_tier, last_payment_at, is_dfy_customer
          FROM users WHERE id = $1 AND is_active = true"
     )
     .bind(claims.sub.parse::<i32>().unwrap_or(0))
@@ -966,10 +968,14 @@ pub async fn google_oauth_callback(
                     email, username, password_hash, is_active,
                     google_id, google_email, google_picture,
                     google_access_token, google_refresh_token, google_token_expiry,
+                    subscription_status, trial_ends_at,
                     created_at, updated_at
                 )
-                VALUES ($1, $2, $3, true, $4, $5, $6, $7, $8, $9, NOW(), NOW())
-                RETURNING id, email, username, password_hash, is_active, is_superuser, is_staff, is_clipper, created_at, updated_at"
+                VALUES ($1, $2, $3, true, $4, $5, $6, $7, $8, $9,
+                        'trial', NOW() + INTERVAL '7 days',
+                        NOW(), NOW())
+                RETURNING id, email, username, password_hash, is_active, is_superuser, is_staff, is_clipper, created_at, updated_at,
+                          subscription_status, trial_ends_at, subscription_active_until, subscription_tier, last_payment_at, is_dfy_customer"
             )
             .bind(&user_info.email)
             .bind(username)
@@ -998,6 +1004,12 @@ pub async fn google_oauth_callback(
                 is_clipper: user_row.get("is_clipper"),
                 created_at: user_row.get("created_at"),
                 updated_at: user_row.get("updated_at"),
+                subscription_status: user_row.try_get("subscription_status").ok().flatten(),
+                trial_ends_at: user_row.try_get("trial_ends_at").ok().flatten(),
+                subscription_active_until: user_row.try_get("subscription_active_until").ok().flatten(),
+                subscription_tier: user_row.try_get("subscription_tier").ok().flatten(),
+                last_payment_at: user_row.try_get("last_payment_at").ok().flatten(),
+                is_dfy_customer: user_row.try_get("is_dfy_customer").unwrap_or(false),
             };
 
             tracing::info!("✨ Created new user via Google OAuth: {}", user.email);
@@ -1333,9 +1345,12 @@ async fn register_clipper(
 
     // Create clipper user
     let user_row = sqlx::query(
-        "INSERT INTO users (email, username, password_hash, is_active, is_superuser, is_staff, is_clipper, created_at, updated_at)
-         VALUES ($1, $2, $3, true, false, false, true, NOW(), NOW())
-         RETURNING id, email, username, password_hash, is_active, is_superuser, is_staff, is_clipper, created_at, updated_at"
+        "INSERT INTO users (email, username, password_hash, is_active, is_superuser, is_staff, is_clipper,
+                            subscription_status, trial_ends_at, created_at, updated_at)
+         VALUES ($1, $2, $3, true, false, false, true,
+                 'trial', NOW() + INTERVAL '7 days', NOW(), NOW())
+         RETURNING id, email, username, password_hash, is_active, is_superuser, is_staff, is_clipper, created_at, updated_at,
+                   subscription_status, trial_ends_at, subscription_active_until, subscription_tier, last_payment_at, is_dfy_customer"
     )
     .bind(&payload.email)
     .bind(&payload.username)

@@ -13,6 +13,12 @@ pub struct User {
     pub is_clipper: bool,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
+    pub subscription_status: Option<String>,
+    pub trial_ends_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub subscription_active_until: Option<chrono::DateTime<chrono::Utc>>,
+    pub subscription_tier: Option<String>,
+    pub last_payment_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub is_dfy_customer: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
@@ -25,6 +31,12 @@ pub struct UserResponse {
     pub is_staff: bool,
     pub is_clipper: bool,
     pub created_at: chrono::DateTime<chrono::Utc>,
+    pub subscription_status: Option<String>,
+    pub trial_ends_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub subscription_active_until: Option<chrono::DateTime<chrono::Utc>>,
+    pub subscription_tier: Option<String>,
+    pub last_payment_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub is_dfy_customer: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -78,6 +90,12 @@ impl From<User> for UserResponse {
             is_staff: user.is_staff,
             is_clipper: user.is_clipper,
             created_at: user.created_at,
+            subscription_status: user.subscription_status,
+            trial_ends_at: user.trial_ends_at,
+            subscription_active_until: user.subscription_active_until,
+            subscription_tier: user.subscription_tier,
+            last_payment_at: user.last_payment_at,
+            is_dfy_customer: user.is_dfy_customer,
         }
     }
 }

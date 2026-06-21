@@ -79,6 +79,10 @@ pub fn admin_routes() -> Router {
             "/api/admin/users/:id/toggle-active",
             post(admin_toggle_user_active),
         )
+        .route(
+            "/api/admin/users/:id/dfy-customer",
+            post(admin_toggle_dfy_customer),
+        )
         .route("/api/admin/users/:id/make-staff", post(admin_make_staff))
         .route(
             "/api/admin/users/:id/remove-staff",
@@ -562,12 +566,13 @@ pub async fn admin_dashboard() -> Html<String> {
                         <th>Status</th>
                         <th>Role</th>
                         <th>Subscription</th>
+                        <th>DFY</th>
                         <th>Joined</th>
                         <th>Actions</th>
                     </tr>
                 </thead>
                 <tbody id="recentUsers">
-                    <tr><td colspan="7" style="text-align: center;">Loading...</td></tr>
+                    <tr><td colspan="8" style="text-align: center;">Loading...</td></tr>
                 </tbody>
             </table>
         </div>
@@ -627,6 +632,7 @@ pub async fn admin_dashboard() -> Html<String> {
                             <td><span class="badge ${user.is_active ? 'badge-success' : 'badge-danger'}">${user.is_active ? 'Active' : 'Inactive'}</span></td>
                             <td><span class="badge ${user.is_superuser ? 'badge-danger' : user.is_staff ? 'badge-warning' : 'badge-success'}">${user.is_superuser ? 'Superuser' : user.is_staff ? 'Staff' : 'User'}</span></td>
                             <td><span class="badge ${subBadge(status)}">${status}</span></td>
+                            <td>${user.is_dfy_customer ? '<span class="badge badge-warning" style="font-weight:700;">DFY</span>' : '—'}</td>
                             <td>${new Date(user.created_at).toLocaleDateString()}</td>
                             <td><a href="/admin/users/${user.id}" class="btn" style="padding: 0.25rem 0.5rem; font-size: 0.8rem;">View</a></td>
                         </tr>`;
@@ -1172,7 +1178,8 @@ pub async fn admin_users_api(
     // the admin users page without having to modify UserResponse.
     let select = "SELECT id, email, username, is_active, is_superuser, is_staff, \
                   created_at, subscription_status, subscription_tier, \
-                  trial_ends_at, subscription_active_until, last_payment_at \
+                  trial_ends_at, subscription_active_until, last_payment_at, \
+                  is_dfy_customer \
                   FROM users";
     let mut query = select.to_string();
     let mut count_query = "SELECT COUNT(*) FROM users".to_string();
@@ -1216,6 +1223,7 @@ pub async fn admin_users_api(
             "trial_ends_at":             to_iso(r.try_get("trial_ends_at").ok().flatten()),
             "subscription_active_until": to_iso(r.try_get("subscription_active_until").ok().flatten()),
             "last_payment_at":           to_iso(r.try_get("last_payment_at").ok().flatten()),
+            "is_dfy_customer":           r.try_get::<bool, _>("is_dfy_customer").unwrap_or(false),
         })
     }).collect();
 
@@ -1309,11 +1317,13 @@ pub async fn create_superuser_api(
         )
     })?;
 
-    // Create superuser
+    // Create superuser — free for life
     let user_row = sqlx::query(
-        "INSERT INTO users (email, username, password_hash, is_active, is_superuser, is_staff) 
-         VALUES ($1, $2, $3, true, true, true) 
-         RETURNING id, email, username, is_active, is_superuser, is_staff, created_at, updated_at",
+        "INSERT INTO users (email, username, password_hash, is_active, is_superuser, is_staff,
+                            subscription_status)
+         VALUES ($1, $2, $3, true, true, true, 'grandfathered')
+         RETURNING id, email, username, is_active, is_superuser, is_staff, created_at, updated_at,
+                   subscription_status, trial_ends_at, subscription_active_until, subscription_tier, last_payment_at, is_dfy_customer",
     )
     .bind(&payload.email)
     .bind(&payload.username)
@@ -1341,6 +1351,12 @@ pub async fn create_superuser_api(
         is_clipper: false,
         created_at: user_row.get("created_at"),
         updated_at: user_row.get("updated_at"),
+        subscription_status: user_row.try_get("subscription_status").ok().flatten(),
+        trial_ends_at: user_row.try_get("trial_ends_at").ok().flatten(),
+        subscription_active_until: user_row.try_get("subscription_active_until").ok().flatten(),
+        subscription_tier: user_row.try_get("subscription_tier").ok().flatten(),
+        last_payment_at: user_row.try_get("last_payment_at").ok().flatten(),
+        is_dfy_customer: user_row.try_get("is_dfy_customer").unwrap_or(false),
     };
 
     Ok(Json(json!({
@@ -1449,6 +1465,7 @@ pub async fn admin_users_list() -> Html<String> {
                         <th>Status</th>
                         <th>Role</th>
                         <th>Subscription</th>
+                        <th>DFY</th>
                         <th>Trial / Paid Until</th>
                         <th>Last Payment</th>
                         <th>Created</th>
@@ -1456,7 +1473,7 @@ pub async fn admin_users_list() -> Html<String> {
                     </tr>
                 </thead>
                 <tbody id="usersTable">
-                    <tr><td colspan="10" style="text-align: center;">Loading...</td></tr>
+                    <tr><td colspan="11" style="text-align: center;">Loading...</td></tr>
                 </tbody>
             </table>
 
@@ -1549,7 +1566,7 @@ pub async fn admin_users_list() -> Html<String> {
             } catch (error) {
                 console.error('Error loading users:', error);
                 document.getElementById('usersTable').innerHTML =
-                    `<tr><td colspan="7" style="text-align:center;color:#dc3545;">Network error — check console</td></tr>`;
+                    `<tr><td colspan="11" style="text-align:center;color:#dc3545;">Network error — check console</td></tr>`;
             }
         }
 
@@ -1557,7 +1574,7 @@ pub async fn admin_users_list() -> Html<String> {
             const tbody = document.getElementById('usersTable');
 
             if (users.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="10" style="text-align: center;">No users found</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="11" style="text-align: center;">No users found</td></tr>';
                 return;
             }
 
@@ -1581,6 +1598,7 @@ pub async fn admin_users_list() -> Html<String> {
                     <td><span class="badge ${user.is_active ? 'badge-success' : 'badge-danger'}">${user.is_active ? 'Active' : 'Inactive'}</span></td>
                     <td><span class="badge ${user.is_superuser ? 'badge-danger' : user.is_staff ? 'badge-warning' : 'badge-success'}">${user.is_superuser ? 'Superuser' : user.is_staff ? 'Staff' : 'User'}</span></td>
                     <td><span class="badge ${subBadgeClass(status)}">${status}</span></td>
+                    <td>${user.is_dfy_customer ? '<span class="badge badge-warning">DFY</span>' : '—'}</td>
                     <td>${fmtDate(untilDate)}</td>
                     <td>${fmtDate(user.last_payment_at)}</td>
                     <td>${fmtDate(user.created_at)}</td>
@@ -1771,6 +1789,9 @@ pub async fn admin_user_detail(Path(id): Path<i32>) -> Html<String> {
                 <div class="info-label">Role:</div>
                 <div class="info-value" id="role">Loading...</div>
 
+                <div class="info-label">DFY Customer:</div>
+                <div class="info-value" id="dfyCustomer">Loading...</div>
+
                 <div class="info-label">Created:</div>
                 <div class="info-value" id="created">Loading...</div>
 
@@ -1800,6 +1821,12 @@ pub async fn admin_user_detail(Path(id): Path<i32>) -> Html<String> {
             <h2>Account Status</h2>
             <p style="color: #6c757d; margin-bottom: 1rem;">Enable or disable this user's account access.</p>
             <button onclick="toggleActive()" id="toggleActiveBtn" class="btn btn-warning">Loading...</button>
+        </div>
+
+        <div class="card">
+            <h2>DFY Customer Status</h2>
+            <p style="color: #6c757d; margin-bottom: 1rem;">Mark this user as a DFY (done-for-you) customer for monetization tracking and invoicing.</p>
+            <button onclick="toggleDfyCustomer()" id="toggleDfyBtn" class="btn btn-warning">Loading...</button>
         </div>
 
         <div class="card">
@@ -1857,6 +1884,9 @@ pub async fn admin_user_detail(Path(id): Path<i32>) -> Html<String> {
             document.getElementById('email').textContent = user.email;
             document.getElementById('status').innerHTML = `<span class="badge ${{user.is_active ? 'badge-success' : 'badge-danger'}}">${{user.is_active ? 'Active' : 'Inactive'}}</span>`;
             document.getElementById('role').innerHTML = `<span class="badge ${{user.is_superuser ? 'badge-danger' : user.is_staff ? 'badge-warning' : 'badge-success'}}">${{user.is_superuser ? 'Superuser' : user.is_staff ? 'Staff' : 'User'}}</span>`;
+            document.getElementById('dfyCustomer').innerHTML = user.is_dfy_customer
+                ? '<span class="badge badge-warning" style="font-weight:700;">Yes — DFY Customer</span>'
+                : '<span class="badge" style="background:#e9ecef;color:#495057;">No</span>';
             document.getElementById('created').textContent = new Date(user.created_at).toLocaleString();
             document.getElementById('updated').textContent = new Date(user.updated_at).toLocaleString();
 
@@ -1872,6 +1902,12 @@ pub async fn admin_user_detail(Path(id): Path<i32>) -> Html<String> {
             activeBtn.textContent = user.is_active ? 'Deactivate Account' : 'Activate Account';
             activeBtn.className = user.is_active ? 'btn' : 'btn btn-success';
             activeBtn.disabled = isSelf;
+
+            // Toggle DFY Customer button
+            const dfyBtn = document.getElementById('toggleDfyBtn');
+            dfyBtn.textContent = user.is_dfy_customer ? 'Remove DFY Customer Label' : 'Mark as DFY Customer';
+            dfyBtn.className = user.is_dfy_customer ? 'btn' : 'btn btn-success';
+            dfyBtn.disabled = false;
 
             // Toggle Staff button
             const staffBtn = document.getElementById('toggleStaffBtn');
@@ -1937,6 +1973,37 @@ pub async fn admin_user_detail(Path(id): Path<i32>) -> Html<String> {
                         'Content-Type': 'application/json'
                     }},
                     body: JSON.stringify({{ is_active: newStatus }})
+                }});
+
+                const data = await response.json();
+
+                if (data.success) {{
+                    showSuccess(data.message);
+                    loadUser();
+                }} else {{
+                    showError(data.message);
+                }}
+            }} catch (error) {{
+                showError('Network error');
+            }}
+        }}
+
+        async function toggleDfyCustomer() {{
+            if (!userData) return;
+
+            const newStatus = !userData.is_dfy_customer;
+            const action = newStatus ? 'mark' : 'unmark';
+
+            if (!confirm(`Are you sure you want to ${action} this user as a DFY customer? This affects monetization tracking and invoicing.`)) return;
+
+            try {{
+                const response = await fetch(`/api/admin/users/${{userId}}/dfy-customer`, {{
+                    method: 'POST',
+                    headers: {{
+                        'Authorization': 'Bearer ' + authToken,
+                        'Content-Type': 'application/json'
+                    }},
+                    body: JSON.stringify({{ is_dfy_customer: newStatus }})
                 }});
 
                 const data = await response.json();
@@ -2331,6 +2398,49 @@ pub async fn admin_toggle_user_active(
     })))
 }
 
+/// POST /api/admin/users/:id/dfy-customer — toggle the DFY customer label.
+pub async fn admin_toggle_dfy_customer(
+    Path(id): Path<i32>,
+    Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
+    Json(payload): Json<ToggleDfyCustomerRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let updated_user = sqlx::query_as::<_, User>(
+        "UPDATE users SET is_dfy_customer = $1, updated_at = NOW() WHERE id = $2 RETURNING *",
+    )
+    .bind(payload.is_dfy_customer)
+    .bind(id)
+    .fetch_one(&state.db_pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("❌ Database error: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "success": false,
+                "message": "Failed to update DFY customer status"
+            })),
+        )
+    })?;
+
+    tracing::info!(
+        "👤 User {} DFY customer {} by admin {}",
+        updated_user.username,
+        if payload.is_dfy_customer { "marked" } else { "unmarked" },
+        claims.username
+    );
+
+    Ok(Json(json!({
+        "success": true,
+        "message": if payload.is_dfy_customer {
+            "User marked as DFY customer"
+        } else {
+            "DFY customer label removed"
+        },
+        "user": UserResponse::from(updated_user)
+    })))
+}
+
 pub async fn admin_make_staff(
     Path(id): Path<i32>,
     Extension(state): Extension<Arc<AppState>>,
@@ -2370,7 +2480,11 @@ pub async fn admin_make_staff(
     }
 
     let updated_user = sqlx::query_as::<_, User>(
-        "UPDATE users SET is_staff = true, updated_at = NOW() WHERE id = $1 RETURNING *",
+        "UPDATE users SET is_staff = true,
+                          subscription_status = 'grandfathered',
+                          trial_ends_at = NULL,
+                          updated_at = NOW()
+         WHERE id = $1 RETURNING *",
     )
     .bind(id)
     .fetch_one(&state.db_pool)
@@ -2531,7 +2645,11 @@ pub async fn admin_make_superuser(
     }
 
     let updated_user = sqlx::query_as::<_, User>(
-        "UPDATE users SET is_superuser = true, is_staff = true, updated_at = NOW() WHERE id = $1 RETURNING *"
+        "UPDATE users SET is_superuser = true, is_staff = true,
+                          subscription_status = 'grandfathered',
+                          trial_ends_at = NULL,
+                          updated_at = NOW()
+         WHERE id = $1 RETURNING *"
     )
     .bind(id)
     .fetch_one(&state.db_pool)
@@ -2862,10 +2980,14 @@ pub async fn admin_create_user(
 
     let is_staff = payload.is_staff.unwrap_or(false);
 
-    // Create user
+    // Create user — staff users get grandfathered (free for life), regular users get trial
     let user = sqlx::query_as::<_, User>(
-        "INSERT INTO users (email, username, password_hash, is_active, is_staff, is_superuser, created_at, updated_at)
-         VALUES ($1, $2, $3, true, $4, false, NOW(), NOW())
+        "INSERT INTO users (email, username, password_hash, is_active, is_staff, is_superuser,
+                            subscription_status, trial_ends_at, created_at, updated_at)
+         VALUES ($1, $2, $3, true, $4, false,
+                 CASE WHEN $4 THEN 'grandfathered' ELSE 'trial' END,
+                 CASE WHEN $4 THEN NULL ELSE NOW() + INTERVAL '7 days' END,
+                 NOW(), NOW())
          RETURNING *"
     )
     .bind(&payload.email)
