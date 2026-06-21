@@ -75,6 +75,8 @@ impl OllamaClient {
         Self {
             client: Client::builder()
                 .timeout(std::time::Duration::from_secs(900))
+                .connect_timeout(std::time::Duration::from_secs(10))
+                .pool_max_idle_per_host(0)
                 .build()
                 .unwrap_or_default(),
             base_url,

@@ -12,7 +12,7 @@ use crate::nvidia_nim_client::NvidiaNimClient;
 use crate::ollama_client::OllamaClient;
 use std::time::Duration;
 
-const PROVIDER_TIMEOUT: Duration = Duration::from_secs(30);
+const PROVIDER_TIMEOUT: Duration = Duration::from_secs(120);
 
 macro_rules! try_provider {
     ($client:expr, $prompt:expr, $name:expr, $fallback_label:expr) => {{
