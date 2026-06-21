@@ -133,16 +133,15 @@ impl OllamaClient {
                 {"role": "system", "content": "You are a helpful assistant. Respond directly without thinking or reasoning. Never use reasoning tags."},
                 {"role": "user", "content": prompt}
             ],
-            "max_tokens": 4096,
             "temperature": 0.1,
             "think": false,
-            "options": {"num_predict": 4096},
+            "options": {"num_predict": 2048},
             "stream": false,
         });
 
         let resp = self
             .client
-            .post(format!("{}/v1/chat/completions", self.base_url))
+            .post(format!("{}/api/chat", self.base_url))
             .header("Content-Type", "application/json")
             .json(&body)
             .send()
@@ -155,12 +154,9 @@ impl OllamaClient {
         }
 
         let json: serde_json::Value = resp.json().await?;
-        let msg = &json["choices"][0]["message"];
-        let text = msg["content"]
+        let text = json["message"]["content"]
             .as_str()
-            .filter(|s| !s.is_empty())
-            .or_else(|| msg["reasoning"].as_str().filter(|s| !s.is_empty()))
-            .ok_or("Ollama: no content or reasoning in response")?
+            .ok_or("Ollama: no content in response")?
             .to_string();
         Ok(text)
     }
@@ -201,14 +197,15 @@ impl OllamaClient {
         let body = serde_json::json!({
             "model": self.model,
             "messages": [{"role": "user", "content": content_parts}],
-            "max_tokens": 8192,
             "temperature": 0.3,
+            "think": false,
+            "options": {"num_predict": 4096},
             "stream": false,
         });
 
         let resp = self
             .client
-            .post(format!("{}/v1/chat/completions", self.base_url))
+            .post(format!("{}/api/chat", self.base_url))
             .header("Content-Type", "application/json")
             .json(&body)
             .send()
@@ -221,7 +218,7 @@ impl OllamaClient {
         }
 
         let json: serde_json::Value = resp.json().await?;
-        let text = json["choices"][0]["message"]["content"]
+        let text = json["message"]["content"]
             .as_str()
             .ok_or("Ollama: no content in multimodal response")?
             .to_string();
