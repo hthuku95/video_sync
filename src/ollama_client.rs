@@ -76,11 +76,26 @@ impl OllamaClient {
             client: Client::builder()
                 .timeout(std::time::Duration::from_secs(900))
                 .connect_timeout(std::time::Duration::from_secs(10))
-                .pool_max_idle_per_host(0)
+                .http1_only()
                 .build()
                 .unwrap_or_default(),
             base_url,
             model,
+        }
+    }
+
+    pub fn new_with_model(model: &str) -> Self {
+        let base_url = std::env::var("OLLAMA_BASE_URL")
+            .unwrap_or_else(|_| OLLAMA_DEFAULT_URL.to_string());
+        Self {
+            client: Client::builder()
+                .timeout(std::time::Duration::from_secs(900))
+                .connect_timeout(std::time::Duration::from_secs(10))
+                .http1_only()
+                .build()
+                .unwrap_or_default(),
+            base_url,
+            model: model.to_string(),
         }
     }
 

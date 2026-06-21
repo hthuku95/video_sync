@@ -1513,6 +1513,7 @@ Return ONLY valid JSON (no markdown):
     );
 
     match crate::llm_utils::generate_text_fast(
+        state.ollama_fast_client.as_ref(),
         state.ollama_client.as_ref(),
         state.gemini_client.as_ref(),
         state.deepseek_client.as_ref(),
@@ -2159,6 +2160,7 @@ Legacy DM: {existing_dm}"#,
     );
 
     let (x_dm, email_script) = match generate_text_best_effort(
+        state.ollama_fast_client.as_ref(),
         state.ollama_client.as_ref(),
         state.nvidia_nim_client.as_ref(),
         state.gemma_client.as_ref(),
@@ -4575,6 +4577,7 @@ Output ONLY the DM body. No quotes, no labels, no preamble."#,
     );
 
     let dm_text = match generate_text_best_effort(
+        state.ollama_fast_client.as_ref(),
         state.ollama_client.as_ref(),
         state.nvidia_nim_client.as_ref(),
         state.gemma_client.as_ref(),
@@ -5094,6 +5097,7 @@ Return ONLY a JSON array of strings. No explanation. Example: ["youtuber", "cont
     );
 
     let hashtags_json = match generate_text_best_effort(
+        state.ollama_fast_client.as_ref(),
         state.ollama_client.as_ref(),
         state.nvidia_nim_client.as_ref(),
         state.gemma_client.as_ref(),
@@ -5725,6 +5729,7 @@ Use education instead of animations for Manim/LaTeX/teaching content. Use three_
         );
 
         let result = generate_text_best_effort(
+            state.ollama_fast_client.as_ref(),
             state.ollama_client.as_ref(),
             state.nvidia_nim_client.as_ref(),
             state.gemma_client.as_ref(),
@@ -5820,6 +5825,7 @@ Return ONLY the raw search query string, nothing else."#
     );
 
     match crate::llm_utils::generate_text_fast(
+        state.ollama_fast_client.as_ref(),
         state.ollama_client.as_ref(),
         state.gemini_client.as_ref(),
         state.deepseek_client.as_ref(),
@@ -5867,6 +5873,7 @@ Return ONLY the category name, nothing else."#
     );
 
     match crate::llm_utils::generate_text_fast(
+        state.ollama_fast_client.as_ref(),
         state.ollama_client.as_ref(),
         state.gemini_client.as_ref(),
         state.deepseek_client.as_ref(),
@@ -5926,6 +5933,7 @@ Return ONLY the JSON, no explanation."#
     );
 
     let text = generate_text_best_effort(
+        state.ollama_fast_client.as_ref(),
         state.ollama_client.as_ref(),
         state.nvidia_nim_client.as_ref(),
         state.gemma_client.as_ref(),
@@ -6331,6 +6339,7 @@ Return ONLY valid JSON (no markdown):
     );
 
     let response = match crate::llm_utils::generate_text_best_effort(
+        state.ollama_fast_client.as_ref(),
         state.ollama_client.as_ref(),
         state.nvidia_nim_client.as_ref(),
         state.gemma_client.as_ref(),

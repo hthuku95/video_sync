@@ -43,14 +43,17 @@ macro_rules! try_provider {
     }};
 }
 
-/// Fast text generation — tries Ollama first, then DeepSeek, then Gemini.
+/// Fast text generation — tries Ollama Fast (qwen3:4b) first, then Ollama (gemma4:12b),
+/// then DeepSeek, then Gemini.
 /// Use for bulk/scoring tasks where speed matters.
 pub async fn generate_text_fast(
+    ollama_fast: Option<&OllamaClient>,
     ollama: Option<&OllamaClient>,
     gemini: Option<&GeminiClient>,
     deepseek: Option<&DeepSeekClient>,
     prompt: &str,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    try_provider!(ollama_fast, prompt, "Ollama (Qwen 3 4B, fast path)", "trying Ollama Gemma 4B");
     try_provider!(ollama, prompt, "Ollama (Gemma 4B, fast path)", "trying DeepSeek");
     try_provider!(deepseek, prompt, "DeepSeek V4 (fast path)", "trying Gemini");
     try_provider!(gemini, prompt, "Gemini Flash (fast path)", "no more fallbacks");
@@ -64,6 +67,7 @@ pub async fn generate_text_fast(
 /// code generation) to avoid hitting Gemini Flash quota limits.
 /// Do NOT use this for video analysis — call GeminiClient::analyze_video_from_url directly.
 pub async fn generate_text_best_effort(
+    ollama_fast: Option<&OllamaClient>,
     ollama: Option<&OllamaClient>,
     nvidia: Option<&NvidiaNimClient>,
     gemma: Option<&GeminiClient>,
@@ -71,6 +75,7 @@ pub async fn generate_text_best_effort(
     deepseek: Option<&DeepSeekClient>,
     prompt: &str,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    try_provider!(ollama_fast, prompt, "Ollama (Qwen 3 4B)", "trying Ollama Gemma 4B fallback");
     try_provider!(ollama, prompt, "Ollama (Gemma 4B)", "trying NVIDIA NIM fallback");
     try_provider!(nvidia, prompt, "NVIDIA NIM (Gemma 4)", "trying Gemma fallback");
     try_provider!(gemma, prompt, "Gemma 4 (Gemini API)", "trying Gemini Flash fallback");
