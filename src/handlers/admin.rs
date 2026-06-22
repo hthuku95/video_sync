@@ -58,6 +58,7 @@ pub fn admin_routes() -> Router {
         .route("/admin/revenue-ledger", get(admin_revenue_ledger_page))
         .route("/admin/how-it-works", get(admin_how_it_works_page))
         .route("/admin/service-samples", get(admin_service_samples_page))
+        .route("/admin/campaigns", get(admin_campaigns_page))
         .route("/admin/zernio", get(admin_zernio_page))
         .route("/delivery/:id", get(delivery_page))
         .route("/delivery/:id/download-gcs", get(delivery_gcs_download))
@@ -402,6 +403,7 @@ pub async fn admin_dashboard() -> Html<String> {
             <li><a href="/admin/performance">📈 Performance</a></li>
             <li><a href="/admin/test-runs">🧪 Portfolio Tests</a></li>
             <li><a href="/admin/portfolio-samples">🧠 Portfolio Samples</a></li>
+            <li><a href="/admin/campaigns">📋 Campaigns</a></li>
             <li><a href="/admin/prospect-finder">🎯 Prospect Finder</a></li>
             <li><a href="/admin/monetization-guide">💰 Monetization Guide</a></li>
             <li><a href="/admin/revenue-ledger">💸 Revenue Ledger</a></li>
@@ -11952,6 +11954,240 @@ const HOW_WE_WORK_HTML: &str = r###"<!DOCTYPE html>
 </body>
 </html>"###;
 
+/// Admin page for managing Campaign Engine campaigns.
+pub async fn admin_campaigns_page() -> Html<String> {
+    let html = r###"<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Campaigns — Admin</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Oxygen,sans-serif;background:#f5f6fa;color:#333;display:flex}
+.sidebar{width:250px;min-height:100vh;background:#343a40;color:#fff;padding:1.5rem;position:fixed;top:0;left:0}
+.sidebar h2{font-size:1.2rem;margin-bottom:1.5rem}
+.sidebar ul{list-style:none;padding:0}
+.sidebar li{margin-bottom:0.5rem}
+.sidebar a{color:#adb5bd;text-decoration:none;display:block;padding:0.5rem 0.75rem;border-radius:6px;transition:all 0.2s}
+.sidebar a:hover,.sidebar a.active{background:#495057;color:#fff}
+.main-content{margin-left:250px;flex:1;padding:2rem;max-width:1400px}
+.header{background:#fff;padding:1rem 2rem;border-radius:10px;box-shadow:0 2px 8px rgba(0,0,0,0.06);margin-bottom:2rem}
+.header h1{font-size:1.5rem;color:#dc3545;margin-bottom:0.25rem}
+.status-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:1rem;margin-bottom:2rem}
+.stat-card{background:#fff;padding:1.25rem;border-radius:10px;box-shadow:0 2px 8px rgba(0,0,0,0.06);text-align:center}
+.stat-card .num{font-size:1.8rem;font-weight:700;color:#dc3545}
+.card{background:#fff;padding:1.5rem;border-radius:10px;box-shadow:0 2px 8px rgba(0,0,0,0.06);margin-bottom:1.5rem}
+.card h2{font-size:1.2rem;margin-bottom:1rem;color:#495057}
+table{width:100%;border-collapse:collapse;font-size:0.9rem}
+th{background:#f8f9fa;padding:0.75rem 0.5rem;text-align:left;font-weight:600;color:#495057;border-bottom:2px solid #dee2e6}
+td{padding:0.75rem 0.5rem;border-bottom:1px solid #f0f0f0;vertical-align:middle}
+tr:hover{background:#f8f9fa}
+.badge{display:inline-block;padding:0.2rem 0.6rem;border-radius:12px;font-size:0.75rem;font-weight:600}
+.badge-active{background:#d4edda;color:#155724}
+.badge-paused{background:#fff3cd;color:#856404}
+.badge-cancelled{background:#f8d7da;color:#721c24}
+.badge-completed{background:#cce5ff;color:#004085}
+.btn{display:inline-flex;align-items:center;gap:0.3rem;padding:0.5rem 1rem;border:none;border-radius:6px;cursor:pointer;font-size:0.85rem;transition:all 0.2s}
+.btn-primary{background:#dc3545;color:#fff}
+.btn-primary:hover{background:#c82333}
+.btn-secondary{background:#6c757d;color:#fff}
+.btn-secondary:hover{background:#5a6268}
+.btn-sm{padding:0.3rem 0.6rem;font-size:0.8rem}
+.btn-success{background:#28a745;color:#fff}
+.btn-success:hover{background:#218838}
+.btn-warning{background:#ffc107;color:#212529}
+.btn-warning:hover{background:#e0a800}
+.btn-danger{background:#dc3545;color:#fff}
+.btn-danger:hover{background:#c82333}
+.btn-info{background:#17a2b8;color:#fff}
+.btn-info:hover{background:#138496}
+.form-row{display:flex;gap:0.75rem;flex-wrap:wrap;margin-bottom:0.75rem}
+.form-group{flex:1;min-width:200px}
+.form-group label{display:block;font-size:0.85rem;font-weight:600;color:#495057;margin-bottom:0.3rem}
+.form-group input,.form-group select,.form-group textarea{width:100%;padding:0.5rem;border:1px solid #ced4da;border-radius:6px;font-size:0.9rem}
+.form-group textarea{min-height:100px;resize:vertical}
+.modal-overlay{display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:1000;justify-content:center;align-items:center}
+.modal-overlay.active{display:flex}
+.modal{background:#fff;border-radius:12px;padding:2rem;max-width:800px;width:90%;max-height:80vh;overflow-y:auto}
+.modal h2{margin-bottom:1rem}
+.modal-close{float:right;background:none;border:none;font-size:1.5rem;cursor:pointer;color:#999}
+.modal-close:hover{color:#333}
+.toast{position:fixed;bottom:1.5rem;right:1.5rem;padding:0.75rem 1.5rem;border-radius:8px;color:#fff;font-size:0.9rem;opacity:0;transition:opacity 0.3s;z-index:2000}
+.toast.show{opacity:1}
+.toast.success{background:#28a745}
+.toast.error{background:#dc3545}
+.spinner{display:inline-block;width:1.2rem;height:1.2rem;border:2px solid rgba(255,255,255,0.3);border-top-color:#fff;border-radius:50%;animation:spin 0.6s linear infinite;vertical-align:middle;margin-right:0.3rem}
+@keyframes spin{to{transform:rotate(360deg)}}
+.search-box{padding:0.5rem;border:1px solid #ced4da;border-radius:6px;font-size:0.9rem;width:300px;margin-bottom:1rem}
+@keyframes fadeIn{from{opacity:0;transform:translateY(10px)};to{opacity:1;transform:translateY(0)}}
+</style>
+</head>
+<body>
+<div class="sidebar">
+  <h2>🛡️ Admin Panel</h2>
+  <ul>
+    <li><a href="/admin/dashboard">📊 Dashboard</a></li>
+    <li><a href="/admin/users">👥 Users</a></li>
+    <li><a href="/admin/clipping-activity">🎬 Clipping Activity</a></li>
+    <li><a href="/admin/deliveries">📦 Deliveries</a></li>
+    <li><a href="/admin/campaigns" class="active">📋 Campaigns</a></li>
+    <li><a href="/admin/zernio">📱 Social</a></li>
+    <li><a href="/admin/performance">📈 Performance</a></li>
+    <li><a href="/admin/prospect-finder">🎯 Prospect Finder</a></li>
+    <li><a href="/admin/monetization-guide">💰 Monetization Guide</a></li>
+  </ul>
+</div>
+<div class="main-content">
+  <div class="header">
+    <h1>📋 Campaign Engine</h1>
+    <p>Manage automated content generation and scheduled posting campaigns</p>
+  </div>
+  <div id="statusGrid" class="status-grid"></div>
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
+      <h2 style="margin:0">Campaigns</h2>
+      <button onclick="showCreateForm()" class="btn btn-primary">+ New Campaign</button>
+    </div>
+    <input type="text" class="search-box" id="searchBox" placeholder="Search campaigns..." oninput="filterTable()">
+    <div style="overflow-x:auto">
+      <table>
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>User</th>
+            <th>Service</th>
+            <th>Status</th>
+            <th>Posts</th>
+            <th>Dates</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="campaignsBody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+<div id="detailModal" class="modal-overlay" onclick="if(event.target===this)closeDetail()">
+  <div class="modal">
+    <button class="modal-close" onclick="closeDetail()">&times;</button>
+    <h2 id="detailName">Campaign Detail</h2>
+    <div id="detailContent"></div>
+  </div>
+</div>
+<div id="createModal" class="modal-overlay" onclick="if(event.target===this)closeCreate()">
+  <div class="modal">
+    <button class="modal-close" onclick="closeCreate()">&times;</button>
+    <h2>Create Campaign</h2>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Name</label>
+        <input id="formName" placeholder="Campaign name">
+      </div>
+      <div class="form-group">
+        <label>Service Type</label>
+        <select id="formService"><option value="clipping">Clipping</option><option value="education">Education</option></select>
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Brief</label>
+      <textarea id="formBrief" placeholder="Describe the topic brief for AI variation generation"></textarea>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Style</label>
+        <input id="formStyle" placeholder="cinematic" value="cinematic">
+      </div>
+      <div class="form-group">
+        <label>Duration (seconds)</label>
+        <input id="formDuration" type="number" value="30">
+      </div>
+      <div class="form-group">
+        <label>Posts Per Day</label>
+        <input id="formPostsPerDay" type="number" value="3">
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Start Date</label>
+        <input id="formStartDate" type="date">
+      </div>
+      <div class="form-group">
+        <label>End Date</label>
+        <input id="formEndDate" type="date">
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Schedule (JSON)</label>
+      <textarea id="formSchedule" style="min-height:60px">[{"time":"08:00","platform":"youtube"},{"time":"12:00","platform":"youtube"},{"time":"17:00","platform":"tiktok"}]</textarea>
+    </div>
+    <div class="form-group">
+      <label>Platforms (JSON)</label>
+      <textarea id="formPlatforms" style="min-height:60px">[{"platform":"youtube","account_id":""}]</textarea>
+    </div>
+    <button onclick="createCampaign()" class="btn btn-primary" style="margin-top:0.75rem">Create Campaign</button>
+  </div>
+</div>
+<div id="toast" class="toast"></div>
+<script>
+async function apiFetch(url, opts={}){opts.headers=opts.headers||{};opts.headers['Accept']='application/json';opts.credentials='include';const r=await fetch(url,opts);if(!r.ok){const t=await r.json().catch(()=>({}));throw new Error(t.error||r.statusText)}return r.json()}
+function toast(msg,type='success'){const t=document.getElementById('toast');t.textContent=msg;t.className='toast '+type+' show';setTimeout(()=>t.classList.remove('show'),3000)}
+let allCampaigns=[];
+async function loadCampaigns(){const r=await apiFetch('/api/admin/campaigns');allCampaigns=r.campaigns||[];renderStats();renderTable()}
+function renderStats(){const g=document.getElementById('statusGrid');let total=0,active=0,paused=0,cancelled=0,planned=0,published=0;allCampaigns.forEach(c=>{total++;if(c.status==='active')active++;else if(c.status==='paused')paused++;else if(c.status==='cancelled')cancelled++;planned+=c.total_posts_planned||0;published+=c.total_posts_published||0});g.innerHTML=`
+  <div class="stat-card"><div class="num">${total}</div><div>Total Campaigns</div></div>
+  <div class="stat-card"><div class="num">${active}</div><div>Active</div></div>
+  <div class="stat-card"><div class="num">${paused}</div><div>Paused</div></div>
+  <div class="stat-card"><div class="num">${cancelled}</div><div>Cancelled</div></div>
+  <div class="stat-card"><div class="num">${planned}</div><div>Posts Planned</div></div>
+  <div class="stat-card"><div class="num">${published}</div><div>Posts Published</div></div>
+`}
+function statusBadge(s){const m={'active':'badge-active','paused':'badge-paused','cancelled':'badge-cancelled','completed':'badge-completed'};return'<span class="badge '+(m[s]||'badge-active')+'">'+s+'</span>'}
+function renderTable(filter){filter=filter||'';const q=filter.toLowerCase();const tbody=document.getElementById('campaignsBody');tbody.innerHTML='';allCampaigns.filter(c=>!q||c.name.toLowerCase().includes(q)||(c.user_email||'').toLowerCase().includes(q)||c.service_type.includes(q)).forEach(c=>{const tr=document.createElement('tr');tr.style.cursor='pointer';tr.onclick=()=>showDetail(c.id);const start=new Date(c.start_date).toLocaleDateString();const end=new Date(c.end_date).toLocaleDateString();tr.innerHTML=`
+  <td><strong>${c.name}</strong></td>
+  <td>${c.user_email||'N/A'}</td>
+  <td>${c.service_type}</td>
+  <td>${statusBadge(c.status)}</td>
+  <td>${c.total_posts_published||0}/${c.total_posts_planned||0}</td>
+  <td>${start} - ${end}</td>
+  <td>
+    <button onclick="event.stopPropagation();showDetail('${c.id}')" class="btn btn-sm btn-info">View</button>
+    ${c.status==='active'?`<button onclick="event.stopPropagation();pauseCampaign('${c.id}')" class="btn btn-sm btn-warning">Pause</button>`:''}
+    ${c.status==='paused'?`<button onclick="event.stopPropagation();resumeCampaign('${c.id}')" class="btn btn-sm btn-success">Resume</button>`:''}
+    ${c.status!=='cancelled'?`<button onclick="event.stopPropagation();cancelCampaign('${c.id}')" class="btn btn-sm btn-danger">Cancel</button>`:''}
+  </td>`;tbody.appendChild(tr)})}
+function filterTable(){renderTable(document.getElementById('searchBox').value)}
+function showCreateForm(){document.getElementById('createModal').classList.add('active');const d=new Date();document.getElementById('formStartDate').value=d.toISOString().slice(0,10);const e=new Date(d);e.setMonth(e.getMonth()+1);document.getElementById('formEndDate').value=e.toISOString().slice(0,10)}
+function closeCreate(){document.getElementById('createModal').classList.remove('active')}
+async function createCampaign(){const btn=event.target;btn.disabled=true;btn.innerHTML='<span class="spinner"></span>Creating...';try{const r=await apiFetch('/api/admin/campaigns',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:document.getElementById('formName').value,service_type:document.getElementById('formService').value,brief:document.getElementById('formBrief').value,style:document.getElementById('formStyle').value||null,duration:parseFloat(document.getElementById('formDuration').value)||null,schedule:JSON.parse(document.getElementById('formSchedule').value),platforms:JSON.parse(document.getElementById('formPlatforms').value),posts_per_day:parseInt(document.getElementById('formPostsPerDay').value)||null,start_date:document.getElementById('formStartDate').value+'T00:00:00Z',end_date:document.getElementById('formEndDate').value+'T00:00:00Z'})});toast('Campaign created!');closeCreate();await loadCampaigns()}catch(e){toast(e.message,'error')}finally{btn.disabled=false;btn.innerHTML='Create Campaign'}}
+async function showDetail(id){document.getElementById('detailModal').classList.add('active');document.getElementById('detailContent').innerHTML='<div class="spinner"></div>Loading...';try{const r=await apiFetch('/api/admin/campaigns/'+id);const c=r.campaign,p=r.posts||[];document.getElementById('detailName').textContent=c.name;let html=`
+<div class="form-row">
+  <div class="form-group"><label>Service</label><div>${c.service_type}</div></div>
+  <div class="form-group"><label>Status</label><div>${statusBadge(c.status)}</div></div>
+  <div class="form-group"><label>Duration</label><div>${c.duration}s</div></div>
+</div>
+<div class="form-group"><label>Brief</label><p style="background:#f8f9fa;padding:0.75rem;border-radius:6px">${c.brief}</p></div>
+<div class="form-row">
+  <div class="form-group"><label>Start</label><div>${new Date(c.start_date).toLocaleString()}</div></div>
+  <div class="form-group"><label>End</label><div>${new Date(c.end_date).toLocaleString()}</div></div>
+  <div class="form-group"><label>Posts/Day</label><div>${c.posts_per_day}</div></div>
+</div>
+<div class="form-group"><label>Schedule</label><pre style="background:#f8f9fa;padding:0.75rem;border-radius:6px;font-size:0.8rem">${JSON.stringify(c.schedule,null,2)}</pre></div>
+<div class="form-group"><label>Platforms</label><pre style="background:#f8f9fa;padding:0.75rem;border-radius:6px;font-size:0.8rem">${JSON.stringify(c.platforms,null,2)}</pre></div>
+<h3 style="margin-top:1rem">Posts (${p.length})</h3>
+<table><thead><tr><th>Day</th><th>Slot</th><th>Scheduled</th><th>Status</th><th>Caption</th><th>Media</th></tr></thead><tbody>
+`;p.forEach(p=>{html+=`<tr><td>${p.day_number}</td><td>${p.slot_index}</td><td>${p.scheduled_at?new Date(p.scheduled_at).toLocaleString():'-'}</td><td>${statusBadge(p.status)}</td><td>${p.caption?p.caption.slice(0,60):'-'}</td><td>${p.media_r2_url?'<a href="'+p.media_r2_url+'" target="_blank">View</a>':'-'}</td></tr>`});html+='</tbody></table>';document.getElementById('detailContent').innerHTML=html}catch(e){document.getElementById('detailContent').innerHTML='<div style="color:red">Error: '+e.message+'</div>'}}
+function closeDetail(){document.getElementById('detailModal').classList.remove('active')}
+async function pauseCampaign(id){if(!confirm('Pause this campaign?'))return;try{await apiFetch('/api/admin/campaigns/'+id+'/pause',{method:'POST'});toast('Campaign paused');await loadCampaigns()}catch(e){toast(e.message,'error')}}
+async function resumeCampaign(id){if(!confirm('Resume this campaign?'))return;try{await apiFetch('/api/admin/campaigns/'+id+'/resume',{method:'POST'});toast('Campaign resumed');await loadCampaigns()}catch(e){toast(e.message,'error')}}
+async function cancelCampaign(id){if(!confirm('Cancel this campaign? This cannot be undone.'))return;try{await apiFetch('/api/admin/campaigns/'+id+'/cancel',{method:'POST'});toast('Campaign cancelled');await loadCampaigns()}catch(e){toast(e.message,'error')}}
+loadCampaigns();
+</script>
+</body>
+</html>"###;
+    Html(html.to_string())
+}
+
 /// Admin page for managing Zernio social publishing profiles and accounts.
 pub async fn admin_zernio_page() -> Html<String> {
     let html = r###"<!DOCTYPE html>
@@ -12018,6 +12254,7 @@ th{background:#f8f9fa;font-weight:600}
     <li><a href="/admin/users">👥 Users</a></li>
     <li><a href="/admin/clipping-activity">🎬 Clipping Activity</a></li>
     <li><a href="/admin/deliveries">📦 Deliveries</a></li>
+    <li><a href="/admin/campaigns">📋 Campaigns</a></li>
     <li><a href="/admin/zernio" class="active">📱 Social</a></li>
     <li><a href="/admin/performance">📈 Performance</a></li>
     <li><a href="/admin/prospect-finder">🎯 Prospect Finder</a></li>
