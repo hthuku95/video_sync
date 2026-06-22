@@ -1,7 +1,6 @@
 use crate::services::agentic_service_pipeline::{AgenticServicePipeline, ServiceInput, ServiceType};
 use crate::zernio_client::{self, PlatformTarget};
 use crate::AppState;
-use serde_json::json;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -33,6 +32,7 @@ struct CampaignRow {
     schedule: serde_json::Value,
     platforms: serde_json::Value,
     posts_per_day: i32,
+    start_date: chrono::DateTime<chrono::Utc>,
     zernio_profile_id: Option<String>,
 }
 
@@ -46,9 +46,9 @@ struct PostRow {
 // ── Step 1: Fetch active campaigns ──────────────────────────────────────────
 
 async fn fetch_active_campaigns(state: &Arc<AppState>) -> Result<Vec<CampaignRow>, sqlx::Error> {
-    sqlx::query_as::<_, (Uuid, i32, String, String, String, String, f64, serde_json::Value, serde_json::Value, i32, Option<String>)>(
+    sqlx::query_as::<_, (Uuid, i32, String, String, String, String, f64, serde_json::Value, serde_json::Value, i32, chrono::DateTime<chrono::Utc>, Option<String>)>(
         "SELECT id, user_id, name, service_type, brief, style, duration, schedule, platforms, \
-                posts_per_day, zernio_profile_id \
+                posts_per_day, start_date, zernio_profile_id \
          FROM campaigns \
          WHERE status = 'active' AND start_date <= NOW() AND end_date >= NOW()",
     )
@@ -56,8 +56,8 @@ async fn fetch_active_campaigns(state: &Arc<AppState>) -> Result<Vec<CampaignRow
     .await
     .map(|rows| {
         rows.into_iter()
-            .map(|(id, user_id, name, service_type, brief, style, duration, schedule, platforms, posts_per_day, zernio_profile_id)| {
-                CampaignRow { id, user_id, name, service_type, brief, style, duration, schedule, platforms, posts_per_day, zernio_profile_id }
+            .map(|(id, user_id, name, service_type, brief, style, duration, schedule, platforms, posts_per_day, start_date, zernio_profile_id)| {
+                CampaignRow { id, user_id, name, service_type, brief, style, duration, schedule, platforms, posts_per_day, start_date, zernio_profile_id }
             })
             .collect()
     })
@@ -257,7 +257,7 @@ async fn process_pending_post(state: &Arc<AppState>, campaign: &CampaignRow, pos
         source_table: Some("deliveries".to_string()),
         source_record_id: Some(delivery_id),
         idempotency_key: None,
-        extra_args: Some(extra),
+        reference_images: vec![],
     };
 
     match AgenticServicePipeline::start(state.clone(), service_type, input).await {
@@ -295,32 +295,19 @@ async fn generate_variation(
     );
 
     if let Some(ref client) = state.ollama_fast_client {
-        let resp = client
-            .send_message(
-                &crate::ollama_client::Message {
-                    role: "user".to_string(),
-                    content: prompt.clone(),
-                    images: None,
-                },
-                None,
-            )
-            .await
+        let resp = client.generate_text(&prompt).await
             .map_err(|e| format!("Ollama: {e}"))?;
         return Ok(resp);
     }
 
     if let Some(ref client) = state.gemma_client {
-        let resp = client
-            .generate_text(&prompt, None)
-            .await
+        let resp = client.generate_text(&prompt).await
             .map_err(|e| format!("Gemma: {e}"))?;
         return Ok(resp);
     }
 
     if let Some(ref client) = state.gemini_client {
-        let resp = client
-            .generate_text(&prompt, None)
-            .await
+        let resp = client.generate_text(&prompt).await
             .map_err(|e| format!("Gemini: {e}"))?;
         return Ok(resp);
     }
@@ -435,6 +422,7 @@ async fn schedule_via_zernio(
 
     let text = format!("Daily content — Day {}", post.day_number);
     let scheduled_for = post.scheduled_at.format("%Y-%m-%dT%H:%M:%SZ").to_string();
+    let scheduled_for_clone = scheduled_for.clone();
 
     let req = zernio_client::CreatePostRequest {
         content: Some(text),
@@ -457,7 +445,7 @@ async fn schedule_via_zernio(
             .await;
             tracing::info!(
                 "campaign post {} scheduled via Zernio (post_id={}, at={})",
-                post.id, resp.post.id, scheduled_for
+                post.id, resp.post.id, scheduled_for_clone
             );
         }
         Err(e) => {
