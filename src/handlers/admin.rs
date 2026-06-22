@@ -7799,7 +7799,7 @@ pub async fn delivery_page(
 }})();
 </script>
 </body>
-</html>"#;
+</html>"#);
             const ZERNIO_SCRIPT: &str = r###"
 <!-- Zernio client-facing social self-service -->
 <div id="zernio-toast" style="position:fixed;bottom:1.5rem;right:1.5rem;padding:0.75rem 1.25rem;border-radius:8px;color:white;font-size:0.9rem;z-index:9999;display:none;background:#28a745;"></div>
