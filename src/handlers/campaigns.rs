@@ -53,11 +53,7 @@ pub struct CreateCampaignRequest {
 async fn admin_list_campaigns(
     Extension(state): Extension<Arc<AppState>>,
 ) -> Json<serde_json::Value> {
-    let rows = sqlx::query_as::<_, (
-        Uuid, i32, String, String, String, String, String, f64, serde_json::Value, serde_json::Value, i32,
-        chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>, Option<String>, String, i32, i32,
-        chrono::DateTime<chrono::Utc>,
-    )>(
+    let rows = sqlx::query(
         "SELECT c.id, c.user_id, u.email, c.name, c.service_type, c.brief, c.style, c.duration, \
                 c.schedule, c.platforms, c.posts_per_day, c.start_date, c.end_date, \
                 c.zernio_profile_id, c.status, c.total_posts_planned, c.total_posts_published, c.created_at \
@@ -68,29 +64,26 @@ async fn admin_list_campaigns(
     .await;
 
     let campaigns: Vec<serde_json::Value> = match rows {
-        Ok(rows) => rows.into_iter().map(|(
-            id, user_id, email, name, service_type, brief, style, duration, schedule, platforms,
-            posts_per_day, start_date, end_date, zernio_profile_id, status, total_planned, total_published, created_at,
-        )| {
+        Ok(rows) => rows.iter().map(|row| {
             json!({
-                "id": id.to_string(),
-                "user_id": user_id,
-                "user_email": email,
-                "name": name,
-                "service_type": service_type,
-                "brief": brief,
-                "style": style,
-                "duration": duration,
-                "schedule": schedule,
-                "platforms": platforms,
-                "posts_per_day": posts_per_day,
-                "start_date": start_date.to_rfc3339(),
-                "end_date": end_date.to_rfc3339(),
-                "zernio_profile_id": zernio_profile_id,
-                "status": status,
-                "total_posts_planned": total_planned,
-                "total_posts_published": total_published,
-                "created_at": created_at.to_rfc3339(),
+                "id": row.get::<Uuid, _>("id").to_string(),
+                "user_id": row.get::<i32, _>("user_id"),
+                "user_email": row.get::<String, _>("email"),
+                "name": row.get::<String, _>("name"),
+                "service_type": row.get::<String, _>("service_type"),
+                "brief": row.get::<String, _>("brief"),
+                "style": row.get::<String, _>("style"),
+                "duration": row.get::<f64, _>("duration"),
+                "schedule": row.get::<serde_json::Value, _>("schedule"),
+                "platforms": row.get::<serde_json::Value, _>("platforms"),
+                "posts_per_day": row.get::<i32, _>("posts_per_day"),
+                "start_date": row.get::<chrono::DateTime<chrono::Utc>, _>("start_date").to_rfc3339(),
+                "end_date": row.get::<chrono::DateTime<chrono::Utc>, _>("end_date").to_rfc3339(),
+                "zernio_profile_id": row.get::<Option<String>, _>("zernio_profile_id"),
+                "status": row.get::<String, _>("status"),
+                "total_posts_planned": row.get::<i32, _>("total_posts_planned"),
+                "total_posts_published": row.get::<i32, _>("total_posts_published"),
+                "created_at": row.get::<chrono::DateTime<chrono::Utc>, _>("created_at").to_rfc3339(),
             })
         }).collect(),
         Err(e) => return Json(json!({"success": false, "error": e.to_string()})),
