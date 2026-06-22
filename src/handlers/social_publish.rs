@@ -196,7 +196,7 @@ pub async fn try_publish_delivery_to_zernio(delivery_id: Uuid, state: &Arc<AppSt
             .into_iter()
             .filter_map(|v| {
                 let obj = v.as_object()?;
-                Some(zernio_client::PlatformTarget {
+                Some(PlatformTarget {
                     platform: obj.get("platform")?.as_str()?.to_string(),
                     accountId: obj.get("account_id")?.as_str()?.to_string(),
                 })
