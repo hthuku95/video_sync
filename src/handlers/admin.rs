@@ -7627,6 +7627,7 @@ pub async fn delivery_page(
   <div class="media-wrap">{media_html}</div>
   {download_btn}
   {score_html}
+  <div id="zernio-section" style="margin-top:16px;"></div>
 </div>
 <div class="footer">
   Delivered by <a href="https://videosync.video">VideoSync</a> — AI-Powered Video Generation
@@ -7796,6 +7797,196 @@ pub async fn delivery_page(
     }}
   }});
 }})();
+</script>
+
+<!-- Zernio client-facing social self-service -->
+<div id="zernio-toast" style="position:fixed;bottom:1.5rem;right:1.5rem;padding:0.75rem 1.25rem;border-radius:8px;color:white;font-size:0.9rem;z-index:9999;display:none;background:#28a745;"></div>
+<script>
+(function() {
+  const deliveryId = window.location.pathname.split('/').pop();
+  const toastEl = document.getElementById('zernio-toast');
+  let zernioState = null;
+
+  function zernioToast(msg, err) {
+    toastEl.textContent = msg;
+    toastEl.style.background = err ? '#dc3545' : '#28a745';
+    toastEl.style.display = 'block';
+    setTimeout(() => { toastEl.style.display = 'none'; }, 4000);
+  }
+
+  async function zernioFetch(url, opts) {
+    const res = await fetch(url, {
+      headers: { 'Content-Type': 'application/json' },
+      ...opts,
+    });
+    return res.json();
+  }
+
+  async function loadZernioStatus() {
+    const el = document.getElementById('zernio-section');
+    if (!el) return;
+    el.innerHTML = '<div style="padding:12px;color:#666680;font-size:13px">⏳ Loading social publishing options...</div>';
+
+    const data = await zernioFetch('/api/deliveries/' + deliveryId + '/social-status');
+    if (!data.success) {
+      if (data.error === 'Delivery not found' || data.error === 'Zernio not configured') {
+        el.innerHTML = '';
+      } else {
+        el.innerHTML = '<div style="padding:12px;color:#f87171;font-size:13px">' + data.error + '</div>';
+      }
+      return;
+    }
+
+    zernioState = data;
+
+    // Only show on completed deliveries with output
+    if (data.delivery_status !== 'completed' || !data.has_output) {
+      el.innerHTML = '';
+      return;
+    }
+
+    el.innerHTML = buildZernioUI(data);
+    attachZernioHandlers();
+  }
+
+  function buildZernioUI(data) {
+    let html = '<div style="border-top:1px solid #2a2a36;padding-top:16px">';
+    html += '<div style="font-size:15px;font-weight:700;color:#e0e0e0;margin-bottom:12px">📱 Post to Social Media</div>';
+    html += '<p style="font-size:13px;color:#9999bb;margin-bottom:12px">Connect your social accounts to auto-publish this video to YouTube, TikTok, Instagram, and more.</p>';
+
+    const hasProfile = !!data.profile_id;
+
+    if (!hasProfile) {
+      // No profile yet — show connect button
+      html += '<button id="zernio-create-profile" class="btn-download" style="background:#7a4cff">Connect Social Accounts</button>';
+    } else {
+      // Has profile — show connected accounts + connect more
+      html += '<div style="font-size:13px;color:#9999bb;margin-bottom:8px">Profile: <strong style="color:#e0e0e0">' + (data.profile ? data.profile.name : data.profile_id) + '</strong></div>';
+
+      const accounts = data.connected_accounts || [];
+      const targets = data.existing_targets || [];
+
+      // Connected accounts grid
+      if (accounts.length > 0) {
+        html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px;margin-bottom:12px">';
+        accounts.forEach(function(a) {
+          const isTarget = targets.some(function(t) { return t.account_id === a._id; });
+          html += '<div style="background:#12121a;border:1px solid ' + (a.connected ? '#2a6a3a' : '#3a2a2a') + ';border-radius:8px;padding:10px;cursor:pointer" class="zernio-account-card" data-id="' + a._id + '" data-platform="' + a.platform + '" data-selected="' + (isTarget ? '1' : '0') + '" onclick="toggleAccount(this)">' +
+            '<div style="font-weight:600;font-size:14px;color:#e0e0e0">' + a.platform + '</div>' +
+            '<div style="font-size:12px;color:#9999bb">' + (a.username || '—') + '</div>' +
+            '<div style="margin-top:4px"><span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:' + (a.connected ? '#4ade80' : '#f87171') + ';margin-right:4px"></span>' +
+            '<span style="font-size:11px;color:' + (a.connected ? '#4ade80' : '#f87171') + '">' + (a.connected ? 'Connected' : 'Pending auth') + '</span>' +
+            '<span id="sel-' + a._id + '" style="display:' + (isTarget ? 'inline' : 'none') + ';margin-left:6px;font-size:11px;color:#6366f1">✓ Selected</span></div></div>';
+        });
+        html += '</div>';
+      }
+
+      // Connect more + publish controls
+      html += '<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">';
+      html += '<select id="zernio-connect-platform" style="padding:8px;border:1px solid #2a2a36;border-radius:6px;background:#1a1a24;color:#e0e0e0;font-size:13px">';
+      html += '<option value="youtube">YouTube</option>';
+      html += '<option value="instagram">Instagram</option>';
+      html += '<option value="twitter">X / Twitter</option>';
+      html += '<option value="tiktok">TikTok</option>';
+      html += '<option value="linkedin">LinkedIn</option>';
+      html += '</select>';
+      html += '<button id="zernio-connect-btn" class="btn-secondary" style="font-size:13px;padding:8px 14px">🔗 Connect Account</button>';
+      html += '<button id="zernio-save-targets" class="btn-download" style="font-size:13px;padding:8px 16px;background:#6366f1">💾 Save &amp; Enable Auto-Publish</button>';
+      html += '</div>';
+    }
+
+    html += '</div>';
+    return html;
+  }
+
+  function attachZernioHandlers() {
+    const createBtn = document.getElementById('zernio-create-profile');
+    if (createBtn) {
+      createBtn.addEventListener('click', async function() {
+        this.disabled = true;
+        this.textContent = 'Creating profile...';
+        const data = await zernioFetch('/api/deliveries/' + deliveryId + '/social-profile', { method: 'POST' });
+        if (data.success) {
+          zernioToast('Profile created! You can now connect accounts.');
+          loadZernioStatus();
+        } else {
+          zernioToast(data.error || 'Failed to create profile', true);
+          this.disabled = false;
+          this.textContent = 'Connect Social Accounts';
+        }
+      });
+    }
+
+    const connectBtn = document.getElementById('zernio-connect-btn');
+    if (connectBtn) {
+      connectBtn.addEventListener('click', async function() {
+        const platform = document.getElementById('zernio-connect-platform').value;
+        const profileId = zernioState.profile_id;
+        if (!profileId) { zernioToast('No profile', true); return; }
+        this.disabled = true;
+        this.textContent = 'Getting URL...';
+        const data = await zernioFetch('/api/social/connect-url?platform=' + encodeURIComponent(platform) + '&profile_id=' + encodeURIComponent(profileId));
+        if (data.success) {
+          zernioToast('OAuth URL ready — opening in new tab');
+          window.open(data.url, '_blank', 'width=600,height=700');
+          this.textContent = '🔗 Connect (opened)';
+          setTimeout(() => { this.disabled = false; this.textContent = '🔗 Connect Account'; }, 3000);
+          // Poll for accounts to connect
+          setTimeout(loadZernioStatus, 5000);
+        } else {
+          zernioToast(data.error || 'Failed to get connect URL', true);
+          this.disabled = false;
+          this.textContent = '🔗 Connect Account';
+        }
+      });
+    }
+
+    const saveBtn = document.getElementById('zernio-save-targets');
+    if (saveBtn) {
+      saveBtn.addEventListener('click', async function() {
+        const selected = document.querySelectorAll('.zernio-account-card[data-selected="1"]');
+        const accounts = [];
+        selected.forEach(function(card) {
+          accounts.push({ platform: card.dataset.platform, account_id: card.dataset.id });
+        });
+        if (accounts.length === 0) {
+          zernioToast('Select at least one account', true);
+          return;
+        }
+        this.disabled = true;
+        this.textContent = 'Saving...';
+        const data = await zernioFetch('/api/deliveries/' + deliveryId + '/social-targets', {
+          method: 'POST',
+          body: JSON.stringify({ accounts: accounts }),
+        });
+        if (data.success) {
+          zernioToast('Auto-publish enabled for ' + accounts.length + ' account(s)!');
+          this.textContent = '✅ Auto-Publish Enabled';
+          setTimeout(() => { this.textContent = '💾 Save & Enable Auto-Publish'; this.disabled = false; }, 2000);
+        } else {
+          zernioToast(data.error || 'Failed to save', true);
+          this.textContent = '💾 Save & Enable Auto-Publish';
+          this.disabled = false;
+        }
+      });
+    }
+  }
+
+  // Toggle account selection (global function called from onclick)
+  window.toggleAccount = function(el) {
+    const current = el.dataset.selected;
+    const newVal = current === '1' ? '0' : '1';
+    el.dataset.selected = newVal;
+    el.style.borderColor = newVal === '1' ? '#6366f1' : (el.querySelector('.connected-dot-inner') ? '#2a6a3a' : '#3a2a2a');
+    const selSpan = document.getElementById('sel-' + el.dataset.id);
+    if (selSpan) { selSpan.style.display = newVal === '1' ? 'inline' : 'none'; }
+  };
+
+  // Initialize
+  if (document.getElementById('zernio-section')) {
+    loadZernioStatus();
+  }
+})();
 </script>
 </body>
 </html>"#
