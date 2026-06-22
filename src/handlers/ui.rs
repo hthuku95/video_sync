@@ -714,18 +714,21 @@ pub async fn kick_com_clipping_page() -> Html<String> {
             "Easy: send a VOD URL and tell us what moments to extract",
             "Captions, hook title cards, and thumbnails included per clip",
             "Vertical and horizontal format support (Shorts, TikTok, Twitter, YouTube)",
+            "Auto-publish across YouTube, TikTok, Instagram, and X via Zernio integration",
+            "Campaign Engine: schedule daily clip generation + cross-platform posting",
             "Delivered as a review/download link you can share immediately",
         ],
         &[
             "Send the Kick.com VOD URL and describe the highlights you want extracted.",
             "We download the VOD and identify the requested moments.",
             "VideoSync clips each moment, adds captions, hook text, and thumbnail.",
+            "Clips are auto-published to your connected social accounts via Zernio.",
             "You receive a delivery page with preview and download links.",
         ],
         &[
             ("Kick streamer or editor", "Needs professional highlight clips from Kick VODs without uploading to third-party tools or screen recording."),
-            ("Clip channel operator", "Needs consistent, captioned clips from multiple Kick streamers for a compilation channel."),
-            ("Social media manager", "Needs platform-ready short-form clips from Kick content for Twitter, TikTok, or Instagram cross-posting."),
+            ("Clip channel operator", "Needs consistent, captioned clips from multiple Kick streamers for a compilation or clipping channel with daily posting."),
+            ("Social media manager", "Needs platform-ready short-form clips from Kick content for Twitter, TikTok, or Instagram cross-posting via automated campaigns."),
         ],
         r#"["clips","captions","thumbnails","scene"]"#,
         r#"["standard"]"#,
@@ -907,6 +910,14 @@ fn build_services_overview_page_html() -> String {
             "For Kick streamers, editors, and clip channels who need professional highlight clips from Kick VODs.",
             "Kick.com VOD or channel URL",
             "Extracted highlight clips with captions, thumbnails, hook cards, and delivery page.",
+        ),
+        (
+            "Social Publishing",
+            "/admin/zernio",
+            "$15/mo DIY · $147-$899 DFY",
+            "For creators, clippers, and agencies who need automated cross-platform clip publishing via Zernio.",
+            "Connected social accounts + content",
+            "Schedule and auto-publish clips to YouTube, TikTok, Instagram, and X from one dashboard with Campaign Engine.",
         ),
     ];
     let production_cards = [
@@ -4447,13 +4458,13 @@ fn build_modern_landing_page_html() -> &'static str {
                 <article class="feature-card">
                     <div class="feature-icon">
                         <svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M21 15v4a2 2 0 0 1-2 2H7l-4-4V5a2 2 0 0 1 2-2h10"></path>
-                            <path d="M17 3h4v4"></path>
-                            <path d="M10 10h4M10 14h7"></path>
+                            <path d="M4 12h16M12 4v16"></path>
+                            <circle cx="12" cy="12" r="10"></circle>
+                            <path d="M8 8 6 6M16 8l2-2M8 16l-2 2M16 16l2 2"></path>
                         </svg>
                     </div>
-                    <h3>Smart Memory</h3>
-                    <p>Sessions, prompts, outputs, and delivery context compound over time so the workflow becomes better for repeat creator and client work.</p>
+                    <h3>Cross-Platform Publishing</h3>
+                    <p>Schedule and auto-publish clips, videos, and campaigns across YouTube, TikTok, Instagram, and X from one dashboard. Connect your accounts once — our Campaign Engine posts daily on your behalf.</p>
                 </article>
             </div>
         </div>
@@ -6136,6 +6147,10 @@ pub async fn dashboard_page() -> Html<String> {
                 <a href="/manual-clipping" class="action-card">
                     <h3><span class="action-icon"><svg viewBox="0 0 24 24"><circle cx="6" cy="6" r="2"></circle><circle cx="6" cy="18" r="2"></circle><path d="M8 7.5 19 4"></path><path d="M8 16.5 19 20"></path><path d="M14 12h7"></path></svg></span>Manual Clipping</h3>
                     <p>Paste any YouTube or Twitch URL to extract viral clips with download links — no destination channel needed</p>
+                </a>
+                <a href="/api/campaigns" class="action-card">
+                    <h3><span class="action-icon"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="6" height="6" rx="1"></rect><rect x="15" y="3" width="6" height="6" rx="1"></rect><rect x="3" y="15" width="6" height="6" rx="1"></rect><rect x="15" y="15" width="6" height="6" rx="1"></rect></svg></span>Campaigns</h3>
+                    <p>Set up automated daily content generation and cross-platform posting campaigns</p>
                 </a>
                 <a href="/help" class="action-card">
                     <h3><span class="action-icon"><svg viewBox="0 0 24 24"><path d="M5 4h11a3 3 0 0 1 3 3v13H8a3 3 0 0 0-3 3Z"></path><path d="M8 4v16a3 3 0 0 0-3 3V7a3 3 0 0 1 3-3Z"></path><path d="M11 9h4"></path><path d="M11 13h4"></path></svg></span>Help & Guide</h3>

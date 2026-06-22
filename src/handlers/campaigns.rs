@@ -15,7 +15,7 @@ use uuid::Uuid;
 /// Client-facing campaign routes (with auth middleware).
 pub fn campaign_routes() -> Router {
     Router::new()
-        .route("/api/campaigns", get(client_list_campaigns))
+        .route("/api/campaigns", get(client_list_campaigns).post(client_create_campaign))
         .route("/api/campaigns/:id", get(client_get_campaign))
         .layer(axum::middleware::from_fn(crate::middleware::auth::auth_middleware))
 }
@@ -271,6 +271,56 @@ async fn set_campaign_status(
         Ok(_) => Json(json!({"success": false, "error": "Campaign not found"})),
         Err(e) => Json(json!({"success": false, "error": e.to_string()})),
     }
+}
+
+// ── Client: Create campaign (DIY self-service) ───────────────────────────────
+
+async fn client_create_campaign(
+    Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<crate::models::auth::Claims>,
+    Json(req): Json<CreateCampaignRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let user_id: i32 = claims.sub.parse().unwrap_or(0);
+    let start_date = chrono::DateTime::parse_from_rfc3339(&req.start_date)
+        .map_err(|e| (StatusCode::BAD_REQUEST, Json(json!({"error": format!("Invalid start_date: {e}")}))))?
+        .with_timezone(&chrono::Utc);
+    let end_date = chrono::DateTime::parse_from_rfc3339(&req.end_date)
+        .map_err(|e| (StatusCode::BAD_REQUEST, Json(json!({"error": format!("Invalid end_date: {e}")}))))?
+        .with_timezone(&chrono::Utc);
+
+    if end_date <= start_date {
+        return Err((StatusCode::BAD_REQUEST, Json(json!({"error": "end_date must be after start_date"}))));
+    }
+
+    if !matches!(req.service_type.as_str(), "clipping" | "education") {
+        return Err((StatusCode::BAD_REQUEST, Json(json!({"error": "service_type must be 'clipping' or 'education'"}))));
+    }
+
+    let style = req.style.unwrap_or_else(|| "cinematic".to_string());
+    let duration = req.duration.unwrap_or(30.0);
+    let posts_per_day = req.posts_per_day.unwrap_or(3);
+
+    let id = sqlx::query_scalar::<_, Uuid>(
+        "INSERT INTO campaigns (user_id, name, service_type, brief, style, duration, schedule, platforms, \
+                                posts_per_day, start_date, end_date) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id",
+    )
+    .bind(user_id)
+    .bind(&req.name)
+    .bind(&req.service_type)
+    .bind(&req.brief)
+    .bind(&style)
+    .bind(duration)
+    .bind(&req.schedule)
+    .bind(&req.platforms)
+    .bind(posts_per_day)
+    .bind(start_date)
+    .bind(end_date)
+    .fetch_one(&state.db_pool)
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+
+    Ok(Json(json!({"success": true, "id": id.to_string()})))
 }
 
 // ── Client: List own campaigns ──────────────────────────────────────────────
