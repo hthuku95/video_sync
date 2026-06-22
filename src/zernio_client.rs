@@ -19,12 +19,12 @@ pub struct CreateProfileRequest {
     pub description: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct CreateProfileResponse {
     pub profile: ZernioProfile,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct ZernioProfile {
     #[serde(rename = "_id")]
     pub id: String,
@@ -33,22 +33,22 @@ pub struct ZernioProfile {
     pub description: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct ListProfilesResponse {
     pub profiles: Vec<ZernioProfile>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct ConnectUrlResponse {
     pub url: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct ListAccountsResponse {
     pub accounts: Vec<ZernioAccount>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct ZernioAccount {
     #[serde(rename = "_id")]
     pub id: String,
@@ -80,12 +80,12 @@ pub struct CreatePostRequest {
     pub publishNow: bool,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct CreatePostResponse {
     pub post: ZernioPost,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct ZernioPost {
     #[serde(rename = "_id")]
     pub id: String,
@@ -99,12 +99,12 @@ pub struct UploadMediaRequest {
     pub accountId: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct UploadMediaResponse {
     pub media: ZernioMedia,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct ZernioMedia {
     #[serde(rename = "_id")]
     pub id: String,
