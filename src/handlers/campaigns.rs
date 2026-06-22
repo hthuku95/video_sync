@@ -7,10 +7,9 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::json;
+use sqlx::Row;
 use std::sync::Arc;
-use uuid::Uuid; // Already used — json! macro must be in scope
-
-// Ensure the json! macro is in scope for all handlers below.
+use uuid::Uuid;
 
 /// Client-facing campaign routes (with auth middleware).
 pub fn campaign_routes() -> Router {
