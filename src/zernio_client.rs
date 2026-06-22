@@ -24,7 +24,7 @@ pub struct CreateProfileResponse {
     pub profile: ZernioProfile,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ZernioProfile {
     #[serde(rename = "_id")]
     pub id: String,

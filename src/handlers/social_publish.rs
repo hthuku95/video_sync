@@ -8,6 +8,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use sqlx::Row;
 use std::sync::Arc;
 use tracing::warn;
 use uuid::Uuid;

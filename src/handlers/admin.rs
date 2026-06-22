@@ -7544,7 +7544,7 @@ pub async fn delivery_page(
                 _ => "#9ca3af",
             };
 
-            format!(
+            let page = format!(
                 r#"<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -7615,6 +7615,191 @@ pub async fn delivery_page(
   .unlock-headline {{ font-size: 16px; font-weight: 700; color: #fff; margin-bottom: 4px; }}
   .unlock-sub {{ font-size: 13px; color: #9999bb; line-height: 1.5; margin-bottom: 8px; }}
 </style>
+</head>
+<body>
+<div class="card">
+  <div class="brand">VideoSync — AI Video Generation</div>
+  <h1>{name}</h1>
+  <div class="meta">
+    <span class="status-dot"></span>
+    Gig type: <strong>{gig_type}</strong> &nbsp;·&nbsp; Status: <strong>{status}</strong>
+  </div>
+  <div class="media-wrap">{media_html}</div>
+  {download_btn}
+  {score_html}
+  <div id="zernio-section" style="margin-top:16px;"></div>
+</div>
+<div class="footer">
+  Delivered by <a href="https://videosync.video">VideoSync</a> — AI-Powered Video Generation
+</div>
+<script>
+// x402 paywall flow — runs only when the unlock button is rendered (locked state).
+(function() {{
+  const btn    = document.getElementById('x402-unlock-btn');
+  const status = document.getElementById('x402-status');
+  if (!btn) return; // Already unlocked; nothing to do.
+
+  const setStatus = (msg, isError) => {{
+    status.style.color = isError ? '#f87171' : '#9999bb';
+    status.textContent = msg;
+  }};
+
+  btn.addEventListener('click', async () => {{
+    btn.disabled = true;
+    btn.textContent = 'Connecting wallet...';
+
+    // Step 1 — pull the 402 payment spec from the server.
+    let spec;
+    try {{
+      const r = await fetch(window.location.pathname + '/unlock-spec');
+      if (!r.ok) throw new Error('unlock-spec returned ' + r.status);
+      spec = await r.json();
+    }} catch (e) {{
+      setStatus('Could not fetch payment spec: ' + e.message, true);
+      btn.disabled = false; btn.textContent = '🔓 Try again';
+      return;
+    }}
+
+    const req = (spec.accepts || [])[0];
+    if (!req) {{ setStatus('Payment spec missing requirements.', true); return; }}
+
+    // Step 2 — find an EVM provider. Phantom exposes window.phantom.ethereum
+    // when EVM mode is enabled; MetaMask + Coinbase Wallet expose window.ethereum.
+    const provider = (window.phantom && window.phantom.ethereum) || window.ethereum;
+    if (!provider) {{
+      setStatus('No crypto wallet detected. Install Phantom, MetaMask, or Coinbase Wallet.', true);
+      btn.disabled = false; btn.textContent = '🔓 Try again';
+      return;
+    }}
+
+    // Step 3 — request accounts and ensure we're on Base mainnet (chainId 0x2105).
+    let accounts;
+    try {{
+      accounts = await provider.request({{ method: 'eth_requestAccounts' }});
+    }} catch (e) {{
+      setStatus('Wallet connection rejected.', true);
+      btn.disabled = false; btn.textContent = '🔓 Try again';
+      return;
+    }}
+    const from = accounts[0];
+
+    try {{
+      await provider.request({{
+        method: 'wallet_switchEthereumChain',
+        params: [{{ chainId: '0x2105' }}],
+      }});
+    }} catch (switchErr) {{
+      // Chain might not be added — try adding it.
+      try {{
+        await provider.request({{
+          method: 'wallet_addEthereumChain',
+          params: [{{
+            chainId: '0x2105',
+            chainName: 'Base',
+            nativeCurrency: {{ name: 'Ether', symbol: 'ETH', decimals: 18 }},
+            rpcUrls: ['https://mainnet.base.org'],
+            blockExplorerUrls: ['https://basescan.org']
+          }}]
+        }});
+      }} catch {{
+        setStatus('Switch your wallet to Base network and try again.', true);
+        btn.disabled = false; btn.textContent = '🔓 Try again';
+        return;
+      }}
+    }}
+
+    setStatus('Sign the USDC payment in your wallet to unlock...', false);
+    btn.textContent = 'Awaiting signature...';
+
+    // Step 4 — build the EIP-3009 transferWithAuthorization typed data.
+    const validAfter  = 0;
+    const validBefore = Math.floor(Date.now() / 1000) + req.maxTimeoutSeconds;
+    const nonce       = '0x' + Array.from(crypto.getRandomValues(new Uint8Array(32)))
+                                    .map(b => b.toString(16).padStart(2, '0')).join('');
+    const typedData = {{
+      types: {{
+        EIP712Domain: [
+          {{ name: 'name', type: 'string' }},
+          {{ name: 'version', type: 'string' }},
+          {{ name: 'chainId', type: 'uint256' }},
+          {{ name: 'verifyingContract', type: 'address' }},
+        ],
+        TransferWithAuthorization: [
+          {{ name: 'from',        type: 'address' }},
+          {{ name: 'to',          type: 'address' }},
+          {{ name: 'value',       type: 'uint256' }},
+          {{ name: 'validAfter',  type: 'uint256' }},
+          {{ name: 'validBefore', type: 'uint256' }},
+          {{ name: 'nonce',       type: 'bytes32' }},
+        ],
+      }},
+      primaryType: 'TransferWithAuthorization',
+      domain: {{
+        name: req.extra && req.extra.name    || 'USD Coin',
+        version: req.extra && req.extra.version || '2',
+        chainId: 8453, // Base mainnet
+        verifyingContract: req.asset,
+      }},
+      message: {{
+        from, to: req.payTo,
+        value: req.maxAmountRequired,
+        validAfter, validBefore, nonce,
+      }},
+    }};
+
+    let signature;
+    try {{
+      signature = await provider.request({{
+        method: 'eth_signTypedData_v4',
+        params: [from, JSON.stringify(typedData)],
+      }});
+    }} catch (e) {{
+      setStatus('Signature rejected.', true);
+      btn.disabled = false; btn.textContent = '🔓 Try again';
+      return;
+    }}
+
+    // Step 5 — POST signed authorization back to our /unlock endpoint.
+    setStatus('Submitting payment to Base network...', false);
+    btn.textContent = 'Settling on-chain...';
+
+    const xPaymentBody = {{
+      x402Version: 1,
+      scheme:  req.scheme,
+      network: req.network,
+      payload: {{
+        signature,
+        authorization: {{
+          from, to: req.payTo,
+          value: req.maxAmountRequired,
+          validAfter: String(validAfter),
+          validBefore: String(validBefore),
+          nonce,
+        }},
+      }},
+    }};
+    const xPaymentB64 = btoa(JSON.stringify(xPaymentBody));
+
+    try {{
+      const r = await fetch(window.location.pathname + '/unlock', {{
+        method: 'POST',
+        headers: {{ 'X-Payment': xPaymentB64 }},
+      }});
+      const data = await r.json();
+      if (!r.ok || !data.success) {{
+        throw new Error(data.error || ('HTTP ' + r.status));
+      }}
+      setStatus('✅ Unlocked! Reloading...', false);
+      setTimeout(() => window.location.reload(), 800);
+    }} catch (e) {{
+      setStatus('Settlement failed: ' + e.message, true);
+      btn.disabled = false; btn.textContent = '🔓 Try again';
+    }}
+  }});
+}})();
+</script>
+</body>
+</html>"#
 </head>
 <body>
 <div class="card">
@@ -7989,8 +8174,203 @@ pub async fn delivery_page(
 })();
 </script>
 </body>
-</html>"#
-            )
+</html>"#;
+            // Zernio social self-service script — appended separately to avoid
+            // Rust format!() brace-escaping issues with JS object literals.
+            const ZERNIO_SCRIPT: &str = r###"
+<!-- Zernio client-facing social self-service -->
+<div id="zernio-toast" style="position:fixed;bottom:1.5rem;right:1.5rem;padding:0.75rem 1.25rem;border-radius:8px;color:white;font-size:0.9rem;z-index:9999;display:none;background:#28a745;"></div>
+<script>
+(function() {
+  const deliveryId = window.location.pathname.split('/').pop();
+  const toastEl = document.getElementById('zernio-toast');
+  let zernioState = null;
+
+  function zernioToast(msg, err) {
+    toastEl.textContent = msg;
+    toastEl.style.background = err ? '#dc3545' : '#28a745';
+    toastEl.style.display = 'block';
+    setTimeout(function() { toastEl.style.display = 'none'; }, 4000);
+  }
+
+  async function zernioFetch(url, opts) {
+    const res = await fetch(url, Object.assign(
+      { headers: { 'Content-Type': 'application/json' } }, opts || {}
+    ));
+    return res.json();
+  }
+
+  async function loadZernioStatus() {
+    const el = document.getElementById('zernio-section');
+    if (!el) return;
+    el.innerHTML = '<div style="padding:12px;color:#666680;font-size:13px">\u23f3 Loading social publishing options...</div>';
+
+    const data = await zernioFetch('/api/deliveries/' + deliveryId + '/social-status');
+    if (!data.success) {
+      if (data.error === 'Delivery not found' || data.error === 'Zernio not configured') {
+        el.innerHTML = '';
+      } else {
+        el.innerHTML = '<div style="padding:12px;color:#f87171;font-size:13px">' + data.error + '</div>';
+      }
+      return;
+    }
+
+    zernioState = data;
+
+    // Only show on completed deliveries with output
+    if (data.delivery_status !== 'completed' || !data.has_output) {
+      el.innerHTML = '';
+      return;
+    }
+
+    el.innerHTML = buildZernioUI(data);
+    attachZernioHandlers();
+  }
+
+  function buildZernioUI(data) {
+    var html = '<div style="border-top:1px solid #2a2a36;padding-top:16px">';
+    html += '<div style="font-size:15px;font-weight:700;color:#e0e0e0;margin-bottom:12px">\uD83d\uDcf1 Post to Social Media</div>';
+    html += '<p style="font-size:13px;color:#9999bb;margin-bottom:12px">Connect your social accounts to auto-publish this video to YouTube, TikTok, Instagram, and more.</p>';
+
+    var hasProfile = !!data.profile_id;
+
+    if (!hasProfile) {
+      html += '<button id="zernio-create-profile" class="btn-download" style="background:#7a4cff">Connect Social Accounts</button>';
+    } else {
+      html += '<div style="font-size:13px;color:#9999bb;margin-bottom:8px">Profile: <strong style="color:#e0e0e0">' + (data.profile ? data.profile.name : data.profile_id) + '</strong></div>';
+
+      var accounts = data.connected_accounts || [];
+      var targets = data.existing_targets || [];
+
+      // Connected accounts grid
+      if (accounts.length > 0) {
+        html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px;margin-bottom:12px">';
+        for (var i = 0; i < accounts.length; i++) {
+          var a = accounts[i];
+          var isTarget = false;
+          for (var j = 0; j < targets.length; j++) {
+            if (targets[j].account_id === a._id) { isTarget = true; break; }
+          }
+          var borderColor = isTarget ? '#6366f1' : (a.connected ? '#2a6a3a' : '#3a2a2a');
+          var selDisplay = isTarget ? 'inline' : 'none';
+          html += '<div style="background:#12121a;border:1px solid ' + borderColor + ';border-radius:8px;padding:10px;cursor:pointer" class="zernio-account-card" data-id="' + a._id + '" data-platform="' + a.platform + '" data-selected="' + (isTarget ? '1' : '0') + '" onclick="toggleAccount(this)">' +
+            '<div style="font-weight:600;font-size:14px;color:#e0e0e0">' + a.platform + '</div>' +
+            '<div style="font-size:12px;color:#9999bb">' + (a.username || '\u2014') + '</div>' +
+            '<div style="margin-top:4px"><span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:' + (a.connected ? '#4ade80' : '#f87171') + ';margin-right:4px"></span>' +
+            '<span style="font-size:11px;color:' + (a.connected ? '#4ade80' : '#f87171') + '">' + (a.connected ? 'Connected' : 'Pending auth') + '</span>' +
+            '<span id="sel-' + a._id + '" style="display:' + selDisplay + ';margin-left:6px;font-size:11px;color:#6366f1">\u2713 Selected</span></div></div>';
+        }
+        html += '</div>';
+      }
+
+      // Connect more + publish controls
+      html += '<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">';
+      html += '<select id="zernio-connect-platform" style="padding:8px;border:1px solid #2a2a36;border-radius:6px;background:#1a1a24;color:#e0e0e0;font-size:13px">';
+      html += '<option value="youtube">YouTube</option>';
+      html += '<option value="instagram">Instagram</option>';
+      html += '<option value="twitter">X / Twitter</option>';
+      html += '<option value="tiktok">TikTok</option>';
+      html += '<option value="linkedin">LinkedIn</option>';
+      html += '</select>';
+      html += '<button id="zernio-connect-btn" class="btn-secondary" style="font-size:13px;padding:8px 14px">\ud83d\udd17 Connect Account</button>';
+      html += '<button id="zernio-save-targets" class="btn-download" style="font-size:13px;padding:8px 16px;background:#6366f1">\ud83d\udcbe Save & Enable Auto-Publish</button>';
+      html += '</div>';
+    }
+
+    html += '</div>';
+    return html;
+  }
+
+  function attachZernioHandlers() {
+    var createBtn = document.getElementById('zernio-create-profile');
+    if (createBtn) {
+      createBtn.addEventListener('click', async function() {
+        this.disabled = true;
+        this.textContent = 'Creating profile...';
+        var result = await zernioFetch('/api/deliveries/' + deliveryId + '/social-profile', { method: 'POST' });
+        if (result.success) {
+          zernioToast('Profile created! You can now connect accounts.');
+          loadZernioStatus();
+        } else {
+          zernioToast(result.error || 'Failed to create profile', true);
+          this.disabled = false;
+          this.textContent = 'Connect Social Accounts';
+        }
+      });
+    }
+
+    var connectBtn = document.getElementById('zernio-connect-btn');
+    if (connectBtn) {
+      connectBtn.addEventListener('click', async function() {
+        var platform = document.getElementById('zernio-connect-platform').value;
+        var profileId = zernioState.profile_id;
+        if (!profileId) { zernioToast('No profile', true); return; }
+        this.disabled = true;
+        this.textContent = 'Getting URL...';
+        var result = await zernioFetch('/api/social/connect-url?platform=' + encodeURIComponent(platform) + '&profile_id=' + encodeURIComponent(profileId));
+        if (result.success) {
+          zernioToast('OAuth URL ready \u2014 opening in new tab');
+          window.open(result.url, '_blank', 'width=600,height=700');
+          this.textContent = '\ud83d\udd17 Connect (opened)';
+          var self = this;
+          setTimeout(function() { self.disabled = false; self.textContent = '\ud83d\udd17 Connect Account'; }, 3000);
+          setTimeout(loadZernioStatus, 5000);
+        } else {
+          zernioToast(result.error || 'Failed to get connect URL', true);
+          this.disabled = false;
+          this.textContent = '\ud83d\udd17 Connect Account';
+        }
+      });
+    }
+
+    var saveBtn = document.getElementById('zernio-save-targets');
+    if (saveBtn) {
+      saveBtn.addEventListener('click', async function() {
+        var selected = document.querySelectorAll('.zernio-account-card[data-selected="1"]');
+        var accountsList = [];
+        for (var i = 0; i < selected.length; i++) {
+          var card = selected[i];
+          accountsList.push({ platform: card.dataset.platform, account_id: card.dataset.id });
+        }
+        if (accountsList.length === 0) {
+          zernioToast('Select at least one account', true);
+          return;
+        }
+        this.disabled = true;
+        this.textContent = 'Saving...';
+        var result = await zernioFetch('/api/deliveries/' + deliveryId + '/social-targets', {
+          method: 'POST',
+          body: JSON.stringify({ accounts: accountsList }),
+        });
+        if (result.success) {
+          zernioToast('Auto-publish enabled for ' + accountsList.length + ' account(s)!');
+          this.textContent = '\u2705 Auto-Publish Enabled';
+          var self2 = this;
+          setTimeout(function() { self2.textContent = '\ud83d\udcbe Save & Enable Auto-Publish'; self2.disabled = false; }, 2000);
+        } else {
+          zernioToast(result.error || 'Failed to save', true);
+          this.textContent = '\ud83d\udcbe Save & Enable Auto-Publish';
+          this.disabled = false;
+        }
+      });
+    }
+  }
+
+  window.toggleAccount = function(el) {
+    var current = el.dataset.selected;
+    var newVal = current === '1' ? '0' : '1';
+    el.dataset.selected = newVal;
+    el.style.borderColor = newVal === '1' ? '#6366f1' : '#3a2a2a';
+    var selSpan = document.getElementById('sel-' + el.dataset.id);
+    if (selSpan) { selSpan.style.display = newVal === '1' ? 'inline' : 'none'; }
+  };
+
+  if (document.getElementById('zernio-section')) {
+    loadZernioStatus();
+  }
+})();
+</script>"###;
+            format!("{}\n{}", page, ZERNIO_SCRIPT)
         }
     };
 
