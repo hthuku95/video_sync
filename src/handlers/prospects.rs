@@ -2341,6 +2341,8 @@ async fn generate_prospect_sample_pack(
         "long_form_video"
     } else if matches!(service.as_str(), "product_mockup" | "ugc") {
         "ui_mockup"
+    } else if service == "kick_auto_clipper" {
+        "clipping"
     } else {
         "scene"
     };
