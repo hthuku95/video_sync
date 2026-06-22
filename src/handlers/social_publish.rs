@@ -1,4 +1,4 @@
-use crate::zernio_client::{self, PlatformTarget, ZernioClient};
+use crate::zernio_client::{PlatformTarget, ZernioClient};
 use crate::AppState;
 use axum::{
     extract::{Extension, Json, Query},
@@ -9,6 +9,8 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::Arc;
+use tracing::warn;
+use uuid::Uuid;
 
 pub fn social_routes() -> Router {
     Router::new()
@@ -162,5 +164,69 @@ pub async fn publish_post(
             "success": false,
             "error": e.to_string(),
         }))),
+    }
+}
+
+/// Best-effort auto-publish of a completed delivery to Zernio-linked social accounts.
+/// Reads the delivery's `zernio_profile_id` and `zernio_account_ids`, and if both are set,
+/// publishes the output video via Zernio. Never fails the delivery — only logs on error.
+pub async fn try_publish_delivery_to_zernio(delivery_id: Uuid, state: &Arc<AppState>) {
+    let Some(zernio) = state.zernio_client.clone() else {
+        return;
+    };
+
+    let row = sqlx::query_as::<_, (Option<String>, Option<serde_json::Value>, Option<String>)>(
+        "SELECT zernio_profile_id, zernio_account_ids, output_r2_url FROM deliveries WHERE id = $1",
+    )
+    .bind(delivery_id)
+    .fetch_optional(&state.db_pool)
+    .await;
+
+    let (profile_id, account_ids, output_url) = match row {
+        Ok(Some(r)) => r,
+        _ => return,
+    };
+
+    let Some(profile_id) = profile_id else { return };
+    let Some(account_ids) = account_ids else { return };
+    let Some(output_url) = output_url else { return };
+
+    let accounts: Vec<zernio_client::PlatformTarget> = match account_ids {
+        serde_json::Value::Array(arr) => arr
+            .into_iter()
+            .filter_map(|v| {
+                let obj = v.as_object()?;
+                Some(zernio_client::PlatformTarget {
+                    platform: obj.get("platform")?.as_str()?.to_string(),
+                    accountId: obj.get("account_id")?.as_str()?.to_string(),
+                })
+            })
+            .collect(),
+        _ => return,
+    };
+
+    if accounts.is_empty() {
+        return;
+    }
+
+    let text = format!(
+        "New video render completed! 🎬\n\nAutomated delivery via VideoSync.\n\n{}",
+        output_url
+    );
+
+    match zernio
+        .publish_to_accounts(&profile_id, &text, accounts, vec![output_url])
+        .await
+    {
+        Ok(resp) => {
+            tracing::info!(
+                "📱 Delivery {} auto-published to Zernio (post_id={})",
+                delivery_id,
+                resp.post.id
+            );
+        }
+        Err(e) => {
+            warn!("📱 Zernio auto-publish failed for delivery {}: {}", delivery_id, e);
+        }
     }
 }

@@ -158,6 +158,10 @@ pub fn admin_routes() -> Router {
             get(api_list_deliveries).post(api_create_delivery),
         )
         .route(
+            "/api/admin/deliveries/:id/zernio-targets",
+            post(api_set_delivery_zernio_targets),
+        )
+        .route(
             "/api/admin/portfolio-samples",
             get(api_list_portfolio_samples),
         )
@@ -8312,6 +8316,40 @@ pub async fn api_list_deliveries(
     Json(json!({"deliveries": deliveries}))
 }
 
+#[derive(serde::Deserialize)]
+pub struct SetDeliveryZernioTargetsRequest {
+    pub profile_id: String,
+    pub accounts: Vec<ZernioAccountTarget>,
+}
+
+#[derive(serde::Deserialize, Clone)]
+pub struct ZernioAccountTarget {
+    pub platform: String,
+    pub account_id: String,
+}
+
+pub async fn api_set_delivery_zernio_targets(
+    Extension(state): Extension<Arc<AppState>>,
+    Path(delivery_id): Path<Uuid>,
+    Json(req): Json<SetDeliveryZernioTargetsRequest>,
+) -> Json<serde_json::Value> {
+    let account_ids = serde_json::to_value(&req.accounts).unwrap_or_default();
+    let result = sqlx::query(
+        "UPDATE deliveries SET zernio_profile_id = $1, zernio_account_ids = $2 WHERE id = $3",
+    )
+    .bind(&req.profile_id)
+    .bind(&account_ids)
+    .bind(delivery_id)
+    .execute(&state.db_pool)
+    .await;
+
+    match result {
+        Ok(r) if r.rows_affected() > 0 => Json(json!({"success": true})),
+        Ok(_) => Json(json!({"success": false, "error": "Delivery not found"})),
+        Err(e) => Json(json!({"success": false, "error": e.to_string()})),
+    }
+}
+
 pub async fn api_list_portfolio_samples(
     Extension(state): Extension<Arc<AppState>>,
     headers: HeaderMap,
@@ -10205,6 +10243,9 @@ pub async fn run_delivery_job(delivery_id: Uuid, state: Arc<AppState>) {
             .bind(&url).bind(&filename).bind(error_note.as_deref())
             .bind(retries_used + 1).bind(review.score).bind(delivery_id)
             .execute(&state.db_pool).await;
+
+            crate::handlers::social_publish::try_publish_delivery_to_zernio(delivery_id, &state).await;
+
             if let Some(workflow_id) = workflow_id {
                 let workflow_runtime = crate::services::WorkflowRuntime::new(state.db_pool.clone());
                 let _ = workflow_runtime

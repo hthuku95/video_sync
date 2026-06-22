@@ -405,6 +405,8 @@ impl AgenticServicePipeline {
                 tracing::warn!("publish_output: failed to update delivery {}: {e}", input.delivery_id);
             }
 
+            crate::handlers::social_publish::try_publish_delivery_to_zernio(input.delivery_id, state).await;
+
             if let Some(prospect_id) = input.prospect_id {
                 let _ = sqlx::query(
                     "UPDATE prospects SET sample_delivery_id = $1, updated_at = NOW() WHERE id = $2",

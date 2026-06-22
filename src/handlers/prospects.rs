@@ -6823,6 +6823,8 @@ Output file paths clearly in your final response so the delivery pipeline can fi
     .execute(&state.db_pool)
     .await;
 
+    crate::handlers::social_publish::try_publish_delivery_to_zernio(delivery_id, &state).await;
+
     if let Some(workflow_id) = workflow_id {
         let _ = workflow_runtime
             .mark_completed(
