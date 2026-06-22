@@ -1994,7 +1994,7 @@ pub async fn admin_user_detail(Path(id): Path<i32>) -> Html<String> {
             const newStatus = !userData.is_dfy_customer;
             const action = newStatus ? 'mark' : 'unmark';
 
-            if (!confirm(`Are you sure you want to ${action} this user as a DFY customer? This affects monetization tracking and invoicing.`)) return;
+            if (!confirm(`Are you sure you want to ${{action}} this user as a DFY customer? This affects monetization tracking and invoicing.`)) return;
 
             try {{
                 const response = await fetch(`/api/admin/users/${{userId}}/dfy-customer`, {{
