@@ -342,20 +342,22 @@ async fn search_prospects(
         search_twitch_prospects(&state, &payload, limit).await
     } else if payload.platform == "kick" {
         search_kick_prospects(&state, &payload, limit).await
+    } else if payload.platform == "kick_clipper" {
+        search_kick_clipper_prospects(&state, &payload, limit).await
     } else {
         complete_prospect_agent_run(
             &state,
             run_id,
             "failed",
             json!({"error": "unsupported_platform", "platform": payload.platform}),
-            Some("platform must be 'youtube', 'twitch', or 'kick'"),
+            Some("platform must be 'youtube', 'twitch', 'kick', or 'kick_clipper'"),
         )
         .await;
         return Err((
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
                 success: false,
-                message: "platform must be 'youtube', 'twitch', or 'kick'".to_string(),
+                message: "platform must be 'youtube', 'twitch', 'kick', or 'kick_clipper'".to_string(),
             }),
         ));
     };
@@ -1034,6 +1036,276 @@ async fn search_kick_prospects(
     }
 
     Ok(count)
+}
+
+/// Search YouTube for channels that repost Kick.com content (clipping channels).
+/// Unlike `search_kick_prospects` which searches Kick.com live streams, this function
+/// finds YouTube channels whose content shows Kick.com branding (green watermark),
+/// indicating they clip Kick streamers and repost to YouTube. These are the actual
+/// target prospects for the `kick_auto_clipper` DFY service.
+async fn search_kick_clipper_prospects(
+    state: &Arc<AppState>,
+    payload: &SearchRequest,
+    limit: usize,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    let api_key = std::env::var("YOUTUBE_API_KEY").unwrap_or_default();
+    if api_key.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, Json(ErrorResponse {
+            success: false, message: "YouTube API key not configured".to_string()
+        })));
+    }
+
+    let http = reqwest::Client::new();
+    let limit = limit.min(20);
+    let mut found = 0usize;
+
+    // 1. AI generates Kick-specific YouTube search query
+    let base_category = payload.category.clone().unwrap_or_else(|| "gaming clips".to_string());
+    let query_prompt = format!(
+        "You are finding YouTube CHANNELS that clip and repost content from Kick.com streamers. \
+         These channels repost Kick stream highlights with the Kick.com green watermark visible. \
+         Generate ONE concise YouTube search query (5-10 words) to find such channels. \
+         Prospect type: clipper. Category: {}. Return ONLY the raw search query.",
+        base_category
+    );
+    let search_query = match crate::llm_utils::generate_text_fast(
+        state.ollama_fast_client.as_ref(),
+        state.ollama_client.as_ref(),
+        state.gemini_client.as_ref(),
+        state.deepseek_client.as_ref(),
+        &query_prompt,
+    ).await {
+        Ok(q) => q.trim().trim_matches('"').to_string(),
+        Err(_) => "kick stream highlights compilation channel".to_string(),
+    };
+
+    tracing::info!("🎯 Kick clipper YouTube search query (AI): \"{}\"", search_query);
+
+    // 2. Search YouTube for channels matching the query
+    let search_url = format!(
+        "https://www.googleapis.com/youtube/v3/search?part=snippet&type=channel&q={}&maxResults={}&order=relevance&key={}",
+        urlencoding::encode(&search_query), limit.min(50), api_key
+    );
+
+    let search_resp: serde_json::Value = http.get(&search_url).send().await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, Json(ErrorResponse {
+            success: false, message: format!("YouTube search failed: {e}")
+        })))?
+        .json().await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, Json(ErrorResponse {
+            success: false, message: format!("YouTube search parse failed: {e}")
+        })))?;
+
+    let channel_ids: Vec<String> = search_resp["items"].as_array()
+        .map(|a| a.iter().filter_map(|item| item["id"]["channelId"].as_str().map(String::from)).collect())
+        .unwrap_or_default();
+
+    if channel_ids.is_empty() {
+        return Ok(Json(json!({"success": true, "found": 0, "message": "No channels found for this query."})));
+    }
+
+    // 3. Get channel stats + snippet
+    let stats_url = format!(
+        "https://www.googleapis.com/youtube/v3/channels?part=snippet,statistics&id={}&key={}",
+        channel_ids.join(","), api_key
+    );
+
+    let stats_resp: serde_json::Value = http.get(&stats_url).send().await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, Json(ErrorResponse {
+            success: false, message: format!("YouTube stats failed: {e}")
+        })))?
+        .json().await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, Json(ErrorResponse {
+            success: false, message: format!("YouTube stats parse failed: {e}")
+        })))?;
+
+    let channels_data = stats_resp["items"].as_array().map(|a| a.to_vec()).unwrap_or_default();
+
+    // 4. Process each channel
+    for channel in &channels_data {
+        let channel_id = channel["id"].as_str().unwrap_or("").to_string();
+        let display_name = channel["snippet"]["title"].as_str().unwrap_or("Unknown").to_string();
+        let description = channel["snippet"]["description"].as_str().unwrap_or("").to_string();
+        let sub_count = channel["statistics"]["subscriberCount"].as_str()
+            .and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
+        let video_count = channel["statistics"]["videoCount"].as_str()
+            .and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
+        let platform_url = format!("https://youtube.com/channel/{channel_id}");
+
+        // Apply subscriber range filter
+        if let Some(min) = payload.min_viewers { if sub_count < min { continue; } }
+        if let Some(max) = payload.max_viewers { if sub_count > max { continue; } }
+
+        // 5. Fetch 3 most recent videos for thumbnail analysis
+        let videos_url = format!(
+            "https://www.googleapis.com/youtube/v3/search?part=snippet&channelId={}&maxResults=3&order=date&type=video&key={}",
+            channel_id, api_key
+        );
+
+        let videos_resp: serde_json::Value = match http.get(&videos_url).send().await {
+            Ok(r) => r.json().await.unwrap_or_default(),
+            Err(_) => continue,
+        };
+
+        let videos = videos_resp["items"].as_array().map(|a| a.to_vec()).unwrap_or_default();
+
+        let mut video_titles: Vec<String> = Vec::new();
+        let mut thumbnail_urls: Vec<String> = Vec::new();
+
+        for video in &videos {
+            if let Some(title) = video["snippet"]["title"].as_str() {
+                video_titles.push(title.to_string());
+            }
+            let thumb = video["snippet"]["thumbnails"]["high"]["url"].as_str()
+                .or_else(|| video["snippet"]["thumbnails"]["medium"]["url"].as_str())
+                .or_else(|| video["snippet"]["thumbnails"]["default"]["url"].as_str());
+            if let Some(t) = thumb {
+                thumbnail_urls.push(t.to_string());
+            }
+        }
+
+        // 6. Text-based Kick signal detection (free, no vision API call)
+        let title_kick_keywords = video_titles.iter().filter(|t| {
+            let l = t.to_lowercase();
+            l.contains("kick") || l.contains("stream") || l.contains("highlights") ||
+            l.contains("clips") || l.contains("moments") || l.contains("compilation") ||
+            l.contains("best of")
+        }).count();
+
+        let desc_has_kick = description.to_lowercase().contains("kick.com")
+            || description.to_lowercase().contains(" kick ")
+            || description.to_lowercase().contains("kickstreamer");
+
+        // 7. Vision analysis: check first thumbnail for Kick.com watermark (green logo)
+        let mut vision_confirmed = false;
+        if let Some(thumb_url) = thumbnail_urls.first() {
+            if let Ok(resp) = http.get(thumb_url).send().await {
+                if let Ok(bytes) = resp.bytes().await {
+                    if !bytes.is_empty() {
+                        let vision_prompt = "Analyze this YouTube video thumbnail. \
+                            Does it contain the Kick.com logo, text \"Kick.com\", \
+                            a green circular watermark with \"Kick\", \
+                            or green brand styling? Look for the distinctive green Kick.com watermark. \
+                            Answer ONLY with YES or NO.";
+                        vision_confirmed = match &state.gemini_client {
+                            Some(g) => g.analyze_image_bytes(&bytes, vision_prompt).await
+                                .ok().map(|r| r.to_uppercase().contains("YES")).unwrap_or(false),
+                            None => false,
+                        };
+                    }
+                }
+            }
+        }
+
+        // 8. Calculate posting frequency (videos/week, rough estimate)
+        let posting_weekly = (video_count as f64 / 4.0).max(0.5);
+
+        // 9. Build comprehensive scoring description for the LLM
+        let scoring_desc = format!(
+            "YouTube channel: {}. Subscribers: {}. Total videos: {}. \
+             Recent video titles: {:?}. \
+             Description mentions Kick: {}. Thumbnails show Kick branding: {}. \
+             Kick-related keywords in titles: {}/{}. Weekly posting: {:.0} videos/week. \
+             Assessment: This channel appears to {} Kick.com content on YouTube.",
+            display_name, sub_count, video_count,
+            video_titles,
+            if desc_has_kick { "YES" } else { "no" },
+            if vision_confirmed { "YES (green Kick watermark detected in thumbnails)" } else { "no" },
+            title_kick_keywords, video_titles.len(),
+            posting_weekly,
+            if vision_confirmed || desc_has_kick { "be actively reposting" } else { "potentially repost" }
+        );
+
+        // 10. AI scoring — force clipper prospect type for kick_auto_clipper evaluation
+        let (score, reasoning, _service, dm_creator, dm_clipper, x_dm, email_script) =
+            score_prospect_with_ai(state, &display_name, sub_count,
+                &scoring_desc, &base_category, "clipper").await;
+
+        if score < 0.3 { continue; }
+
+        // 11. Contact enrichment
+        let mut twitter_handle = extract_best_twitter_handle(&description);
+        let mut instagram_handle = extract_best_instagram_handle(&description);
+        let mut business_email = extract_best_business_email(&description);
+        let mut external_url = extract_best_external_url(&description);
+
+        let enrichment_url = if platform_url.starts_with("http") { Some(platform_url.as_str()) } else { None };
+        let contact_enrichment = enrich_public_contact_fields(
+            enrichment_url,
+            &mut twitter_handle, &mut instagram_handle,
+            &mut business_email, &mut external_url,
+        ).await;
+
+        // 12. Store prospect with kick_auto_clipper service type
+        let kick_signals = json!({
+            "vision_confirmed": vision_confirmed,
+            "title_kick_keywords": title_kick_keywords,
+            "desc_has_kick": desc_has_kick,
+            "posting_weekly": posting_weekly,
+            "video_titles_analyzed": video_titles.len(),
+        });
+
+        let channel_desc = format!(
+            "{} | Kick clipper channel, {} videos, ~{:.0}/week | signals: {}",
+            description, video_count, posting_weekly, kick_signals
+        );
+
+        let reasoning_with_signals = format!(
+            "{} | Kick signals: titleKw={}/{} vision={} descKick={} weekly={:.0}",
+            reasoning, title_kick_keywords, video_titles.len(), vision_confirmed, desc_has_kick, posting_weekly
+        );
+
+        let _ = sqlx::query(
+            "INSERT INTO prospects \
+             (platform, channel_id, display_name, platform_url, subscriber_count, \
+              content_category, channel_description, prospect_type, \
+              ai_score, ai_reasoning, dm_script_creator, dm_script_clipper, \
+              twitter_handle, instagram_handle, business_email, external_url, \
+              service_type, x_dm_script, email_script, contact_enrichment) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) \
+             ON CONFLICT (platform, channel_id) DO UPDATE SET \
+             ai_score = EXCLUDED.ai_score, ai_reasoning = EXCLUDED.ai_reasoning, \
+             dm_script_creator = EXCLUDED.dm_script_creator, dm_script_clipper = EXCLUDED.dm_script_clipper, \
+             x_dm_script = EXCLUDED.x_dm_script, email_script = EXCLUDED.email_script, \
+             twitter_handle = COALESCE(EXCLUDED.twitter_handle, prospects.twitter_handle), \
+             instagram_handle = COALESCE(EXCLUDED.instagram_handle, prospects.instagram_handle), \
+             business_email = COALESCE(EXCLUDED.business_email, prospects.business_email), \
+             external_url = COALESCE(EXCLUDED.external_url, prospects.external_url), \
+             contact_enrichment = COALESCE(NULLIF(EXCLUDED.contact_enrichment, '{}'::jsonb), prospects.contact_enrichment), \
+             service_type = EXCLUDED.service_type, updated_at = NOW()"
+        )
+        .bind("youtube")
+        .bind(&channel_id)
+        .bind(&display_name)
+        .bind(&platform_url)
+        .bind(sub_count)
+        .bind(&base_category)
+        .bind(&channel_desc)
+        .bind("clipper")
+        .bind(score)
+        .bind(&reasoning_with_signals)
+        .bind(&dm_creator)
+        .bind(&dm_clipper)
+        .bind(&twitter_handle)
+        .bind(&instagram_handle)
+        .bind(&business_email)
+        .bind(&external_url)
+        .bind("kick_auto_clipper")
+        .bind(&x_dm)
+        .bind(&email_script)
+        .bind(&contact_enrichment)
+        .execute(&state.db_pool)
+        .await
+        .ok();
+
+        found += 1;
+    }
+
+    Ok(Json(json!({
+        "success": true,
+        "found": found,
+        "message": format!("Found {} Kick clipper prospects via YouTube search", found)
+    })))
 }
 
 /// Extract a Twitter/X handle from a channel description using simple pattern matching.
@@ -2785,6 +3057,7 @@ tr:hover td{background:rgba(92,84,112,0.12)}
         <select id="platform">
           <option value="youtube">YouTube</option>
           <option value="twitch">Twitch</option>
+          <option value="kick_clipper">🎯 Kick Clipper (via YouTube)</option>
         </select>
       </div>
       <div>
