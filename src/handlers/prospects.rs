@@ -1223,18 +1223,53 @@ async fn search_kick_clipper_prospects(
 
         if score < 0.3 { continue; }
 
-        // 11. Contact enrichment
+        // 11. Identify which Kick creators this prospect clips (for sample generation)
+        let mut detected_source_creators: Vec<String> = Vec::new();
+        if score >= 0.5 {
+            let creator_prompt = format!(
+                "YouTube channel '{}' reposts clips from Kick.com streamers. \
+                 Based on the channel name, description, and recent video titles {:?}, \
+                 identify which specific Kick.com streamers/creators this channel clips content from. \
+                 Return ONLY a comma-separated list of Kick usernames/slugs. \
+                 If you cannot identify specific creators, return 'unknown'.",
+                display_name, video_titles
+            );
+            if let Ok(creators_raw) = crate::llm_utils::generate_text_fast(
+                state.ollama_fast_client.as_ref(),
+                state.ollama_client.as_ref(),
+                state.gemini_client.as_ref(),
+                state.deepseek_client.as_ref(),
+                &creator_prompt,
+            ).await {
+                let raw = creators_raw.trim().to_lowercase();
+                if !raw.contains("unknown") && !raw.is_empty() {
+                    detected_source_creators = raw.split(',')
+                        .map(|s| s.trim().trim_matches('"').trim_matches('\'').to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect();
+                }
+            }
+        }
+
+        // 12. Contact enrichment
         let mut twitter_handle = extract_best_twitter_handle(&description);
         let mut instagram_handle = extract_best_instagram_handle(&description);
         let mut business_email = extract_best_business_email(&description);
         let mut external_url = extract_best_external_url(&description);
 
         let enrichment_url = if platform_url.starts_with("http") { Some(platform_url.as_str()) } else { None };
-        let contact_enrichment = enrich_public_contact_fields(
+        let mut contact_enrichment = enrich_public_contact_fields(
             enrichment_url,
             &mut twitter_handle, &mut instagram_handle,
             &mut business_email, &mut external_url,
         ).await;
+
+        // Embed detected source creators for sample generation
+        if !detected_source_creators.is_empty() {
+            if let Some(obj) = contact_enrichment.as_object_mut() {
+                obj.insert("detected_source_creators".to_string(), json!(detected_source_creators));
+            }
+        }
 
         // 12. Store prospect with kick_auto_clipper service type
         let kick_signals = json!({
@@ -2511,7 +2546,7 @@ async fn generate_prospect_sample_pack(
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
     let row = sqlx::query(
         "SELECT display_name, platform, platform_url, content_category, channel_description,
-                service_type, external_url, sample_delivery_id
+                service_type, external_url, sample_delivery_id, contact_enrichment
          FROM prospects WHERE id=$1",
     )
     .bind(id)
@@ -2566,8 +2601,24 @@ async fn generate_prospect_sample_pack(
         .unwrap_or_else(|| "landing_page".to_string());
     let service = normalize_revenue_service(&service).to_string();
     let product_name = request.product_name.unwrap_or_else(|| display_name.clone());
+
+    // For kick_auto_clipper, use detected source creators' Kick channel as the source
+    let contact_enrich: Option<serde_json::Value> = row.get("contact_enrichment");
+    let kick_source_url: Option<String> = if service == "kick_auto_clipper" {
+        contact_enrich.as_ref().and_then(|e| {
+            e.get("detected_source_creators")
+                .and_then(|c| c.as_array())
+                .and_then(|arr| arr.first())
+                .and_then(|c| c.as_str())
+                .map(|slug| format!("https://kick.com/{}", slug.trim()))
+        })
+    } else {
+        None
+    };
+
     let source_url = request
         .source_url
+        .or(kick_source_url)
         .or_else(|| row.get::<Option<String>, _>("external_url"))
         .unwrap_or_else(|| platform_url.clone());
     let has_product_url = source_url.starts_with("http://") || source_url.starts_with("https://");
