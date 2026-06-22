@@ -58,6 +58,7 @@ pub fn admin_routes() -> Router {
         .route("/admin/revenue-ledger", get(admin_revenue_ledger_page))
         .route("/admin/how-it-works", get(admin_how_it_works_page))
         .route("/admin/service-samples", get(admin_service_samples_page))
+        .route("/admin/zernio", get(admin_zernio_page))
         .route("/delivery/:id", get(delivery_page))
         .route("/delivery/:id/download-gcs", get(delivery_gcs_download))
         .route("/api/portfolio-samples", get(api_list_portfolio_samples))
@@ -181,6 +182,7 @@ pub fn admin_routes() -> Router {
         .route("/api/admin/payments", get(api_studio_payments))
         .route("/api/admin/config", get(api_get_config))
         .route("/api/admin/config", post(api_update_config))
+        .route("/api/admin/zernio/status", get(api_admin_zernio_status))
         .layer(axum::middleware::from_fn(admin_middleware))
         .layer(axum::middleware::from_fn(auth_middleware));
 
@@ -402,6 +404,7 @@ pub async fn admin_dashboard() -> Html<String> {
             <li><a href="/admin/prospect-finder">🎯 Prospect Finder</a></li>
             <li><a href="/admin/monetization-guide">💰 Monetization Guide</a></li>
             <li><a href="/admin/revenue-ledger">💸 Revenue Ledger</a></li>
+            <li><a href="/admin/zernio">📱 Social</a></li>
             <li><a href="/admin/how-it-works">📘 How We Work</a></li>
             <li><a href="#" onclick="showWhitelist()">🛡️ Whitelist</a></li>
             <li><a href="#" onclick="showYoutube()">🎥 YouTube Features</a></li>
@@ -11947,3 +11950,258 @@ const HOW_WE_WORK_HTML: &str = r###"<!DOCTYPE html>
 </div>
 </body>
 </html>"###;
+
+/// Admin page for managing Zernio social publishing profiles and accounts.
+pub async fn admin_zernio_page() -> Html<String> {
+    let html = r###"<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Social Publishing — Admin</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#f8f9fa}
+.sidebar{width:250px;background:#343a40;height:100vh;position:fixed;left:0;top:0;color:white;padding:1rem}
+.sidebar h2{color:#dc3545;margin-bottom:2rem}
+.sidebar ul{list-style:none}
+.sidebar li{margin-bottom:0.5rem}
+.sidebar a{color:#adb5bd;text-decoration:none;padding:0.5rem;display:block;border-radius:5px}
+.sidebar a:hover{background:#495057;color:white}
+.sidebar a.active{background:#dc3545;color:white}
+.main-content{margin-left:250px;padding:2rem}
+.header{background:white;padding:1rem 2rem;margin-bottom:2rem;border-radius:10px;box-shadow:0 2px 10px rgba(0,0,0,0.1)}
+.header h1{color:#343a40;margin-bottom:0.5rem}
+.card{background:white;padding:1.5rem;border-radius:10px;box-shadow:0 2px 10px rgba(0,0,0,0.1);margin-bottom:2rem}
+.card h2{color:#343a40;margin-bottom:1rem}
+.btn{padding:0.5rem 1rem;background:#dc3545;color:white;border:none;border-radius:5px;cursor:pointer;display:inline-block;font-size:0.9rem}
+.btn:hover{background:#c82333}
+.btn-secondary{background:#6c757d}
+.btn-secondary:hover{background:#5a6268}
+.btn-sm{padding:0.3rem 0.6rem;font-size:0.8rem}
+table{width:100%;border-collapse:collapse}
+th,td{padding:0.75rem;text-align:left;border-bottom:1px solid #dee2e6}
+th{background:#f8f9fa;font-weight:600}
+.badge{padding:0.25rem 0.5rem;border-radius:3px;font-size:0.8rem;font-weight:500}
+.badge-success{background:#d4edda;color:#155724}
+.badge-danger{background:#f8d7da;color:#721c24}
+.badge-warning{background:#fff3cd;color:#856404}
+.badge-info{background:#d1ecf1;color:#0c5460}
+.status-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:1rem;margin-bottom:1.5rem}
+.stat-card{background:#f8f9fa;padding:1rem;border-radius:8px;text-align:center}
+.stat-card .num{font-size:1.8rem;font-weight:bold;color:#dc3545}
+.stat-card .label{color:#6c757d;font-size:0.85rem;margin-top:0.25rem}
+.form-row{display:flex;gap:0.75rem;align-items:center;flex-wrap:wrap;margin-bottom:1rem}
+.form-row input{flex:1;min-width:200px;padding:0.5rem;border:1px solid #ddd;border-radius:5px}
+.form-row select{padding:0.5rem;border:1px solid #ddd;border-radius:5px;background:white}
+.accounts-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:1rem}
+.account-card{border:1px solid #e9ecef;border-radius:8px;padding:1rem;background:#f8f9fa}
+.account-card .platform{font-weight:600;font-size:1rem}
+.account-card .username{color:#6c757d;font-size:0.85rem}
+.connected-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:0.4rem}
+.connected-dot.yes{background:#28a745}
+.connected-dot.no{background:#dc3545}
+.spinner{display:inline-block;width:1rem;height:1rem;border:2px solid #ddd;border-top-color:#dc3545;border-radius:50%;animation:spin 0.6s linear infinite;vertical-align:middle}
+@keyframes spin{to{transform:rotate(360deg)}}
+.toast{position:fixed;bottom:1.5rem;right:1.5rem;padding:0.75rem 1.25rem;border-radius:8px;color:white;font-size:0.9rem;z-index:9999;display:none;animation:fadeIn 0.3s}
+.toast.success{background:#28a745}
+.toast.error{background:#dc3545}
+@keyframes fadeIn{from{opacity:0;transform:translateY(10px)};to{opacity:1;transform:translateY(0)}}
+</style>
+</head>
+<body>
+<div class="sidebar">
+  <h2>🛡️ Admin Panel</h2>
+  <ul>
+    <li><a href="/admin/dashboard">📊 Dashboard</a></li>
+    <li><a href="/admin/users">👥 Users</a></li>
+    <li><a href="/admin/clipping-activity">🎬 Clipping Activity</a></li>
+    <li><a href="/admin/deliveries">📦 Deliveries</a></li>
+    <li><a href="/admin/zernio" class="active">📱 Social</a></li>
+    <li><a href="/admin/performance">📈 Performance</a></li>
+    <li><a href="/admin/prospect-finder">🎯 Prospect Finder</a></li>
+    <li><a href="/admin/monetization-guide">💰 Monetization Guide</a></li>
+  </ul>
+</div>
+<div class="main-content">
+  <div class="header">
+    <h1>📱 Social Publishing</h1>
+    <p>Manage Zernio profiles, connected accounts, and cross-platform publishing</p>
+  </div>
+
+  <div id="statusGrid" class="status-grid"></div>
+
+  <div class="card">
+    <h2>Zernio Profiles</h2>
+    <div class="form-row">
+      <input id="profileName" placeholder="Profile name (e.g. Client Name)" />
+      <input id="profileDesc" placeholder="Description (optional)" />
+      <button class="btn" onclick="createProfile()">+ Create Profile</button>
+    </div>
+    <div id="profilesContainer"><div class="spinner"></div> Loading...</div>
+  </div>
+
+  <div class="card">
+    <h2>Connect a New Account</h2>
+    <div class="form-row">
+      <select id="connectPlatform">
+        <option value="youtube">YouTube</option>
+        <option value="instagram">Instagram</option>
+        <option value="twitter">X / Twitter</option>
+        <option value="tiktok">TikTok</option>
+        <option value="linkedin">LinkedIn</option>
+        <option value="facebook">Facebook</option>
+        <option value="pinterest">Pinterest</option>
+        <option value="snapchat">Snapchat</option>
+        <option value="telegram">Telegram</option>
+        <option value="whatsapp">WhatsApp</option>
+      </select>
+      <select id="connectProfileId">
+        <option value="">— Select profile first —</option>
+      </select>
+      <button class="btn btn-secondary" onclick="getConnectUrl()">🔗 Get OAuth URL</button>
+    </div>
+    <div id="connectUrlResult" style="margin-top:0.5rem;display:none">
+      <p style="margin-bottom:0.5rem">Send this URL to the client to authorize their account:</p>
+      <input id="connectUrlInput" style="width:100%;padding:0.5rem;border:1px solid #ddd;border-radius:5px;font-size:0.85rem" readonly onclick="this.select()" />
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Connected Accounts</h2>
+    <div id="accountsContainer"><div class="spinner"></div> Loading...</div>
+  </div>
+</div>
+
+<div id="toast" class="toast"></div>
+
+<script>
+const API = '/api/admin/zernio/status';
+const SOCIAL_API = '/api/social';
+let statusData = null;
+
+function showToast(msg, type='success') {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.className = 'toast ' + type; t.style.display = 'block';
+  setTimeout(() => { t.style.display = 'none' }, 4000);
+}
+
+async function apiFetch(url, opts = {}) {
+  const token = localStorage.getItem('authToken') || localStorage.getItem('auth_token') || localStorage.getItem('admin_token');
+  const headers = { 'Content-Type': 'application/json', ...(token ? { 'Authorization': 'Bearer ' + token } : {}), ...opts.headers };
+  const res = await fetch(url, { ...opts, headers });
+  return res.json();
+}
+
+async function loadStatus() {
+  try {
+    const data = await apiFetch(API);
+    statusData = data;
+    if (!data.success) { document.getElementById('statusGrid').innerHTML = '<div class="card" style="color:#721c24;background:#f8d7da">Failed to load: ' + (data.error || 'unknown error') + '</div>'; return; }
+    const profiles = data.profiles || [];
+    const accounts = data.accounts || [];
+    let connected = 0, pending = 0;
+    accounts.forEach(a => { if (a.connected) connected++; else pending++; });
+    document.getElementById('statusGrid').innerHTML =
+      '<div class="stat-card"><div class="num">' + profiles.length + '</div><div class="label">Profiles</div></div>' +
+      '<div class="stat-card"><div class="num">' + accounts.length + '</div><div class="label">Total Accounts</div></div>' +
+      '<div class="stat-card"><div class="num">' + connected + '</div><div class="label">Connected</div></div>' +
+      '<div class="stat-card"><div class="num">' + pending + '</div><div class="label">Pending</div></div>';
+    renderProfiles(profiles);
+    renderAccounts(accounts);
+  } catch(e) {
+    document.getElementById('statusGrid').innerHTML = '<div class="card" style="color:#721c24;background:#f8d7da">Error: ' + e.message + '</div>';
+  }
+}
+
+function renderProfiles(profiles) {
+  const sel = document.getElementById('connectProfileId');
+  sel.innerHTML = '<option value="">— Select profile —</option>';
+  if (!profiles.length) {
+    document.getElementById('profilesContainer').innerHTML = '<p style="color:#6c757d">No profiles yet. Create one above.</p>';
+    return;
+  }
+  let html = '<table><thead><tr><th>ID</th><th>Name</th><th>Description</th></tr></thead><tbody>';
+  profiles.forEach(p => {
+    html += '<tr><td style="font-family:monospace;font-size:0.8rem">' + p._id + '</td><td>' + p.name + '</td><td>' + (p.description || '—') + '</td></tr>';
+    sel.innerHTML += '<option value="' + p._id + '">' + p.name + '</option>';
+  });
+  html += '</tbody></table>';
+  document.getElementById('profilesContainer').innerHTML = html;
+}
+
+function renderAccounts(accounts) {
+  if (!accounts.length) {
+    document.getElementById('accountsContainer').innerHTML = '<p style="color:#6c757d">No accounts connected yet. Use the connect form above.</p>';
+    return;
+  }
+  let html = '<div class="accounts-grid">';
+  accounts.forEach(a => {
+    const dot = a.connected ? 'yes' : 'no';
+    const statusText = a.connected ? 'Connected' : 'Pending';
+    const badgeCls = a.connected ? 'badge-success' : 'badge-warning';
+    html += '<div class="account-card">' +
+      '<div class="platform"><span class="connected-dot ' + dot + '"></span>' + a.platform + '</div>' +
+      '<div class="username">' + (a.username || '—') + '</div>' +
+      '<div style="margin-top:0.5rem"><span class="badge ' + badgeCls + '">' + statusText + '</span></div>' +
+      '<div style="margin-top:0.3rem;font-size:0.75rem;color:#6c757d;font-family:monospace">' + a._id + '</div>' +
+      '</div>';
+  });
+  html += '</div>';
+  document.getElementById('accountsContainer').innerHTML = html;
+}
+
+async function createProfile() {
+  const name = document.getElementById('profileName').value.trim();
+  if (!name) { showToast('Enter a profile name', 'error'); return; }
+  const desc = document.getElementById('profileDesc').value.trim() || null;
+  try {
+    const data = await apiFetch(SOCIAL_API + '/create-profile', { method: 'POST', body: JSON.stringify({ name, description: desc }) });
+    if (data.success) { showToast('Profile "' + name + '" created'); document.getElementById('profileName').value = ''; document.getElementById('profileDesc').value = ''; loadStatus(); }
+    else { showToast(data.error || 'Failed to create profile', 'error'); }
+  } catch(e) { showToast(e.message, 'error'); }
+}
+
+async function getConnectUrl() {
+  const platform = document.getElementById('connectPlatform').value;
+  const profileId = document.getElementById('connectProfileId').value;
+  if (!profileId) { showToast('Select a profile first', 'error'); return; }
+  try {
+    const data = await apiFetch(SOCIAL_API + '/connect-url?platform=' + encodeURIComponent(platform) + '&profile_id=' + encodeURIComponent(profileId));
+    if (data.success) {
+      document.getElementById('connectUrlInput').value = data.url;
+      document.getElementById('connectUrlResult').style.display = 'block';
+    } else {
+      showToast(data.error || 'Failed to get connect URL', 'error');
+    }
+  } catch(e) { showToast(e.message, 'error'); }
+}
+
+loadStatus();
+</script>
+</body>
+</html>"###;
+
+    Html(html.to_string())
+}
+
+/// API: returns Zernio profiles + accounts combined status.
+pub async fn api_admin_zernio_status(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    let Some(zernio) = state.zernio_client.clone() else {
+        return Json(json!({"success": false, "error": "Zernio not configured"}));
+    };
+
+    let profiles = match zernio.list_profiles().await {
+        Ok(r) => r.profiles,
+        Err(e) => return Json(json!({"success": false, "error": format!("Failed to list profiles: {e}")})),
+    };
+
+    let accounts = match zernio.list_accounts().await {
+        Ok(r) => r.accounts,
+        Err(e) => return Json(json!({"success": false, "error": format!("Failed to list accounts: {e}")})),
+    };
+
+    Json(json!({"success": true, "profiles": profiles, "accounts": accounts}))
+}
