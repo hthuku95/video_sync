@@ -191,7 +191,7 @@ pub async fn try_publish_delivery_to_zernio(delivery_id: Uuid, state: &Arc<AppSt
     let Some(account_ids) = account_ids else { return };
     let Some(output_url) = output_url else { return };
 
-    let accounts: Vec<zernio_client::PlatformTarget> = match account_ids {
+    let accounts: Vec<PlatformTarget> = match account_ids {
         serde_json::Value::Array(arr) => arr
             .into_iter()
             .filter_map(|v| {

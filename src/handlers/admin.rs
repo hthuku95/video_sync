@@ -8322,7 +8322,7 @@ pub struct SetDeliveryZernioTargetsRequest {
     pub accounts: Vec<ZernioAccountTarget>,
 }
 
-#[derive(serde::Deserialize, Clone)]
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
 pub struct ZernioAccountTarget {
     pub platform: String,
     pub account_id: String,
