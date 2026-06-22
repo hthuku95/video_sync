@@ -8,7 +8,9 @@ use axum::{
 use serde::Deserialize;
 use serde_json::json;
 use std::sync::Arc;
-use uuid::Uuid;
+use uuid::Uuid; // Already used — json! macro must be in scope
+
+// Ensure the json! macro is in scope for all handlers below.
 
 /// Client-facing campaign routes (with auth middleware).
 pub fn campaign_routes() -> Router {
@@ -53,7 +55,8 @@ async fn admin_list_campaigns(
 ) -> Json<serde_json::Value> {
     let rows = sqlx::query_as::<_, (
         Uuid, i32, String, String, String, String, f64, serde_json::Value, serde_json::Value, i32,
-        chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>, String, i32, i32, chrono::DateTime<chrono::Utc>,
+        chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>, Option<String>, String, i32, i32,
+        chrono::DateTime<chrono::Utc>,
     )>(
         "SELECT c.id, c.user_id, u.email, c.name, c.service_type, c.brief, c.style, c.duration, \
                 c.schedule, c.platforms, c.posts_per_day, c.start_date, c.end_date, \
@@ -268,7 +271,7 @@ async fn client_list_campaigns(
 ) -> Json<serde_json::Value> {
     let user_id: i32 = claims.sub.parse().unwrap_or(0);
     let rows = sqlx::query_as::<_, (
-        Uuid, String, String, String, serde_json::Value, i32, String, i32, i32, chrono::DateTime<chrono::Utc>,
+        Uuid, String, String, String, serde_json::Value, i32, i32, i32, chrono::DateTime<chrono::Utc>,
     )>(
         "SELECT id, name, service_type, status, schedule, posts_per_day, \
                 total_posts_planned, total_posts_published, created_at \
