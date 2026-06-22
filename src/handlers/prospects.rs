@@ -1859,7 +1859,7 @@ async fn list_prospects(
          (CASE \
             WHEN service_type IN ('landing_page','agency_bundle','full_stack') THEN 30 \
             WHEN service_type IN ('product_mockup','education','three_d_scene','ugc') THEN 25 \
-            WHEN service_type IN ('clipping','thumbnails','voice_audio') THEN 15 \
+            WHEN service_type IN ('clipping','thumbnails','voice_audio','kick_auto_clipper') THEN 15 \
             ELSE 0 \
           END) + \
                     COALESCE((ai_score * 100)::int, 0)) AS revenue_priority \
