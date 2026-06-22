@@ -1047,7 +1047,7 @@ async fn search_kick_clipper_prospects(
     state: &Arc<AppState>,
     payload: &SearchRequest,
     limit: usize,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<usize, (StatusCode, Json<ErrorResponse>)> {
     let api_key = std::env::var("YOUTUBE_API_KEY").unwrap_or_default();
     if api_key.is_empty() {
         return Err((StatusCode::BAD_REQUEST, Json(ErrorResponse {
@@ -1101,7 +1101,7 @@ async fn search_kick_clipper_prospects(
         .unwrap_or_default();
 
     if channel_ids.is_empty() {
-        return Ok(Json(json!({"success": true, "found": 0, "message": "No channels found for this query."})));
+        return Ok(0);
     }
 
     // 3. Get channel stats + snippet
@@ -1301,11 +1301,7 @@ async fn search_kick_clipper_prospects(
         found += 1;
     }
 
-    Ok(Json(json!({
-        "success": true,
-        "found": found,
-        "message": format!("Found {} Kick clipper prospects via YouTube search", found)
-    })))
+    Ok(found)
 }
 
 /// Extract a Twitter/X handle from a channel description using simple pattern matching.
