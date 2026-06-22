@@ -4,6 +4,7 @@ pub mod api_access; // 💳 USDC subscription page (x402 paywall on /api-access)
 pub mod auth;
 pub mod background;
 pub mod background_routes;
+pub mod campaigns;
 pub mod chat;
 pub mod clipping; // 📹 YouTube clipping feature
 pub mod crypto_payments; // 💳 USDC on Base payments (x402) for studio offers

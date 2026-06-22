@@ -183,6 +183,7 @@ pub fn admin_routes() -> Router {
         .route("/api/admin/config", get(api_get_config))
         .route("/api/admin/config", post(api_update_config))
         .route("/api/admin/zernio/status", get(api_admin_zernio_status))
+        .merge(crate::handlers::campaigns::admin_campaign_routes())
         .layer(axum::middleware::from_fn(admin_middleware))
         .layer(axum::middleware::from_fn(auth_middleware));
 

@@ -74,14 +74,15 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     // sqlx::migrate!() is a proc macro — Cargo only re-runs it when THIS file
     // changes. Touching this file forces the macro to re-scan ./migrations and
     // embed all current migration files.
-    // Last touched: 2026-05-19 to force sqlx::migrate!() to re-embed the
+    // Last touched: 2026-06-23 to force sqlx::migrate!() to re-embed the
     // current migration set, including:
-    //   20260519190000 - app_workflow_nodes durable node execution
-    //   20260517020000 - fallback_rendering clipping status
-    //   20260517010000 - delivery YouTube upload recovery tracking
-    //   20260516070000 - agentic prospect discovery state
-    //   20260516060000 - Revenue V1 prospect fields
-    // Previous touch: 2026-05-11 for:
+    //   20260623000002 - campaigns table
+    //   20260623000003 - campaign_posts table
+    //   20260623000004 - campaign_files table
+    //   20260623000001 - zernio columns on deliveries
+    //   20260623000000 - is_dfy_customer column on users
+    //   (many more above)
+    // Previous touch: 2026-05-19 for:
     //   20260413000000 — scope_instagram_leads_per_user
     //   20260510000000 — app_workflows
     //   20260510010000 — workflow links on clipping_jobs/manual_clipping_jobs

@@ -1,6 +1,7 @@
 // src/services/mod.rs
 pub mod agentic_service_pipeline;
 pub mod artifact_verifier;
+pub mod campaign_engine;
 pub mod generated_artifacts;
 pub mod media_review;
 pub mod long_form_video;

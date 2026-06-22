@@ -1,0 +1,505 @@
+use crate::services::agentic_service_pipeline::{AgenticServicePipeline, ServiceInput, ServiceType};
+use crate::zernio_client::{self, PlatformTarget};
+use crate::AppState;
+use serde_json::json;
+use std::sync::Arc;
+use uuid::Uuid;
+
+/// Run one cycle of campaign processing. Should be called every ~10-15 minutes.
+pub async fn process_campaigns(state: &Arc<AppState>) {
+    let active = match fetch_active_campaigns(state).await {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!("campaign_engine: failed to fetch active campaigns: {e}");
+            return;
+        }
+    };
+
+    for campaign in active {
+        process_campaign(state, campaign).await;
+    }
+}
+
+// ── Data types ──────────────────────────────────────────────────────────────
+
+struct CampaignRow {
+    id: Uuid,
+    user_id: i32,
+    name: String,
+    service_type: String,
+    brief: String,
+    style: String,
+    duration: f64,
+    schedule: serde_json::Value,
+    platforms: serde_json::Value,
+    posts_per_day: i32,
+    zernio_profile_id: Option<String>,
+}
+
+struct PostRow {
+    id: Uuid,
+    day_number: i32,
+    slot_index: i32,
+    scheduled_at: chrono::DateTime<chrono::Utc>,
+}
+
+// ── Step 1: Fetch active campaigns ──────────────────────────────────────────
+
+async fn fetch_active_campaigns(state: &Arc<AppState>) -> Result<Vec<CampaignRow>, sqlx::Error> {
+    sqlx::query_as::<_, (Uuid, i32, String, String, String, String, f64, serde_json::Value, serde_json::Value, i32, Option<String>)>(
+        "SELECT id, user_id, name, service_type, brief, style, duration, schedule, platforms, \
+                posts_per_day, zernio_profile_id \
+         FROM campaigns \
+         WHERE status = 'active' AND start_date <= NOW() AND end_date >= NOW()",
+    )
+    .fetch_all(&state.db_pool)
+    .await
+    .map(|rows| {
+        rows.into_iter()
+            .map(|(id, user_id, name, service_type, brief, style, duration, schedule, platforms, posts_per_day, zernio_profile_id)| {
+                CampaignRow { id, user_id, name, service_type, brief, style, duration, schedule, platforms, posts_per_day, zernio_profile_id }
+            })
+            .collect()
+    })
+}
+
+// ── Step 2: Process a single campaign ───────────────────────────────────────
+
+async fn process_campaign(state: &Arc<AppState>, campaign: CampaignRow) {
+    // Fill today's unfilled slots
+    if let Err(e) = fill_today_slots(state, &campaign).await {
+        tracing::error!("campaign[{}]: fill_today_slots failed: {e}", campaign.id);
+    }
+
+    // Process pending_generation posts → create delivery, kick off rendering
+    match fetch_posts_by_status(state, campaign.id, "pending_generation", 10).await {
+        Ok(posts) => {
+            for post in &posts {
+                process_pending_post(state, &campaign, post).await;
+            }
+        }
+        Err(e) => tracing::error!("campaign[{}]: fetch pending failed: {e}", campaign.id),
+    }
+
+    // Check rendering posts for completed deliveries
+    match fetch_posts_by_status(state, campaign.id, "rendering", 50).await {
+        Ok(posts) => {
+            for post in &posts {
+                check_rendering_post(state, &campaign, post).await;
+            }
+        }
+        Err(e) => tracing::error!("campaign[{}]: fetch rendering failed: {e}", campaign.id),
+    }
+
+    update_campaign_counts(state, campaign.id).await;
+}
+
+// ── Schedule slots ──────────────────────────────────────────────────────────
+
+#[derive(serde::Deserialize, Clone)]
+struct ScheduleSlot {
+    time: String,
+    #[serde(default)]
+    platform: String,
+    #[serde(default)]
+    index: Option<i32>,
+}
+
+async fn fill_today_slots(state: &Arc<AppState>, campaign: &CampaignRow) -> Result<(), sqlx::Error> {
+    let schedule: Vec<ScheduleSlot> = serde_json::from_value(campaign.schedule.clone())
+        .unwrap_or_default();
+    if schedule.is_empty() {
+        return Ok(());
+    }
+
+    let now = chrono::Utc::now();
+    let day = days_since_start(campaign.start_date);
+
+    for (idx, slot) in schedule.iter().enumerate() {
+        let parts: Vec<&str> = slot.time.split(':').collect();
+        let hour: u32 = parts.first().and_then(|s| s.parse().ok()).unwrap_or(0);
+        let minute: u32 = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
+
+        let scheduled_at = now
+            .date_naive()
+            .and_hms_opt(hour, minute, 0)
+            .map(|d| chrono::DateTime::from_naive_utc_and_offset(d, chrono::Utc))
+            .unwrap_or(now);
+
+        if scheduled_at <= now {
+            continue; // Only create future posts
+        }
+
+        let slot_idx = slot.index.unwrap_or(idx as i32);
+
+        sqlx::query(
+            "INSERT INTO campaign_posts (campaign_id, day_number, slot_index, scheduled_at, status) \
+             VALUES ($1, $2, $3, $4, 'pending_generation') \
+             ON CONFLICT (campaign_id, day_number, slot_index) DO NOTHING",
+        )
+        .bind(campaign.id)
+        .bind(day)
+        .bind(slot_idx)
+        .bind(scheduled_at)
+        .execute(&state.db_pool)
+        .await?;
+    }
+
+    Ok(())
+}
+
+fn days_since_start(start_date: chrono::DateTime<chrono::Utc>) -> i32 {
+    let days = (chrono::Utc::now() - start_date).num_days();
+    days.max(0) as i32 + 1
+}
+
+// ── Fetch posts by status ──────────────────────────────────────────────────
+
+async fn fetch_posts_by_status(
+    state: &Arc<AppState>,
+    campaign_id: Uuid,
+    status: &str,
+    limit: i32,
+) -> Result<Vec<PostRow>, sqlx::Error> {
+    sqlx::query_as::<_, (Uuid, i32, i32, chrono::DateTime<chrono::Utc>)>(
+        "SELECT id, day_number, slot_index, scheduled_at \
+         FROM campaign_posts \
+         WHERE campaign_id = $1 AND status = $2 \
+         ORDER BY day_number, slot_index \
+         LIMIT $3",
+    )
+    .bind(campaign_id)
+    .bind(status)
+    .bind(limit)
+    .fetch_all(&state.db_pool)
+    .await
+    .map(|rows| {
+        rows.into_iter()
+            .map(|(id, day_number, slot_index, scheduled_at)| PostRow {
+                id,
+                day_number,
+                slot_index,
+                scheduled_at,
+            })
+            .collect()
+    })
+}
+
+// ── Process pending post: generate variation + kick off rendering ──────────
+
+async fn process_pending_post(state: &Arc<AppState>, campaign: &CampaignRow, post: &PostRow) {
+    // 1. Generate variation from brief
+    let variation = generate_variation(state, &campaign.brief, post.day_number, post.slot_index).await;
+    let variation_text = match variation {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!("campaign[{}] post[{}]: variation gen failed: {}", campaign.id, post.id, e);
+            mark_post_failed(state, post.id, &format!("Variation generation failed: {e}")).await;
+            return;
+        }
+    };
+
+    // 2. Create a delivery record for the pipeline to work with
+    let extra = json!({
+        "campaign_id": campaign.id.to_string(),
+        "campaign_post_id": post.id.to_string(),
+        "service_slug": campaign.service_type,
+    });
+
+    let delivery_id = match sqlx::query_scalar::<_, Uuid>(
+        "INSERT INTO deliveries (client_ref, title, gig_type, prompt, style, duration, extra_args, status) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending') RETURNING id",
+    )
+    .bind(format!("campaign:{}", campaign.id))
+    .bind(format!("{} — Day {} Slot {}", campaign.name, post.day_number, post.slot_index + 1))
+    .bind(&campaign.service_type)
+    .bind(&variation_text)
+    .bind(&campaign.style)
+    .bind(campaign.duration)
+    .bind(&extra)
+    .fetch_one(&state.db_pool)
+    .await
+    {
+        Ok(id) => id,
+        Err(e) => {
+            tracing::error!("campaign[{}] post[{}]: delivery create failed: {e}", campaign.id, post.id);
+            mark_post_failed(state, post.id, &format!("Delivery create failed: {e}")).await;
+            return;
+        }
+    };
+
+    // 3. Link delivery to campaign post
+    let _ = sqlx::query(
+        "UPDATE campaign_posts SET variation_prompt = $1, delivery_id = $2, status = 'rendering' WHERE id = $3",
+    )
+    .bind(&variation_text)
+    .bind(delivery_id)
+    .bind(post.id)
+    .execute(&state.db_pool)
+    .await;
+
+    // 4. Kick off rendering via AgenticServicePipeline
+    let service_type = match campaign.service_type.as_str() {
+        "education" => ServiceType::Education,
+        _ => ServiceType::Clipping,
+    };
+
+    let input = ServiceInput {
+        title: format!("{} — Day {} Slot {}", campaign.name, post.day_number, post.slot_index + 1),
+        brief: variation_text,
+        source_url: None,
+        style: campaign.style.clone(),
+        duration_seconds: campaign.duration,
+        delivery_id,
+        prospect_id: None,
+        session_uuid: None,
+        user_id: Some(campaign.user_id),
+        source_table: Some("deliveries".to_string()),
+        source_record_id: Some(delivery_id),
+        idempotency_key: None,
+        extra_args: Some(extra),
+    };
+
+    match AgenticServicePipeline::start(state.clone(), service_type, input).await {
+        Ok(_) => tracing::info!(
+            "campaign[{}] post[{}] delivery[{}]: rendering started",
+            campaign.id, post.id, delivery_id
+        ),
+        Err(e) => {
+            tracing::error!(
+                "campaign[{}] post[{}]: failed to start rendering: {e}",
+                campaign.id, post.id
+            );
+            mark_post_failed(state, post.id, &format!("Failed to start rendering: {e}")).await;
+        }
+    }
+}
+
+// ── Generate variation ──────────────────────────────────────────────────────
+
+async fn generate_variation(
+    state: &Arc<AppState>,
+    brief: &str,
+    day_number: i32,
+    slot_index: i32,
+) -> Result<String, String> {
+    let prompt = format!(
+        "You are a content creator. Generate a unique video brief variation for day {day_number}, \
+         post #{slot_index} of a daily content campaign.\n\n\
+         Original brief: {brief}\n\n\
+         Rules:\n\
+         - Make this variation unique but clearly on-topic\n\
+         - Include specific details that would make this a different video from yesterday's\n\
+         - Keep it concise (2-4 sentences)\n\
+         - Return ONLY the variation text, no explanations"
+    );
+
+    if let Some(ref client) = state.ollama_fast_client {
+        let resp = client
+            .send_message(
+                &crate::ollama_client::Message {
+                    role: "user".to_string(),
+                    content: prompt.clone(),
+                    images: None,
+                },
+                None,
+            )
+            .await
+            .map_err(|e| format!("Ollama: {e}"))?;
+        return Ok(resp);
+    }
+
+    if let Some(ref client) = state.gemma_client {
+        let resp = client
+            .generate_text(&prompt, None)
+            .await
+            .map_err(|e| format!("Gemma: {e}"))?;
+        return Ok(resp);
+    }
+
+    if let Some(ref client) = state.gemini_client {
+        let resp = client
+            .generate_text(&prompt, None)
+            .await
+            .map_err(|e| format!("Gemini: {e}"))?;
+        return Ok(resp);
+    }
+
+    Err("No LLM client available".to_string())
+}
+
+// ── Check rendering post for completion ────────────────────────────────────
+
+async fn check_rendering_post(state: &Arc<AppState>, campaign: &CampaignRow, post: &PostRow) {
+    // Read delivery_id from campaign post
+    let delivery_id: Option<Uuid> = sqlx::query_scalar(
+        "SELECT delivery_id FROM campaign_posts WHERE id = $1",
+    )
+    .bind(post.id)
+    .fetch_optional(&state.db_pool)
+    .await
+    .ok()
+    .flatten()
+    .flatten();
+
+    let Some(delivery_id) = delivery_id else {
+        return;
+    };
+
+    // Check if the delivery has completed output
+    let output = sqlx::query_as::<_, (Option<String>, Option<String>)>(
+        "SELECT output_r2_url, error_message FROM deliveries WHERE id = $1 AND status = 'completed'",
+    )
+    .bind(delivery_id)
+    .fetch_optional(&state.db_pool)
+    .await;
+
+    let (output_url, error_msg) = match output {
+        Ok(Some(r)) => r,
+        _ => return, // Not yet complete
+    };
+
+    if let Some(ref err) = error_msg {
+        mark_post_failed(state, post.id, err).await;
+        return;
+    }
+
+    let Some(url) = output_url else {
+        return;
+    };
+
+    // Store the media URL on the post
+    let _ = sqlx::query(
+        "UPDATE campaign_posts SET media_r2_url = $1 WHERE id = $2",
+    )
+    .bind(&url)
+    .bind(post.id)
+    .execute(&state.db_pool)
+    .await;
+
+    // Schedule via Zernio if configured
+    if let Some(ref profile_id) = campaign.zernio_profile_id {
+        schedule_via_zernio(state, profile_id, post, &url, &campaign.platforms).await;
+    }
+
+    let new_status = if campaign.zernio_profile_id.is_some() {
+        "scheduled"
+    } else {
+        "published"
+    };
+
+    let _ = sqlx::query(
+        "UPDATE campaign_posts SET status = $1, published_at = NOW() WHERE id = $2",
+    )
+    .bind(new_status)
+    .bind(post.id)
+    .execute(&state.db_pool)
+    .await;
+
+    tracing::info!(
+        "campaign post {} → {} (delivery={}, url={})",
+        post.id, new_status, delivery_id, url
+    );
+}
+
+// ── Schedule via Zernio ────────────────────────────────────────────────────
+
+async fn schedule_via_zernio(
+    state: &Arc<AppState>,
+    profile_id: &str,
+    post: &PostRow,
+    media_url: &str,
+    platforms_json: &serde_json::Value,
+) {
+    let Some(zernio) = state.zernio_client.clone() else {
+        return;
+    };
+
+    let targets: Vec<PlatformTarget> = match platforms_json {
+        serde_json::Value::Array(arr) => arr
+            .iter()
+            .filter_map(|v| {
+                let obj = v.as_object()?;
+                Some(PlatformTarget {
+                    platform: obj.get("platform")?.as_str()?.to_string(),
+                    accountId: obj.get("account_id")?.as_str()?.to_string(),
+                })
+            })
+            .collect(),
+        _ => return,
+    };
+
+    if targets.is_empty() {
+        return;
+    }
+
+    let text = format!("Daily content — Day {}", post.day_number);
+    let scheduled_for = post.scheduled_at.format("%Y-%m-%dT%H:%M:%SZ").to_string();
+
+    let req = zernio_client::CreatePostRequest {
+        content: Some(text),
+        text: None,
+        platforms: targets,
+        profileId: Some(profile_id.to_string()),
+        mediaUrls: Some(vec![media_url.to_string()]),
+        scheduledFor: Some(scheduled_for),
+        publishNow: false,
+    };
+
+    match zernio.create_post(&req).await {
+        Ok(resp) => {
+            let _ = sqlx::query(
+                "UPDATE campaign_posts SET zernio_post_id = $1 WHERE id = $2",
+            )
+            .bind(&resp.post.id)
+            .bind(post.id)
+            .execute(&state.db_pool)
+            .await;
+            tracing::info!(
+                "campaign post {} scheduled via Zernio (post_id={}, at={})",
+                post.id, resp.post.id, scheduled_for
+            );
+        }
+        Err(e) => {
+            tracing::warn!("campaign post {} Zernio schedule failed: {e}", post.id);
+        }
+    }
+}
+
+// ── Update campaign counters ───────────────────────────────────────────────
+
+async fn update_campaign_counts(state: &Arc<AppState>, campaign_id: Uuid) {
+    let counts = sqlx::query_as::<_, (i64, i64)>(
+        "SELECT COUNT(*), \
+                COALESCE(SUM(CASE WHEN status IN ('scheduled','published') THEN 1 ELSE 0 END), 0) \
+         FROM campaign_posts WHERE campaign_id = $1",
+    )
+    .bind(campaign_id)
+    .fetch_one(&state.db_pool)
+    .await;
+
+    if let Ok((total, published)) = counts {
+        let _ = sqlx::query(
+            "UPDATE campaigns SET total_posts_planned = $1, total_posts_published = $2, \
+             updated_at = NOW() WHERE id = $3",
+        )
+        .bind(total as i32)
+        .bind(published as i32)
+        .bind(campaign_id)
+        .execute(&state.db_pool)
+        .await;
+    }
+}
+
+// ── Helpers ─────────────────────────────────────────────────────────────────
+
+async fn mark_post_failed(state: &Arc<AppState>, post_id: Uuid, error: &str) {
+    let _ = sqlx::query(
+        "UPDATE campaign_posts SET status = 'failed', error_message = $1 WHERE id = $2",
+    )
+    .bind(error)
+    .bind(post_id)
+    .execute(&state.db_pool)
+    .await;
+    tracing::warn!("campaign post {post_id} failed: {error}");
+}

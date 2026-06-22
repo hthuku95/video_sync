@@ -779,6 +779,7 @@ async fn main() {
         .merge(handlers::paypal::paypal_routes()) // 💳 PayPal/card checkout for service packs
         .merge(handlers::crypto_payments::crypto_routes()) // 💳 USDC on Base checkout for service packs
         .merge(handlers::social_publish::social_routes()) // 📱 Multi-platform social publishing via Zernio
+        .merge(handlers::campaigns::campaign_routes()) // 📅 Content campaign engine
         .merge(handlers::auth::clipper_invite_routes()) // 🎫 Clipper invites
         .merge(admin_only_routes) // Admin-only routes like API docs
         .route("/api/status", axum::routing::get(api_status))
@@ -896,6 +897,20 @@ async fn main() {
             loop {
                 interval.tick().await;
                 handlers::prospects::dispatch_queued_pb_jobs(&disp_state).await;
+            }
+        });
+    }
+
+    // ── Campaign engine — generates + schedules daily content ────────────────
+    {
+        let camp_state = shared_state.clone();
+        tokio::spawn(async move {
+            tracing::info!("📅 Campaign engine started (10-min interval)");
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(600));
+            interval.tick().await; // skip first immediate tick
+            loop {
+                interval.tick().await;
+                crate::services::campaign_engine::process_campaigns(&camp_state).await;
             }
         });
     }
