@@ -485,7 +485,7 @@ async fn list_campaign_files(
     .fetch_all(&state.db_pool)
     .await;
 
-    let files = match rows {
+    let files: Vec<serde_json::Value> = match rows {
         Ok(rows) => rows.into_iter().map(|(fid, name, url, ftype, at)| {
             json!({"id": fid.to_string(), "file_name": name, "r2_url": url, "file_type": ftype, "uploaded_at": at.to_rfc3339()})
         }).collect(),
