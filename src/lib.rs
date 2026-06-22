@@ -48,6 +48,7 @@ pub mod voyage_embeddings;
 pub mod x402;
 pub mod youtube_analytics_client;
 pub mod youtube_client;
+pub mod zernio_client;
 
 // Video processing modules
 pub mod advanced;
@@ -108,4 +109,5 @@ pub struct AppState {
     pub active_agent_channels:
         std::sync::Arc<tokio::sync::RwLock<std::collections::HashMap<String, tokio::sync::mpsc::UnboundedSender<String>>>>,
     pub kick_client: Option<kick_client::KickClient>,
+    pub zernio_client: Option<zernio_client::ZernioClient>,
 }

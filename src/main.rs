@@ -50,6 +50,7 @@ mod voyage_embeddings;
 mod x402; // 💰 x402 HTTP-402 payment protocol (USDC on Base)
 mod youtube_analytics_client; // 📊 YouTube Analytics API for metrics and insights
 mod youtube_client; // 📺 YouTube Data API v3 for video uploads // 💼 Monetizable portfolio sample targets + prompts
+mod zernio_client; // 📱 Zernio — multi-platform social media publishing API
 
 // Video processing modules (from lib.rs)
 mod advanced;
@@ -100,6 +101,7 @@ pub struct AppState {
     pub phantombuster_client: Option<phantombuster_client::PhantomBusterClient>, // 🎯 LinkedIn scraping
     pub active_agent_channels: Arc<tokio::sync::RwLock<HashMap<String, UnboundedSender<String>>>>, // Interactive agent channels
     pub kick_client: Option<kick_client::KickClient>, // 📺 Kick.com API client
+    pub zernio_client: Option<zernio_client::ZernioClient>, // 📱 Multi-platform social publishing
 }
 
 /// Validate Apify API token on startup
@@ -733,6 +735,16 @@ async fn main() {
                 None
             }
         },
+        zernio_client: {
+            let api_key = std::env::var("ZERNIO_API_KEY").unwrap_or_default();
+            if !api_key.is_empty() {
+                tracing::info!("📱 Zernio social publishing client initialized");
+                Some(zernio_client::ZernioClient::new(api_key))
+            } else {
+                tracing::warn!("Zernio client not configured (missing ZERNIO_API_KEY)");
+                None
+            }
+        },
     });
 
     // Admin-only routes
@@ -766,6 +778,7 @@ async fn main() {
         .merge(handlers::subscribe::subscribe_routes()) // 💳 Regular-user $15/mo paywall
         .merge(handlers::paypal::paypal_routes()) // 💳 PayPal/card checkout for service packs
         .merge(handlers::crypto_payments::crypto_routes()) // 💳 USDC on Base checkout for service packs
+        .merge(handlers::social_publish::social_routes()) // 📱 Multi-platform social publishing via Zernio
         .merge(handlers::auth::clipper_invite_routes()) // 🎫 Clipper invites
         .merge(admin_only_routes) // Admin-only routes like API docs
         .route("/api/status", axum::routing::get(api_status))
