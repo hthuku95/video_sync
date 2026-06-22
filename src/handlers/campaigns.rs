@@ -1,14 +1,15 @@
 use crate::AppState;
 use axum::{
-    extract::{Extension, Path},
+    extract::{multipart::Multipart, DefaultBodyLimit, Extension, Path},
     http::StatusCode,
-    routing::{get, post},
+    routing::{delete, get, post},
     Json, Router,
 };
 use serde::Deserialize;
 use serde_json::json;
 use sqlx::Row;
 use std::sync::Arc;
+use tokio::fs;
 use uuid::Uuid;
 
 /// Client-facing campaign routes (with auth middleware).
@@ -27,6 +28,9 @@ pub fn admin_campaign_routes() -> Router {
         .route("/api/admin/campaigns/:id/pause", post(admin_pause_campaign))
         .route("/api/admin/campaigns/:id/resume", post(admin_resume_campaign))
         .route("/api/admin/campaigns/:id/cancel", post(admin_cancel_campaign))
+        .route("/api/admin/campaigns/:id/files", get(list_campaign_files).post(upload_campaign_file))
+        .route("/api/admin/campaigns/:id/files/:file_id", delete(delete_campaign_file))
+        .layer(DefaultBodyLimit::max(100 * 1024 * 1024))
         .layer(axum::middleware::from_fn(crate::middleware::admin::admin_middleware))
         .layer(axum::middleware::from_fn(crate::middleware::auth::auth_middleware))
 }
@@ -189,6 +193,19 @@ async fn admin_get_campaign(
         })
     }).collect();
 
+    // Fetch reference files
+    let files = sqlx::query_as::<_, (Uuid, String, String, String, chrono::DateTime<chrono::Utc>)>(
+        "SELECT id, file_name, r2_url, file_type, uploaded_at FROM campaign_files WHERE campaign_id = $1 ORDER BY uploaded_at",
+    )
+    .bind(id)
+    .fetch_all(&state.db_pool)
+    .await
+    .unwrap_or_default();
+
+    let files_json: Vec<serde_json::Value> = files.into_iter().map(|(fid, fname, url, ftype, at)| {
+        json!({"id": fid.to_string(), "file_name": fname, "r2_url": url, "file_type": ftype, "uploaded_at": at.to_rfc3339()})
+    }).collect();
+
     Json(json!({
         "success": true,
         "campaign": {
@@ -207,6 +224,7 @@ async fn admin_get_campaign(
             "status": status,
             "total_posts_planned": total_planned,
             "total_posts_published": total_published,
+            "files": files_json,
         },
         "posts": posts_json,
     }))
@@ -368,4 +386,155 @@ async fn client_get_campaign(
         },
         "posts": posts_json,
     }))
+}
+
+// ── Campaign Files: Upload, List, Delete ─────────────────────────────────────
+
+async fn upload_campaign_file(
+    Extension(state): Extension<Arc<AppState>>,
+    Path(id): Path<Uuid>,
+    mut multipart: Multipart,
+) -> Json<serde_json::Value> {
+    let mut uploaded = Vec::new();
+
+    loop {
+        let field = match multipart.next_field().await {
+            Ok(Some(f)) => f,
+            Ok(None) => break,
+            Err(e) => {
+                tracing::warn!("Multipart error: {e}");
+                break;
+            }
+        };
+        let filename = field.file_name().unwrap_or("file").to_string();
+        let data = match field.bytes().await {
+            Ok(d) => d,
+            Err(_) => continue,
+        };
+        if data.is_empty() { continue; }
+
+        let ext = std::path::Path::new(&filename)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("bin");
+        let file_type = match ext {
+            "png"|"jpg"|"jpeg"|"gif"|"webp" => "image",
+            "mp4"|"mov"|"avi"|"webm" => "video",
+            "pdf"|"doc"|"docx"|"txt" => "document",
+            _ => "document",
+        };
+
+        let tmp = format!("/tmp/campaign_{id}_{}", Uuid::new_v4());
+        if fs::write(&tmp, &data).await.is_err() { continue; }
+
+        let r2_key = format!("campaigns/{id}/{}", Uuid::new_v4());
+        let r2_url = match &state.r2_client {
+            Some(r2) => {
+                match r2.upload_file(&tmp, &r2_key).await {
+                    Ok(url) => url,
+                    Err(e) => {
+                        tracing::error!("R2 upload failed for campaign file: {e}");
+                        let _ = fs::remove_file(&tmp).await;
+                        continue;
+                    }
+                }
+            }
+            None => {
+                let _ = fs::remove_file(&tmp).await;
+                return Json(json!({"success": false, "error": "R2 not configured"}));
+            }
+        };
+
+        let _ = fs::remove_file(&tmp).await;
+
+        let file_id = Uuid::new_v4();
+        if let Err(e) = sqlx::query(
+            "INSERT INTO campaign_files (id, campaign_id, file_name, r2_url, file_type) VALUES ($1, $2, $3, $4, $5)"
+        )
+        .bind(file_id)
+        .bind(id)
+        .bind(&filename)
+        .bind(&r2_url)
+        .bind(file_type)
+        .execute(&state.db_pool)
+        .await
+        {
+            tracing::error!("Failed to insert campaign_file: {e}");
+            continue;
+        }
+
+        uploaded.push(json!({
+            "id": file_id.to_string(),
+            "file_name": filename,
+            "r2_url": r2_url,
+            "file_type": file_type,
+        }));
+    }
+
+    Json(json!({"success": true, "files": uploaded}))
+}
+
+async fn list_campaign_files(
+    Extension(state): Extension<Arc<AppState>>,
+    Path(id): Path<Uuid>,
+) -> Json<serde_json::Value> {
+    let rows = sqlx::query_as::<_, (Uuid, String, String, String, chrono::DateTime<chrono::Utc>)>(
+        "SELECT id, file_name, r2_url, file_type, uploaded_at FROM campaign_files WHERE campaign_id = $1 ORDER BY uploaded_at",
+    )
+    .bind(id)
+    .fetch_all(&state.db_pool)
+    .await;
+
+    let files = match rows {
+        Ok(rows) => rows.into_iter().map(|(fid, name, url, ftype, at)| {
+            json!({"id": fid.to_string(), "file_name": name, "r2_url": url, "file_type": ftype, "uploaded_at": at.to_rfc3339()})
+        }).collect(),
+        Err(e) => return Json(json!({"success": false, "error": e.to_string()})),
+    };
+
+    Json(json!({"success": true, "files": files}))
+}
+
+async fn delete_campaign_file(
+    Extension(state): Extension<Arc<AppState>>,
+    Path((id, file_id)): Path<(Uuid, Uuid)>,
+) -> Json<serde_json::Value> {
+    // Get the R2 key from the URL
+    let row = sqlx::query("SELECT r2_url FROM campaign_files WHERE id = $1 AND campaign_id = $2")
+        .bind(file_id)
+        .bind(id)
+        .fetch_optional(&state.db_pool)
+        .await;
+
+    match row {
+        Ok(Some(r)) => {
+            let r2_url: String = r.get("r2_url");
+            // Delete from R2
+            if let Some(r2) = &state.r2_client {
+                // Extract key from presigned URL — it's the part after the bucket endpoint
+                if let Some(key) = extract_r2_key_from_url(&r2_url) {
+                    let _ = r2.delete(&key).await;
+                }
+            }
+            // Delete from DB
+            if let Err(e) = sqlx::query("DELETE FROM campaign_files WHERE id = $1")
+                .bind(file_id)
+                .execute(&state.db_pool)
+                .await
+            {
+                return Json(json!({"success": false, "error": e.to_string()}));
+            }
+            Json(json!({"success": true}))
+        }
+        Ok(None) => Json(json!({"success": false, "error": "File not found"})),
+        Err(e) => Json(json!({"success": false, "error": e.to_string()})),
+    }
+}
+
+fn extract_r2_key_from_url(url: &str) -> Option<String> {
+    // Presigned URL format: https://<bucket>.<account_id>.r2.cloudflarestorage.com/<key>?...
+    // Try to extract the key portion
+    let after_bucket = url.split(".r2.cloudflarestorage.com/").nth(1)?;
+    let key = after_bucket.split('?').next()?;
+    Some(urlencoding::decode(key).ok()?.into_owned())
 }

@@ -258,7 +258,7 @@ async fn process_pending_post(state: &Arc<AppState>, campaign: &CampaignRow, pos
         source_table: Some("deliveries".to_string()),
         source_record_id: Some(delivery_id),
         idempotency_key: None,
-        reference_images: vec![],
+        reference_images: get_campaign_file_urls(state, campaign.id).await,
     };
 
     match AgenticServicePipeline::start(state.clone(), service_type, input).await {
@@ -274,6 +274,16 @@ async fn process_pending_post(state: &Arc<AppState>, campaign: &CampaignRow, pos
             mark_post_failed(state, post.id, &format!("Failed to start rendering: {e}")).await;
         }
     }
+}
+
+// ── Get campaign file reference images ─────────────────────────────────────
+
+async fn get_campaign_file_urls(state: &Arc<AppState>, campaign_id: Uuid) -> Vec<String> {
+    sqlx::query_scalar::<_, String>("SELECT r2_url FROM campaign_files WHERE campaign_id = $1 ORDER BY uploaded_at")
+        .bind(campaign_id)
+        .fetch_all(&state.db_pool)
+        .await
+        .unwrap_or_default()
 }
 
 // ── Generate variation ──────────────────────────────────────────────────────
