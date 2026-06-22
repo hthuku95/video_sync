@@ -1466,13 +1466,14 @@ Description: {description}
 Prospect type (already tagged by us): {prospect_type}
 
 The studio offers these services — pick the ONE that fits best:
-- **clipping**       — turn long-form videos, podcasts, or streams into short-form clips with captions and thumbnails. Best fit: podcasters, long-form YouTubers, Twitch streamers. $297-$899/mo.
-- **education**      — AI-driven Blender animations: explainer scenes, data visualizations, title cards, lower thirds, motion graphics. Best fit: educators, finance/crypto creators, technical YouTubers. $75-$400 per asset.
-- **thumbnails**     — click-optimised YouTube thumbnails with branded title treatments. Best fit: growing channels and creators. $25-$75 per thumbnail.
-- **ugc**            — vertical-first product-demo videos and ad-ready promo assets for ecommerce and SaaS. Best fit: Shopify operators, SaaS founders, marketers testing paid acquisition. $200-$900 per video.
-- **product_mockup** — rendered 3D product visuals, device mockups, and motion-enhanced launch assets. Best fit: ecommerce, hardware, app launches. $100-$600 per asset.
-- **landing_page**   — homepage hero videos, narrated product demos, launch cutdowns from your website or app. Best fit: indie founders, SaaS teams, launch marketers. $299-$1,500+.
-- **full_stack**     — private production backend: demos, thumbnails, motion graphics, mockups under your brand. Best fit: boutique agencies, creator managers, operators. $1,000-$3,000/mo.
+- **clipping**             — turn long-form videos, podcasts, or streams into short-form clips with captions and thumbnails. Best fit: podcasters, long-form YouTubers, Twitch streamers. $297-$899/mo.
+- **education**            — AI-driven Blender animations: explainer scenes, data visualizations, title cards, lower thirds, motion graphics. Best fit: educators, finance/crypto creators, technical YouTubers. $75-$400 per asset.
+- **thumbnails**           — click-optimised YouTube thumbnails with branded title treatments. Best fit: growing channels and creators. $25-$75 per thumbnail.
+- **ugc**                  — vertical-first product-demo videos and ad-ready promo assets for ecommerce and SaaS. Best fit: Shopify operators, SaaS founders, marketers testing paid acquisition. $200-$900 per video.
+- **product_mockup**       — rendered 3D product visuals, device mockups, and motion-enhanced launch assets. Best fit: ecommerce, hardware, app launches. $100-$600 per asset.
+- **landing_page**         — homepage hero videos, narrated product demos, launch cutdowns from your website or app. Best fit: indie founders, SaaS teams, launch marketers. $299-$1,500+.
+- **full_stack**           — private production backend: demos, thumbnails, motion graphics, mockups under your brand. Best fit: boutique agencies, creator managers, operators. $1,000-$3,000/mo.
+- **kick_auto_clipper**    — automated Kick clip generation from VODs: branding, lower thirds, outro, watermark, with daily auto-posting. Best fit: clipping channels, Kick highlight reposters, stream compilations. $297-$899/mo.
 
 Prospect-type guidance:
 - If `prospect_type` is `clipper`, favor people or teams already selling clip editing, short-form growth, or creator post-production. Score higher if they would clearly benefit from tooling, faster fulfillment, or premium add-on renders.
@@ -1499,7 +1500,7 @@ Return ONLY valid JSON (no markdown):
   "dm_clipper": "<alt DM treating them as a clipper looking for tooling — 2-3 sentences>"
 }}
 
-`service` MUST be one of: clipping, education, thumbnails, ugc, product_mockup, landing_page, full_stack. No other values are valid."#,
+`service` MUST be one of: clipping, education, thumbnails, ugc, product_mockup, landing_page, full_stack, kick_auto_clipper. No other values are valid."#,
         name = name,
         audience = audience_size,
         category_word = if audience_size > 0 {
@@ -1660,6 +1661,8 @@ fn default_service_for_prospect(category: &str, prospect_type: &str) -> String {
         || combined.contains("founder")
     {
         "landing_page".to_string()
+    } else if combined.contains("clip") || combined.contains("highlight") || combined.contains("best.of") || combined.contains("kick") {
+        "kick_auto_clipper".to_string()
     } else if combined.contains("podcast")
         || combined.contains("stream")
         || combined.contains("creator")
@@ -1676,6 +1679,7 @@ fn normalize_revenue_service(service: &str) -> &str {
         "fullstack" | "agency" | "agency_fulfillment" | "creator_manager_fulfillment" | "agency_bundle" => "full_stack",
         "3d" | "blender" | "scene" | "three_d_scene" => "product_mockup",
         "voice" | "audio" | "narration" | "voice_audio" => "ugc",
+        "kick_auto_clipper" | "kick_clipper" | "auto_clipper" => "kick_auto_clipper",
         other => other,
     }
 }
@@ -1690,6 +1694,7 @@ fn is_valid_revenue_service(service: &str) -> bool {
             | "education"
             | "ugc"
             | "full_stack"
+            | "kick_auto_clipper"
     )
 }
 
@@ -1702,6 +1707,7 @@ fn service_offer_line(service: &str) -> &'static str {
         "product_mockup" => "a 3D device mockup or product reveal with motion",
         "landing_page" => "a 30-90s homepage hero or narrated product demo video from your site",
         "full_stack" => "a private production backend with all lanes under your brand",
+        "kick_auto_clipper" => "auto-generated Kick clips from VODs with branding and captions",
         _ => "a product video or motion asset from your website or app",
     }
 }
@@ -1715,6 +1721,7 @@ fn service_price_line(service: &str) -> &'static str {
         "product_mockup" => "$100-$600 per asset",
         "landing_page" => "$299-$1,500+",
         "full_stack" => "$1,000-$3,000/mo",
+        "kick_auto_clipper" => "$297-$899/mo",
         _ => "$99 starter",
     }
 }
@@ -1728,6 +1735,7 @@ fn service_target_duration_seconds(service: &str) -> f64 {
         "three_d_scene" => 60.0,
         "clipping" => 60.0,
         "agency_bundle" | "full_stack" => 90.0,
+        "kick_auto_clipper" => 60.0,
         _ => 60.0,
     }
 }
@@ -1743,6 +1751,7 @@ fn service_long_form_style(service: &str) -> &'static str {
         "ugc" => "vertical ad creative sample, direct-response hooks, product benefits, creator-ad pacing",
         "agency_bundle" => "white-label agency production sample pack, mixed deliverables, client-ready proof of capability",
         "full_stack" => "full-stack AI production backend showcase, mixed video, thumbnail, voice, mockup, and delivery outputs",
+        "kick_auto_clipper" => "automated Kick clip generation from VODs, branded lower thirds, outro, and watermark, TikTok/Shorts native",
         _ => "premium SaaS launch video, clean product motion, polished founder-outreach sample",
     }
 }
@@ -1758,6 +1767,7 @@ fn service_long_form_offer_type(service: &str) -> String {
         "ugc" => "ugc_ad_pack".to_string(),
         "agency_bundle" => "agency_bundle_pack".to_string(),
         "full_stack" => "full_stack_production_pack".to_string(),
+        "kick_auto_clipper" => "kick_auto_clipper_pack".to_string(),
         _ => "saas_demo_pack".to_string(),
     }
 }
@@ -1772,6 +1782,7 @@ fn service_page_for_revenue_service(service: &str) -> &'static str {
         "voice_audio" => "/services/voice-audio-pack",
         "ugc" => "/services/product-mockup-pack",
         "agency_bundle" | "full_stack" => "/services/mixed-agency-bundle",
+        "kick_auto_clipper" => "/services/kick-auto-clipper",
         _ => "/services/saas-launch-pack",
     }
 }
@@ -1789,6 +1800,7 @@ fn should_use_long_form_for_revenue_sample(service: &str, has_reference_url: boo
             | "ugc"
             | "agency_bundle"
             | "full_stack"
+            | "kick_auto_clipper"
     ) && (has_reference_url
         || matches!(
             normalize_revenue_service(service),
@@ -6407,14 +6419,14 @@ pub fn unlock_price_for(service: Option<&str>, has_website: bool) -> f64 {
             Some("product_mockup") => 197.00,
             Some("ugc") => 197.00,
             Some("education") => 197.00,
-            Some("clipping") => 147.00,
+            Some("clipping") | Some("kick_auto_clipper") => 147.00,
             _ => 197.00,
         }
     } else {
         match service {
             Some("landing_page") => 97.00,
             Some("product_mockup") | Some("education") => 97.00,
-            Some("clipping") | Some("ugc") | Some("full_stack") => 49.00,
+            Some("clipping") | Some("ugc") | Some("full_stack") | Some("kick_auto_clipper") => 49.00,
             Some("thumbnails") => 19.00,
             _ => 29.00,
         }
