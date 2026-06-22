@@ -54,7 +54,7 @@ async fn admin_list_campaigns(
     Extension(state): Extension<Arc<AppState>>,
 ) -> Json<serde_json::Value> {
     let rows = sqlx::query_as::<_, (
-        Uuid, i32, String, String, String, String, f64, serde_json::Value, serde_json::Value, i32,
+        Uuid, i32, String, String, String, String, String, f64, serde_json::Value, serde_json::Value, i32,
         chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>, Option<String>, String, i32, i32,
         chrono::DateTime<chrono::Utc>,
     )>(
