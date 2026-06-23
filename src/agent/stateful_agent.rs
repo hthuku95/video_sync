@@ -1001,23 +1001,11 @@ You MUST only call tools that are explicitly listed in the `tools` array of this
 
                                     if function_name == "submit_final_answer"
                                         || function_name == "generate_image"
-                                        || function_name == "text_to_image"
-                                        || function_name == "auto_generate_video"
-                                        || function_name == "edit_image"
                                         || function_name == "blender_generate_scene_type"
                                         || function_name == "manim_execute_script"
                                         || function_name == "create_thumbnail"
                                         || function_name == "create_thumbnail_hd"
-                                        || function_name == "generate_text_to_speech"
-                                        || function_name == "generate_sound_effect"
-                                        || function_name == "generate_music"
-                                        || function_name == "add_voiceover_to_video"
-                                        || function_name == "generate_long_form_video"
                                         || function_name == "merge_videos"
-                                        || function_name == "convert_format"
-                                        || function_name == "extract_frames"
-                                        || function_name == "pexels_download_video"
-                                        || function_name == "pexels_download_photo"
                                     {
                                         last_tool_result_with_output =
                                             Some(tool_result.clone());

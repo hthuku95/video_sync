@@ -515,11 +515,8 @@ IMPORTANT: You do NOT use AI to generate videos. Instead, you fetch stock media 
         };
 
         const RENDERING_TOOLS: &[&str] = &[
-            "blender_generate_scene_type", "manim_execute_script", "merge_videos", "trim_video", "add_text_overlay",
-            "add_voiceover_to_video", "add_audio", "generate_image", "generate_text_to_speech",
-            "generate_music", "generate_sound_effect", "apply_filter", "crop_video",
-            "resize_video", "concat_videos", "add_transition", "add_captions",
-            "create_blank_video", "create_thumbnail", "add_subtitles",
+            "blender_generate_scene_type", "manim_execute_script", "merge_videos",
+            "generate_image", "create_thumbnail",
         ];
 
         let mut messages: Vec<serde_json::Value> = vec![serde_json::json!({
@@ -885,11 +882,8 @@ IMPORTANT: You do NOT use AI to generate videos. Instead, you fetch stock media 
         }];
 
         const GEMINI_RENDERING_TOOLS: &[&str] = &[
-            "blender_generate_scene_type", "manim_execute_script", "merge_videos", "trim_video", "add_text_overlay",
-            "add_voiceover_to_video", "add_audio", "generate_image", "generate_text_to_speech",
-            "generate_music", "generate_sound_effect", "apply_filter", "crop_video",
-            "resize_video", "concat_videos", "add_transition", "add_captions",
-            "create_blank_video", "create_thumbnail", "add_subtitles",
+            "blender_generate_scene_type", "manim_execute_script", "merge_videos",
+            "generate_image", "create_thumbnail",
         ];
 
         let mut iterations = 0;

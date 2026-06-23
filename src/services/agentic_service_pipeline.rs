@@ -672,10 +672,10 @@ Title: {title}
 Brief: {brief}
 Style: {style}
 
-## WHAT TO DO
+## WHAT TO DO (strict order)
 1. Understand the product from the brief
 2. Plan your creative approach — direct-response hook, benefit showcase, CTA
-3. Produce the video using the available tools (Blender for 3D scenes, Manim for diagrams, etc.)
+3. **REQUIRED: Generate visual content FIRST** — call blender_generate_scene_type() or manim_execute_script() before anything else. Do NOT skip this step.
 4. Add voiceover or text-to-speech to narrate the demo
 5. Review your output — check quality, fix issues, iterate
 6. Use submit_final_answer when the output meets your standards
