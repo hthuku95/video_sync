@@ -278,7 +278,9 @@ async fn login(
 
     // Find user by email
     let user_row = sqlx::query(
-        "SELECT id, email, username, password_hash, google_id, is_active, is_superuser, is_staff, is_clipper, created_at, updated_at
+        "SELECT id, email, username, password_hash, google_id, is_active, is_superuser, is_staff, is_clipper, created_at, updated_at,
+                subscription_status, trial_ends_at, subscription_active_until, subscription_tier,
+                last_payment_at, is_dfy_customer
          FROM users WHERE email = $1 AND is_active = true"
     )
     .bind(&payload.email)
