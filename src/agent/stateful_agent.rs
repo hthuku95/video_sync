@@ -955,6 +955,7 @@ You MUST only call tools that are explicitly listed in the `tools` array of this
 
             // 3. Try Ollama (self-hosted, free)
             let ollama_client = self.ollama_client.as_ref()
+                .map(|arc| arc.as_ref())
                 .or_else(|| app_state.ollama_client.as_ref());
             let response = match ollama_client {
                 Some(ollama) => {
