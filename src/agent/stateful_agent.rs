@@ -523,11 +523,33 @@ You MUST only call tools that are explicitly listed in the `tools` array of this
 /// Gemini version of stateful agent
 pub struct StatefulGeminiAgent {
     client: Arc<crate::gemini_client::GeminiClient>,
+    bedrock_client: Option<Arc<crate::bedrock_client::BedrockClient>>,
+    nvidia_nim_client: Option<Arc<crate::nvidia_nim_client::NvidiaNimClient>>,
+    ollama_client: Option<Arc<crate::ollama_client::OllamaClient>>,
 }
 
 impl StatefulGeminiAgent {
     pub fn new(client: Arc<crate::gemini_client::GeminiClient>) -> Self {
-        Self { client }
+        Self {
+            client,
+            bedrock_client: None,
+            nvidia_nim_client: None,
+            ollama_client: None,
+        }
+    }
+
+    pub fn new_with_nvidia(
+        client: Arc<crate::gemini_client::GeminiClient>,
+        bedrock_client: Option<Arc<crate::bedrock_client::BedrockClient>>,
+        nvidia_nim_client: Option<Arc<crate::nvidia_nim_client::NvidiaNimClient>>,
+        ollama_client: Option<Arc<crate::ollama_client::OllamaClient>>,
+    ) -> Self {
+        Self {
+            client,
+            bedrock_client,
+            nvidia_nim_client,
+            ollama_client,
+        }
     }
 
     pub async fn chat(
@@ -816,27 +838,127 @@ You MUST only call tools that are explicitly listed in the `tools` array of this
                 system_instruction: Some(system_instruction_content.clone()),
             };
 
-            // Try Ollama first (self-hosted, free), then Gemini, then DeepSeek
-            let response = match app_state.ollama_client.as_ref() {
-                Some(ollama) => {
-                    // Build OpenAI-format messages from conversation history
-                    let mut oa_messages: Vec<serde_json::Value> = vec![
-                        serde_json::json!({"role": "system", "content": system_instruction})
-                    ];
-                    for msg in &conversation_history {
-                        let role = match msg.role {
-                            crate::agent::conversation_manager::MessageRole::Human => "user",
-                            crate::agent::conversation_manager::MessageRole::Assistant => "assistant",
-                            _ => continue,
-                        };
-                        oa_messages.push(serde_json::json!({"role": role, "content": msg.content}));
-                    }
-                    let current_msg = if !context.is_empty() {
-                        context.to_string()
-                    } else {
-                        user_input.to_string()
+            // ── Provider Fallback Chain ──
+            // Order: NVIDIA NIM (fastest, GPU) → AWS Bedrock → Ollama (self-hosted) → Gemini → DeepSeek
+
+            // Helper to build OpenAI-format messages for OpenAI-compatible APIs (NVIDIA, Ollama, DeepSeek)
+            let build_messages = |sys_inst: &str| -> Vec<serde_json::Value> {
+                let mut msgs: Vec<serde_json::Value> = vec![
+                    serde_json::json!({"role": "system", "content": sys_inst})
+                ];
+                for msg in &conversation_history {
+                    let role = match msg.role {
+                        crate::agent::conversation_manager::MessageRole::Human => "user",
+                        crate::agent::conversation_manager::MessageRole::Assistant => "assistant",
+                        _ => continue,
                     };
-                    oa_messages.push(serde_json::json!({"role": "user", "content": current_msg}));
+                    msgs.push(serde_json::json!({"role": role, "content": msg.content}));
+                }
+                let current_msg = if !context.is_empty() {
+                    context.to_string()
+                } else {
+                    user_input.to_string()
+                };
+                msgs.push(serde_json::json!({"role": "user", "content": current_msg}));
+                msgs
+            };
+
+            // 1. Try NVIDIA NIM (GPU, fastest path)
+            if let Some(ref nim) = self.nvidia_nim_client {
+                let mut nim_messages = build_messages(system_instruction);
+                let exec_context = crate::agent::tool_executor::ToolExecutionContext {
+                    session_id: session_id.to_string(),
+                    user_id,
+                    app_state: app_state.clone(),
+                    workflow_id,
+                };
+                match run_nvidia_tool_loop(
+                    nim,
+                    &mut nim_messages,
+                    &all_tools,
+                    &exec_context,
+                    &send_progress,
+                )
+                .await
+                {
+                    Ok(response) => {
+                        let clean = response.trim().to_string();
+                        let msg = ConversationMessage::new_assistant(
+                            session_id.to_string(),
+                            clean.clone(),
+                        );
+                        let _ = conversation_manager.save_message(&msg).await;
+                        tracing::info!("✅ NVIDIA NIM completed task for session {}", session_id);
+                        return Ok(clean);
+                    }
+                    Err(nim_err) => {
+                        tracing::warn!("⚠️ NVIDIA NIM failed, trying Bedrock: {}", nim_err);
+                    }
+                }
+            }
+
+            // 2. Try AWS Bedrock
+            if let Some(ref bedrock) = self.bedrock_client {
+                let mut bd_messages: Vec<aws_sdk_bedrockruntime::types::Message> = Vec::new();
+                for msg in &conversation_history {
+                    let role = match msg.role {
+                        crate::agent::conversation_manager::MessageRole::Human => aws_sdk_bedrockruntime::types::ConversationRole::User,
+                        crate::agent::conversation_manager::MessageRole::Assistant => aws_sdk_bedrockruntime::types::ConversationRole::Assistant,
+                        _ => continue,
+                    };
+                    if let Ok(m) = crate::agent::simple_gemini_agent::build_text_message(role, &msg.content) {
+                        bd_messages.push(m);
+                    }
+                }
+                let current_msg = if !context.is_empty() {
+                    context.to_string()
+                } else {
+                    user_input.to_string()
+                };
+                if let Ok(m) = crate::agent::simple_gemini_agent::build_text_message(
+                    aws_sdk_bedrockruntime::types::ConversationRole::User,
+                    &format!("{}\n\n{}", system_instruction, current_msg),
+                ) {
+                    bd_messages.push(m);
+                }
+
+                let exec_context = crate::agent::tool_executor::ToolExecutionContext {
+                    session_id: session_id.to_string(),
+                    user_id,
+                    app_state: app_state.clone(),
+                    workflow_id,
+                };
+                match run_bedrock_tool_loop(
+                    bedrock,
+                    &mut bd_messages,
+                    &all_tools,
+                    &exec_context,
+                    &send_progress,
+                )
+                .await
+                {
+                    Ok(response) => {
+                        let clean = response.trim().to_string();
+                        let msg = ConversationMessage::new_assistant(
+                            session_id.to_string(),
+                            clean.clone(),
+                        );
+                        let _ = conversation_manager.save_message(&msg).await;
+                        tracing::info!("✅ Bedrock completed task for session {}", session_id);
+                        return Ok(clean);
+                    }
+                    Err(bedrock_err) => {
+                        tracing::warn!("⚠️ Bedrock failed, trying Ollama: {}", bedrock_err);
+                    }
+                }
+            }
+
+            // 3. Try Ollama (self-hosted, free)
+            let ollama_client = self.ollama_client.as_ref()
+                .or_else(|| app_state.ollama_client.as_ref());
+            let response = match ollama_client {
+                Some(ollama) => {
+                    let mut oa_messages = build_messages(system_instruction);
 
                     send_progress("🤖 Processing your request...");
 
@@ -878,27 +1000,13 @@ You MUST only call tools that are explicitly listed in the `tools` array of this
                 None => self.client.generate_content(request).await,
             };
 
+            // 4. Gemini — if all prior providers failed
+            // 5. DeepSeek (last resort) — if Gemini also fails
             let response = match response {
                 Ok(r) => r,
                 Err(gemini_err) => {
                     tracing::warn!("⚠️ Gemini failed, trying DeepSeek fallback: {}", gemini_err);
-                    let mut ds_messages: Vec<serde_json::Value> = vec![
-                        serde_json::json!({"role": "system", "content": system_instruction})
-                    ];
-                    for msg in &conversation_history {
-                        let role = match msg.role {
-                            crate::agent::conversation_manager::MessageRole::Human => "user",
-                            crate::agent::conversation_manager::MessageRole::Assistant => "assistant",
-                            _ => continue,
-                        };
-                        ds_messages.push(serde_json::json!({"role": role, "content": msg.content}));
-                    }
-                    let current_msg = if !context.is_empty() {
-                        context.to_string()
-                    } else {
-                        user_input.to_string()
-                    };
-                    ds_messages.push(serde_json::json!({"role": "user", "content": current_msg}));
+                    let mut ds_messages = build_messages(system_instruction);
 
                     if let Some(ref ds_client) = app_state.deepseek_client {
                         send_progress("🤖 Processing your request...");
@@ -1630,4 +1738,163 @@ where
     }
 
     Err(format!("DeepSeek V4 exceeded max turns ({})", MAX_TURNS))
+}
+
+/// Multi-turn tool loop for NVIDIA NIM (Gemma 4 31B on GPU).
+/// OpenAI-compatible message format. Same contract as run_ollama_tool_loop.
+async fn run_nvidia_tool_loop<F>(
+    nim_client: &crate::nvidia_nim_client::NvidiaNimClient,
+    messages: &mut Vec<serde_json::Value>,
+    tools: &[crate::gemini_client::FunctionDeclaration],
+    exec_context: &crate::agent::tool_executor::ToolExecutionContext,
+    send_progress: &F,
+) -> Result<String, String>
+where
+    F: Fn(&str),
+{
+    const MAX_TURNS: usize = 10;
+
+    for turn in 0..MAX_TURNS {
+        let response = nim_client
+            .generate_single(messages, tools)
+            .await
+            .map_err(|e| format!("NVIDIA NIM API error: {}", e))?;
+
+        match response {
+            crate::nvidia_nim_client::NimResponse::Text(text) => {
+                tracing::info!("✅ NVIDIA NIM final answer after {} turns", turn + 1);
+                return Ok(text);
+            }
+
+            crate::nvidia_nim_client::NimResponse::ToolCalls(tool_calls) => {
+                let assistant_tool_calls: Vec<serde_json::Value> = tool_calls
+                    .iter()
+                    .map(|tc| {
+                        serde_json::json!({
+                            "id": tc.id,
+                            "type": "function",
+                            "function": {
+                                "name": tc.name,
+                                "arguments": tc.arguments.to_string(),
+                            }
+                        })
+                    })
+                    .collect();
+
+                messages.push(serde_json::json!({
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": assistant_tool_calls,
+                }));
+
+                for tc in &tool_calls {
+                    send_progress(&format!("🔧 NVIDIA NIM calling: {}", tc.name));
+                    tracing::info!("🎬 NVIDIA NIM tool call: {}", tc.name);
+
+                    let args_map: std::collections::HashMap<String, serde_json::Value> = tc
+                        .arguments
+                        .as_object()
+                        .map(|o| o.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+                        .unwrap_or_default();
+
+                    let result = crate::agent::tool_executor::execute_tool_gemini_with_context(
+                        &tc.name,
+                        &args_map,
+                        exec_context,
+                    )
+                    .await;
+
+                    send_progress(&format!("✅ {} done", tc.name));
+
+                    messages.push(serde_json::json!({
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": result,
+                    }));
+                }
+            }
+        }
+    }
+
+    Err(format!("NVIDIA NIM exceeded max turns ({})", MAX_TURNS))
+}
+
+/// Multi-turn tool loop for AWS Bedrock (Meta Llama 4 Maverick 17B).
+/// Uses AWS SDK Message types. Same contract as run_ollama_tool_loop.
+async fn run_bedrock_tool_loop<F>(
+    bedrock_client: &crate::bedrock_client::BedrockClient,
+    messages: &mut Vec<aws_sdk_bedrockruntime::types::Message>,
+    tools: &[crate::gemini_client::FunctionDeclaration],
+    exec_context: &crate::agent::tool_executor::ToolExecutionContext,
+    send_progress: &F,
+) -> Result<String, String>
+where
+    F: Fn(&str),
+{
+    const MAX_TURNS: usize = 10;
+
+    for turn in 0..MAX_TURNS {
+        let response = bedrock_client
+            .generate_single("", messages, tools)
+            .await
+            .map_err(|e| format!("Bedrock API error: {}", e))?;
+
+        match response {
+            crate::bedrock_client::BedrockResponse::Text(text) => {
+                tracing::info!("✅ Bedrock final answer after {} turns", turn + 1);
+                return Ok(text);
+            }
+
+            crate::bedrock_client::BedrockResponse::ToolCalls(tool_calls) => {
+                let mut content_blocks = Vec::new();
+                for tc in &tool_calls {
+                    content_blocks.push(
+                        crate::bedrock_client::tool_call_to_content_block(tc),
+                    );
+                }
+                messages.push(
+                    aws_sdk_bedrockruntime::types::Message::builder()
+                        .role(aws_sdk_bedrockruntime::types::ConversationRole::Assistant)
+                        .set_content(Some(content_blocks))
+                        .build()
+                        .map_err(|e| format!("Bedrock build error: {e}"))?,
+                );
+
+                let mut result_blocks = Vec::new();
+                for tc in &tool_calls {
+                    send_progress(&format!("🔧 Bedrock calling: {}", tc.name));
+                    tracing::info!("🎬 Bedrock tool call: {}", tc.name);
+
+                    let args_map: std::collections::HashMap<String, serde_json::Value> = tc
+                        .arguments
+                        .as_object()
+                        .map(|o| o.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+                        .unwrap_or_default();
+
+                    let result = crate::agent::tool_executor::execute_tool_gemini_with_context(
+                        &tc.name,
+                        &args_map,
+                        exec_context,
+                    )
+                    .await;
+
+                    send_progress(&format!("✅ {} done", tc.name));
+
+                    let result_str = serde_json::to_string(&result).unwrap_or_default();
+                    result_blocks.push(
+                        crate::bedrock_client::tool_result_to_content_block(tc, &result_str),
+                    );
+                }
+                messages.push(
+                    aws_sdk_bedrockruntime::types::Message::builder()
+                        .role(aws_sdk_bedrockruntime::types::ConversationRole::User)
+                        .set_content(Some(result_blocks))
+                        .build()
+                        .map_err(|e| format!("Bedrock build error: {e}"))?,
+                );
+            }
+        }
+    }
+
+    Err(format!("Bedrock exceeded max turns ({})", MAX_TURNS))
 }

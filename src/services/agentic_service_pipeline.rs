@@ -1,5 +1,3 @@
-use crate::agent::simple_gemini_agent::SimpleGeminiAgent;
-use crate::agent::tool_executor::{execute_tool_gemini_with_context, ToolExecutionContext};
 use crate::render_review::{review_render, ReviewResult};
 use crate::services::workflow_runtime::{NewWorkflow, WorkflowRuntime, WorkflowStatus};
 use crate::AppState;
@@ -216,41 +214,24 @@ impl AgenticServicePipeline {
                 )
                 .await;
 
-            let agent = SimpleGeminiAgent::new_with_nvidia(
+            let agent = crate::agent::stateful_agent::StatefulGeminiAgent::new_with_nvidia(
                 gemini_client.clone(),
                 state.bedrock_client.clone(),
                 state.nvidia_nim_client.clone().map(Arc::new),
                 ollama_client.clone(),
             );
-            let system_prompt = Self::system_prompt(service_type, &input);
-
-            let tools = crate::ai_tool_selector::select_tools_for_request(
-                &format!("{} {}", system_prompt, current_prompt),
-                state.ollama_client.as_ref(),
-                state.nvidia_nim_client.as_ref(),
-                Some(gemini_client.as_ref()),
-            )
-            .await;
-
-            let tool_executor: crate::agent::simple_gemini_agent::GeminiToolExecutor =
-                Arc::new(|name, args, ctx| {
-                    Box::pin(async move {
-                        Value::String(execute_tool_gemini_with_context(name, args, ctx).await)
-                    })
-                });
 
             let agent_result = agent
-                .execute_with_custom_tools(
+                .chat(
                     &current_prompt,
                     &session_id,
-                    input.user_id,
+                    String::new(),
                     state.clone(),
+                    state.job_manager.clone(),
                     None,
-                    &system_prompt,
-                    tools,
-                    Some("submit_final_answer"),
-                    tool_executor,
                     Some(workflow_id),
+                    None,
+                    input.user_id,
                 )
                 .await;
 
@@ -438,39 +419,6 @@ impl AgenticServicePipeline {
         }
 
         Ok(())
-    }
-
-    fn system_prompt(service_type: ServiceType, input: &ServiceInput) -> String {
-        let base = r#"You are a video production agent. Produce actual media files by calling tools.
-
-## MANDATORY TOOL SEQUENCE
-1. generate_video_script(topic, duration, style, tone) — plan the content
-2. Choose the right renderer:
-   - blender_generate_scene_type(prompt, params) — for 3D scenes, product mockups, title cards, UI mockups, thumbnails, logos, lower thirds, abstract backgrounds, particle effects, and any other Blender 3D content
-   - manim_execute_script(description, ...) — for math/STEM explainers, data visualizations, LaTeX equations, code animations, timelines, network graphs, vector fields, geometry proofs, and any other Manim/animated diagram content
-   - Both can be used together in one video — render separate clips then merge with merge_videos
-3. add_voiceover_to_video(video_path, script) or generate_text_to_speech(text, voice) — narrate
-4. review_video(video_path_or_url) — check quality
-5. submit_final_answer(summary, output_files=[path]) — only after review passes
-
-## RULES
-- Generate actual media files on disk, not just text
-- Save output to the specified directory
-- Call submit_final_answer ONLY after rendering AND reviewing
-- The available editing, animation, and generation tools are listed in the API — pick the right ones for each step"#;
-
-        let service_specific = match service_type {
-            ServiceType::LandingPage => Self::landing_page_prompt(input),
-            ServiceType::ProductMockup => Self::product_mockup_prompt(input),
-            ServiceType::Thumbnails => Self::thumbnail_prompt(input),
-            ServiceType::Education => Self::education_prompt(input),
-            ServiceType::Clipping => Self::clipping_prompt(input),
-            ServiceType::VoiceAudio => Self::voice_audio_prompt(input),
-            ServiceType::FullStack => Self::full_stack_prompt(input),
-            ServiceType::Ugc => Self::ugc_prompt(input),
-        };
-
-        format!("{}\n\n{}", base, service_specific)
     }
 
     fn landing_page_prompt(input: &ServiceInput) -> String {

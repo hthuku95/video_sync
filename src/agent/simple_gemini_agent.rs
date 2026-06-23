@@ -1053,7 +1053,7 @@ IMPORTANT: You do NOT use AI to generate videos. Instead, you fetch stock media 
     }
 }
 
-fn build_text_message(
+pub(crate) fn build_text_message(
     role: aws_sdk_bedrockruntime::types::ConversationRole,
     text: &str,
 ) -> Result<aws_sdk_bedrockruntime::types::Message, String> {
