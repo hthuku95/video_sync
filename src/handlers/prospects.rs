@@ -344,20 +344,22 @@ async fn search_prospects(
         search_kick_prospects(&state, &payload, limit).await
     } else if payload.platform == "kick_clipper" {
         search_kick_clipper_prospects(&state, &payload, limit).await
+    } else if payload.platform == "kick_clipper_top" {
+        search_kick_clipper_prospects_top_streamers(&state, &payload, limit).await
     } else {
         complete_prospect_agent_run(
             &state,
             run_id,
             "failed",
             json!({"error": "unsupported_platform", "platform": payload.platform}),
-            Some("platform must be 'youtube', 'twitch', 'kick', or 'kick_clipper'"),
+            Some("platform must be 'youtube', 'twitch', 'kick', 'kick_clipper', or 'kick_clipper_top'"),
         )
         .await;
         return Err((
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
                 success: false,
-                message: "platform must be 'youtube', 'twitch', 'kick', or 'kick_clipper'".to_string(),
+                message: "platform must be 'youtube', 'twitch', 'kick', 'kick_clipper', or 'kick_clipper_top'".to_string(),
             }),
         ));
     };
@@ -1339,6 +1341,248 @@ async fn search_kick_clipper_prospects(
     Ok(found)
 }
 
+/// Search for kick_auto_clipper prospects by starting from Kick.com:
+/// 1. Find top live streamers on Kick via the API (free, no Cloudflare)
+/// 2. For each top streamer, search YouTube for channels posting their clips
+/// 3. Score and store those channels as kick_auto_clipper prospects
+async fn search_kick_clipper_prospects_top_streamers(
+    state: &Arc<AppState>,
+    payload: &SearchRequest,
+    limit: usize,
+) -> Result<usize, (StatusCode, Json<ErrorResponse>)> {
+    let api_key = std::env::var("YOUTUBE_API_KEY").unwrap_or_default();
+    if api_key.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, Json(ErrorResponse {
+            success: false, message: "YouTube API key not configured".to_string()
+        })));
+    }
+
+    let Some(kick) = &state.kick_client else {
+        return Err((StatusCode::BAD_REQUEST, Json(ErrorResponse {
+            success: false, message: "Kick client not configured".to_string()
+        })));
+    }
+
+    let http = reqwest::Client::new();
+    let limit = limit.min(20);
+    let mut found = 0usize;
+    let base_category = payload.category.clone().unwrap_or_else(|| "just chatting".to_string());
+
+    // 1. Fetch top live streamers from Kick via API
+    let livestreams = match kick.search_livestreams_by_category_name(&base_category).await {
+        Ok(streams) => streams,
+        Err(e) => {
+            tracing::warn!("kick_top_streamers: failed to fetch livestreams: {e}");
+            Vec::new()
+        }
+    };
+
+    if livestreams.is_empty() {
+        tracing::info!("kick_top_streamers: no live streams found for category '{}'", base_category);
+        return Ok(0);
+    }
+
+    // Sort by viewer count descending, take top N streamers
+    let mut sorted: Vec<_> = livestreams.into_iter().filter_map(|s| {
+        let viewers = s.viewer_count.unwrap_or(0);
+        if viewers < 10 { return None; } // Skip tiny streams
+        Some((viewers, s))
+    }).collect();
+    sorted.sort_by(|a, b| b.0.cmp(&a.0));
+    let top_streamers: Vec<_> = sorted.into_iter().take(10).collect(); // Top 10 streamers
+
+    tracing::info!("🎯 Kick top streamers in '{}': {} found, processing top {}",
+        base_category, top_streamers.len(), top_streamers.len());
+
+    // 2. For each top Kick streamer, search YouTube for clipping channels
+    for (viewers, streamer) in &top_streamers {
+        let slug = &streamer.slug;
+        let stream_title = streamer.stream_title.as_deref().unwrap_or(slug);
+
+        // AI generates a targeted YouTube search query for this specific streamer's clippers
+        let query_prompt = format!(
+            "A Kick.com streamer named '{}' ({}) streams '{}'. \
+             Find YouTube CHANNELS that clip and repost this streamer's content. \
+             Generate ONE concise YouTube search query (5-10 words) to find these clipping channels. \
+             Return ONLY the raw search query.",
+            slug, stream_title, base_category
+        );
+        let search_query = match crate::llm_utils::generate_text_fast(
+            state.ollama_fast_client.as_ref(),
+            state.ollama_client.as_ref(),
+            state.gemini_client.as_ref(),
+            state.deepseek_client.as_ref(),
+            &query_prompt,
+        ).await {
+            Ok(q) => q.trim().trim_matches('"').to_string(),
+            Err(_) => format!("{} kick stream highlights clips", slug),
+        };
+
+        tracing::info!("  Searching YouTube for clippers of '{}': \"{}\"", slug, search_query);
+
+        // Search YouTube for channels
+        let search_url = format!(
+            "https://www.googleapis.com/youtube/v3/search?part=snippet&type=channel&q={}&maxResults=5&order=relevance&key={}",
+            urlencoding::encode(&search_query), api_key
+        );
+
+        let search_resp: serde_json::Value = match http.get(&search_url).send().await {
+            Ok(r) => r.json().await.unwrap_or_default(),
+            Err(_) => continue,
+        };
+
+        let channel_ids: Vec<String> = search_resp["items"].as_array()
+            .map(|a| a.iter().filter_map(|item| item["id"]["channelId"].as_str().map(String::from)).collect())
+            .unwrap_or_default();
+
+        if channel_ids.is_empty() { continue; }
+
+        // Get channel stats
+        let stats_url = format!(
+            "https://www.googleapis.com/youtube/v3/channels?part=snippet,statistics&id={}&key={}",
+            channel_ids.join(","), api_key
+        );
+        let stats_resp: serde_json::Value = match http.get(&stats_url).send().await {
+            Ok(r) => r.json().await.unwrap_or_default(),
+            Err(_) => continue,
+        };
+
+        let channels_data = stats_resp["items"].as_array().map(|a| a.to_vec()).unwrap_or_default();
+
+        for channel in &channels_data {
+            let channel_id = channel["id"].as_str().unwrap_or("").to_string();
+            let display_name = channel["snippet"]["title"].as_str().unwrap_or("Unknown").to_string();
+            let description = channel["snippet"]["description"].as_str().unwrap_or("").to_string();
+            let sub_count = channel["statistics"]["subscriberCount"].as_str()
+                .and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
+            let video_count = channel["statistics"]["videoCount"].as_str()
+                .and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
+            let platform_url = format!("https://youtube.com/channel/{}", channel_id);
+
+            // Apply subscriber range filter
+            if let Some(min) = payload.min_viewers { if sub_count < min { continue; } }
+            if let Some(max) = payload.max_viewers { if sub_count > max { continue; } }
+
+            // Fetch recent video titles for analysis
+            let videos_url = format!(
+                "https://www.googleapis.com/youtube/v3/search?part=snippet&channelId={}&maxResults=3&order=date&type=video&key={}",
+                channel_id, api_key
+            );
+            let videos_resp: serde_json::Value = match http.get(&videos_url).send().await {
+                Ok(r) => r.json().await.unwrap_or_default(),
+                Err(_) => serde_json::Value::Null,
+            };
+            let video_titles: Vec<String> = videos_resp["items"].as_array()
+                .map(|a| a.iter().filter_map(|v| v["snippet"]["title"].as_str().map(String::from)).collect())
+                .unwrap_or_default();
+
+            // Build scoring description — we already know this channel clips THIS streamer
+            let scoring_desc = format!(
+                "YouTube channel: {}. Subscribers: {}. Total videos: {}. \
+                 Recent video titles: {:?}. \
+                 This channel clips content from Kick streamer '{slug}' ({viewers} live viewers, '{base_category}'). \
+                 Assessment: This channel reposts {slug}'s Kick.com content on YouTube.",
+                display_name, sub_count, video_count, video_titles,
+            );
+
+            // Score with LLM
+            let (score, reasoning, _service, dm_creator, dm_clipper, x_dm, email_script) =
+                score_prospect_with_ai(state, &display_name, sub_count,
+                    &scoring_desc, &base_category, "clipper").await;
+
+            if score < 0.3 { continue; }
+
+            // detected_source_creators = the Kick streamer this channel clips
+            let detected_source_creators = vec![slug.clone()];
+
+            // Contact enrichment
+            let mut twitter_handle = extract_best_twitter_handle(&description);
+            let mut instagram_handle = extract_best_instagram_handle(&description);
+            let mut business_email = extract_best_business_email(&description);
+            let mut external_url = extract_best_external_url(&description);
+
+            let enrichment_url = Some(platform_url.as_str());
+            let mut contact_enrichment = enrich_public_contact_fields(
+                enrichment_url,
+                &mut twitter_handle, &mut instagram_handle,
+                &mut business_email, &mut external_url,
+            ).await;
+
+            if !detected_source_creators.is_empty() {
+                if let Some(obj) = contact_enrichment.as_object_mut() {
+                    obj.insert("detected_source_creators".to_string(), json!(detected_source_creators));
+                }
+            }
+
+            let post_signal = json!({
+                "source_kick_streamer": slug,
+                "source_kick_viewers": viewers,
+                "source_kick_category": base_category,
+            });
+
+            let channel_desc = format!(
+                "{} | Clips {} from Kick ({} viewers) | {} videos",
+                description, slug, viewers, video_count
+            );
+            let reasoning_with_signals = format!(
+                "{} | Clips Kick streamer={} viewers={}",
+                reasoning, slug, viewers
+            );
+
+            let _ = sqlx::query(
+                "INSERT INTO prospects \
+                 (platform, channel_id, display_name, platform_url, subscriber_count, \
+                  content_category, channel_description, prospect_type, \
+                  ai_score, ai_reasoning, dm_script_creator, dm_script_clipper, \
+                  twitter_handle, instagram_handle, business_email, external_url, \
+                  service_type, x_dm_script, email_script, contact_enrichment) \
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) \
+                 ON CONFLICT (platform, channel_id) DO UPDATE SET \
+                 ai_score = EXCLUDED.ai_score, ai_reasoning = EXCLUDED.ai_reasoning, \
+                 dm_script_creator = EXCLUDED.dm_script_creator, dm_script_clipper = EXCLUDED.dm_script_clipper, \
+                 x_dm_script = EXCLUDED.x_dm_script, email_script = EXCLUDED.email_script, \
+                 twitter_handle = COALESCE(EXCLUDED.twitter_handle, prospects.twitter_handle), \
+                 instagram_handle = COALESCE(EXCLUDED.instagram_handle, prospects.instagram_handle), \
+                 business_email = COALESCE(EXCLUDED.business_email, prospects.business_email), \
+                 external_url = COALESCE(EXCLUDED.external_url, prospects.external_url), \
+                 contact_enrichment = COALESCE(NULLIF(EXCLUDED.contact_enrichment, '{}'::jsonb), prospects.contact_enrichment), \
+                 service_type = EXCLUDED.service_type, updated_at = NOW()"
+            )
+            .bind("youtube")
+            .bind(&channel_id)
+            .bind(&display_name)
+            .bind(&platform_url)
+            .bind(sub_count)
+            .bind(&base_category)
+            .bind(&channel_desc)
+            .bind("clipper")
+            .bind(score)
+            .bind(&reasoning_with_signals)
+            .bind(&dm_creator)
+            .bind(&dm_clipper)
+            .bind(&twitter_handle)
+            .bind(&instagram_handle)
+            .bind(&business_email)
+            .bind(&external_url)
+            .bind("kick_auto_clipper")
+            .bind(&x_dm)
+            .bind(&email_script)
+            .bind(&contact_enrichment)
+            .execute(&state.db_pool)
+            .await
+            .ok();
+
+            found += 1;
+            if found >= limit { break; }
+        }
+
+        if found >= limit { break; }
+    }
+
+    tracing::info!("🎯 Kick top-streamer method: found {} prospects", found);
+    Ok(found)
+}
+
 /// Extract a Twitter/X handle from a channel description using simple pattern matching.
 fn extract_twitter_handle(description: &str) -> Option<String> {
     // Look for twitter.com/handle or x.com/handle patterns
@@ -1964,13 +2208,10 @@ fn default_service_for_prospect(category: &str, prospect_type: &str) -> String {
         || combined.contains("founder")
     {
         "landing_page".to_string()
+    } else if combined.contains("stream") || combined.contains("creator") {
+        "clipping".to_string()
     } else if combined.contains("clip") || combined.contains("highlight") || combined.contains("best.of") || combined.contains("kick") {
         "kick_auto_clipper".to_string()
-    } else if combined.contains("podcast")
-        || combined.contains("stream")
-        || combined.contains("creator")
-    {
-        "clipping".to_string()
     } else {
         "landing_page".to_string()
     }
@@ -2039,6 +2280,7 @@ fn service_target_duration_seconds(service: &str) -> f64 {
         "clipping" => 60.0,
         "agency_bundle" | "full_stack" => 90.0,
         "kick_auto_clipper" => 60.0,
+        "ugc" => 45.0,
         _ => 60.0,
     }
 }
@@ -2656,12 +2898,21 @@ async fn generate_prospect_sample_pack(
         extra["reference_image_url"] = json!(hero);
     }
 
-    let gig_type = if use_long_form_workflow {
+    // For landing_page: scrape website content so the LLM agent can understand the product
+    let mut scraped_site = None;
+    if service == "landing_page" && has_product_url {
+        scraped_site = scrape_website_content(&source_url).await;
+        if let Some(ref ctx) = scraped_site {
+            extra["scraped_website_content"] = json!(ctx);
+        }
+    }
+
+    let gig_type = if service == "kick_auto_clipper" {
+        "clipping"
+    } else if use_long_form_workflow {
         "long_form_video"
     } else if matches!(service.as_str(), "product_mockup" | "ugc") {
         "ui_mockup"
-    } else if service == "kick_auto_clipper" {
-        "clipping"
     } else {
         "scene"
     };
@@ -2731,6 +2982,10 @@ async fn generate_prospect_sample_pack(
         has_product_url.then(|| 15.0).unwrap_or(8.0)
     };
 
+    let scraped_context = scraped_site
+        .map(|s| format!("\n\n## Scraped Website Content\n{}\n\nUse the above website content to understand the product and its value proposition.", s))
+        .unwrap_or_default();
+
     let delivery_id_clone = delivery_id;
     let workflow_id = crate::services::AgenticServicePipeline::start(
         state.clone(),
@@ -2738,7 +2993,7 @@ async fn generate_prospect_sample_pack(
         crate::services::ServiceInput {
             title: format!("Revenue sample pack for {}", display_name),
             brief: format!(
-                "{prompt}\n\nProspect description: {description}\n\nCreate a buyer-facing sample for this service: {service_offer}. It should be strong enough to send in an X DM or email, use the available public source/reference, include concise narration, and end with a clear CTA for the starter offer."
+                "{prompt}\n\nProspect description: {description}\n\nCreate a buyer-facing sample for this service: {service_offer}. It should be strong enough to send in an X DM or email, use the available public source/reference, include concise narration, and end with a clear CTA for the starter offer.{scraped_context}"
             ),
             source_url: if has_product_url { Some(source_url.clone()) } else { None },
             style: agentic_style,
@@ -3105,6 +3360,7 @@ tr:hover td{background:rgba(92,84,112,0.12)}
           <option value="youtube">YouTube</option>
           <option value="twitch">Twitch</option>
           <option value="kick_clipper">🎯 Kick Clipper (via YouTube)</option>
+          <option value="kick_clipper_top">🎯 Kick Clipper (Top Streamers → YouTube)</option>
         </select>
       </div>
       <div>
@@ -6037,6 +6293,7 @@ The studio offers:
 - **product_mockup** — photorealistic product shot on a device/scene. Best fit: ecommerce, hardware brands, app devs, Kickstarter creators.
 - **landing_page**   — animated SaaS hero mockup (we can scrape their existing site URL). Best fit: SaaS/startup founders, no-code builders.
 - **full_stack**   — bundle of the above. Best fit: 100k+ creators serious about scaling.
+- **kick_auto_clipper** — auto-generated Kick clips from VODs with branding and captions. Best fit: clipping channels, Kick highlight reposters.
 
 Creator profile:
 - Username: @{username}
@@ -6053,7 +6310,7 @@ Score guidelines:
 Return ONLY valid JSON (no markdown, no code fence):
 {{"score": 75, "service": "clipping", "reason": "podcaster with podcast link in bio, posts long-form clips"}}
 
-`service` MUST be one of: clipping, thumbnails, product_mockup, landing_page, education, three_d_scene, voice_audio, ugc, agency_bundle, full_stack.
+`service` MUST be one of: clipping, thumbnails, product_mockup, landing_page, education, three_d_scene, voice_audio, ugc, agency_bundle, full_stack, kick_auto_clipper.
 
 Use education instead of animations for Manim/LaTeX/teaching content. Use three_d_scene for Blender/3D/product-scene/logo-reveal leads. Use voice_audio for narration, podcast intro, audiobook, or summary leads. Use agency_bundle for agencies, creator managers, and marketers."#,
             username = username,
@@ -6652,6 +6909,7 @@ The studio offers (pick ONE):
 - product_mockup — photorealistic 3D product shot. Best fit: ecommerce / hardware / app launches / Kickstarter. $100–$300 each.
 - landing_page   — animated SaaS landing hero (can scrape their live URL). Best fit: SaaS / indie founders / pre-launch. $200–$600 each.
 - full_stack     — bundle of all. Best fit: 100k+ creators. $1500–$3000/mo.
+- kick_auto_clipper — auto-generated Kick clips from VODs with branding and captions. Best fit: clipping channels, Kick highlight reposters. $297–$899/mo.
 
 Message:
 """
@@ -6667,7 +6925,7 @@ Score guidelines:
 Return ONLY valid JSON (no markdown):
 {{"score": 75, "service": "clipping", "reason": "Podcaster says 'need someone to cut my 2hr episodes into TikToks, DM for budget'"}}
 
-`service` MUST be one of: clipping, thumbnails, product_mockup, landing_page, education, three_d_scene, voice_audio, ugc, agency_bundle, full_stack — or null if score < 40."#,
+`service` MUST be one of: clipping, thumbnails, product_mockup, landing_page, education, three_d_scene, voice_audio, ugc, agency_bundle, full_stack, kick_auto_clipper — or null if score < 40."#,
         channel = channel,
         message = message,
     );
@@ -7303,6 +7561,172 @@ pub async fn fetch_landing_page_hero(url: &str) -> Option<String> {
         return Some(normalise_image_url(&img, url));
     }
     None
+}
+
+/// Scrape a website URL and return a structured text summary (title, description, headings, body text).
+/// Used to give the LLM agent real website content so it can make informed landing page videos.
+pub async fn scrape_website_content(url: &str) -> Option<String> {
+    if !url.starts_with("https://") && !url.starts_with("http://") {
+        return None;
+    }
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .user_agent("Mozilla/5.0 (compatible; VideoSyncBot/1.0)")
+        .redirect(reqwest::redirect::Policy::limited(5))
+        .build()
+        .ok()?;
+    let resp = client.get(url).send().await.ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let html = resp.text().await.ok()?;
+    let lower = html.to_lowercase();
+
+    // Extract title
+    let title = extract_tag_content(&html, "title").unwrap_or_default();
+
+    // Extract meta description
+    let description = extract_meta_content(&html, "description").unwrap_or_default();
+
+    // Extract h1-h3 headings
+    let mut headings: Vec<String> = Vec::new();
+    for tag in &["h1", "h2", "h3"] {
+        extract_all_tag_contents(&html, tag, &mut headings);
+    }
+    let headings_text = if headings.is_empty() {
+        String::new()
+    } else {
+        format!("\nPage headings:\n- {}", headings.join("\n- "))
+    };
+
+    // Extract body text — strip tags to get readable content
+    let body_text = extract_body_text(&html);
+
+    // Truncate body to avoid blowing the prompt
+    let body_trimmed = if body_text.len() > 3000 {
+        format!("{}...", &body_text[..3000])
+    } else {
+        body_text
+    };
+
+    let summary = format!(
+        "Website: {url}\nTitle: {title}\nDescription: {description}{headings}\n\nPage content:\n{body_trimmed}",
+        url = url,
+        title = title,
+        description = description,
+        headings = headings_text,
+        body_trimmed = body_trimmed,
+    );
+
+    Some(summary)
+}
+
+fn extract_tag_content(html: &str, tag: &str) -> Option<String> {
+    let open_start = format!("<{}>", tag);
+    let open_start_upper = format!("<{}>", tag.to_uppercase());
+    let open_attr = format!("<{} ", tag);
+    let open_attr_upper = format!("<{} ", tag.to_uppercase());
+    let close = format!("</{}>", tag);
+    let close_upper = format!("</{}>", tag.to_uppercase());
+
+    let pos = html.find(&open_start)
+        .or_else(|| html.find(&open_start_upper))
+        .or_else(|| html.find(&open_attr))
+        .or_else(|| html.find(&open_attr_upper))?;
+
+    let content_start = html[pos..].find('>')? + pos + 1;
+    let end = html[content_start..].find(&close)
+        .or_else(|| html[content_start..].find(&close_upper))?;
+    let content = html[content_start..content_start + end].trim();
+    if content.is_empty() { None } else { Some(strip_html_tags(content).to_string()) }
+}
+
+fn extract_all_tag_contents(html: &str, tag: &str, results: &mut Vec<String>) {
+    let open_variants = [format!("<{}>", tag), format!("<{} ", tag), format!("<{}/>", tag)];
+    let close = format!("</{}>", tag);
+    let mut search_from = 0;
+    loop {
+        let pos = open_variants.iter()
+            .filter_map(|o| html[search_from..].find(o).map(|p| search_from + p))
+            .min();
+        let pos = match pos { Some(p) => p, None => break };
+
+        let content_start = html[pos..].find('>').map(|p| pos + p + 1)?;
+        let end = html[content_start..].find(&close)?;
+        let content = html[content_start..content_start + end].trim();
+        if !content.is_empty() {
+            let cleaned = strip_html_tags(content).to_string();
+            let trimmed = cleaned.trim().to_string();
+            if !trimmed.is_empty() {
+                results.push(trimmed);
+            }
+        }
+        search_from = content_start + end + close.len();
+    }
+}
+
+fn extract_body_text(html: &str) -> String {
+    let body_start = html.find("<body")
+        .or_else(|| html.find("<BODY"))
+        .map(|p| html[p..].find('>').map(|e| p + e + 1))
+        .flatten()
+        .unwrap_or(0);
+    let body_end = html[body_start..].find("</body>")
+        .or_else(|| html[body_start..].find("</BODY>"))
+        .map(|p| body_start + p)
+        .unwrap_or(html.len());
+    let body = &html[body_start..body_end];
+    strip_html_tags(body).to_string()
+}
+
+fn strip_html_tags(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut in_tag = false;
+    let mut in_script = false;
+    let mut in_style = false;
+    let lower = s.to_lowercase();
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < s.len() {
+        if !in_tag && !in_script && !in_style {
+            if bytes[i] == b'<' {
+                if lower[i..].starts_with("<script") { in_script = true; }
+                else if lower[i..].starts_with("<style") { in_style = true; }
+                else { in_tag = true; }
+                i += 1;
+                continue;
+            }
+            result.push(s[i as usize..].chars().next().unwrap_or(' '));
+            i += s[i as usize..].chars().next().map(|c| c.len_utf8()).unwrap_or(1);
+        } else if in_tag {
+            if bytes[i] == b'>' { in_tag = false; }
+            i += 1;
+        } else if in_script {
+            if lower[i..].starts_with("</script") {
+                let end = lower[i..].find('>').unwrap_or(0);
+                i += end + 1;
+                in_script = false;
+            } else { i += 1; }
+        } else if in_style {
+            if lower[i..].starts_with("</style") {
+                let end = lower[i..].find('>').unwrap_or(0);
+                i += end + 1;
+                in_style = false;
+            } else { i += 1; }
+        }
+    }
+    // Collapse whitespace
+    let mut cleaned = String::with_capacity(result.len());
+    let mut prev_space = false;
+    for ch in result.chars() {
+        if ch.is_whitespace() {
+            if !prev_space { cleaned.push(' '); prev_space = true; }
+        } else {
+            cleaned.push(ch);
+            prev_space = false;
+        }
+    }
+    cleaned.trim().to_string()
 }
 
 /// Pull the `content` attribute of the first matching meta tag.

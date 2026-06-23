@@ -241,7 +241,12 @@ async fn process_pending_post(state: &Arc<AppState>, campaign: &CampaignRow, pos
 
     // 4. Kick off rendering via AgenticServicePipeline
     let service_type = match campaign.service_type.as_str() {
+        "landing_page" => ServiceType::LandingPage,
+        "product_mockup" => ServiceType::ProductMockup,
         "education" => ServiceType::Education,
+        "ugc" => ServiceType::Ugc,
+        "full_stack" => ServiceType::FullStack,
+        "kick_auto_clipper" | "clipping" => ServiceType::Clipping,
         _ => ServiceType::Clipping,
     };
 

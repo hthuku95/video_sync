@@ -19,6 +19,7 @@ pub enum ServiceType {
     Clipping,
     VoiceAudio,
     FullStack,
+    Ugc,
 }
 
 impl ServiceType {
@@ -28,8 +29,9 @@ impl ServiceType {
             "product_mockup" | "product_explainer" | "product_mockup_pack" | "three_d_scene" | "blender_scene_pack" => Self::ProductMockup,
             "thumbnails" | "thumbnail" | "thumbnail_hero_pack" => Self::Thumbnails,
             "education" | "course_lesson" | "explainer" | "tutorial" | "education_explainer_pack" => Self::Education,
-            "clipping" | "clip" | "short" | "clip_pack" => Self::Clipping,
-            "ugc" | "ugc_ad_pack" | "voice_audio" | "voice" | "voice_audio_pack" | "narration" | "podcast" => Self::VoiceAudio,
+            "clipping" | "clip" | "short" | "clip_pack" | "kick_auto_clipper" | "kick" => Self::Clipping,
+            "ugc" | "ugc_ad_pack" => Self::Ugc,
+            "voice_audio" | "voice" | "voice_audio_pack" | "narration" | "podcast" => Self::VoiceAudio,
             "full_stack" | "agency_bundle" | "agency" | "fullstack" | "full_stack_production_pack" | "agency_bundle_pack" => Self::FullStack,
             "fallback_summary" | "summary" | "ad" | "advert" => Self::LandingPage,
             _ => Self::LandingPage,
@@ -45,6 +47,7 @@ impl ServiceType {
             Self::Clipping => "clipping",
             Self::VoiceAudio => "voice_audio",
             Self::FullStack => "full_stack",
+            Self::Ugc => "ugc",
         }
     }
 
@@ -57,6 +60,7 @@ impl ServiceType {
             Self::Clipping => "high-retention creator clip pack, captions, branded lower thirds",
             Self::VoiceAudio => "professional podcast-quality audio production, clean mixing",
             Self::FullStack => "full-stack production backend, consistent branding across formats",
+            Self::Ugc => "vertical product-demo video, direct-response hooks, creator-ad pacing, mobile-first",
         }
     }
 
@@ -69,11 +73,12 @@ impl ServiceType {
             Self::Clipping => 30.0,
             Self::VoiceAudio => 45.0,
             Self::FullStack => 90.0,
+            Self::Ugc => 45.0,
         }
     }
 
     pub fn expects_video(&self) -> bool {
-        matches!(self, Self::LandingPage | Self::ProductMockup | Self::Education | Self::Clipping)
+        matches!(self, Self::LandingPage | Self::ProductMockup | Self::Education | Self::Clipping | Self::Ugc)
     }
 
     pub fn expects_image(&self) -> bool {
@@ -462,6 +467,7 @@ impl AgenticServicePipeline {
             ServiceType::Clipping => Self::clipping_prompt(input),
             ServiceType::VoiceAudio => Self::voice_audio_prompt(input),
             ServiceType::FullStack => Self::full_stack_prompt(input),
+            ServiceType::Ugc => Self::ugc_prompt(input),
         };
 
         format!("{}\n\n{}", base, service_specific)
@@ -475,20 +481,21 @@ GOAL: Create a polished {duration_seconds}s SaaS demo video.
 
 Source: {url}
 Title: {title}
+Brief: {brief}
 Style: {style}
 
 ## WHAT TO DO
-1. First understand the product by reading the website
-2. Plan your creative approach — you have editing, animation, voiceover, and review tools available. Use whatever combination you think will produce the best result
-3. Generate any reference images you need
-4. Produce the video — you decide which tools to use and how to combine them
-5. Review your output — check quality, fix issues, iterate
-6. Use submit_final_answer when the output meets your standards
+1. Understand the product using the brief above (website content is included if available)
+2. Plan your creative approach — you have editing, animation, voiceover, and review tools available
+3. Produce the video
+4. Review your output — check quality, fix issues, iterate
+5. Use submit_final_answer when the output meets your standards
 
 OUTPUT to: {output_dir}/
 Save your final video with .mp4 extension"#,
             url = url,
             title = input.title,
+            brief = input.brief,
             style = input.style,
             duration_seconds = input.duration_seconds as i32,
             output_dir = format!("outputs/agentic_{}", input.delivery_id),
@@ -503,20 +510,22 @@ GOAL: Create an animated {duration_seconds}s product/UI mockup video.
 
 Source: {url}
 Title: {title}
+Brief: {brief}
 Style: {style}
 
 ## WHAT TO DO
-1. Understand the product (read the website if URL provided, or use the brief)
+1. Understand the product from the brief (read the website if URL provided)
 2. Generate any reference images you might need
-3. Plan and produce the mockup video using whatever combination of tools you think works best — device mockups, animations, text reveals, and more
+3. Plan and produce the mockup video — device mockups, animations, text reveals, etc.
 4. Add audio if it improves the result
-5. Review your output and iterate until it's solid
+5. Review your output and iterate until solid
 6. submit_final_answer
 
 OUTPUT to: {output_dir}/
 Save final video as .mp4"#,
             url = url,
             title = input.title,
+            brief = input.brief,
             style = input.style,
             duration_seconds = input.duration_seconds as i32,
             output_dir = format!("outputs/agentic_{}", input.delivery_id),
@@ -549,18 +558,17 @@ Save as .png or .jpg"#,
     }
 
     fn education_prompt(input: &ServiceInput) -> String {
-        let url = input.source_url.as_deref().unwrap_or("");
         let out = format!("outputs/agentic_{}", input.delivery_id);
         format!(
             r#"## SERVICE: Education Explainer Video
 GOAL: {duration_seconds}s narrated educational video.
 
-Topic: {url}
+Topic: {brief}
 Title: {title}
 Style: {style}
 
 ## TO CALL
-1. generate_video_script(topic="{url}", duration={duration_seconds}, style="{style}", tone="professional")
+1. generate_video_script(topic="{brief}", duration={duration_seconds}, style="{style}", tone="professional")
 2. Render scenes using the right tool for each visual:
    - blender_generate_scene_type(prompt=..., params=...) — for 3D backgrounds, animated props, intro/outro sequences
    - manim_execute_script(description=..., quality="h") — for math equations, diagrams, code animations, data charts, LaTeX formulas
@@ -571,7 +579,7 @@ Style: {style}
 
 OUTPUT dir: {out}/"#,
             duration_seconds = input.duration_seconds as i32,
-            url = url,
+            brief = input.brief,
             title = input.title,
             style = input.style,
             out = out,
@@ -633,6 +641,7 @@ GOAL: Create a comprehensive production package (video + thumbnail + audio).
 
 Source: {url}
 Title: {title}
+Brief: {brief}
 Style: {style}
 
 ## WHAT TO DO
@@ -648,7 +657,35 @@ OUTPUT to: {output_dir}/
 Save main_video.mp4, thumbnail.png, audio.mp3"#,
             url = url,
             title = input.title,
+            brief = input.brief,
             style = input.style,
+            output_dir = format!("outputs/agentic_{}", input.delivery_id),
+        )
+    }
+
+    fn ugc_prompt(input: &ServiceInput) -> String {
+        format!(
+            r#"## SERVICE: UGC Product Demo Video
+GOAL: Create a {duration_seconds}s vertical product-demo video.
+
+Title: {title}
+Brief: {brief}
+Style: {style}
+
+## WHAT TO DO
+1. Understand the product from the brief
+2. Plan your creative approach — direct-response hook, benefit showcase, CTA
+3. Produce the video using the available tools (Blender for 3D scenes, Manim for diagrams, etc.)
+4. Add voiceover or text-to-speech to narrate the demo
+5. Review your output — check quality, fix issues, iterate
+6. Use submit_final_answer when the output meets your standards
+
+OUTPUT to: {output_dir}/
+Save your final video as .mp4 (vertical 9:16 recommended)"#,
+            title = input.title,
+            brief = input.brief,
+            style = input.style,
+            duration_seconds = input.duration_seconds as i32,
             output_dir = format!("outputs/agentic_{}", input.delivery_id),
         )
     }
