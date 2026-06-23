@@ -7651,8 +7651,14 @@ fn extract_all_tag_contents(html: &str, tag: &str, results: &mut Vec<String>) {
             .min();
         let pos = match pos { Some(p) => p, None => break };
 
-        let content_start = html[pos..].find('>').map(|p| pos + p + 1)?;
-        let end = html[content_start..].find(&close)?;
+        let content_start = match html[pos..].find('>').map(|p| pos + p + 1) {
+            Some(p) => p,
+            None => break,
+        };
+        let end = match html[content_start..].find(&close) {
+            Some(e) => e,
+            None => break,
+        };
         let content = html[content_start..content_start + end].trim();
         if !content.is_empty() {
             let cleaned = strip_html_tags(content).to_string();

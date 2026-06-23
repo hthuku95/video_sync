@@ -699,6 +699,7 @@ Save your final video as .mp4 (vertical 9:16 recommended)"#,
             ServiceType::Clipping => Self::clipping_prompt(input),
             ServiceType::VoiceAudio => Self::voice_audio_prompt(input),
             ServiceType::FullStack => Self::full_stack_prompt(input),
+            ServiceType::Ugc => Self::ugc_prompt(input),
         }
     }
 }
