@@ -1361,7 +1361,7 @@ async fn search_kick_clipper_prospects_top_streamers(
         return Err((StatusCode::BAD_REQUEST, Json(ErrorResponse {
             success: false, message: "Kick client not configured".to_string()
         })));
-    }
+    };
 
     let http = reqwest::Client::new();
     let limit = limit.min(20);
