@@ -17,7 +17,7 @@ pub enum ServiceType {
     Clipping,
     VoiceAudio,
     FullStack,
-    Ugc,
+    BusinessExplainer,
 }
 
 impl ServiceType {
@@ -28,7 +28,7 @@ impl ServiceType {
             "thumbnails" | "thumbnail" | "thumbnail_hero_pack" => Self::Thumbnails,
             "education" | "course_lesson" | "explainer" | "tutorial" | "education_explainer_pack" => Self::Education,
             "clipping" | "clip" | "short" | "clip_pack" | "kick_auto_clipper" | "kick" => Self::Clipping,
-            "ugc" | "ugc_ad_pack" => Self::Ugc,
+            "business_explainer" | "business" | "business_case_study" | "saas_explainer" | "business_explainer_pack" => Self::BusinessExplainer,
             "voice_audio" | "voice" | "voice_audio_pack" | "narration" | "podcast" => Self::VoiceAudio,
             "full_stack" | "agency_bundle" | "agency" | "fullstack" | "full_stack_production_pack" | "agency_bundle_pack" => Self::FullStack,
             "fallback_summary" | "summary" | "ad" | "advert" => Self::LandingPage,
@@ -45,7 +45,7 @@ impl ServiceType {
             Self::Clipping => "clipping",
             Self::VoiceAudio => "voice_audio",
             Self::FullStack => "full_stack",
-            Self::Ugc => "ugc",
+            Self::BusinessExplainer => "business_explainer",
         }
     }
 
@@ -58,7 +58,7 @@ impl ServiceType {
             Self::Clipping => "high-retention creator clip pack, captions, branded lower thirds",
             Self::VoiceAudio => "professional podcast-quality audio production, clean mixing",
             Self::FullStack => "full-stack production backend, consistent branding across formats",
-            Self::Ugc => "vertical product-demo video, direct-response hooks, creator-ad pacing, mobile-first",
+            Self::BusinessExplainer => "narrated business explainer, data-driven visuals, professional tone, clean motion graphics",
         }
     }
 
@@ -71,12 +71,12 @@ impl ServiceType {
             Self::Clipping => 30.0,
             Self::VoiceAudio => 45.0,
             Self::FullStack => 90.0,
-            Self::Ugc => 45.0,
+            Self::BusinessExplainer => 60.0,
         }
     }
 
     pub fn expects_video(&self) -> bool {
-        matches!(self, Self::LandingPage | Self::ProductMockup | Self::Education | Self::Clipping | Self::Ugc)
+        matches!(self, Self::LandingPage | Self::ProductMockup | Self::Education | Self::Clipping | Self::BusinessExplainer)
     }
 
     pub fn expects_image(&self) -> bool {
@@ -639,28 +639,32 @@ Save main_video.mp4, thumbnail.png, audio.mp3"#,
         )
     }
 
-    fn ugc_prompt(input: &ServiceInput) -> String {
+    fn business_explainer_prompt(input: &ServiceInput) -> String {
+        let url = input.source_url.as_deref().unwrap_or("");
         format!(
-            r#"## SERVICE: UGC Product Demo Video
-GOAL: Create a {duration_seconds}s vertical product-demo video.
+            r#"## SERVICE: Business Explainer Video
+GOAL: Create a professional {duration_seconds}s narrated business explainer video.
 
+Source: {url}
 Title: {title}
 Brief: {brief}
 Style: {style}
 
 ## ⚠️ CRITICAL: DO NOT USE generate_long_form_video
-That tool delegates to another agent. Call rendering tools directly for this UGC video.
+That tool delegates to another agent. Call rendering tools directly.
 
-## WHAT TO DO (strict order)
-1. Understand the product from the brief
-2. Plan your creative approach — direct-response hook, benefit showcase, CTA
-3. **REQUIRED: Generate visual content FIRST** — call blender_generate_scene_type() or manim_execute_script() before anything else. Do NOT skip this step.
-4. Add voiceover or text-to-speech to narrate the demo
-5. Review your output — check quality, fix issues, iterate
-6. Use submit_final_answer when the output meets your standards
+## MANDATORY TOOL SEQUENCE
+1. generate_video_script(topic, duration, style, tone) — plan the narrative structure
+2. Render the main visual using blender_generate_scene_type(prompt, params) — for 3D scenes, title cards, product mockups, abstract backgrounds, and branded visuals
+3. Use manim_execute_script(description, ...) — for data visualizations, charts, diagrams, flowcharts, timelines, and any analytical/technical content. Render these as separate clips.
+4. Use merge_videos to combine all rendered clips into a single cohesive video
+5. add_voiceover_to_video(video_path, script) or generate_text_to_speech(text, voice) — professional narration
+6. review_video(video_path_or_url) — check quality, fix issues, iterate
+7. submit_final_answer(summary, output_files=[path]) — only after review passes
 
 OUTPUT to: {output_dir}/
-Save your final video as .mp4 (vertical 9:16 recommended)"#,
+Save your final video as .mp4 (landscape 16:9 recommended)"#,
+            url = url,
             title = input.title,
             brief = input.brief,
             style = input.style,
@@ -678,7 +682,7 @@ Save your final video as .mp4 (vertical 9:16 recommended)"#,
             ServiceType::Clipping => Self::clipping_prompt(input),
             ServiceType::VoiceAudio => Self::voice_audio_prompt(input),
             ServiceType::FullStack => Self::full_stack_prompt(input),
-            ServiceType::Ugc => Self::ugc_prompt(input),
+            ServiceType::BusinessExplainer => Self::business_explainer_prompt(input),
         }
     }
 }

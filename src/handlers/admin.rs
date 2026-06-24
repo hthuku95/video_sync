@@ -11947,9 +11947,9 @@ const HOW_WE_WORK_HTML: &str = r###"<!DOCTYPE html>
       <p class="desc">Gemini picks best frame → title overlay → CTR-tested. Best for growing YouTubers.</p>
     </div>
     <div class="service-card">
-      <div class="name">📱 UGC / Product-demo Videos</div>
-      <span class="price">$200 – $500 each</span>
-      <p class="desc">Vertical-first ad-style demo videos for Shopify / DTC / SaaS founders.</p>
+      <div class="name">📊 Business Explainer Videos</div>
+      <span class="price">$200 – $600 each</span>
+      <p class="desc">Narrated animated explainers for business, finance, and B2B/SaaS concepts — Blender graphics + voiceover.</p>
     </div>
     <div class="service-card">
       <div class="name">📦 Product Mockups</div>

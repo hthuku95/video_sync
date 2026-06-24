@@ -34,11 +34,11 @@ pub const SERVICE_OFFERS: [ServiceOffer; 7] = [
         best_fit: "growing channels, creators, and teams that want stronger presentation before a viewer clicks play.",
     },
     ServiceOffer {
-        key: "ugc",
-        title: "UGC / PRODUCT-DEMO VIDEOS",
-        what_you_offer: "vertical-first product videos, demo edits, and ad-ready promo assets for ecommerce and software brands.",
-        pricing_tiers: "$200-$900 per video depending on scope, voiceover, and asset complexity.",
-        best_fit: "Shopify operators, SaaS founders, and marketers testing paid acquisition.",
+        key: "business_explainer",
+        title: "BUSINESS EXPLAINER VIDEOS",
+        what_you_offer: "narrated animated explainers for business, finance, and B2B/SaaS concepts — combining Blender motion graphics, data visualizations, and professional voiceover.",
+        pricing_tiers: "$200-$600 per video depending on scope, duration, and asset complexity.",
+        best_fit: "SaaS founders, finance creators, business coaches, B2B marketers, and agencies needing premium professional explainers.",
     },
     ServiceOffer {
         key: "product_mockup",

@@ -362,7 +362,7 @@ impl ToolRegistry {
             "offer_type".to_string(),
             gemini_property(
                 "string",
-                "Business lane: landing_page, education, product_mockup, clipping, ugc, thumbnails, or full_stack.",
+                "Business lane: landing_page, education, product_mockup, clipping, business_explainer, thumbnails, or full_stack.",
             ),
         );
         properties.insert(

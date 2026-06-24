@@ -478,7 +478,7 @@ pub async fn thumbnail_hero_pack_page() -> Html<String> {
             ("SaaS founder", "Needs stronger launch and landing-page visuals."),
             ("Agency operator", "Needs fast visual variants for client campaigns."),
         ],
-        r#"["thumbnails","generated_images","landing_page","ugc"]"#,
+        r#"["thumbnails","generated_images","landing_page","business_explainer"]"#,
         r#"["clip-enhancement-standard"]"#,
     ))
 }
