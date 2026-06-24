@@ -615,6 +615,9 @@ impl StatefulGeminiAgent {
 ## CRITICAL RULE: CALL TOOLS IMMEDIATELY
 When the user asks you to CREATE, GENERATE, PRODUCE, MAKE, BUILD, RENDER, or EDIT media (video, thumbnail, clip, demo, image, ad, animation, scene, sample, narration), you MUST call the appropriate generation tool on your very first response. Do NOT respond with text saying what you will do. Call the tool NOW.
 
+## ⚠️ CRITICAL TOOL RESTRICTION: NEVER use generate_long_form_video
+The tool `generate_long_form_video` exists in your catalog but is a DELEGATION wrapper that starts a new agent — it WILL produce the wrong output. When a DFY service brief tells you to create a specific type of video (landing page, product mockup, UGC, education, clip, etc.), you MUST call the actual rendering tools directly yourself: blender_generate_scene_type for 3D/visual content, manim_execute_script for diagrams/animations, and the editing tools for clip processing. NEVER delegate to generate_long_form_video.
+
 ## Your Full Tool Catalog
 You have access to ALL tools defined in the `tools` array. Use them to edit, generate, and produce professional video content of any length.
 - **Media generation**: text-to-image, text-to-video, text-to-audio, thumbnail creation, script writing

@@ -432,12 +432,16 @@ Title: {title}
 Brief: {brief}
 Style: {style}
 
-## WHAT TO DO
-1. Understand the product using the brief above (website content is included if available)
-2. Plan your creative approach — you have editing, animation, voiceover, and review tools available
-3. Produce the video
-4. Review your output — check quality, fix issues, iterate
-5. Use submit_final_answer when the output meets your standards
+## ⚠️ CRITICAL: DO NOT USE generate_long_form_video
+The tool `generate_long_form_video` is a convenience wrapper that delegates to another agent — it will NOT produce the correct output for this DFY service. You MUST call the rendering tools directly yourself.
+
+## MANDATORY TOOL SEQUENCE
+1. generate_video_script(topic, duration, style, tone) — plan the content
+2. Render the MAIN VISUAL using blender_generate_scene_type(prompt, params) — this is the core of your landing page video. Use it for product mockups, device frames, animated UI mockups, title cards, logos, and any 3D content.
+3. If your video needs animated diagrams, data visualizations, or math/technical content, use manim_execute_script(description, ...) and merge with merge_videos
+4. add_voiceover_to_video(video_path, script) or generate_text_to_speech(text, voice) — narrate the demo
+5. review_video(video_path_or_url) — check quality, fix issues, iterate
+6. submit_final_answer(summary, output_files=[path]) — only after review passes
 
 OUTPUT to: {output_dir}/
 Save your final video with .mp4 extension"#,
@@ -461,13 +465,15 @@ Title: {title}
 Brief: {brief}
 Style: {style}
 
-## WHAT TO DO
-1. Understand the product from the brief (read the website if URL provided)
-2. Generate any reference images you might need
-3. Plan and produce the mockup video — device mockups, animations, text reveals, etc.
-4. Add audio if it improves the result
-5. Review your output and iterate until solid
-6. submit_final_answer
+## ⚠️ CRITICAL: DO NOT USE generate_long_form_video
+The tool `generate_long_form_video` delegates to another agent and will NOT produce the correct output. Call the rendering tools directly.
+
+## MANDATORY TOOL SEQUENCE
+1. generate_video_script(topic, duration, style, tone) — plan the content
+2. Render the product mockup using blender_generate_scene_type(prompt, params) — for device mockups, 3D product animations, UI mockups, text reveals, and animated backgrounds
+3. add_voiceover_to_video(video_path, script) or generate_text_to_speech(text, voice) — narrate if it improves the result
+4. review_video(video_path_or_url) — check quality, iterate
+5. submit_final_answer(summary, output_files=[path]) — only after review passes
 
 OUTPUT to: {output_dir}/
 Save final video as .mp4"#,
@@ -489,12 +495,14 @@ Title: {title}
 Brief: {brief}
 Style: {style}
 
-## WHAT TO DO
-1. Understand what the thumbnail is for
-2. Generate the image using whatever approach you think will maximize click-through
-3. Add overlays, text, or effects if they improve it
-4. Review with view_image — if it's not right, regenerate
-5. submit_final_answer
+## ⚠️ CRITICAL: DO NOT USE generate_long_form_video
+This is a STATIC IMAGE task — do NOT call any video generation tools.
+
+## MANDATORY TOOL SEQUENCE
+1. Create the image using create_thumbnail_hd(prompt, ...) or generate_image(prompt, ...) — whichever you think produces the best click-through result
+2. review_video or view_image — verify quality
+3. If it's not right, regenerate with improved prompt
+4. submit_final_answer with the image path
 
 OUTPUT to: {output_dir}/
 Save as .png or .jpg"#,
@@ -515,11 +523,14 @@ Topic: {brief}
 Title: {title}
 Style: {style}
 
-## TO CALL
+## ⚠️ CRITICAL: DO NOT USE generate_long_form_video
+That tool delegates to another agent and will NOT produce the correct educational video. Render directly.
+
+## MANDATORY TOOL SEQUENCE
 1. generate_video_script(topic="{brief}", duration={duration_seconds}, style="{style}", tone="professional")
 2. Render scenes using the right tool for each visual:
+   - manim_execute_script(description=..., quality="h") — for math equations, diagrams, code animations, data charts, LaTeX formulas, and ALL educational/technical visual content
    - blender_generate_scene_type(prompt=..., params=...) — for 3D backgrounds, animated props, intro/outro sequences
-   - manim_execute_script(description=..., quality="h") — for math equations, diagrams, code animations, data charts, LaTeX formulas
    - Use both together for mixed Blender+Manim scenes, then merge with merge_videos
 3. add_voiceover_to_video(video_path="{out}/output.mp4", script="from script above")
 4. review_video(video_path_or_url="{out}/output.mp4")
@@ -542,13 +553,15 @@ GOAL: Extract engaging clips from content and make them shine.
 Title: {title}
 Brief: {brief}
 
-## WHAT TO DO
-1. If a video URL is provided, analyze it to understand the content and find the best moments
-2. Extract clips — you decide what length, what moments, what style
-3. Enhance each clip however you see fit: captions, color grading, transitions, overlays, effects, speed adjustments, stabilization, sound design — the full editing and effects toolset is at your disposal
-4. Each clip should feel complete and professional
-5. Review each clip, iterate on any that fall short
-6. submit_final_answer with all clip paths
+## ⚠️ CRITICAL: DO NOT USE generate_long_form_video
+That tool will start a new agent instead of clipping the actual source video. Use the real editing tools directly.
+
+## MANDATORY TOOL SEQUENCE
+1. If a video URL is provided, use trim_video or split_video to extract the best moments
+2. Enhance each clip: captions (add_subtitles), color grading (adjust_color), transitions, overlays (add_overlay), speed adjustments (adjust_speed), stabilization (stabilize_video), sound design — the full editing toolset is at your disposal
+3. Each clip should feel complete and professional
+4. review_video on each clip, iterate on any that fall short
+5. submit_final_answer with all clip paths
 
 OUTPUT to: {output_dir}/
 Save each clip as clip_N.mp4"#,
@@ -566,12 +579,15 @@ GOAL: Create professional narration/audio output.
 Title: {title}
 Brief: {brief}
 
-## WHAT TO DO
+## ⚠️ CRITICAL: DO NOT USE generate_long_form_video
+This is an AUDIO-ONLY task. Do NOT call any video tools.
+
+## MANDATORY TOOL SEQUENCE
 1. Read the script/brief and plan the audio
-2. Generate the audio — you have text-to-speech, music generation, sound effects, mixing tools, and more
-3. Enhance with music, effects, or processing if it improves the result
+2. Generate the audio using generate_text_to_speech(text, voice) for narration, generate_music(prompt) for background music, or generate_sound_effect(description) for effects
+3. Enhance with mixing tools if available
 4. Review and iterate on quality
-5. submit_final_answer
+5. submit_final_answer with the audio file path
 
 OUTPUT to: {output_dir}/
 Save as .mp3 or .wav"#,
@@ -592,14 +608,26 @@ Title: {title}
 Brief: {brief}
 Style: {style}
 
-## WHAT TO DO
-This is a multi-format deliverable. Produce ALL of:
+## ⚠️ CRITICAL: DO NOT USE generate_long_form_video
+That tool delegates to another agent. For a full-stack deliverable you MUST call the rendering tools directly for each component.
 
-1. A MAIN VIDEO — whatever style and approach you think works best for this product
-2. A THUMBNAIL — optimized for click-through on the platform
-3. AUDIO highlights or a standalone audio version
+## MANDATORY WORKFLOW — produce ALL three deliverables:
 
-The full toolset — editing, animation, voiceover, review — is at your disposal. Use them creatively. Each output should be independently reviewed before you finalize.
+### 1. MAIN VIDEO
+- generate_video_script(topic, duration, style, tone) — plan
+- Render using blender_generate_scene_type(prompt, params) for the main visual
+- Optionally use manim_execute_script for data/technical visuals and merge with merge_videos
+- add_voiceover_to_video(video_path, script) or generate_text_to_speech(text, voice) — narrate
+- review_video — check quality, iterate
+
+### 2. THUMBNAIL
+- Use create_thumbnail_hd or generate_image — create a click-optimized image
+
+### 3. AUDIO
+- Use generate_text_to_speech, generate_music, or a mix
+
+### Final step
+- submit_final_answer with all 3 output paths
 
 OUTPUT to: {output_dir}/
 Save main_video.mp4, thumbnail.png, audio.mp3"#,
@@ -619,6 +647,9 @@ GOAL: Create a {duration_seconds}s vertical product-demo video.
 Title: {title}
 Brief: {brief}
 Style: {style}
+
+## ⚠️ CRITICAL: DO NOT USE generate_long_form_video
+That tool delegates to another agent. Call rendering tools directly for this UGC video.
 
 ## WHAT TO DO (strict order)
 1. Understand the product from the brief
