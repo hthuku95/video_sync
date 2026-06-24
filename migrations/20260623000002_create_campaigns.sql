@@ -2,7 +2,7 @@ CREATE TABLE IF NOT EXISTS campaigns (
     id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id             INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     name                TEXT NOT NULL,
-    service_type        TEXT NOT NULL CHECK (service_type IN ('clipping', 'education', 'landing_page', 'product_mockup', 'full_stack', 'kick_auto_clipper', 'business_explainer', 'voice_audio')),
+    service_type        TEXT NOT NULL CHECK (service_type IN ('clipping', 'education')),
     brief               TEXT NOT NULL,
     style               TEXT NOT NULL DEFAULT 'cinematic',
     duration            FLOAT8 NOT NULL DEFAULT 30.0,
