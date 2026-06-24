@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use urlencoding;
 
 #[derive(Debug, Clone)]
 pub struct KickClient {
@@ -192,10 +193,13 @@ impl KickClient {
     ) -> Result<Vec<KickLivestream>, String> {
         let token = self.ensure_token().await?;
 
-        let categories_url = "https://api.kick.com/public/v1/categories";
+        let categories_url = format!(
+            "https://api.kick.com/public/v1/categories?q={}&page=1",
+            urlencoding::encode(category_name)
+        );
         let resp = self
             .client
-            .get(categories_url)
+            .get(&categories_url)
             .header("Authorization", format!("Bearer {}", token))
             .send()
             .await
