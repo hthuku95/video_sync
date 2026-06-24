@@ -9,6 +9,7 @@ use uuid::Uuid;
 pub const AGENT_MAX_RETRIES: i32 = 5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum ServiceType {
     LandingPage,
     ProductMockup,
     Thumbnails,
