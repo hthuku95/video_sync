@@ -8183,3 +8183,179 @@ async fn telegram_watcher_status(
 ) -> Json<serde_json::Value> {
     Json(crate::telegram_client::status(&state).await)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_normalize_revenue_service() {
+        assert_eq!(normalize_revenue_service("clipping"), "clipping");
+        assert_eq!(normalize_revenue_service("thumbnails"), "thumbnails");
+        assert_eq!(normalize_revenue_service("product_mockup"), "product_mockup");
+        assert_eq!(normalize_revenue_service("landing_page"), "landing_page");
+        assert_eq!(normalize_revenue_service("education"), "education");
+        assert_eq!(normalize_revenue_service("business_explainer"), "business_explainer");
+        assert_eq!(normalize_revenue_service("full_stack"), "full_stack");
+        assert_eq!(normalize_revenue_service("kick_auto_clipper"), "kick_auto_clipper");
+        assert_eq!(normalize_revenue_service("voice_audio"), "voice_audio");
+
+        // Aliases
+        assert_eq!(normalize_revenue_service("animations"), "education");
+        assert_eq!(normalize_revenue_service("fullstack"), "full_stack");
+        assert_eq!(normalize_revenue_service("agency"), "full_stack");
+        assert_eq!(normalize_revenue_service("3d"), "product_mockup");
+        assert_eq!(normalize_revenue_service("voice"), "voice_audio");
+        assert_eq!(normalize_revenue_service("narration"), "voice_audio");
+        assert_eq!(normalize_revenue_service("business"), "business_explainer");
+        assert_eq!(normalize_revenue_service("saas_explainer"), "business_explainer");
+        assert_eq!(normalize_revenue_service("kick_clipper"), "kick_auto_clipper");
+
+        // Unknown passes through
+        assert_eq!(normalize_revenue_service("unknown_service"), "unknown_service");
+    }
+
+    #[test]
+    fn test_is_valid_revenue_service() {
+        assert!(is_valid_revenue_service("clipping"));
+        assert!(is_valid_revenue_service("thumbnails"));
+        assert!(is_valid_revenue_service("product_mockup"));
+        assert!(is_valid_revenue_service("landing_page"));
+        assert!(is_valid_revenue_service("education"));
+        assert!(is_valid_revenue_service("business_explainer"));
+        assert!(is_valid_revenue_service("full_stack"));
+        assert!(is_valid_revenue_service("kick_auto_clipper"));
+        assert!(is_valid_revenue_service("voice_audio"));
+
+        // Aliases resolve before validation
+        assert!(is_valid_revenue_service("animations"));
+        assert!(is_valid_revenue_service("voice"));
+        assert!(is_valid_revenue_service("agency"));
+
+        // Invalid
+        assert!(!is_valid_revenue_service("invalid_service"));
+        assert!(!is_valid_revenue_service(""));
+    }
+
+    #[test]
+    fn test_old_ugc_references_removed() {
+        // normalize_revenue_service should NOT map anything to "ugc"
+        let mapped = normalize_revenue_service("ugc");
+        assert_ne!(mapped, "ugc", "ugc should not map to itself");
+        assert!(!is_valid_revenue_service("ugc"), "ugc should not be valid");
+
+        // voice no longer routes to ugc dead-end
+        assert_eq!(normalize_revenue_service("voice"), "voice_audio");
+        assert_eq!(normalize_revenue_service("audio"), "voice_audio");
+    }
+
+    #[test]
+    fn test_service_price_line() {
+        assert!(service_price_line("clipping").contains("$"));
+        assert!(service_price_line("thumbnails").contains("$"));
+        assert!(service_price_line("product_mockup").contains("$"));
+        assert!(service_price_line("landing_page").contains("$"));
+        assert!(service_price_line("education").contains("$"));
+        assert!(service_price_line("business_explainer").contains("$"));
+        assert!(service_price_line("full_stack").contains("$"));
+        assert!(service_price_line("kick_auto_clipper").contains("$"));
+        assert!(service_price_line("voice_audio").contains("$"));
+
+        // Business expliner should be $200-$600
+        let be_price = service_price_line("business_explainer");
+        assert!(be_price.contains("200") || be_price.contains("600"));
+    }
+
+    #[test]
+    fn test_service_target_duration_seconds() {
+        assert!(service_target_duration_seconds("clipping") > 0.0);
+        assert!(service_target_duration_seconds("thumbnails") > 0.0);
+        assert!(service_target_duration_seconds("product_mockup") > 0.0);
+        assert!(service_target_duration_seconds("landing_page") > 0.0);
+        assert!(service_target_duration_seconds("education") > 0.0);
+        assert!(service_target_duration_seconds("business_explainer") > 0.0);
+        assert!(service_target_duration_seconds("full_stack") > 0.0);
+        assert!(service_target_duration_seconds("kick_auto_clipper") > 0.0);
+        assert!(service_target_duration_seconds("voice_audio") > 0.0);
+
+        // Business expliner default duration should be 60s
+        assert_eq!(service_target_duration_seconds("business_explainer"), 60.0);
+    }
+
+    #[test]
+    fn test_service_long_form_style_non_empty() {
+        for service in &["clipping", "thumbnails", "product_mockup", "education",
+                         "business_explainer", "full_stack", "kick_auto_clipper", "voice_audio"] {
+            let s = service_long_form_style(service);
+            assert!(!s.is_empty(), "empty long_form_style for {}", service);
+        }
+    }
+
+    #[test]
+    fn test_service_long_form_offer_type() {
+        assert_eq!(service_long_form_offer_type("clipping"), "clip_pack");
+        assert_eq!(service_long_form_offer_type("thumbnails"), "thumbnail_hero_pack");
+        assert_eq!(service_long_form_offer_type("business_explainer"), "business_explainer_pack");
+        assert_eq!(service_long_form_offer_type("full_stack"), "full_stack_production_pack");
+        assert_eq!(service_long_form_offer_type("voice_audio"), "voice_audio_pack");
+    }
+
+    #[test]
+    fn test_service_page_for_revenue_service() {
+        assert!(service_page_for_revenue_service("business_explainer").contains("business-explainer"));
+        assert!(service_page_for_revenue_service("clipping").contains("clipper"));
+        assert!(service_page_for_revenue_service("full_stack").contains("agency"));
+    }
+
+    #[test]
+    fn test_should_use_long_form_for_revenue_sample() {
+        // Services with a URL should use long form
+        assert!(should_use_long_form_for_revenue_sample("landing_page", true));
+        assert!(should_use_long_form_for_revenue_sample("education", false));
+        assert!(should_use_long_form_for_revenue_sample("business_explainer", true));
+        assert!(should_use_long_form_for_revenue_sample("business_explainer", false));
+
+        // Some services without URL should still use long form
+        assert!(should_use_long_form_for_revenue_sample("education", false));
+        assert!(should_use_long_form_for_revenue_sample("voice_audio", false));
+        assert!(should_use_long_form_for_revenue_sample("full_stack", false));
+    }
+
+    #[test]
+    fn test_unlock_price_for_has_website() {
+        let has_website = true;
+        assert_eq!(unlock_price_for(Some("full_stack"), has_website), 497.00);
+        assert_eq!(unlock_price_for(Some("landing_page"), has_website), 297.00);
+        assert_eq!(unlock_price_for(Some("product_mockup"), has_website), 197.00);
+        assert_eq!(unlock_price_for(Some("education"), has_website), 197.00);
+        assert_eq!(unlock_price_for(Some("business_explainer"), has_website), 197.00);
+        assert_eq!(unlock_price_for(Some("clipping"), has_website), 147.00);
+        assert_eq!(unlock_price_for(Some("kick_auto_clipper"), has_website), 147.00);
+    }
+
+    #[test]
+    fn test_unlock_price_for_no_website() {
+        let no_website = false;
+        assert_eq!(unlock_price_for(Some("landing_page"), no_website), 97.00);
+        assert_eq!(unlock_price_for(Some("product_mockup"), no_website), 97.00);
+        assert_eq!(unlock_price_for(Some("education"), no_website), 97.00);
+        assert_eq!(unlock_price_for(Some("business_explainer"), no_website), 97.00);
+        assert_eq!(unlock_price_for(Some("clipping"), no_website), 49.00);
+        assert_eq!(unlock_price_for(Some("full_stack"), no_website), 49.00);
+        assert_eq!(unlock_price_for(Some("kick_auto_clipper"), no_website), 49.00);
+        assert_eq!(unlock_price_for(Some("thumbnails"), no_website), 19.00);
+    }
+
+    #[test]
+    fn test_service_offer_line() {
+        let be = service_offer_line("business_explainer");
+        assert!(be.contains("explainer") || be.contains("data"));
+        assert!(be.contains("motion"));
+
+        let clipping = service_offer_line("clipping");
+        assert!(clipping.contains("short-form") || clipping.contains("clip"));
+
+        let va = service_offer_line("voice_audio");
+        assert!(va.contains("narrat") || va.contains("audio"));
+    }
+}

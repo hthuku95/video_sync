@@ -856,3 +856,113 @@ fn locate_output_from_result(agent_result: &Result<String, String>, output_dir: 
 pub fn normalize_to_service_type(s: &str) -> ServiceType {
     ServiceType::from_normalized(s)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_service_type_from_normalized() {
+        assert_eq!(ServiceType::from_normalized("landing_page"), ServiceType::LandingPage);
+        assert_eq!(ServiceType::from_normalized("landing"), ServiceType::LandingPage);
+        assert_eq!(ServiceType::from_normalized("product_mockup"), ServiceType::ProductMockup);
+        assert_eq!(ServiceType::from_normalized("3d_mockup"), ServiceType::ProductMockup);
+        assert_eq!(ServiceType::from_normalized("thumbnails"), ServiceType::Thumbnails);
+        assert_eq!(ServiceType::from_normalized("thumbnail"), ServiceType::Thumbnails);
+        assert_eq!(ServiceType::from_normalized("education"), ServiceType::Education);
+        assert_eq!(ServiceType::from_normalized("clipping"), ServiceType::Clipping);
+        assert_eq!(ServiceType::from_normalized("clip"), ServiceType::Clipping);
+        assert_eq!(ServiceType::from_normalized("voice_audio"), ServiceType::VoiceAudio);
+        assert_eq!(ServiceType::from_normalized("voice"), ServiceType::VoiceAudio);
+        assert_eq!(ServiceType::from_normalized("podcast"), ServiceType::VoiceAudio);
+        assert_eq!(ServiceType::from_normalized("full_stack"), ServiceType::FullStack);
+        assert_eq!(ServiceType::from_normalized("business_explainer"), ServiceType::BusinessExplainer);
+        assert_eq!(ServiceType::from_normalized("saas_explainer"), ServiceType::BusinessExplainer);
+        assert_eq!(ServiceType::from_normalized("unknown"), ServiceType::LandingPage);
+    }
+
+    #[test]
+    fn test_service_type_as_str() {
+        assert_eq!(ServiceType::LandingPage.as_str(), "landing_page");
+        assert_eq!(ServiceType::ProductMockup.as_str(), "product_mockup");
+        assert_eq!(ServiceType::Thumbnails.as_str(), "thumbnails");
+        assert_eq!(ServiceType::Education.as_str(), "education");
+        assert_eq!(ServiceType::Clipping.as_str(), "clipping");
+        assert_eq!(ServiceType::VoiceAudio.as_str(), "voice_audio");
+        assert_eq!(ServiceType::FullStack.as_str(), "full_stack");
+        assert_eq!(ServiceType::BusinessExplainer.as_str(), "business_explainer");
+    }
+
+    #[test]
+    fn test_service_type_round_trip() {
+        let variants = [
+            ServiceType::LandingPage,
+            ServiceType::ProductMockup,
+            ServiceType::Thumbnails,
+            ServiceType::Education,
+            ServiceType::Clipping,
+            ServiceType::VoiceAudio,
+            ServiceType::FullStack,
+            ServiceType::BusinessExplainer,
+        ];
+        for v in variants {
+            let s = v.as_str();
+            let back = ServiceType::from_normalized(s);
+            assert_eq!(v, back, "round-trip failed for {:?} -> {} -> {:?}", v, s, back);
+        }
+    }
+
+    #[test]
+    fn test_service_type_default_style_non_empty() {
+        let variants = [
+            ServiceType::LandingPage,
+            ServiceType::ProductMockup,
+            ServiceType::Thumbnails,
+            ServiceType::Education,
+            ServiceType::Clipping,
+            ServiceType::VoiceAudio,
+            ServiceType::FullStack,
+            ServiceType::BusinessExplainer,
+        ];
+        for v in variants {
+            let style = v.default_style();
+            assert!(!style.is_empty(), "empty style for {:?}", v);
+        }
+    }
+
+    #[test]
+    fn test_service_type_duration_positive() {
+        let variants = [
+            ServiceType::LandingPage,
+            ServiceType::ProductMockup,
+            ServiceType::Thumbnails,
+            ServiceType::Education,
+            ServiceType::Clipping,
+            ServiceType::VoiceAudio,
+            ServiceType::FullStack,
+            ServiceType::BusinessExplainer,
+        ];
+        for v in variants {
+            let d = v.default_duration_seconds();
+            assert!(d > 0.0, "non-positive duration {} for {:?}", d, v);
+        }
+    }
+
+    #[test]
+    fn test_service_type_expects_video() {
+        assert!(ServiceType::LandingPage.expects_video());
+        assert!(ServiceType::ProductMockup.expects_video());
+        assert!(ServiceType::Education.expects_video());
+        assert!(ServiceType::Clipping.expects_video());
+        assert!(ServiceType::BusinessExplainer.expects_video());
+        assert!(!ServiceType::Thumbnails.expects_video());
+        assert!(!ServiceType::VoiceAudio.expects_video());
+        assert!(!ServiceType::FullStack.expects_video());
+    }
+
+    #[test]
+    fn test_old_ugc_deleted() {
+        assert!(!matches!(ServiceType::from_normalized("ugc"), ServiceType::BusinessExplainer));
+        assert_ne!(ServiceType::from_normalized("ugc").as_str(), "ugc");
+    }
+}
