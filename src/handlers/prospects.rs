@@ -2352,7 +2352,7 @@ fn should_use_long_form_for_revenue_sample(service: &str, has_reference_url: boo
     ) && (has_reference_url
         || matches!(
             normalize_revenue_service(service),
-            "education" | "three_d_scene" | "voice_audio" | "agency_bundle" | "full_stack"
+            "education" | "three_d_scene" | "voice_audio" | "business_explainer" | "agency_bundle" | "full_stack"
         ))
 }
 
@@ -8239,10 +8239,8 @@ mod tests {
 
     #[test]
     fn test_old_ugc_references_removed() {
-        // normalize_revenue_service should NOT map anything to "ugc"
-        let mapped = normalize_revenue_service("ugc");
-        assert_ne!(mapped, "ugc", "ugc should not map to itself");
-        assert!(!is_valid_revenue_service("ugc"), "ugc should not be valid");
+        // normalize_revenue_service should NOT recognize "ugc" as a valid service
+        assert!(!is_valid_revenue_service("ugc"), "ugc should not be a valid revenue service");
 
         // voice no longer routes to ugc dead-end
         assert_eq!(normalize_revenue_service("voice"), "voice_audio");

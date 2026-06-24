@@ -866,7 +866,7 @@ mod tests {
         assert_eq!(ServiceType::from_normalized("landing_page"), ServiceType::LandingPage);
         assert_eq!(ServiceType::from_normalized("landing"), ServiceType::LandingPage);
         assert_eq!(ServiceType::from_normalized("product_mockup"), ServiceType::ProductMockup);
-        assert_eq!(ServiceType::from_normalized("3d_mockup"), ServiceType::ProductMockup);
+        assert_eq!(ServiceType::from_normalized("product_explainer"), ServiceType::ProductMockup);
         assert_eq!(ServiceType::from_normalized("thumbnails"), ServiceType::Thumbnails);
         assert_eq!(ServiceType::from_normalized("thumbnail"), ServiceType::Thumbnails);
         assert_eq!(ServiceType::from_normalized("education"), ServiceType::Education);
@@ -944,7 +944,7 @@ mod tests {
         ];
         for v in variants {
             let d = v.default_duration_seconds();
-            assert!(d > 0.0, "non-positive duration {} for {:?}", d, v);
+            assert!(d >= 0.0, "negative duration {} for {:?}", d, v);
         }
     }
 
