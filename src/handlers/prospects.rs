@@ -2901,9 +2901,9 @@ async fn generate_prospect_sample_pack(
         extra["reference_image_url"] = json!(hero);
     }
 
-    // For landing_page: scrape website content so the LLM agent can understand the product
+    // For landing_page and business_explainer: scrape website content so the LLM agent can understand the product
     let mut scraped_site = None;
-    if service == "landing_page" && has_product_url {
+    if matches!(service.as_str(), "landing_page" | "business_explainer") && has_product_url {
         scraped_site = scrape_website_content(&source_url).await;
         if let Some(ref ctx) = scraped_site {
             extra["scraped_website_content"] = json!(ctx);
