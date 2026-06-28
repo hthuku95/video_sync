@@ -18312,23 +18312,126 @@ async fn execute_run_director_impl(
         }
     }
 
-    let result = match client.call_tool("run_director", tool_args).await {
-        Ok(r) => r,
-        Err(e) => return format!("❌ Director agent failed: {}", e),
+    // Submit as async job so the caller can poll progress
+    let job_id = match client.submit_job("run_director", tool_args).await {
+        Ok(id) => id,
+        Err(e) => return format!("❌ Director agent submit failed: {}", e),
     };
 
-    let result_str = match result.as_str() {
-        Some(s) if !s.is_empty() => s,
-        _ => return "✅ Director agent completed with no output summary.".to_string(),
-    };
+    let mut progress_events: Vec<String> = Vec::new();
+    let mut final_result = String::new();
 
-    if let Ok(inner) = serde_json::from_str::<Value>(result_str) {
-        let summary = inner.get("summary").and_then(|v| v.as_str()).unwrap_or("");
-        let assets = inner.get("assets").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0);
-        format!("✅ Director completed: {}\nProduced {} assets.\n{}", summary, assets, result_str)
-    } else {
-        format!("✅ Director result: {}", result_str)
+    for _ in 0..180u16 {
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+
+        let status = match client.poll_job(&job_id).await {
+            Ok(s) => s,
+            Err(e) => {
+                return format!(
+                    "❌ Director agent poll failed: {}\nProgress:\n  {}",
+                    e,
+                    progress_events.join("\n  ")
+                );
+            }
+        };
+
+        // Collect progress events
+        if let Some(events) = status.get("progress_events").and_then(|v| v.as_array()) {
+            for ev in events {
+                if let (Some(stage), Some(msg)) = (
+                    ev.get("stage").and_then(|v| v.as_str()),
+                    ev.get("message").and_then(|v| v.as_str()),
+                ) {
+                    let entry = format!("[{}] {}", stage, msg);
+                    if !progress_events.contains(&entry) {
+                        progress_events.push(entry);
+                    }
+                }
+            }
+        }
+
+        match status.get("state").and_then(|s| s.as_str()) {
+            Some("completed") => {
+                // The result may be a JSON string (from the handler) or a structured object
+                if let Some(result_val) = status.get("result") {
+                    // Try structured object first
+                    if let Some(assets) = result_val.get("assets").and_then(|v| v.as_array()) {
+                        let summary = result_val
+                            .get("summary")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        final_result = format!(
+                            "✅ Director completed: {}\nProduced {} assets.\n{}",
+                            summary,
+                            assets.len(),
+                            serde_json::to_string_pretty(result_val).unwrap_or_default()
+                        );
+                    } else if let Some(s) = result_val.as_str() {
+                        // Fallback: result is a JSON string (legacy format)
+                        if let Ok(inner) = serde_json::from_str::<Value>(s) {
+                            let summary = inner
+                                .get("summary")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("");
+                            let assets = inner
+                                .get("assets")
+                                .and_then(|v| v.as_array())
+                                .map(|a| a.len())
+                                .unwrap_or(0);
+                            final_result = format!(
+                                "✅ Director completed: {}\nProduced {} assets.\n{}",
+                                summary,
+                                assets,
+                                s
+                            );
+                        } else {
+                            let full = format!("✅ Director result: {}", s);
+                            if let Some(jid) = result_val.get("job_id").and_then(|v| v.as_str()) {
+                                final_result = format!("{}\njob_id: {}", full, jid);
+                            } else {
+                                final_result = full;
+                            }
+                        }
+                    } else {
+                        final_result =
+                            "✅ Director agent completed with no output summary.".to_string();
+                    }
+                }
+                break;
+            }
+            Some("failed") | Some("error") => {
+                let err_msg = status
+                    .get("error")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("director failed");
+                final_result = format!(
+                    "❌ Director agent failed: {}\nProgress:\n  {}",
+                    err_msg,
+                    progress_events.join("\n  ")
+                );
+                break;
+            }
+            _ => {} // still running
+        }
     }
+
+    if final_result.is_empty() {
+        final_result = format!(
+            "❌ Director agent timed out (15 min).\nProgress:\n  {}",
+            progress_events.join("\n  ")
+        );
+    }
+
+    // Append progress to result for visibility
+    if !progress_events.is_empty() {
+        final_result.push_str("\n\n— Progress Timeline —\n");
+        for ev in &progress_events {
+            use std::fmt::Write;
+            let _ = writeln!(final_result, "  {}", ev);
+        }
+    }
+
+    final_result
 }
 
 async fn execute_run_director_gemini(
