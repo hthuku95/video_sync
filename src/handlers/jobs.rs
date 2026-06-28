@@ -762,36 +762,35 @@ pub async fn workflow_events(
 
 /// Routes for job management
 pub fn job_routes() -> Router {
-    Router::new()
+    let public = Router::new()
         .route("/api/jobs/:job_id/status", get(get_job_status))
         .route("/api/jobs/:job_id/control", post(control_job))
         .route("/api/jobs/session/:session_id", get(get_session_jobs))
         .route(
+            "/api/workflows/:workflow_id/events",
+            get(workflow_events),
+        );
+
+    let protected = Router::new()
+        .route(
             "/api/workflows/:workflow_id/status",
-            get(get_workflow_status).layer(axum::middleware::from_fn(
-                crate::middleware::auth::auth_middleware,
-            )),
+            get(get_workflow_status),
         )
         .route(
             "/api/workflows/:workflow_id/debug",
-            get(get_workflow_debug).layer(axum::middleware::from_fn(
-                crate::middleware::auth::auth_middleware,
-            )),
+            get(get_workflow_debug),
         )
         .route(
             "/api/workflows/:workflow_id/feedback",
-            post(workflow_feedback).layer(axum::middleware::from_fn(
-                crate::middleware::auth::auth_middleware,
-            )),
+            post(workflow_feedback),
         )
         .route(
             "/api/workflows/:workflow_id/cancel",
-            post(workflow_cancel).layer(axum::middleware::from_fn(
-                crate::middleware::auth::auth_middleware,
-            )),
+            post(workflow_cancel),
         )
-        .route(
-            "/api/workflows/:workflow_id/events",
-            get(workflow_events),
-        )
+        .layer(axum::middleware::from_fn(
+            crate::middleware::auth::auth_middleware,
+        ));
+
+    public.merge(protected)
 }

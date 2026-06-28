@@ -7,6 +7,7 @@ use tokio::sync::Semaphore;
 pub mod agent;
 pub mod ai_tool_selector;
 pub mod bedrock_client;
+pub mod browserbase_client;
 pub mod blender_mcp_client;
 pub mod blender_quality;
 pub mod claude_client;

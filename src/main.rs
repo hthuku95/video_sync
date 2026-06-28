@@ -10,7 +10,6 @@ use tower_http::cors::CorsLayer;
 mod agent;
 mod ai_tool_selector; // 🧠 AI-driven tool selection — Gemma 4 picks relevant tools per request
 mod blender_mcp_client; // 🎨 BlenderMCPServer — 3D rendering + Manim
-mod browserbase_client; // 🌐 BrowserBase — cloud browser fetch + search
 mod bedrock_client;
 mod blender_quality;
 mod claude_client;
