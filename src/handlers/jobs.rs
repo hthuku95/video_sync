@@ -616,7 +616,7 @@ pub async fn get_workflow_debug(
 /// Send a follow-up message to a running agent for re-editing / add-on requests.
 pub async fn workflow_feedback(
     Path(workflow_id): Path<String>,
-    State(state): State<Arc<AppState>>,
+    Extension(state): Extension<Arc<AppState>>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
     let session_id = match uuid::Uuid::parse_str(&workflow_id) {
@@ -663,7 +663,7 @@ pub async fn workflow_feedback(
 /// Cancel a running agent mid-task.
 pub async fn workflow_cancel(
     Path(workflow_id): Path<String>,
-    State(state): State<Arc<AppState>>,
+    Extension(state): Extension<Arc<AppState>>,
 ) -> impl IntoResponse {
     let session_id = match uuid::Uuid::parse_str(&workflow_id) {
         Ok(_) => workflow_id,
@@ -707,7 +707,7 @@ pub async fn workflow_cancel(
 /// Poll progress events from a running or completed workflow.
 pub async fn workflow_events(
     Path(workflow_id): Path<String>,
-    State(state): State<Arc<AppState>>,
+    Extension(state): Extension<Arc<AppState>>,
 ) -> impl IntoResponse {
     let workflow_uuid = match uuid::Uuid::parse_str(&workflow_id) {
         Ok(id) => id,
