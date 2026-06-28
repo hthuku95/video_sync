@@ -12,6 +12,7 @@ mod ai_tool_selector; // 🧠 AI-driven tool selection — Gemma 4 picks relevan
 mod blender_mcp_client; // 🎨 BlenderMCPServer — 3D rendering + Manim
 mod bedrock_client;
 mod blender_quality;
+mod browserbase_client; // 🌐 BrowserBase — cloud browser fetch + search
 mod claude_client;
 mod clipping; // 📹 YouTube clipping feature
 mod cloud_storage;

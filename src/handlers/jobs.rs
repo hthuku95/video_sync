@@ -761,7 +761,7 @@ pub async fn workflow_events(
 }
 
 /// Routes for job management
-pub fn job_routes() -> Router<Arc<AppState>> {
+pub fn job_routes() -> Router {
     Router::new()
         .route("/api/jobs/:job_id/status", get(get_job_status))
         .route("/api/jobs/:job_id/control", post(control_job))
@@ -786,7 +786,7 @@ pub fn job_routes() -> Router<Arc<AppState>> {
             "/api/workflows/:workflow_id/cancel",
             post(workflow_cancel),
         )
-        .layer(axum::middleware::from_fn(
+        .route_layer(axum::middleware::from_fn(
             crate::middleware::auth::auth_middleware,
         ))
 }
