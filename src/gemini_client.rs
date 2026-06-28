@@ -2761,6 +2761,27 @@ impl GeminiClient {
                 },
             },
 
+            // BROWSERBASE FETCH — JS-rendered, CAPTCHA-solving, markdown-returning page fetch
+            // =====================================================================
+
+            FunctionDeclaration {
+                name: "browserbase_fetch_url".to_string(),
+                description: "Fetch a website URL using BrowserBase — a cloud browser that renders JavaScript, solves CAPTCHAs, and returns clean markdown content. Use this instead of read_website_content for JavaScript-heavy SPAs, sites that block plain HTTP fetches, or when you need the full rendered page as markdown. Returns the page content as clean markdown (up to 8000 chars). Falls back to read_website_content if BrowserBase is not configured.".to_string(),
+                parameters: Parameters {
+                    param_type: "object".to_string(),
+                    properties: {
+                        let mut props = HashMap::new();
+                        props.insert("url".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "The website URL to fetch (e.g. 'https://stripe.com')".to_string(),
+                            items: None,
+                        });
+                        props
+                    },
+                    required: vec!["url".to_string()],
+                },
+            },
+
             // CLOUD STORAGE TOOL
             // =====================================================================
 

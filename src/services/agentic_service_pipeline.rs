@@ -18,6 +18,14 @@ pub enum ServiceType {
     VoiceAudio,
     FullStack,
     BusinessExplainer,
+    ManimExplainer,
+    WhiteboardAnimation,
+    KineticTypography,
+    AnimatedInfographic,
+    AlgorithmViz,
+    InvestorPitch,
+    YearInReview,
+    IsometricExplainer,
 }
 
 impl ServiceType {
@@ -31,6 +39,14 @@ impl ServiceType {
             "business_explainer" | "business" | "business_case_study" | "saas_explainer" | "business_explainer_pack" => Self::BusinessExplainer,
             "voice_audio" | "voice" | "voice_audio_pack" | "narration" | "podcast" => Self::VoiceAudio,
             "full_stack" | "agency_bundle" | "agency" | "fullstack" | "full_stack_production_pack" | "agency_bundle_pack" => Self::FullStack,
+            "manim_explainer" | "manim" | "manim_only" | "manim_pack" => Self::ManimExplainer,
+            "whiteboard" | "whiteboard_animation" | "hand_drawn" | "sketch" | "whiteboard_pack" => Self::WhiteboardAnimation,
+            "kinetic_typography" | "kinetic_type" | "text_animation" | "type_pack" => Self::KineticTypography,
+            "animated_infographic" | "infographic" | "data_story" | "chart_animation" | "infographic_pack" => Self::AnimatedInfographic,
+            "algorithm_viz" | "algorithm_visualization" | "code_viz" | "data_structure" | "algorithm_pack" => Self::AlgorithmViz,
+            "investor_pitch" | "pitch_deck" | "investor_video" | "pitch_pack" => Self::InvestorPitch,
+            "year_in_review" | "wrapped" | "annual_recap" | "year_recap" | "wrapped_pack" => Self::YearInReview,
+            "isometric_explainer" | "isometric" | "isometric_pack" => Self::IsometricExplainer,
             "fallback_summary" | "summary" | "ad" | "advert" => Self::LandingPage,
             _ => Self::LandingPage,
         }
@@ -46,6 +62,14 @@ impl ServiceType {
             Self::VoiceAudio => "voice_audio",
             Self::FullStack => "full_stack",
             Self::BusinessExplainer => "business_explainer",
+            Self::ManimExplainer => "manim_explainer",
+            Self::WhiteboardAnimation => "whiteboard_animation",
+            Self::KineticTypography => "kinetic_typography",
+            Self::AnimatedInfographic => "animated_infographic",
+            Self::AlgorithmViz => "algorithm_viz",
+            Self::InvestorPitch => "investor_pitch",
+            Self::YearInReview => "year_in_review",
+            Self::IsometricExplainer => "isometric_explainer",
         }
     }
 
@@ -59,6 +83,14 @@ impl ServiceType {
             Self::VoiceAudio => "professional podcast-quality audio production, clean mixing",
             Self::FullStack => "full-stack production backend, consistent branding across formats",
             Self::BusinessExplainer => "narrated business explainer, data-driven visuals, professional tone, clean motion graphics",
+            Self::ManimExplainer => "Manim-powered animated explainer, clean motion graphics, narrated, no 3D required",
+            Self::WhiteboardAnimation => "hand-drawn whiteboard sketch style, marker-on-board, educational, narrated",
+            Self::KineticTypography => "dynamic text animation, word-by-word reveal, kinetic type, narrated",
+            Self::AnimatedInfographic => "data-driven animated infographic, charts, counters, statistics, narrated",
+            Self::AlgorithmViz => "algorithm visualization, code execution flow, data structures, narrated technical explainer",
+            Self::InvestorPitch => "professional investor pitch video, motion graphics, narrated, clean brand presentation",
+            Self::YearInReview => "personalized year-in-review recap, data-driven highlights, wrapped-style, narrated",
+            Self::IsometricExplainer => "isometric 3D explainer, angled perspective view, clean motion graphics, narrated",
         }
     }
 
@@ -72,11 +104,25 @@ impl ServiceType {
             Self::VoiceAudio => 45.0,
             Self::FullStack => 90.0,
             Self::BusinessExplainer => 60.0,
+            Self::ManimExplainer => 60.0,
+            Self::WhiteboardAnimation => 60.0,
+            Self::KineticTypography => 30.0,
+            Self::AnimatedInfographic => 45.0,
+            Self::AlgorithmViz => 90.0,
+            Self::InvestorPitch => 90.0,
+            Self::YearInReview => 60.0,
+            Self::IsometricExplainer => 45.0,
         }
     }
 
     pub fn expects_video(&self) -> bool {
-        matches!(self, Self::LandingPage | Self::ProductMockup | Self::Education | Self::Clipping | Self::BusinessExplainer)
+        matches!(self,
+            Self::LandingPage | Self::ProductMockup | Self::Education |
+            Self::Clipping | Self::BusinessExplainer | Self::ManimExplainer |
+            Self::WhiteboardAnimation | Self::KineticTypography | Self::AnimatedInfographic |
+            Self::AlgorithmViz | Self::InvestorPitch | Self::YearInReview |
+            Self::IsometricExplainer
+        )
     }
 
     pub fn expects_image(&self) -> bool {
@@ -221,6 +267,32 @@ impl AgenticServicePipeline {
                 ollama_client.clone(),
             );
 
+            // ── PROGRESS BRIDGE ──
+            // Connect agent's progress_tx to the workflow_events table so callers
+            // can poll GET /api/workflows/{workflow_id}/events for live progress.
+            let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+            let pool = state.db_pool.clone();
+            let wf_id = workflow_id;
+            let progress_task = tokio::spawn(async move {
+                while let Some(msg) = progress_rx.recv().await {
+                    let _ = sqlx::query(
+                        r#"INSERT INTO app_workflow_events
+                           (workflow_id, event_type, node_name, message, details)
+                           VALUES ($1, 'agent_progress', NULL, $2, '{}'::jsonb)"#,
+                    )
+                    .bind(wf_id)
+                    .bind(&msg)
+                    .execute(&pool)
+                    .await;
+                }
+            });
+
+            // ── RE-EDITING CHANNEL ──
+            // Register a feedback channel so POST /api/workflows/{workflow_id}/feedback
+            // can send messages to the running agent (re-editing / add-on requests).
+            let (feedback_tx, feedback_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+            let _ = state.active_agent_channels.write().await.insert(session_id.clone(), feedback_tx);
+
             let agent_result = agent
                 .chat(
                     &current_prompt,
@@ -228,12 +300,16 @@ impl AgenticServicePipeline {
                     String::new(),
                     state.clone(),
                     state.job_manager.clone(),
-                    None,
+                    Some(progress_tx),
                     Some(workflow_id),
-                    None,
+                    Some(feedback_rx),
                     input.user_id,
                 )
                 .await;
+
+            // Clean up progress bridge and feedback channel
+            state.active_agent_channels.write().await.remove(&session_id);
+            // Dropping progress_tx closes the channel, stopping progress_task
 
             let produced = locate_output_from_result(&agent_result, &output_dir);
             retries_used = attempt as i32;
@@ -435,8 +511,17 @@ Style: {style}
 ## ⚠️ CRITICAL: DO NOT USE generate_long_form_video
 The tool `generate_long_form_video` is a convenience wrapper that delegates to another agent — it will NOT produce the correct output for this DFY service. You MUST call the rendering tools directly yourself.
 
+## STEP 0: UNDERSTAND THE WEBSITE
+Before making anything, call `browserbase_fetch_url(url="{url}")` to fetch the website content via BrowserBase (JS rendering, CAPTCHA solving, markdown output). Use the extracted content to understand:
+- What the product/service does
+- Key features and value propositions
+- Brand colors, tone, and style
+- Call-to-action and target audience
+
+If BrowserBase is not configured, fall back to `read_website_content(url="{url}")`.
+
 ## MANDATORY TOOL SEQUENCE
-1. generate_video_script(topic, duration, style, tone) — plan the content
+1. generate_video_script(topic, duration, style, tone) — plan the content using the website info from step 0
 2. Render the MAIN VISUAL using blender_generate_scene_type(prompt, params) — this is the core of your landing page video. Use it for product mockups, device frames, animated UI mockups, title cards, logos, and any 3D content.
 3. If your video needs animated diagrams, data visualizations, or math/technical content, use manim_execute_script(description, ...) and merge with merge_videos
 4. add_voiceover_to_video(video_path, script) or generate_text_to_speech(text, voice) — narrate the demo
@@ -467,6 +552,9 @@ Style: {style}
 
 ## ⚠️ CRITICAL: DO NOT USE generate_long_form_video
 The tool `generate_long_form_video` delegates to another agent and will NOT produce the correct output. Call the rendering tools directly.
+
+## STEP 0: UNDERSTAND THE WEBSITE (if source URL is provided)
+If a source URL is provided, call `browserbase_fetch_url(url="{url}")` first to extract website content via BrowserBase (JS rendering, markdown output). Use the extracted content to understand the product's features, design, and brand style. Fall back to `read_website_content(url="{url}")` if BrowserBase is not configured.
 
 ## MANDATORY TOOL SEQUENCE
 1. generate_video_script(topic, duration, style, tone) — plan the content
@@ -683,7 +771,325 @@ Save your final video as .mp4 (landscape 16:9 recommended)"#,
             ServiceType::VoiceAudio => Self::voice_audio_prompt(input),
             ServiceType::FullStack => Self::full_stack_prompt(input),
             ServiceType::BusinessExplainer => Self::business_explainer_prompt(input),
+            ServiceType::ManimExplainer => Self::manim_explainer_prompt(input),
+            ServiceType::WhiteboardAnimation => Self::whiteboard_animation_prompt(input),
+            ServiceType::KineticTypography => Self::kinetic_typography_prompt(input),
+            ServiceType::AnimatedInfographic => Self::animated_infographic_prompt(input),
+            ServiceType::AlgorithmViz => Self::algorithm_viz_prompt(input),
+            ServiceType::InvestorPitch => Self::investor_pitch_prompt(input),
+            ServiceType::YearInReview => Self::year_in_review_prompt(input),
+            ServiceType::IsometricExplainer => Self::isometric_explainer_prompt(input),
         }
+    }
+
+    // ── NEW MANIM-ONLY SERVICE PROMPTS ─────────────────────────────────────
+
+    fn manim_explainer_prompt(input: &ServiceInput) -> String {
+        let out = format!("outputs/agentic_{}", input.delivery_id);
+        format!(
+            r#"## SERVICE: Manim Explainer Video
+GOAL: Create a {duration}s narrated animated explainer video using ONLY Manim.
+
+Topic: {brief}
+Title: {title}
+Style: {style}
+
+## ⚠️ CRITICAL: DO NOT USE blender_generate_scene_type or any 3D/Blender tools.
+Use ONLY manim_execute_script for ALL visual content — every render call uploads to R2 automatically.
+
+## ⚠️ CRITICAL: DO NOT USE generate_long_form_video
+That tool delegates to another agent and will NOT produce the correct output.
+
+## MANDATORY TOOL SEQUENCE
+1. generate_video_script(topic="{brief}", duration={duration}, style="{style}", tone="professional")
+2. Render ALL scenes using manim_execute_script(description=..., quality="h") — for title cards, text animations, diagrams, charts, and ALL visual content. Each call returns a Cloud URL.
+3. Use merge_videos if multiple manim clips need combining
+4. add_voiceover_to_video(video_path="{out}/output.mp4", script="from script above")
+5. review_video(video_path_or_url="{out}/output.mp4")
+6. submit_final_answer(summary="manim explainer {title}", output_files=["{out}/output.mp4"])
+"#,
+            duration = input.duration_seconds,
+            brief = input.brief,
+            title = input.title,
+            style = input.style,
+            out = out,
+        )
+    }
+
+    fn whiteboard_animation_prompt(input: &ServiceInput) -> String {
+        let out = format!("outputs/agentic_{}", input.delivery_id);
+        format!(
+            r#"## SERVICE: Whiteboard Animation Video
+GOAL: Create a {duration}s narrated whiteboard-style explainer video using ONLY Manim.
+
+Topic: {brief}
+Title: {title}
+Style: whiteboard, hand-drawn sketch, marker-on-board
+
+## ⚠️ CRITICAL: DO NOT USE blender_generate_scene_type or any 3D/Blender tools.
+Use ONLY manim_execute_script for ALL visual content — every render call uploads to R2 automatically.
+
+## ⚠️ CRITICAL: DO NOT USE generate_long_form_video
+
+## WHITEBOARD STYLE INSTRUCTIONS
+- Use Write() animation for text and drawings to simulate hand-sketching
+- Use Create() for shapes to reveal them stroke-by-stroke
+- Use a white/off-white background (#F5F0E8 or similar) with dark marker-style strokes (#1A1A1A)
+- Keep visuals simple: stick figures, hand-drawn shapes, arrows, boxes
+- Text should appear as if being hand-written (use Write with reverse=False)
+- Pace the narration to match the drawing speed
+- See manim_codegen: use background="light" for whiteboard look
+
+## MANDATORY TOOL SEQUENCE
+1. generate_video_script(topic="{brief}", duration={duration}, style="whiteboard hand-drawn", tone="friendly educational")
+2. Render ALL scenes using manim_execute_script(description=..., quality="h", background="light") — every visual must be Manim-generated stroke-by-stroke. Each call returns a Cloud URL.
+3. Use merge_videos if multiple clips need combining
+4. add_voiceover_to_video(video_path="{out}/output.mp4", script="from script above")
+5. review_video(video_path_or_url="{out}/output.mp4")
+6. submit_final_answer(summary="whiteboard animation {title}", output_files=["{out}/output.mp4"])
+"#,
+            duration = input.duration_seconds,
+            brief = input.brief,
+            title = input.title,
+            out = out,
+        )
+    }
+
+    fn kinetic_typography_prompt(input: &ServiceInput) -> String {
+        let out = format!("outputs/agentic_{}", input.delivery_id);
+        format!(
+            r#"## SERVICE: Kinetic Typography Video
+GOAL: Create a {duration}s kinetic typography video using ONLY Manim.
+
+Topic: {brief}
+Title: {title}
+Style: dynamic text animation, word-by-word reveal, kinetic type
+
+## ⚠️ CRITICAL: DO NOT USE blender_generate_scene_type or any 3D/Blender tools.
+Use ONLY manim_execute_script for ALL visual content — every render call uploads to R2 automatically.
+
+## ⚠️ CRITICAL: DO NOT USE generate_long_form_video
+
+## KINETIC TYPOGRAPHY INSTRUCTIONS
+- Use animated text as the primary visual element throughout the video
+- Words should appear, scale, move, and transform in sync with the narration
+- Use Write() for text reveals, Transform() for morphing between phrases
+- Vary font sizes and weights for emphasis on key words
+- Use color changes to highlight important concepts
+- Background should be minimal (solid color or subtle gradient) — text IS the visual
+- See manim_codegen: use background="dark" or "light" as appropriate
+
+## MANDATORY TOOL SEQUENCE
+1. generate_video_script(topic="{brief}", duration={duration}, style="kinetic typography", tone="dynamic energetic")
+2. Render ALL scenes using manim_execute_script(description=..., quality="h") — text animations only, no diagrams or charts. Each call returns a Cloud URL.
+3. Use merge_videos if multiple clips need combining
+4. add_voiceover_to_video(video_path="{out}/output.mp4", script="from script above")
+5. review_video(video_path_or_url="{out}/output.mp4")
+6. submit_final_answer(summary="kinetic typography {title}", output_files=["{out}/output.mp4"])
+"#,
+            duration = input.duration_seconds,
+            brief = input.brief,
+            title = input.title,
+            out = out,
+        )
+    }
+
+    fn animated_infographic_prompt(input: &ServiceInput) -> String {
+        let out = format!("outputs/agentic_{}", input.delivery_id);
+        format!(
+            r#"## SERVICE: Animated Infographic Video
+GOAL: Create a {duration}s animated data infographic video using ONLY Manim.
+
+Topic: {brief}
+Title: {title}
+Style: data-driven infographic, animated charts, counters
+
+## ⚠️ CRITICAL: DO NOT USE blender_generate_scene_type or any 3D/Blender tools.
+Use ONLY manim_execute_script for ALL visual content — every render call uploads to R2 automatically.
+
+## ⚠️ CRITICAL: DO NOT USE generate_long_form_video
+
+## INFOGRAPHIC INSTRUCTIONS
+- Use BarChart, PieChart, or other Manim chart types to visualize data
+- Animate data counters with ValueTracker and DecimalNumber
+- Use Create() to reveal chart elements progressively
+- Highlight key data points with color and labels
+- Include title cards and summary cards as text scenes
+- Transition between charts with clean fades or slides
+- See manim_codegen: use background="dark" or "light" as appropriate
+
+## MANDATORY TOOL SEQUENCE
+1. generate_video_script(topic="{brief}", duration={duration}, style="infographic animated charts", tone="professional data-driven")
+2. Render ALL scenes using manim_execute_script(description=..., quality="h") — charts, counters, data viz only. Each call returns a Cloud URL.
+3. Use merge_videos if multiple clips need combining
+4. add_voiceover_to_video(video_path="{out}/output.mp4", script="from script above")
+5. review_video(video_path_or_url="{out}/output.mp4")
+6. submit_final_answer(summary="animated infographic {title}", output_files=["{out}/output.mp4"])
+"#,
+            duration = input.duration_seconds,
+            brief = input.brief,
+            title = input.title,
+            out = out,
+        )
+    }
+
+    fn algorithm_viz_prompt(input: &ServiceInput) -> String {
+        let out = format!("outputs/agentic_{}", input.delivery_id);
+        format!(
+            r#"## SERVICE: Algorithm Visualization Video
+GOAL: Create a {duration}s algorithm visualization video using ONLY Manim.
+
+Topic: {brief}
+Title: {title}
+Style: algorithm visualization, code execution, data structures
+
+## ⚠️ CRITICAL: DO NOT USE blender_generate_scene_type or any 3D/Blender tools.
+Use ONLY manim_execute_script for ALL visual content — every render call uploads to R2 automatically.
+
+## ⚠️ CRITICAL: DO NOT USE generate_long_form_video
+
+## ALGORITHM VIZ INSTRUCTIONS
+- Visualize data structures (arrays, trees, graphs, linked lists) using Manim shapes
+- Show step-by-step algorithm execution with animated pointers and highlights
+- Use value trackers (ValueTracker) for counters and indices
+- Color-code elements: unsorted=WHITE, comparing=YELLOW, sorted=GREEN, pivot=BLUE
+- Show code snippets alongside the visualization when relevant
+- Animate swaps, comparisons, and pointer movements
+- Include labeled axes or coordinates when needed
+
+## MANDATORY TOOL SEQUENCE
+1. generate_video_script(topic="{brief}", duration={duration}, style="algorithm visualization", tone="educational technical")
+2. Render ALL scenes using manim_execute_script(description=..., quality="h") — algorithm visuals, data structures, code animations. Each call returns a Cloud URL.
+3. Use merge_videos if multiple clips need combining
+4. add_voiceover_to_video(video_path="{out}/output.mp4", script="from script above")
+5. review_video(video_path_or_url="{out}/output.mp4")
+6. submit_final_answer(summary="algorithm visualization {title}", output_files=["{out}/output.mp4"])
+"#,
+            duration = input.duration_seconds,
+            brief = input.brief,
+            title = input.title,
+            out = out,
+        )
+    }
+
+    fn investor_pitch_prompt(input: &ServiceInput) -> String {
+        let out = format!("outputs/agentic_{}", input.delivery_id);
+        format!(
+            r#"## SERVICE: Investor Pitch Video
+GOAL: Create a {duration}s professional investor pitch video using ONLY Manim + voiceover.
+
+Topic: {brief}
+Title: {title}
+Style: professional investor pitch, clean motion graphics, brand presentation
+
+## ⚠️ CRITICAL: DO NOT USE blender_generate_scene_type or any 3D/Blender tools.
+Use ONLY manim_execute_script for ALL visual content — every render call uploads to R2 automatically.
+
+## ⚠️ CRITICAL: DO NOT USE generate_long_form_video
+
+## INVESTOR PITCH INSTRUCTIONS
+- Create a professional pitch deck-style video: problem → solution → market → traction → team → ask
+- Use clean title cards and animated text for each section
+- Include simple data charts for market size and traction metrics
+- Animate key numbers (revenue, users, growth %) with ValueTracker counters
+- Use a professional color palette (blues, grays, accent color)
+- Background music should be subtle and professional
+- Voiceover should be energetic and confident
+
+## MANDATORY TOOL SEQUENCE
+1. generate_video_script(topic="{brief}", duration={duration}, style="investor pitch deck", tone="professional confident persuasive")
+2. Render ALL scenes using manim_execute_script(description=..., quality="h") — pitch deck slides, charts, animated metrics. Each call returns a Cloud URL.
+3. Use merge_videos if multiple clips need combining
+4. add_voiceover_to_video(video_path="{out}/output.mp4", script="from script above")
+5. review_video(video_path_or_url="{out}/output.mp4")
+6. submit_final_answer(summary="investor pitch {title}", output_files=["{out}/output.mp4"])
+"#,
+            duration = input.duration_seconds,
+            brief = input.brief,
+            title = input.title,
+            out = out,
+        )
+    }
+
+    fn year_in_review_prompt(input: &ServiceInput) -> String {
+        let out = format!("outputs/agentic_{}", input.delivery_id);
+        format!(
+            r#"## SERVICE: Year-in-Review / Wrapped Video
+GOAL: Create a {duration}s personalized year-in-review recap video using ONLY Manim.
+
+Topic: {brief}
+Title: {title}
+Style: wrapped-style recap, data-driven highlights, personalized
+
+## ⚠️ CRITICAL: DO NOT USE blender_generate_scene_type or any 3D/Blender tools.
+Use ONLY manim_execute_script for ALL visual content — every render call uploads to R2 automatically.
+
+## ⚠️ CRITICAL: DO NOT USE generate_long_form_video
+
+## YEAR-IN-REVIEW INSTRUCTIONS
+- Create a Spotify Wrapped-style recap video showing key statistics and highlights
+- Use bold typography and vibrant colors for each stat reveal
+- Animate counters to count up to final numbers (ValueTracker + DecimalNumber)
+- Use bar charts or circular progress indicators for comparisons
+- Each stat gets its own scene with dramatic reveal
+- Include a title card and closing summary
+- Fast-paced editing between stats
+- See manim_codegen: use background="dark" for wrapped-style aesthetic
+
+## MANDATORY TOOL SEQUENCE
+1. generate_video_script(topic="{brief}", duration={duration}, style="year-in-review wrapped", tone="energetic celebratory")
+2. Render ALL scenes using manim_execute_script(description=..., quality="h") — stat reveals, counters, charts. Each call returns a Cloud URL.
+3. Use merge_videos if multiple clips need combining
+4. add_voiceover_to_video(video_path="{out}/output.mp4", script="from script above")
+5. review_video(video_path_or_url="{out}/output.mp4")
+6. submit_final_answer(summary="year in review {title}", output_files=["{out}/output.mp4"])
+"#,
+            duration = input.duration_seconds,
+            brief = input.brief,
+            title = input.title,
+            out = out,
+        )
+    }
+
+    fn isometric_explainer_prompt(input: &ServiceInput) -> String {
+        let out = format!("outputs/agentic_{}", input.delivery_id);
+        format!(
+            r#"## SERVICE: Isometric Explainer Video
+GOAL: Create a {duration}s isometric 3D explainer video using ONLY Manim.
+
+Topic: {brief}
+Title: {title}
+Style: isometric 3D perspective, angled view, clean motion graphics
+
+## ⚠️ CRITICAL: DO NOT USE blender_generate_scene_type or any 3D/Blender tools.
+Use ONLY manim_execute_script for ALL visual content — every render call uploads to R2 automatically.
+
+## ⚠️ CRITICAL: DO NOT USE generate_long_form_video
+
+## ISOMETRIC EXPLAINER INSTRUCTIONS
+- Use Manim's ThreeDScene with isometric camera angle (phi=60, theta=-45, gamma=0 or similar)
+- Create 3D geometric shapes (cubes, cylinders, arrows) to represent concepts
+- Use ThreeDaxes for 3D coordinate reference when needed
+- Animate objects rising from the "floor" (build-up reveal)
+- Use perspective lines and isometric grids for spatial context
+- Color-code different elements/layers of the concept
+- Keep the isometric view consistent throughout
+- See manim_codegen: use ThreeDScene for isometric perspective rendering
+- Set background="dark" for modern tech aesthetic or "light" for clean business look
+
+## MANDATORY TOOL SEQUENCE
+1. generate_video_script(topic="{brief}", duration={duration}, style="isometric 3D explainer", tone="professional modern")
+2. Render ALL scenes using manim_execute_script(description=..., quality="h") — isometric 3D scenes, animated objects. Each call returns a Cloud URL.
+3. Use merge_videos if multiple clips need combining
+4. add_voiceover_to_video(video_path="{out}/output.mp4", script="from script above")
+5. review_video(video_path_or_url="{out}/output.mp4")
+6. submit_final_answer(summary="isometric explainer {title}", output_files=["{out}/output.mp4"])
+"#,
+            duration = input.duration_seconds,
+            brief = input.brief,
+            title = input.title,
+            out = out,
+        )
     }
 }
 

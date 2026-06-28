@@ -1628,6 +1628,21 @@ impl ClaudeClient {
                 },
             },
             ClaudeTool {
+                name: "browserbase_fetch_url".to_string(),
+                description: "Fetch a website URL using BrowserBase — a cloud browser that renders JavaScript, solves CAPTCHAs, and returns clean markdown content. Use this instead of read_website_content for JavaScript-heavy SPAs, sites that block plain HTTP fetches, or when you need the full rendered page as markdown. Returns the page content as clean markdown (up to 8000 chars). Falls back to read_website_content if BrowserBase is not configured.".to_string(),
+                input_schema: InputSchema {
+                    schema_type: "object".to_string(),
+                    properties: HashMap::from([
+                        ("url".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "The website URL to fetch (e.g. 'https://stripe.com')".to_string(),
+                            items: None,
+                        }),
+                    ]),
+                    required: vec!["url".to_string()],
+                },
+            },
+            ClaudeTool {
                 name: "fetch_website_image".to_string(),
                 description: "Fetch the hero/og:image from a website URL. Use this when a user provides a website URL (e.g. netflix.com, stripe.com) and you need to extract its visual for use in a Blender landing page animation or product mockup. Returns the image URL that you can pass to blender_generate_scene_type's reference_image_url parameter.".to_string(),
                 input_schema: InputSchema {

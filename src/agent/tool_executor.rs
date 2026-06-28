@@ -1173,6 +1173,7 @@ pub async fn execute_tool_claude(name: &str, args: &Value) -> String {
         "edit_image" => execute_edit_image_claude(args).await,
         "fetch_website_image" => execute_fetch_website_image_claude(args).await,
         "read_website_content" => execute_read_website_content_claude(args).await,
+        "browserbase_fetch_url" => execute_browserbase_fetch_url_claude(args).await,
         "auto_generate_video" => execute_auto_generate_video_claude(args).await,
         "generate_video_queries" => execute_generate_video_queries_claude(args),
         "sketchfab_search" => execute_sketchfab_search_claude(args).await,
@@ -1592,6 +1593,7 @@ pub async fn execute_tool_gemini(name: &str, args: &HashMap<String, Value>) -> S
         "edit_image" => execute_edit_image_gemini(args).await,
         "fetch_website_image" => execute_fetch_website_image_gemini(args).await,
         "read_website_content" => execute_read_website_content_gemini(args).await,
+        "browserbase_fetch_url" => execute_browserbase_fetch_url_gemini(args).await,
         "auto_generate_video" => execute_auto_generate_video_gemini(args).await,
         "generate_video_queries" => execute_generate_video_queries_gemini(args),
         "sketchfab_search" => execute_sketchfab_search_gemini(args).await,
@@ -18487,6 +18489,28 @@ async fn execute_read_website_content_inner(url: &str) -> String {
         url.to_string()
     };
 
+    // Try BrowserBase first for JS-rendered, CAPTCHA-protected sites
+    if crate::browserbase_client::is_configured() {
+        match crate::browserbase_client::fetch_url(&full_url).await {
+            Ok(Some(markdown)) => {
+                return format!(
+                    "Website: {full_url}\n\n\
+                    Content (BrowserBase markdown):\n{markdown}\n\n\
+                    You now understand what this website is about. Use this information to:\n\
+                    1. Write a video script with generate_video_script\n\
+                    2. Extract the hero image with fetch_website_image for Blender scenes\n\
+                    3. Create title cards, lower thirds, and scene animations\n\
+                    4. Add voiceover narration with add_voiceover_to_video"
+                );
+            }
+            Ok(None) => {} // BrowserBase not configured, fall through to plain HTTP
+            Err(e) => {
+                tracing::warn!("BrowserBase fetch failed, falling back to plain HTTP: {e}");
+            }
+        }
+    }
+
+    // Fall back to plain HTTP fetch
     let client = match reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
         .user_agent("Mozilla/5.0 (compatible; VideoSyncBot/1.0)")
@@ -18533,6 +18557,44 @@ async fn execute_read_website_content_inner(url: &str) -> String {
         3. Create title cards, lower thirds, and scene animations\n\
         4. Add voiceover narration with add_voiceover_to_video"
     )
+}
+
+// ── browserbase_fetch_url ─────────────────────────────────────────────────
+// Fetches a URL using BrowserBase cloud browser (JS rendering, CAPTCHA solving).
+// Returns clean markdown content. Falls back to read_website_content if
+// BrowserBase is not configured or fails.
+
+async fn execute_browserbase_fetch_url_claude(args: &serde_json::Value) -> String {
+    let url = args.get("url").and_then(|v| v.as_str()).unwrap_or("");
+    execute_browserbase_fetch_url_inner(url).await
+}
+
+async fn execute_browserbase_fetch_url_gemini(args: &HashMap<String, serde_json::Value>) -> String {
+    let url = args.get("url").and_then(|v| v.as_str()).unwrap_or("");
+    execute_browserbase_fetch_url_inner(url).await
+}
+
+async fn execute_browserbase_fetch_url_inner(url: &str) -> String {
+    if url.is_empty() {
+        return "Error: 'url' parameter is required".to_string();
+    }
+    let full_url = if !url.starts_with("http") {
+        format!("https://{url}")
+    } else {
+        url.to_string()
+    };
+
+    match crate::browserbase_client::fetch_url(&full_url).await {
+        Ok(Some(markdown)) => markdown,
+        Ok(None) => {
+            // BrowserBase not configured — fall back to read_website_content
+            execute_read_website_content_inner(&full_url).await
+        }
+        Err(e) => {
+            format!("BrowserBase fetch error: {e}. Falling back to plain HTTP.\n\n{}",
+                execute_read_website_content_inner(&full_url).await)
+        }
+    }
 }
 
 fn extract_tag_content(html: &str, tag: &str) -> Option<String> {

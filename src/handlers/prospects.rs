@@ -2241,6 +2241,14 @@ fn is_valid_revenue_service(service: &str) -> bool {
             | "full_stack"
             | "kick_auto_clipper"
             | "voice_audio"
+            | "manim_explainer"
+            | "whiteboard_animation"
+            | "kinetic_typography"
+            | "animated_infographic"
+            | "algorithm_viz"
+            | "investor_pitch"
+            | "year_in_review"
+            | "isometric_explainer"
     )
 }
 
@@ -2255,6 +2263,14 @@ fn service_offer_line(service: &str) -> &'static str {
         "full_stack" => "a private production backend with all lanes under your brand",
         "kick_auto_clipper" => "auto-generated Kick clips from VODs with branding and captions",
         "voice_audio" => "professional narrated audio for videos, podcasts, and courses",
+        "manim_explainer" => "a narrated Manim animated explainer with motion graphics and math diagrams",
+        "whiteboard_animation" => "a narrated whiteboard-style hand-drawn explainer video",
+        "kinetic_typography" => "a dynamic kinetic typography text animation video",
+        "animated_infographic" => "an animated data infographic with charts and counters",
+        "algorithm_viz" => "an algorithm visualization with animated data structures",
+        "investor_pitch" => "a professional investor pitch deck video with motion graphics",
+        "year_in_review" => "a personalized year-in-review wrapped-style recap video",
+        "isometric_explainer" => "an isometric 3D perspective explainer video",
         _ => "a product video or motion asset from your website or app",
     }
 }
@@ -2269,6 +2285,10 @@ fn service_price_line(service: &str) -> &'static str {
         "landing_page" => "$299-$1,500+",
         "full_stack" => "$1,000-$3,000/mo",
         "kick_auto_clipper" => "$297-$899/mo",
+        "manim_explainer" | "whiteboard_animation" => "$75-$300 per asset",
+        "kinetic_typography" | "animated_infographic" => "$75-$250 per asset",
+        "algorithm_viz" | "investor_pitch" => "$150-$500 per asset",
+        "year_in_review" | "isometric_explainer" => "$100-$400 per asset",
         _ => "$99 starter",
     }
 }
@@ -2284,6 +2304,11 @@ fn service_target_duration_seconds(service: &str) -> f64 {
         "agency_bundle" | "full_stack" => 90.0,
         "kick_auto_clipper" => 60.0,
         "business_explainer" => 60.0,
+        "manim_explainer" | "whiteboard_animation" | "kinetic_typography" => 60.0,
+        "animated_infographic" | "algorithm_viz" => 75.0,
+        "investor_pitch" => 90.0,
+        "year_in_review" => 60.0,
+        "isometric_explainer" => 60.0,
         _ => 60.0,
     }
 }
@@ -2300,6 +2325,14 @@ fn service_long_form_style(service: &str) -> &'static str {
         "agency_bundle" => "white-label agency production sample pack, mixed deliverables, client-ready proof of capability",
         "full_stack" => "full-stack AI production backend showcase, mixed video, thumbnail, voice, mockup, and delivery outputs",
         "kick_auto_clipper" => "automated Kick clip generation from VODs, branded lower thirds, outro, and watermark, TikTok/Shorts native",
+        "manim_explainer" => "narrated Manim animated explainer, clean motion graphics, math/technical diagrams, professional educational tone",
+        "whiteboard_animation" => "narrated whiteboard hand-drawn sketch explainer, marker-on-board style, Write() text reveals, friendly educational tone",
+        "kinetic_typography" => "dynamic kinetic typography text animation, word-by-word reveals, Transform morphing, bold font variations, vibrant colors",
+        "animated_infographic" => "animated data infographic, BarChart/PieChart visualizations, ValueTracker counters, data-driven professional tone",
+        "algorithm_viz" => "algorithm visualization with animated data structures, color-coded elements, step-by-step execution, educational technical tone",
+        "investor_pitch" => "professional investor pitch deck, clean title cards, data charts, animated metrics, confident persuasive tone",
+        "year_in_review" => "Spotify Wrapped-style year-in-review recap, bold typography, stat reveals, ValueTracker counters, energetic celebratory tone",
+        "isometric_explainer" => "isometric 3D perspective explainer, ThreeDScene camera angles, geometric shapes, clean modern motion graphics",
         _ => "premium SaaS launch video, clean product motion, polished founder-outreach sample",
     }
 }
@@ -2316,6 +2349,14 @@ fn service_long_form_offer_type(service: &str) -> String {
         "agency_bundle" => "agency_bundle_pack".to_string(),
         "full_stack" => "full_stack_production_pack".to_string(),
         "kick_auto_clipper" => "kick_auto_clipper_pack".to_string(),
+        "manim_explainer" => "manim_pack".to_string(),
+        "whiteboard_animation" => "whiteboard_pack".to_string(),
+        "kinetic_typography" => "type_pack".to_string(),
+        "animated_infographic" => "infographic_pack".to_string(),
+        "algorithm_viz" => "algorithm_pack".to_string(),
+        "investor_pitch" => "pitch_pack".to_string(),
+        "year_in_review" => "wrapped_pack".to_string(),
+        "isometric_explainer" => "isometric_pack".to_string(),
         _ => "saas_demo_pack".to_string(),
     }
 }
@@ -2910,14 +2951,20 @@ async fn generate_prospect_sample_pack(
         }
     }
 
-    let gig_type = if service == "kick_auto_clipper" {
-        "clipping"
+    let gig_type: String = if service == "kick_auto_clipper" {
+        "clipping".to_string()
     } else if use_long_form_workflow {
-        "long_form_video"
+        "long_form_video".to_string()
     } else if matches!(service.as_str(), "product_mockup" | "business_explainer") {
-        "ui_mockup"
+        "ui_mockup".to_string()
+    } else if matches!(service.as_str(),
+        "manim_explainer" | "whiteboard_animation" | "kinetic_typography" |
+        "animated_infographic" | "algorithm_viz" | "investor_pitch" |
+        "year_in_review" | "isometric_explainer"
+    ) {
+        service.clone()
     } else {
-        "scene"
+        "scene".to_string()
     };
     let duration = if use_long_form_workflow {
         target_duration
@@ -7003,6 +7050,10 @@ pub fn unlock_price_for(service: Option<&str>, has_website: bool) -> f64 {
             Some("business_explainer") => 197.00,
             Some("education") => 197.00,
             Some("clipping") | Some("kick_auto_clipper") => 147.00,
+            Some("manim_explainer") | Some("whiteboard_animation") => 175.00,
+            Some("kinetic_typography") | Some("animated_infographic") => 147.00,
+            Some("algorithm_viz") | Some("investor_pitch") => 247.00,
+            Some("year_in_review") | Some("isometric_explainer") => 197.00,
             _ => 197.00,
         }
     } else {
@@ -7012,6 +7063,10 @@ pub fn unlock_price_for(service: Option<&str>, has_website: bool) -> f64 {
             Some("clipping") | Some("full_stack") | Some("kick_auto_clipper") => 49.00,
             Some("business_explainer") => 97.00,
             Some("thumbnails") => 19.00,
+            Some("manim_explainer") | Some("whiteboard_animation") |
+            Some("kinetic_typography") | Some("animated_infographic") |
+            Some("algorithm_viz") | Some("investor_pitch") |
+            Some("year_in_review") | Some("isometric_explainer") => 75.00,
             _ => 29.00,
         }
     }
@@ -7573,6 +7628,22 @@ pub async fn scrape_website_content(url: &str) -> Option<String> {
     if !url.starts_with("https://") && !url.starts_with("http://") {
         return None;
     }
+
+    // Prefer BrowserBase for JS-rendered, CAPTCHA-protected sites
+    if crate::browserbase_client::is_configured() {
+        match crate::browserbase_client::fetch_url(url).await {
+            Ok(Some(markdown)) => {
+                return Some(format!(
+                    "Website: {url}\n\nBrowserBase Content:\n{markdown}"
+                ));
+            }
+            Ok(None) => {} // not configured, fall through
+            Err(e) => {
+                tracing::warn!("BrowserBase scrape failed, falling back to plain HTTP: {e}");
+            }
+        }
+    }
+
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
         .user_agent("Mozilla/5.0 (compatible; VideoSyncBot/1.0)")
@@ -7584,7 +7655,6 @@ pub async fn scrape_website_content(url: &str) -> Option<String> {
         return None;
     }
     let html = resp.text().await.ok()?;
-    let lower = html.to_lowercase();
 
     // Extract title
     let title = extract_tag_content(&html, "title").unwrap_or_default();

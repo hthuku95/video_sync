@@ -123,7 +123,9 @@ Trust your understanding of natural language to determine user intent:
 - If tools created output files, finish with `submit_final_answer` so the user gets delivery/output links instead of internal file paths
 
 ## CRITICAL: Only Use Declared Tools
-You MUST only call tools that are explicitly listed in the `tools` array of this request. Do NOT call tools like `imagen`, `imagen_generate`, `remove_background`, `expand_image`, `search_web`, `google_search`, `web_search`, `read_website`, `extract_content`, or `fetch_url` — these tools do NOT exist in this system. If a tool name isn't in the catalog, don't guess — pick the closest declared tool instead."#;
+You MUST only call tools that are explicitly listed in the `tools` array of this request. Do NOT call tools like `imagen`, `imagen_generate`, `remove_background`, `expand_image`, `search_web`, `google_search`, `web_search`, `read_website`, `extract_content`, or `fetch_url` — these tools do NOT exist in this system. If a tool name isn't in the catalog, don't guess — pick the closest declared tool instead.
+
+IMPORTANT: For fetching website content, use `browserbase_fetch_url(url)` — it renders JavaScript, solves CAPTCHAs, and returns clean markdown. Use `read_website_content(url)` as a fallback."#;
 
         // Save user message to conversation history
         let user_msg =
@@ -691,7 +693,9 @@ Your tool catalog includes: image generation, video generation, audio generation
 - Do NOT stop at a plan — actually generate the deliverable the user asked for
 
 ## CRITICAL: Only Use Declared Tools
-You MUST only call tools that are explicitly listed in the `tools` array of this request. Do NOT call tools like `imagen`, `imagen_generate`, `remove_background`, `expand_image`, `search_web`, `google_search`, `web_search`, `read_website`, `extract_content`, or `fetch_url` — these tools do NOT exist in this system. If a tool name isn't in the catalog, don't guess — pick the closest declared tool instead."#;
+You MUST only call tools that are explicitly listed in the `tools` array of this request. Do NOT call tools like `imagen`, `imagen_generate`, `remove_background`, `expand_image`, `search_web`, `google_search`, `web_search`, `read_website`, `extract_content`, or `fetch_url` — these tools do NOT exist in this system. If a tool name isn't in the catalog, don't guess — pick the closest declared tool instead.
+
+IMPORTANT: For fetching website content, use `browserbase_fetch_url(url)` — it renders JavaScript, solves CAPTCHAs, and returns clean markdown. Use `read_website_content(url)` as a fallback."#;
 
         // Build contents array with conversation history
         let mut contents = Vec::new();
@@ -758,6 +762,14 @@ You MUST only call tools that are explicitly listed in the `tools` array of this
             // 🆕 INTERACTIVE: Check for user follow-up messages between tool calls
             if let Some(ref mut rx) = user_message_rx {
                 while let Ok(followup) = rx.try_recv() {
+                    // 🛑 CANCELLATION: If the user sends __CANCEL__, stop immediately
+                    if followup == "__CANCEL__" {
+                        tracing::info!("🛑 Agent cancelled by user: session={}", session_id);
+                        send_progress("🛑 Agent cancelled by user.");
+                        final_response = "Cancelled by user.".to_string();
+                        return Ok(final_response);
+                    }
+
                     tracing::info!("📨 Agent received follow-up message mid-work: session={}", session_id);
                     send_progress("💬 Received your follow-up while working...");
 

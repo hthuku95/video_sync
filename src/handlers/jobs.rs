@@ -4,7 +4,7 @@
 use crate::jobs::{JobControl, JobId};
 use crate::AppState;
 use axum::{
-    extract::{Extension, Path},
+    extract::{Extension, Path, State},
     http::StatusCode,
     response::{IntoResponse, Json},
     routing::{get, post},
@@ -608,6 +608,158 @@ pub async fn get_workflow_debug(
     (StatusCode::OK, Json(response)).into_response()
 }
 
+// ── Workflow Feedback / Cancel / Events ──────────────────────────────────
+// These endpoints allow re-editing, cancellation, and progress polling
+// for StatefulGeminiAgent runs (including the DFY pipeline).
+
+/// POST /api/workflows/{workflow_id}/feedback
+/// Send a follow-up message to a running agent for re-editing / add-on requests.
+pub async fn workflow_feedback(
+    Path(workflow_id): Path<String>,
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let session_id = match uuid::Uuid::parse_str(&workflow_id) {
+        Ok(_) => workflow_id,
+        Err(_) => return (StatusCode::BAD_REQUEST, "Invalid workflow id").into_response(),
+    };
+
+    let message = body
+        .get("message")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    if message.is_empty() {
+        return (StatusCode::BAD_REQUEST, "Missing 'message' field").into_response();
+    }
+
+    let channels = state.active_agent_channels.read().await;
+    // Try exact workflow_id first, then search for any matching session key
+    let found = if let Some(tx) = channels.get(&session_id.to_string()) {
+        tx.send(message.clone()).is_ok()
+    } else {
+        // Fallback: search all channels for workflows containing this UUID
+        let mut sent = false;
+        for (key, tx) in channels.iter() {
+            if key.contains(&session_id.to_string()) {
+                if tx.send(message.clone()).is_ok() {
+                    sent = true;
+                    break;
+                }
+            }
+        }
+        sent
+    };
+
+    if found {
+        tracing::info!("📨 Feedback sent to workflow {}: {:.60}", session_id, message);
+        (StatusCode::OK, "Feedback sent to running agent").into_response()
+    } else {
+        (StatusCode::NOT_FOUND, "No active agent found for this workflow").into_response()
+    }
+}
+
+/// POST /api/workflows/{workflow_id}/cancel
+/// Cancel a running agent mid-task.
+pub async fn workflow_cancel(
+    Path(workflow_id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    let session_id = match uuid::Uuid::parse_str(&workflow_id) {
+        Ok(_) => workflow_id,
+        Err(_) => return (StatusCode::BAD_REQUEST, "Invalid workflow id").into_response(),
+    };
+
+    let channels = state.active_agent_channels.read().await;
+    let found = if let Some(tx) = channels.get(&session_id.to_string()) {
+        tx.send("__CANCEL__".to_string()).is_ok()
+    } else {
+        let mut sent = false;
+        for (key, tx) in channels.iter() {
+            if key.contains(&session_id.to_string()) {
+                if tx.send("__CANCEL__".to_string()).is_ok() {
+                    sent = true;
+                    break;
+                }
+            }
+        }
+        sent
+    };
+
+    if found {
+        tracing::info!("🛑 Cancel signal sent to workflow {}", session_id);
+        // Also mark the workflow as cancelled in the DB
+        let _ = sqlx::query(
+            "UPDATE app_workflows SET status = 'cancelled', current_step = 'cancelled_by_user',
+             completed_at = NOW() WHERE id = $1 AND status NOT IN ('completed', 'failed', 'cancelled')",
+        )
+        .bind(session_id)
+        .execute(&state.db_pool)
+        .await;
+
+        (StatusCode::OK, "Cancel signal sent").into_response()
+    } else {
+        (StatusCode::NOT_FOUND, "No active agent found for this workflow").into_response()
+    }
+}
+
+/// GET /api/workflows/{workflow_id}/events
+/// Poll progress events from a running or completed workflow.
+pub async fn workflow_events(
+    Path(workflow_id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    let workflow_uuid = match uuid::Uuid::parse_str(&workflow_id) {
+        Ok(id) => id,
+        Err(_) => return (StatusCode::BAD_REQUEST, "Invalid workflow id").into_response(),
+    };
+
+    let events = sqlx::query_as::<_, (String, Option<String>, String, serde_json::Value, chrono::DateTime<chrono::Utc>)>(
+        r#"SELECT event_type, node_name, message, details, created_at
+             FROM app_workflow_events
+            WHERE workflow_id = $1
+            ORDER BY created_at ASC"#,
+    )
+    .bind(workflow_uuid)
+    .fetch_all(&state.db_pool)
+    .await
+    .map(|rows| {
+        rows.into_iter()
+            .map(|(event_type, node_name, message, details, created_at)| {
+                serde_json::json!({
+                    "event_type": event_type,
+                    "node_name": node_name,
+                    "message": message,
+                    "details": details,
+                    "created_at": created_at.to_rfc3339(),
+                })
+            })
+            .collect::<Vec<_>>()
+    })
+    .unwrap_or_default();
+
+    // Also include the workflow's current status
+    let status: Option<(String, Option<String>, Option<chrono::DateTime<chrono::Utc>>)> =
+        sqlx::query_as(
+            r#"SELECT status, current_step, completed_at FROM app_workflows WHERE id = $1"#,
+        )
+        .bind(workflow_uuid)
+        .fetch_optional(&state.db_pool)
+        .await
+        .unwrap_or(None);
+
+    let response = serde_json::json!({
+        "workflow_id": workflow_id,
+        "status": status.as_ref().map(|s| s.0.as_str()).unwrap_or("unknown"),
+        "current_step": status.as_ref().and_then(|s| s.1.as_deref()).unwrap_or(""),
+        "completed_at": status.as_ref().and_then(|s| s.2.map(|t| t.to_rfc3339())),
+        "events": events,
+        "event_count": events.len(),
+    });
+
+    (StatusCode::OK, Json(response)).into_response()
+}
+
 /// Routes for job management
 pub fn job_routes() -> Router {
     Router::new()
@@ -625,5 +777,21 @@ pub fn job_routes() -> Router {
             get(get_workflow_debug).layer(axum::middleware::from_fn(
                 crate::middleware::auth::auth_middleware,
             )),
+        )
+        .route(
+            "/api/workflows/:workflow_id/feedback",
+            post(workflow_feedback).layer(axum::middleware::from_fn(
+                crate::middleware::auth::auth_middleware,
+            )),
+        )
+        .route(
+            "/api/workflows/:workflow_id/cancel",
+            post(workflow_cancel).layer(axum::middleware::from_fn(
+                crate::middleware::auth::auth_middleware,
+            )),
+        )
+        .route(
+            "/api/workflows/:workflow_id/events",
+            get(workflow_events),
         )
 }
