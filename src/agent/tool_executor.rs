@@ -18913,7 +18913,7 @@ async fn execute_blender_generate_scene_type_claude(args: &Value) -> String {
         return "❌ BlenderMCPServer not configured. Set BLENDER_MCP_URL in .env.".to_string();
     }
     let client = crate::blender_mcp_client::BlenderMCPClient::new(base_url, api_key);
-    match client.call_tool(
+    match client.call_tool_async(
         "blender_execute_bpy_script",
         serde_json::json!({
             "prompt": prompt,
@@ -18943,7 +18943,7 @@ async fn execute_blender_generate_scene_type_gemini(args: &HashMap<String, Value
         return "❌ BlenderMCPServer not configured. Set BLENDER_MCP_URL in .env.".to_string();
     }
     let client = crate::blender_mcp_client::BlenderMCPClient::new(base_url, api_key);
-    match client.call_tool(
+    match client.call_tool_async(
         "blender_execute_bpy_script",
         serde_json::json!({
             "prompt": prompt,
@@ -18980,7 +18980,7 @@ async fn execute_manim_execute_script_claude(args: &Value) -> String {
         return "❌ BlenderMCPServer not configured. Set BLENDER_MCP_URL in .env.".to_string();
     }
     let client = crate::blender_mcp_client::BlenderMCPClient::new(base_url, api_key);
-    match client.call_tool(
+    match client.call_tool_async(
         "manim_execute_script",
         serde_json::json!({
             "description": description,
@@ -19017,7 +19017,7 @@ async fn execute_manim_execute_script_gemini(args: &HashMap<String, Value>) -> S
         return "❌ BlenderMCPServer not configured. Set BLENDER_MCP_URL in .env.".to_string();
     }
     let client = crate::blender_mcp_client::BlenderMCPClient::new(base_url, api_key);
-    match client.call_tool(
+    match client.call_tool_async(
         "manim_execute_script",
         serde_json::json!({
             "description": description,

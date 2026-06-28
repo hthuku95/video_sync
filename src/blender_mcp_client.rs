@@ -487,6 +487,44 @@ impl BlenderMCPClient {
         Err(last_err)
     }
 
+    /// Submit a tool as a background job and poll until completion.
+    /// Returns the full JSON result (unlike render_async which downloads the file).
+    /// Safe for any duration — never holds an HTTP connection open during render.
+    pub async fn call_tool_async(&self, tool: &str, args: serde_json::Value) -> Result<serde_json::Value, String> {
+        let job_id = self.submit_job(tool, args).await?;
+
+        // Poll every 5 seconds for up to 30 minutes (360 polls).
+        for _ in 0..360 {
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            let status = self.poll_job(&job_id).await?;
+            match status.get("state").and_then(|s| s.as_str()) {
+                Some("completed") => {
+                    return status
+                        .get("result")
+                        .ok_or_else(|| "Job result missing 'result'".to_string())
+                        .cloned();
+                }
+                Some("error") | Some("failed") => {
+                    let msg = status
+                        .get("error")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown error");
+                    return Err(msg.to_string());
+                }
+                _ => {
+                    if status.get("error").is_some() && status.get("state").is_none() {
+                        let msg = status
+                            .get("error")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("job not found");
+                        return Err(format!("Blender job {job_id}: {msg}"));
+                    }
+                }
+            }
+        }
+        Err(format!("Blender job {job_id} timed out after 1800s"))
+    }
+
     /// Analyze a video via BlenderMCPServer's `/api/analyze-video` endpoint.
     ///
     /// This offloads video analysis to the Python service which uses a SEPARATE Gemini API key
