@@ -18426,8 +18426,7 @@ async fn execute_run_director_impl(
     if !progress_events.is_empty() {
         final_result.push_str("\n\n— Progress Timeline —\n");
         for ev in &progress_events {
-            use std::fmt::Write;
-            let _ = writeln!(final_result, "  {}", ev);
+            final_result.push_str(&format!("  {}\n", ev));
         }
     }
 
