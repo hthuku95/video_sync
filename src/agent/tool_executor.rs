@@ -18922,7 +18922,7 @@ async fn execute_blender_generate_scene_type_claude(args: &Value) -> String {
             "reference_image_url": reference_image_url,
         }),
     ).await {
-        Ok(result) => result.to_string(),
+        Ok(result) => extract_url_from_async_result(&result, "Output"),
         Err(e) => format!("❌ blender_generate_scene_type failed: {}", e),
     }
 }
@@ -18952,8 +18952,33 @@ async fn execute_blender_generate_scene_type_gemini(args: &HashMap<String, Value
             "reference_image_url": reference_image_url,
         }),
     ).await {
-        Ok(result) => result.to_string(),
+        Ok(result) => extract_url_from_async_result(&result, "Output"),
         Err(e) => format!("❌ blender_generate_scene_type failed: {}", e),
+    }
+}
+
+/// Extract a video/image URL from the nested JSON returned by call_tool_async.
+/// call_tool_async returns Value::String("{\"video_url\": \"...\"}") — the
+/// result is a JSON string containing a JSON object.  Parse it, extract the
+/// URL, and return a clean success message so the pipeline node marks as
+/// completed and locate_output_from_result can find the URL.
+fn extract_url_from_async_result(result: &serde_json::Value, label: &str) -> String {
+    let inner = result
+        .as_str()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+        .unwrap_or_else(|| result.clone());
+
+    let url = inner
+        .get("video_url")
+        .and_then(|v| v.as_str())
+        .or_else(|| inner.get("image_url").and_then(|v| v.as_str()))
+        .or_else(|| inner.get("narrated_video_url").and_then(|v| v.as_str()))
+        .unwrap_or("");
+
+    if !url.is_empty() {
+        format!("✅ {}: {url}", label)
+    } else {
+        format!("✅ {} result: {}", label, result)
     }
 }
 
@@ -18993,7 +19018,7 @@ async fn execute_manim_execute_script_claude(args: &Value) -> String {
             "narration_speaker": narration_speaker,
         }),
     ).await {
-        Ok(result) => result.to_string(),
+        Ok(result) => extract_url_from_async_result(&result, "Output"),
         Err(e) => format!("❌ manim_execute_script failed: {}", e),
     }
 }
@@ -19030,7 +19055,11 @@ async fn execute_manim_execute_script_gemini(args: &HashMap<String, Value>) -> S
             "narration_speaker": narration_speaker,
         }),
     ).await {
-        Ok(result) => result.to_string(),
+        Ok(result) => extract_url_from_async_result(&result, "Output"),
         Err(e) => format!("❌ manim_execute_script failed: {}", e),
     }
 }
+
+// =============================================================================
+// BLENDER EXECUTE BPY SCRIPT — consolidated Blender tool (Claude)
+// =============================================================================
