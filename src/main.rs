@@ -1036,6 +1036,31 @@ async fn main() {
         tracing::info!("✅ Analytics sync job started");
     }
 
+    // ── Delivery recovery — re-trigger pending deliveries that were orphaned on restart ────
+    {
+        let recovery_state = shared_state.clone();
+        tokio::spawn(async move {
+            tracing::info!("🔁 Checking for orphaned pending deliveries...");
+            let pending = sqlx::query_as::<_, (uuid::Uuid,)>(
+                "SELECT id FROM deliveries WHERE status = 'pending' AND workflow_id IS NOT NULL",
+            )
+            .fetch_all(&recovery_state.db_pool)
+            .await;
+
+            match pending {
+                Ok(rows) if !rows.is_empty() => {
+                    tracing::info!("🔁 Recovering {} orphaned deliveries", rows.len());
+                    for (delivery_id,) in rows {
+                        tracing::info!("🔁 Re-triggering delivery {delivery_id}");
+                        handlers::admin::run_delivery_job(delivery_id, recovery_state.clone()).await;
+                    }
+                }
+                Ok(_) => tracing::info!("✅ No orphaned deliveries found"),
+                Err(e) => tracing::warn!("⚠️ Failed to check for orphaned deliveries: {e}"),
+            }
+        });
+    }
+
     // Run the server with ConnectInfo to provide socket addresses for rate limiting
     axum::serve(
         listener,
