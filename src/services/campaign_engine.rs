@@ -248,6 +248,14 @@ async fn process_pending_post(state: &Arc<AppState>, campaign: &CampaignRow, pos
         "voice_audio" => ServiceType::VoiceAudio,
         "full_stack" => ServiceType::FullStack,
         "kick_auto_clipper" | "clipping" => ServiceType::Clipping,
+        "manim_explainer" => ServiceType::ManimExplainer,
+        "whiteboard_animation" => ServiceType::WhiteboardAnimation,
+        "kinetic_typography" => ServiceType::KineticTypography,
+        "animated_infographic" => ServiceType::AnimatedInfographic,
+        "algorithm_viz" => ServiceType::AlgorithmViz,
+        "investor_pitch" => ServiceType::InvestorPitch,
+        "year_in_review" => ServiceType::YearInReview,
+        "isometric_explainer" => ServiceType::IsometricExplainer,
         _ => ServiceType::Clipping,
     };
 

@@ -182,14 +182,26 @@ class JobStatus:
 # ---------------------------------------------------------------------------
 
 def _ddb_to_status(item: dict) -> JobStatus:
+    # result and args are stored as JSON strings to avoid DynamoDB float issues
+    raw_result = item.get("result_json")
+    raw_args = item.get("args_json")
+    if raw_result is None:
+        raw_result = item.get("result")
+    if raw_args is None:
+        raw_args = item.get("args")
+    raw_state = item.get("state", "pending")
+    try:
+        parsed_state = State(raw_state)
+    except ValueError:
+        parsed_state = State.PENDING
     return JobStatus(
         job_id=item["job_id"],
         tool=item.get("tool", ""),
         workflow_thread_id=item.get("workflow_thread_id", ""),
-        state=State(item.get("state", "pending")),
-        result=item.get("result"),
+        state=parsed_state,
+        result=_from_json(raw_result) if isinstance(raw_result, str) else raw_result,
         error=item.get("error", ""),
-        args=item.get("args"),
+        args=_from_json(raw_args) if isinstance(raw_args, str) else raw_args,
         created_at=item.get("created_at", _now()),
         started_at=item.get("started_at", ""),
         finished_at=item.get("finished_at", ""),
@@ -208,9 +220,9 @@ def _put_status_sync(status: JobStatus) -> None:
         "error": status.error,
     }
     if status.result is not None:
-        item["result"] = status.result
+        item["result_json"] = _to_json(status.result)
     if status.args is not None:
-        item["args"] = status.args
+        item["args_json"] = _to_json(status.args)
     _table.put_item(Item=item)
 
 

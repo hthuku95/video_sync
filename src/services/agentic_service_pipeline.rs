@@ -1297,6 +1297,14 @@ mod tests {
         assert_eq!(ServiceType::VoiceAudio.as_str(), "voice_audio");
         assert_eq!(ServiceType::FullStack.as_str(), "full_stack");
         assert_eq!(ServiceType::BusinessExplainer.as_str(), "business_explainer");
+        assert_eq!(ServiceType::ManimExplainer.as_str(), "manim_explainer");
+        assert_eq!(ServiceType::WhiteboardAnimation.as_str(), "whiteboard_animation");
+        assert_eq!(ServiceType::KineticTypography.as_str(), "kinetic_typography");
+        assert_eq!(ServiceType::AnimatedInfographic.as_str(), "animated_infographic");
+        assert_eq!(ServiceType::AlgorithmViz.as_str(), "algorithm_viz");
+        assert_eq!(ServiceType::InvestorPitch.as_str(), "investor_pitch");
+        assert_eq!(ServiceType::YearInReview.as_str(), "year_in_review");
+        assert_eq!(ServiceType::IsometricExplainer.as_str(), "isometric_explainer");
     }
 
     #[test]
@@ -1310,6 +1318,14 @@ mod tests {
             ServiceType::VoiceAudio,
             ServiceType::FullStack,
             ServiceType::BusinessExplainer,
+            ServiceType::ManimExplainer,
+            ServiceType::WhiteboardAnimation,
+            ServiceType::KineticTypography,
+            ServiceType::AnimatedInfographic,
+            ServiceType::AlgorithmViz,
+            ServiceType::InvestorPitch,
+            ServiceType::YearInReview,
+            ServiceType::IsometricExplainer,
         ];
         for v in variants {
             let s = v.as_str();
@@ -1329,6 +1345,14 @@ mod tests {
             ServiceType::VoiceAudio,
             ServiceType::FullStack,
             ServiceType::BusinessExplainer,
+            ServiceType::ManimExplainer,
+            ServiceType::WhiteboardAnimation,
+            ServiceType::KineticTypography,
+            ServiceType::AnimatedInfographic,
+            ServiceType::AlgorithmViz,
+            ServiceType::InvestorPitch,
+            ServiceType::YearInReview,
+            ServiceType::IsometricExplainer,
         ];
         for v in variants {
             let style = v.default_style();
