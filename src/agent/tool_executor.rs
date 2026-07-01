@@ -574,6 +574,10 @@ async fn finalize_special_tool_result_value(
 /// After a tool creates a local file, upload it to R2 and return the cloud URL.
 /// The local file is kept for pipeline QA review and cleaned up by the pipeline afterwards.
 async fn upload_tool_output_to_cloud(local_path: &str, ctx: &ToolExecutionContext) -> Option<String> {
+    if !std::path::Path::new(local_path).exists() {
+        tracing::debug!("upload_tool_output_to_cloud: skipping non-existent file {}", local_path);
+        return None;
+    }
     let file_name = std::path::Path::new(local_path)
         .file_name()
         .and_then(|n| n.to_str())

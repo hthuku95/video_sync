@@ -193,7 +193,7 @@ pub fn execute_ffmpeg_command_with_sync_timeout(
                 }
                 let stderr = String::from_utf8_lossy(&stderr_buf);
                 return Err(format!(
-                    "FFmpeg error (exit {}): {}",
+                    "Error: FFmpeg (exit {}): {}",
                     status.code().unwrap_or(-1),
                     &stderr[..stderr.len().min(600)]
                 ));
