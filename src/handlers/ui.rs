@@ -9075,27 +9075,6 @@ pub async fn clipping_management_page() -> Html<String> {
             </p>
             <div id="reviewContainer" class="loading">Loading pending clips...</div>
 
-            <!-- Content Management Agent -->
-            <div class="card" style="margin-top: 2rem;">
-                <h3 style="margin-bottom: 1rem;">🤖 Content Management Agent</h3>
-                <p style="color: #94a3b8; margin-bottom: 1rem; font-size: 0.9rem;">
-                    Type a natural-language instruction to manage your published clips (update metadata, delete, repost).
-                </p>
-                <div class="form-group">
-                    <label>Select Destination Channel</label>
-                    <select id="cmChannelSelect" style="width:100%; padding:0.75rem; background:rgba(30,30,52,0.8); border:1px solid rgba(59,130,246,0.3); border-radius:10px; color:#e8e8e8; font-size:1rem;">
-                        <option value="">Loading channels...</option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label>Instruction</label>
-                    <textarea id="cmInstruction" rows="3"
-                        placeholder="e.g. Take down clip 3 and repost it with title: Better Title"
-                        style="width:100%; padding:0.75rem; background:rgba(30,30,52,0.8); border:1px solid rgba(59,130,246,0.3); border-radius:10px; color:#e8e8e8; font-size:1rem; resize:vertical;"></textarea>
-                </div>
-                <button onclick="startContentManagement()" class="btn">Run Agent</button>
-                <div id="cmStatus" style="margin-top:1rem; display:none;"></div>
-            </div>
         </div>
     </div>
 
@@ -9354,83 +9333,6 @@ pub async fn clipping_management_page() -> Html<String> {
                     '<option value="' + c.id + '">' + c.channel_name + '</option>'
                 ).join('') || '<option value="">No channels connected</option>';
             } catch (e) {}
-        }
-
-        // Start content management session
-        let cmSessionId = null;
-        let cmPollInterval = null;
-
-        async function startContentManagement() {
-            const instruction = document.getElementById('cmInstruction').value.trim();
-            const channelId = parseInt(document.getElementById('cmChannelSelect').value);
-            if (!instruction) { alert('Please enter an instruction.'); return; }
-            if (!channelId) { alert('Please select a channel.'); return; }
-
-            const statusDiv = document.getElementById('cmStatus');
-            statusDiv.style.display = 'block';
-            statusDiv.innerHTML = '<div class="loading">Starting agent...</div>';
-
-            try {
-                const r = await fetch('/api/clipping/manage-content', {
-                    method: 'POST',
-                    headers: { 'Authorization': 'Bearer ' + authToken, 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ instruction, destination_channel_id: channelId })
-                });
-                const data = await r.json();
-                cmSessionId = data.session_id;
-                statusDiv.innerHTML = '<p>Session #' + cmSessionId + ' started. Polling for updates...</p><div id="cmStatusBody"></div>';
-                if (cmPollInterval) clearInterval(cmPollInterval);
-                cmPollInterval = setInterval(pollCMSession, 3000);
-            } catch (e) {
-                statusDiv.innerHTML = '<p style="color:#ef4444;">Error: ' + e.message + '</p>';
-            }
-        }
-
-        async function pollCMSession() {
-            if (!cmSessionId) return;
-            try {
-                const r = await fetch('/api/clipping/manage-content/' + cmSessionId, {
-                    headers: { 'Authorization': 'Bearer ' + authToken }
-                });
-                const data = await r.json();
-                const session = data.session;
-                const body = document.getElementById('cmStatusBody');
-                if (!body) return;
-
-                let html = '<p><strong>Status:</strong> <span style="color:' +
-                    (session.status === 'completed' ? '#22c55e' : session.status === 'failed' ? '#ef4444' : '#3b82f6') +
-                    '">' + session.status + '</span></p>';
-
-                if (session.status === 'awaiting_confirmation' && session.confirmation_required) {
-                    const cr = session.confirmation_required;
-                    html += '<div style="background:rgba(239,68,68,0.15); border:1px solid rgba(239,68,68,0.4); border-radius:10px; padding:1rem; margin-top:0.75rem;">';
-                    html += '<strong>AI wants to:</strong> ' + (cr.action_summary || '') + '<br>';
-                    html += '<div style="margin-top:0.75rem; display:flex; gap:0.5rem;">';
-                    html += '<button onclick="confirmCMAction(true)" class="btn btn-small" style="background:linear-gradient(135deg,#22c55e,#16a34a);">Confirm</button>';
-                    html += '<button onclick="confirmCMAction(false)" class="btn btn-danger btn-small">Cancel</button>';
-                    html += '</div></div>';
-                }
-
-                if (session.result_summary) {
-                    html += '<div style="margin-top:0.75rem; background:rgba(59,130,246,0.1); padding:0.75rem; border-radius:8px;"><strong>Result:</strong> ' + session.result_summary + '</div>';
-                }
-
-                body.innerHTML = html;
-
-                if (session.status === 'completed' || session.status === 'failed') {
-                    clearInterval(cmPollInterval);
-                    cmPollInterval = null;
-                }
-            } catch (e) {}
-        }
-
-        async function confirmCMAction(confirmed) {
-            if (!cmSessionId) return;
-            await fetch('/api/clipping/manage-content/' + cmSessionId + '/confirm', {
-                method: 'POST',
-                headers: { 'Authorization': 'Bearer ' + authToken, 'Content-Type': 'application/json' },
-                body: JSON.stringify({ confirmed })
-            });
         }
 
         // Load source channels

@@ -1,6 +1,5 @@
 // HTTP handlers for YouTube Clipping API endpoints
 
-use crate::agent::content_management_agent::ContentManagementAgent;
 use crate::clipping::models::*;
 use crate::clipping::uploader::ClipUploader;
 use crate::middleware::{
@@ -82,19 +81,6 @@ pub fn clipping_routes() -> Router {
         .route(
             "/api/clipping/clips/:id/propose-edit",
             axum::routing::put(propose_edit_clip),
-        )
-        // Content management agent
-        .route(
-            "/api/clipping/manage-content",
-            post(start_content_management_session),
-        )
-        .route(
-            "/api/clipping/manage-content/:session_id",
-            get(get_content_management_session),
-        )
-        .route(
-            "/api/clipping/manage-content/:session_id/confirm",
-            post(confirm_content_management_action),
         )
         // Access check endpoint
         .route("/api/clipping/access-check", get(check_access))
@@ -1548,11 +1534,6 @@ struct ProposeEditRequest {
 }
 
 #[derive(Deserialize)]
-struct StartContentMgmtRequest {
-    instruction: String,
-    destination_channel_id: i32,
-}
-
 /// PUT /api/clipping/clips/:id/approve
 /// Approve a pending-review clip: trigger actual YouTube upload now.
 async fn approve_clip(
@@ -1787,148 +1768,6 @@ async fn propose_edit_clip(
     Ok(Json(
         json!({"success": true, "message": "Proposed edit saved"}),
     ))
-}
-
-// ─────────────────────────── Content Management Handlers ─────────────────────
-
-/// POST /api/clipping/manage-content
-/// Start a new content management agent session.
-async fn start_content_management_session(
-    Extension(state): Extension<Arc<AppState>>,
-    Extension(claims): Extension<Claims>,
-    Json(payload): Json<StartContentMgmtRequest>,
-) -> Result<Json<Value>, StatusCode> {
-    let user_id = claims.sub.parse::<i32>().unwrap_or(0);
-
-    // Create the session row in DB
-    let session_id: i32 = sqlx::query_scalar(
-        "INSERT INTO content_management_sessions
-             (user_id, destination_channel_id, instruction, status)
-         VALUES ($1, $2, $3, 'running')
-         RETURNING id",
-    )
-    .bind(user_id)
-    .bind(payload.destination_channel_id)
-    .bind(&payload.instruction)
-    .fetch_one(&state.db_pool)
-    .await
-    .map_err(|e| {
-        tracing::error!("Failed to create content management session: {}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
-    // Spawn the agent in a background task
-    let state_clone = state.clone();
-    let instruction = payload.instruction.clone();
-    let channel_id = payload.destination_channel_id;
-    tokio::spawn(async move {
-        ContentManagementAgent::run(session_id, &instruction, channel_id, state_clone).await;
-    });
-
-    Ok(Json(json!({
-        "success": true,
-        "session_id": session_id
-    })))
-}
-
-/// GET /api/clipping/manage-content/:session_id
-/// Get the current status of a content management session.
-async fn get_content_management_session(
-    Extension(state): Extension<Arc<AppState>>,
-    Extension(claims): Extension<Claims>,
-    Path(session_id): Path<i32>,
-) -> Result<Json<Value>, StatusCode> {
-    let user_id = claims.sub.parse::<i32>().unwrap_or(0);
-
-    let row = sqlx::query(
-        "SELECT id, status, instruction, result_summary, confirmation_required,
-                confirmation_granted, agent_state, created_at, updated_at
-         FROM content_management_sessions
-         WHERE id = $1 AND user_id = $2",
-    )
-    .bind(session_id)
-    .bind(user_id)
-    .fetch_optional(&state.db_pool)
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-    .ok_or(StatusCode::NOT_FOUND)?;
-
-    Ok(Json(json!({
-        "success": true,
-        "session": {
-            "id": row.try_get::<i32, _>("id").unwrap_or(0),
-            "status": row.try_get::<String, _>("status").unwrap_or_default(),
-            "instruction": row.try_get::<String, _>("instruction").unwrap_or_default(),
-            "result_summary": row.try_get::<Option<String>, _>("result_summary").ok().flatten(),
-            "confirmation_required": row.try_get::<Option<serde_json::Value>, _>("confirmation_required").ok().flatten(),
-            "confirmation_granted": row.try_get::<bool, _>("confirmation_granted").unwrap_or(false),
-            "created_at": row.try_get::<DateTime<Utc>, _>("created_at").ok(),
-            "updated_at": row.try_get::<DateTime<Utc>, _>("updated_at").ok(),
-        }
-    })))
-}
-
-/// POST /api/clipping/manage-content/:session_id/confirm
-/// Human confirms (or cancels) a pending destructive action in a content management session.
-async fn confirm_content_management_action(
-    Extension(state): Extension<Arc<AppState>>,
-    Extension(claims): Extension<Claims>,
-    Path(session_id): Path<i32>,
-    payload: Option<Json<Value>>,
-) -> Result<Json<Value>, StatusCode> {
-    let user_id = claims.sub.parse::<i32>().unwrap_or(0);
-
-    let confirmed = payload
-        .as_ref()
-        .and_then(|p| p.get("confirmed"))
-        .and_then(|v| v.as_bool())
-        .unwrap_or(true);
-
-    // Verify ownership
-    let exists = sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS(SELECT 1 FROM content_management_sessions WHERE id = $1 AND user_id = $2)",
-    )
-    .bind(session_id)
-    .bind(user_id)
-    .fetch_one(&state.db_pool)
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    if !exists {
-        return Err(StatusCode::NOT_FOUND);
-    }
-
-    if confirmed {
-        sqlx::query(
-            "UPDATE content_management_sessions
-             SET confirmation_granted = true,
-                 status = 'running',
-                 updated_at = NOW()
-             WHERE id = $1",
-        )
-        .bind(session_id)
-        .execute(&state.db_pool)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    } else {
-        // User cancelled — mark session as failed
-        sqlx::query(
-            "UPDATE content_management_sessions
-             SET status = 'failed',
-                 result_summary = 'Action cancelled by user',
-                 updated_at = NOW()
-             WHERE id = $1",
-        )
-        .bind(session_id)
-        .execute(&state.db_pool)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    }
-
-    Ok(Json(json!({
-        "success": true,
-        "confirmed": confirmed
-    })))
 }
 
 /// DELETE /api/clipping/twitch/mappings/:id

@@ -921,7 +921,7 @@ IMPORTANT: For fetching website content, use `browserbase_fetch_url(url)` — it
                         crate::agent::conversation_manager::MessageRole::Assistant => aws_sdk_bedrockruntime::types::ConversationRole::Assistant,
                         _ => continue,
                     };
-                    if let Ok(m) = crate::agent::simple_gemini_agent::build_text_message(role, &msg.content) {
+                    if let Ok(m) = bedrock_text_message(role, &msg.content) {
                         bd_messages.push(m);
                     }
                 }
@@ -930,7 +930,7 @@ IMPORTANT: For fetching website content, use `browserbase_fetch_url(url)` — it
                 } else {
                     user_input.to_string()
                 };
-                if let Ok(m) = crate::agent::simple_gemini_agent::build_text_message(
+                if let Ok(m) = bedrock_text_message(
                     aws_sdk_bedrockruntime::types::ConversationRole::User,
                     &format!("{}\n\n{}", system_instruction, current_msg),
                 ) {
@@ -1913,4 +1913,15 @@ where
     }
 
     Err(format!("Bedrock exceeded max turns ({})", MAX_TURNS))
+}
+
+fn bedrock_text_message(
+    role: aws_sdk_bedrockruntime::types::ConversationRole,
+    text: &str,
+) -> Result<aws_sdk_bedrockruntime::types::Message, String> {
+    aws_sdk_bedrockruntime::types::Message::builder()
+        .role(role)
+        .content(aws_sdk_bedrockruntime::types::ContentBlock::Text(text.to_string()))
+        .build()
+        .map_err(|e| format!("Bedrock build message error: {e}"))
 }

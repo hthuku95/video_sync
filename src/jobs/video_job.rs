@@ -4,8 +4,7 @@
 
 use super::{Job, JobControl, JobId, JobManager, JobStatus, ProgressUpdate};
 use crate::agent::conversation_manager::{ConversationManager, ConversationMessage};
-use crate::agent::simple_claude_agent::SimpleClaudeAgent;
-use crate::agent::simple_gemini_agent::SimpleGeminiAgent;
+use crate::agent::stateful_agent::StatefulGeminiAgent;
 use crate::AppState;
 use serde_json::json;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -17,7 +16,6 @@ use tokio::time::Duration;
 #[derive(Debug, Clone)]
 pub enum AgentType {
     Claude,
-    Gemini,
 }
 
 /// Video editing job that runs in background
@@ -153,10 +151,7 @@ impl VideoEditingJob {
                 current_step: Some("job_initialized".to_string()),
                 metadata: json!({
                     "job_id": job_id,
-                    "agent_type": match &self.agent_type {
-                        AgentType::Claude => "claude",
-                        AgentType::Gemini => "gemini",
-                    },
+                    "agent_type": "claude",
                     "job_type": self.job.job_type.clone(),
                 }),
                 artifact_requirements: json!([]),
@@ -191,10 +186,7 @@ impl VideoEditingJob {
                 json!({
                     "job_id": job_id,
                     "artifact_expected": artifact_expected,
-                    "agent_type": match &self.agent_type {
-                        AgentType::Claude => "claude",
-                        AgentType::Gemini => "gemini",
-                    },
+                    "agent_type": "claude",
                 }),
                 "Video editing request planned and durable workflow nodes initialized.",
             )
@@ -423,16 +415,6 @@ impl VideoEditingJob {
                 )
                 .await
             }
-            AgentType::Gemini => {
-                self.execute_with_gemini(
-                    &final_prompt,
-                    &session_id,
-                    progress_callback,
-                    &mut control_rx,
-                    workflow_id,
-                )
-                .await
-            }
         };
 
         // Update final status and save response
@@ -580,10 +562,7 @@ impl VideoEditingJob {
                 // Fetch pricing from database
                 let pricing = self.fetch_pricing_from_db().await;
 
-                let model_name = match &self.agent_type {
-                    AgentType::Claude => "claude-sonnet-4-5",
-                    AgentType::Gemini => "gemini-3-pro-preview",
-                };
+                let model_name = "claude-sonnet-4-5";
 
                 let prompt_tokens = Self::estimate_tokens(&final_prompt);
                 let completion_tokens = Self::estimate_tokens(&response);
@@ -888,7 +867,7 @@ impl VideoEditingJob {
         input_cost + output_cost
     }
 
-    /// Execute using Claude agent with ReAct pattern and user interruption support
+    /// Execute using StatefulGeminiAgent with ReAct pattern and user interruption support
     async fn execute_with_claude(
         &self,
         user_input: &str,
@@ -897,106 +876,62 @@ impl VideoEditingJob {
         control_rx: &mut mpsc::UnboundedReceiver<JobControl>,
         workflow_id: Option<uuid::Uuid>,
     ) -> Result<String, String> {
-        // Use SimpleClaudeAgent with all 38 tools
-        let claude_client_ref = self
-            .app_state
-            .claude_client
-            .as_ref()
-            .ok_or("Claude client not configured")?;
-        let claude_client = Arc::new(claude_client_ref.clone());
-
-        let agent = SimpleClaudeAgent::new(claude_client);
-
-        // Send initial progress
-        progress_callback(0.1, "The Claude video workflow has started its first agent execution step.");
-
-        // Execute agent (handles tool calling internally with up to 15 iterations)
-        let user_input_clone = user_input.to_string();
-        let session_id_clone = session_id.to_string();
-        let app_state_clone = self.app_state.clone();
-        let progress_callback_clone = progress_callback.clone();
-        let mut agent_handle = tokio::spawn(async move {
-            agent
-                .execute(
-                    &user_input_clone,
-                    &session_id_clone,
-                    None,
-                    app_state_clone,
-                    Some(progress_callback_clone),
-                    workflow_id,
-                )
-                .await
-        });
-        let timeout_secs = std::env::var("VIDEO_JOB_AGENT_TIMEOUT_SECONDS")
-            .ok()
-            .and_then(|value| value.parse::<u64>().ok())
-            .unwrap_or(1200);
-        let timeout = tokio::time::sleep(Duration::from_secs(timeout_secs));
-        tokio::pin!(timeout);
-
-        // Poll for control commands
-        loop {
-            tokio::select! {
-                result = &mut agent_handle => {
-                    return result.map_err(|e| format!("Agent task failed: {}", e))?;
-                }
-                _ = &mut timeout => {
-                    tracing::error!("⏱️ Claude video job timed out after {} seconds", timeout_secs);
-                    progress_callback(1.0, "The Claude video workflow hit its execution limit and was stopped.");
-                    agent_handle.abort();
-                    return Err(format!("Claude video job exceeded the {} second execution limit", timeout_secs));
-                }
-                control = control_rx.recv() => {
-                    if let Some(JobControl::Cancel) = control {
-                        tracing::info!("🛑 Job cancelled by user");
-                        agent_handle.abort();
-                        return Err("Job cancelled by user".to_string());
-                    }
-                }
-            }
-        }
-    }
-
-    /// Execute using Gemini agent with simple tool execution
-    async fn execute_with_gemini(
-        &self,
-        user_input: &str,
-        session_id: &str,
-        progress_callback: Arc<dyn Fn(f32, &str) + Send + Sync>,
-        control_rx: &mut mpsc::UnboundedReceiver<JobControl>,
-        workflow_id: Option<uuid::Uuid>,
-    ) -> Result<String, String> {
-        // Use SimpleGeminiAgent with all 38 tools
-        let gemini_client_ref = self
+        let gemini_client = self
             .app_state
             .video_gemini_client
             .as_ref()
             .or(self.app_state.gemini_client.as_ref())
             .ok_or("Gemini client not configured")?;
-        let gemini_client = Arc::new(gemini_client_ref.clone());
+        let agent = StatefulGeminiAgent::new_with_nvidia(
+            Arc::new(gemini_client.clone()),
+            self.app_state.bedrock_client.clone(),
+            self.app_state.nvidia_nim_client.clone().map(Arc::new),
+            self.app_state.ollama_client.clone().map(Arc::new),
+        );
 
-        let agent = SimpleGeminiAgent::new(gemini_client);
+        let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
 
-        // Send initial progress
-        progress_callback(0.1, "The Gemini video workflow has started its first agent execution step.");
+        let ctx = if self.job.job_type == "video_editing" {
+            let raw = self.job.input_data.get("raw_input")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let augmented = self.job.input_data.get("augmented_input")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            format!("Raw input: {}\nAugmented context: {}", raw, augmented)
+        } else {
+            String::new()
+        };
 
-        // Execute agent (handles tool calling internally with up to 15 iterations)
-        let user_input_clone = user_input.to_string();
-        let session_id_clone = session_id.to_string();
+        let user_input_owned = user_input.to_string();
+        let session_id_owned = session_id.to_string();
         let app_state_clone = self.app_state.clone();
-        let progress_callback_clone = progress_callback.clone();
+        let job_manager_clone = self.job_manager.clone();
+
         let mut agent_handle = tokio::spawn(async move {
             agent
-                .execute(
-                    &user_input_clone,
-                    &session_id_clone,
-                    None,
+                .chat(
+                    &user_input_owned,
+                    &session_id_owned,
+                    ctx,
                     app_state_clone,
-                    Some(progress_callback_clone),
+                    job_manager_clone,
+                    Some(progress_tx),
                     workflow_id,
+                    None,
+                    None,
                 )
                 .await
         });
+
+        // Forward progress updates
+        let progress_cb = progress_callback.clone();
+        let mut prog_handle = tokio::spawn(async move {
+            while let Some(msg) = progress_rx.recv().await {
+                progress_cb(0.0, &msg);
+            }
+        });
+
         let timeout_secs = std::env::var("VIDEO_JOB_AGENT_TIMEOUT_SECONDS")
             .ok()
             .and_then(|value| value.parse::<u64>().ok())
@@ -1008,13 +943,14 @@ impl VideoEditingJob {
         loop {
             tokio::select! {
                 result = &mut agent_handle => {
+                    prog_handle.abort();
                     return result.map_err(|e| format!("Agent task failed: {}", e))?;
                 }
                 _ = &mut timeout => {
-                    tracing::error!("⏱️ Gemini video job timed out after {} seconds", timeout_secs);
-                    progress_callback(1.0, "The Gemini video workflow hit its execution limit and was stopped.");
+                    tracing::error!("⏱️ Video job timed out after {} seconds", timeout_secs);
+                    progress_callback(1.0, "Video job hit its execution limit and was stopped.");
                     agent_handle.abort();
-                    return Err(format!("Gemini video job exceeded the {} second execution limit", timeout_secs));
+                    return Err(format!("Video job exceeded the {} second execution limit", timeout_secs));
                 }
                 control = control_rx.recv() => {
                     if let Some(JobControl::Cancel) = control {

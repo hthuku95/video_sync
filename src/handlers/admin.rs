@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::agent::tool_executor::execute_tool_gemini_with_context;
+
 
 #[derive(Debug, Deserialize, Default)]
 pub struct DeliveryViewQuery {
@@ -175,7 +175,7 @@ pub fn admin_routes() -> Router {
         )
         .route(
             "/api/admin/service-samples",
-            get(api_list_service_portfolio_samples).post(api_trigger_service_portfolio_sample),
+            get(api_list_service_portfolio_samples),
         )
         .route(
             "/api/admin/service-samples/briefs",
@@ -9206,53 +9206,6 @@ pub async fn api_list_service_portfolio_briefs(
     Json(json!({ "success": true, "services": services }))
 }
 
-pub async fn api_trigger_service_portfolio_sample(
-    Extension(state): Extension<Arc<AppState>>,
-    axum::Json(body): axum::Json<serde_json::Value>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let service_slug = body.get("service_slug").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let brief_name = body.get("brief_name").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    if service_slug.is_empty() || brief_name.is_empty() {
-        return Err((StatusCode::BAD_REQUEST, Json(json!({ "error": "service_slug and brief_name required" }))));
-    }
-    let briefs = crate::handlers::service_catalog::get_service_portfolio_briefs(&service_slug);
-    let brief = briefs.into_iter().find(|b| b.name == brief_name);
-    let brief = match brief {
-        Some(b) => b,
-        None => return Err((StatusCode::NOT_FOUND, Json(json!({ "error": "Brief not found for this service" })))),
-    };
-
-    let sample_id = uuid::Uuid::new_v4();
-    let _ = sqlx::query(
-        "INSERT INTO service_portfolio_samples (id, service_slug, sample_name, brief, description, status) VALUES ($1, $2, $3, $4, $5, 'pending')"
-    )
-    .bind(sample_id)
-    .bind(&service_slug)
-    .bind(brief.name)
-    .bind(brief.brief)
-    .bind(brief.description)
-    .execute(&state.db_pool)
-    .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": format!("DB insert failed: {e}") }))))?;
-
-    let state_clone = state.clone();
-    let sample_id_clone = sample_id;
-    let brief_text = brief.brief.to_string();
-    let service_slug_clone = service_slug.clone();
-
-    tokio::spawn(async move {
-        run_service_portfolio_sample_agent(state_clone, sample_id_clone, &service_slug_clone, &brief_text).await;
-    });
-
-    Ok(Json(json!({
-        "success": true,
-        "sample_id": sample_id,
-        "service_slug": service_slug,
-        "brief_name": brief_name,
-        "status": "queued",
-    })))
-}
-
 pub async fn api_list_service_portfolio_samples(
     Extension(state): Extension<Arc<AppState>>,
     Query(params): Query<HashMap<String, String>>,
@@ -9286,149 +9239,6 @@ pub async fn api_list_service_portfolio_samples(
     }).collect();
 
     Json(json!({ "success": true, "samples": samples }))
-}
-
-async fn run_service_portfolio_sample_agent(
-    state: Arc<AppState>,
-    sample_id: uuid::Uuid,
-    service_slug: &str,
-    brief: &str,
-) {
-    let _ = sqlx::query("UPDATE service_portfolio_samples SET status = 'running', started_at = NOW() WHERE id = $1")
-        .bind(sample_id)
-        .execute(&state.db_pool)
-        .await;
-
-    let session_id = uuid::Uuid::new_v4().to_string();
-    let _ = sqlx::query("UPDATE service_portfolio_samples SET session_id = $1 WHERE id = $2")
-        .bind(&session_id)
-        .bind(sample_id)
-        .execute(&state.db_pool)
-        .await;
-
-    let gemini_client = state.video_gemini_client.clone()
-        .or_else(|| state.gemini_client.clone());
-    let gemini_client = match gemini_client {
-        Some(c) => c,
-        None => {
-            let _ = sqlx::query("UPDATE service_portfolio_samples SET status = 'failed', error_message = 'No Gemini client configured', completed_at = NOW() WHERE id = $1")
-                .bind(sample_id)
-                .execute(&state.db_pool)
-                .await;
-            return;
-        }
-    };
-
-    let tools = crate::ai_tool_selector::select_tools_for_request(
-        brief,
-        state.ollama_client.as_ref(),
-        state.nvidia_nim_client.as_ref(),
-        Some(&gemini_client),
-    )
-    .await;
-
-    let agent = crate::agent::simple_gemini_agent::SimpleGeminiAgent::new_with_nvidia(
-        Arc::new(gemini_client),
-        state.bedrock_client.clone(),
-        state.nvidia_nim_client.clone().map(Arc::new),
-        state.ollama_client.clone().map(Arc::new),
-    );
-
-    let system_instruction = format!(
-        r#"You are a VideoSync AI agent creating a REAL portfolio sample for the '{slug}' done-for-you service. This sample will be shown to potential customers as proof of quality. It MUST be a polished, complete deliverable that could be sold to a paying customer for $75–$500.
-
-CRITICAL RULE — YOU MUST ACTUALLY GENERATE THE MEDIA:
-- You MUST call the real generation tools to produce actual media files
-- For VIDEO ASSETS, call run_director with a descriptive creative brief describing the style, mood, content, and requirements. The Director agent will plan and call the appropriate rendering tools internally.
-- For THUMBNAILS, call run_director with a brief describing the thumbnail style — the Director handles generating them.
-- Do NOT call individual blender_generate_* tools directly — always use run_director for asset generation
-- After the Director returns assets, use FFmpeg tools (concat_videos, overlay_video, add_text_overlay, add_audio) for post-processing into the final deliverable
-- Do NOT just describe what you would do — actually DO it
-- Do NOT call submit_final_answer until you have produced real files that are uploaded to R2
-- If you need audio, CALL generate_text_to_speech
-
-REQUIREMENTS:
-1. Produce a FULL video matching the brief duration (typically 15–90 seconds)
-2. Resolution MUST be 1080p (1920x1080) or at minimum 720p (1280x720)
-3. Compose scenes together using concat_videos, overlay_video, add_text_overlay, add_background_music
-4. Include background music, title card/end card, and voiceover narration where appropriate
-5. Upload EVERY intermediate asset to cloud (tools do this automatically)
-6. Only call submit_final_answer AFTER you have real output files with R2 URLs
-7. DO NOT use test/smoke tools — use the real production tools
-
-Your final submit_final_answer MUST include the R2 URL of the final deliverable.
-Create everything from scratch. Do NOT ask for uploaded files or reference URLs.
-Be descriptive in your run_director brief — describe what the customer wants as if you were writing a creative brief, not a technical specification. Do not hardcode tool names, durations, or styles in your brief."#,
-        slug = service_slug
-    );
-
-    let tool_executor: crate::agent::simple_gemini_agent::GeminiToolExecutor = Arc::new(|name, args, ctx| {
-        Box::pin(async move {
-            serde_json::Value::String(execute_tool_gemini_with_context(name, args, ctx).await)
-        })
-    });
-
-    let result = agent.execute_with_custom_tools(
-        brief,
-        &session_id,
-        None,
-        state.clone(),
-        None,
-        &system_instruction,
-        tools,
-        Some("submit_final_answer"),
-        tool_executor,
-        None,
-    )
-    .await;
-
-    match result {
-        Ok(response) => {
-            // Query generated_artifacts for this session's outputs
-            let outputs = sqlx::query(
-                "SELECT kind, public_url, file_path FROM generated_artifacts WHERE session_uuid = $1 ORDER BY created_at DESC LIMIT 20"
-            )
-            .bind(&session_id)
-            .fetch_all(&state.db_pool)
-            .await
-            .unwrap_or_default();
-
-            let video_url = outputs.iter()
-                .find(|r| matches!(r.get::<String, _>("kind").as_str(), "video" | "long_form_video"))
-                .or_else(|| outputs.iter().find(|r| r.get::<String, _>("kind") == "image"))
-                .or_else(|| outputs.iter().find(|r| r.get::<String, _>("kind") == "audio"))
-                .or_else(|| outputs.iter().find(|r| r.get::<String, _>("kind") == "file"))
-                .and_then(|r| r.get::<Option<String>, _>("public_url"));
-
-            let thumbnail_url = outputs.iter()
-                .find(|r| r.get::<String, _>("kind") == "image")
-                .or_else(|| outputs.iter().find(|r| r.get::<String, _>("kind") == "video"))
-                .or_else(|| outputs.iter().find(|r| r.get::<String, _>("kind") == "long_form_video"))
-                .and_then(|r| r.get::<Option<String>, _>("public_url"));
-
-            let _ = sqlx::query(
-                "UPDATE service_portfolio_samples SET status = 'completed', output_r2_url = $1, output_thumbnail_url = $2, completed_at = NOW() WHERE id = $3"
-            )
-            .bind(&video_url)
-            .bind(&thumbnail_url)
-            .bind(sample_id)
-            .execute(&state.db_pool)
-            .await;
-
-            tracing::info!("✅ Service portfolio sample {sample_id} completed for {service_slug}");
-        }
-        Err(e) => {
-            let _ = sqlx::query(
-                "UPDATE service_portfolio_samples SET status = 'failed', error_message = $1, completed_at = NOW() WHERE id = $2"
-            )
-            .bind(&e)
-            .bind(sample_id)
-            .execute(&state.db_pool)
-            .await;
-
-            tracing::error!("❌ Service portfolio sample {sample_id} failed for {service_slug}: {e}");
-        }
-    }
 }
 
 pub async fn admin_service_samples_page() -> Html<String> {

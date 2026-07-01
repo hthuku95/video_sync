@@ -6,8 +6,6 @@ use super::checkpoint::WorkflowCheckpointer;
 use super::executor::{ExecutorBuilder, ExecutorConfig, WorkflowExecutor};
 use super::graph::{NodeFunction, NodeType, StateGraph, StateGraphBuilder};
 use super::state::{StateUpdate, WorkflowState, WorkflowStatus};
-use crate::agent::simple_claude_agent::SimpleClaudeAgent;
-use crate::claude_client::ClaudeClient;
 use async_trait::async_trait;
 use std::sync::Arc;
 
