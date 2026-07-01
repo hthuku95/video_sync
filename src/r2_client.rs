@@ -246,6 +246,35 @@ impl R2Client {
     // Download
     // -------------------------------------------------------------------------
 
+    /// Stream an R2 object directly, supporting HTTP Range requests.
+    /// Returns (status_code_u16, response_headers, byte_stream).
+    pub async fn stream_object(
+        &self,
+        key: &str,
+        range: Option<&str>,
+    ) -> Result<(u16, Vec<(String, String)>, ByteStream), String> {
+        let mut req = self.client.get_object().bucket(&self.bucket).key(key);
+        if let Some(range_header) = range {
+            req = req.range(range_header);
+        }
+        let resp = req.send().await.map_err(|e| format!("R2 stream failed for {key}: {e}"))?;
+
+        let status: u16 = if range.is_some() { 206 } else { 200 };
+
+        let mut headers = vec![
+            ("accept-ranges".to_string(), "bytes".to_string()),
+            ("content-type".to_string(), resp.content_type.unwrap_or_else(|| "video/mp4".to_string())),
+        ];
+        if let Some(len) = resp.content_length {
+            headers.push(("content-length".to_string(), len.to_string()));
+        }
+        if let Some(cr) = resp.content_range {
+            headers.push(("content-range".to_string(), cr));
+        }
+
+        Ok((status, headers, resp.body))
+    }
+
     pub async fn download(&self, key: &str, local_path: &str) -> Result<(), String> {
         let resp = self
             .client

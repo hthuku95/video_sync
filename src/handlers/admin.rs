@@ -3,6 +3,7 @@ use crate::middleware::auth::auth_middleware;
 use crate::models::{admin::*, auth::*};
 use crate::AppState;
 use axum::{
+    body::Body,
     extract::{Extension, Path, Query},
     http::{header, HeaderMap, StatusCode},
     response::{Html, IntoResponse, Json, Response},
@@ -61,6 +62,7 @@ pub fn admin_routes() -> Router {
         .route("/admin/campaigns", get(admin_campaigns_page))
         .route("/admin/zernio", get(admin_zernio_page))
         .route("/delivery/:id", get(delivery_page))
+        .route("/delivery/:id/stream", get(delivery_stream))
         .route("/delivery/:id/download-gcs", get(delivery_gcs_download))
         .route("/api/portfolio-samples", get(api_list_portfolio_samples))
         // x402 paywall endpoints — public on purpose; auth happens via the
@@ -7282,11 +7284,11 @@ load();
 // GET /delivery/:id
 // ─────────────────────────────────────────────────────────────────────────────
 
-pub async fn delivery_page(
+async fn delivery_page(
     Path(id): Path<String>,
     Query(query): Query<DeliveryViewQuery>,
     Extension(state): Extension<Arc<AppState>>,
-) -> Html<String> {
+) -> impl IntoResponse {
     let internal_reviewer = query
         .token
         .as_deref()
@@ -7440,6 +7442,7 @@ pub async fn delivery_page(
             let gig_type = gig_type.unwrap_or_default();
             let status = status.unwrap_or_default();
             let r2_url = r2_url;
+            let stream_url = r2_url.as_ref().map(|_| format!("/delivery/{id}/stream"));
             let filename = filename;
             let score = score;
             let feedback = feedback;
@@ -7461,6 +7464,7 @@ pub async fn delivery_page(
                     }
                 }
                 Some(url) => {
+                    let media_src = stream_url.as_deref().unwrap_or(url);
                     if is_image {
                         let watermark_overlay = if !is_unlocked {
                             r#"<div class="watermark"><div class="watermark-label">PREVIEW · UNLOCK FULL HD BELOW</div></div>"#
@@ -7468,7 +7472,7 @@ pub async fn delivery_page(
                             ""
                         };
                         format!(
-                            r#"<div class="media-stack"><img src="{url}" alt="Delivered image" style="max-width:100%;border-radius:12px;">{watermark_overlay}</div>"#
+                            r#"<div class="media-stack"><img src="{media_src}" alt="Delivered image" style="max-width:100%;border-radius:12px;">{watermark_overlay}</div>"#
                         )
                     } else {
                         let watermark_overlay = if !is_unlocked {
@@ -7487,7 +7491,7 @@ pub async fn delivery_page(
                         format!(
                             r#"<div class="media-stack">
 <video {video_attrs} style="width:100%;border-radius:12px;background:#000;">
-  <source src="{url}" type="video/mp4">
+  <source src="{media_src}" type="video/mp4">
   Your browser does not support the video tag.
 </video>{watermark_overlay}</div>"#
                         )
@@ -7997,7 +8001,91 @@ pub async fn delivery_page(
         }
     };
 
-    Html(html)
+    let mut resp_headers = HeaderMap::new();
+    resp_headers.insert(
+        header::HeaderName::from_static("x-robots-tag"),
+        header::HeaderValue::from_static("noindex, nofollow"),
+    );
+    (resp_headers, Html(html))
+}
+
+async fn delivery_stream(
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Extension(state): Extension<Arc<AppState>>,
+) -> Result<Response, (StatusCode, Json<serde_json::Value>)> {
+    let uuid = Uuid::parse_str(&id).map_err(|_| {
+        (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Invalid delivery ID"})))
+    })?;
+
+    let r2_url: Option<String> = {
+        let tr = sqlx::query_scalar::<_, Option<String>>(
+            "SELECT output_r2_url FROM test_results WHERE id = $1",
+        )
+        .bind(uuid)
+        .fetch_optional(&state.db_pool)
+        .await
+        .map_err(|e| {
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("DB error: {e}")})))
+        })?;
+
+        if let Some(Some(url)) = tr {
+            Some(url)
+        } else {
+            let row = sqlx::query(
+                "SELECT output_r2_url, preview_r2_url, unlock_price_usdc, unlocked_until \
+                 FROM deliveries WHERE id = $1",
+            )
+            .bind(uuid)
+            .fetch_optional(&state.db_pool)
+            .await
+            .map_err(|e| {
+                (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("DB error: {e}")})))
+            })?;
+
+            match row {
+                Some(r) => {
+                    let full_u: Option<String> = r.try_get("output_r2_url").ok().flatten();
+                    let preview_u: Option<String> = r.try_get("preview_r2_url").ok().flatten();
+                    let price: Option<sqlx::types::Decimal> = r.try_get("unlock_price_usdc").ok().flatten();
+                    let until: Option<chrono::DateTime<chrono::Utc>> =
+                        r.try_get("unlocked_until").ok().flatten();
+
+                    let is_unlocked = price.is_none()
+                        || until.map(|t| t > chrono::Utc::now()).unwrap_or(false);
+
+                    if is_unlocked { full_u } else { preview_u.or(full_u) }
+                }
+                None => None,
+            }
+        }
+    };
+
+    let r2_url = r2_url.ok_or_else(|| {
+        (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Delivery not found or no media available"})))
+    })?;
+
+    let r2 = state.r2_client.as_ref().ok_or_else(|| {
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Storage not configured"})))
+    })?;
+
+    let key = extract_r2_object_key_from_url(&r2_url, &r2.bucket).ok_or_else(|| {
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Invalid media URL"})))
+    })?;
+
+    let range = headers.get("range").and_then(|v| v.to_str().ok());
+    let (raw_status, resp_headers, byte_stream) = r2.stream_object(&key, range).await.map_err(|e| {
+        (StatusCode::BAD_GATEWAY, Json(serde_json::json!({"error": format!("Stream failed: {e}")})))
+    })?;
+
+    let mut response = Response::new(Body::from_stream(byte_stream));
+    *response.status_mut() = StatusCode::from_u16(raw_status).unwrap_or(StatusCode::OK);
+    for (k, v) in resp_headers {
+        if let (Ok(key), Ok(val)) = (k.parse::<header::HeaderName>(), v.parse::<header::HeaderValue>()) {
+            response.headers_mut().insert(key, val);
+        }
+    }
+    Ok(response)
 }
 
 pub async fn delivery_gcs_download(
