@@ -8078,7 +8078,11 @@ async fn delivery_stream(
         (StatusCode::BAD_GATEWAY, Json(serde_json::json!({"error": format!("Stream failed: {e}")})))
     })?;
 
-    let mut response = Response::new(Body::from_stream(byte_stream));
+    let bytes = byte_stream.collect().await.map_err(|e| {
+        (StatusCode::BAD_GATEWAY, Json(serde_json::json!({"error": format!("Failed to read R2 stream: {e}")})))
+    })?;
+
+    let mut response = Response::new(Body::from(bytes.to_vec()));
     *response.status_mut() = StatusCode::from_u16(raw_status).unwrap_or(StatusCode::OK);
     for (k, v) in resp_headers {
         if let (Ok(key), Ok(val)) = (k.parse::<header::HeaderName>(), v.parse::<header::HeaderValue>()) {
