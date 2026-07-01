@@ -53,6 +53,15 @@ pub fn ui_routes() -> Router {
             "/services/kick-com-clipping",
             get(kick_com_clipping_page),
         )
+        .route(
+            "/services/kick-auto-clipper",
+            get(kick_com_clipping_page),
+        )
+        .route("/services/business-explainer-pack", get(saas_launch_pack_page))
+        .route(
+            "/services/manim-explainer",
+            get(manim_explainer_page),
+        )
         .route("/login", get(login_page))
         .route("/signup", get(signup_page))
         .route("/dashboard", get(dashboard_page))
@@ -735,6 +744,43 @@ pub async fn kick_com_clipping_page() -> Html<String> {
     ))
 }
 
+pub async fn manim_explainer_page() -> Html<String> {
+    Html(build_service_offer_page_html(
+        "manim-explainer",
+        "Manim Animated Explainer",
+        "$75-$400+",
+        "Send a topic, lesson, or script. Our AI agent generates a narrated Manim explainer with clean motion graphics, math/technical diagrams, and professional narration — in minutes, not hours.",
+        "Built for educators, course creators, math/finance channels, SaaS teams, and anyone who needs clear animated explainers faster than traditional animation pipelines.",
+        "The simple offer: send a topic, outline, lesson, script, or technical concept and get a narrated animated explainer video. The full pack includes the full explainer with motion graphics, diagrams, professional voiceover narration, captions, and a delivery page with downloads. Powered by Manim Community Edition — 5-20x faster render than Blender with CPU-friendly Cairo backend.",
+        "/chat",
+        "Generate a Manim explainer",
+        "/services/education-explainer-pack",
+        "See education explainers",
+        &[
+            "Narrated animated explainer videos with clean motion graphics",
+            "Math/technical diagrams, formulas, data visualizations, and process flows",
+            "Professional voiceover narration via VibeVoice TTS (natural speech)",
+            "Supports any duration: 30s shorts to 10+ minute lessons",
+            "Captions and subtitles included",
+            "Delivered as a review/download link you can share immediately",
+            "5-20x faster than Blender pipeline — CPU-friendly Cairo backend",
+        ],
+        &[
+            "Share the topic, lesson, script, or source material you want explained.",
+            "Our AI agent plans the visual narrative and generates Manim Python code per scene.",
+            "VideoSync renders each scene in parallel, stitches them together, adds narration.",
+            "You receive a delivery page with preview and download links.",
+        ],
+        &[
+            ("Educator or course creator", "Needs visual explainers for complex topics without spending days on animation."),
+            ("Math/finance channel", "Needs clear animated diagrams and formula walkthroughs for technical content."),
+            ("Product or SaaS team", "Needs a narrated explainer that makes a complex product or concept easy to understand."),
+        ],
+        r#"["manim_explainer","education","three_d_scene","voice_audio"]"#,
+        r#"["manim_pack"]"#,
+    ))
+}
+
 struct ServicePageTheme {
     accent: &'static str,
     secondary: &'static str,
@@ -910,6 +956,14 @@ fn build_services_overview_page_html() -> String {
             "For Kick streamers, editors, and clip channels who need professional highlight clips from Kick VODs.",
             "Kick.com VOD or channel URL",
             "Extracted highlight clips with captions, thumbnails, hook cards, and delivery page.",
+        ),
+        (
+            "Manim Animated Explainer",
+            "/services/manim-explainer",
+            "$75-$400+",
+            "For educators, course creators, and technical channels who need narrated animated explainers with math diagrams and motion graphics.",
+            "Topic, lesson, script, or technical concept",
+            "Manim-powered animated explainers with voiceover narration, diagrams, and captions — 5-20x faster than Blender.",
         ),
         (
             "Social Publishing",

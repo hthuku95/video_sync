@@ -7499,17 +7499,18 @@ async fn delivery_page(
                 }
             };
 
+            let stream_url_str = stream_url.as_deref().unwrap_or("");
             // Download button is gated. When LOCKED, show the unlock CTA
             // instead — this is the entire revenue surface.
             let download_btn = match (&r2_url, is_unlocked) {
                 (None, _) => String::new(),
-                (Some(url), true) => {
+                (Some(_url), true) => {
                     let fname = filename.as_deref().unwrap_or("output");
                     format!(
                         r#"<div class="delivery-actions">
-  <a href="{url}" target="_blank" rel="noopener" class="btn-secondary">Open media</a>
+  <a href="{stream_url_str}" target="_blank" rel="noopener" class="btn-secondary">Open media</a>
   <button type="button" class="btn-secondary" onclick="navigator.clipboard.writeText(window.location.href);this.textContent='Link copied';setTimeout(()=>this.textContent='Copy delivery link',1800)">Copy delivery link</button>
-  <a href="{url}" download="{fname}" class="btn-download">Download HD {fname}</a>
+  <a href="{stream_url_str}" download="{fname}" class="btn-download">Download HD {fname}</a>
 </div>"#
                     )
                 }
@@ -11216,7 +11217,9 @@ async function loadDeliveries() {
     }
 
     document.getElementById('deliveries-tbody').innerHTML = deliveries.map(d => {
-      const deliveryUrl = `${location.origin}/delivery/${d.id}`;
+      const token = localStorage.getItem('auth_token') || localStorage.getItem('admin_token');
+      const deliveryUrl = `${location.origin}/delivery/${d.id}${token ? `?token=${encodeURIComponent(token)}` : ''}`;
+      const streamUrl = `${location.origin}/delivery/${d.id}/stream`;
       const r2Url = d.output_r2_url || '';
       const fname = d.output_filename || `delivery_${d.id.substring(0,8)}`;
       const progress = d.workflow_progress || {};
@@ -11231,7 +11234,7 @@ async function loadDeliveries() {
         ? `<div class="link-cell">
              <button class="btn btn-copy btn-sm" onclick="navigator.clipboard.writeText('${deliveryUrl}');this.textContent='✓ Copied';setTimeout(()=>this.textContent='Copy Link',2000)">Copy Link</button>
              <a href="${deliveryUrl}" target="_blank" style="font-size:11px;color:#6c5ce7">Open ↗</a>
-             ${r2Url ? `<a href="${r2Url}" download="${fname}" class="btn btn-sm" style="background:#1a2a3a;border:1px solid #2a4a6a;color:#60a5fa;text-decoration:none;">⬇ Download</a>` : ''}
+             ${r2Url ? `<a href="${streamUrl}" download="${fname}" class="btn btn-sm" style="background:#1a2a3a;border:1px solid #2a4a6a;color:#60a5fa;text-decoration:none;">⬇ Download</a>` : ''}
            </div>`
         : d.status === 'failed'
           ? `<span style="font-size:11px;color:#f87171">${(d.error||'').substring(0,60)}</span>`

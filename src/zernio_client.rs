@@ -40,6 +40,7 @@ pub struct ListProfilesResponse {
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct ConnectUrlResponse {
+    #[serde(alias = "connectUrl")]
     pub url: String,
 }
 
