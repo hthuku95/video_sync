@@ -5,7 +5,7 @@ use crate::agent::conversation_manager::{ConversationManager, ConversationMessag
 use crate::claude_client::{
     ClaudeClient, ClaudeContent, ClaudeMessage, ClaudeTool, InputSchema, PropertyDefinition,
 };
-use crate::jobs::video_job;
+
 use crate::AppState;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -172,40 +172,15 @@ IMPORTANT: For fetching website content, use `browserbase_fetch_url(url)` — it
                         let tool_use_id = id.clone();
                         send_progress(&format!("🔧 Detected tool call: {}", name));
                         if name == "start_background_job" {
-                            send_progress("🚀 Starting background video editing job...");
-                            tracing::info!("🚀 AI decided to start background job");
+                            send_progress("🚀 Background job tool called — handling inline...");
+                            tracing::info!("🚀 AI called start_background_job — handling inline");
 
                             let task_description = input
                                 .get("task_description")
                                 .and_then(|v| v.as_str())
                                 .unwrap_or(user_input);
 
-                            // Spawn background job
-                            let agent_type = video_job::AgentType::Claude;
-                            let job_result = video_job::spawn_video_editing_job(
-                                user_input.to_string(),
-                                task_description.to_string(),
-                                session_id.to_string(),
-                                agent_type,
-                                app_state.clone(),
-                                job_manager.clone(),
-                            )
-                            .await;
-
-                            let tool_result = match job_result {
-                                Ok(job_id) => {
-                                    send_progress(&format!(
-                                        "✅ Background job started: {}",
-                                        job_id
-                                    ));
-                                    tracing::info!("✅ Background job started: {}", job_id);
-                                    format!("Successfully started background video editing job with ID: {}. The job is now processing in the background and will send progress updates.", job_id)
-                                }
-                                Err(e) => {
-                                    send_progress(&format!("❌ Failed to start job: {}", e));
-                                    format!("Failed to start background job: {}", e)
-                                }
-                            };
+                            let tool_result = format!("The background job is being handled within the current agent session. Task: {}. Background job dispatch was removed — the agent handles all tasks inline.", task_description);
 
                             tool_results.push((tool_use_id.clone(), tool_result));
                         } else if name == "check_job_status" {
@@ -1141,8 +1116,8 @@ IMPORTANT: For fetching website content, use `browserbase_fetch_url(url)` — it
                                         function_call.thought_signature.clone(),
                                     ));
                                 } else if function_name == "start_background_job" {
-                                    send_progress("🚀 Starting background video editing job...");
-                                    tracing::info!("🚀 Gemini decided to start background job");
+                                    send_progress("🚀 Background job tool called — handling inline...");
+                                    tracing::info!("🚀 Gemini called start_background_job — handling inline");
 
                                     let task_description = function_call
                                         .args
@@ -1150,42 +1125,10 @@ IMPORTANT: For fetching website content, use `browserbase_fetch_url(url)` — it
                                         .and_then(|v| v.as_str())
                                         .unwrap_or(user_input);
 
-                                    let agent_type = video_job::AgentType::Claude;
-
-                                    let job_result = video_job::spawn_video_editing_job(
-                                        user_input.to_string(),
-                                        task_description.to_string(),
-                                        session_id.to_string(),
-                                        agent_type,
-                                        app_state.clone(),
-                                        job_manager.clone(),
-                                    )
-                                    .await;
-
-                                    let tool_result = match job_result {
-                                        Ok(job_id) => {
-                                            send_progress(&format!(
-                                                "✅ Background job started: {}",
-                                                job_id
-                                            ));
-                                            tracing::info!("✅ Background job started: {}", job_id);
-                                            serde_json::json!({
-                                                "success": true,
-                                                "job_id": job_id,
-                                                "message": format!("Successfully started background video editing job with ID: {}. The job is now processing in the background and will send progress updates.", job_id)
-                                            })
-                                        }
-                                        Err(e) => {
-                                            send_progress(&format!(
-                                                "❌ Failed to start job: {}",
-                                                e
-                                            ));
-                                            serde_json::json!({
-                                                "success": false,
-                                                "error": format!("Failed to start background job: {}", e)
-                                            })
-                                        }
-                                    };
+                                    let tool_result = Ok(json!({
+                                        "result": format!("The background job is being handled within the current agent session. Task: {}", task_description),
+                                        "note": "Background job dispatch was removed. The agent handles all tasks inline."
+                                    }));
 
                                     function_results.push((
                                         function_name.clone(),
