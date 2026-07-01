@@ -1533,7 +1533,6 @@ struct ProposeEditRequest {
     proposed_description: Option<String>,
 }
 
-#[derive(Deserialize)]
 /// PUT /api/clipping/clips/:id/approve
 /// Approve a pending-review clip: trigger actual YouTube upload now.
 async fn approve_clip(

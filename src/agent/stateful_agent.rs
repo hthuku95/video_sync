@@ -1150,7 +1150,7 @@ IMPORTANT: For fetching website content, use `browserbase_fetch_url(url)` — it
                                         .and_then(|v| v.as_str())
                                         .unwrap_or(user_input);
 
-                                    let agent_type = video_job::AgentType::Gemini;
+                                    let agent_type = video_job::AgentType::Claude;
 
                                     let job_result = video_job::spawn_video_editing_job(
                                         user_input.to_string(),
