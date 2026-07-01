@@ -1206,39 +1206,49 @@ fn locate_output_from_result(agent_result: &Result<String, String>, output_dir: 
         }
     }
 
-    // Fallback: scan output directories for local files
+    // Fallback: scan output_dir only (not global outputs/ — avoids picking up stale files
+    // from other deliveries). Only consider files modified within the last hour.
     if local_path.is_none() {
-        for dir in &[output_dir, "outputs"] {
-            if let Ok(entries) = std::fs::read_dir(dir) {
-                let mut candidates: Vec<_> = entries
-                    .flatten()
-                    .filter_map(|e| {
-                        let p = e.path();
-                        let ext = p.extension()?.to_str()?;
-                        if matches!(ext, "mp4" | "webm" | "mov" | "avi" | "mkv") {
-                            Some((p, 2))
-                        } else if matches!(ext, "png" | "jpg" | "jpeg" | "gif") {
-                            Some((p, 1))
-                        } else if matches!(ext, "mp3" | "wav" | "aac") {
-                            Some((p, 0))
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
-                if !candidates.is_empty() {
-                    // Prefer video > image > audio, then by modification time (newest first)
-                    candidates.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| {
-                        std::fs::metadata(&b.0).ok()
-                            .and_then(|m| m.modified().ok())
-                            .cmp(&std::fs::metadata(&a.0).ok().and_then(|m| m.modified().ok()))
-                    }));
-                    if let Some((p, _)) = candidates.first() {
-                        let p = p.to_string_lossy().to_string();
-                        tracing::warn!(path = %p, dir = %dir, "locate_output_from_result found local file via dir scan");
-                        local_path = Some(p);
-                        break;
+        let cutoff = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()
+            .and_then(|n| n.checked_sub(std::time::Duration::from_secs(3600)))
+            .and_then(|past| std::time::UNIX_EPOCH.checked_add(past));
+        if let Ok(entries) = std::fs::read_dir(output_dir) {
+            let mut candidates: Vec<_> = entries
+                .flatten()
+                .filter_map(|e| {
+                    let p = e.path();
+                    let ext = p.extension()?.to_str()?;
+                    if !matches!(ext, "mp4" | "webm" | "mov" | "avi" | "mkv" | "png" | "jpg" | "jpeg" | "gif" | "mp3" | "wav" | "aac") {
+                        return None;
                     }
+                    // Only accept files modified within the last hour
+                    if let Some(ref cutoff) = cutoff {
+                        if let Ok(meta) = std::fs::metadata(&p) {
+                            if let Ok(modified) = meta.modified() {
+                                if modified < *cutoff {
+                                    return None;
+                                }
+                            }
+                        }
+                    }
+                    let priority = if matches!(ext, "mp4" | "webm" | "mov" | "avi" | "mkv") { 2 }
+                        else if matches!(ext, "png" | "jpg" | "jpeg" | "gif") { 1 }
+                        else { 0 };
+                    Some((p, priority))
+                })
+                .collect();
+            if !candidates.is_empty() {
+                candidates.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| {
+                    std::fs::metadata(&b.0).ok()
+                        .and_then(|m| m.modified().ok())
+                        .cmp(&std::fs::metadata(&a.0).ok().and_then(|m| m.modified().ok()))
+                }));
+                if let Some((p, _)) = candidates.first() {
+                    let p = p.to_string_lossy().to_string();
+                    tracing::warn!(path = %p, dir = %output_dir, "locate_output_from_result found local file via dir scan");
+                    local_path = Some(p);
                 }
             }
         }
