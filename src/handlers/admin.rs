@@ -10764,6 +10764,17 @@ fn build_delivery_tool_args(
                 ext,
             )
         }
+        "isometric_explainer" | "manim_explainer" => {
+            let tool_name = "manim_execute_script".to_string();
+            let mut args = json!({
+                "description": format!("Isometric 3D explainer: {} (style: {}, duration: {}s)", prompt, style, duration),
+                "quality": "h",
+                "duration": duration,
+            });
+            maybe_insert_delivery_narration_args(&tool_name, &mut args, extra);
+            (tool_name, args, "video_url", "mp4")
+        }
+
         _ => {
             // "scene" + default — includes landing_page service type
             let mut args = json!({"prompt": prompt, "style": style, "duration": duration});

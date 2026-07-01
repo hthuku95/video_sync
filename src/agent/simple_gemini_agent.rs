@@ -8,7 +8,7 @@ use crate::gemini_client::{
     GenerateContentRequest, GenerationConfig, Part, Tool, ToolConfig,
 };
 use crate::nvidia_nim_client::{NimResponse as NvidiaNimResponse, NvidiaNimClient};
-use crate::ollama_client::{OllamaClient, OllamaResponse, OllamaToolCall};
+use crate::ollama_client::{OllamaClient, OllamaResponse};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::future::Future;
