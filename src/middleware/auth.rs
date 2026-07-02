@@ -66,13 +66,14 @@ fn is_browser_request(headers: &HeaderMap) -> bool {
         .unwrap_or(false)
 }
 
-fn unauthenticated(headers: &HeaderMap) -> impl IntoResponse {
+fn unauthenticated(headers: &HeaderMap) -> Response {
     if is_browser_request(headers) {
         (
             StatusCode::FOUND,
             [(header::LOCATION, "/login")],
             Html(""),
         )
+            .into_response()
     } else {
         (
             StatusCode::UNAUTHORIZED,
@@ -82,5 +83,6 @@ fn unauthenticated(headers: &HeaderMap) -> impl IntoResponse {
                 message: "Missing Authorization header or token query parameter".to_string(),
             }),
         )
+            .into_response()
     }
 }

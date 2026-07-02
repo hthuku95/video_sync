@@ -147,13 +147,14 @@ fn is_browser_request(request: &Request) -> bool {
         .unwrap_or(false)
 }
 
-fn payment_required(request: &Request) -> impl IntoResponse {
+fn payment_required(request: &Request) -> Response {
     if is_browser_request(request) {
         (
             StatusCode::FOUND,
             [(header::LOCATION, "/subscribe")],
             Html(""),
         )
+            .into_response()
     } else {
         (
             StatusCode::PAYMENT_REQUIRED,
@@ -164,5 +165,6 @@ fn payment_required(request: &Request) -> impl IntoResponse {
                 "upgrade_url":  "/subscribe",
             })),
         )
+            .into_response()
     }
 }
