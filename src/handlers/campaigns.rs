@@ -53,6 +53,7 @@ pub struct CreateCampaignRequest {
     pub start_date: String,         // ISO 8601
     pub end_date: String,           // ISO 8601
     pub zernio_profile_id: Option<String>,
+    pub source_url: Option<String>, // Source video URL (YouTube/Twitch/Kick) for clipping services
 }
 
 // ── Admin: List all campaigns ───────────────────────────────────────────────
@@ -63,7 +64,7 @@ async fn admin_list_campaigns(
     let rows = sqlx::query(
         "SELECT c.id, c.user_id, u.email, c.name, c.service_type, c.brief, c.style, c.duration, \
                 c.schedule, c.platforms, c.posts_per_day, c.start_date, c.end_date, \
-                c.zernio_profile_id, c.status, c.total_posts_planned, c.total_posts_published, c.created_at \
+                c.zernio_profile_id, c.source_url, c.status, c.total_posts_planned, c.total_posts_published, c.created_at \
          FROM campaigns c JOIN users u ON u.id = c.user_id \
          ORDER BY c.created_at DESC",
     )
@@ -87,6 +88,7 @@ async fn admin_list_campaigns(
                 "start_date": row.get::<chrono::DateTime<chrono::Utc>, _>("start_date").to_rfc3339(),
                 "end_date": row.get::<chrono::DateTime<chrono::Utc>, _>("end_date").to_rfc3339(),
                 "zernio_profile_id": row.get::<Option<String>, _>("zernio_profile_id"),
+                "source_url": row.get::<Option<String>, _>("source_url"),
                 "status": row.get::<String, _>("status"),
                 "total_posts_planned": row.get::<i32, _>("total_posts_planned"),
                 "total_posts_published": row.get::<i32, _>("total_posts_published"),
@@ -120,10 +122,12 @@ async fn admin_create_campaign(
     let duration = req.duration.unwrap_or(30.0);
     let posts_per_day = req.posts_per_day.unwrap_or(3);
 
+    let source_url = req.source_url.as_deref().filter(|s| !s.is_empty());
+
     let id = sqlx::query_scalar::<_, Uuid>(
         "INSERT INTO campaigns (user_id, name, service_type, brief, style, duration, schedule, platforms, \
-                                posts_per_day, start_date, end_date) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id",
+                                posts_per_day, start_date, end_date, source_url) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING id",
     )
     .bind(0i32) // user_id — admin-created, no specific user
     .bind(&req.name)
@@ -136,6 +140,7 @@ async fn admin_create_campaign(
     .bind(posts_per_day)
     .bind(start_date)
     .bind(end_date)
+    .bind(source_url)
     .fetch_one(&state.db_pool)
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
@@ -151,10 +156,10 @@ async fn admin_get_campaign(
 ) -> Json<serde_json::Value> {
     let campaign = sqlx::query_as::<_, (
         Uuid, String, String, String, String, f64, serde_json::Value, serde_json::Value, i32,
-        chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>, Option<String>, String, i32, i32,
+        chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>, Option<String>, Option<String>, String, i32, i32,
     )>(
         "SELECT id, name, service_type, brief, style, duration, schedule, platforms, \
-                posts_per_day, start_date, end_date, zernio_profile_id, status, \
+                posts_per_day, start_date, end_date, zernio_profile_id, source_url, status, \
                 total_posts_planned, total_posts_published \
          FROM campaigns WHERE id = $1",
     )
@@ -163,7 +168,7 @@ async fn admin_get_campaign(
     .await;
 
     let (id, name, service_type, brief, style, duration, schedule, platforms, posts_per_day,
-         start_date, end_date, zernio_profile_id, status, total_planned, total_published) = match campaign {
+         start_date, end_date, zernio_profile_id, source_url, status, total_planned, total_published) = match campaign {
         Ok(Some(r)) => r,
         Ok(None) => return Json(json!({"success": false, "error": "Campaign not found"})),
         Err(e) => return Json(json!({"success": false, "error": e.to_string()})),
@@ -225,6 +230,7 @@ async fn admin_get_campaign(
             "start_date": start_date.to_rfc3339(),
             "end_date": end_date.to_rfc3339(),
             "zernio_profile_id": zernio_profile_id,
+            "source_url": source_url,
             "status": status,
             "total_posts_planned": total_planned,
             "total_posts_published": total_published,
@@ -352,11 +358,12 @@ async fn client_create_campaign(
     let style = req.style.unwrap_or_else(|| "cinematic".to_string());
     let duration = req.duration.unwrap_or(30.0);
     let posts_per_day = req.posts_per_day.unwrap_or(3);
+    let source_url = req.source_url.as_deref().filter(|s| !s.is_empty());
 
     let id = sqlx::query_scalar::<_, Uuid>(
         "INSERT INTO campaigns (user_id, name, service_type, brief, style, duration, schedule, platforms, \
-                                posts_per_day, start_date, end_date, zernio_profile_id) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING id",
+                                posts_per_day, start_date, end_date, zernio_profile_id, source_url) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING id",
     )
     .bind(user_id)
     .bind(&req.name)
@@ -370,6 +377,7 @@ async fn client_create_campaign(
     .bind(start_date)
     .bind(end_date)
     .bind(&req.zernio_profile_id)
+    .bind(source_url)
     .fetch_one(&state.db_pool)
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
@@ -385,9 +393,9 @@ async fn client_list_campaigns(
 ) -> Json<serde_json::Value> {
     let user_id: i32 = claims.sub.parse().unwrap_or(0);
     let rows = sqlx::query_as::<_, (
-        Uuid, String, String, String, serde_json::Value, i32, i32, i32, chrono::DateTime<chrono::Utc>,
+        Uuid, String, String, String, Option<String>, serde_json::Value, i32, i32, i32, chrono::DateTime<chrono::Utc>,
     )>(
-        "SELECT id, name, service_type, status, schedule, posts_per_day, \
+        "SELECT id, name, service_type, status, source_url, schedule, posts_per_day, \
                 total_posts_planned, total_posts_published, created_at \
          FROM campaigns WHERE user_id = $1 ORDER BY created_at DESC",
     )
@@ -397,7 +405,7 @@ async fn client_list_campaigns(
 
     let campaigns: Vec<serde_json::Value> = match rows {
         Ok(rows) => rows.into_iter().map(|(
-            id, name, service_type, status, schedule, posts_per_day,
+            id, name, service_type, status, source_url, schedule, posts_per_day,
             total_planned, total_published, created_at,
         )| {
             json!({
@@ -405,6 +413,7 @@ async fn client_list_campaigns(
                 "name": name,
                 "service_type": service_type,
                 "status": status,
+                "source_url": source_url,
                 "posts_per_day": posts_per_day,
                 "total_posts_planned": total_planned,
                 "total_posts_published": total_published,

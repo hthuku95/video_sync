@@ -1,6 +1,7 @@
 use crate::services::agentic_service_pipeline::{AgenticServicePipeline, ServiceInput, ServiceType};
 use crate::zernio_client::{self, PlatformTarget};
 use crate::AppState;
+use regex::Regex;
 use serde_json::json;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -35,6 +36,7 @@ struct CampaignRow {
     posts_per_day: i32,
     start_date: chrono::DateTime<chrono::Utc>,
     zernio_profile_id: Option<String>,
+    source_url: Option<String>,
 }
 
 struct PostRow {
@@ -47,9 +49,9 @@ struct PostRow {
 // ── Step 1: Fetch active campaigns ──────────────────────────────────────────
 
 async fn fetch_active_campaigns(state: &Arc<AppState>) -> Result<Vec<CampaignRow>, sqlx::Error> {
-    sqlx::query_as::<_, (Uuid, i32, String, String, String, String, f64, serde_json::Value, serde_json::Value, i32, chrono::DateTime<chrono::Utc>, Option<String>)>(
+    sqlx::query_as::<_, (Uuid, i32, String, String, String, String, f64, serde_json::Value, serde_json::Value, i32, chrono::DateTime<chrono::Utc>, Option<String>, Option<String>)>(
         "SELECT id, user_id, name, service_type, brief, style, duration, schedule, platforms, \
-                posts_per_day, start_date, zernio_profile_id \
+                posts_per_day, start_date, zernio_profile_id, source_url \
          FROM campaigns \
          WHERE status = 'active' AND start_date <= NOW() AND end_date >= NOW()",
     )
@@ -57,8 +59,8 @@ async fn fetch_active_campaigns(state: &Arc<AppState>) -> Result<Vec<CampaignRow
     .await
     .map(|rows| {
         rows.into_iter()
-            .map(|(id, user_id, name, service_type, brief, style, duration, schedule, platforms, posts_per_day, start_date, zernio_profile_id)| {
-                CampaignRow { id, user_id, name, service_type, brief, style, duration, schedule, platforms, posts_per_day, start_date, zernio_profile_id }
+            .map(|(id, user_id, name, service_type, brief, style, duration, schedule, platforms, posts_per_day, start_date, zernio_profile_id, source_url)| {
+                CampaignRow { id, user_id, name, service_type, brief, style, duration, schedule, platforms, posts_per_day, start_date, zernio_profile_id, source_url }
             })
             .collect()
     })
@@ -242,11 +244,7 @@ async fn process_pending_post(state: &Arc<AppState>, campaign: &CampaignRow, pos
     // 4. Kick off rendering via AgenticServicePipeline
     let service_type = match campaign.service_type.as_str() {
         "landing_page" => ServiceType::LandingPage,
-        "product_mockup" => ServiceType::ProductMockup,
         "education" => ServiceType::Education,
-        "business_explainer" => ServiceType::BusinessExplainer,
-        "voice_audio" => ServiceType::VoiceAudio,
-        "full_stack" => ServiceType::FullStack,
         "kick_auto_clipper" | "clipping" => ServiceType::Clipping,
         "manim_explainer" => ServiceType::ManimExplainer,
         "whiteboard_animation" => ServiceType::WhiteboardAnimation,
@@ -259,10 +257,21 @@ async fn process_pending_post(state: &Arc<AppState>, campaign: &CampaignRow, pos
         _ => ServiceType::Clipping,
     };
 
+    // Resolve the source URL to the latest video (for clipping/Kick campaigns)
+    let source_url = if let Some(ref url) = campaign.source_url {
+        let resolved = resolve_latest_video_url(state, url).await.unwrap_or_else(|e| {
+            tracing::warn!("campaign[{}] post[{}]: resolve_source_url failed: {e}", campaign.id, post.id);
+            url.clone()
+        });
+        if resolved.is_empty() { None } else { Some(resolved) }
+    } else {
+        None
+    };
+
     let input = ServiceInput {
         title: format!("{} — Day {} Slot {}", campaign.name, post.day_number, post.slot_index + 1),
         brief: variation_text,
-        source_url: None,
+        source_url,
         style: campaign.style.clone(),
         duration_seconds: campaign.duration,
         delivery_id,
@@ -501,6 +510,129 @@ async fn update_campaign_counts(state: &Arc<AppState>, campaign_id: Uuid) {
         .bind(campaign_id)
         .execute(&state.db_pool)
         .await;
+    }
+}
+
+// ── Resolve channel URL → latest video URL ─────────────────────────────────
+
+/// Takes a channel/streamer URL and returns the latest video URL from that source.
+/// - YouTube channels → fetches most recent upload via uploads playlist API
+/// - Twitch channels → fetches most recent VOD via Helix API
+/// - Kick streamers → returns as-is (yt-dlp resolves latest broadcast natively)
+/// - Direct video URLs → returned unchanged
+async fn resolve_latest_video_url(state: &Arc<AppState>, url: &str) -> Result<String, String> {
+    let trimmed = url.trim();
+
+    // Direct video URLs — pass through (already a specific video)
+    if is_direct_video_url(trimmed) {
+        return Ok(trimmed.to_string());
+    }
+
+    // Kick: https://kick.com/{slug}
+    if let Some(slug) = parse_kick_slug(trimmed) {
+        // Verify the streamer exists, then return the channel URL for yt-dlp
+        if let Some(ref client) = state.kick_client {
+            match client.get_channel_by_slug(&slug).await {
+                Ok(Some(_)) => return Ok(format!("https://kick.com/{}", slug)),
+                Ok(None) => return Err(format!("Kick streamer '{}' not found", slug)),
+                Err(e) => return Err(format!("Kick API error: {}", e)),
+            }
+        }
+        // No Kick client configured — return as-is (optimistic)
+        return Ok(format!("https://kick.com/{}", slug));
+    }
+
+    // Twitch: https://twitch.tv/{channel}
+    if let Some(channel) = parse_twitch_channel(trimmed) {
+        if let Some(ref client) = state.twitch_client {
+            let user = client.get_user_by_login(&channel).await
+                .map_err(|e| format!("Twitch API error: {}", e))?
+                .ok_or_else(|| format!("Twitch channel '{}' not found", channel))?;
+            let (videos, _) = client.get_videos(&user.broadcaster_id, None, 1).await
+                .map_err(|e| format!("Twitch videos error: {}", e))?;
+            return videos.into_iter().next()
+                .map(|v| v.url)
+                .ok_or_else(|| format!("No VODs found for Twitch channel '{}'", channel));
+        }
+        return Err("Twitch client not configured".to_string());
+    }
+
+    // YouTube: https://youtube.com/channel/{id} or youtube.com/@{handle} or youtube.com/c/{name}
+    if let Some(channel_id) = parse_youtube_channel_id(trimmed) {
+        if let Some(ref client) = state.youtube_client {
+            let uploads_id = uploads_playlist_id_for_channel(&channel_id);
+            let resp = client.get_channel_uploads(&uploads_id, 1).await
+                .map_err(|e| format!("YouTube API error: {}", e))?;
+            return resp.items.into_iter().next()
+                .map(|item| format!("https://youtube.com/watch?v={}", item.id.video_id))
+                .ok_or_else(|| format!("No uploads found for YouTube channel '{}'", channel_id));
+        }
+        return Err("YouTube client not configured".to_string());
+    }
+
+    // YouTube handle: youtube.com/@handle — needs a channel search first
+    if let Some(handle) = parse_youtube_handle(trimmed) {
+        if let Some(ref client) = state.youtube_client {
+            let resp = client.search_channels(None, &handle, 1, None).await
+                .map_err(|e| format!("YouTube search error: {}", e))?;
+            let channel = resp.items.into_iter().next()
+                .ok_or_else(|| format!("YouTube channel '@{}' not found", handle))?;
+            let uploads_id = uploads_playlist_id_for_channel(&channel.id.channel_id);
+            let uploads = client.get_channel_uploads(&uploads_id, 1).await
+                .map_err(|e| format!("YouTube uploads error: {}", e))?;
+            return uploads.items.into_iter().next()
+                .map(|item| format!("https://youtube.com/watch?v={}", item.id.video_id))
+                .ok_or_else(|| format!("No uploads found for YouTube channel '@{}'", handle));
+        }
+        return Err("YouTube client not configured".to_string());
+    }
+
+    // Unknown URL format — return as-is, let the pipeline try it
+    Ok(trimmed.to_string())
+}
+
+fn is_direct_video_url(url: &str) -> bool {
+    // Direct video URLs have a video ID parameter (watch?v=, /videos/, /video/)
+    url.contains("watch?v=")
+        || url.contains("youtu.be/")
+        || url.contains("twitch.tv/videos/")
+        || url.contains("kick.com/video/")
+        || url.contains("vimeo.com/")
+        || url.ends_with(".mp4")
+        || url.ends_with(".webm")
+        || url.ends_with(".mov")
+}
+
+fn parse_kick_slug(url: &str) -> Option<String> {
+    let re = Regex::new(r"kick\.com/([a-zA-Z0-9_-]+)").ok()?;
+    re.captures(url)
+        .and_then(|c| c.get(1).map(|m| m.as_str().to_lowercase()))
+}
+
+fn parse_twitch_channel(url: &str) -> Option<String> {
+    let re = Regex::new(r"twitch\.tv/([a-zA-Z0-9_]+)").ok()?;
+    re.captures(url)
+        .and_then(|c| c.get(1).map(|m| m.as_str().to_lowercase()))
+}
+
+fn parse_youtube_channel_id(url: &str) -> Option<String> {
+    let re = Regex::new(r"youtube\.com/channel/(UC[a-zA-Z0-9_-]+)").ok()?;
+    re.captures(url)
+        .and_then(|c| c.get(1).map(|m| m.as_str().to_string()))
+}
+
+fn parse_youtube_handle(url: &str) -> Option<String> {
+    let re = Regex::new(r"youtube\.com/@([a-zA-Z0-9_-]+)").ok()?;
+    re.captures(url)
+        .and_then(|c| c.get(1).map(|m| m.as_str().to_string()))
+}
+
+fn uploads_playlist_id_for_channel(channel_id: &str) -> String {
+    // YouTube uploads playlist: replace "UC" prefix with "UU"
+    if channel_id.starts_with("UC") {
+        format!("UU{}", &channel_id[2..])
+    } else {
+        format!("UU{}", channel_id)
     }
 }
 

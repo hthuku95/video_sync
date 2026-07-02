@@ -827,14 +827,10 @@ pub async fn campaigns_new_page(
     let preselect_service = query.get("service").cloned().unwrap_or_default();
     let service_options = [
         ("landing_page", "SaaS Demo Video"),
-        ("product_mockup", "Product Mockup"),
-        ("education", "Education Explainer"),
         ("clipping", "Clip Enhancement"),
         ("kick_auto_clipper", "Kick.com Clipping"),
-        ("business_explainer", "Business Explainer"),
+        ("education", "Education Explainer"),
         ("manim_explainer", "Manim Explainer"),
-        ("voice_audio", "Voice & Audio"),
-        ("full_stack", "Full Stack Agency"),
         ("whiteboard_animation", "Whiteboard Animation"),
         ("kinetic_typography", "Kinetic Typography"),
         ("animated_infographic", "Animated Infographic"),
@@ -896,7 +892,12 @@ pub async fn campaigns_new_page(
         </div>
         <div>
             <label>Service Type</label>
-            <select name="service_type" id="serviceType">{options_html}</select>
+            <select name="service_type" id="serviceType" onchange="toggleSourceUrl()">{options_html}</select>
+        </div>
+        <div id="sourceUrlSection" style="display:none;">
+            <label>Source Channel URL</label>
+            <input type="url" name="source_url" placeholder="https://kick.com/streamer or https://youtube.com/@channel or https://twitch.tv/channel">
+            <p class="hint">The campaign will watch this channel for new content daily and clip the latest video.</p>
         </div>
         <div>
             <label>Brief / Topic</label>
@@ -989,6 +990,14 @@ function addScheduleEntry() {{
     document.getElementById('scheduleEntries').appendChild(div);
 }}
 
+// Show/hide source URL field based on service type
+function toggleSourceUrl() {
+    const val = document.getElementById('serviceType').value;
+    const section = document.getElementById('sourceUrlSection');
+    section.style.display = (val === 'clipping' || val === 'kick_auto_clipper') ? 'block' : 'none';
+}
+toggleSourceUrl();
+
 // Set default dates
 document.getElementById('startDate').value = new Date().toISOString().split('T')[0];
 const endDate = new Date(); endDate.setMonth(endDate.getMonth() + 1);
@@ -1037,6 +1046,7 @@ document.getElementById('campaignForm').addEventListener('submit', async (e) => 
     document.querySelectorAll('input[name="platform_account"]:checked').forEach(cb => {{
         platforms.push(JSON.parse(cb.value));
     }});
+    const sourceUrl = fd.get('source_url');
     const payload = {{
         name: fd.get('name'),
         service_type: fd.get('service_type'),
@@ -1049,6 +1059,7 @@ document.getElementById('campaignForm').addEventListener('submit', async (e) => 
         schedule: schedule,
         platforms: platforms,
         zernio_profile_id: fd.get('zernio_profile_id') || undefined,
+        source_url: sourceUrl || undefined,
     }};
     try {{
         const resp = await fetch('/api/campaigns', {{ method: 'POST', headers: {{'Content-Type':'application/json'}}, body: JSON.stringify(payload) }});
@@ -1073,9 +1084,9 @@ pub async fn campaigns_detail_page(
 ) -> Html<String> {
     let user_id: i32 = claims.sub.parse().unwrap_or(0);
 
-    let campaign = sqlx::query_as::<_, (uuid::Uuid, String, String, String, String, f64, serde_json::Value, serde_json::Value, i32, chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>, Option<String>, String, i32, i32)>(
+    let campaign = sqlx::query_as::<_, (uuid::Uuid, String, String, String, String, f64, serde_json::Value, serde_json::Value, i32, chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>, Option<String>, Option<String>, String, i32, i32)>(
         "SELECT id, name, service_type, brief, style, duration, schedule, platforms, \
-                posts_per_day, start_date, end_date, zernio_profile_id, status, \
+                posts_per_day, start_date, end_date, zernio_profile_id, source_url, status, \
                 total_posts_planned, total_posts_published \
          FROM campaigns WHERE id = $1 AND user_id = $2",
     )
@@ -1085,7 +1096,7 @@ pub async fn campaigns_detail_page(
     .await;
 
     let (id, name, service_type, brief, style, duration, _schedule, _platforms, posts_per_day,
-         start_date, end_date, _zernio_profile_id, status, total_planned, total_published) = match campaign {
+         start_date, end_date, _zernio_profile_id, source_url, status, total_planned, total_published) = match campaign {
         Ok(Some(r)) => r,
         Ok(None) => return Html(r#"<html><body><h1>Campaign not found</h1><a href="/campaigns">Back</a></body></html>"#.to_string()),
         Err(_) => return Html(r#"<html><body><h1>Error loading campaign</h1><a href="/campaigns">Back</a></body></html>"#.to_string()),
@@ -1147,6 +1158,9 @@ pub async fn campaigns_detail_page(
     let start_str = start_date.format("%b %d, %Y").to_string();
     let end_str = end_date.format("%b %d, %Y").to_string();
     let service_label = format_service_type(&service_type);
+    let source_url_detail = source_url.map(|u| {
+        format!(r#"<div class="detail-item"><div class="dl">Source</div><div class="dd"><a href="{u}" target="_blank" style="color:#93c5fd;word-break:break-all;">{u}</a></div></div>"#)
+    }).unwrap_or_default();
 
     Html(format!(
         r#"<!DOCTYPE html>
@@ -1212,6 +1226,7 @@ pub async fn campaigns_detail_page(
         <div class="detail-item"><div class="dl">Posts/Day</div><div class="dd">{posts_per_day}</div></div>
         <div class="detail-item"><div class="dl">Start</div><div class="dd">{start_str}</div></div>
         <div class="detail-item"><div class="dl">End</div><div class="dd">{end_str}</div></div>
+        {source_url_detail}
     </div>
 
     <div class="stats">
