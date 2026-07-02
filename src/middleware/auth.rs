@@ -2,9 +2,9 @@ use crate::handlers::auth::verify_jwt_token;
 use crate::models::auth::ErrorResponse;
 use axum::{
     extract::Request,
-    http::{HeaderMap, header},
+    http::{HeaderMap, StatusCode, header},
     middleware::Next,
-    response::{IntoResponse, Json, Redirect, Response},
+    response::{Html, IntoResponse, Json, Response},
 };
 
 pub async fn auth_middleware(
@@ -16,17 +16,14 @@ pub async fn auth_middleware(
         let auth_str = match auth_header.to_str() {
             Ok(str) => str,
             Err(_) => {
-                return Err(json_or_redirect(&headers, "Invalid Authorization header format"));
+                return Err(unauthenticated(&headers));
             }
         };
 
         if auth_str.starts_with("Bearer ") {
             auth_str[7..].to_string()
         } else {
-            return Err(json_or_redirect(
-                &headers,
-                "Invalid Authorization header format. Expected 'Bearer <token>'",
-            ));
+            return Err(unauthenticated(&headers));
         }
     } else {
         let query = request.uri().query().unwrap_or("");
@@ -44,10 +41,7 @@ pub async fn auth_middleware(
         match token_from_query {
             Some(t) => t,
             None => {
-                return Err(json_or_redirect(
-                    &headers,
-                    "Missing Authorization header or token query parameter",
-                ));
+                return Err(unauthenticated(&headers));
             }
         }
     };
@@ -56,7 +50,7 @@ pub async fn auth_middleware(
         Ok(claims) => claims,
         Err(e) => {
             tracing::warn!("JWT verification failed: {}", e);
-            return Err(json_or_redirect(&headers, "Invalid or expired token"));
+            return Err(unauthenticated(&headers));
         }
     };
 
@@ -72,16 +66,21 @@ fn is_browser_request(headers: &HeaderMap) -> bool {
         .unwrap_or(false)
 }
 
-fn json_or_redirect(
-    headers: &HeaderMap,
-    message: &str,
-) -> axum::response::Response {
+fn unauthenticated(headers: &HeaderMap) -> impl IntoResponse {
     if is_browser_request(headers) {
-        Redirect::to("/login").into_response()
+        (
+            StatusCode::FOUND,
+            [(header::LOCATION, "/login")],
+            Html(""),
+        )
     } else {
-        Json(ErrorResponse {
-            success: false,
-            message: message.to_string(),
-        }).into_response()
+        (
+            StatusCode::UNAUTHORIZED,
+            [(header::CONTENT_TYPE, "application/json")],
+            Json(ErrorResponse {
+                success: false,
+                message: "Missing Authorization header or token query parameter".to_string(),
+            }),
+        )
     }
 }

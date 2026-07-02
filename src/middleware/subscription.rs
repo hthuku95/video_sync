@@ -1,14 +1,10 @@
-//! Regular-user subscription gate.
-//!
-//! Runs AFTER `auth_middleware` so `Claims` is in the request extensions.
-
 use crate::models::auth::Claims;
 use crate::AppState;
 use axum::{
     extract::Request,
-    http::header,
+    http::{StatusCode, header},
     middleware::Next,
-    response::{IntoResponse, Json, Redirect, Response},
+    response::{Html, IntoResponse, Json, Response},
 };
 use serde_json::json;
 use sqlx::Row;
@@ -21,20 +17,17 @@ pub async fn subscription_middleware(
     let claims = match request.extensions().get::<Claims>() {
         Some(c) => c.clone(),
         None => {
-            return Err(json_or_redirect(
-                &request,
-                json!({"success": false, "error": "auth_required"}),
-            ))
+            return Err(payment_required(&request));
         }
     };
 
     let state = match request.extensions().get::<Arc<AppState>>() {
         Some(s) => s.clone(),
         None => {
-            return Err(json_or_redirect(
-                &request,
-                json!({"success": false, "error": "app_state_missing"}),
-            ))
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"success": false, "error": "app_state_missing"})),
+            ));
         }
     };
 
@@ -45,10 +38,10 @@ pub async fn subscription_middleware(
     let user_id: i32 = match claims.sub.parse() {
         Ok(id) => id,
         Err(_) => {
-            return Err(json_or_redirect(
-                &request,
-                json!({"success": false, "error": "invalid_user_id"}),
-            ))
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                Json(json!({"success": false, "error": "invalid_user_id"})),
+            ));
         }
     };
 
@@ -62,17 +55,17 @@ pub async fn subscription_middleware(
     {
         Ok(Some(r)) => r,
         Ok(None) => {
-            return Err(json_or_redirect(
-                &request,
-                json!({"success": false, "error": "user_not_found"}),
-            ))
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                Json(json!({"success": false, "error": "user_not_found"})),
+            ));
         }
         Err(e) => {
             tracing::warn!("subscription_middleware DB error: {}", e);
-            return Err(json_or_redirect(
-                &request,
-                json!({"success": false, "error": "subscription_lookup_failed"}),
-            ))
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"success": false, "error": "subscription_lookup_failed"})),
+            ));
         }
     };
 
@@ -154,28 +147,22 @@ fn is_browser_request(request: &Request) -> bool {
         .unwrap_or(false)
 }
 
-fn json_or_redirect(
-    request: &Request,
-    body: serde_json::Value,
-) -> axum::response::Response {
+fn payment_required(request: &Request) -> impl IntoResponse {
     if is_browser_request(request) {
-        Redirect::to("/subscribe").into_response()
+        (
+            StatusCode::FOUND,
+            [(header::LOCATION, "/subscribe")],
+            Html(""),
+        )
     } else {
-        Json(body).into_response()
-    }
-}
-
-fn payment_required(
-    request: &Request,
-) -> axum::response::Response {
-    if is_browser_request(request) {
-        Redirect::to("/subscribe").into_response()
-    } else {
-        Json(json!({
-            "success":      false,
-            "error":        "subscription_required",
-            "message":      "Your free trial has ended. Subscribe for $15/mo USDC to continue.",
-            "upgrade_url":  "/subscribe",
-        })).into_response()
+        (
+            StatusCode::PAYMENT_REQUIRED,
+            Json(json!({
+                "success":      false,
+                "error":        "subscription_required",
+                "message":      "Your free trial has ended. Subscribe for $15/mo USDC to continue.",
+                "upgrade_url":  "/subscribe",
+            })),
+        )
     }
 }
