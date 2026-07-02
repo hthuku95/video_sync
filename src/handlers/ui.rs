@@ -1,6 +1,6 @@
 use crate::{
     handlers::service_catalog::{
-        build_service_sample_chat_title, build_service_sample_prompt, service_sample_ui_config,
+        build_service_sample_chat_title, build_service_sample_prompt,
     },
     handlers::upload::get_or_create_session,
     middleware::auth::auth_middleware,
@@ -22,46 +22,17 @@ pub fn ui_routes() -> Router {
         .route("/", get(landing_page))
         .route("/services", get(services_overview_page))
         .route("/services/saas-launch-pack", get(saas_launch_pack_page))
-        .route(
-            "/services/thumbnail-hero-pack",
-            get(thumbnail_hero_pack_page),
-        )
-        .route(
-            "/services/product-mockup-pack",
-            get(product_mockup_pack_page),
-        )
-        .route(
-            "/services/education-explainer-pack",
-            get(education_explainer_pack_page),
-        )
-        .route("/services/blender-scene-pack", get(blender_scene_pack_page))
-        .route("/services/voice-audio-pack", get(voice_audio_pack_page))
-        .route(
-            "/services/mixed-agency-bundle",
-            get(mixed_agency_bundle_page),
-        )
-        .route(
-            "/services/clipper-enhancement-pack",
-            get(clipper_enhancement_pack_page),
-        )
-        .route(
-            "/services/creator-manager-fulfillment",
-            get(creator_manager_fulfillment_page),
-        )
-        .route("/services/x402-asset-api", get(x402_asset_api_page))
-        .route(
-            "/services/kick-com-clipping",
-            get(kick_com_clipping_page),
-        )
-        .route(
-            "/services/kick-auto-clipper",
-            get(kick_com_clipping_page),
-        )
-        .route("/services/business-explainer-pack", get(saas_launch_pack_page))
-        .route(
-            "/services/manim-explainer",
-            get(manim_explainer_page),
-        )
+        .route("/services/clipping-pack", get(clipping_pack_page))
+        .route("/services/kick-auto-clipper", get(kick_auto_clipper_page))
+        .route("/services/education-explainer-pack", get(education_explainer_pack_page))
+        .route("/services/manim-explainer", get(manim_explainer_page))
+        .route("/services/whiteboard-animation", get(whiteboard_animation_page))
+        .route("/services/kinetic-typography", get(kinetic_typography_page))
+        .route("/services/animated-infographic", get(animated_infographic_page))
+        .route("/services/algorithm-viz", get(algorithm_viz_page))
+        .route("/services/investor-pitch", get(investor_pitch_page))
+        .route("/services/year-in-review", get(year_in_review_page))
+        .route("/services/isometric-explainer", get(isometric_explainer_page))
         .route("/login", get(login_page))
         .route("/signup", get(signup_page))
         .route("/dashboard", get(dashboard_page))
@@ -392,358 +363,330 @@ pub async fn services_overview_page() -> Html<String> {
 pub async fn saas_launch_pack_page() -> Html<String> {
     Html(build_service_offer_page_html(
         "saas-launch-pack",
-        "SaaS Demo Video",
-        "$399-$1,200+",
-        "Send your website or app URL. Our AI agent turns it into a polished product demo in hours — not weeks. One demo or a hundred: volume pricing makes multiple campaigns, hook variations, and localization affordable.",
-        "Built for founders, product marketers, agencies, and sales teams that need polished product video at volume — produce 5, 10, or 20 demos for the same cost a traditional studio would charge for one.",
-        "The simple offer: send a live product URL, screenshots, app recording, or launch brief and get a buyer-facing demo video package. The full pack includes the main video, 3 hooks/captions, a thumbnail or hero concept, and a delivery page with downloads. Our AI agent produces faster than any human editor — so you can run more launches, A/B test more angles, and produce more content for a fraction of agency cost.",
-         "/subscribe",
-         "Start 7-day trial",
-         "/campaigns/new?service=landing_page",
-         "Create campaign",
-         &[
-             "$399 starter demo: one tightly scoped product demo/promo video, usually 30-90s",
-             "$699 launch demo pack: polished demo plus hooks/captions, thumbnail or hero concept, delivery/download page",
-             "$1,200+ walkthrough or campaign pack: longer product walkthrough, multiple variants, or stronger motion/voice polish",
-            "Optional device, browser, app mockup, narration, and launch scenes",
-            "Built for Product Hunt, X, LinkedIn, homepage, onboarding, or sales",
-            "Delivered as a review/download link you can share immediately",
+        "SaaS Demo Campaign",
+        "$399/mo",
+        "Turn your product URL into daily buyer-facing demos — auto-posted to Twitter, LinkedIn, and YouTube.",
+        "For SaaS founders, product marketers, and sales teams who need a steady stream of polished product videos without hiring a studio.",
+        &[
+            "Set your product URL + target buyer",
+            "Choose platforms & daily posting schedule",
+            "AI generates a unique demo variant daily",
+            "Auto-posts to your connected accounts via Zernio",
         ],
         &[
-            "Send the website/app URL and the target buyer.",
-            "We decide the strongest story length: pain, product workflow, proof, CTA.",
-            "VideoSync builds the video using mockups, motion, narration, captions, and QA where useful.",
-            "You receive a delivery page with preview and download links within the rush window.",
+            "Daily AI-generated product demo videos",
+            "Auto-publish to Twitter, LinkedIn, YouTube, TikTok",
+            "Campaign dashboard with analytics",
+            "Variation engine — never the same demo twice",
+            "Hook/caption variants per post",
+            "R2-hosted delivery links for sharing",
+            "Pause/resume/cancel anytime",
         ],
         &[
-            ("SaaS founder", "Needs launch-ready product video for a homepage, launch, demo day, or investor update."),
-            ("Product marketer", "Needs polished motion assets without hiring a full video team for every release."),
-            ("Sales or onboarding team", "Needs clear product video that explains the product faster and shortens the learning curve."),
+            ("SaaS founder", "Needs regular product video content without hiring an editor."),
+            ("Product marketer", "Needs daily motion assets for every feature release."),
+            ("Agency", "Resells demo campaigns to client portfolio."),
         ],
-        r#"["landing_page","product_mockup","full_stack","scene"]"#,
-        r#"["saas-demo-starter","saas-demo-launch","agency-3-videos"]"#,
     ))
 }
 
-pub async fn clipper_enhancement_pack_page() -> Html<String> {
+pub async fn clipping_pack_page() -> Html<String> {
     Html(build_service_offer_page_html(
-        "clipper-enhancement-pack",
-        "Thumbnail & Motion Graphics Pack",
-        "$250-$1,200+",
-        "High-converting thumbnails, title cards, lower thirds, mockups, and motion assets — produced in hours, not days. Generate 10 thumbnail variants or a full campaign's worth of visuals without hiring a designer.",
-        "Built for creators, marketers, agencies, and small teams that need premium visual packaging at volume — more thumbnails, more variants, more A/B tests, all for a fraction of what a designer would charge per asset.",
-        "This offer focuses on the platform's strongest visual add-ons: rendered thumbnails, title cards, lower thirds, device mockups, data visuals, and branded motion scenes. The AI agent handles production end-to-end — so you can order 3 variants or 30 and still get them back in the same timeframe.",
-        "/manual-clipping",
-        "Open video tools",
-         "/campaigns/new?service=clipping",
-         "Create campaign",
+        "clipping-pack",
+        "Social Clipping Campaign",
+        "$147/mo",
+        "Paste a VOD or long video URL. Our AI extracts daily highlights with captions, hooks, and thumbnails — auto-posted to TikTok, Shorts, Reels, and X.",
+        "For creators, streamers, clip channels, and social media managers who need a consistent stream of short-form clips without manual editing.",
         &[
-            "YouTube and social thumbnail variants",
-            "Title cards, lower thirds, and branded overlays",
-            "Device mockups and promo motion loops",
-            "Data visuals, explainer scenes, and support graphics",
-            "Polish assets you can reuse across campaigns",
+            "Connect your source channel (Twitch, YouTube, Kick)",
+            "Choose platforms & daily clip schedule",
+            "AI detects highlights and extracts clips daily",
+            "Auto-posts captioned clips to your accounts",
         ],
         &[
-            "Share the video, channel, campaign, or design direction you want to improve.",
-            "We identify the supporting visuals that will make the content look more premium and click-worthy.",
-            "VideoSync produces the thumbnail, motion graphics, mockups, or support scenes around that brief.",
-            "You receive ready-to-use assets that fit your channel, launch, or client package.",
+            "Daily AI-driven clip extraction from VODs",
+            "Auto-captions, hook title cards, thumbnails",
+            "Cross-platform post to TikTok, Shorts, Reels, X",
+            "Campaign dashboard with performance stats",
+            "Supports Twitch, YouTube, Kick VOD sources",
+            "Branded lower thirds and outro overlay",
+            "Pause/resume/cancel anytime",
         ],
         &[
-            ("Creator or YouTube operator", "Needs stronger thumbnails and packaging to improve clicks and presentation."),
-            ("Launch marketer", "Needs motion assets that make a release look more polished across channels."),
-            ("Agency or freelance editor", "Needs premium visual add-ons without building every graphic from scratch."),
+            ("Streamer or creator", "Needs daily clips without hiring an editor."),
+            ("Clip channel operator", "Needs automated, consistent daily posting."),
+            ("Social media manager", "Needs reliable cross-platform clip publishing."),
         ],
-        r#"["animations","thumbnails","scene","ui_mockup"]"#,
-        r#"["clip-enhancement-standard"]"#,
     ))
 }
 
-pub async fn thumbnail_hero_pack_page() -> Html<String> {
+pub async fn kick_auto_clipper_page() -> Html<String> {
     Html(build_service_offer_page_html(
-        "thumbnail-hero-pack",
-        "Thumbnail & Hero Visual Pack",
-        "$75-$300+",
-        "Click-focused thumbnails, hero visuals, and campaign graphics — delivered same day. Run multiple designs per video, A/B test thumbnails, and never wait on a designer again.",
-        "Built for YouTubers, SaaS founders, course sellers, agencies, and operators who need stronger first impressions at scale — more thumbnails, more variants, more campaigns for less.",
-        "VideoSync turns a product, video, or campaign brief into thumbnail variants, hero visuals, ad stills, and reusable visual directions — with Gemini multimodal QA before delivery. The AI agent handles volume effortlessly: order 3 thumbnails or 30, the turnaround stays the same.",
-         "/campaigns/new?service=thumbnails",
-         "Create campaign",
-         "/chat",
-         "Try one-off in chat",
+        "kick-auto-clipper",
+        "Kick Auto-Clipper Campaign",
+        "$297/mo",
+        "Monitors your chosen Kick streamers. Downloads their latest VODs, clips highlights, captions them, and auto-posts — all daily.",
+        "For Kick clipping channels and streamer managers who need automated daily content from Kick VODs.",
         &[
-            "YouTube thumbnail variants",
-            "SaaS/product hero visuals",
-            "Ad stills and campaign graphics",
-            "Visual direction notes and hooks",
-            "Download-ready delivery links",
+            "Add Kick streamers you want to clip",
+            "AI monitors their latest VODs",
+            "Highlights extracted + captioned daily",
+            "Auto-posted to connected social accounts",
         ],
         &[
-            "Share the product, video, campaign, or audience you want to attract.",
-            "The agent creates several visual angles and hook concepts.",
-            "VideoSync generates and reviews the strongest thumbnail/hero candidates.",
-            "You receive downloadable assets and captions/hooks to test.",
+            "Daily Kick VOD monitoring & download",
+            "AI highlight detection per streamer",
+            "Captions, hook cards, thumbnails per clip",
+            "Auto-post to TikTok, Shorts, Reels, X",
+            "Multi-streamer support in one campaign",
+            "Campaign dashboard with post history",
+            "Pause/resume/cancel anytime",
         ],
         &[
-            ("YouTube creator", "Needs better click-through without waiting on a designer."),
-            ("SaaS founder", "Needs stronger launch and landing-page visuals."),
-            ("Agency operator", "Needs fast visual variants for client campaigns."),
+            ("Kick clipping channel", "Needs daily fresh clips from their source streamers."),
+            ("Streamer manager", "Manages Kick talent and needs highlight distribution."),
+            ("Clip editor", "Wants automated clip pipeline."),
         ],
-        r#"["thumbnails","generated_images","landing_page","business_explainer"]"#,
-        r#"["clip-enhancement-standard"]"#,
-    ))
-}
-
-pub async fn product_mockup_pack_page() -> Html<String> {
-    Html(build_service_offer_page_html(
-        "product-mockup-pack",
-        "Product Mockup Video Pack",
-        "$299-$900+",
-        "Send a website, screenshots, or app flow. Our AI agent turns it into animated UI mockups and short product videos — in hours, not weeks. Produce demo videos for every feature, every use case, every update.",
-        "Built for SaaS founders, indie hackers, app owners, no-code builders, and agencies selling productized demos at scale — more feature videos, more product angles, more campaigns for the same budget.",
-        "This is the visual upgrade for apps that look useful but do not yet feel premium. Send a URL, screenshots, Figma exports, or a written workflow; VideoSync turns it into browser/device scenes, motion callouts, and short product videos. The automated pipeline means you can produce a mockup for every major feature without the cost of a traditional video team.",
-         "/campaigns/new?service=product_mockup",
-         "Create campaign",
-         "/chat",
-         "Try one-off in chat",
-        &[
-            "Browser/device mockup scenes",
-            "Short product walkthrough videos",
-            "App promo clips and ads",
-            "Landing-page hero concepts",
-            "Delivery page with downloads",
-        ],
-        &[
-            "Share the product URL, screenshots, or app flow.",
-            "The agent identifies the clearest product story and buyer use case.",
-            "VideoSync renders UI mockups, narration, motion, and support footage.",
-            "You get a shareable delivery link and downloadable media.",
-        ],
-        &[
-            ("Indie hacker", "Needs a product video before paid ads or launch."),
-            ("No-code builder", "Needs a polished demo from screenshots and a short brief."),
-            ("Agency", "Needs repeatable client mockup videos."),
-        ],
-        r#"["product_mockup","landing_page","animations","full_stack"]"#,
-        r#"["product-mockup-standard"]"#,
     ))
 }
 
 pub async fn education_explainer_pack_page() -> Html<String> {
     Html(build_service_offer_page_html(
         "education-explainer-pack",
-        "Education Explainer Pack",
-        "$300-$1,500+",
-        "Animated math/science visuals, diagrams, narration, and long-form explainers — automated end-to-end. Produce a full course curriculum's worth of lessons for the price an agency would charge for one video.",
-        "Built for educators, course creators, technical YouTubers, founders, and B2B teams that need concepts explained visually at volume — more lessons, more modules, more content for less.",
-        "VideoSync combines animated math/science visuals, diagrams, stock footage, narration, and long-form assembly into lessons, explainer videos, and course modules. The AI agent produces each segment independently — so a 20-video course ships just as fast as a single explainer. No studio, no crew, no markup per video.",
-         "/campaigns/new?service=education",
-         "Create campaign",
-         "/chat",
-         "Try one-off in chat",
+        "Education Explainer Campaign",
+        "$199/mo",
+        "Send a course outline or topic. Our AI generates daily animated explainer videos with narration, diagrams, and captions — auto-posted to YouTube and X.",
+        "For educators, course creators, technical YouTubers, and B2B teams who need consistent educational video content.",
         &[
-            "Animated explainer scenes",
-            "Narrated explainers and tutorials",
-            "Course lesson videos",
-            "Diagrams, formulas, and visual proofs",
-            "Long-form assembly with checkpoints",
+            "Share your curriculum or topic list",
+            "AI plans daily lesson sequence",
+            "Animated explainers generated with narration",
+            "Auto-posted on schedule via Zernio",
         ],
         &[
-            "Share the concept, lesson outline, or technical topic.",
-            "The agent chooses diagrams, formulas, narration, and visual pacing.",
-            "VideoSync renders recoverable segments and reviews the outputs.",
-            "You receive a complete video plus reusable assets.",
+            "Daily animated explainer videos",
+            "Narration via VibeVoice (AI voiceover)",
+            "Math/science diagrams & data visualizations",
+            "Long-form assembly for multi-segment lessons",
+            "Auto-publish to YouTube, Twitter, LinkedIn",
+            "Campaign dashboard with lesson calendar",
+            "Pause/resume/cancel anytime",
         ],
         &[
-            ("Course creator", "Needs lesson videos without manually animating every concept."),
-            ("Technical founder", "Needs a clear product or API explainer."),
+            ("Course creator", "Needs lesson videos without animating every concept."),
             ("YouTube educator", "Needs repeatable educational video production."),
+            ("Technical founder", "Needs clear product or API explainers."),
         ],
-        r#"["education","manim","latex","long_form"]"#,
-        r#"["education-explainer-standard"]"#,
     ))
 }
 
-pub async fn blender_scene_pack_page() -> Html<String> {
+pub async fn whiteboard_animation_page() -> Html<String> {
     Html(build_service_offer_page_html(
-        "blender-scene-pack",
-        "3D/2D Animation Scene Pack",
-        "$500-$2,500+",
-        "Animated 3D/2D scenes, product animations, 3D explainers, and cinematic visuals — generated by AI agents in hours. Render multiple product angles and animation variants for the cost of a single studio shoot.",
-        "Built for product teams, creators, agencies, educators, and technical brands that need 3D visuals at volume — more scenes, more angles, more variations for the same budget.",
-        "VideoSync generates animated 3D/2D scenes alongside editing, narration, QA, thumbnails, and delivery pages to produce stronger demos and explainers. The automated pipeline lets you order multiple product angles, animation styles, or scene variants without per-scene overhead of a traditional studio.",
-         "/campaigns/new?service=full_stack",
-         "Create campaign",
-         "/chat",
-         "Try one-off in chat",
+        "whiteboard-animation",
+        "Whiteboard Animation Campaign",
+        "$149/mo",
+        "Daily narrated whiteboard-style explainers — hand-drawn sketch style, marker-on-board visuals, auto-posted to your platforms.",
+        "For explainer channels, SaaS startups, how-to content creators, and educators who want the classic whiteboard style at scale.",
         &[
-            "2D/3D product scenes",
-            "Animated models and explainers",
-            "Title cards and lower thirds",
-            "Data visuals and cinematic loops",
-            "QA-reviewed rendered assets",
+            "Share a topic or script",
+            "AI plans hand-drawn sketch scenes",
+            "Manim renders whiteboard-style animation",
+            "Auto-posts narrated explainer daily",
         ],
         &[
-            "Describe the object, scene, or animation goal.",
-            "The agent orchestrates editing, animated scenes, voiceovers, and image generation as needed.",
-            "Rendered assets are reviewed and packaged with downloads.",
-            "Scenes can be inserted into longer product or education videos.",
+            "Daily whiteboard-style animated explainers",
+            "Hand-drawn marker-on-board visuals",
+            "Write() text reveals for sketch feel",
+            "VibeVoice narration",
+            "Auto-publish to YouTube, Twitter, LinkedIn",
+            "Campaign dashboard",
+            "Pause/resume/cancel anytime",
         ],
         &[
-            ("Product marketer", "Needs visuals that make the product feel premium."),
-            ("Educator", "Needs physical or abstract concepts animated clearly."),
-            ("Agency", "Needs unique visuals clients cannot get from template editors."),
+            ("Explainer channel", "Needs daily whiteboard videos."),
+            ("SaaS founder", "Explains product with sketch-style demos."),
+            ("Educator", "Creates engaging hand-drawn lessons."),
         ],
-        r#"["blender","3d_scene","animations","full_stack"]"#,
-        r#"["blender-scene-standard"]"#,
     ))
 }
 
-pub async fn voice_audio_pack_page() -> Html<String> {
+pub async fn kinetic_typography_page() -> Html<String> {
     Html(build_service_offer_page_html(
-        "voice-audio-pack",
-        "Voice & Audio Production Pack",
-        "$99-$750+",
-        "Narration, podcast-style audio, voiceovers, summaries, and audio-backed video packages — produced same day. Generate 5, 10, or 50 voiceovers without a recording studio or voice talent budget.",
-        "Built for founders, creators, educators, agencies, and newsletter operators who need narration or audio content at scale — more scripts, more variations, more formats for less.",
-        "VideoSync generates scripts, voiceovers, narrated summaries, audio visualizers, and video packages that combine narration with motion assets. The AI agent handles script writing, voice generation, and assembly — so producing a batch of 20 narrated clips costs roughly the same as producing one.",
-         "/campaigns/new?service=voice_audio",
-         "Create campaign",
-         "/chat",
-         "Try one-off in chat",
+        "kinetic-typography",
+        "Kinetic Typography Campaign",
+        "$149/mo",
+        "Daily animated text-motion videos — turning scripts and quotes into engaging kinetic typography content for social media.",
+        "For podcasters, quote pages, motivational channels, educators, and marketers who want text-driven video content.",
         &[
-            "Voiceover and narration scripts",
-            "AI-assisted voice and narration outputs",
-            "Podcast/video summaries",
-            "Audio visualizers",
-            "Narrated videos and delivery links",
+            "Provide script, quotes, or text",
+            "AI designs typography motion sequence",
+            "Manim renders animated text scenes",
+            "Auto-posts to connected platforms",
         ],
         &[
-            "Share the source, topic, or script direction.",
-            "The agent writes or adapts narration for the goal.",
-            "VideoSync generates audio and optionally pairs it with visuals.",
-            "You receive downloadable audio/video assets.",
+            "Daily kinetic typography videos",
+            "Animated text reveals and motion",
+            "Background music sync",
+            "VibeVoice narration option",
+            "Auto-publish to TikTok, Instagram, X",
+            "Campaign dashboard",
+            "Pause/resume/cancel anytime",
         ],
         &[
-            ("Founder", "Needs a clear narrated demo or update."),
-            ("Creator", "Needs voiceover-backed clips and summaries."),
-            ("Agency", "Needs fast narration for client deliverables."),
+            ("Podcaster", "Turns episode quotes into social clips."),
+            ("Quote channel", "Needs daily text-animation content."),
+            ("Marketer", "Creates engaging text-based ads."),
         ],
-        r#"["voice_audio","summary","long_form"]"#,
-        r#"["audio-standard"]"#,
     ))
 }
 
-pub async fn mixed_agency_bundle_page() -> Html<String> {
+pub async fn animated_infographic_page() -> Html<String> {
     Html(build_service_offer_page_html(
-        "mixed-agency-bundle",
-        "Agency Client Pack (3 Videos)",
-        "$1,500 for 3 client videos",
-        "For Webflow, Framer, SaaS, and marketing agencies: send 3 client websites and get 3 client-ready demo videos in hours. Scale from 3 to 30 clients without hiring a video team.",
-        "Built for agencies, freelancers, Webflow/Framer studios, no-code builders, and SaaS marketers who already have clients but need faster, higher-volume video fulfillment — fulfill more clients, produce more assets, charge less, keep more margin.",
-        "The plain offer: agencies send client websites or app URLs, and VideoSync produces demo/promo videos plus supporting assets they can deliver under their own brand. The automated pipeline means you can take on more clients without scaling your team — 3 videos or 30, the turnaround stays the same. No studio overhead, no per-video markup, just white-label video fulfillment at agency-friendly pricing.",
-         "/campaigns/new?service=full_stack",
-         "Create campaign",
-         "/chat",
-         "Try one-off in chat",
+        "animated-infographic",
+        "Animated Infographic Campaign",
+        "$199/mo",
+        "Turn data, reports, and statistics into daily animated infographics — bar charts, pie charts, timelines, and data stories.",
+        "For analysts, data journalists, business channels, and educators who need visual data storytelling at scale.",
         &[
-            "$1,500 pack: 3 client website/app demo videos",
-            "Each client gets a delivery page with preview and downloads",
-            "Optional hook/caption variants, thumbnails, mockups, and narration",
-            "Designed so agencies can resell the assets to their own clients",
-            "Upsell path into monthly fulfillment once one pack works",
+            "Share data source or report",
+            "AI identifies key data stories",
+            "Manim renders animated charts & infographics",
+            "Auto-posts narrated data videos",
         ],
         &[
-            "Agency sends 3 client URLs and the goal for each video.",
-            "We turn each site/app into a clear demo/promo concept, usually short-form first with longer walkthroughs available.",
-            "VideoSync generates, reviews, and packages each client video.",
-            "Agency receives 3 delivery/download links they can send or resell.",
+            "Daily animated data visualizations",
+            "Bar charts, pie charts, timelines, maps",
+            "Data-driven narration",
+            "VibeVoice narration",
+            "Auto-publish to YouTube, LinkedIn, X",
+            "Campaign dashboard",
+            "Pause/resume/cancel anytime",
         ],
         &[
-            ("Webflow or Framer agency", "Already builds sites and can resell demo videos as a launch add-on."),
-            ("SaaS marketing agency", "Needs product videos for clients without hiring a video team."),
-            ("No-code builder or consultant", "Can offer website-to-video as an upsell after shipping an app or landing page."),
+            ("Data journalist", "Needs daily visual data stories."),
+            ("Business channel", "Presents market data and trends."),
+            ("Educator", "Teaches with animated data examples."),
         ],
-        r#"["bundle","full_stack","long_form","thumbnails","voice_audio","blender","education"]"#,
-        r#"["agency-3-videos"]"#,
     ))
 }
 
-pub async fn creator_manager_fulfillment_page() -> Html<String> {
+pub async fn algorithm_viz_page() -> Html<String> {
     Html(build_service_offer_page_html(
-        "creator-manager-fulfillment",
-        "Agency Production Backend",
-        "$999-$3,000+/month",
-        "A private production backend — produce 10x more client deliverables without hiring editors. VideoSync handles the output; you keep the client and the brand.",
-        "Built for boutique agencies, creator managers, consultants, and operators who sell video services and need reliable, scalable fulfillment without the cost of an in-house production team.",
-        "VideoSync works best here as a backend, not a personality. You keep the client relationship and use the platform to produce demos, thumbnails, motion graphics, narrated explainers, delivery pages, and repeatable monthly output under your own brand. The AI agent pipeline means you can fulfill 30 client videos a month with the same effort it used to take to produce 3 — your margin scales with volume, not headcount.",
-        "/dashboard",
-        "Open the workspace",
-        "/api-access",
-        "View API access",
+        "algorithm-viz",
+        "Algorithm Visualization Campaign",
+        "$199/mo",
+        "Daily animated algorithm walkthroughs — sorting, search, graph traversal, data structures visualized with Manim.",
+        "For CS educators, coding channels, tutorial creators, and technical interview prep content producers.",
         &[
-            "White-label production support across multiple client accounts",
-            "Product demos, thumbnails, motion graphics, and narrated explainers",
-            "Delivery links that make review and handoff easier",
-            "Repeatable monthly fulfillment instead of one-off scrambling",
-            "A backend that can grow from manual work into API-driven workflows",
+            "Choose algorithm or data structure",
+            "AI designs visualization sequence",
+            "Manim renders step-by-step animation",
+            "Auto-posts narrated explainer",
         ],
         &[
-            "You sell the offer under your own brand and keep the client relationship.",
-            "We help turn the brief into the right production workflow and output mix.",
-            "VideoSync fulfills the deliverables behind the scenes with the same production stack used across the platform.",
-            "Fulfill with VideoSync’s editing, generation, and delivery stack.",
+            "Daily algorithm visualization videos",
+            "Sorting, search, graph, tree, DP animations",
+            "Step-by-step code walkthrough",
+            "VibeVoice technical narration",
+            "Auto-publish to YouTube, Twitter",
+            "Campaign dashboard",
+            "Pause/resume/cancel anytime",
         ],
         &[
-            ("Boutique agency owner", "Needs more delivery capacity without turning every new client into an operations problem."),
-            ("Creator manager", "Needs a production backend that helps keep fulfillment consistent across a small roster."),
-            ("Solo operator", "Needs a way to sell a larger service without hiring a full in-house team first."),
+            ("CS educator", "Need visuals for algorithm lectures."),
+            ("Coding channel", "Creates daily algorithm content."),
+            ("Interview prep", "Produces technical explainers."),
         ],
-        r#"["full_stack","thumbnails","scene","landing_page"]"#,
-        r#"[]"#,
     ))
 }
 
-pub async fn x402_asset_api_page() -> Html<String> {
-    Html(build_x402_docs_page_html())
+pub async fn investor_pitch_page() -> Html<String> {
+    Html(build_service_offer_page_html(
+        "investor-pitch",
+        "Investor Pitch Campaign",
+        "$299/mo",
+        "Daily narrated pitch videos for fundraising — market analysis, product demo, traction charts, and team slides, animated and auto-posted.",
+        "For startups raising rounds, accelerators, and pitch coaches who need consistent investor-ready video content.",
+        &[
+            "Share pitch deck and metrics",
+            "AI creates daily pitch variant",
+            "Manim renders animated pitch scenes",
+            "Auto-posts to LinkedIn and X",
+        ],
+        &[
+            "Daily animated pitch videos",
+            "Traction charts, market sizing visuals",
+            "Product demo integration",
+            "VibeVoice professional narration",
+            "Auto-publish to LinkedIn, X, YouTube",
+            "Campaign dashboard",
+            "Pause/resume/cancel anytime",
+        ],
+        &[
+            ("Startup founder", "Needs daily investor-ready content."),
+            ("Accelerator", "Produces pitch videos for portfolio."),
+            ("Pitch coach", "Creates sample pitches for clients."),
+        ],
+    ))
 }
 
-pub async fn kick_com_clipping_page() -> Html<String> {
+pub async fn year_in_review_page() -> Html<String> {
     Html(build_service_offer_page_html(
-        "kick-com-clipping",
-        "Kick.com Clipping",
-        "$75-$300+",
-        "Paste a Kick.com VOD link. Our AI agent downloads the stream, extracts your requested highlights, and delivers ready-to-post clips with captions and thumbnails — in hours, not days.",
-        "Built for Kick streamers, editors, clip channels, social media managers, and anyone who needs professional highlight clips from Kick VODs without screen recording or manual editing.",
-        "The simple offer: send a Kick.com VOD URL and describe the moments you want. The full pack includes 3 extracted clips, each with search-optimized captions, a hook title card, a click-focused thumbnail, and a delivery page with download links. Supports gaming highlights, IRL moments, donation reactions, and any other VOD content.",
-        "/manual-clipping",
-        "Open clipping tools",
-         "/campaigns/new?service=kick_auto_clipper",
-         "Create campaign",
+        "year-in-review",
+        "Year in Review Campaign",
+        "$99/mo",
+        "Daily highlight-reel videos — curated from your content, with animated stats, milestones, and timeline visuals.",
+        "For creators, businesses, and teams who want ongoing highlight content without end-of-year scramble.",
         &[
-            "Clip packs from public Kick.com VODs — no screen recording needed",
-            "Easy: send a VOD URL and tell us what moments to extract",
-            "Captions, hook title cards, and thumbnails included per clip",
-            "Vertical and horizontal format support (Shorts, TikTok, Twitter, YouTube)",
-            "Auto-publish across YouTube, TikTok, Instagram, and X via Zernio integration",
-            "Campaign Engine: schedule daily clip generation + cross-platform posting",
-            "Delivered as a review/download link you can share immediately",
+            "Connect content sources",
+            "AI identifies best moments",
+            "Manim renders review scenes",
+            "Auto-posts daily highlights",
         ],
         &[
-            "Send the Kick.com VOD URL and describe the highlights you want extracted.",
-            "We download the VOD and identify the requested moments.",
-            "VideoSync clips each moment, adds captions, hook text, and thumbnail.",
-            "Clips are auto-published to your connected social accounts via Zernio.",
-            "You receive a delivery page with preview and download links.",
+            "Daily highlight compilation videos",
+            "Animated milestone timeline",
+            "Stats and metrics visualization",
+            "VibeVoice narration",
+            "Auto-publish to YouTube, Instagram, X",
+            "Campaign dashboard",
+            "Pause/resume/cancel anytime",
         ],
         &[
-            ("Kick streamer or editor", "Needs professional highlight clips from Kick VODs without uploading to third-party tools or screen recording."),
-            ("Clip channel operator", "Needs consistent, captioned clips from multiple Kick streamers for a compilation or clipping channel with daily posting."),
-            ("Social media manager", "Needs platform-ready short-form clips from Kick content for Twitter, TikTok, or Instagram cross-posting via automated campaigns."),
+            ("Creator", "Showcases daily best moments."),
+            ("Business", "Highlights weekly/monthly wins."),
+            ("Team", "Celebrates milestones publicly."),
         ],
-        r#"["clips","captions","thumbnails","scene"]"#,
-        r#"["standard"]"#,
+    ))
+}
+
+pub async fn isometric_explainer_page() -> Html<String> {
+    Html(build_service_offer_page_html(
+        "isometric-explainer",
+        "Isometric Explainer Campaign",
+        "$199/mo",
+        "Daily isometric-style animated explainers — 3D-like visuals on a 2D plane, perfect for product demos, architecture, and technical concepts.",
+        "For product teams, architects, game devs, and technical educators who want isometric visual explanations at scale.",
+        &[
+            "Share concept or product spec",
+            "AI designs isometric scene layout",
+            "Manim renders isometric animation",
+            "Auto-posts narrated explainer daily",
+        ],
+        &[
+            "Daily isometric animated explainers",
+            "3D-like visuals rendered on 2D plane",
+            "Product demos and architectural walkthroughs",
+            "VibeVoice narration",
+            "Auto-publish to YouTube, LinkedIn, X",
+            "Campaign dashboard",
+            "Pause/resume/cancel anytime",
+        ],
+        &[
+            ("Product team", "Explains features with isometric visuals."),
+            ("Architect", "Showcases designs with animated isometrics."),
+            ("Game dev", "Creates isometric scene breakdowns."),
+        ],
     ))
 }
 
@@ -1325,37 +1268,30 @@ fn format_service_type(s: &str) -> &'static str {
 pub async fn manim_explainer_page() -> Html<String> {
     Html(build_service_offer_page_html(
         "manim-explainer",
-        "Manim Animated Explainer",
-        "$75-$400+",
-        "Send a topic, lesson, or script. Our AI agent generates a narrated Manim explainer with clean motion graphics, math/technical diagrams, and professional narration — in minutes, not hours.",
-        "Built for educators, course creators, math/finance channels, SaaS teams, and anyone who needs clear animated explainers faster than traditional animation pipelines.",
-        "The simple offer: send a topic, outline, lesson, script, or technical concept and get a narrated animated explainer video. The full pack includes the full explainer with motion graphics, diagrams, professional voiceover narration, captions, and a delivery page with downloads. Powered by Manim Community Edition — 5-20x faster render than Blender with CPU-friendly Cairo backend.",
-         "/campaigns/new?service=manim_explainer",
-         "Create campaign",
-         "/chat",
-         "Try one-off in chat",
+        "Manim Explainer Campaign",
+        "$149/mo",
+        "AI generates narrated Manim-animated explainers daily — from a topic, script, or outline. 5-20x faster than Blender, auto-posted to your platforms.",
+        "For educators, math/finance channels, course creators, and technical communicators who need clean motion-graphics explainers at scale.",
         &[
-            "Narrated animated explainer videos with clean motion graphics",
-            "Math/technical diagrams, formulas, data visualizations, and process flows",
-            "Professional voiceover narration via VibeVoice TTS (natural speech)",
-            "Supports any duration: 30s shorts to 10+ minute lessons",
-            "Captions and subtitles included",
-            "Delivered as a review/download link you can share immediately",
-            "5-20x faster than Blender pipeline — CPU-friendly Cairo backend",
+            "Give a topic, lesson, or script",
+            "AI plans Manim scenes + narration",
+            "Renders scenes in parallel (CPU-friendly)",
+            "Auto-posts narrated explainer on schedule",
         ],
         &[
-            "Share the topic, lesson, script, or source material you want explained.",
-            "Our AI agent plans the visual narrative and generates Manim Python code per scene.",
-            "VideoSync renders each scene in parallel, stitches them together, adds narration.",
-            "You receive a delivery page with preview and download links.",
+            "Daily Manim animated explainer videos",
+            "Math/technical diagrams, formulas, visual proofs",
+            "VibeVoice narration (AI voiceover)",
+            "Captions and motion graphics",
+            "Auto-publish to YouTube, Twitter, LinkedIn",
+            "Campaign dashboard with calendar",
+            "Pause/resume/cancel anytime",
         ],
         &[
-            ("Educator or course creator", "Needs visual explainers for complex topics without spending days on animation."),
-            ("Math/finance channel", "Needs clear animated diagrams and formula walkthroughs for technical content."),
-            ("Product or SaaS team", "Needs a narrated explainer that makes a complex product or concept easy to understand."),
+            ("Math/finance educator", "Needs animated formula explainers daily."),
+            ("Course creator", "Needs curriculum-scale animated lessons."),
+            ("Technical communicator", "Needs consistent diagram-based content."),
         ],
-        r#"["manim_explainer","education","three_d_scene","voice_audio"]"#,
-        r#"["manim_pack"]"#,
     ))
 }
 
@@ -1384,27 +1320,16 @@ fn service_page_theme(service_slug: &str) -> ServicePageTheme {
             visual_points: &["Landing page scan", "Product story", "Mockups + motion", "Downloadable delivery"],
             lab_class: "service-lab-saas",
         },
-        "thumbnail-hero-pack" | "clipper-enhancement-pack" => ServicePageTheme {
-            accent: "#f97316",
-            secondary: "#facc15",
-            glow_a: "rgba(249,115,22,0.22)",
-            glow_b: "rgba(250,204,21,0.12)",
-            pattern: "radial-gradient(circle at 25% 30%, rgba(250,204,21,0.28), transparent 0 18%), radial-gradient(circle at 75% 24%, rgba(249,115,22,0.22), transparent 0 22%), linear-gradient(135deg, rgba(15,23,42,0.48), rgba(2,6,23,0.74))",
-            eyebrow: "Click package",
-            visual_title: "First frame, thumbnail, hook, and polish.",
-            visual_points: &["Hero frame", "CTR thumbnail", "Caption/title card", "Reusable campaign visual"],
+        "clipping-pack" | "kick-auto-clipper" => ServicePageTheme {
+            accent: "#00e701",
+            secondary: "#8b5cf6",
+            glow_a: "rgba(0,231,1,0.22)",
+            glow_b: "rgba(139,92,246,0.14)",
+            pattern: "linear-gradient(135deg, rgba(0,231,1,0.28), transparent 42%), radial-gradient(circle at 70% 80%, rgba(139,92,246,0.20), transparent 0 24%), repeating-linear-gradient(135deg, rgba(226,232,240,0.07) 0 1px, transparent 1px 22px)",
+            eyebrow: "From VOD to clip",
+            visual_title: "VODs become daily ready-to-post highlights.",
+            visual_points: &["VOD link", "Download + clip", "Captions + hook", "Auto-publish"],
             lab_class: "service-lab-visual",
-        },
-        "product-mockup-pack" => ServicePageTheme {
-            accent: "#14b8a6",
-            secondary: "#38bdf8",
-            glow_a: "rgba(20,184,166,0.20)",
-            glow_b: "rgba(56,189,248,0.12)",
-            pattern: "linear-gradient(135deg, rgba(20,184,166,0.24), transparent 42%), radial-gradient(circle at 70% 20%, rgba(56,189,248,0.18), transparent 0 24%), repeating-linear-gradient(135deg, rgba(226,232,240,0.07) 0 1px, transparent 1px 22px)",
-            eyebrow: "Mockup system",
-            visual_title: "Screenshots become animated product scenes.",
-            visual_points: &["UI flow", "Device/browser scenes", "Callouts", "Ad-ready export"],
-            lab_class: "service-lab-saas",
         },
         "education-explainer-pack" => ServicePageTheme {
             accent: "#22c55e",
@@ -1414,52 +1339,19 @@ fn service_page_theme(service_slug: &str) -> ServicePageTheme {
             pattern: "linear-gradient(135deg, rgba(34,197,94,0.18), transparent 42%), repeating-linear-gradient(0deg, rgba(226,232,240,0.08) 0 1px, transparent 1px 34px), repeating-linear-gradient(90deg, rgba(226,232,240,0.06) 0 1px, transparent 1px 34px)",
             eyebrow: "Explain visually",
             visual_title: "Concept → storyboard → animated scenes → lesson.",
-            visual_points: &["f(x) = clarity", "Animated diagrams", "Narrated lesson", "Long-form assembly"],
+            visual_points: &["Animated diagrams", "Narrated lesson", "Math/science visuals", "Long-form assembly"],
             lab_class: "service-lab-education",
         },
-        "blender-scene-pack" => ServicePageTheme {
-            accent: "#a855f7",
-            secondary: "#fb7185",
-            glow_a: "rgba(168,85,247,0.22)",
-            glow_b: "rgba(251,113,133,0.12)",
-            pattern: "radial-gradient(circle at 50% 28%, rgba(168,85,247,0.28), transparent 0 24%), conic-gradient(from 180deg at 50% 50%, rgba(251,113,133,0.12), rgba(59,130,246,0.18), rgba(168,85,247,0.12))",
-            eyebrow: "Scene engine",
-            visual_title: "3D scenes and cinematic support visuals.",
-            visual_points: &["Scene brief", "Model/lighting", "Camera motion", "Rendered assets"],
+        "manim-explainer" | "whiteboard-animation" | "kinetic-typography" | "animated-infographic" | "algorithm-viz" | "investor-pitch" | "year-in-review" | "isometric-explainer" => ServicePageTheme {
+            accent: "#8b5cf6",
+            secondary: "#a78bfa",
+            glow_a: "rgba(139,92,246,0.22)",
+            glow_b: "rgba(167,139,250,0.12)",
+            pattern: "radial-gradient(circle at 30% 25%, rgba(139,92,246,0.28), transparent 0 22%), radial-gradient(circle at 70% 75%, rgba(167,139,250,0.16), transparent 0 20%), linear-gradient(135deg, rgba(15,23,42,0.48), rgba(2,6,23,0.74))",
+            eyebrow: "Animated explainer",
+            visual_title: "Topic → Manim scenes → narrated video.",
+            visual_points: &["Scene planning", "Parallel render", "Narration + captions", "Auto-publish"],
             lab_class: "service-lab-visual",
-        },
-        "voice-audio-pack" => ServicePageTheme {
-            accent: "#ec4899",
-            secondary: "#8b5cf6",
-            glow_a: "rgba(236,72,153,0.20)",
-            glow_b: "rgba(139,92,246,0.14)",
-            pattern: "repeating-linear-gradient(90deg, rgba(236,72,153,0.22) 0 3px, transparent 3px 18px), linear-gradient(135deg, rgba(15,23,42,0.62), rgba(88,28,135,0.36))",
-            eyebrow: "Audio layer",
-            visual_title: "Scripts, voiceovers, summaries, and narrated assets.",
-            visual_points: &["Script polish", "Voiceover", "Audio-backed video", "Downloadable files"],
-            lab_class: "service-lab-audio",
-        },
-        "kick-com-clipping" => ServicePageTheme {
-            accent: "#00e701",
-            secondary: "#8b5cf6",
-            glow_a: "rgba(0,231,1,0.22)",
-            glow_b: "rgba(139,92,246,0.14)",
-            pattern: "linear-gradient(135deg, rgba(0,231,1,0.28), transparent 42%), radial-gradient(circle at 70% 80%, rgba(139,92,246,0.20), transparent 0 24%), repeating-linear-gradient(135deg, rgba(226,232,240,0.07) 0 1px, transparent 1px 22px)",
-            eyebrow: "From Kick to clip",
-            visual_title: "Kick.com VODs become ready-to-post highlights.",
-            visual_points: &["VOD link", "Download + clip", "Captions + hook", "Delivery page"],
-            lab_class: "service-lab-visual",
-        },
-        "mixed-agency-bundle" | "creator-manager-fulfillment" => ServicePageTheme {
-            accent: "#0ea5e9",
-            secondary: "#f59e0b",
-            glow_a: "rgba(14,165,233,0.22)",
-            glow_b: "rgba(245,158,11,0.12)",
-            pattern: "linear-gradient(135deg, rgba(14,165,233,0.22), transparent 42%), radial-gradient(circle at 80% 15%, rgba(245,158,11,0.18), transparent 0 22%), repeating-linear-gradient(90deg, rgba(226,232,240,0.07) 0 1px, transparent 1px 46px)",
-            eyebrow: "Agency system",
-            visual_title: "Multiple client deliverables, one production backend.",
-            visual_points: &["3 client URLs", "3 videos", "Delivery pages", "Monthly upsell"],
-            lab_class: "service-lab-saas",
         },
         _ => ServicePageTheme {
             accent: "#3b82f6",
@@ -1475,154 +1367,36 @@ fn service_page_theme(service_slug: &str) -> ServicePageTheme {
     }
 }
 
+
+
 fn build_services_overview_page_html() -> String {
-    let launch_cards = [
-        (
-            "SaaS Demo Video",
-            "/services/saas-launch-pack",
-            "$399-$1,200+",
-            "For SaaS founders and product teams who need their OWN product video — from a URL, screenshots, or brief. One polished demo for your launch.",
-            "Website/app URL, screenshots, loom, or short brief",
-            "Polished demo, promo, or walkthrough video autonomously. 30-120s is standard; longer available.",
-        ),
-        (
-            "Agency Client Pack (3 videos)",
-            "/services/mixed-agency-bundle",
-            "$1,500 for 3 videos",
-            "For agencies who want to RESELL video deliverables to existing clients. Send 3 client URLs and get 3 white-label videos back.",
-            "3 client websites, offers, or landing pages",
-            "3 client-ready demo/promo videos with delivery pages and download links.",
-        ),
-        (
-            "Product Mockup Video",
-            "/services/product-mockup-pack",
-            "$299-$900+",
-            "For founders and teams that need UI mockups, app-flow visuals, or product scenes before they have polished footage.",
-            "Screenshots, product URL, Figma references, or app flow",
-            "Animated UI/product mockups for ads, landing pages, demos, or sales decks.",
-        ),
-    ];
-    let content_cards = [
-        (
-            "Education Explainer",
-            "/services/education-explainer-pack",
-            "$300-$1,500+",
-            "For educators, technical creators, coaches, and course sellers who need clearer visual explanations.",
-            "Topic, outline, lesson, script, or source material",
-            "Animated diagrams, narrated explainers, visual lessons, or long-form educational videos.",
-        ),
-        (
-            "Thumbnail & Hero Visual",
-            "/services/thumbnail-hero-pack",
-            "$75-$300+",
-            "For creators, SaaS launches, ads, and landing pages that need a stronger first impression.",
-            "Topic, product, face/photo, brand colors, or campaign goal",
-            "Thumbnails, hero images, ad visuals, and campaign graphics ready to publish.",
-        ),
-        (
-            "Clip Enhancement",
-            "/services/clipper-enhancement-pack",
-            "$250-$1,200+",
-            "For creators and brands that already have clips but need them packaged like professional social content.",
-            "Raw clips, highlights, timestamps, or exported videos",
-            "Captions, title cards, lower thirds, thumbnails, motion graphics, and export-ready variants.",
-        ),
-        (
-            "Kick.com Clipping",
-            "/services/kick-com-clipping",
-            "$75-$300+",
-            "For Kick streamers, editors, and clip channels who need professional highlight clips from Kick VODs.",
-            "Kick.com VOD or channel URL",
-            "Extracted highlight clips with captions, thumbnails, hook cards, and delivery page.",
-        ),
-        (
-            "Manim Animated Explainer",
-            "/services/manim-explainer",
-            "$75-$400+",
-            "For educators, course creators, and technical channels who need narrated animated explainers with math diagrams and motion graphics.",
-            "Topic, lesson, script, or technical concept",
-            "Manim-powered animated explainers with voiceover narration, diagrams, and captions — 5-20x faster than Blender.",
-        ),
-        (
-            "Social Publishing",
-            "/admin/zernio",
-            "$15/mo DIY · $147-$899 DFY",
-            "For creators, clippers, and agencies who need automated cross-platform clip publishing via Zernio.",
-            "Connected social accounts + content",
-            "Schedule and auto-publish clips to YouTube, TikTok, Instagram, and X from one dashboard with Campaign Engine.",
-        ),
-    ];
-    let production_cards = [
-        (
-            "3D/2D Animation Scene",
-            "/services/blender-scene-pack",
-            "$500-$2,500+",
-            "For teams that need cinematic product visuals, 3D explainers, animated models, or support scenes.",
-            "Idea, product, object, style reference, or scene description",
-            "3D/2D animated visuals, product scenes, motion graphics, or explainer assets.",
-        ),
-        (
-            "Voice & Audio Production",
-            "/services/voice-audio-pack",
-            "$99-$750+",
-            "For videos, explainers, summaries, podcasts, and sales assets that need clean narration or audio.",
-            "Script, topic, article, video, or rough notes",
-            "Narration, voiceovers, podcast-style audio, summaries, or audio-backed video packages.",
-        ),
-    ];
-    let agency_cards = [
-        (
-            "Agency Production Backend",
-            "/services/creator-manager-fulfillment",
-            "$1,500-$5,000+/mo",
-            "For agencies and operators selling monthly video deliverables who need a reliable production layer.",
-            "Recurring client tasks, briefs, brand notes, and fulfillment requirements",
-            "Ongoing video, thumbnail, mockup, voice, and delivery-page work behind the scenes.",
-        ),
-        (
-            "Programmable Payments & Asset API",
-            "/services/x402-asset-api",
-            "Custom / pay per call",
-            "For technical teams that want wallet-paid delivery unlocks, paid previews, or media-generation API flows.",
-            "Access pattern, asset type, and buyer flow",
-            "Paid delivery pages, x402-style unlocks, and API-backed media access.",
-        ),
+    let cards = [
+        ("saas-launch-pack", "SaaS Demo Campaign", "$399/mo", "Turn your product URL into daily buyer-facing demos — auto-posted to Twitter, LinkedIn, and YouTube.", "AI demos from any URL"),
+        ("clipping-pack", "Social Clipping Campaign", "$147/mo", "Daily highlight clips with captions, hooks, and thumbnails from any VOD.", "Clip extraction from VODs"),
+        ("kick-auto-clipper", "Kick Auto-Clipper Campaign", "$297/mo", "Kick VOD monitoring, highlight clipping, and daily auto-posting.", "Kick VOD clipping"),
+        ("education-explainer-pack", "Education Explainer Campaign", "$199/mo", "Daily animated explainers with narration, diagrams, and captions.", "Education explainers"),
+        ("manim-explainer", "Manim Explainer Campaign", "$149/mo", "Narrated Manim-animated explainers — 5-20x faster than Blender.", "Manim animation"),
+        ("whiteboard-animation", "Whiteboard Animation Campaign", "$149/mo", "Daily whiteboard-style hand-drawn sketch explainers.", "Whiteboard animation"),
+        ("kinetic-typography", "Kinetic Typography Campaign", "$149/mo", "Animated text-motion videos from scripts and quotes.", "Kinetic text"),
+        ("animated-infographic", "Animated Infographic Campaign", "$199/mo", "Animated charts, timelines, and data stories from reports.", "Data visualization"),
+        ("algorithm-viz", "Algorithm Visualization Campaign", "$199/mo", "Animated algorithm walkthroughs visualized with Manim.", "Algorithm viz"),
+        ("investor-pitch", "Investor Pitch Campaign", "$299/mo", "Animated pitch videos with traction charts and demos.", "Pitch videos"),
+        ("year-in-review", "Year in Review Campaign", "$99/mo", "Daily highlight reels with animated stats and milestones.", "Review videos"),
+        ("isometric-explainer", "Isometric Explainer Campaign", "$199/mo", "Isometric-style animated explainers on a 2D plane.", "Isometric animation"),
     ];
 
-    fn render_group(cards: &[(&str, &str, &str, &str, &str, &str)], group_eyebrow: &str) -> String {
-        let items: String = cards.iter().map(|(title, href, price, audience, input, output)| {
-            format!(
-                r#"<article class="offer-card">
-                  <div class="card-top">
-                    <div class="eyebrow">{group_eyebrow}</div>
-                  </div>
-                  <h2>{title}</h2>
-                  <div class="price">{price}</div>
-                  <p class="audience">{audience}</p>
-                  <div class="mini-list">
-                    <div><strong>You send:</strong> {input}</div>
-                    <div><strong>We deliver:</strong> {output}</div>
-                  </div>
-                  <a class="cta" href="{href}">See details</a>
-                </article>"#
-            )
-        }).collect();
+    let cards_html: String = cards.iter().map(|(slug, title, price, tagline, brief)| {
         format!(
-            r#"<div class="group-section">
-              <div class="group-heading">
-                <div class="group-eyebrow">{group_eyebrow}</div>
-              </div>
-              <div class="grid">{items}</div>
-            </div>"#
+            r#"<article class="offer-card">
+              <div class="card-top"><div class="eyebrow">Campaign Service</div></div>
+              <h2>{title}</h2>
+              <div class="price">{price}</div>
+              <p class="audience">{tagline}</p>
+              <div class="mini-list"><div><strong>What it does:</strong> {brief}</div></div>
+              <a class="cta" href="/services/{slug}">See details</a>
+            </article>"#
         )
-    }
-
-    let launch_html = render_group(&launch_cards, "Launch Assets");
-    let content_html = render_group(&content_cards, "Content & Social");
-    let production_html = render_group(&production_cards, "Production");
-    let agency_html = render_group(&agency_cards, "Agency");
-
-    let all_cards = format!("{launch_html}{content_html}{production_html}{agency_html}");
+    }).collect();
 
     format!(
         r#"<!DOCTYPE html>
@@ -1630,7 +1404,7 @@ fn build_services_overview_page_html() -> String {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Done-For-You Video Production | VideoSync</title>
+  <title>Campaign Services | VideoSync</title>
   <style>
     :root {{
       --bg:#07111d;
@@ -1642,60 +1416,40 @@ fn build_services_overview_page_html() -> String {
       --blue:#3b82f6;
       --green:#22c55e;
       --amber:#fbbf24;
+      --purple:#8b5cf6;
     }}
     * {{ box-sizing:border-box; }}
     body {{ margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:
-      radial-gradient(circle at top left, rgba(59,130,246,0.18), transparent 28%),
-      radial-gradient(circle at bottom right, rgba(34,197,94,0.10), transparent 30%),
+      radial-gradient(circle at top left, rgba(139,92,246,0.18), transparent 28%),
+      radial-gradient(circle at bottom right, rgba(59,130,246,0.10), transparent 30%),
       #07111d; color:var(--text); }}
     .shell {{ max-width:1180px; margin:0 auto; padding:32px 20px 72px; }}
     .topbar {{ display:flex; justify-content:space-between; align-items:center; gap:1rem; flex-wrap:wrap; margin-bottom:28px; }}
     .brand {{ color:#fff; text-decoration:none; font-weight:800; font-size:1.3rem; }}
     .toplinks {{ display:flex; gap:0.8rem; flex-wrap:wrap; }}
     .toplinks a {{ color:#c7d8f6; text-decoration:none; padding:0.65rem 1rem; border:1px solid rgba(148,163,184,0.2); border-radius:999px; background:rgba(8,15,28,0.75); }}
-    .hero {{ padding:28px; border-radius:28px; background:linear-gradient(135deg, rgba(59,130,246,0.2), rgba(8,15,28,0.94)); border:1px solid rgba(96,165,250,0.22); box-shadow:0 24px 70px rgba(2,6,23,0.45); }}
+    .hero {{ padding:28px; border-radius:28px; background:linear-gradient(135deg, rgba(139,92,246,0.2), rgba(8,15,28,0.94)); border:1px solid rgba(167,139,250,0.22); box-shadow:0 24px 70px rgba(2,6,23,0.45); }}
     .hero h1 {{ margin:0; font-size:3.15rem; line-height:1.03; max-width:940px; }}
     .hero p {{ margin:1rem 0 0; max-width:860px; color:#b9c8df; font-size:1.08rem; }}
     .hero-actions {{ display:flex; flex-wrap:wrap; gap:0.8rem; margin-top:1.35rem; }}
     .hero-action {{ display:inline-flex; align-items:center; text-decoration:none; padding:0.8rem 1.05rem; border-radius:999px; border:1px solid var(--line-strong); background:rgba(15,23,42,0.72); color:#dbeafe; font-weight:800; }}
-    .hero-action.primary {{ background:linear-gradient(135deg,#3b82f6,#2563eb); color:white; border-color:transparent; }}
-    .speed-badge {{ display:inline-flex; align-items:center; gap:0.45rem; background:rgba(34,197,94,0.15); border:1px solid rgba(34,197,94,0.25); border-radius:999px; padding:0.4rem 0.75rem; color:#86efac; font-weight:700; font-size:0.82rem; }}
-    .compare-row {{ display:flex; flex-wrap:wrap; gap:1.2rem; margin-top:1.15rem; padding:1rem; border-radius:16px; background:rgba(15,23,42,0.7); border:1px solid rgba(148,163,184,0.12); }}
-    .compare-item {{ flex:1; min-width:130px; }}
-    .compare-item .label {{ color:var(--muted); font-size:0.78rem; text-transform:uppercase; letter-spacing:0.06em; }}
-    .compare-item .value {{ color:#fff; font-size:1.35rem; font-weight:900; }}
-    .compare-item .note {{ color:#86efac; font-size:0.75rem; font-weight:700; }}
-    .chooser {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:0.85rem; margin-top:1.15rem; }}
-    .chooser-card {{ border:1px solid rgba(96,165,250,0.18); background:rgba(15,23,42,0.58); border-radius:18px; padding:1rem; color:#dbeafe; }}
-    .chooser-card strong {{ display:block; color:#fff; margin-bottom:0.3rem; }}
-    .chooser-card span {{ color:#a8b8d3; font-size:0.92rem; line-height:1.4; }}
+    .hero-action.primary {{ background:linear-gradient(135deg,#8b5cf6,#7c3aed); color:white; border-color:transparent; }}
+    .badge-row {{ display:flex;flex-wrap:wrap;gap:0.6rem;margin-top:0.8rem }}
+    .badge {{ display:inline-flex;align-items:center;gap:0.45rem;border-radius:999px;padding:0.4rem 0.75rem;font-weight:700;font-size:0.82rem;border:1px solid rgba(167,139,250,0.25);background:rgba(139,92,246,0.15);color:#c4b5fd; }}
     .group-section {{ margin-top:2rem; }}
-    .group-heading {{ margin-bottom:0.6rem; }}
+    .group-heading {{ margin-bottom:1rem; }}
     .group-eyebrow {{ color:#93c5fd; font-size:0.85rem; letter-spacing:0.08em; text-transform:uppercase; font-weight:800; }}
     .grid {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:1.2rem; }}
-    .offer-card {{ display:flex; flex-direction:column; min-height:360px; padding:1.45rem; border-radius:24px; background:var(--panel); border:1px solid var(--line); box-shadow:0 18px 45px rgba(2,6,23,0.35); }}
+    .offer-card {{ display:flex; flex-direction:column; min-height:300px; padding:1.45rem; border-radius:24px; background:var(--panel); border:1px solid var(--line); box-shadow:0 18px 45px rgba(2,6,23,0.35); }}
     .card-top {{ display:flex; justify-content:space-between; align-items:center; gap:0.8rem; }}
     .offer-card h2 {{ margin:0.55rem 0 0.35rem; font-size:1.5rem; line-height:1.22; }}
     .eyebrow {{ color:#93c5fd; font-size:0.78rem; text-transform:uppercase; letter-spacing:0.08em; font-weight:800; }}
     .price {{ font-size:1.85rem; font-weight:900; margin:0.55rem 0 0.7rem; color:#fff; }}
-    .audience {{ color:#b9c8df; min-height:76px; line-height:1.5; font-size:0.94rem; }}
+    .audience {{ color:#b9c8df; min-height:60px; line-height:1.5; font-size:0.94rem; }}
     .mini-list {{ display:grid; gap:0.75rem; margin-top:0.3rem; color:#a8b8d3; font-size:0.94rem; line-height:1.45; }}
     .mini-list strong {{ color:#e5eefb; }}
-    .cta {{ display:inline-flex; align-self:flex-start; margin-top:auto; color:#fff; text-decoration:none; background:#2563eb; border-radius:5px; padding:0.82rem 1.2rem; font-weight:800; transition:transform 0.18s ease, box-shadow 0.18s ease, background 0.18s ease; }}
-    .cta:hover {{ transform:translateY(-2px); box-shadow:0 14px 34px rgba(37,99,235,0.26); background:#1d4ed8; }}
-    .how-section {{ margin-top:2rem; padding:1.5rem; border-radius:24px; background:var(--panel); border:1px solid var(--line); }}
-    .how-section h2 {{ margin:0 0 1rem; font-size:1.6rem; }}
-    .how-grid {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:0.8rem; }}
-    .how-step {{ text-align:center; padding:0.8rem; border-radius:18px; background:rgba(15,23,42,0.6); border:1px solid rgba(148,163,184,0.1); }}
-    .how-step .step-num {{ display:inline-flex; align-items:center; justify-content:center; width:36px; height:36px; border-radius:50%; background:linear-gradient(135deg,#3b82f6,#2563eb); color:#fff; font-weight:900; font-size:1rem; margin-bottom:0.4rem; }}
-    .how-step .step-label {{ color:#dbeafe; font-weight:700; }}
-    .how-step .step-desc {{ color:var(--muted); font-size:0.82rem; }}
-    .lead-cta {{ margin-top:2rem; padding:1.8rem; border-radius:24px; background:linear-gradient(135deg, rgba(59,130,246,0.2), rgba(8,15,28,0.94)); border:1px solid rgba(96,165,250,0.3); text-align:center; }}
-    .lead-cta h2 {{ margin:0 0 0.5rem; font-size:1.8rem; }}
-    .lead-cta p {{ color:var(--muted); max-width:600px; margin:0 auto 1rem; }}
-    .lead-form {{ display:flex; flex-wrap:wrap; gap:0.6rem; justify-content:center; }}
-    .lead-form input {{ flex:1; min-width:200px; max-width:320px; padding:0.75rem 1rem; border-radius:999px; border:1px solid var(--line-strong); background:rgba(15,23,42,0.8); color:#fff; outline:none; }}
-    .lead-form button {{ padding:0.75rem 1.5rem; border-radius:999px; border:none; background:linear-gradient(135deg,#3b82f6,#2563eb); color:#fff; font-weight:800; cursor:pointer; }}
+    .cta {{ display:inline-flex; align-self:flex-start; margin-top:auto; color:#fff; text-decoration:none; background:#7c3aed; border-radius:5px; padding:0.82rem 1.2rem; font-weight:800; transition:transform 0.18s ease, box-shadow 0.18s ease, background 0.18s ease; }}
+    .cta:hover {{ transform:translateY(-2px); box-shadow:0 14px 34px rgba(124,58,237,0.26); background:#6d28d9; }}
     @media (max-width: 760px) {{
       .hero h1 {{ font-size:2.25rem; }}
       .offer-card {{ min-height:auto; }}
@@ -1710,306 +1464,28 @@ fn build_services_overview_page_html() -> String {
         <a href="/dashboard">Dashboard</a>
         <a href="/chat">Chat</a>
         <a href="/subscribe">Subscribe</a>
-        <a href="/api-access">API Access</a>
       </div>
     </div>
     <section class="hero">
-      <div class="eyebrow">Done-For-You Services</div>
-      <h1>AI-Generated Video in Hours — at a Fraction of Agency Cost</h1>
-      <p>No human editor. No back-and-forth. No waiting weeks. Our AI agent autonomously produces your deliverable from a URL, screenshot, brief, or raw clips — and you get a polished delivery page in hours, not weeks.</p>
-      <div style="display:flex;flex-wrap:wrap;gap:0.6rem;margin-top:0.8rem">
-        <span class="speed-badge">⚡ 24-48 hour delivery</span>
-        <span class="speed-badge">🤖 No human in the loop</span>
-        <span class="speed-badge">📄 Delivery page included</span>
-      </div>
-      <div class="compare-row">
-        <div class="compare-item">
-          <div class="label">Agency Cost</div>
-          <div class="value" style="color:#f87171">$1,000–$5,000+</div>
-          <div class="note">Human editor, 2-4 week turnaround</div>
-        </div>
-        <div class="compare-item">
-          <div class="label">VideoSync</div>
-          <div class="value" style="color:#86efac">$75–$2,500</div>
-          <div class="note">AI agent, 24-48 hour delivery</div>
-        </div>
-        <div class="compare-item">
-          <div class="label">You Save</div>
-          <div class="value" style="color:#fbbf24">50–90%</div>
-          <div class="note">No project manager, no editor markup</div>
-        </div>
+      <div class="eyebrow">Campaign Services</div>
+      <h1>Daily AI-Generated Content — Auto-Posted to Your Platforms</h1>
+      <p>Set a brief once. Our campaign engine generates unique content daily and posts it on schedule via Zernio. Never worry about “what to post today.”</p>
+      <div class="badge-row">
+        <span class="badge">Daily generation</span>
+        <span class="badge">Auto-publish via Zernio</span>
+        <span class="badge">Campaign dashboard</span>
+        <span class="badge">Pause/resume anytime</span>
       </div>
       <div class="hero-actions">
-        <a class="hero-action primary" href="/services/saas-launch-pack">Start with a SaaS demo</a>
-        <a class="hero-action" href="/services/mixed-agency-bundle">See agency pack</a>
-        <a class="hero-action" href="/chat?prompt=I%20want%20a%20done-for-you%20video%20service.%20Help%20me%20choose%20the%20right%20pack.&autosend=1">Help me choose</a>
-      </div>
-      <div class="chooser">
-        <div class="chooser-card"><strong>Have a URL?</strong><span>SaaS demo, website walkthrough, or product mockup.</span></div>
-        <div class="chooser-card"><strong>Have raw clips?</strong><span>Clip enhancement, thumbnails, or social cutdowns.</span></div>
-        <div class="chooser-card"><strong>Have a lesson?</strong><span>Education explainer with animated visuals, diagrams, and narration.</span></div>
-        <div class="chooser-card"><strong>Need something custom?</strong><span>Animated scene, voice/audio, or agency backend.</span></div>
-      </div>
-    </section>
-    <section class="how-section">
-      <h2>How It Works</h2>
-      <div class="how-grid">
-        <div class="how-step"><div class="step-num">1</div><div class="step-label">Send Your Brief</div><div class="step-desc">URL, screenshot, clips, or a short description</div></div>
-        <div class="how-step"><div class="step-num">2</div><div class="step-label">AI Plans</div><div class="step-desc">Agent selects tools, sources assets, builds storyboard</div></div>
-        <div class="how-step"><div class="step-num">3</div><div class="step-label">AI Produces</div><div class="step-desc">Animated scenes, voiceovers, edits, effects — fully automated</div></div>
-        <div class="how-step"><div class="step-num">4</div><div class="step-label">QA Review</div><div class="step-desc">Multimodal AI checks quality against your brief</div></div>
-        <div class="how-step"><div class="step-num">5</div><div class="step-label">Delivery Page</div><div class="step-desc">Polished preview with download + share links</div></div>
+        <a class="hero-action primary" href="/campaigns/new">Start a Campaign</a>
+        <a class="hero-action" href="/chat">Try in Chat</a>
       </div>
     </section>
     <section class="group-section">
       <div class="group-heading">
-        <div class="group-eyebrow">Pick the outcome — our AI agent handles the rest</div>
+        <div class="group-eyebrow">12 Campaign Services — Pick one, set your brief, go.</div>
       </div>
-      {all_cards}
-    </section>
-    <section class="lead-cta">
-      <h2>Not Sure Which Pack Fits Your Project?</h2>
-      <p>Describe what you need and we'll recommend the right service — or build a custom quote.</p>
-      <form class="lead-form" action="/api/prospect/register" method="POST">
-        <input type="text" name="description" placeholder="e.g. 90-second SaaS demo video with voiceover" required>
-        <input type="email" name="email" placeholder="your@email.com" required>
-        <button type="submit">Get a Recommendation</button>
-      </form>
-    </section>
-  </div>
-<script>
-class DynamicBackgroundManager {{
-    constructor() {{
-        this.lastUpdate = Date.now();
-        this.interval = 5 * 60 * 1000;
-        this.init();
-    }}
-    async init() {{
-        await this.updateBg();
-        setInterval(() => this.updateBg(), this.interval);
-    }}
-    async updateBg() {{
-        try {{
-            const r = await fetch('/api/background/image');
-            if (!r.ok) return;
-            const ct = r.headers.get('content-type') || '';
-            if (ct.includes('application/json')) {{
-                const d = await r.json();
-                if (d.fallback && d.gradient) document.body.style.background = d.gradient;
-                return;
-            }}
-            const blob = await r.blob();
-            const url = URL.createObjectURL(blob);
-            const o = document.createElement('div');
-            o.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background-image:url('+url+');background-size:cover;background-position:center;opacity:0;transition:opacity 1s;z-index:-1;pointer-events:none';
-            document.body.appendChild(o);
-            setTimeout(() => o.style.opacity = '0.3', 100);
-            setTimeout(() => {{
-                const old = document.querySelectorAll('div[style*="background-image"]');
-                old.forEach((e,i) => {{ if (i < old.length - 1) e.remove(); }});
-            }}, 1100);
-        }} catch(e) {{ console.error(e); }}
-    }}
-}}
-new DynamicBackgroundManager();
-</script>
-<script>
-(async function(){{
-  const t=localStorage.getItem('authToken')||localStorage.getItem('admin_token')||localStorage.getItem('auth_token');
-  const c=document.getElementById('homepageAuthButtons');
-  if(t&&c)try{{
-    const r=await fetch('/api/auth/verify',{{headers:{{'Authorization':'Bearer '+t}}}});
-    if(r.ok){{
-      const d=await r.json(),u=d.user||d;
-      c.innerHTML='<span style="color:var(--muted);margin-right:8px">'+(u.email||u.username||'User')+'</span><a href="/dashboard" class="btn btn-secondary">Dashboard</a><a href='#' onclick="localStorage.clear();location.reload()" class="btn btn-secondary">Logout</a>';
-    }}
-  }}catch(e){{}}
-}})();
-</script>
-</body>
-</html>"#
-    )
-}
-
-fn build_x402_docs_page_html() -> String {
-    let endpoint_cards = [
-        (
-            "GET /api/subscribe/unlock-spec",
-            "Returns the signed payment requirements needed to start the creator subscription flow.",
-        ),
-        (
-            "POST /api/subscribe/unlock",
-            "Accepts the signed payment authorization and activates the paid subscription.",
-        ),
-        (
-            "GET /api/api-access/unlock-spec",
-            "Returns the payment requirements for API access tiers and usage plans.",
-        ),
-        (
-            "POST /api/api-access/unlock",
-            "Settles the API tier payment and unlocks the selected access tier.",
-        ),
-        (
-            "GET /delivery/:id/unlock-spec",
-            "Returns the HD delivery unlock price and payment requirements for a preview page.",
-        ),
-        (
-            "POST /delivery/:id/unlock",
-            "Settles the delivery unlock payment and returns the HD access metadata.",
-        ),
-    ]
-    .into_iter()
-    .map(|(route, copy)| {
-        format!(
-            r#"<article class="endpoint-card"><div class="route">{route}</div><p>{copy}</p></article>"#
-        )
-    })
-    .collect::<Vec<_>>()
-    .join("");
-
-    format!(
-        r#"<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Programmable Payments | VideoSync</title>
-  <style>
-    :root {{
-      --bg:#07111d;
-      --panel:rgba(9,18,31,0.84);
-      --line:rgba(148,163,184,0.16);
-      --line-strong:rgba(96,165,250,0.28);
-      --text:#e5eefb;
-      --muted:#a8b8d3;
-      --blue:#3b82f6;
-      --green:#22c55e;
-      --shadow:0 24px 70px rgba(2,6,23,0.45);
-    }}
-    * {{ box-sizing:border-box; }}
-    body {{ margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; color:var(--text); background:
-      radial-gradient(circle at top left, rgba(59,130,246,0.18), transparent 28%),
-      linear-gradient(135deg, #0a1322 0%, #0d1728 55%, #07111d 100%); }}
-    .shell {{ max-width:1180px; margin:0 auto; padding:28px 20px 72px; }}
-    .topbar {{ display:flex; justify-content:space-between; align-items:center; gap:1rem; flex-wrap:wrap; margin-bottom:24px; }}
-    .brand {{ color:#fff; text-decoration:none; font-size:1.35rem; font-weight:800; }}
-    .toplinks {{ display:flex; gap:0.8rem; flex-wrap:wrap; }}
-    .toplinks a {{ text-decoration:none; color:#dbeafe; padding:0.65rem 1rem; border-radius:999px; border:1px solid var(--line); background:rgba(8,15,28,0.76); }}
-    .hero, .panel {{ border-radius:24px; border:1px solid var(--line); background:var(--panel); box-shadow:var(--shadow); backdrop-filter: blur(16px); }}
-    .hero {{ padding:1.8rem; }}
-    .eyebrow {{ color:#93c5fd; font-size:0.8rem; letter-spacing:0.08em; text-transform:uppercase; font-weight:800; }}
-    h1 {{ margin:0.6rem 0 0; font-size:3rem; line-height:1.05; }}
-    p {{ color:var(--muted); }}
-    .cta-row {{ display:flex; gap:0.8rem; flex-wrap:wrap; margin-top:1.4rem; }}
-    .btn {{ display:inline-flex; align-items:center; justify-content:center; padding:0.8rem 1.2rem; border-radius:999px; text-decoration:none; font-weight:700; }}
-    .btn-primary {{ background:linear-gradient(135deg,#3b82f6,#2563eb); color:#fff; }}
-    .btn-secondary {{ background:rgba(15,23,42,0.7); border:1px solid var(--line-strong); color:#dbeafe; }}
-    .panel {{ padding:1.5rem; margin-top:1.2rem; }}
-    .grid {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:1rem; }}
-    .endpoint-card, .code-card {{ padding:1.15rem; border-radius:18px; background:rgba(15,23,42,0.72); border:1px solid rgba(148,163,184,0.14); }}
-    .route {{ font-family:ui-monospace,SFMono-Regular,Menlo,monospace; color:#bfdbfe; font-weight:700; margin-bottom:0.55rem; }}
-    pre {{ margin:0; white-space:pre-wrap; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:13px; color:#dbeafe; }}
-    ul {{ margin:0; padding-left:1.1rem; color:#d7e3f5; }}
-    li {{ margin:0.55rem 0; }}
-    .spec-grid {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:1rem; }}
-    @media (max-width: 880px) {{
-      h1 {{ font-size:2.3rem; }}
-    }}
-  </style>
-</head>
-<body>
-  <div class="shell">
-    <div class="topbar">
-      <a class="brand" href="/">VideoSync</a>
-      <div class="toplinks" id="homepageAuthButtons">
-        <a href="/services">All Services</a>
-        <a href="/api-access">API Access</a>
-        <a href="/subscribe">Subscribe</a>
-        <a href="/chat">Chat</a>
-      </div>
-    </div>
-
-    <section class="hero">
-      <div class="eyebrow">Programmable Payments</div>
-      <h1>Wallet-paid delivery and API access for technical buyers</h1>
-      <p>Use VideoSync when you need paid media unlocks or API access that can be purchased directly inside a product flow. The payment layer is designed for teams selling assets, previews, generation endpoints, or delivery access without forcing every buyer through a traditional checkout funnel.</p>
-      <div class="cta-row">
-        <a class="btn btn-primary" href="/api-access">Open API Access Page</a>
-        <a class="btn btn-secondary" href="/chat?prompt=I%20want%20to%20integrate%20VideoSync%20through%20x402.%20Show%20me%20the%20best%20live%20payment%20flow%20for%20my%20use%20case.&autosend=1">Request an integration walkthrough</a>
-      </div>
-    </section>
-
-    <section class="panel">
-      <div class="eyebrow">Available now</div>
-      <h2>Endpoints you can integrate today</h2>
-      <div class="grid">
-        {endpoint_cards}
-      </div>
-    </section>
-
-    <section class="panel">
-      <div class="eyebrow">Implementation patterns</div>
-      <h2>What teams sell with this setup</h2>
-      <ul>
-        <li>Sell paid delivery unlocks for HD videos, previews, downloadable assets, and client handoff pages.</li>
-        <li>Turn generation endpoints into paid developer products without adding a separate billing layer first.</li>
-        <li>Support partner and automation flows where payment, access, and delivery need to happen in one request path.</li>
-      </ul>
-    </section>
-
-    <section class="panel">
-      <div class="eyebrow">Payment flow</div>
-      <h2>How the unlock flow works</h2>
-      <ul>
-        <li>The client requests an `unlock-spec` endpoint first.</li>
-        <li>VideoSync returns the payment requirements for a Base USDC transfer.</li>
-        <li>The wallet signs the payment authorization.</li>
-        <li>The signed payload is sent back in `X-Payment` to the matching `unlock` endpoint.</li>
-        <li>VideoSync settles the payment and returns the unlocked resource or access metadata.</li>
-      </ul>
-    </section>
-
-    <section class="panel">
-      <div class="eyebrow">Integration basics</div>
-      <h2>Headers and request shape</h2>
-      <div class="spec-grid">
-        <article class="code-card">
-          <div class="route">Request headers</div>
-<pre>Content-Type: application/json
-X-Payment: &lt;signed x402 payload&gt;</pre>
-        </article>
-        <article class="code-card">
-          <div class="route">Example resource pattern</div>
-<pre>GET  /delivery/:id/unlock-spec
-POST /delivery/:id/unlock
-
-GET  /api/subscribe/unlock-spec
-POST /api/subscribe/unlock</pre>
-        </article>
-      </div>
-    </section>
-
-    <section class="panel">
-      <div class="eyebrow">Custom integration patterns</div>
-      <h2>Revenue flows available through implementation work</h2>
-      <ul>
-        <li>`POST /api/x402/generate-thumbnail-pack`</li>
-        <li>`POST /api/x402/generate-product-mockup`</li>
-        <li>`POST /api/x402/generate-landing-hero-video`</li>
-        <li>`POST /api/x402/generate-narrated-explainer`</li>
-        <li>`POST /api/x402/enrich-creator-lead`</li>
-      </ul>
-      <p>If you need one of these paid flows immediately, we can wire it through the current payment and delivery infrastructure as a custom integration while the dedicated endpoint is finalized.</p>
-    </section>
-
-    <section class="panel">
-      <div class="eyebrow">Why teams choose it</div>
-      <h2>Why this works as a monetization layer</h2>
-      <ul>
-        <li>It gives technical teams a direct path to sell access, unlocks, and paid delivery without adding a heavy checkout layer to every workflow.</li>
-        <li>It fits one-off asset delivery, API access, and paid generation endpoints where speed and automation matter.</li>
-        <li>It supports partner integrations and developer-led buying flows while the main service pages stay focused on buyer outcomes instead of payment mechanics.</li>
-      </ul>
+      <div class="grid">{cards_html}</div>
     </section>
   </div>
 <script>
@@ -2029,59 +1505,39 @@ POST /api/subscribe/unlock</pre>
 </html>"#
     )
 }
+
+
 
 fn build_service_offer_page_html(
     service_slug: &str,
     title: &str,
-    price: &str,
+    price_monthly: &str,
     tagline: &str,
-    audience: &str,
-    summary: &str,
-    primary_href: &str,
-    primary_label: &str,
-    secondary_href: &str,
-    secondary_label: &str,
-    includes: &[&str],
-    workflow: &[&str],
-    lead_samples: &[(&str, &str)],
-    sample_filters_json: &str,
-    paypal_offers: &str,
+    audience_desc: &str,
+    how_it_works: &[&str],
+    features: &[&str],
+    lead_personas: &[(&str, &str)],
 ) -> String {
-    let hero_highlights_html = includes
-        .iter()
-        .take(3)
-        .map(|item| format!(r#"<div class="hero-highlight">{item}</div>"#))
-        .collect::<Vec<_>>()
-        .join("");
-    let includes_html = includes
+    let features_html: String = features
         .iter()
         .map(|item| format!(r#"<li>{item}</li>"#))
-        .collect::<Vec<_>>()
-        .join("");
-    let workflow_html = workflow
+        .collect();
+    let workflow_html: String = how_it_works
         .iter()
         .enumerate()
-        .map(|(idx, item)| {
-            format!(
-                r#"<div class="step"><div class="step-no">{}</div><div>{}</div></div>"#,
-                idx + 1,
-                item
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("");
-    let lead_html = lead_samples
+        .map(|(idx, item)| format!(
+            r#"<div class="step"><div class="step-no">{}</div><div>{}</div></div>"#,
+            idx + 1,
+            item
+        ))
+        .collect();
+    let personas_html: String = lead_personas
         .iter()
-        .map(|(persona, copy)| {
-            format!(
-                r#"<article class="lead-card"><div class="lead-title">{persona}</div><p>{copy}</p></article>"#
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("");
-    let nav_html = service_page_nav(title);
-    let sample_filters_json = sample_filters_json.to_string();
-    let sample_ui = service_sample_ui_config(service_slug).to_string();
+        .map(|(persona, copy)| format!(
+            r#"<article class="lead-card"><div class="lead-title">{persona}</div><p>{copy}</p></article>"#
+        ))
+        .collect();
+    let nav_html = service_page_nav(service_slug);
     let theme = service_page_theme(service_slug);
     let theme_accent = theme.accent;
     let theme_secondary = theme.secondary;
@@ -2091,12 +1547,11 @@ fn build_service_offer_page_html(
     let theme_eyebrow = theme.eyebrow;
     let theme_visual_title = theme.visual_title;
     let theme_lab_class = theme.lab_class;
-    let visual_points = theme
+    let visual_points: String = theme
         .visual_points
         .iter()
         .map(|point| format!(r#"<span>{point}</span>"#))
-        .collect::<Vec<_>>()
-        .join("");
+        .collect();
 
     format!(
         r#"<!DOCTYPE html>
@@ -2148,6 +1603,7 @@ fn build_service_offer_page_html(
     .btn:hover {{ transform:translateY(-2px); box-shadow:0 14px 34px rgba(2,6,23,0.28); }}
     .btn-primary {{ background:linear-gradient(135deg,var(--blue),#2563eb); color:#fff; border:0; }}
     .btn-secondary {{ background:rgba(15,23,42,0.7); border:1px solid var(--line-strong); color:#dbeafe; }}
+    .btn-cta {{ background:linear-gradient(135deg,var(--green),#059669); color:#fff; border:0; font-size:1.1rem; padding:0.9rem 1.5rem; }}
     .mini-metrics {{ display:grid; gap:0.9rem; padding:1.5rem; }}
     .metric {{ padding:1rem; border-radius:18px; background:rgba(15,23,42,0.72); border:1px solid rgba(148,163,184,0.14); }}
     .metric strong {{ display:block; font-size:1.9rem; }}
@@ -2168,48 +1624,19 @@ fn build_service_offer_page_html(
     .lead-grid, .portfolio-grid {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:1rem; }}
     .lead-card, .sample-card {{ padding:1.1rem; border-radius:18px; background:rgba(15,23,42,0.72); border:1px solid rgba(148,163,184,0.14); }}
     .lead-title, .sample-title {{ font-weight:800; color:#fff; margin-bottom:0.45rem; }}
-    .sample-video {{ width:100%; aspect-ratio:16/9; object-fit:cover; border-radius:14px; background:#020617; margin-bottom:0.8rem; }}
-    .sample-meta {{ color:var(--muted); font-size:0.92rem; }}
-    .sample-actions {{ display:flex; gap:0.7rem; flex-wrap:wrap; margin-top:0.9rem; }}
-    .sample-actions a {{ color:#93c5fd; text-decoration:none; font-weight:700; }}
-    .sample-lab {{ display:grid; grid-template-columns:minmax(0,1fr) minmax(280px,0.8fr); gap:1rem; }}
-    .visual-stage {{ min-height:100%; position:relative; overflow:hidden; }}
-    .visual-stage::before {{ content:""; position:absolute; inset:-20%; background:{theme_pattern}; opacity:0.72; filter:blur(0.2px); animation:slowDrift 14s ease-in-out infinite alternate; }}
-    .visual-inner {{ position:relative; z-index:1; min-height:320px; display:flex; flex-direction:column; justify-content:space-between; }}
-    .visual-title {{ font-size:1.7rem; font-weight:900; letter-spacing:-0.03em; max-width:320px; }}
-    .visual-points {{ display:grid; gap:0.65rem; }}
-    .visual-points span {{ display:block; border:1px solid rgba(226,232,240,0.13); background:rgba(2,6,23,0.42); border-radius:10px; padding:0.75rem 0.85rem; color:#dbeafe; }}
-    .service-saas-launch-pack .visual-inner {{ background:linear-gradient(180deg, rgba(15,23,42,0.25), rgba(15,23,42,0.68)); border-radius:18px; padding:1rem; }}
-    .service-thumbnail-hero-pack .visual-points {{ grid-template-columns:repeat(2,minmax(0,1fr)); }}
-    .service-thumbnail-hero-pack .visual-points span:first-child {{ grid-column:span 2; min-height:88px; font-size:1.15rem; display:flex; align-items:center; }}
-    .service-education-explainer-pack .visual-stage {{ background:rgba(2,6,23,0.42); }}
-    .service-education-explainer-pack .visual-points span {{ font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }}
-    .service-blender-scene-pack .visual-title {{ text-transform:uppercase; letter-spacing:0.08em; font-size:1.25rem; }}
-    .service-voice-audio-pack .visual-points span {{ border-left:4px solid var(--green); }}
+    .service-{service_slug} .visual-inner {{ background:linear-gradient(180deg, rgba(15,23,42,0.25), rgba(15,23,42,0.68)); border-radius:18px; padding:1rem; }}
     .sample-lab-card.service-lab-saas {{ border-color:rgba(96,165,250,0.24); }}
     .sample-lab-card.service-lab-visual {{ background:linear-gradient(145deg, rgba(15,23,42,0.86), rgba(30,41,59,0.68)); }}
     .sample-lab-card.service-lab-education {{ background:linear-gradient(145deg, rgba(12,20,33,0.92), rgba(20,45,48,0.58)); }}
     .sample-lab-card.service-lab-audio {{ background:linear-gradient(145deg, rgba(15,23,42,0.88), rgba(68,27,99,0.42)); }}
     .sample-lab-card {{ padding:1.25rem; border-radius:18px; background:rgba(15,23,42,0.72); border:1px solid rgba(148,163,184,0.14); }}
-    .sample-form {{ display:grid; gap:0.85rem; margin-top:0.9rem; }}
-    .sample-form label {{ font-size:0.88rem; font-weight:700; color:#dbeafe; }}
-    .sample-form input, .sample-form textarea {{ width:100%; border-radius:6px; border:1px solid rgba(96,165,250,0.22); background:rgba(2,6,23,0.56); color:#e5eefb; padding:0.9rem 1rem; font:inherit; transition:border-color 0.18s ease, box-shadow 0.18s ease; }}
-    .sample-form input:focus, .sample-form textarea:focus {{ outline:none; border-color:var(--blue); box-shadow:0 0 0 3px rgba(59,130,246,0.16); }}
-    .sample-form textarea {{ min-height:120px; resize:vertical; }}
-    .sample-form .row {{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:0.8rem; }}
-    .sample-note {{ color:var(--muted); font-size:0.92rem; line-height:1.6; }}
-    .sample-status {{ margin-top:0.75rem; color:#cbd5e1; font-size:0.92rem; }}
-    .admin-only-shell {{ display:none; }}
-    .admin-only-shell.visible {{ display:block; }}
-    .admin-pill {{ display:inline-flex; align-items:center; gap:0.45rem; padding:0.45rem 0.8rem; border-radius:999px; border:1px solid rgba(34,197,94,0.28); background:rgba(34,197,94,0.10); color:#bbf7d0; font-size:0.85rem; font-weight:700; }}
-    .locked-pill {{ display:inline-flex; align-items:center; gap:0.45rem; padding:0.45rem 0.8rem; border-radius:999px; border:1px solid rgba(148,163,184,0.18); background:rgba(15,23,42,0.56); color:#cbd5e1; font-size:0.85rem; font-weight:700; }}
-    .empty-note {{ color:var(--muted); }}
+    .campaign-price {{ font-size:2.2rem; font-weight:900; color:#fff; line-height:1; }}
+    .campaign-price-sub {{ color:var(--muted); font-size:0.92rem; }}
     @keyframes riseIn {{ from {{ opacity:0; transform:translateY(18px); }} to {{ opacity:1; transform:translateY(0); }} }}
     @keyframes softReveal {{ from {{ opacity:0; transform:translateY(12px); }} to {{ opacity:1; transform:translateY(0); }} }}
     @keyframes slowDrift {{ from {{ transform:translate3d(-1%, -1%, 0) scale(1.02); }} to {{ transform:translate3d(1.5%, 1%, 0) scale(1.06); }} }}
     @keyframes fadeScale {{ from {{ opacity:0; transform:scale(0.96); }} to {{ opacity:1; transform:scale(1); }} }}
     @keyframes slideUp {{ from {{ opacity:0; transform:translateY(24px); }} to {{ opacity:1; transform:translateY(0); }} }}
-    @keyframes pulseGlow {{ 0%,100% {{ box-shadow:0 0 8px rgba(96,165,250,0.08); }} 50% {{ box-shadow:0 0 20px rgba(96,165,250,0.22); }} }}
     .panel {{ animation-delay:calc(var(--idx,0) * 0.08s); }}
     .checklist li {{ animation:slideUp 0.5s ease both; animation-delay:calc(var(--i,0) * 0.06s); }}
     .lead-card {{ animation:fadeScale 0.55s ease both; animation-delay:calc(var(--ci,0) * 0.07s); transition:transform 0.25s ease, border-color 0.25s ease, box-shadow 0.25s ease; }}
@@ -2222,8 +1649,6 @@ fn build_service_offer_page_html(
     @media (max-width: 880px) {{
       .hero {{ grid-template-columns:1fr; }}
       h1 {{ font-size:2.4rem; }}
-      .sample-lab {{ grid-template-columns:1fr; }}
-      .sample-form .row {{ grid-template-columns:1fr; }}
     }}
   </style>
 </head>
@@ -2236,48 +1661,20 @@ fn build_service_offer_page_html(
         <a href="/dashboard">Dashboard</a>
         <a href="/chat">Chat</a>
         <a href="/subscribe">Subscribe</a>
-        <a href="/api-access">API Access</a>
       </div>
     </div>
 
     <section class="hero">
       <div class="hero-panel">
-        <div class="eyebrow">Service</div>
+        <div class="eyebrow">{theme_eyebrow}</div>
         <h1>{title}</h1>
+        <div class="campaign-price">{price_monthly}</div>
+        <div class="campaign-price-sub">per month — pause or cancel anytime</div>
         <div class="tagline">{tagline}</div>
-        <p class="summary">{summary}</p>
-        <div class="hero-highlights">{hero_highlights_html}</div>
+        <p class="summary">{audience_desc}</p>
         <div class="cta-row">
-          <a class="btn btn-primary" href="{primary_href}">{primary_label}</a>
-          <a class="btn btn-secondary" href="{secondary_href}">{secondary_label}</a>
-        </div>
-        <div id="paypal-section" style="margin-top:1.2rem;border-top:1px solid var(--line);padding-top:1rem;">
-          <div style="font-size:0.85rem;color:var(--muted);margin-bottom:0.6rem;">Buy this service — Pay with PayPal or Credit Card:</div>
-          <details style="margin-bottom:0.8rem;">
-            <summary style="cursor:pointer;font-size:0.8rem;color:var(--muted);padding:0.3rem 0;">Billing address (optional)</summary>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem;margin-top:0.5rem;">
-              <input type="text" id="billing-name" placeholder="Full name" style="grid-column:1/-1;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:0.5rem 0.7rem;color:var(--text);font-family:inherit;font-size:0.85rem;">
-              <input type="text" id="billing-address1" placeholder="Address line 1" style="grid-column:1/-1;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:0.5rem 0.7rem;color:var(--text);font-family:inherit;font-size:0.85rem;">
-              <input type="text" id="billing-address2" placeholder="Address line 2 (optional)" style="grid-column:1/-1;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:0.5rem 0.7rem;color:var(--text);font-family:inherit;font-size:0.85rem;">
-              <input type="text" id="billing-city" placeholder="City" style="background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:0.5rem 0.7rem;color:var(--text);font-family:inherit;font-size:0.85rem;">
-              <input type="text" id="billing-state" placeholder="State / Province" style="background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:0.5rem 0.7rem;color:var(--text);font-family:inherit;font-size:0.85rem;">
-              <input type="text" id="billing-zip" placeholder="ZIP / Postal code" style="background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:0.5rem 0.7rem;color:var(--text);font-family:inherit;font-size:0.85rem;">
-              <select id="billing-country" style="grid-column:1/-1;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:0.5rem 0.7rem;color:var(--text);font-family:inherit;font-size:0.85rem;">
-                <option value="US">United States</option>
-                <option value="KE">Kenya</option>
-                <option value="GB">United Kingdom</option>
-                <option value="CA">Canada</option>
-                <option value="AU">Australia</option>
-                <option value="DE">Germany</option>
-                <option value="FR">France</option>
-                <option value="IN">India</option>
-                <option value="NG">Nigeria</option>
-                <option value="ZA">South Africa</option>
-                <option value="OTHER">Other</option>
-              </select>
-            </div>
-          </details>
-          <div id="paypal-buttons-container"></div>
+          <a class="btn btn-cta" href="/campaigns/new?service={service_slug}">Start Campaign</a>
+          <a class="btn btn-secondary" href="/chat">Try in Chat</a>
         </div>
       </div>
       <aside class="hero-panel visual-stage">
@@ -2287,7 +1684,6 @@ fn build_service_offer_page_html(
             <div class="visual-title">{theme_visual_title}</div>
           </div>
           <div class="visual-points">{visual_points}</div>
-          <div class="metric"><strong>{price}</strong><span>Typical project range</span></div>
         </div>
       </aside>
     </section>
@@ -2297,755 +1693,33 @@ fn build_service_offer_page_html(
     <section class="grid">
       <article class="panel">
         <div class="eyebrow">What you get</div>
-        <h2>Included in this service</h2>
-        <ul class="checklist">{includes_html}</ul>
+        <h2>Campaign features</h2>
+        <ul class="checklist">{features_html}</ul>
       </article>
       <article class="panel">
         <div class="eyebrow">Process</div>
-        <h2>How the project runs</h2>
+        <h2>How the campaign runs</h2>
         {workflow_html}
       </article>
     </section>
 
     <section class="panel" style="margin-top:1.2rem;">
       <div class="eyebrow">Best fit</div>
-      <h2>Who this is for</h2>
-      <div class="lead-grid">{lead_html}</div>
+      <h2>Who this campaign is for</h2>
+      <div class="lead-grid">{personas_html}</div>
     </section>
 
-    <section class="panel" style="margin-top:1.2rem;">
-      <div class="eyebrow">Request output</div>
-      <h2 id="sampleSectionTitle">Request a custom output</h2>
-      <p id="sampleSectionCopy">Describe the exact output you want and VideoSync will hand the brief to the agent. Your included outputs stay available until the upgrade CTA takes over.</p>
-      <div class="sample-lab" style="margin-top:1rem;">
-        <div class="sample-lab-card {theme_lab_class}">
-          <div class="locked-pill" id="sampleGateBadge">5 outputs available</div>
-          <form id="sampleRequestForm" class="sample-form">
-            <div class="row">
-              <div>
-                <label for="sampleUrl" id="sampleUrlLabel">Reference URL or media link</label>
-                <input id="sampleUrl" type="text" placeholder="https://example.com, YouTube/Twitch URL, or asset link">
-              </div>
-              <div>
-                <label for="sampleContact" id="sampleContactLabel">Prospect or brand name</label>
-                <input id="sampleContact" type="text" placeholder="Client, brand, or creator name">
-              </div>
-            </div>
-            <div class="row">
-              <div>
-                <label for="sampleFormat" id="sampleFormatLabel">Requested format</label>
-                <input id="sampleFormat" type="text" placeholder="Video type, length, or asset format">
-              </div>
-              <div>
-                <label for="sampleOutcome" id="sampleOutcomeLabel">Goal</label>
-                <input id="sampleOutcome" type="text" placeholder="What this sample should help you prove or sell">
-              </div>
-            </div>
-            <div>
-              <label for="sampleBrief" id="sampleBriefLabel">Describe the output you want the agent to create</label>
-              <textarea id="sampleBrief" placeholder="Describe the output you want the agent to create."></textarea>
-            </div>
-            <div class="cta-row" style="margin-top:0;">
-              <button type="submit" class="btn btn-primary" id="sampleLaunchBtn">Open project chat</button>
-              <a class="btn btn-secondary" href="/subscribe" id="sampleUpgradeBtn" style="display:none;">Continue with paid output</a>
-            </div>
-          </form>
-          <div class="sample-status" id="sampleStatus">This opens the agent chat with a structured brief so the requested output can be generated from scratch.</div>
-        </div>
-        <aside class="sample-lab-card {theme_lab_class}">
-          <div class="eyebrow">Before you buy</div>
-          <h2 style="margin-top:0.5rem;" id="sampleHelperTitle">How generation works</h2>
-          <p class="sample-note" id="sampleHelperCopy">Use each included output to test the production direction before you pay for more.</p>
-          <ul class="checklist" style="margin-top:0.8rem;">
-            <li id="sampleHelperBullet1">Describe what you want clearly.</li>
-            <li id="sampleHelperBullet2">The agent opens in chat with your structured brief.</li>
-            <li id="sampleHelperBullet3">Your included outputs stay available before checkout appears.</li>
-          </ul>
-          <div class="sample-lab-card" style="margin-top:1rem; padding:1rem 1rem 0.95rem;">
-            <div class="eyebrow" id="sampleExampleHeading">Example request</div>
-            <p class="sample-note" id="sampleExampleCopy" style="margin-top:0.55rem;">Create a polished buyer-facing sample that shows the requested output clearly and includes a usable delivery or review link.</p>
-          </div>
-        </aside>
-      </div>
-    </section>
-
-    <section class="panel admin-only-shell" id="adminReviewShell" style="margin-top:1.2rem;">
-      <div class="eyebrow">Admin review only</div>
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:1rem;flex-wrap:wrap;">
-        <div>
-          <h2>Live delivery examples from the platform</h2>
-          <p>These cards stay visible only for staff/superusers while the public-facing sample flow is being rebuilt.</p>
-        </div>
-        <div class="admin-pill">Admin visibility enabled</div>
-      </div>
-      <div id="portfolioGrid" class="portfolio-grid" style="margin-top:1rem;">
-        <div class="empty-note">Loading internal review samples...</div>
+    <section class="panel" style="margin-top:1.2rem; text-align:center;">
+      <div class="eyebrow">Ready to start?</div>
+      <h2>Set up your {title} in minutes</h2>
+      <p style="max-width:600px;margin:0 auto 1rem;">Create a campaign, set your brief, choose your platforms, and let the engine generate and post daily content for you.</p>
+      <div class="cta-row" style="justify-content:center;">
+        <a class="btn btn-cta" href="/campaigns/new?service={service_slug}">Start Campaign</a>
+        <a class="btn btn-secondary" href="/chat">Chat with us first</a>
       </div>
     </section>
   </div>
 
-  <script>
-    const sampleFilters = {sample_filters_json};
-    const fallbackOrigin = window.location.origin;
-    const serviceSlug = {service_slug:?};
-    const sampleUi = {sample_ui};
-
-    function applySampleUiConfig() {{
-      document.getElementById('sampleSectionTitle').textContent = sampleUi.section_title;
-      document.getElementById('sampleSectionCopy').textContent = sampleUi.section_copy;
-      document.getElementById('sampleUrlLabel').textContent = sampleUi.source_label;
-      document.getElementById('sampleUrl').placeholder = sampleUi.source_placeholder;
-      document.getElementById('sampleContactLabel').textContent = sampleUi.contact_label;
-      document.getElementById('sampleContact').placeholder = sampleUi.contact_placeholder;
-      document.getElementById('sampleFormatLabel').textContent = sampleUi.format_label;
-      document.getElementById('sampleFormat').placeholder = sampleUi.format_placeholder;
-      document.getElementById('sampleOutcomeLabel').textContent = sampleUi.outcome_label;
-      document.getElementById('sampleOutcome').placeholder = sampleUi.outcome_placeholder;
-      document.getElementById('sampleBriefLabel').textContent = sampleUi.brief_label;
-      document.getElementById('sampleBrief').placeholder = sampleUi.brief_placeholder;
-      document.getElementById('sampleLaunchBtn').textContent = sampleUi.launch_label;
-      document.getElementById('sampleUpgradeBtn').href = sampleUi.upgrade_href;
-      document.getElementById('sampleUpgradeBtn').textContent = sampleUi.upgrade_label;
-      document.getElementById('sampleStatus').textContent = sampleUi.status_idle;
-      document.getElementById('sampleHelperTitle').textContent = sampleUi.helper_title;
-      document.getElementById('sampleHelperCopy').textContent = sampleUi.helper_copy;
-      document.getElementById('sampleHelperBullet1').textContent = sampleUi.helper_bullets[0] || '';
-      document.getElementById('sampleHelperBullet2').textContent = sampleUi.helper_bullets[1] || '';
-      document.getElementById('sampleHelperBullet3').textContent = sampleUi.helper_bullets[2] || '';
-      document.getElementById('sampleExampleHeading').textContent = sampleUi.example_heading;
-      document.getElementById('sampleExampleCopy').textContent = sampleUi.example_request;
-    }}
-
-    function absoluteUrl(value) {{
-      if (!value) return '';
-      if (/^https?:\/\//i.test(value)) return value;
-      return `${{fallbackOrigin}}${{value.startsWith('/') ? value : `/${{value}}`}}`;
-    }}
-
-    function parseJwt(token) {{
-      try {{
-        const base64 = token.split('.')[1];
-        if (!base64) return null;
-        const normalized = base64.replace(/-/g, '+').replace(/_/g, '/');
-        return JSON.parse(atob(normalized));
-      }} catch (_) {{
-        return null;
-      }}
-    }}
-
-    function getAuthToken() {{
-      return localStorage.getItem('authToken')
-        || localStorage.getItem('admin_token')
-        || localStorage.getItem('auth_token')
-        || '';
-    }}
-
-    function isAdminUser() {{
-      const token = getAuthToken();
-      const claims = token ? parseJwt(token) : null;
-      return !!(claims && (claims.is_staff || claims.is_superuser));
-    }}
-
-    function draftStorageKey() {{
-      return `videosync:service-sample-draft:${{serviceSlug}}`;
-    }}
-
-    async function updateSampleGateUI() {{
-      const launchBtn = document.getElementById('sampleLaunchBtn');
-      const upgradeBtn = document.getElementById('sampleUpgradeBtn');
-      const badge = document.getElementById('sampleGateBadge');
-      const authToken = getAuthToken();
-      if (!authToken) {{
-        badge.textContent = sampleUi.anon_badge;
-        launchBtn.style.display = 'inline-flex';
-        launchBtn.disabled = false;
-        upgradeBtn.style.display = 'none';
-        return;
-      }}
-
-      try {{
-        const response = await fetch(`/api/service-samples/quota?service=${{encodeURIComponent(serviceSlug)}}`, {{
-          headers: {{
-            Authorization: `Bearer ${{authToken}}`
-          }}
-        }});
-        const payload = await response.json();
-        const remaining = Number(payload.remaining || 0);
-        if (payload.unlimited) {{
-          badge.textContent = 'Admin or staff access: launch limit bypassed';
-          launchBtn.style.display = 'inline-flex';
-          launchBtn.disabled = false;
-          upgradeBtn.style.display = 'none';
-          return;
-        }}
-
-        if (remaining > 0) {{
-          const unit = remaining === 1 ? sampleUi.included_unit_singular : sampleUi.included_unit_plural;
-          badge.textContent = `${{remaining}} included ${{unit}} remaining before checkout`;
-          launchBtn.style.display = 'inline-flex';
-          launchBtn.disabled = false;
-          upgradeBtn.style.display = 'none';
-        }} else {{
-          badge.textContent = sampleUi.limit_reached_badge;
-          launchBtn.style.display = 'none';
-          upgradeBtn.style.display = 'inline-flex';
-        }}
-      }} catch (_) {{
-        badge.textContent = 'Sample quota could not be loaded right now.';
-        launchBtn.style.display = 'none';
-        upgradeBtn.style.display = 'inline-flex';
-      }}
-    }}
-
-    function sampleMatches(sample) {{
-      const bucket = [
-        sample.gig_type,
-        sample.portfolio_category,
-        sample.title,
-        sample.company,
-        sample.sales_positioning,
-      ]
-        .filter(Boolean)
-        .join(' ')
-        .toLowerCase();
-      return sampleFilters.some((filter) => bucket.includes(String(filter).toLowerCase()));
-    }}
-
-    function renderSampleCard(sample) {{
-      const media = sample.output_r2_url || sample.preview_r2_url || '';
-      const mediaHtml = media
-        ? `<video class="sample-video" src="${{media}}" controls preload="metadata"></video>`
-        : '';
-      const authToken = getAuthToken();
-      const rawDeliveryUrl = absoluteUrl(sample.public_delivery_url || sample.delivery_url || '');
-      const deliveryUrl = rawDeliveryUrl && authToken
-        ? `${{rawDeliveryUrl}}${{rawDeliveryUrl.includes('?') ? '&' : '?'}}token=${{encodeURIComponent(authToken)}}`
-        : rawDeliveryUrl;
-      const sourceUrl = sample.source_url ? absoluteUrl(sample.source_url) : '';
-      const downloadUrl = absoluteUrl(sample.output_r2_url || sample.preview_r2_url || '');
-      const downloadName = (sample.output_filename || sample.title || sample.company || 'videosync-sample')
-        .toString()
-        .replace(/[^a-z0-9._-]+/gi, '-')
-        .replace(/^-+|-+$/g, '')
-        || 'videosync-sample';
-      return `
-        <article class="sample-card">
-          ${{mediaHtml}}
-          <div class="sample-title">${{sample.company || sample.title || 'Portfolio sample'}}</div>
-          <div class="sample-meta">${{sample.title || ''}}</div>
-          <div class="sample-meta" style="margin-top:0.35rem;">Status: ${{sample.status || 'unknown'}}</div>
-          <div class="sample-actions">
-            ${{deliveryUrl ? `<a href="${{deliveryUrl}}" target="_blank" rel="noreferrer">Delivery</a>` : ''}}
-            ${{downloadUrl ? `<a href="${{downloadUrl}}" download="${{downloadName}}" target="_blank" rel="noreferrer">Download</a>` : ''}}
-            ${{sourceUrl ? `<a href="${{sourceUrl}}" target="_blank" rel="noreferrer">Source</a>` : ''}}
-          </div>
-        </article>
-      `;
-    }}
-
-    function loadAdminPortfolioSamples() {{
-      if (!isAdminUser()) return;
-      const adminShell = document.getElementById('adminReviewShell');
-      adminShell.classList.add('visible');
-      const authToken = getAuthToken();
-      fetch('/api/portfolio-samples', {{
-        headers: authToken ? {{ Authorization: `Bearer ${{authToken}}` }} : {{}}
-      }})
-        .then((response) => response.json())
-        .then((payload) => {{
-          const root = document.getElementById('portfolioGrid');
-          const rawSamples = Array.isArray(payload.samples) ? payload.samples : [];
-          const completed = rawSamples.filter((sample) => sample.status === 'completed');
-          const prioritized = completed.filter(sampleMatches);
-          const selected = (prioritized.length ? prioritized : completed).slice(0, 4);
-          if (!selected.length) {{
-            root.innerHTML = '<div class="empty-note">No completed internal review samples are available yet. Use the chat or dashboard to generate a fresh delivery sample.</div>';
-            return;
-          }}
-          root.innerHTML = selected.map(renderSampleCard).join('');
-        }})
-        .catch(() => {{
-          document.getElementById('portfolioGrid').innerHTML =
-            '<div class="empty-note">Admin review samples could not be loaded right now.</div>';
-        }});
-    }}
-
-    function storePendingSampleDraft() {{
-      const draft = {{
-        reference_url: document.getElementById('sampleUrl').value.trim(),
-        prospect_name: document.getElementById('sampleContact').value.trim(),
-        format: document.getElementById('sampleFormat').value.trim(),
-        outcome: document.getElementById('sampleOutcome').value.trim(),
-        brief: document.getElementById('sampleBrief').value.trim(),
-      }};
-      sessionStorage.setItem(draftStorageKey(), JSON.stringify(draft));
-    }}
-
-    function loadPendingSampleDraft() {{
-      try {{
-        const raw = sessionStorage.getItem(draftStorageKey());
-        return raw ? JSON.parse(raw) : null;
-      }} catch (_) {{
-        return null;
-      }}
-    }}
-
-    function clearPendingSampleDraft() {{
-      sessionStorage.removeItem(draftStorageKey());
-    }}
-
-    async function submitSampleRequest(event) {{
-      event.preventDefault();
-
-      const url = document.getElementById('sampleUrl').value.trim();
-      const contact = document.getElementById('sampleContact').value.trim();
-      const formatValue = document.getElementById('sampleFormat').value.trim();
-      const outcomeValue = document.getElementById('sampleOutcome').value.trim();
-      const brief = document.getElementById('sampleBrief').value.trim();
-      const status = document.getElementById('sampleStatus');
-      const authToken = getAuthToken();
-
-      if (!brief) {{
-        status.textContent = 'Add a short brief so the agent knows what sample to generate.';
-        return;
-      }}
-
-      if (!authToken) {{
-        storePendingSampleDraft();
-        status.textContent = 'Sign in first so the agent can launch your tracked custom sample session.';
-        const redirectTo = `${{window.location.pathname}}?launch_sample=1`;
-        window.location.href = `/login?redirect_to=${{encodeURIComponent(redirectTo)}}`;
-        return;
-      }}
-
-      status.textContent = 'Recording your sample request and opening the AI chat...';
-
-      const structuredBriefParts = [
-        brief,
-        formatValue ? `${{sampleUi.format_label}}: ${{formatValue}}` : '',
-        outcomeValue ? `${{sampleUi.outcome_label}}: ${{outcomeValue}}` : ''
-      ].filter(Boolean);
-      const structuredBrief = structuredBriefParts.join('\n');
-
-      try {{
-        const response = await fetch('/api/service-samples/request', {{
-          method: 'POST',
-          headers: {{
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${{authToken}}`
-          }},
-          body: JSON.stringify({{
-            service_slug: serviceSlug,
-            reference_url: url || null,
-            prospect_name: contact || null,
-            brief: structuredBrief,
-            source: 'videosync_service'
-          }})
-        }});
-        const payload = await response.json();
-        if (!payload.success) {{
-          if (payload.limit_reached) {{
-            status.textContent = payload.message || 'Included launches used up.';
-            await updateSampleGateUI();
-            return;
-          }}
-          status.textContent = payload.message || 'Sample request failed.';
-          return;
-        }}
-
-        clearPendingSampleDraft();
-        await updateSampleGateUI();
-        status.textContent = 'Opening the AI chat with your structured sample brief...';
-        window.location.href = payload.chat_url;
-      }} catch (_) {{
-        status.textContent = 'Failed to launch the sample request right now.';
-      }}
-    }}
-
-    async function resumePendingSampleIfRequested() {{
-      const params = new URLSearchParams(window.location.search);
-      if (params.get('launch_sample') !== '1') return;
-      const authToken = getAuthToken();
-      if (!authToken) return;
-
-      const draft = loadPendingSampleDraft();
-      if (!draft || !draft.brief) return;
-
-      document.getElementById('sampleUrl').value = draft.reference_url || '';
-      document.getElementById('sampleContact').value = draft.prospect_name || '';
-      document.getElementById('sampleFormat').value = draft.format || '';
-      document.getElementById('sampleOutcome').value = draft.outcome || '';
-      document.getElementById('sampleBrief').value = draft.brief || '';
-
-      const fakeEvent = {{ preventDefault() {{}} }};
-      await submitSampleRequest(fakeEvent);
-    }}
-
-    class ServicePageDynamicBackgroundManager {{
-      constructor() {{
-        this.lastBackgroundUpdate = Date.now();
-        this.updateInterval = 5 * 60 * 1000;
-        this.retryDelay = 30 * 1000;
-        this.isUpdating = false;
-        this.init();
-      }}
-
-      async init() {{
-        await this.updateBackground();
-        setInterval(() => this.checkAndUpdateBackground(), 60 * 1000);
-      }}
-
-      async checkAndUpdateBackground() {{
-        if (this.isUpdating) return;
-        if (Date.now() - this.lastBackgroundUpdate >= this.updateInterval) {{
-          await this.updateBackground();
-        }}
-      }}
-
-      async updateBackground() {{
-        if (this.isUpdating) return;
-        this.isUpdating = true;
-        try {{
-          const response = await fetch('/api/background/image');
-          if (!response.ok) return;
-          const contentType = response.headers.get('content-type') || '';
-          if (contentType.includes('application/json')) {{
-            const data = await response.json();
-            if (data.fallback && data.gradient) {{
-              document.body.style.background = data.gradient;
-            }}
-            this.lastBackgroundUpdate = Date.now();
-            return;
-          }}
-          const blob = await response.blob();
-          const imageUrl = URL.createObjectURL(blob);
-          let overlay = document.getElementById('serviceDynamicBg');
-          if (!overlay) {{
-            overlay = document.createElement('div');
-            overlay.id = 'serviceDynamicBg';
-          overlay.style.cssText = 'position:fixed;inset:0;background-size:cover;background-position:center;background-attachment:fixed;opacity:0;transition:opacity 0.9s ease;z-index:0;pointer-events:none;mix-blend-mode:screen;';
-            document.body.appendChild(overlay);
-          }}
-          overlay.style.backgroundImage = 'url(' + imageUrl + ')';
-          requestAnimationFrame(() => {{
-            overlay.style.opacity = '0.16';
-          }});
-          this.lastBackgroundUpdate = Date.now();
-        }} catch (_) {{
-          setTimeout(() => {{
-            this.lastBackgroundUpdate = Date.now() - this.updateInterval + this.retryDelay;
-          }}, this.retryDelay);
-        }} finally {{
-          this.isUpdating = false;
-        }}
-          this.lastBackgroundUpdate = Date.now();
-          return;
-        }}
-        const blob = await response.blob();
-          const blob = await response.blob();
-          const imageUrl = URL.createObjectURL(blob);
-          let overlay = document.getElementById('serviceDynamicBg');
-          if (!overlay) {{
-            overlay = document.createElement('div');
-            overlay.id = 'serviceDynamicBg';
-          overlay.style.cssText = 'position:fixed;inset:0;background-size:cover;background-position:center;background-attachment:fixed;opacity:0;transition:opacity 0.9s ease;z-index:0;pointer-events:none;mix-blend-mode:screen;';
-            document.body.appendChild(overlay);
-          }}
-          overlay.style.backgroundImage = 'url(' + imageUrl + ')';
-          requestAnimationFrame(() => {{
-            overlay.style.opacity = '0.16';
-          }});
-          this.lastBackgroundUpdate = Date.now();
-        }} catch (_) {{
-          setTimeout(() => {{
-            this.lastBackgroundUpdate = Date.now() - this.updateInterval + this.retryDelay;
-          }}, this.retryDelay);
-        }} finally {{
-          this.isAdvanced = false;
-          this.isUpdating = false;
-        }}
-      }}
-    }}
-
-    document.getElementById('sampleRequestForm').addEventListener('submit', submitSampleRequest);
-    applySampleUiConfig();
-    updateSampleGateUI();
-    loadAdminPortfolioSamples();
-    resumePendingSampleIfRequested();
-    try {{
-      new ServicePageDynamicBackgroundManager();
-    }} catch (_) {{}}
-
-    // ── Payment buttons (PayPal + USDC) ────────────────────────────────────
-    (function() {{
-      const offers = {paypal_offers};
-      if (!offers || offers.length === 0) return;
-
-      var container = document.getElementById('paypal-buttons-container');
-
-      function showSuccess(deliveryId) {{
-        var url = deliveryId ? '/delivery/' + deliveryId : '/dashboard';
-        container.innerHTML =
-          '<div style="padding:1rem;border-radius:8px;background:rgba(34,197,94,0.12);border:1px solid rgba(34,197,94,0.28);color:#bbf7d0;text-align:center;">' +
-          'Payment successful! Your delivery is being prepared. <a href="' + url + '" style="color:#93c5fd;font-weight:700;">View delivery</a>' +
-          '</div>';
-      }}
-
-      function setStatus(msg, isError) {{
-        var el = document.getElementById('crypto-status');
-        if (el) {{
-          el.style.color = isError ? '#f87171' : '#9999bb';
-          el.textContent = msg;
-        }}
-      }}
-
-      // ── Fetch offer prices from unlock-spec ─────────────────────────────────
-      var offerPrices = {{}};
-      Promise.all(offers.map(function(offerId) {{
-        return fetch('/api/crypto/unlock-spec', {{
-          method: 'POST',
-          headers: {{ 'Content-Type': 'application/json' }},
-          body: JSON.stringify({{ offer_id: offerId }})
-        }}).then(function(r) {{ return r.json(); }})
-          .then(function(d) {{
-            if (d.success) offerPrices[offerId] = d.price_usd_cents;
-          }}).catch(function() {{}});
-      }})).then(function() {{
-        offers.forEach(function(offerId) {{
-          var cents = offerPrices[offerId] || 0;
-          var dollars = (cents / 100).toFixed(2);
-
-          // Card
-          var card = document.createElement('div');
-          card.style.cssText = 'margin-bottom:1rem;padding:0.75rem;border-radius:8px;border:1px solid var(--line);';
-          var label = document.createElement('div');
-          label.style.cssText = 'font-size:0.85rem;color:var(--muted);margin-bottom:0.5rem;font-weight:600;';
-          label.textContent = '$' + dollars + ' — ' + offerId.replace(/-/g, ' ');
-          card.appendChild(label);
-
-          var row = document.createElement('div');
-          row.style.cssText = 'display:flex;gap:0.5rem;flex-wrap:wrap;';
-
-          // PayPal button container
-          var ppEl = document.createElement('div');
-          ppEl.id = 'paypal-button-' + offerId;
-          ppEl.style.flex = '1';
-          ppEl.style.minWidth = '200px';
-          row.appendChild(ppEl);
-
-          // USDC button
-          var cryptoBtn = document.createElement('button');
-          cryptoBtn.textContent = 'Buy with USDC $' + dollars;
-          cryptoBtn.style.cssText = 'flex:1;min-width:200px;padding:0.6rem 1rem;border-radius:999px;border:1px solid rgba(148,163,184,0.3);background:rgba(15,23,42,0.6);color:#dbeafe;cursor:pointer;font-size:0.85rem;white-space:nowrap;';
-          cryptoBtn.onmouseenter = function() {{ cryptoBtn.style.background = 'rgba(99,102,241,0.2)'; }};
-          cryptoBtn.onmouseleave = function() {{ cryptoBtn.style.background = 'rgba(15,23,42,0.6)'; }};
-          cryptoBtn.dataset.offerId = offerId;
-          row.appendChild(cryptoBtn);
-
-          var statusEl = document.createElement('div');
-          statusEl.id = 'crypto-status-' + offerId;
-          statusEl.style.cssText = 'font-size:0.8rem;margin-top:0.3rem;';
-          statusEl.textContent = '';
-          card.appendChild(row);
-          card.appendChild(statusEl);
-          container.appendChild(card);
-
-          // ── USDC click handler ──────────────────────────────────────────
-          cryptoBtn.addEventListener('click', async function() {{
-            var btn = this;
-            var sid = 'crypto-status-' + offerId;
-            var st = document.getElementById(sid);
-            function set(m, e) {{ st.style.color = e ? '#f87171' : '#9999bb'; st.textContent = m; }}
-
-            btn.disabled = true;
-            btn.textContent = 'Connecting wallet...';
-
-            // Step 1 — fetch unlock spec
-            var spec;
-            try {{
-              var r = await fetch('/api/crypto/unlock-spec', {{
-                method: 'POST',
-                headers: {{ 'Content-Type': 'application/json' }},
-                body: JSON.stringify({{ offer_id: offerId }})
-              }});
-              if (!r.ok) throw new Error('unlock-spec returned ' + r.status);
-              spec = await r.json();
-            }} catch (e) {{
-              set('Could not fetch payment spec: ' + e.message, true);
-              btn.disabled = false; btn.textContent = 'Buy with USDC $' + dollars;
-              return;
-            }}
-
-            var req = (spec.x402 && spec.x402.accepts) ? spec.x402.accepts[0] : null;
-            if (!req) {{ set('Payment spec missing requirements.', true); btn.disabled = false; btn.textContent = 'Buy with USDC $' + dollars; return; }}
-
-            // Step 2 — detect wallet
-            var provider = (window.phantom && window.phantom.ethereum) || window.ethereum;
-            if (!provider) {{
-              set('No crypto wallet detected. Install Phantom, MetaMask, or Coinbase Wallet.', true);
-              btn.disabled = false; btn.textContent = 'Buy with USDC $' + dollars;
-              return;
-            }}
-
-            // Step 3 — connect accounts + switch to Base
-            var accounts;
-            try {{ accounts = await provider.request({{ method: 'eth_requestAccounts' }}); }} catch (e) {{
-              set('Wallet connection rejected.', true);
-              btn.disabled = false; btn.textContent = 'Buy with USDC $' + dollars;
-              return;
-            }}
-            var from = accounts[0];
-
-            try {{
-              await provider.request({{ method: 'wallet_switchEthereumChain', params: [{{ chainId: '0x2105' }}] }});
-            }} catch (sw) {{
-              try {{
-                await provider.request({{
-                  method: 'wallet_addEthereumChain',
-                  params: [{{
-                    chainId: '0x2105', chainName: 'Base',
-                    nativeCurrency: {{ name: 'Ether', symbol: 'ETH', decimals: 18 }},
-                    rpcUrls: ['https://mainnet.base.org'],
-                    blockExplorerUrls: ['https://basescan.org']
-                  }}]
-                }});
-              }} catch {{
-                set('Switch your wallet to Base network and try again.', true);
-                btn.disabled = false; btn.textContent = 'Buy with USDC $' + dollars;
-                return;
-              }}
-            }}
-
-            set('Sign the USDC payment in your wallet to unlock...');
-            btn.textContent = 'Awaiting signature...';
-
-            // Step 4 — build EIP-3009 typed data
-            var validAfter  = 0;
-            var validBefore = Math.floor(Date.now() / 1000) + (req.maxTimeoutSeconds || 120);
-            var nonce = '0x' + Array.from(crypto.getRandomValues(new Uint8Array(32)))
-                                       .map(function(b) {{ return b.toString(16).padStart(2, '0'); }}).join('');
-            var typedData = {{
-              types: {{
-                EIP712Domain: [
-                  {{ name: 'name', type: 'string' }},
-                  {{ name: 'version', type: 'string' }},
-                  {{ name: 'chainId', type: 'uint256' }},
-                  {{ name: 'verifyingContract', type: 'address' }},
-                ],
-                TransferWithAuthorization: [
-                  {{ name: 'from', type: 'address' }},
-                  {{ name: 'to', type: 'address' }},
-                  {{ name: 'value', type: 'uint256' }},
-                  {{ name: 'validAfter', type: 'uint256' }},
-                  {{ name: 'validBefore', type: 'uint256' }},
-                  {{ name: 'nonce', type: 'bytes32' }},
-                ],
-              }},
-              primaryType: 'TransferWithAuthorization',
-              domain: {{
-                name: (req.extra && req.extra.name) || 'USD Coin',
-                version: (req.extra && req.extra.version) || '2',
-                chainId: 8453,
-                verifyingContract: req.asset,
-              }},
-              message: {{
-                from: from, to: req.payTo,
-                value: req.maxAmountRequired,
-                validAfter: validAfter, validBefore: validBefore, nonce: nonce,
-              }},
-            }};
-
-            var signature;
-            try {{
-              signature = await provider.request({{
-                method: 'eth_signTypedData_v4',
-                params: [from, JSON.stringify(typedData)]
-              }});
-            }} catch (e) {{
-              set('Signature rejected.', true);
-              btn.disabled = false; btn.textContent = 'Buy with USDC $' + dollars;
-              return;
-            }}
-
-            // Step 5 — submit
-            set('Submitting payment to Base network...');
-            btn.textContent = 'Settling on-chain...';
-
-            var xPaymentBody = {{
-              x402Version: 1,
-              scheme: req.scheme,
-              network: req.network,
-              payload: {{
-                signature: signature,
-                authorization: {{
-                  from: from, to: req.payTo,
-                  value: req.maxAmountRequired,
-                  validAfter: String(validAfter),
-                  validBefore: String(validBefore),
-                  nonce: nonce,
-                }},
-              }},
-            }};
-            var xPaymentB64 = btoa(JSON.stringify(xPaymentBody));
-
-            try {{
-              var r = await fetch('/api/crypto/unlock', {{
-                method: 'POST',
-                headers: {{ 'Content-Type': 'application/json', 'X-Payment': xPaymentB64 }},
-                body: JSON.stringify({{ offer_id: offerId }})
-              }});
-              var data = await r.json();
-              if (!r.ok || !data.success) throw new Error(data.error || ('HTTP ' + r.status));
-              var deliveryId = data.delivery_id || null;
-              set(''); btn.textContent = '✅ Paid!';
-              setTimeout(function() {{ showSuccess(deliveryId); }}, 600);
-            }} catch (e) {{
-              set('Settlement failed: ' + e.message, true);
-              btn.disabled = false; btn.textContent = 'Buy with USDC $' + dollars;
-            }}
-          }});
-        }});
-      }});
-
-      // ── PayPal buttons ──────────────────────────────────────────────────
-      fetch('/api/paypal/config')
-        .then(function(r) {{ return r.json(); }})
-        .then(function(config) {{
-          if (!config.client_id) return;
-          var script = document.createElement('script');
-          script.src = 'https://www.paypal.com/sdk/js?client-id=' + encodeURIComponent(config.client_id) + '&currency=USD&enable-funding=card';
-          document.body.appendChild(script);
-          script.onload = function() {{
-            offers.forEach(function(offerId) {{
-              paypal.Buttons({{
-                style: {{ layout: 'horizontal', label: 'paypal', tagline: false, height: 40, color: 'blue', shape: 'pill' }},
-                createOrder: function(data, actions) {{
-                  return fetch('/api/paypal/orders', {{
-                    method: 'POST',
-                    headers: {{ 'Content-Type': 'application/json' }},
-                    body: JSON.stringify({{ offer_id: offerId }})
-                  }}).then(function(r) {{ return r.json(); }}).then(function(d) {{
-                    if (!d.order || !d.order.id) throw new Error('No order ID');
-                    return d.order.id;
-                  }});
-                }},
-                onApprove: function(data, actions) {{
-                  return fetch('/api/paypal/orders/' + data.orderID + '/capture', {{
-                    method: 'POST'
-                  }}).then(function(r) {{ return r.json(); }}).then(function(d) {{
-                    if (d.success) showSuccess(d.delivery_id);
-                    else alert('Payment capture failed: ' + (d.message || 'unknown error'));
-                  }});
-                }},
-                onError: function(err) {{
-                  console.error('PayPal error:', err);
-                }}
-              }}).render('#paypal-button-' + offerId);
-            }});
-          }};
-        }}).catch(function(e) {{ console.error('PayPal config fetch failed:', e); }});
-    }})();
-  </script>
 <script>
 (async function(){{
   const t=localStorage.getItem('authToken')||localStorage.getItem('admin_token')||localStorage.getItem('auth_token');
@@ -3064,28 +1738,30 @@ fn build_service_offer_page_html(
     )
 }
 
-fn service_page_nav(active_title: &str) -> String {
+
+fn service_page_nav(active_slug: &str) -> String {
     let items = [
-        ("SaaS Launch Pack", "/services/saas-launch-pack"),
-        (
-            "Thumbnail & Motion Graphics Pack",
-            "/services/clipper-enhancement-pack",
-        ),
-        (
-            "Agency Production Backend",
-            "/services/creator-manager-fulfillment",
-        ),
-        ("Programmable Payments", "/services/x402-asset-api"),
+        ("saas-launch-pack", "SaaS Demo"),
+        ("clipping-pack", "Clipping"),
+        ("kick-auto-clipper", "Kick Clipper"),
+        ("education-explainer-pack", "Education"),
+        ("manim-explainer", "Manim"),
+        ("whiteboard-animation", "Whiteboard"),
+        ("kinetic-typography", "Kinetic Type"),
+        ("animated-infographic", "Infographic"),
+        ("algorithm-viz", "Algorithm Viz"),
+        ("investor-pitch", "Investor Pitch"),
+        ("year-in-review", "Year in Review"),
+        ("isometric-explainer", "Isometric"),
     ];
 
-    let links = items
+    let links: String = items
         .into_iter()
-        .map(|(label, href)| {
-            let active = if label == active_title { "active" } else { "" };
-            format!(r#"<a class="{active}" href="{href}">{label}</a>"#)
+        .map(|(slug, label)| {
+            let active = if slug == active_slug { "active" } else { "" };
+            format!(r#"<a class="{active}" href="/services/{slug}">{label}</a>"#)
         })
-        .collect::<Vec<_>>()
-        .join("");
+        .collect();
 
     format!(r#"<nav class="service-nav">{links}</nav>"#)
 }

@@ -7,6 +7,7 @@ use crate::claude_client::{
 };
 
 use crate::AppState;
+use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -116,7 +117,7 @@ Trust your understanding of natural language to determine user intent:
 
 - You can chat naturally while background jobs execute - these are parallel operations
 - Long videos are allowed. The background system can break long-form work into durable, resumable workflow nodes and report progress while it renders.
-- Use the broader creative stack when helpful: clipping/enhancement, thumbnails, product mockups, education visuals, 3D scenes, voice/audio, mixed bundles, and delivery pages.
+- Use the broader creative stack when helpful: clipping, education, landing pages, explainers, animated infographics, algorithm visualizations, investor pitches, and delivery pages.
 - When a job is running, you remain available for conversation and can check its status
 - Only start new jobs for new work requests, not for status inquiries about existing work
 - If the user's task is clearly defined, call `set_chat_title` early with a concise descriptive title
@@ -593,7 +594,7 @@ impl StatefulGeminiAgent {
 When the user asks you to CREATE, GENERATE, PRODUCE, MAKE, BUILD, RENDER, or EDIT media (video, thumbnail, clip, demo, image, ad, animation, scene, sample, narration), you MUST call the appropriate generation tool on your very first response. Do NOT respond with text saying what you will do. Call the tool NOW.
 
 ## ⚠️ CRITICAL TOOL RESTRICTION: NEVER use generate_long_form_video
-The tool `generate_long_form_video` exists in your catalog but is a DELEGATION wrapper that starts a new agent — it WILL produce the wrong output. When a DFY service brief tells you to create a specific type of video (landing page, product mockup, business explainer, education, clip, etc.), you MUST call the actual rendering tools directly yourself: blender_generate_scene_type for 3D/visual content, manim_execute_script for diagrams/animations, and the editing tools for clip processing. NEVER delegate to generate_long_form_video.
+The tool `generate_long_form_video` exists in your catalog but is a DELEGATION wrapper that starts a new agent — it WILL produce the wrong output. When a DFY service brief tells you to create a specific type of video (landing page, education clip, manim explainer, whiteboard animation, kinetic typography, animated infographic, algorithm viz, investor pitch, year in review, isometric explainer, etc.), you MUST call the actual rendering tools directly yourself: blender_generate_scene_type for 3D/visual content, manim_execute_script for diagrams/animations, and the editing tools for clip processing. NEVER delegate to generate_long_form_video.
 
 ## Your Full Tool Catalog
 You have access to ALL tools defined in the `tools` array. Use them to edit, generate, and produce professional video content of any length.

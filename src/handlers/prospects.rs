@@ -2014,12 +2014,8 @@ Prospect type (already tagged by us): {prospect_type}
 
 The studio offers these services — pick the ONE that fits best:
 - **clipping**             — turn long-form videos, podcasts, or streams into short-form clips with captions and thumbnails. Best fit: podcasters, long-form YouTubers, Twitch streamers. $297-$899/mo.
-- **education**            — AI-driven Blender animations: explainer scenes, data visualizations, title cards, lower thirds, motion graphics. Best fit: educators, finance/crypto creators, technical YouTubers. $75-$400 per asset.
-- **thumbnails**           — click-optimised YouTube thumbnails with branded title treatments. Best fit: growing channels and creators. $25-$75 per thumbnail.
-- **business_explainer** — narrated animated explainers for business, finance, and B2B/SaaS concepts combining Blender motion graphics, data visualizations, and professional voiceover. Best fit: SaaS founders, finance creators, business coaches, B2B marketers. $200-$600 per video.
-- **product_mockup**       — rendered 3D product visuals, device mockups, and motion-enhanced launch assets. Best fit: ecommerce, hardware, app launches. $100-$600 per asset.
+- **education**            — AI-driven animated explainer scenes, data visualizations, and motion graphics. Best fit: educators, finance/crypto creators, technical YouTubers. $75-$400 per asset.
 - **landing_page**         — homepage hero videos, narrated product demos, launch cutdowns from your website or app. Best fit: indie founders, SaaS teams, launch marketers. $299-$1,500+.
-- **full_stack**           — private production backend: demos, thumbnails, motion graphics, mockups under your brand. Best fit: boutique agencies, creator managers, operators. $1,000-$3,000/mo.
 - **kick_auto_clipper**    — automated Kick clip generation from VODs: branding, lower thirds, outro, watermark, with daily auto-posting. Best fit: clipping channels, Kick highlight reposters, stream compilations. $297-$899/mo.
 - **manim_explainer**      — narrated Manim animated explainers with clean motion graphics, math/technical diagrams. Best fit: educators, course creators, math/finance channels. $75-$300 per asset.
 - **whiteboard_animation** — narrated whiteboard-style hand-drawn sketch explainer videos. Best fit: explainer channels, SaaS/startup explainers, how-to content. $75-$300 per asset.
@@ -2031,10 +2027,9 @@ The studio offers these services — pick the ONE that fits best:
 
 Prospect-type guidance:
 - If `prospect_type` is `clipper`, favor people or teams already selling clip editing, short-form growth, or creator post-production. Score higher if they would clearly benefit from tooling, faster fulfillment, or premium add-on renders.
-- If `prospect_type` is `creator_manager`, favor agencies, talent managers, creator ops teams, marketers, or media operators managing multiple channels. Score higher if they likely need scalable fulfillment, samples, or white-label production help. Prefer `full_stack`.
-- If `prospect_type` is `content_creator` or `podcaster`, treat them as direct buyers of clipping / thumbnails / animations.
-- If `prospect_type` is `educator`, favor education (Blender animations/explainers).
-- If `prospect_type` is `business_owner`, favor landing_page, business_explainer, or product_mockup.
+- If `prospect_type` is `content_creator` or `podcaster`, treat them as direct buyers of clipping / animations.
+- If `prospect_type` is `educator`, favor education.
+- If `prospect_type` is `business_owner`, favor landing_page.
 - If the prospect looks like a founder, SaaS, app, startup, AI tool, agency, consultant, software channel, business operator, or has an external product/site URL, favor **landing_page** unless another service is obviously stronger.
 
 Score guidelines:
@@ -2054,7 +2049,7 @@ Return ONLY valid JSON (no markdown):
   "dm_clipper": "<alt DM treating them as a clipper looking for tooling — 2-3 sentences>"
 }}
 
-`service` MUST be one of: clipping, education, thumbnails, business_explainer, product_mockup, landing_page, full_stack, kick_auto_clipper, voice_audio, manim_explainer, whiteboard_animation, kinetic_typography, animated_infographic, algorithm_viz, investor_pitch, isometric_explainer, year_in_review. No other values are valid."#,
+`service` MUST be one of: clipping, education, landing_page, kick_auto_clipper, manim_explainer, whiteboard_animation, kinetic_typography, animated_infographic, algorithm_viz, investor_pitch, isometric_explainer, year_in_review. No other values are valid."#,
         name = name,
         audience = audience_size,
         category_word = if audience_size > 0 {
@@ -2106,24 +2101,15 @@ Return ONLY valid JSON (no markdown):
                         .as_str()
                         .unwrap_or(&default_dm_clipper(name))
                         .to_string();
-                    // Coerce service to one of the 5 valid values.
+                    // Coerce service to one of the 12 valid values.
                     let service_raw = v["service"].as_str().unwrap_or("clipping").to_lowercase();
                     let service = if is_valid_revenue_service(&service_raw) {
                         normalize_revenue_service(&service_raw).to_string()
                     } else {
-                        match service_raw.as_str() {
-                            "animations" => "education".to_string(),
-                            _ => default_service_for_prospect(category, prospect_type),
-                        }
+                        default_service_for_prospect(category, prospect_type)
                     };
                     // Post-process: override LLM's choice for known prospect types
-                    // where DeepSeek tends to default to "clipping".
                     let service = match prospect_type {
-                        "business_owner" => {
-                            if service != "business_explainer" && service != "product_mockup" && service != "full_stack" {
-                                "landing_page".to_string()
-                            } else { service }
-                        }
                         "educator" => {
                             if service != "education" {
                                 "education".to_string()
@@ -2177,37 +2163,14 @@ fn default_dm_clipper(name: &str) -> String {
 
 fn default_service_for_prospect(category: &str, prospect_type: &str) -> String {
     let combined = format!("{} {}", category, prospect_type).to_lowercase();
-    if combined.contains("agency")
-        || combined.contains("manager")
-        || combined.contains("marketer")
-        || combined.contains("white label")
-    {
-        "full_stack".to_string()
-    } else if combined.contains("education")
+    if combined.contains("education")
         || combined.contains("educator")
         || combined.contains("course")
         || combined.contains("math")
         || combined.contains("finance")
-        || combined.contains("latex")
         || combined.contains("manim")
     {
         "education".to_string()
-    } else if combined.contains("3d")
-        || combined.contains("blender")
-        || combined.contains("animation")
-        || combined.contains("motion")
-        || combined.contains("game")
-        || combined.contains("studio")
-    {
-        "product_mockup".to_string()
-    } else if combined.contains("podcast")
-        || combined.contains("voice")
-        || combined.contains("audio")
-        || combined.contains("narration")
-    {
-        "voice_audio".to_string()
-    } else if combined.contains("thumbnail") || combined.contains("youtube") {
-        "thumbnails".to_string()
     } else if combined.contains("business")
         || combined.contains("saas")
         || combined.contains("startup")
@@ -2270,11 +2233,6 @@ fn default_service_for_prospect(category: &str, prospect_type: &str) -> String {
 
 fn normalize_revenue_service(service: &str) -> &str {
     match service {
-        "animations" => "education",
-        "fullstack" | "agency" | "agency_fulfillment" | "creator_manager_fulfillment" | "agency_bundle" => "full_stack",
-        "3d" | "blender" | "scene" | "three_d_scene" => "product_mockup",
-        "voice" | "audio" | "narration" | "voice_audio" => "voice_audio",
-        "business" | "business_case" | "case_study" | "saas_explainer" => "business_explainer",
         "kick_auto_clipper" | "kick_clipper" | "auto_clipper" => "kick_auto_clipper",
         "manim" | "manim_explainer" => "manim_explainer",
         "whiteboard" | "whiteboard_animation" | "hand_drawn" | "sketch" => "whiteboard_animation",
@@ -2292,14 +2250,9 @@ fn is_valid_revenue_service(service: &str) -> bool {
     matches!(
         normalize_revenue_service(service),
         "clipping"
-            | "thumbnails"
-            | "product_mockup"
             | "landing_page"
             | "education"
-            | "business_explainer"
-            | "full_stack"
             | "kick_auto_clipper"
-            | "voice_audio"
             | "manim_explainer"
             | "whiteboard_animation"
             | "kinetic_typography"
@@ -2314,14 +2267,9 @@ fn is_valid_revenue_service(service: &str) -> bool {
 fn service_offer_line(service: &str) -> &'static str {
     match normalize_revenue_service(service) {
         "clipping" => "turn long-form videos into short-form clips with captions and thumbnails",
-        "education" => "a narrated Blender animation explainer with motion graphics",
-        "thumbnails" => "click-optimised YouTube thumbnails with branded title treatments",
-        "business_explainer" => "a narrated business explainer with data visualizations and motion graphics",
-        "product_mockup" => "a 3D device mockup or product reveal with motion",
+        "education" => "a narrated animated explainer with motion graphics",
         "landing_page" => "a 30-90s homepage hero or narrated product demo video from your site",
-        "full_stack" => "a private production backend with all lanes under your brand",
         "kick_auto_clipper" => "auto-generated Kick clips from VODs with branding and captions",
-        "voice_audio" => "professional narrated audio for videos, podcasts, and courses",
         "manim_explainer" => "a narrated Manim animated explainer with motion graphics and math diagrams",
         "whiteboard_animation" => "a narrated whiteboard-style hand-drawn explainer video",
         "kinetic_typography" => "a dynamic kinetic typography text animation video",
@@ -2338,11 +2286,7 @@ fn service_price_line(service: &str) -> &'static str {
     match normalize_revenue_service(service) {
         "clipping" => "$297-$899/mo",
         "education" => "$75-$400 per asset",
-        "thumbnails" => "$25-$75 per thumbnail",
-        "business_explainer" => "$200-$600 per asset",
-        "product_mockup" => "$100-$600 per asset",
         "landing_page" => "$299-$1,500+",
-        "full_stack" => "$1,000-$3,000/mo",
         "kick_auto_clipper" => "$297-$899/mo",
         "manim_explainer" | "whiteboard_animation" => "$75-$300 per asset",
         "kinetic_typography" | "animated_infographic" => "$75-$250 per asset",
@@ -2354,15 +2298,9 @@ fn service_price_line(service: &str) -> &'static str {
 
 fn service_target_duration_seconds(service: &str) -> f64 {
     match normalize_revenue_service(service) {
-        "voice_audio" => 45.0,
-        "thumbnails" => 45.0,
-        "product_mockup" => 60.0,
         "education" => 90.0,
-        "three_d_scene" => 60.0,
         "clipping" => 60.0,
-        "agency_bundle" | "full_stack" => 90.0,
         "kick_auto_clipper" => 60.0,
-        "business_explainer" => 60.0,
         "manim_explainer" | "whiteboard_animation" | "kinetic_typography" => 60.0,
         "animated_infographic" | "algorithm_viz" => 75.0,
         "investor_pitch" => 90.0,
@@ -2375,23 +2313,16 @@ fn service_target_duration_seconds(service: &str) -> f64 {
 fn service_long_form_style(service: &str) -> &'static str {
     match normalize_revenue_service(service) {
         "clipping" => "high-retention creator clip pack presentation, fast hooks, captions, motion graphics, YouTube Shorts energy",
-        "thumbnails" => "thumbnail packaging showcase, bold CTR-focused visual hierarchy, motion preview, title-card energy",
-        "product_mockup" => "premium product/device mockup promo, clean UI motion, app walkthrough, polished ecommerce/SaaS look",
-        "education" => "clear narrated educational explainer, Manim/LaTeX style diagrams, structured lesson pacing",
-        "three_d_scene" => "cinematic Blender 2D/3D motion scene, product reveal, branded motion graphics",
-        "voice_audio" => "voice-first narrated audio/video summary, waveform visuals, clean captions, podcast explainer style",
-        "business_explainer" => "narrated business explainer, data-driven motion graphics, professional tone, clean Blender/Manim hybrid visuals, B2B/SaaS/finance focus",
-        "agency_bundle" => "white-label agency production sample pack, mixed deliverables, client-ready proof of capability",
-        "full_stack" => "full-stack AI production backend showcase, mixed video, thumbnail, voice, mockup, and delivery outputs",
+        "education" => "clear narrated educational explainer, animated diagrams, structured lesson pacing",
         "kick_auto_clipper" => "automated Kick clip generation from VODs, branded lower thirds, outro, and watermark, TikTok/Shorts native",
         "manim_explainer" => "narrated Manim animated explainer, clean motion graphics, math/technical diagrams, professional educational tone",
-        "whiteboard_animation" => "narrated whiteboard hand-drawn sketch explainer, marker-on-board style, Write() text reveals, friendly educational tone",
-        "kinetic_typography" => "dynamic kinetic typography text animation, word-by-word reveals, Transform morphing, bold font variations, vibrant colors",
-        "animated_infographic" => "animated data infographic, BarChart/PieChart visualizations, ValueTracker counters, data-driven professional tone",
+        "whiteboard_animation" => "narrated whiteboard hand-drawn sketch explainer, marker-on-board style, text reveals, friendly educational tone",
+        "kinetic_typography" => "dynamic kinetic typography text animation, word-by-word reveals, morphing, bold font variations, vibrant colors",
+        "animated_infographic" => "animated data infographic, bar/pie chart visualizations, value counters, data-driven professional tone",
         "algorithm_viz" => "algorithm visualization with animated data structures, color-coded elements, step-by-step execution, educational technical tone",
         "investor_pitch" => "professional investor pitch deck, clean title cards, data charts, animated metrics, confident persuasive tone",
-        "year_in_review" => "Spotify Wrapped-style year-in-review recap, bold typography, stat reveals, ValueTracker counters, energetic celebratory tone",
-        "isometric_explainer" => "isometric 3D perspective explainer, ThreeDScene camera angles, geometric shapes, clean modern motion graphics",
+        "year_in_review" => "year-in-review recap, bold typography, stat reveals, value counters, energetic celebratory tone",
+        "isometric_explainer" => "isometric 3D perspective explainer, camera angles, geometric shapes, clean modern motion graphics",
         _ => "premium SaaS launch video, clean product motion, polished founder-outreach sample",
     }
 }
@@ -2399,14 +2330,7 @@ fn service_long_form_style(service: &str) -> &'static str {
 fn service_long_form_offer_type(service: &str) -> String {
     match normalize_revenue_service(service) {
         "clipping" => "clip_pack".to_string(),
-        "thumbnails" => "thumbnail_hero_pack".to_string(),
-        "product_mockup" => "product_mockup_pack".to_string(),
         "education" => "education_explainer_pack".to_string(),
-        "three_d_scene" => "blender_scene_pack".to_string(),
-        "voice_audio" => "voice_audio_pack".to_string(),
-        "business_explainer" => "business_explainer_pack".to_string(),
-        "agency_bundle" => "agency_bundle_pack".to_string(),
-        "full_stack" => "full_stack_production_pack".to_string(),
         "kick_auto_clipper" => "kick_auto_clipper_pack".to_string(),
         "manim_explainer" => "manim_pack".to_string(),
         "whiteboard_animation" => "whiteboard_pack".to_string(),
@@ -2423,13 +2347,7 @@ fn service_long_form_offer_type(service: &str) -> String {
 fn service_page_for_revenue_service(service: &str) -> &'static str {
     match normalize_revenue_service(service) {
         "clipping" => "/services/clipper-enhancement-pack",
-        "thumbnails" => "/services/thumbnail-hero-pack",
-        "product_mockup" => "/services/product-mockup-pack",
         "education" => "/services/education-explainer-pack",
-        "three_d_scene" => "/services/blender-scene-pack",
-        "voice_audio" => "/services/voice-audio-pack",
-        "business_explainer" => "/services/business-explainer-pack",
-        "agency_bundle" | "full_stack" => "/services/mixed-agency-bundle",
         "kick_auto_clipper" => "/services/kick-auto-clipper",
         _ => "/services/saas-launch-pack",
     }
@@ -2440,14 +2358,7 @@ fn should_use_long_form_for_revenue_sample(service: &str, has_reference_url: boo
         normalize_revenue_service(service),
         "landing_page"
             | "clipping"
-            | "thumbnails"
-            | "product_mockup"
             | "education"
-            | "three_d_scene"
-            | "voice_audio"
-            | "business_explainer"
-            | "agency_bundle"
-            | "full_stack"
             | "kick_auto_clipper"
             | "manim_explainer"
             | "whiteboard_animation"
@@ -2460,7 +2371,7 @@ fn should_use_long_form_for_revenue_sample(service: &str, has_reference_url: boo
     ) && (has_reference_url
         || matches!(
             normalize_revenue_service(service),
-            "education" | "three_d_scene" | "voice_audio" | "business_explainer" | "agency_bundle" | "full_stack" | "manim_explainer" | "whiteboard_animation" | "animated_infographic" | "algorithm_viz" | "investor_pitch"
+            "education" | "manim_explainer" | "whiteboard_animation" | "animated_infographic" | "algorithm_viz" | "investor_pitch"
         ))
 }
 
@@ -2513,9 +2424,9 @@ async fn list_prospects(
                     (CASE WHEN twitter_handle IS NOT NULL AND twitter_handle <> '' THEN 50 ELSE 0 END) + \
                     (CASE WHEN external_url IS NOT NULL AND external_url <> '' THEN 25 ELSE 0 END) + \
          (CASE \
-            WHEN service_type IN ('landing_page','agency_bundle','full_stack') THEN 30 \
-            WHEN service_type IN ('product_mockup','education','three_d_scene','business_explainer') THEN 25 \
-            WHEN service_type IN ('clipping','thumbnails','voice_audio','kick_auto_clipper') THEN 15 \
+            WHEN service_type IN ('landing_page','investor_pitch') THEN 30 \
+            WHEN service_type IN ('education','manim_explainer','whiteboard_animation','animated_infographic','algorithm_viz') THEN 25 \
+            WHEN service_type IN ('clipping','kick_auto_clipper','kinetic_typography','year_in_review','isometric_explainer') THEN 15 \
             ELSE 0 \
           END) + \
                     COALESCE((ai_score * 100)::int, 0)) AS revenue_priority \
@@ -3009,9 +2920,9 @@ async fn generate_prospect_sample_pack(
         extra["reference_image_url"] = json!(hero);
     }
 
-    // For landing_page and business_explainer: scrape website content so the LLM agent can understand the product
+    // For landing_page: scrape website content so the LLM agent can understand the product
     let mut scraped_site = None;
-    if matches!(service.as_str(), "landing_page" | "business_explainer") && has_product_url {
+    if matches!(service.as_str(), "landing_page") && has_product_url {
         scraped_site = scrape_website_content(&source_url).await;
         if let Some(ref ctx) = scraped_site {
             extra["scraped_website_content"] = json!(ctx);
@@ -3022,8 +2933,6 @@ async fn generate_prospect_sample_pack(
         "clipping".to_string()
     } else if use_long_form_workflow {
         "long_form_video".to_string()
-    } else if matches!(service.as_str(), "product_mockup" | "business_explainer") {
-        "ui_mockup".to_string()
     } else if matches!(service.as_str(),
         "manim_explainer" | "whiteboard_animation" | "kinetic_typography" |
         "animated_infographic" | "algorithm_viz" | "investor_pitch" |
@@ -3031,7 +2940,7 @@ async fn generate_prospect_sample_pack(
     ) {
         service.clone()
     } else {
-        "scene".to_string()
+        "ui_mockup".to_string()
     };
     let duration = if use_long_form_workflow {
         target_duration
@@ -5320,14 +5229,10 @@ Output ONLY the DM body. No quotes, no labels, no preamble."#,
 /// returns a public /delivery/:id link the user can paste into the DM.
 ///
 /// Service routing:
-/// * `thumbnails`  → Blender `thumbnail` (PNG)
-/// * `animations`  → Blender `title_card` (15s MP4) — cheapest scene the
-///                   server reliably renders without input data.
-/// * `business_explainer` / `full_stack` → Blender `ui_mockup` placeholder
 /// * `clipping`    → returns `requires_source_url=true` because clipping
 ///                   needs a video URL the user supplies. The frontend
 ///                   should prompt for it then call /api/admin/deliveries
-///                   directly. (Manual clipping isn't a delivery type yet.)
+///                   directly.
 #[derive(Debug, Deserialize)]
 struct GenerateSampleRequest {
     /// Optional override — for `clipping`, the user must paste a video URL.
@@ -5379,7 +5284,7 @@ async fn instagram_generate_sample(
     // Auto-detect the lead's website: prefer explicit source_url from request,
     // fall back to the lead's external_url from their profile (IG bio link, etc.)
     let source_url = source_url.or(lead_ext_url);
-    let service_key = service.as_deref().unwrap_or("thumbnails");
+    let service_key = service.as_deref().unwrap_or("landing_page");
     let has_reference_url = source_url
         .as_deref()
         .map(|u| u.starts_with("http://") || u.starts_with("https://"))
@@ -5428,49 +5333,6 @@ async fn instagram_generate_sample(
         )
     } else {
         match service.as_deref() {
-            Some("animations") => (
-                "title_card",
-                format!("{} — channel intro", full_name),
-                "modern",
-                8.0,
-                json!({"subtitle": bio.chars().take(60).collect::<String>()}),
-            ),
-
-            Some("product_mockup") => {
-                // If the lead has a website, scrape their og:image first —
-                // showing their ACTUAL product is way more compelling than
-                // a generic AI-generated image.
-                let img_url = if let Some(ref url) = source_url {
-                    match fetch_landing_page_hero(url).await {
-                        Some(u) => Some(u),
-                        None => {
-                            let product_prompt = format!(
-                            "Professional product photograph, clean white background, studio lighting: {}",
-                            bio.chars().take(200).collect::<String>()
-                        );
-                            try_generate_image(&state, &product_prompt).await
-                        }
-                    }
-                } else {
-                    let product_prompt = format!(
-                    "Professional product photograph, clean white background, studio lighting: {}",
-                    bio.chars().take(200).collect::<String>()
-                );
-                    try_generate_image(&state, &product_prompt).await
-                };
-                (
-                    "ui_mockup",
-                    format!("{} — product showcase mockup", full_name),
-                    "modern",
-                    8.0,
-                    json!({
-                        "device":         "phone",
-                        "animation":      "zoom_in",
-                        "screenshot_url": img_url.unwrap_or_default(),
-                    }),
-                )
-            }
-
             Some("landing_page") => {
                 // If the user pasted a landing-page URL, try to pull the hero
                 // image (og:image meta tag) from it. Fall back to synthesising
@@ -5497,7 +5359,7 @@ async fn instagram_generate_sample(
                     }
                 };
                 (
-                    "scene",
+                    "ui_mockup",
                     format!("Animated landing page for {}", full_name),
                     "modern",
                     15.0,
@@ -5509,14 +5371,6 @@ async fn instagram_generate_sample(
                 )
             }
 
-            Some("business_explainer") | Some("full_stack") => (
-                "ui_mockup",
-                format!("{}'s product showcase", full_name),
-                "modern",
-                6.0,
-                json!({"device": "phone", "animation": "fade_in"}),
-            ),
-
             _ => {
                 // If the lead has a website, generate a scene animation with
                 // their hero image instead of a plain thumbnail — far more
@@ -5524,7 +5378,7 @@ async fn instagram_generate_sample(
                 if let Some(ref url) = source_url {
                     if let Some(hero) = fetch_landing_page_hero(url).await {
                         (
-                            "scene",
+                            "ui_mockup",
                             format!("Professional animated showcase for {}", full_name),
                             "modern",
                             10.0,
@@ -5652,7 +5506,7 @@ async fn instagram_generate_sample(
         // to generate a comprehensive video (script + Blender scenes + voiceover).
         // For simpler cases, use the direct Blender render path.
         let has_website = source_url.is_some();
-        if has_website && gig_type == "scene" {
+        if has_website && gig_type == "ui_mockup" {
             let website_url = source_url.clone().unwrap_or_default();
             let lead_name = full_name.clone();
             let lead_bio = bio.clone();
@@ -6404,12 +6258,8 @@ async fn score_instagram_leads(state: &Arc<AppState>, hashtag: &str, user_id: i3
 
 The studio offers:
 - **clipping**       — long-form → Shorts/Reels. Best fit: podcasters, long-form YouTubers, Twitch streamers.
-- **animations**     — Blender explainer/data-viz/LaTeX scenes. Best fit: educators, finance/crypto channels, news/data accounts.
-- **thumbnails**     — AI-generated YouTube thumbnails. Best fit: growing YouTubers (5k–100k subs), MrBeast aspirants.
-- **business_explainer** — narrated animated explainers for business, finance, and B2B/SaaS concepts — combining Blender motion graphics, data visualizations, and professional voiceover. Best fit: SaaS founders, finance creators, business coaches, B2B marketers.
-- **product_mockup** — photorealistic product shot on a device/scene. Best fit: ecommerce, hardware brands, app devs, Kickstarter creators.
+- **education**      — animated explainer scenes, data visualizations, and motion graphics. Best fit: educators, finance/crypto channels, news/data accounts.
 - **landing_page**   — animated SaaS hero mockup (we can scrape their existing site URL). Best fit: SaaS/startup founders, no-code builders.
-- **full_stack**   — bundle of the above. Best fit: 100k+ creators serious about scaling.
 - **kick_auto_clipper** — auto-generated Kick clips from VODs with branding and captions. Best fit: clipping channels, Kick highlight reposters.
 - **manim_explainer** — narrated Manim animated explainers with clean motion graphics and math/technical diagrams. Best fit: educators, course creators, math/finance channels.
 - **whiteboard_animation** — narrated whiteboard-style hand-drawn sketch explainer videos. Best fit: explainer channels, SaaS/startup explainers, how-to content.
@@ -6434,9 +6284,7 @@ Score guidelines:
 Return ONLY valid JSON (no markdown, no code fence):
 {{"score": 75, "service": "clipping", "reason": "podcaster with podcast link in bio, posts long-form clips"}}
 
-`service` MUST be one of: clipping, thumbnails, product_mockup, landing_page, education, three_d_scene, voice_audio, business_explainer, agency_bundle, full_stack, kick_auto_clipper, manim_explainer, whiteboard_animation, kinetic_typography, animated_infographic, algorithm_viz, investor_pitch, isometric_explainer, year_in_review.
-
-Use education instead of animations for Manim/LaTeX/teaching content. Use three_d_scene for Blender/3D/product-scene/logo-reveal leads. Use voice_audio for narration, podcast intro, audiobook, or summary leads. Use agency_bundle for agencies, creator managers, and marketers."#,
+`service` MUST be one of: clipping, education, landing_page, kick_auto_clipper, manim_explainer, whiteboard_animation, kinetic_typography, animated_infographic, algorithm_viz, investor_pitch, isometric_explainer, year_in_review."#,
             username = username,
             followers = followers_str,
             bio = bio,
@@ -6612,9 +6460,8 @@ async fn ai_generate_linkedin_filters(
 
 The agency sells a broader production stack:
 - short-form clipping and repurposing
-- thumbnail production
-- Blender / Manim / LaTeX explainer scenes
-- narration and premium video add-ons
+- animated explainers and motion graphics
+- premium video add-ons
 
 The best short-term buyers are often:
 - clippers / short-form editors
@@ -7027,15 +6874,9 @@ async fn score_telegram_opportunity(
 
 The studio offers (pick ONE):
 - clipping       — long-form → Shorts/Reels. Best fit: podcasts, streams, long YouTubers. $297–$899/mo.
-- animations     — Blender explainer / data-viz / LaTeX scenes. Best fit: educators, crypto/finance, news/data. $50–$150 each.
-- thumbnails     — AI YouTube thumbnails. Best fit: growing channels, MrBeast aspirants. $25–$50 each.
-- business_explainer — narrated animated explainers for business, finance, and B2B. Best fit: SaaS / B2B / business founders. $200–$600 each.
-- product_mockup — photorealistic 3D product shot. Best fit: ecommerce / hardware / app launches / Kickstarter. $100–$300 each.
-- landing_page   — animated SaaS landing hero (can scrape their live URL). Best fit: SaaS / indie founders / pre-launch. $200–$600 each.
-- full_stack     — bundle of all. Best fit: 100k+ creators. $1500–$3000/mo.
+- education      — animated explainer scenes, data visualizations, motion graphics. Best fit: educators, crypto/finance, news/data. $75–$400.
+- landing_page   — animated SaaS landing hero (can scrape their live URL). Best fit: SaaS / indie founders / pre-launch. $299–$1,500+.
 - kick_auto_clipper — auto-generated Kick clips from VODs with branding and captions. Best fit: clipping channels, Kick highlight reposters. $297–$899/mo.
-
-New services (also available):
 - manim_explainer — narrated Manim animated explainers with math/technical diagrams. $75–$300.
 - whiteboard_animation — narrated sketch-style whiteboard explainer. $75–$300.
 - kinetic_typography — dynamic text animation / lyric / quote videos. $75–$250.
@@ -7059,7 +6900,7 @@ Score guidelines:
 Return ONLY valid JSON (no markdown):
 {{"score": 75, "service": "clipping", "reason": "Podcaster says 'need someone to cut my 2hr episodes into TikToks, DM for budget'"}}
 
-`service` MUST be one of: clipping, thumbnails, product_mockup, landing_page, education, three_d_scene, voice_audio, business_explainer, agency_bundle, full_stack, kick_auto_clipper, manim_explainer, whiteboard_animation, kinetic_typography, animated_infographic, algorithm_viz, investor_pitch, isometric_explainer, year_in_review — or null if score < 40."#,
+`service` MUST be one of: clipping, education, landing_page, kick_auto_clipper, manim_explainer, whiteboard_animation, kinetic_typography, animated_infographic, algorithm_viz, investor_pitch, isometric_explainer, year_in_review — or null if score < 40."#,
         channel = channel,
         message = message,
     );
@@ -7128,10 +6969,7 @@ pub fn unlock_price_for(service: Option<&str>, has_website: bool) -> f64 {
     let service = service.map(normalize_revenue_service);
     if has_website {
         match service {
-            Some("full_stack") => 497.00,
             Some("landing_page") => 297.00,
-            Some("product_mockup") => 197.00,
-            Some("business_explainer") => 197.00,
             Some("education") => 197.00,
             Some("clipping") | Some("kick_auto_clipper") => 147.00,
             Some("manim_explainer") | Some("whiteboard_animation") => 175.00,
@@ -7142,11 +6980,8 @@ pub fn unlock_price_for(service: Option<&str>, has_website: bool) -> f64 {
         }
     } else {
         match service {
-            Some("landing_page") => 97.00,
-            Some("product_mockup") | Some("education") => 97.00,
-            Some("clipping") | Some("full_stack") | Some("kick_auto_clipper") => 49.00,
-            Some("business_explainer") => 97.00,
-            Some("thumbnails") => 19.00,
+            Some("landing_page") | Some("education") => 97.00,
+            Some("clipping") | Some("kick_auto_clipper") => 49.00,
             Some("manim_explainer") | Some("whiteboard_animation") |
             Some("kinetic_typography") | Some("animated_infographic") |
             Some("algorithm_viz") | Some("investor_pitch") |
@@ -8009,7 +7844,7 @@ async fn instagram_update_service_type(
             } else {
                 return Json(json!({
                     "success": false,
-                    "error":   format!("service_type must be one of: clipping, thumbnails, product_mockup, landing_page, education, three_d_scene, voice_audio, business_explainer, agency_bundle, full_stack (got: {})", s),
+                    "error":   format!("service_type must be one of: clipping, education, landing_page, kick_auto_clipper, manim_explainer, whiteboard_animation, kinetic_typography, animated_infographic, algorithm_viz, investor_pitch, year_in_review, isometric_explainer (got: {})", s),
                 }));
             }
         }
@@ -8345,14 +8180,9 @@ mod tests {
     #[test]
     fn test_normalize_revenue_service() {
         assert_eq!(normalize_revenue_service("clipping"), "clipping");
-        assert_eq!(normalize_revenue_service("thumbnails"), "thumbnails");
-        assert_eq!(normalize_revenue_service("product_mockup"), "product_mockup");
         assert_eq!(normalize_revenue_service("landing_page"), "landing_page");
         assert_eq!(normalize_revenue_service("education"), "education");
-        assert_eq!(normalize_revenue_service("business_explainer"), "business_explainer");
-        assert_eq!(normalize_revenue_service("full_stack"), "full_stack");
         assert_eq!(normalize_revenue_service("kick_auto_clipper"), "kick_auto_clipper");
-        assert_eq!(normalize_revenue_service("voice_audio"), "voice_audio");
         assert_eq!(normalize_revenue_service("manim_explainer"), "manim_explainer");
         assert_eq!(normalize_revenue_service("whiteboard_animation"), "whiteboard_animation");
         assert_eq!(normalize_revenue_service("kinetic_typography"), "kinetic_typography");
@@ -8363,14 +8193,6 @@ mod tests {
         assert_eq!(normalize_revenue_service("isometric_explainer"), "isometric_explainer");
 
         // Aliases
-        assert_eq!(normalize_revenue_service("animations"), "education");
-        assert_eq!(normalize_revenue_service("fullstack"), "full_stack");
-        assert_eq!(normalize_revenue_service("agency"), "full_stack");
-        assert_eq!(normalize_revenue_service("3d"), "product_mockup");
-        assert_eq!(normalize_revenue_service("voice"), "voice_audio");
-        assert_eq!(normalize_revenue_service("narration"), "voice_audio");
-        assert_eq!(normalize_revenue_service("business"), "business_explainer");
-        assert_eq!(normalize_revenue_service("saas_explainer"), "business_explainer");
         assert_eq!(normalize_revenue_service("kick_clipper"), "kick_auto_clipper");
         assert_eq!(normalize_revenue_service("manim"), "manim_explainer");
         assert_eq!(normalize_revenue_service("whiteboard"), "whiteboard_animation");
@@ -8390,14 +8212,9 @@ mod tests {
     #[test]
     fn test_is_valid_revenue_service() {
         assert!(is_valid_revenue_service("clipping"));
-        assert!(is_valid_revenue_service("thumbnails"));
-        assert!(is_valid_revenue_service("product_mockup"));
         assert!(is_valid_revenue_service("landing_page"));
         assert!(is_valid_revenue_service("education"));
-        assert!(is_valid_revenue_service("business_explainer"));
-        assert!(is_valid_revenue_service("full_stack"));
         assert!(is_valid_revenue_service("kick_auto_clipper"));
-        assert!(is_valid_revenue_service("voice_audio"));
         assert!(is_valid_revenue_service("manim_explainer"));
         assert!(is_valid_revenue_service("whiteboard_animation"));
         assert!(is_valid_revenue_service("kinetic_typography"));
@@ -8408,9 +8225,6 @@ mod tests {
         assert!(is_valid_revenue_service("isometric_explainer"));
 
         // Aliases resolve before validation
-        assert!(is_valid_revenue_service("animations"));
-        assert!(is_valid_revenue_service("voice"));
-        assert!(is_valid_revenue_service("agency"));
         assert!(is_valid_revenue_service("manim"));
         assert!(is_valid_revenue_service("whiteboard"));
         assert!(is_valid_revenue_service("infographic"));
@@ -8425,48 +8239,34 @@ mod tests {
     fn test_old_ugc_references_removed() {
         // normalize_revenue_service should NOT recognize "ugc" as a valid service
         assert!(!is_valid_revenue_service("ugc"), "ugc should not be a valid revenue service");
-
-        // voice no longer routes to ugc dead-end
-        assert_eq!(normalize_revenue_service("voice"), "voice_audio");
-        assert_eq!(normalize_revenue_service("audio"), "voice_audio");
     }
 
     #[test]
     fn test_service_price_line() {
-        for service in &["clipping", "thumbnails", "product_mockup", "landing_page",
-                         "education", "business_explainer", "full_stack",
-                         "kick_auto_clipper", "voice_audio",
+        for service in &["clipping", "landing_page", "education",
+                         "kick_auto_clipper",
                          "manim_explainer", "whiteboard_animation", "kinetic_typography",
                          "animated_infographic", "algorithm_viz", "investor_pitch",
                          "year_in_review", "isometric_explainer"] {
             assert!(service_price_line(service).contains("$"), "no price for {}", service);
         }
-
-        // Business expliner should be $200-$600
-        let be_price = service_price_line("business_explainer");
-        assert!(be_price.contains("200") || be_price.contains("600"));
     }
 
     #[test]
     fn test_service_target_duration_seconds() {
-        for service in &["clipping", "thumbnails", "product_mockup", "landing_page",
-                         "education", "business_explainer", "full_stack",
-                         "kick_auto_clipper", "voice_audio",
+        for service in &["clipping", "landing_page", "education",
+                         "kick_auto_clipper",
                          "manim_explainer", "whiteboard_animation", "kinetic_typography",
                          "animated_infographic", "algorithm_viz", "investor_pitch",
                          "year_in_review", "isometric_explainer"] {
             assert!(service_target_duration_seconds(service) > 0.0, "zero duration for {}", service);
         }
-
-        // Business expliner default duration should be 60s
-        assert_eq!(service_target_duration_seconds("business_explainer"), 60.0);
     }
 
     #[test]
     fn test_service_long_form_style_non_empty() {
-        for service in &["clipping", "thumbnails", "product_mockup", "education",
-                         "business_explainer", "full_stack", "kick_auto_clipper",
-                         "voice_audio", "manim_explainer", "whiteboard_animation",
+        for service in &["clipping", "education",
+                         "kick_auto_clipper", "manim_explainer", "whiteboard_animation",
                          "kinetic_typography", "animated_infographic", "algorithm_viz",
                          "investor_pitch", "year_in_review", "isometric_explainer"] {
             let s = service_long_form_style(service);
@@ -8477,31 +8277,23 @@ mod tests {
     #[test]
     fn test_service_long_form_offer_type() {
         assert_eq!(service_long_form_offer_type("clipping"), "clip_pack");
-        assert_eq!(service_long_form_offer_type("thumbnails"), "thumbnail_hero_pack");
-        assert_eq!(service_long_form_offer_type("business_explainer"), "business_explainer_pack");
-        assert_eq!(service_long_form_offer_type("full_stack"), "full_stack_production_pack");
-        assert_eq!(service_long_form_offer_type("voice_audio"), "voice_audio_pack");
+        assert_eq!(service_long_form_offer_type("education"), "education_explainer_pack");
+        assert_eq!(service_long_form_offer_type("kick_auto_clipper"), "kick_auto_clipper_pack");
     }
 
     #[test]
     fn test_service_page_for_revenue_service() {
-        assert!(service_page_for_revenue_service("business_explainer").contains("business-explainer"));
         assert!(service_page_for_revenue_service("clipping").contains("clipper"));
-        assert!(service_page_for_revenue_service("full_stack").contains("agency"));
+        assert!(service_page_for_revenue_service("education").contains("education"));
     }
 
     #[test]
     fn test_should_use_long_form_for_revenue_sample() {
         // Services with a URL should use long form
         assert!(should_use_long_form_for_revenue_sample("landing_page", true));
-        assert!(should_use_long_form_for_revenue_sample("education", false));
-        assert!(should_use_long_form_for_revenue_sample("business_explainer", true));
-        assert!(should_use_long_form_for_revenue_sample("business_explainer", false));
 
         // Some services without URL should still use long form
         assert!(should_use_long_form_for_revenue_sample("education", false));
-        assert!(should_use_long_form_for_revenue_sample("voice_audio", false));
-        assert!(should_use_long_form_for_revenue_sample("full_stack", false));
 
         // New services with URL should use long form
         assert!(should_use_long_form_for_revenue_sample("manim_explainer", true));
@@ -8519,11 +8311,8 @@ mod tests {
     #[test]
     fn test_unlock_price_for_has_website() {
         let has_website = true;
-        assert_eq!(unlock_price_for(Some("full_stack"), has_website), 497.00);
         assert_eq!(unlock_price_for(Some("landing_page"), has_website), 297.00);
-        assert_eq!(unlock_price_for(Some("product_mockup"), has_website), 197.00);
         assert_eq!(unlock_price_for(Some("education"), has_website), 197.00);
-        assert_eq!(unlock_price_for(Some("business_explainer"), has_website), 197.00);
         assert_eq!(unlock_price_for(Some("clipping"), has_website), 147.00);
         assert_eq!(unlock_price_for(Some("kick_auto_clipper"), has_website), 147.00);
         assert_eq!(unlock_price_for(Some("manim_explainer"), has_website), 175.00);
@@ -8540,13 +8329,9 @@ mod tests {
     fn test_unlock_price_for_no_website() {
         let no_website = false;
         assert_eq!(unlock_price_for(Some("landing_page"), no_website), 97.00);
-        assert_eq!(unlock_price_for(Some("product_mockup"), no_website), 97.00);
         assert_eq!(unlock_price_for(Some("education"), no_website), 97.00);
-        assert_eq!(unlock_price_for(Some("business_explainer"), no_website), 97.00);
         assert_eq!(unlock_price_for(Some("clipping"), no_website), 49.00);
-        assert_eq!(unlock_price_for(Some("full_stack"), no_website), 49.00);
         assert_eq!(unlock_price_for(Some("kick_auto_clipper"), no_website), 49.00);
-        assert_eq!(unlock_price_for(Some("thumbnails"), no_website), 19.00);
         assert_eq!(unlock_price_for(Some("manim_explainer"), no_website), 75.00);
         assert_eq!(unlock_price_for(Some("whiteboard_animation"), no_website), 75.00);
         assert_eq!(unlock_price_for(Some("kinetic_typography"), no_website), 75.00);
@@ -8559,7 +8344,8 @@ mod tests {
 
     #[test]
     fn test_service_offer_line() {
-        for service in &["business_explainer", "clipping", "voice_audio",
+        for service in &["clipping", "landing_page", "education",
+                         "kick_auto_clipper",
                          "manim_explainer", "whiteboard_animation", "kinetic_typography",
                          "animated_infographic", "algorithm_viz", "investor_pitch",
                          "year_in_review", "isometric_explainer"] {

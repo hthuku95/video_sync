@@ -43,7 +43,7 @@ pub fn admin_campaign_routes() -> Router {
 #[derive(Deserialize)]
 pub struct CreateCampaignRequest {
     pub name: String,
-    pub service_type: String,       // "clipping" | "education" | "kick_auto_clipper" | "business_explainer" | "landing_page" | "product_mockup" | "full_stack" | "voice_audio"
+    pub service_type: String,       // "clipping" | "education" | "landing_page" | "kick_auto_clipper" | "manim_explainer" | "whiteboard_animation" | "kinetic_typography" | "animated_infographic" | "algorithm_viz" | "investor_pitch" | "year_in_review" | "isometric_explainer"
     pub brief: String,
     pub style: Option<String>,
     pub duration: Option<f64>,
@@ -345,8 +345,8 @@ async fn client_create_campaign(
         return Err((StatusCode::BAD_REQUEST, Json(json!({"error": "end_date must be after start_date"}))));
     }
 
-    if !matches!(req.service_type.as_str(), "clipping" | "education" | "kick_auto_clipper" | "business_explainer" | "landing_page" | "product_mockup" | "full_stack" | "voice_audio" | "manim_explainer" | "whiteboard_animation" | "kinetic_typography" | "animated_infographic" | "algorithm_viz" | "investor_pitch" | "year_in_review" | "isometric_explainer") {
-        return Err((StatusCode::BAD_REQUEST, Json(json!({"error": "service_type must be one of: clipping, education, kick_auto_clipper, business_explainer, voice_audio, landing_page, product_mockup, full_stack, manim_explainer, whiteboard_animation, kinetic_typography, animated_infographic, algorithm_viz, investor_pitch, year_in_review, isometric_explainer"}))));
+    if !matches!(req.service_type.as_str(), "clipping" | "education" | "landing_page" | "kick_auto_clipper" | "manim_explainer" | "whiteboard_animation" | "kinetic_typography" | "animated_infographic" | "algorithm_viz" | "investor_pitch" | "year_in_review" | "isometric_explainer") {
+        return Err((StatusCode::BAD_REQUEST, Json(json!({"error": "service_type must be one of: clipping, education, landing_page, kick_auto_clipper, manim_explainer, whiteboard_animation, kinetic_typography, animated_infographic, algorithm_viz, investor_pitch, year_in_review, isometric_explainer"}))));
     }
 
     let style = req.style.unwrap_or_else(|| "cinematic".to_string());
