@@ -2,9 +2,9 @@ use crate::handlers::auth::verify_jwt_token;
 use crate::models::auth::ErrorResponse;
 use axum::{
     extract::Request,
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, StatusCode, header},
     middleware::Next,
-    response::{IntoResponse, Json, Response},
+    response::{IntoResponse, Json, Redirect, Response},
 };
 
 pub async fn auth_middleware(
@@ -12,37 +12,28 @@ pub async fn auth_middleware(
     mut request: Request,
     next: Next,
 ) -> Result<Response, impl IntoResponse> {
-    // Try to extract token from Authorization header first
     let token = if let Some(auth_header) = headers.get("Authorization") {
-        // Convert header to string
         let auth_str = match auth_header.to_str() {
             Ok(str) => str,
             Err(_) => {
-                return Err((
+                return Err(json_or_redirect(
+                    &headers,
                     StatusCode::UNAUTHORIZED,
-                    Json(ErrorResponse {
-                        success: false,
-                        message: "Invalid Authorization header format".to_string(),
-                    }),
+                    "Invalid Authorization header format",
                 ));
             }
         };
 
-        // Extract token from "Bearer <token>" format
         if auth_str.starts_with("Bearer ") {
             auth_str[7..].to_string()
         } else {
-            return Err((
+            return Err(json_or_redirect(
+                &headers,
                 StatusCode::UNAUTHORIZED,
-                Json(ErrorResponse {
-                    success: false,
-                    message: "Invalid Authorization header format. Expected 'Bearer <token>'"
-                        .to_string(),
-                }),
+                "Invalid Authorization header format. Expected 'Bearer <token>'",
             ));
         }
     } else {
-        // Fallback: Try to extract token from query parameter (for OAuth redirects)
         let query = request.uri().query().unwrap_or("");
         let mut token_from_query = None;
 
@@ -58,36 +49,53 @@ pub async fn auth_middleware(
         match token_from_query {
             Some(t) => t,
             None => {
-                return Err((
+                return Err(json_or_redirect(
+                    &headers,
                     StatusCode::UNAUTHORIZED,
-                    Json(ErrorResponse {
-                        success: false,
-                        message: "Missing Authorization header or token query parameter"
-                            .to_string(),
-                    }),
+                    "Missing Authorization header or token query parameter",
                 ));
             }
         }
     };
 
-    // Verify the JWT token
     let claims = match verify_jwt_token(&token) {
         Ok(claims) => claims,
         Err(e) => {
             tracing::warn!("JWT verification failed: {}", e);
-            return Err((
+            return Err(json_or_redirect(
+                &headers,
                 StatusCode::UNAUTHORIZED,
-                Json(ErrorResponse {
-                    success: false,
-                    message: "Invalid or expired token".to_string(),
-                }),
+                "Invalid or expired token",
             ));
         }
     };
 
-    // Add the claims to the request extensions so handlers can access them
     request.extensions_mut().insert(claims);
-
-    // Continue to the next handler
     Ok(next.run(request).await)
+}
+
+fn json_or_redirect(
+    headers: &HeaderMap,
+    status: StatusCode,
+    message: &str,
+) -> (StatusCode, axum::response::Response) {
+    let accepts_html = headers
+        .get(header::ACCEPT)
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.contains("text/html"))
+        .unwrap_or(false);
+
+    if accepts_html {
+        let target = if message.contains("expired") || message.contains("Invalid") {
+            "/login"
+        } else {
+            "/login"
+        };
+        (status, Redirect::to(target).into_response())
+    } else {
+        (status, Json(ErrorResponse {
+            success: false,
+            message: message.to_string(),
+        }).into_response())
+    }
 }

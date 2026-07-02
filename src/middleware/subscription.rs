@@ -1,25 +1,14 @@
 //! Regular-user subscription gate.
 //!
 //! Runs AFTER `auth_middleware` so `Claims` is in the request extensions.
-//! Reads the caller's subscription row and decides whether the request
-//! is allowed through:
-//!
-//! * `grandfathered`                             → always allow (team / pre-paywall signups).
-//! * `trial` AND trial_ends_at > NOW()           → allow.
-//! * `active` AND subscription_active_until > NOW() → allow.
-//! * Admins / staff / whitelisted clippers       → always allow.
-//! * Otherwise                                   → HTTP 402 with upgrade_url.
-//!
-//! When a trial's timestamp has passed we flip the status to `expired`
-//! inline so the admin dashboard sees it without a separate sweeper.
 
 use crate::models::auth::Claims;
 use crate::AppState;
 use axum::{
     extract::Request,
-    http::StatusCode,
+    http::{StatusCode, header},
     middleware::Next,
-    response::{IntoResponse, Json, Response},
+    response::{IntoResponse, Json, Redirect, Response},
 };
 use serde_json::json;
 use sqlx::Row;
@@ -29,15 +18,13 @@ pub async fn subscription_middleware(
     request: Request,
     next: Next,
 ) -> Result<Response, impl IntoResponse> {
-    // Pull Claims (JWT already verified upstream by auth_middleware) and
-    // AppState out of request extensions. If either is missing the request
-    // is malformed — bail out rather than crash.
     let claims = match request.extensions().get::<Claims>() {
         Some(c) => c.clone(),
         None => {
-            return Err((
+            return Err(json_or_redirect(
+                &request,
                 StatusCode::UNAUTHORIZED,
-                Json(json!({"success": false, "error": "auth_required"})),
+                json!({"success": false, "error": "auth_required"}),
             ))
         }
     };
@@ -45,14 +32,14 @@ pub async fn subscription_middleware(
     let state = match request.extensions().get::<Arc<AppState>>() {
         Some(s) => s.clone(),
         None => {
-            return Err((
+            return Err(json_or_redirect(
+                &request,
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"success": false, "error": "app_state_missing"})),
+                json!({"success": false, "error": "app_state_missing"}),
             ))
         }
     };
 
-    // Staff + superusers bypass the paywall entirely — they're running ops.
     if claims.is_superuser || claims.is_staff {
         return Ok(next.run(request).await);
     }
@@ -60,9 +47,10 @@ pub async fn subscription_middleware(
     let user_id: i32 = match claims.sub.parse() {
         Ok(id) => id,
         Err(_) => {
-            return Err((
+            return Err(json_or_redirect(
+                &request,
                 StatusCode::UNAUTHORIZED,
-                Json(json!({"success": false, "error": "invalid_user_id"})),
+                json!({"success": false, "error": "invalid_user_id"}),
             ))
         }
     };
@@ -77,23 +65,22 @@ pub async fn subscription_middleware(
     {
         Ok(Some(r)) => r,
         Ok(None) => {
-            return Err((
+            return Err(json_or_redirect(
+                &request,
                 StatusCode::UNAUTHORIZED,
-                Json(json!({"success": false, "error": "user_not_found"})),
+                json!({"success": false, "error": "user_not_found"}),
             ))
         }
         Err(e) => {
             tracing::warn!("subscription_middleware DB error: {}", e);
-            return Err((
+            return Err(json_or_redirect(
+                &request,
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"success": false, "error": "subscription_lookup_failed"})),
-            ));
+                json!({"success": false, "error": "subscription_lookup_failed"}),
+            ))
         }
     };
 
-    // NULL status → grandfathered (the migration backfills NULLs, but a
-    // race with a fresh signup before the register handler runs is safe
-    // to treat as grandfathered).
     let status: String = row
         .try_get::<Option<String>, _>("subscription_status")
         .ok()
@@ -113,9 +100,6 @@ pub async fn subscription_middleware(
             match trial_end {
                 Some(t) if t > now => Ok(next.run(request).await),
                 _ => {
-                    // Trial expired — flip to `expired` so admin UI and
-                    // future requests see the correct status without
-                    // running an overnight sweeper.
                     let _ = sqlx::query(
                         "UPDATE users SET subscription_status = 'expired'
                          WHERE id = $1 AND subscription_status = 'trial'",
@@ -130,7 +114,7 @@ pub async fn subscription_middleware(
                     .bind(user_id)
                     .execute(&state.db_pool)
                     .await;
-                    Err(payment_required())
+                    Err(payment_required(&request))
                 }
             }
         }
@@ -143,7 +127,6 @@ pub async fn subscription_middleware(
             match until {
                 Some(t) if t > now => Ok(next.run(request).await),
                 _ => {
-                    // Subscription lapsed — demote to expired.
                     let _ = sqlx::query(
                         "UPDATE users SET subscription_status = 'expired'
                          WHERE id = $1 AND subscription_status = 'active'",
@@ -158,24 +141,48 @@ pub async fn subscription_middleware(
                     .bind(user_id)
                     .execute(&state.db_pool)
                     .await;
-                    Err(payment_required())
+                    Err(payment_required(&request))
                 }
             }
         }
 
-        // 'expired' | 'cancelled' | anything else → block.
-        _ => Err(payment_required()),
+        _ => Err(payment_required(&request)),
     }
 }
 
-fn payment_required() -> (StatusCode, Json<serde_json::Value>) {
-    (
-        StatusCode::PAYMENT_REQUIRED,
-        Json(json!({
+fn accepts_html(request: &Request) -> bool {
+    request
+        .headers()
+        .get(header::ACCEPT)
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.contains("text/html"))
+        .unwrap_or(false)
+}
+
+fn json_or_redirect(
+    request: &Request,
+    status: StatusCode,
+    body: serde_json::Value,
+) -> (StatusCode, axum::response::Response) {
+    if accepts_html(request) {
+        (status, Redirect::to("/subscribe").into_response())
+    } else {
+        (status, Json(body).into_response())
+    }
+}
+
+fn payment_required(
+    request: &Request,
+) -> (StatusCode, axum::response::Response) {
+    let status = StatusCode::PAYMENT_REQUIRED;
+    if accepts_html(request) {
+        (status, Redirect::to("/subscribe").into_response())
+    } else {
+        (status, Json(json!({
             "success":      false,
             "error":        "subscription_required",
             "message":      "Your free trial has ended. Subscribe for $15/mo USDC to continue.",
             "upgrade_url":  "/subscribe",
-        })),
-    )
+        })).into_response())
+    }
 }
