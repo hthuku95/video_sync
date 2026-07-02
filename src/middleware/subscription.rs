@@ -24,9 +24,9 @@ pub async fn subscription_middleware(
     let state = match request.extensions().get::<Arc<AppState>>() {
         Some(s) => s.clone(),
         None => {
-            return Err((
+            return Err(json_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"success": false, "error": "app_state_missing"})),
+                json!({"success": false, "error": "app_state_missing"}),
             ));
         }
     };
@@ -38,9 +38,9 @@ pub async fn subscription_middleware(
     let user_id: i32 = match claims.sub.parse() {
         Ok(id) => id,
         Err(_) => {
-            return Err((
+            return Err(json_error(
                 StatusCode::UNAUTHORIZED,
-                Json(json!({"success": false, "error": "invalid_user_id"})),
+                json!({"success": false, "error": "invalid_user_id"}),
             ));
         }
     };
@@ -55,16 +55,16 @@ pub async fn subscription_middleware(
     {
         Ok(Some(r)) => r,
         Ok(None) => {
-            return Err((
+            return Err(json_error(
                 StatusCode::UNAUTHORIZED,
-                Json(json!({"success": false, "error": "user_not_found"})),
+                json!({"success": false, "error": "user_not_found"}),
             ));
         }
         Err(e) => {
             tracing::warn!("subscription_middleware DB error: {}", e);
-            return Err((
+            return Err(json_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"success": false, "error": "subscription_lookup_failed"})),
+                json!({"success": false, "error": "subscription_lookup_failed"}),
             ));
         }
     };
@@ -145,6 +145,10 @@ fn is_browser_request(request: &Request) -> bool {
         .and_then(|v| v.to_str().ok())
         .map(|v| v.contains("text/html"))
         .unwrap_or(false)
+}
+
+fn json_error(status: StatusCode, body: serde_json::Value) -> Response {
+    (status, Json(body)).into_response()
 }
 
 fn payment_required(request: &Request) -> Response {
