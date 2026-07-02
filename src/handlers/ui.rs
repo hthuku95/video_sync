@@ -4073,27 +4073,9 @@ body {{ font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; colo
 <div class="tags"><span class="tag">Starter</span><span class="tag">Launch</span><span class="tag">Walkthrough</span></div>
 <span class="btn">Order demo</span>
 </a>
-<a href="/services/clipper-enhancement-pack" class="card" style="text-decoration:none;color:inherit;">
-<h3>Thumbnails & Motion Graphics</h3>
-<div class="price">$250–$1,200</div>
-<p>Thumbnails, title cards, lower thirds, device mockups — 10 variants in hours.</p>
-<div class="tags"><span class="tag">YouTube</span><span class="tag">Campaign</span><span class="tag">Social</span></div>
-<span class="btn">Order graphics</span>
-</a>
-<a href="/services/thumbnail-hero-pack" class="card" style="text-decoration:none;color:inherit;">
-<h3>Thumbnail & Hero Visuals</h3>
-<div class="price">$75–$300</div>
-<p>Click-optimized thumbnails and hero visuals. Same-day delivery.</p>
-<div class="tags"><span class="tag">Thumbnail</span><span class="tag">Hero</span><span class="tag">Ad</span></div>
-<span class="btn">Order thumbnail</span>
-</a>
-<a href="/services/product-mockup-pack" class="card" style="text-decoration:none;color:inherit;">
-<h3>Product Mockup Videos</h3>
-<div class="price">$299–$900</div>
-<p>Animated UI mockups and product walkthroughs from URLs or screenshots.</p>
-<div class="tags"><span class="tag">UI</span><span class="tag">Mockup</span><span class="tag">Demo</span></div>
-<span class="btn">Order mockup</span>
-</a>
+
+
+
 <a href="/services/education-explainer-pack" class="card" style="text-decoration:none;color:inherit;">
 <h3>Education Explainers</h3>
 <div class="price">$300–$1,500</div>
@@ -4101,34 +4083,10 @@ body {{ font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; colo
 <div class="tags"><span class="tag">Course</span><span class="tag">Explainer</span><span class="tag">Tutorial</span></div>
 <span class="btn">Order explainer</span>
 </a>
-<a href="/services/blender-scene-pack" class="card" style="text-decoration:none;color:inherit;">
-            <h3>3D/2D Animated Scenes</h3>
-<div class="price">$500–$2,500</div>
-<p>3D product scenes, animations, cinematic visuals — multiple angles in hours.</p>
-<div class="tags"><span class="tag">3D</span><span class="tag">Animation</span><span class="tag">Product</span></div>
-<span class="btn">Order scene</span>
-</a>
-<a href="/services/voice-audio-pack" class="card" style="text-decoration:none;color:inherit;">
-<h3>Voice & Audio Production</h3>
-<div class="price">$99–$750</div>
-<p>Narration, voiceovers, summaries — produce 20 clips in the time it takes to record one.</p>
-<div class="tags"><span class="tag">Voiceover</span><span class="tag">Audio</span><span class="tag">Narration</span></div>
-<span class="btn">Order audio</span>
-</a>
-<a href="/services/mixed-agency-bundle" class="card" style="text-decoration:none;color:inherit;">
-<h3>Agency 3-Pack</h3>
-<div class="price">$1,500</div>
-<p>3 client demo videos you can resell under your own brand. Scale to 30 clients.</p>
-<div class="tags"><span class="tag">Agency</span><span class="tag">Resell</span><span class="tag">Bundle</span></div>
-<span class="btn">Order 3-pack</span>
-</a>
-<a href="/services/creator-manager-fulfillment" class="card" style="text-decoration:none;color:inherit;">
-<h3>Agency Production Backend</h3>
-<div class="price">$999–$3,000/mo</div>
-<p>Recurring fulfillment backend. Fulfill 30 client videos with the effort it took to produce 3.</p>
-<div class="tags"><span class="tag">White-label</span><span class="tag">Recurring</span><span class="tag">API</span></div>
-<span class="btn">Explore backend</span>
-</a>
+
+
+
+
 </div>
 </div>
 </div>
@@ -5417,9 +5375,7 @@ pub async fn dashboard_page() -> Html<String> {
         <div style="display:flex;flex-wrap:wrap;gap:10px;margin:0 0 24px;">
             <a href="/services" style="text-decoration:none;padding:10px 14px;border-radius:999px;background:rgba(59,130,246,0.18);border:1px solid rgba(96,165,250,0.28);color:#dbeafe;font-weight:600;">All Services</a>
             <a href="/services/saas-launch-pack" style="text-decoration:none;padding:10px 14px;border-radius:999px;background:rgba(15,23,42,0.72);border:1px solid rgba(148,163,184,0.18);color:#dbeafe;">SaaS Launch Pack</a>
-            <a href="/services/clipper-enhancement-pack" style="text-decoration:none;padding:10px 14px;border-radius:999px;background:rgba(15,23,42,0.72);border:1px solid rgba(148,163,184,0.18);color:#dbeafe;">Thumbnail & Motion Graphics</a>
-            <a href="/services/creator-manager-fulfillment" style="text-decoration:none;padding:10px 14px;border-radius:999px;background:rgba(15,23,42,0.72);border:1px solid rgba(148,163,184,0.18);color:#dbeafe;">Agency Production Backend</a>
-            <a href="/services/x402-asset-api" style="text-decoration:none;padding:10px 14px;border-radius:999px;background:rgba(15,23,42,0.72);border:1px solid rgba(148,163,184,0.18);color:#dbeafe;">Programmable Payments</a>
+
         </div>
 
         <div class="quick-actions">
@@ -6338,9 +6294,7 @@ pub async fn chat_interface_with_session_id(session_id: Option<String>) -> Html<
                     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
                         <a href="/services" style="text-decoration:none;padding:6px 10px;border-radius:999px;background:rgba(59,130,246,0.18);border:1px solid rgba(96,165,250,0.28);color:#dbeafe;font-size:12px;font-weight:600;">Services</a>
                         <a href="/services/saas-launch-pack" style="text-decoration:none;padding:6px 10px;border-radius:999px;background:rgba(15,23,42,0.72);border:1px solid rgba(148,163,184,0.18);color:#dbeafe;font-size:12px;">SaaS Launch</a>
-                        <a href="/services/clipper-enhancement-pack" style="text-decoration:none;padding:6px 10px;border-radius:999px;background:rgba(15,23,42,0.72);border:1px solid rgba(148,163,184,0.18);color:#dbeafe;font-size:12px;">Motion Pack</a>
-                        <a href="/services/creator-manager-fulfillment" style="text-decoration:none;padding:6px 10px;border-radius:999px;background:rgba(15,23,42,0.72);border:1px solid rgba(148,163,184,0.18);color:#dbeafe;font-size:12px;">Agency Backend</a>
-                        <a href="/services/x402-asset-api" style="text-decoration:none;padding:6px 10px;border-radius:999px;background:rgba(15,23,42,0.72);border:1px solid rgba(148,163,184,0.18);color:#dbeafe;font-size:12px;">Payments</a>
+
                     </div>
                 </div>
                 <div style="display: flex; gap: 15px; align-items: center;">
