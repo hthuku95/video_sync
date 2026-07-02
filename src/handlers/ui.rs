@@ -371,7 +371,7 @@ pub async fn saas_launch_pack_page() -> Html<String> {
             "Set your product URL + target buyer",
             "Choose platforms & daily posting schedule",
             "AI generates a unique demo variant daily",
-            "Auto-posts to your connected accounts via Zernio",
+            "Auto-posts to your connected social accounts",
         ],
         &[
             "Daily AI-generated product demo videos",
@@ -461,7 +461,7 @@ pub async fn education_explainer_pack_page() -> Html<String> {
             "Share your curriculum or topic list",
             "AI plans daily lesson sequence",
             "Animated explainers generated with narration",
-            "Auto-posted on schedule via Zernio",
+            "Auto-posted on schedule to your accounts",
         ],
         &[
             "Daily animated explainer videos",
@@ -815,7 +815,7 @@ pub async fn campaigns_new_page(
 <body>
 <div class="box">
     <h1>Subscription Required</h1>
-    <p>Campaigns are part of our managed production service. Subscribe to get access to the campaign dashboard, daily content generation, and auto-publishing via Zernio.</p>
+    <p>Campaigns are part of our managed production service. Subscribe to get access to the campaign dashboard, daily content generation, and auto-publishing to your social accounts.</p>
     <a class="btn" href="/subscribe">Subscribe — $15/mo</a>
     <p style="margin-top:1rem;font-size:0.85rem;">Already subscribed? <a href="/login" style="color:#93c5fd;">Log in</a></p>
 </div>
@@ -967,16 +967,16 @@ pub async fn campaigns_new_page(
             <button type="button" class="add-btn" onclick="addScheduleEntry()">+ Add Time Slot</button>
         </div>
         <div>
-            <label>Social Accounts (Zernio)</label>
-            <p class="hint">Connect your social accounts via <a href="/admin/zernio" style="color:#93c5fd;">Zernio settings</a> first, then select which profiles to post to.</p>
+            <label>Social Accounts</label>
+            <p class="hint">Connect your accounts in <a href="/admin/zernio" style="color:#93c5fd;">Account Settings</a> first, then select which profile to post from.</p>
             <select name="zernio_profile_id" id="zernioProfile">
-                <option value="">Select a Zernio profile...</option>
+                <option value="">Select a profile...</option>
             </select>
         </div>
         <div>
             <label>Connected Platforms</label>
             <div id="platformAccounts" style="display:flex;flex-direction:column;gap:0.5rem;">
-                <p class="hint">Connect accounts in Zernio settings first, then they'll appear here.</p>
+                <p class="hint">Connect accounts in Account Settings first, then they'll appear here.</p>
             </div>
         </div>
         <button type="submit" class="btn btn-primary">Create Campaign</button>
@@ -1003,7 +1003,7 @@ document.getElementById('startDate').value = new Date().toISOString().split('T')
 const endDate = new Date(); endDate.setMonth(endDate.getMonth() + 1);
 document.getElementById('endDate').value = endDate.toISOString().split('T')[0];
 
-// Load Zernio profile for platform accounts
+// Load connected social accounts
 async function loadZernioAccounts() {{
     try {{
         const resp = await fetch('/api/admin/zernio/status');
@@ -1029,7 +1029,7 @@ async function loadZernioAccounts() {{
                 }}
             }});
         }}
-    }} catch(e) {{ console.log('Zernio load skipped'); }}
+    }} catch(e) {{ console.log('Account load skipped'); }}
 }}
 loadZernioAccounts();
 
@@ -1482,10 +1482,10 @@ fn build_services_overview_page_html() -> String {
     <section class="hero">
       <div class="eyebrow">Campaign Services</div>
       <h1>Daily AI-Generated Content — Auto-Posted to Your Platforms</h1>
-      <p>Set a brief once. Our campaign engine generates unique content daily and posts it on schedule via Zernio. Never worry about “what to post today.”</p>
+      <p>Set a brief once. Our campaign engine generates unique content daily and posts to your connected accounts on schedule. Never worry about “what to post today.”</p>
       <div class="badge-row">
         <span class="badge">Daily generation</span>
-        <span class="badge">Auto-publish via Zernio</span>
+        <span class="badge">Auto-publish</span>
         <span class="badge">Campaign dashboard</span>
         <span class="badge">Pause/resume anytime</span>
       </div>
