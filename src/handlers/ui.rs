@@ -991,11 +991,11 @@ function addScheduleEntry() {{
 }}
 
 // Show/hide source URL field based on service type
-function toggleSourceUrl() {
+function toggleSourceUrl() {{
     const val = document.getElementById('serviceType').value;
     const section = document.getElementById('sourceUrlSection');
     section.style.display = (val === 'clipping' || val === 'kick_auto_clipper') ? 'block' : 'none';
-}
+}}
 toggleSourceUrl();
 
 // Set default dates
