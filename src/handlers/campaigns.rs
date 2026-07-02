@@ -17,6 +17,9 @@ pub fn campaign_routes() -> Router {
     Router::new()
         .route("/api/campaigns", get(client_list_campaigns).post(client_create_campaign))
         .route("/api/campaigns/:id", get(client_get_campaign))
+        .route("/api/campaigns/:id/pause", post(client_pause_campaign))
+        .route("/api/campaigns/:id/resume", post(client_resume_campaign))
+        .route("/api/campaigns/:id/cancel", post(client_cancel_campaign))
         .layer(axum::middleware::from_fn(crate::middleware::auth::auth_middleware))
 }
 
@@ -49,6 +52,7 @@ pub struct CreateCampaignRequest {
     pub posts_per_day: Option<i32>,
     pub start_date: String,         // ISO 8601
     pub end_date: String,           // ISO 8601
+    pub zernio_profile_id: Option<String>,
 }
 
 // ── Admin: List all campaigns ───────────────────────────────────────────────
@@ -273,6 +277,55 @@ async fn set_campaign_status(
     }
 }
 
+// ── Client: Pause / Resume / Cancel (scoped to user) ─────────────────────────
+
+async fn client_pause_campaign(
+    Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<crate::models::auth::Claims>,
+    Path(id): Path<Uuid>,
+) -> Json<serde_json::Value> {
+    client_set_campaign_status(state, claims, id, "paused").await
+}
+
+async fn client_resume_campaign(
+    Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<crate::models::auth::Claims>,
+    Path(id): Path<Uuid>,
+) -> Json<serde_json::Value> {
+    client_set_campaign_status(state, claims, id, "active").await
+}
+
+async fn client_cancel_campaign(
+    Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<crate::models::auth::Claims>,
+    Path(id): Path<Uuid>,
+) -> Json<serde_json::Value> {
+    client_set_campaign_status(state, claims, id, "cancelled").await
+}
+
+async fn client_set_campaign_status(
+    state: Arc<AppState>,
+    claims: crate::models::auth::Claims,
+    id: Uuid,
+    status: &str,
+) -> Json<serde_json::Value> {
+    let user_id: i32 = claims.sub.parse().unwrap_or(0);
+    let result = sqlx::query(
+        "UPDATE campaigns SET status = $1, updated_at = NOW() WHERE id = $2 AND user_id = $3",
+    )
+    .bind(status)
+    .bind(id)
+    .bind(user_id)
+    .execute(&state.db_pool)
+    .await;
+
+    match result {
+        Ok(r) if r.rows_affected() > 0 => Json(json!({"success": true, "status": status})),
+        Ok(_) => Json(json!({"success": false, "error": "Campaign not found"})),
+        Err(e) => Json(json!({"success": false, "error": e.to_string()})),
+    }
+}
+
 // ── Client: Create campaign (DIY self-service) ───────────────────────────────
 
 async fn client_create_campaign(
@@ -302,8 +355,8 @@ async fn client_create_campaign(
 
     let id = sqlx::query_scalar::<_, Uuid>(
         "INSERT INTO campaigns (user_id, name, service_type, brief, style, duration, schedule, platforms, \
-                                posts_per_day, start_date, end_date) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id",
+                                posts_per_day, start_date, end_date, zernio_profile_id) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING id",
     )
     .bind(user_id)
     .bind(&req.name)
@@ -316,6 +369,7 @@ async fn client_create_campaign(
     .bind(posts_per_day)
     .bind(start_date)
     .bind(end_date)
+    .bind(&req.zernio_profile_id)
     .fetch_one(&state.db_pool)
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;

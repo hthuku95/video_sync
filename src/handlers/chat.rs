@@ -287,7 +287,7 @@ async fn websocket_handler(
 /// Returns Ok(true) if the user is allowed to use paid compute right now.
 /// Mirrors the logic in src/middleware/subscription.rs but called inline
 /// because the WS upgrade bypasses standard middleware.
-async fn subscription_ok(state: &Arc<AppState>, user_id: i32) -> Result<bool, sqlx::Error> {
+pub async fn subscription_ok(state: &Arc<AppState>, user_id: i32) -> Result<bool, sqlx::Error> {
     let row = sqlx::query(
         "SELECT is_staff, is_superuser, subscription_status, trial_ends_at, subscription_active_until
          FROM users WHERE id = $1"

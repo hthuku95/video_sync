@@ -3040,7 +3040,7 @@ async fn generate_prospect_sample_pack(
     } else {
         8.0
     };
-    let unlock_price = unlock_price_for(Some(service.as_str()), has_product_url);
+    let unlock_price = 0.0; // Prospect samples are always free — marketing material for DMs
 
     let delivery_id: Uuid = sqlx::query_scalar(
         "INSERT INTO deliveries (client_ref, title, gig_type, prompt, style, duration, extra_args,

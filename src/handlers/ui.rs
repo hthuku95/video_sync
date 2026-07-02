@@ -8,7 +8,7 @@ use crate::{
     AppState,
 };
 use axum::{
-    extract::Extension,
+    extract::{Extension, Path, Query},
     response::Html,
     routing::{get, post},
     Json, Router,
@@ -85,6 +85,9 @@ pub fn ui_private_routes() -> Router {
             "/api/service-samples/request",
             post(create_service_sample_request),
         )
+        .route("/campaigns", get(campaigns_list_page))
+        .route("/campaigns/new", get(campaigns_new_page))
+        .route("/campaigns/:id", get(campaigns_detail_page))
         .layer(axum::middleware::from_fn(
             crate::middleware::subscription::subscription_middleware,
         ))
@@ -742,6 +745,581 @@ pub async fn kick_com_clipping_page() -> Html<String> {
         r#"["clips","captions","thumbnails","scene"]"#,
         r#"["standard"]"#,
     ))
+}
+
+// ── Campaign Dashboard Pages ─────────────────────────────────────────────────
+
+pub async fn campaigns_list_page(
+    Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
+) -> Html<String> {
+    let user_id: i32 = claims.sub.parse().unwrap_or(0);
+    let rows = sqlx::query_as::<_, (uuid::Uuid, String, String, String, i32, i32, i32, chrono::DateTime<chrono::Utc>)>(
+        "SELECT id, name, service_type, status, posts_per_day, \
+                total_posts_planned, total_posts_published, created_at \
+         FROM campaigns WHERE user_id = $1 ORDER BY created_at DESC",
+    )
+    .bind(user_id)
+    .fetch_all(&state.db_pool)
+    .await
+    .unwrap_or_default();
+
+    let campaigns_html: String = if rows.is_empty() {
+        r#"<div class="empty-state"><h2>No campaigns yet</h2><p>Create your first campaign to start generating and posting content automatically.</p><a class="btn btn-primary" href="/campaigns/new">Create Campaign</a></div>"#.to_string()
+    } else {
+        rows.iter().map(|(id, name, service_type, status, per_day, planned, published, created)| {
+            let status_badge = match status.as_str() {
+                "active" => r#"<span class="badge badge-active">Active</span>"#,
+                "paused" => r#"<span class="badge badge-paused">Paused</span>"#,
+                "completed" => r#"<span class="badge badge-completed">Completed</span>"#,
+                "cancelled" => r#"<span class="badge badge-cancelled">Cancelled</span>"#,
+                _ => r#"<span class="badge">Pending</span>"#,
+            };
+            let service_label = format_service_type(service_type);
+            format!(
+                r#"<a class="campaign-card" href="/campaigns/{id}">
+                    <div class="card-top">
+                        <div class="service-tag">{service_label}</div>
+                        {status_badge}
+                    </div>
+                    <h3>{name}</h3>
+                    <div class="card-meta">
+                        <span>{published}/{planned} posts</span>
+                        <span>{per_day}/day</span>
+                        <span>{created}</span>
+                    </div>
+                </a>"#
+            )
+        }).collect()
+    };
+
+    Html(format!(
+        r#"<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>My Campaigns — VideoSync</title>
+<style>
+    :root {{ --bg:#07111d; --panel:rgba(9,18,31,0.84); --line:rgba(148,163,184,0.16); --text:#e5eefb; --muted:#a8b8d3; --blue:#3b82f6; --green:#22c55e; }}
+    * {{ box-sizing:border-box; }}
+    body {{ margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:var(--bg); color:var(--text); }}
+    .shell {{ max-width:960px; margin:0 auto; padding:32px 20px 72px; }}
+    .topbar {{ display:flex; justify-content:space-between; align-items:center; margin-bottom:28px; flex-wrap:wrap; gap:1rem; }}
+    .brand {{ color:#fff; text-decoration:none; font-weight:800; font-size:1.3rem; }}
+    .nav-links a {{ color:#c7d8f6; text-decoration:none; padding:0.65rem 1rem; border:1px solid rgba(148,163,184,0.2); border-radius:999px; background:rgba(8,15,28,0.75); margin-left:0.5rem; }}
+    h1 {{ margin:0 0 1.5rem; font-size:1.8rem; }}
+    .campaigns-grid {{ display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:1rem; }}
+    .campaign-card {{ display:block; padding:1.25rem; border-radius:16px; background:var(--panel); border:1px solid var(--line); text-decoration:none; color:var(--text); transition:border-color 0.2s; }}
+    .campaign-card:hover {{ border-color:var(--blue); }}
+    .card-top {{ display:flex; justify-content:space-between; align-items:center; margin-bottom:0.8rem; }}
+    .service-tag {{ font-size:0.78rem; padding:0.25rem 0.6rem; border-radius:999px; background:rgba(59,130,246,0.15); color:#93c5fd; }}
+    .badge {{ font-size:0.72rem; padding:0.2rem 0.5rem; border-radius:999px; }}
+    .badge-active {{ background:rgba(34,197,94,0.15); color:#86efac; }}
+    .badge-paused {{ background:rgba(251,191,36,0.15); color:#fde68a; }}
+    .badge-completed {{ background:rgba(99,102,241,0.15); color:#c4b5fd; }}
+    .badge-cancelled {{ background:rgba(239,68,68,0.15); color:#fca5a5; }}
+    .campaign-card h3 {{ margin:0 0 0.5rem; font-size:1.05rem; }}
+    .card-meta {{ display:flex; gap:0.8rem; font-size:0.82rem; color:var(--muted); }}
+    .empty-state {{ text-align:center; padding:4rem 1rem; }}
+    .empty-state h2 {{ margin:0 0 0.5rem; }}
+    .empty-state p {{ color:var(--muted); }}
+    .btn {{ display:inline-flex; align-items:center; padding:0.7rem 1.2rem; border-radius:5px; text-decoration:none; font-weight:700; cursor:pointer; }}
+    .btn-primary {{ background:linear-gradient(135deg,var(--blue),#2563eb); color:#fff; border:0; }}
+</style>
+</head>
+<body>
+<div class="shell">
+    <div class="topbar">
+        <a class="brand" href="/">VideoSync</a>
+        <div class="nav-links">
+            <a href="/campaigns/new">+ New Campaign</a>
+            <a href="/chat">Chat</a>
+            <a href="/services">Services</a>
+        </div>
+    </div>
+    <h1>My Campaigns</h1>
+    <div class="campaigns-grid">{campaigns_html}</div>
+</div>
+</body>
+</html>"#
+    ))
+}
+
+pub async fn campaigns_new_page(
+    Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
+    Query(query): Query<std::collections::HashMap<String, String>>,
+) -> Html<String> {
+    let user_id: i32 = claims.sub.parse().unwrap_or(0);
+
+    // Check subscription — non-subscribers get a paywall
+    let sub_ok = crate::handlers::chat::subscription_ok(&state, user_id).await.unwrap_or(false);
+    if !sub_ok {
+        return Html(format!(
+            r#"<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Subscribe — VideoSync</title>
+<style>
+    :root {{ --bg:#07111d; --panel:rgba(9,18,31,0.84); --text:#e5eefb; --blue:#3b82f6; }}
+    * {{ box-sizing:border-box; }}
+    body {{ margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:var(--bg); color:var(--text); display:flex; align-items:center; justify-content:center; min-height:100vh; }}
+    .box {{ text-align:center; max-width:480px; padding:2rem; }}
+    h1 {{ font-size:2rem; margin:0 0 1rem; }}
+    p {{ color:#a8b8d3; line-height:1.6; }}
+    .btn {{ display:inline-block; padding:0.8rem 1.5rem; border-radius:5px; background:linear-gradient(135deg,var(--blue),#2563eb); color:#fff; text-decoration:none; font-weight:700; margin-top:1rem; }}
+</style>
+</head>
+<body>
+<div class="box">
+    <h1>Subscription Required</h1>
+    <p>Campaigns are part of our managed production service. Subscribe to get access to the campaign dashboard, daily content generation, and auto-publishing via Zernio.</p>
+    <a class="btn" href="/subscribe">Subscribe — $15/mo</a>
+    <p style="margin-top:1rem;font-size:0.85rem;">Already subscribed? <a href="/login" style="color:#93c5fd;">Log in</a></p>
+</div>
+</body>
+</html>"#
+        ));
+    }
+
+    let preselect_service = query.get("service").cloned().unwrap_or_default();
+    let service_options = [
+        ("landing_page", "SaaS Demo Video"),
+        ("product_mockup", "Product Mockup"),
+        ("education", "Education Explainer"),
+        ("clipping", "Clip Enhancement"),
+        ("kick_auto_clipper", "Kick.com Clipping"),
+        ("business_explainer", "Business Explainer"),
+        ("manim_explainer", "Manim Explainer"),
+        ("voice_audio", "Voice & Audio"),
+        ("full_stack", "Full Stack Agency"),
+        ("whiteboard_animation", "Whiteboard Animation"),
+        ("kinetic_typography", "Kinetic Typography"),
+        ("animated_infographic", "Animated Infographic"),
+        ("algorithm_viz", "Algorithm Visualization"),
+        ("investor_pitch", "Investor Pitch"),
+        ("year_in_review", "Year in Review"),
+        ("isometric_explainer", "Isometric Explainer"),
+    ];
+
+    let options_html: String = service_options.iter().map(|(val, label)| {
+        let sel = if *val == preselect_service { " selected" } else { "" };
+        format!(r#"<option value="{val}"{sel}>{label}</option>"#)
+    }).collect();
+
+    Html(format!(
+        r#"<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>New Campaign — VideoSync</title>
+<style>
+    :root {{ --bg:#07111d; --panel:rgba(9,18,31,0.84); --line:rgba(148,163,184,0.16); --text:#e5eefb; --muted:#a8b8d3; --blue:#3b82f6; --green:#22c55e; }}
+    * {{ box-sizing:border-box; }}
+    body {{ margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:var(--bg); color:var(--text); }}
+    .shell {{ max-width:640px; margin:0 auto; padding:32px 20px 72px; }}
+    h1 {{ margin:0 0 1.5rem; font-size:1.6rem; }}
+    .topbar {{ display:flex; justify-content:space-between; align-items:center; margin-bottom:28px; }}
+    .brand {{ color:#fff; text-decoration:none; font-weight:800; font-size:1.3rem; }}
+    .nav-links a {{ color:#c7d8f6; text-decoration:none; padding:0.6rem 0.9rem; border:1px solid rgba(148,163,184,0.2); border-radius:999px; background:rgba(8,15,28,0.75); margin-left:0.4rem; font-size:0.88rem; }}
+    form {{ display:flex; flex-direction:column; gap:1.2rem; }}
+    label {{ font-weight:600; font-size:0.9rem; color:#dbeafe; }}
+    input, select, textarea {{ width:100%; padding:0.7rem; border-radius:8px; border:1px solid var(--line); background:rgba(15,23,42,0.7); color:#fff; font-size:0.95rem; }}
+    input:focus, select:focus, textarea:focus {{ outline:none; border-color:var(--blue); }}
+    textarea {{ min-height:100px; resize:vertical; }}
+    .form-row {{ display:grid; grid-template-columns:1fr 1fr; gap:1rem; }}
+    .btn {{ padding:0.8rem 1.2rem; border-radius:5px; font-weight:700; cursor:pointer; border:0; font-size:1rem; }}
+    .btn-primary {{ background:linear-gradient(135deg,var(--blue),#2563eb); color:#fff; }}
+    .btn-secondary {{ background:rgba(15,23,42,0.7); border:1px solid var(--line); color:#dbeafe; text-decoration:none; text-align:center; }}
+    .hint {{ color:var(--muted); font-size:0.82rem; margin-top:0.3rem; }}
+    .schedule-entry {{ display:flex; gap:0.5rem; align-items:center; }}
+    .schedule-entry input {{ width:auto; flex:1; }}
+    .schedule-entry select {{ width:auto; flex:1; }}
+    .add-btn {{ background:rgba(59,130,246,0.15); color:#93c5fd; border:1px dashed rgba(59,130,246,0.3); padding:0.5rem; border-radius:8px; cursor:pointer; font-size:0.85rem; }}
+</style>
+</head>
+<body>
+<div class="shell">
+    <div class="topbar">
+        <a class="brand" href="/">VideoSync</a>
+        <div class="nav-links">
+            <a href="/campaigns">My Campaigns</a>
+            <a href="/chat">Chat</a>
+        </div>
+    </div>
+    <h1>Create Campaign</h1>
+    <form id="campaignForm">
+        <div>
+            <label>Campaign Name</label>
+            <input type="text" name="name" required placeholder="e.g., Weekly Education Series">
+        </div>
+        <div>
+            <label>Service Type</label>
+            <select name="service_type" id="serviceType">{options_html}</select>
+        </div>
+        <div>
+            <label>Brief / Topic</label>
+            <textarea name="brief" required placeholder="Describe the content you want generated daily. For example: '3-minute educational explainers about calculus concepts'"></textarea>
+        </div>
+        <div class="form-row">
+            <div>
+                <label>Style</label>
+                <select name="style">
+                    <option value="cinematic">Cinematic</option>
+                    <option value="modern">Modern</option>
+                    <option value="minimal">Minimal</option>
+                    <option value="educational">Educational</option>
+                </select>
+            </div>
+            <div>
+                <label>Duration (seconds)</label>
+                <input type="number" name="duration" value="30" min="5" max="600">
+            </div>
+        </div>
+        <div class="form-row">
+            <div>
+                <label>Posts Per Day</label>
+                <input type="number" name="posts_per_day" value="3" min="1" max="10">
+            </div>
+            <div>
+                <label>Start Date</label>
+                <input type="date" name="start_date" id="startDate">
+            </div>
+        </div>
+        <div>
+            <label>End Date</label>
+            <input type="date" name="end_date" id="endDate">
+        </div>
+        <div>
+            <label>Schedule Times</label>
+            <p class="hint">Set the times each day when posts should be published.</p>
+            <div id="scheduleEntries">
+                <div class="schedule-entry">
+                    <input type="time" name="schedule_time" value="08:00">
+                    <select name="schedule_platform">
+                        <option value="youtube">YouTube</option>
+                        <option value="tiktok">TikTok</option>
+                        <option value="instagram">Instagram</option>
+                        <option value="twitter">X / Twitter</option>
+                    </select>
+                </div>
+                <div class="schedule-entry">
+                    <input type="time" name="schedule_time" value="12:00">
+                    <select name="schedule_platform">
+                        <option value="tiktok">TikTok</option>
+                        <option value="youtube">YouTube</option>
+                        <option value="instagram">Instagram</option>
+                        <option value="twitter">X / Twitter</option>
+                    </select>
+                </div>
+                <div class="schedule-entry">
+                    <input type="time" name="schedule_time" value="17:00">
+                    <select name="schedule_platform">
+                        <option value="instagram">Instagram</option>
+                        <option value="youtube">YouTube</option>
+                        <option value="tiktok">TikTok</option>
+                        <option value="twitter">X / Twitter</option>
+                    </select>
+                </div>
+            </div>
+            <button type="button" class="add-btn" onclick="addScheduleEntry()">+ Add Time Slot</button>
+        </div>
+        <div>
+            <label>Social Accounts (Zernio)</label>
+            <p class="hint">Connect your social accounts via <a href="/admin/zernio" style="color:#93c5fd;">Zernio settings</a> first, then select which profiles to post to.</p>
+            <select name="zernio_profile_id" id="zernioProfile">
+                <option value="">Select a Zernio profile...</option>
+            </select>
+        </div>
+        <div>
+            <label>Connected Platforms</label>
+            <div id="platformAccounts" style="display:flex;flex-direction:column;gap:0.5rem;">
+                <p class="hint">Connect accounts in Zernio settings first, then they'll appear here.</p>
+            </div>
+        </div>
+        <button type="submit" class="btn btn-primary">Create Campaign</button>
+    </form>
+</div>
+<script>
+function addScheduleEntry() {{
+    const div = document.createElement('div');
+    div.className = 'schedule-entry';
+    div.innerHTML = '<input type="time" name="schedule_time" value="09:00"><select name="schedule_platform"><option value="youtube">YouTube</option><option value="tiktok">TikTok</option><option value="instagram">Instagram</option><option value="twitter">X / Twitter</option></select><button type="button" onclick="this.parentElement.remove()" style="background:none;border:none;color:#ef4444;cursor:pointer;font-size:1.2rem;">×</button>';
+    document.getElementById('scheduleEntries').appendChild(div);
+}}
+
+// Set default dates
+document.getElementById('startDate').value = new Date().toISOString().split('T')[0];
+const endDate = new Date(); endDate.setMonth(endDate.getMonth() + 1);
+document.getElementById('endDate').value = endDate.toISOString().split('T')[0];
+
+// Load Zernio profile for platform accounts
+async function loadZernioAccounts() {{
+    try {{
+        const resp = await fetch('/api/admin/zernio/status');
+        const data = await resp.json();
+        if (data.success && data.profiles) {{
+            const sel = document.getElementById('zernioProfile');
+            data.profiles.forEach(p => {{
+                const opt = document.createElement('option');
+                opt.value = p.id;
+                opt.textContent = p.name;
+                sel.appendChild(opt);
+            }});
+        }}
+        if (data.success && data.accounts) {{
+            const container = document.getElementById('platformAccounts');
+            container.innerHTML = '';
+            data.accounts.forEach(a => {{
+                if (a.connected) {{
+                    const label = document.createElement('label');
+                    label.style.cssText = 'display:flex;align-items:center;gap:0.5rem;font-weight:400;';
+                    label.innerHTML = '<input type="checkbox" name="platform_account" value=\'' + JSON.stringify({{platform: a.platform, accountId: a.id}}) + '\'> ' + a.platform + ' (@' + (a.username || 'connected') + ')';
+                    container.appendChild(label);
+                }}
+            }});
+        }}
+    }} catch(e) {{ console.log('Zernio load skipped'); }}
+}}
+loadZernioAccounts();
+
+document.getElementById('campaignForm').addEventListener('submit', async (e) => {{
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const schedule = [];
+    document.querySelectorAll('#scheduleEntries .schedule-entry').forEach(entry => {{
+        const time = entry.querySelector('input[type="time"]').value;
+        const platform = entry.querySelector('select').value;
+        schedule.push({{time, platform}});
+    }});
+    const platforms = [];
+    document.querySelectorAll('input[name="platform_account"]:checked').forEach(cb => {{
+        platforms.push(JSON.parse(cb.value));
+    }});
+    const payload = {{
+        name: fd.get('name'),
+        service_type: fd.get('service_type'),
+        brief: fd.get('brief'),
+        style: fd.get('style'),
+        duration: parseFloat(fd.get('duration')),
+        posts_per_day: parseInt(fd.get('posts_per_day')),
+        start_date: new Date(fd.get('start_date')).toISOString(),
+        end_date: new Date(fd.get('end_date')).toISOString(),
+        schedule: schedule,
+        platforms: platforms,
+        zernio_profile_id: fd.get('zernio_profile_id') || undefined,
+    }};
+    try {{
+        const resp = await fetch('/api/campaigns', {{ method: 'POST', headers: {{'Content-Type':'application/json'}}, body: JSON.stringify(payload) }});
+        const data = await resp.json();
+        if (data.success) {{
+            window.location.href = '/campaigns/' + data.id;
+        }} else {{
+            alert('Error: ' + (data.error || 'Unknown'));
+        }}
+    }} catch(e) {{ alert('Network error: ' + e); }}
+}});
+</script>
+</body>
+</html>"#
+    ))
+}
+
+pub async fn campaigns_detail_page(
+    Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
+    Path(id): Path<uuid::Uuid>,
+) -> Html<String> {
+    let user_id: i32 = claims.sub.parse().unwrap_or(0);
+
+    let campaign = sqlx::query_as::<_, (uuid::Uuid, String, String, String, String, f64, serde_json::Value, serde_json::Value, i32, chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>, Option<String>, String, i32, i32)>(
+        "SELECT id, name, service_type, brief, style, duration, schedule, platforms, \
+                posts_per_day, start_date, end_date, zernio_profile_id, status, \
+                total_posts_planned, total_posts_published \
+         FROM campaigns WHERE id = $1 AND user_id = $2",
+    )
+    .bind(id)
+    .bind(user_id)
+    .fetch_optional(&state.db_pool)
+    .await;
+
+    let (id, name, service_type, brief, style, duration, _schedule, _platforms, posts_per_day,
+         start_date, end_date, _zernio_profile_id, status, total_planned, total_published) = match campaign {
+        Ok(Some(r)) => r,
+        Ok(None) => return Html(r#"<html><body><h1>Campaign not found</h1><a href="/campaigns">Back</a></body></html>"#.to_string()),
+        Err(_) => return Html(r#"<html><body><h1>Error loading campaign</h1><a href="/campaigns">Back</a></body></html>"#.to_string()),
+    };
+
+    let posts = sqlx::query_as::<_, (uuid::Uuid, i32, i32, chrono::DateTime<chrono::Utc>, Option<String>, Option<String>, String, Option<String>)>(
+        "SELECT id, day_number, slot_index, scheduled_at, media_r2_url, caption, status, zernio_post_id \
+         FROM campaign_posts WHERE campaign_id = $1 ORDER BY day_number, slot_index LIMIT 100",
+    )
+    .bind(id)
+    .fetch_all(&state.db_pool)
+    .await
+    .unwrap_or_default();
+
+    let posts_html: String = posts.iter().map(|(_pid, day, slot, scheduled_at, media_url, caption, post_status, zernio_id)| {
+        let status_icon = match post_status.as_str() {
+            "pending_generation" => "⏳",
+            "rendering" => "🔄",
+            "scheduled" => "📅",
+            "published" => "✅",
+            "failed" => "❌",
+            _ => "⬜",
+        };
+        let media_link = match media_url {
+            Some(url) => format!(r#"<a href="{url}" target="_blank" style="color:#93c5fd;">View</a>"#),
+            None => "—".to_string(),
+        };
+        let zernio_link = match zernio_id {
+            Some(zid) => format!(" ({})", zid.chars().take(8).collect::<String>()),
+            None => String::new(),
+        };
+        format!(
+            r#"<tr>
+                <td>Day {day}</td>
+                <td>Slot {slot}</td>
+                <td>{scheduled_at}</td>
+                <td>{status_icon} {post_status}{zernio_link}</td>
+                <td>{media_link}</td>
+                <td>{caption}</td>
+            </tr>"#
+        )
+    }).collect();
+
+    let status_badge = match status.as_str() {
+        "active" => r#"<span class="badge badge-active">Active</span>"#,
+        "paused" => r#"<span class="badge badge-paused">Paused</span>"#,
+        "completed" => r#"<span class="badge badge-completed">Completed</span>"#,
+        "cancelled" => r#"<span class="badge badge-cancelled">Cancelled</span>"#,
+        _ => r#"<span class="badge">Pending</span>"#,
+    };
+
+    let status_actions = match status.as_str() {
+        "active" => r#"<button class="btn btn-warning" onclick="updateStatus('paused')">Pause</button><button class="btn btn-danger" onclick="updateStatus('cancelled')">Cancel</button>"#,
+        "paused" => r#"<button class="btn btn-success" onclick="updateStatus('active')">Resume</button><button class="btn btn-danger" onclick="updateStatus('cancelled')">Cancel</button>"#,
+        _ => String::new(),
+    };
+
+    let start_str = start_date.format("%b %d, %Y").to_string();
+    let end_str = end_date.format("%b %d, %Y").to_string();
+    let service_label = format_service_type(&service_type);
+
+    Html(format!(
+        r#"<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{name} — VideoSync</title>
+<style>
+    :root {{ --bg:#07111d; --panel:rgba(9,18,31,0.84); --line:rgba(148,163,184,0.16); --text:#e5eefb; --muted:#a8b8d3; --blue:#3b82f6; --green:#22c55e; --red:#ef4444; --amber:#f59e0b; }}
+    * {{ box-sizing:border-box; }}
+    body {{ margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:var(--bg); color:var(--text); }}
+    .shell {{ max-width:960px; margin:0 auto; padding:32px 20px 72px; }}
+    .topbar {{ display:flex; justify-content:space-between; align-items:center; margin-bottom:28px; flex-wrap:wrap; gap:1rem; }}
+    .brand {{ color:#fff; text-decoration:none; font-weight:800; font-size:1.3rem; }}
+    .nav-links a {{ color:#c7d8f6; text-decoration:none; padding:0.65rem 1rem; border:1px solid rgba(148,163,184,0.2); border-radius:999px; background:rgba(8,15,28,0.75); margin-left:0.5rem; }}
+    .campaign-header {{ display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:1rem; margin-bottom:1.5rem; }}
+    .campaign-header h1 {{ margin:0; font-size:1.6rem; }}
+    .badge {{ font-size:0.75rem; padding:0.25rem 0.6rem; border-radius:999px; }}
+    .badge-active {{ background:rgba(34,197,94,0.15); color:#86efac; }}
+    .badge-paused {{ background:rgba(251,191,36,0.15); color:#fde68a; }}
+    .badge-completed {{ background:rgba(99,102,241,0.15); color:#c4b5fd; }}
+    .badge-cancelled {{ background:rgba(239,68,68,0.15); color:#fca5a5; }}
+    .stats {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:1rem; margin-bottom:1.5rem; }}
+    .stat-card {{ padding:1rem; border-radius:12px; background:var(--panel); border:1px solid var(--line); }}
+    .stat-card .value {{ font-size:1.5rem; font-weight:900; }}
+    .stat-card .label {{ font-size:0.78rem; color:var(--muted); }}
+    .actions {{ display:flex; gap:0.5rem; flex-wrap:wrap; margin-bottom:1.5rem; }}
+    .btn {{ display:inline-flex; align-items:center; padding:0.6rem 1rem; border-radius:5px; font-weight:700; cursor:pointer; border:0; font-size:0.88rem; }}
+    .btn-success {{ background:rgba(34,197,94,0.2); color:#86efac; border:1px solid rgba(34,197,94,0.3); }}
+    .btn-warning {{ background:rgba(251,191,36,0.2); color:#fde68a; border:1px solid rgba(251,191,36,0.3); }}
+    .btn-danger {{ background:rgba(239,68,68,0.2); color:#fca5a5; border:1px solid rgba(239,68,68,0.3); }}
+    table {{ width:100%; border-collapse:collapse; }}
+    th, td {{ text-align:left; padding:0.7rem 0.5rem; border-bottom:1px solid var(--line); font-size:0.9rem; }}
+    th {{ color:var(--muted); font-weight:600; }}
+    tr:hover td {{ background:rgba(59,130,246,0.04); }}
+    .service-tag {{ display:inline-block; font-size:0.78rem; padding:0.2rem 0.6rem; border-radius:999px; background:rgba(59,130,246,0.15); color:#93c5fd; margin-bottom:0.5rem; }}
+    .detail-grid {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:0.8rem; margin-bottom:1.5rem; padding:1rem; border-radius:12px; background:var(--panel); border:1px solid var(--line); }}
+    .detail-item .dl {{ color:var(--muted); font-size:0.78rem; }}
+    .detail-item .dd {{ font-weight:600; }}
+</style>
+</head>
+<body>
+<div class="shell">
+    <div class="topbar">
+        <a class="brand" href="/">VideoSync</a>
+        <div class="nav-links">
+            <a href="/campaigns">My Campaigns</a>
+            <a href="/chat">Chat</a>
+        </div>
+    </div>
+
+    <div class="campaign-header">
+        <div>
+            <div class="service-tag">{service_label}</div>
+            <h1>{name}</h1>
+        </div>
+        <div>{status_badge}</div>
+    </div>
+
+    <div class="detail-grid">
+        <div class="detail-item"><div class="dl">Brief</div><div class="dd">{brief}</div></div>
+        <div class="detail-item"><div class="dl">Style</div><div class="dd">{style}</div></div>
+        <div class="detail-item"><div class="dl">Duration</div><div class="dd">{duration}s</div></div>
+        <div class="detail-item"><div class="dl">Posts/Day</div><div class="dd">{posts_per_day}</div></div>
+        <div class="detail-item"><div class="dl">Start</div><div class="dd">{start_str}</div></div>
+        <div class="detail-item"><div class="dl">End</div><div class="dd">{end_str}</div></div>
+    </div>
+
+    <div class="stats">
+        <div class="stat-card"><div class="value">{total_published}</div><div class="label">Published</div></div>
+        <div class="stat-card"><div class="value">{total_planned}</div><div class="label">Total Planned</div></div>
+        <div class="stat-card"><div class="value">{posts_per_day}</div><div class="label">Posts / Day</div></div>
+    </div>
+
+    <div class="actions">
+        {status_actions}
+    </div>
+
+    <h2>Post Calendar</h2>
+    <table>
+        <thead><tr><th>Day</th><th>Slot</th><th>Scheduled</th><th>Status</th><th>Media</th><th>Caption</th></tr></thead>
+        <tbody>
+            {posts_html}
+        </tbody>
+    </table>
+</div>
+<script>
+async function updateStatus(newStatus) {{
+    if (newStatus === 'cancelled' && !confirm('Cancel this campaign? This cannot be undone.')) return;
+    const resp = await fetch('/api/campaigns/{id}/' + newStatus, {{ method: 'POST' }});
+    const data = await resp.json();
+    if (data.success) {{ location.reload(); }}
+    else {{ alert('Failed: ' + (data.error || 'Unknown')); }}
+}}
+</script>
+</body>
+</html>"#
+    ))
+}
+
+fn format_service_type(s: &str) -> &'static str {
+    match s {
+        "landing_page" => "SaaS Demo",
+        "product_mockup" => "Product Mockup",
+        "education" => "Education",
+        "clipping" | "kick_auto_clipper" => "Clipping",
+        "business_explainer" => "Business Explainer",
+        "manim_explainer" => "Manim",
+        "voice_audio" => "Voice & Audio",
+        "full_stack" => "Full Stack",
+        "whiteboard_animation" => "Whiteboard",
+        "kinetic_typography" => "Kinetic Text",
+        "animated_infographic" => "Infographic",
+        "algorithm_viz" => "Algorithm Viz",
+        "year_in_review" => "Year in Review",
+        "isometric_explainer" => "Isometric",
+        _ => s,
+    }
 }
 
 pub async fn manim_explainer_page() -> Html<String> {
