@@ -1129,10 +1129,10 @@ IMPORTANT: For fetching website content, use `browserbase_fetch_url(url)` — it
                                         .and_then(|v| v.as_str())
                                         .unwrap_or(user_input);
 
-                                    let tool_result = Ok(json!({
+                                    let tool_result = json!({
                                         "result": format!("The background job is being handled within the current agent session. Task: {}", task_description),
                                         "note": "Background job dispatch was removed. The agent handles all tasks inline."
-                                    }));
+                                    });
 
                                     function_results.push((
                                         function_name.clone(),

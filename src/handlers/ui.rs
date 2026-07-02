@@ -1117,6 +1117,7 @@ pub async fn campaigns_detail_page(
             Some(zid) => format!(" ({})", zid.chars().take(8).collect::<String>()),
             None => String::new(),
         };
+        let caption_display = caption.as_deref().unwrap_or("—");
         format!(
             r#"<tr>
                 <td>Day {day}</td>
@@ -1124,7 +1125,7 @@ pub async fn campaigns_detail_page(
                 <td>{scheduled_at}</td>
                 <td>{status_icon} {post_status}{zernio_link}</td>
                 <td>{media_link}</td>
-                <td>{caption}</td>
+                <td>{caption_display}</td>
             </tr>"#
         )
     }).collect();
@@ -1138,8 +1139,8 @@ pub async fn campaigns_detail_page(
     };
 
     let status_actions = match status.as_str() {
-        "active" => r#"<button class="btn btn-warning" onclick="updateStatus('paused')">Pause</button><button class="btn btn-danger" onclick="updateStatus('cancelled')">Cancel</button>"#,
-        "paused" => r#"<button class="btn btn-success" onclick="updateStatus('active')">Resume</button><button class="btn btn-danger" onclick="updateStatus('cancelled')">Cancel</button>"#,
+        "active" => r#"<button class="btn btn-warning" onclick="updateStatus('paused')">Pause</button><button class="btn btn-danger" onclick="updateStatus('cancelled')">Cancel</button>"#.to_string(),
+        "paused" => r#"<button class="btn btn-success" onclick="updateStatus('active')">Resume</button><button class="btn btn-danger" onclick="updateStatus('cancelled')">Cancel</button>"#.to_string(),
         _ => String::new(),
     };
 
@@ -1248,20 +1249,17 @@ async function updateStatus(newStatus) {{
 fn format_service_type(s: &str) -> &'static str {
     match s {
         "landing_page" => "SaaS Demo",
-        "product_mockup" => "Product Mockup",
-        "education" => "Education",
         "clipping" | "kick_auto_clipper" => "Clipping",
-        "business_explainer" => "Business Explainer",
+        "education" => "Education",
         "manim_explainer" => "Manim",
-        "voice_audio" => "Voice & Audio",
-        "full_stack" => "Full Stack",
         "whiteboard_animation" => "Whiteboard",
         "kinetic_typography" => "Kinetic Text",
         "animated_infographic" => "Infographic",
         "algorithm_viz" => "Algorithm Viz",
+        "investor_pitch" => "Investor Pitch",
         "year_in_review" => "Year in Review",
         "isometric_explainer" => "Isometric",
-        _ => s,
+        _ => "Unknown",
     }
 }
 
