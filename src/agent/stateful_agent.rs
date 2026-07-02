@@ -1064,6 +1064,9 @@ IMPORTANT: For fetching website content, use `browserbase_fetch_url(url)` — it
                                 if function_name != "start_background_job"
                                     && function_name != "check_job_status"
                                     && function_name != "search_memory"
+                                    && function_name != "list_campaigns"
+                                    && function_name != "get_campaign_status"
+                                    && function_name != "control_campaign"
                                 {
                                     // Execute video editing tool directly using tool_executor
                                     send_progress(&format!(
@@ -1326,6 +1329,184 @@ IMPORTANT: For fetching website content, use `browserbase_fetch_url(url)` — it
                                         tool_result,
                                         function_call.thought_signature.clone(),
                                     ));
+                                } else if function_name == "list_campaigns" {
+                                    send_progress("📋 Listing your campaigns...");
+                                    let user_id_i32 = user_id.unwrap_or(0);
+                                    let rows = sqlx::query_as::<_, (uuid::Uuid, String, String, String, i32, i32, i32)>(
+                                        "SELECT id, name, service_type, status, posts_per_day, \
+                                                total_posts_planned, total_posts_published \
+                                         FROM campaigns WHERE user_id = $1 ORDER BY created_at DESC LIMIT 50",
+                                    )
+                                    .bind(user_id_i32)
+                                    .fetch_all(&app_state.db_pool)
+                                    .await
+                                    .unwrap_or_default();
+
+                                    let campaigns_list: Vec<serde_json::Value> = rows.into_iter().map(|(cid, cname, stype, cstatus, ppd, planned, published)| {
+                                        serde_json::json!({
+                                            "id": cid.to_string(),
+                                            "name": cname,
+                                            "service_type": stype,
+                                            "status": cstatus,
+                                            "posts_per_day": ppd,
+                                            "total_posts_planned": planned,
+                                            "total_posts_published": published,
+                                        })
+                                    }).collect();
+
+                                    let tool_result = serde_json::json!({
+                                        "campaigns": campaigns_list,
+                                        "total": campaigns_list.len(),
+                                        "note": "You can ask about a specific campaign by name or ID for more details."
+                                    });
+
+                                    function_results.push((
+                                        function_name.clone(),
+                                        tool_result,
+                                        function_call.thought_signature.clone(),
+                                    ));
+                                } else if function_name == "get_campaign_status" {
+                                    send_progress("📊 Fetching campaign details...");
+                                    let user_id_i32 = user_id.unwrap_or(0);
+                                    let campaign_id = function_call.args.get("campaign_id").and_then(|v| v.as_str());
+                                    let campaign_name = function_call.args.get("name").and_then(|v| v.as_str());
+
+                                    let tool_result = if let Some(cid_str) = campaign_id {
+                                        if let Ok(cid) = uuid::Uuid::parse_str(cid_str) {
+                                            let row = sqlx::query_as::<_, (uuid::Uuid, String, String, String, String, f64, i32, i32, i32, chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>, String)>(
+                                                "SELECT id, name, service_type, brief, style, duration, posts_per_day, \
+                                                        total_posts_planned, total_posts_published, start_date, end_date, status \
+                                                 FROM campaigns WHERE id = $1 AND user_id = $2",
+                                            )
+                                            .bind(cid)
+                                            .bind(user_id_i32)
+                                            .fetch_optional(&app_state.db_pool)
+                                            .await;
+
+                                            match row {
+                                                Ok(Some((cid2, cname, stype, brief, style, duration, ppd, planned, published, start, end, cstatus))) => {
+                                                    let recent_posts = sqlx::query_as::<_, (String, String, Option<String>)>(
+                                                        "SELECT scheduled_at::text, status, media_r2_url \
+                                                         FROM campaign_posts WHERE campaign_id = $1 \
+                                                         ORDER BY scheduled_at DESC LIMIT 10",
+                                                    )
+                                                    .bind(cid2)
+                                                    .fetch_all(&app_state.db_pool)
+                                                    .await
+                                                    .unwrap_or_default();
+
+                                                    let posts_json: Vec<serde_json::Value> = recent_posts.into_iter().map(|(sa, ps, url)| {
+                                                        serde_json::json!({
+                                                            "scheduled_at": sa,
+                                                            "status": ps,
+                                                            "has_media": url.is_some(),
+                                                        })
+                                                    }).collect();
+
+                                                    serde_json::json!({
+                                                        "found": true,
+                                                        "campaign": {
+                                                            "id": cid2.to_string(),
+                                                            "name": cname,
+                                                            "service_type": stype,
+                                                            "brief": brief,
+                                                            "style": style,
+                                                            "duration_seconds": duration,
+                                                            "posts_per_day": ppd,
+                                                            "total_planned": planned,
+                                                            "total_published": published,
+                                                            "start_date": start.to_rfc3339(),
+                                                            "end_date": end.to_rfc3339(),
+                                                            "status": cstatus,
+                                                        },
+                                                        "recent_posts": posts_json,
+                                                    })
+                                                }
+                                                Ok(None) => serde_json::json!({"found": false, "error": "Campaign not found or access denied."}),
+                                                Err(e) => serde_json::json!({"error": format!("Database error: {e}")}),
+                                            }
+                                        } else {
+                                            serde_json::json!({"error": "Invalid campaign ID format."})
+                                        }
+                                    } else if let Some(cname) = campaign_name {
+                                        let row = sqlx::query_as::<_, (uuid::Uuid, String)>(
+                                            "SELECT id, name FROM campaigns WHERE user_id = $1 AND name ILIKE $2 LIMIT 1",
+                                        )
+                                        .bind(user_id_i32)
+                                        .bind(format!("%{}%", cname))
+                                        .fetch_optional(&app_state.db_pool)
+                                        .await;
+
+                                        match row {
+                                            Ok(Some((found_id, found_name))) => {
+                                                // Recurse with the found ID
+                                                // We use the same logic — re-call with the ID found
+                                                serde_json::json!({
+                                                    "found_campaign": found_name,
+                                                    "campaign_id": found_id.to_string(),
+                                                    "note": "Use get_campaign_status with this campaign_id to get full details."
+                                                })
+                                            }
+                                            Ok(None) => serde_json::json!({"found": false, "error": format!("No campaign found with name matching '{cname}'.")}),
+                                            Err(e) => serde_json::json!({"error": format!("Database error: {e}")}),
+                                        }
+                                    } else {
+                                        serde_json::json!({"error": "Provide either campaign_id or name."})
+                                    };
+
+                                    function_results.push((
+                                        function_name.clone(),
+                                        tool_result,
+                                        function_call.thought_signature.clone(),
+                                    ));
+                                } else if function_name == "control_campaign" {
+                                    send_progress("🔄 Controlling campaign...");
+                                    let user_id_i32 = user_id.unwrap_or(0);
+                                    let campaign_id = function_call.args.get("campaign_id").and_then(|v| v.as_str());
+                                    let action = function_call.args.get("action").and_then(|v| v.as_str()).unwrap_or("");
+
+                                    let valid_actions = ["pause", "resume", "cancel"];
+                                    if !valid_actions.contains(&action) {
+                                        let tool_result = serde_json::json!({
+                                            "error": format!("Invalid action '{action}'. Must be one of: pause, resume, cancel.")
+                                        });
+                                        function_results.push((function_name.clone(), tool_result, function_call.thought_signature.clone()));
+                                    } else if let Some(cid_str) = campaign_id {
+                                        if let Ok(cid) = uuid::Uuid::parse_str(cid_str) {
+                                            let status = match action {
+                                                "pause" => "paused",
+                                                "resume" => "active",
+                                                "cancel" => "cancelled",
+                                                _ => "paused",
+                                            };
+                                            let result = sqlx::query(
+                                                "UPDATE campaigns SET status = $1, updated_at = NOW() WHERE id = $2 AND user_id = $3"
+                                            )
+                                            .bind(status)
+                                            .bind(cid)
+                                            .bind(user_id_i32)
+                                            .execute(&app_state.db_pool)
+                                            .await;
+
+                                            let tool_result = match result {
+                                                Ok(r) if r.rows_affected() > 0 => serde_json::json!({
+                                                    "success": true,
+                                                    "campaign_id": cid_str,
+                                                    "new_status": status,
+                                                    "message": format!("Campaign {}d successfully.", action)
+                                                }),
+                                                Ok(_) => serde_json::json!({"error": "Campaign not found or access denied."}),
+                                                Err(e) => serde_json::json!({"error": format!("Database error: {e}")}),
+                                            };
+                                            function_results.push((function_name.clone(), tool_result, function_call.thought_signature.clone()));
+                                        } else {
+                                            let tool_result = serde_json::json!({"error": "Invalid campaign ID format."});
+                                            function_results.push((function_name.clone(), tool_result, function_call.thought_signature.clone()));
+                                        }
+                                    } else {
+                                        let tool_result = serde_json::json!({"error": "campaign_id is required."});
+                                        function_results.push((function_name.clone(), tool_result, function_call.thought_signature.clone()));
+                                    }
                                 }
                             }
                             _ => {}
@@ -1445,7 +1626,7 @@ IMPORTANT: For fetching website content, use `browserbase_fetch_url(url)` — it
     }
 
     fn create_all_tools(_user_input: &str) -> Vec<crate::gemini_client::FunctionDeclaration> {
-        // Start with the 3 control tools
+        // Start with the 3 control tools + campaign management tools
         let all_tools = vec![
             crate::gemini_client::FunctionDeclaration {
                 name: "start_background_job".to_string(),
@@ -1500,6 +1681,55 @@ IMPORTANT: For fetching website content, use `browserbase_fetch_url(url)` — it
                         }),
                     ]),
                     required: vec!["query".to_string()],
+                },
+            },
+            crate::gemini_client::FunctionDeclaration {
+                name: "list_campaigns".to_string(),
+                description: "List all content campaigns for the current user. Returns campaign names, status, service type, and post counts. Use this when the user asks 'what campaigns do I have?', 'show me my campaigns', or 'list my content schedules'.".to_string(),
+                parameters: crate::gemini_client::Parameters {
+                    param_type: "object".to_string(),
+                    properties: HashMap::from([]),
+                    required: vec![],
+                },
+            },
+            crate::gemini_client::FunctionDeclaration {
+                name: "get_campaign_status".to_string(),
+                description: "Get detailed status of a specific campaign by its ID or name. Returns schedule, post calendar, recent publish stats, and current status. Use this when the user asks 'how is my campaign doing?', 'show me campaign X', or 'what happened to my education campaign?'.".to_string(),
+                parameters: crate::gemini_client::Parameters {
+                    param_type: "object".to_string(),
+                    properties: HashMap::from([
+                        ("campaign_id".to_string(), crate::gemini_client::PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "The UUID of the campaign to check. If omitted, tries to find by name.".to_string(),
+                            items: None,
+                        }),
+                        ("name".to_string(), crate::gemini_client::PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Optional campaign name to search for if no ID provided.".to_string(),
+                            items: None,
+                        }),
+                    ]),
+                    required: vec![],
+                },
+            },
+            crate::gemini_client::FunctionDeclaration {
+                name: "control_campaign".to_string(),
+                description: "Pause, resume, or cancel a campaign. Use this when the user wants to stop, start, or delete a campaign.".to_string(),
+                parameters: crate::gemini_client::Parameters {
+                    param_type: "object".to_string(),
+                    properties: HashMap::from([
+                        ("campaign_id".to_string(), crate::gemini_client::PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "The UUID of the campaign to control.".to_string(),
+                            items: None,
+                        }),
+                        ("action".to_string(), crate::gemini_client::PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "One of: 'pause', 'resume', 'cancel'.".to_string(),
+                            items: None,
+                        }),
+                    ]),
+                    required: vec!["campaign_id".to_string(), "action".to_string()],
                 },
             },
         ];
