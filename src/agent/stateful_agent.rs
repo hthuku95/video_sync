@@ -600,7 +600,7 @@ The tool `generate_long_form_video` exists in your catalog but is a DELEGATION w
 ## SERVICE-SPECIFIC TOOL SELECTION
 The MANDATORY TOOL SEQUENCE in the service prompt above tells you exactly which tools to use for THIS specific task. Follow it exactly. Do NOT use tools that are not listed in the mandatory sequence for this service type:
 
-- For Clipping services: use ONLY editing tools (trim_video, split_video, add_subtitles, etc.). NEVER use blender_generate_scene_type or manim_execute_script.
+- For Clipping services: use `generate_clip_compilation` (downloads video → extracts clips → adds captions → uploads to R2 in one call). Fall back to manual editing tools (trim_video, split_video, add_subtitles) if generate_clip_compilation is unavailable. NEVER use blender_generate_scene_type or manim_execute_script.
 - For Manim services (manim_explainer, whiteboard_animation, kinetic_typography, animated_infographic, algorithm_viz, investor_pitch, year_in_review, isometric_explainer): use ONLY manim_execute_script. NEVER use blender_generate_scene_type.
 - For Landing Page / Education: follow the prompt's sequence.
 - For all other services: follow the prompt's mandatory tool sequence.
