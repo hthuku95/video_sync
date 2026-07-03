@@ -10,6 +10,7 @@ use crate::AppState;
 use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;
+use tokio::time::{timeout, Duration};
 
 pub struct StatefulClaudeAgent {
     client: Arc<ClaudeClient>,
@@ -1882,9 +1883,9 @@ where
     const MAX_TURNS: usize = 10;
 
     for turn in 0..MAX_TURNS {
-        let response = ollama_client
-            .generate_single(messages, tools)
+        let response = timeout(Duration::from_secs(300), ollama_client.generate_single(messages, tools))
             .await
+            .map_err(|_| "Ollama timeout after 300s".to_string())?
             .map_err(|e| format!("Ollama API error: {}", e))?;
 
         match response {
@@ -1969,9 +1970,9 @@ where
     const MAX_TURNS: usize = 10;
 
     for turn in 0..MAX_TURNS {
-        let response = ds_client
-            .generate_single(messages, tools)
+        let response = timeout(Duration::from_secs(300), ds_client.generate_single(messages, tools))
             .await
+            .map_err(|_| "DeepSeek timeout after 300s".to_string())?
             .map_err(|e| format!("DeepSeek API error: {}", e))?;
 
         match response {
@@ -2048,9 +2049,9 @@ where
     const MAX_TURNS: usize = 10;
 
     for turn in 0..MAX_TURNS {
-        let response = nim_client
-            .generate_single(messages, tools)
+        let response = timeout(Duration::from_secs(300), nim_client.generate_single(messages, tools))
             .await
+            .map_err(|_| "NVIDIA NIM timeout after 300s".to_string())?
             .map_err(|e| format!("NVIDIA NIM API error: {}", e))?;
 
         match response {
@@ -2127,9 +2128,9 @@ where
     const MAX_TURNS: usize = 10;
 
     for turn in 0..MAX_TURNS {
-        let response = bedrock_client
-            .generate_single("", messages, tools)
+        let response = timeout(Duration::from_secs(300), bedrock_client.generate_single("", messages, tools))
             .await
+            .map_err(|_| "Bedrock timeout after 300s".to_string())?
             .map_err(|e| format!("Bedrock API error: {}", e))?;
 
         match response {
