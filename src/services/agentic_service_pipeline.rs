@@ -634,20 +634,35 @@ OUTPUT dir: {out}/"#,
     }
 
     fn clipping_prompt(input: &ServiceInput) -> String {
+        let source = input.source_url.as_deref().unwrap_or("");
         format!(
             r#"## SERVICE: Clip Enhancement
 GOAL: Extract engaging clips from content and make them shine.
 
 Title: {title}
 Brief: {brief}
+Source: {source}
+
+## ⚠️ CRITICAL: NEVER USE blender_generate_scene_type OR manim_execute_script
+This is a CLIPPING/EDITING task. Do NOT generate content from scratch. Only edit existing video files.
 
 ## ⚠️ CRITICAL: DO NOT USE generate_long_form_video
-That tool will start a new agent instead of clipping the actual source video. Use the real editing tools directly.
+That tool will start a new agent instead of clipping the actual source video.
 
-## MANDATORY TOOL SEQUENCE
-1. If a video URL is provided, use trim_video or split_video to extract the best moments
-2. Enhance each clip: captions (add_subtitles), color grading (adjust_color), transitions, overlays (add_overlay), speed adjustments (adjust_speed), stabilization (stabilize_video), sound design — the full editing toolset is at your disposal
-3. Each clip should feel complete and professional
+## RECOMMENDED TOOL: generate_clip_compilation
+Use this tool to automate the entire clipping pipeline:
+- Downloads the video from the source URL (YouTube, Kick, Twitch, or any public URL)
+- Extracts highlight clips at evenly-spaced intervals
+- Adds auto-generated subtitles/captions
+- Uploads finished clips to R2 cloud storage
+- Returns shareable R2 URLs for each clip
+
+Call it once: generate_clip_compilation(source_url="{source}", clip_duration_seconds=15, max_clips=3, include_captions=true)
+
+## ALTERNATIVE: Manual editing (if generate_clip_compilation is unavailable)
+1. Download the source video using your available tools
+2. Use trim_video or split_video to extract the best moments from the downloaded video
+3. Enhance each clip: captions (add_subtitles), color grading, transitions, overlays, sound design
 4. review_video on each clip, iterate on any that fall short
 5. submit_final_answer with all clip paths
 
@@ -655,6 +670,7 @@ OUTPUT to: {output_dir}/
 Save each clip as clip_N.mp4"#,
             title = input.title,
             brief = input.brief,
+            source = source,
             output_dir = format!("outputs/agentic_{}", input.delivery_id),
         )
     }

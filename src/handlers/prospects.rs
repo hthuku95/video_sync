@@ -2929,10 +2929,10 @@ async fn generate_prospect_sample_pack(
         }
     }
 
-    let gig_type: String = if service == "kick_auto_clipper" {
-        "clipping".to_string()
-    } else if use_long_form_workflow {
+    let gig_type: String = if use_long_form_workflow {
         "long_form_video".to_string()
+    } else if service == "kick_auto_clipper" {
+        "clipping".to_string()
     } else if matches!(service.as_str(),
         "manim_explainer" | "whiteboard_animation" | "kinetic_typography" |
         "animated_infographic" | "algorithm_viz" | "investor_pitch" |

@@ -726,6 +726,11 @@ async fn execute_tool_claude_with_context_inner(
         return finalize_special_tool_result_value(name, args, result, ctx).await;
     }
 
+    if name == "generate_clip_compilation" {
+        let result = execute_clip_compilation_value(args, ctx).await;
+        return finalize_special_tool_result_value(name, args, result, ctx).await;
+    }
+
     // YouTube integration tools (READ-ONLY research tools)
     if name == "optimize_youtube_metadata" {
         return execute_optimize_youtube_metadata_with_state_claude(args, ctx).await;
@@ -964,6 +969,11 @@ async fn execute_tool_gemini_with_context_inner(
 
     if name == "generate_long_form_video" {
         let result = execute_generate_long_form_video_gemini(args, ctx).await;
+        return finalize_special_tool_result_gemini(name, args, result, ctx).await;
+    }
+
+    if name == "generate_clip_compilation" {
+        let result = execute_clip_compilation_gemini(args, ctx).await;
         return finalize_special_tool_result_gemini(name, args, result, ctx).await;
     }
 
@@ -4789,6 +4799,152 @@ async fn execute_generate_long_form_video_value(
         ),
         Err(error) => format!("❌ Failed to start agentic long-form video workflow: {}", error),
     }
+}
+
+/// Wrapper: hashmap args → Value for clip compilation (Gemini dispatch)
+async fn execute_clip_compilation_gemini(
+    args: &HashMap<String, Value>,
+    ctx: &ToolExecutionContext,
+) -> String {
+    let mut object = serde_json::Map::new();
+    for (key, value) in args {
+        object.insert(key.clone(), value.clone());
+    }
+    execute_clip_compilation_value(&Value::Object(object), ctx).await
+}
+
+/// Core clip compilation logic
+async fn execute_clip_compilation_value(
+    args: &Value,
+    ctx: &ToolExecutionContext,
+) -> String {
+    let source_url = match string_arg(args, &["source_url", "url"]) {
+        Some(url) => url,
+        None => return r#"{"error":"source_url is required"}"#.to_string(),
+    };
+    let clip_duration = number_arg(args, &["clip_duration_seconds", "duration_seconds", "duration"])
+        .unwrap_or(15.0)
+        .max(5.0)
+        .min(120.0);
+    let max_clips = number_arg(args, &["max_clips", "count", "num_clips"])
+        .unwrap_or(3.0)
+        .max(1.0)
+        .min(10.0) as usize;
+    let include_captions = bool_arg(args, &["include_captions", "captions", "subtitles"])
+        .unwrap_or(true);
+
+    let session_slug = ctx.session_id.replace('-', "_");
+    let tmp_dir = std::env::temp_dir().join(format!("clip_compilation_{}", session_slug));
+    let _ = tokio::fs::create_dir_all(&tmp_dir).await;
+    let input_path = tmp_dir.join("source.mp4");
+    let input_str = input_path.to_str().unwrap_or("/tmp/source.mp4");
+
+    tracing::info!("🎬 Clip compilation: downloading {} → {}", source_url, input_str);
+    let download_result = crate::clipping::ytdlp_api_client::YtdlpApiClient::download_video(&source_url, input_str).await;
+    match download_result {
+        Ok(_) => tracing::info!("✅ Download complete"),
+        Err(e) => {
+            let _ = tokio::fs::remove_dir_all(&tmp_dir).await;
+            return format!(r#"{{"error":"Failed to download video: {}"}}"#, e.replace('"', "'"));
+        }
+    }
+
+    // Get duration via ffprobe
+    let duration = StdCommand::new("ffprobe")
+        .args(["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", input_str])
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .and_then(|s| s.trim().parse::<f64>().ok())
+        .unwrap_or(60.0);
+
+    if duration < 10.0 {
+        let _ = tokio::fs::remove_dir_all(&tmp_dir).await;
+        return format!(r#"{{"error":"Video too short ({:.1}s)"}}"#, duration);
+    }
+
+    let usable = (duration / clip_duration).floor() as usize;
+    let count = max_clips.min(usable).max(1);
+    let step = (duration - clip_duration) / (count as f64).max(1.0);
+
+    let mut clip_urls: Vec<String> = Vec::new();
+
+    for i in 0..count {
+        let start = step * (i as f64);
+        let raw = format!("clip_{:02}.mp4", i + 1);
+        let raw_path = tmp_dir.join(&raw);
+
+        let trim_ok = StdCommand::new("ffmpeg")
+            .args([
+                "-y", "-ss", &format!("{:.1}", start),
+                "-i", input_str,
+                "-t", &format!("{:.1}", clip_duration),
+                "-c", "copy",
+                raw_path.to_str().unwrap_or(""),
+            ])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+
+        if !trim_ok {
+            tracing::warn!("⚠️ Clip {} trim failed, skipping", i + 1);
+            continue;
+        }
+
+        let final_path = if include_captions {
+            let captioned = format!("clip_{:02}_captioned.mp4", i + 1);
+            let cap_path = tmp_dir.join(&captioned);
+            let srt = tmp_dir.join("overlay.srt");
+            let srt_content = format!(
+                "1\n00:00:00,000 --> 00:{:02}:{:02},000\nClip {} — auto-generated highlight\n",
+                (clip_duration as u32) / 60,
+                (clip_duration as u32) % 60,
+                i + 1
+            );
+            let _ = tokio::fs::write(&srt, srt_content.as_bytes()).await;
+            StdCommand::new("ffmpeg")
+                .args([
+                    "-y", "-i", raw_path.to_str().unwrap_or(""),
+                    "-vf", &format!("subtitles={}", srt.to_str().unwrap_or("")),
+                    "-c:a", "copy",
+                    cap_path.to_str().unwrap_or(""),
+                ])
+                .output()
+                .ok();
+            cap_path
+        } else {
+            raw_path
+        };
+
+        let url = crate::cloud_storage::upload_local_file_to_cloud(
+            final_path.to_str().unwrap_or(""),
+            "video/mp4",
+            ctx.user_id.unwrap_or(0),
+            &ctx.session_id,
+            ctx.workflow_id,
+            &ctx.app_state,
+        )
+        .await;
+
+        match url {
+            Ok(u) => clip_urls.push(u),
+            Err(e) => tracing::warn!("⚠️ Upload failed for clip {}: {}", i + 1, e),
+        }
+    }
+
+    let _ = tokio::fs::remove_dir_all(&tmp_dir).await;
+
+    if clip_urls.is_empty() {
+        return r#"{"error":"No clips generated successfully"}"#.to_string();
+    }
+
+    serde_json::json!({
+        "clips": clip_urls,
+        "count": clip_urls.len(),
+        "source": source_url,
+        "total_duration_seconds": duration,
+    })
+    .to_string()
 }
 
 fn string_arg(args: &Value, names: &[&str]) -> Option<String> {

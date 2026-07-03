@@ -100,6 +100,7 @@ impl ToolRegistry {
                 let mut declarations =
                     crate::gemini_client::GeminiClient::create_video_editing_tools();
                 declarations.push(Self::long_form_video_tool());
+                declarations.push(Self::clip_compilation_tool());
                 let contract = Self::completion_contract(profile);
                 let mandatory: BTreeSet<&str> =
                     contract.mandatory_tool_names.iter().copied().collect();
@@ -398,6 +399,53 @@ impl ToolRegistry {
                     "brief".to_string(),
                     "target_duration_seconds".to_string(),
                 ],
+            },
+        }
+    fn clip_compilation_tool() -> FunctionDeclaration {
+        let mut properties = HashMap::new();
+        properties.insert(
+            "source_url".to_string(),
+            gemini_property(
+                "string",
+                "The URL of the video to download and clip. Supports YouTube, Kick, Twitch, or any yt-dlp compatible URL.",
+            ),
+        );
+        properties.insert(
+            "clip_duration_seconds".to_string(),
+            gemini_property(
+                "number",
+                "Duration in seconds for each clip. Defaults to 15 if not specified.",
+            ),
+        );
+        properties.insert(
+            "max_clips".to_string(),
+            gemini_property(
+                "integer",
+                "Maximum number of clips to generate. Defaults to 3 if not specified.",
+            ),
+        );
+        properties.insert(
+            "include_captions".to_string(),
+            gemini_property(
+                "boolean",
+                "Whether to add auto-generated captions/subtitles to the clips. Defaults to true.",
+            ),
+        );
+        properties.insert(
+            "description".to_string(),
+            gemini_property(
+                "string",
+                "A brief description of the content for context. Used for caption generation and logging.",
+            ),
+        );
+
+        FunctionDeclaration {
+            name: "generate_clip_compilation".to_string(),
+            description: "Download a video from YouTube, Kick, Twitch, or any public URL, extract highlight clips, add captions/subtitles, and upload the clips to R2. Returns an array of R2 URLs for the finished clips. Perfect for clipping/kick_auto_clipper services. Uses yt-dlp for download and FFmpeg for editing — NEVER uses Blender or Manim.".to_string(),
+            parameters: Parameters {
+                param_type: "object".to_string(),
+                properties,
+                required: vec!["source_url".to_string()],
             },
         }
     }

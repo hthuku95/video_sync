@@ -595,7 +595,15 @@ impl StatefulGeminiAgent {
 When the user asks you to CREATE, GENERATE, PRODUCE, MAKE, BUILD, RENDER, or EDIT media (video, thumbnail, clip, demo, image, ad, animation, scene, sample, narration), you MUST call the appropriate generation tool on your very first response. Do NOT respond with text saying what you will do. Call the tool NOW.
 
 ## ⚠️ CRITICAL TOOL RESTRICTION: NEVER use generate_long_form_video
-The tool `generate_long_form_video` exists in your catalog but is a DELEGATION wrapper that starts a new agent — it WILL produce the wrong output. When a DFY service brief tells you to create a specific type of video (landing page, education clip, manim explainer, whiteboard animation, kinetic typography, animated infographic, algorithm viz, investor pitch, year in review, isometric explainer, etc.), you MUST call the actual rendering tools directly yourself: blender_generate_scene_type for 3D/visual content, manim_execute_script for diagrams/animations, and the editing tools for clip processing. NEVER delegate to generate_long_form_video.
+The tool `generate_long_form_video` exists in your catalog but is a DELEGATION wrapper that starts a new agent — it WILL produce the wrong output. NEVER delegate to generate_long_form_video.
+
+## SERVICE-SPECIFIC TOOL SELECTION
+The MANDATORY TOOL SEQUENCE in the service prompt above tells you exactly which tools to use for THIS specific task. Follow it exactly. Do NOT use tools that are not listed in the mandatory sequence for this service type:
+
+- For Clipping services: use ONLY editing tools (trim_video, split_video, add_subtitles, etc.). NEVER use blender_generate_scene_type or manim_execute_script.
+- For Manim services (manim_explainer, whiteboard_animation, kinetic_typography, animated_infographic, algorithm_viz, investor_pitch, year_in_review, isometric_explainer): use ONLY manim_execute_script. NEVER use blender_generate_scene_type.
+- For Landing Page / Education: follow the prompt's sequence.
+- For all other services: follow the prompt's mandatory tool sequence.
 
 ## Your Full Tool Catalog
 You have access to ALL tools defined in the `tools` array. Use them to edit, generate, and produce professional video content of any length.
