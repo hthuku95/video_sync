@@ -1068,6 +1068,7 @@ IMPORTANT: For fetching website content, use `browserbase_fetch_url(url)` — it
                                     && function_name != "list_campaigns"
                                     && function_name != "get_campaign_status"
                                     && function_name != "control_campaign"
+                                    && function_name != "search_campaign_knowledge"
                                 {
                                     // Execute video editing tool directly using tool_executor
                                     send_progress(&format!(
@@ -1508,6 +1509,83 @@ IMPORTANT: For fetching website content, use `browserbase_fetch_url(url)` — it
                                         let tool_result = serde_json::json!({"error": "campaign_id is required."});
                                         function_results.push((function_name.clone(), tool_result, function_call.thought_signature.clone()));
                                     }
+                                } else if function_name == "search_campaign_knowledge" {
+                                    send_progress("🔍 Searching campaign knowledge...");
+                                    let query = function_call
+                                        .args
+                                        .get("query")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("");
+                                    let service_type_filter = function_call
+                                        .args
+                                        .get("service_type")
+                                        .and_then(|v| v.as_str());
+                                    let limit = function_call
+                                        .args
+                                        .get("limit")
+                                        .and_then(|v| v.as_u64())
+                                        .unwrap_or(10) as usize;
+
+                                    let tool_result = if let Some(ref qdrant_client) = app_state.qdrant_client {
+                                        let gemini = app_state.video_gemini_client.as_ref()
+                                            .or(app_state.gemini_client.as_ref());
+                                        if let Some(g) = gemini {
+                                            // Embed the query
+                                            match g.embed_content_with_model(query, "models/gemini-embedding-2", Some(1536)).await {
+                                                Ok(embedding) => {
+                                                    // Build filter: feature=campaign_post + user_id + optional service_type
+                                                    let mut must_conditions = vec![
+                                                        serde_json::json!({"key": "feature", "match": {"value": "campaign_post"}}),
+                                                    ];
+                                                    if let Some(uid) = user_id {
+                                                        must_conditions.push(serde_json::json!({"key": "user_id", "match": {"value": uid.to_string()}}));
+                                                    }
+                                                    if let Some(st) = service_type_filter {
+                                                        must_conditions.push(serde_json::json!({"key": "context.service_type", "match": {"value": st}}));
+                                                    }
+                                                    let filter = serde_json::json!({"must": must_conditions});
+
+                                                    match qdrant_client.search_points(
+                                                        &embedding,
+                                                        limit,
+                                                        Some(&filter),
+                                                        qdrant_client::EmbeddingProvider::GeminiEmbedding2,
+                                                    ).await {
+                                                        Ok(results) => {
+                                                            let posts: Vec<serde_json::Value> = results.into_iter().map(|p| {
+                                                                serde_json::json!({
+                                                                    "campaign": p.get("context.campaign_name").or(p.get("campaign_name")).and_then(|v| v.as_str()),
+                                                                    "service_type": p.get("context.service_type").or(p.get("service_type")).and_then(|v| v.as_str()),
+                                                                    "variation": p.get("user_message").and_then(|v| v.as_str()),
+                                                                    "caption": p.get("agent_response").and_then(|v| v.as_str()),
+                                                                    "output_url": p.get("context.output_url").or(p.get("output_url")).and_then(|v| v.as_str()),
+                                                                    "score": p.get("score").and_then(|v| v.as_f64()),
+                                                                })
+                                                            }).collect();
+                                                            serde_json::json!({
+                                                                "found": true,
+                                                                "posts": posts,
+                                                                "total": posts.len(),
+                                                                "note": "These are past campaign posts matching your query. You can ask follow-up questions about any result."
+                                                            })
+                                                        }
+                                                        Err(e) => serde_json::json!({"error": format!("Search failed: {e}")}),
+                                                    }
+                                                }
+                                                Err(e) => serde_json::json!({"error": format!("Embedding failed: {e}")}),
+                                            }
+                                        } else {
+                                            serde_json::json!({"error": "Campaign knowledge search unavailable - no embedding client"})
+                                        }
+                                    } else {
+                                        serde_json::json!({"error": "Campaign knowledge search unavailable - Qdrant not configured"})
+                                    };
+
+                                    function_results.push((
+                                        function_name.clone(),
+                                        tool_result,
+                                        function_call.thought_signature.clone(),
+                                    ));
                                 }
                             }
                             _ => {}
@@ -1731,6 +1809,31 @@ IMPORTANT: For fetching website content, use `browserbase_fetch_url(url)` — it
                         }),
                     ]),
                     required: vec!["campaign_id".to_string(), "action".to_string()],
+                },
+            },
+            crate::gemini_client::FunctionDeclaration {
+                name: "search_campaign_knowledge".to_string(),
+                description: "Search across all past campaign posts to find what content performed well, what topics were covered, and what outputs were generated. Use this when the user asks about past campaign results, wants to learn from previous content, or asks 'what worked well' or 'show me similar outputs'.".to_string(),
+                parameters: crate::gemini_client::Parameters {
+                    param_type: "object".to_string(),
+                    properties: HashMap::from([
+                        ("query".to_string(), crate::gemini_client::PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "What to search for in past campaign content (e.g., 'best performing posts', 'education campaign results', 'videos about calculus')".to_string(),
+                            items: None,
+                        }),
+                        ("service_type".to_string(), crate::gemini_client::PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Optional: filter by service type (e.g., 'clipping', 'education', 'kick_auto_clipper')".to_string(),
+                            items: None,
+                        }),
+                        ("limit".to_string(), crate::gemini_client::PropertyDefinition {
+                            prop_type: "number".to_string(),
+                            description: "Maximum number of results to return (default: 10)".to_string(),
+                            items: None,
+                        }),
+                    ]),
+                    required: vec!["query".to_string()],
                 },
             },
         ];

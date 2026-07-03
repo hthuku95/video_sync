@@ -421,6 +421,9 @@ async fn check_rendering_post(state: &Arc<AppState>, campaign: &CampaignRow, pos
         "campaign post {} → {} (delivery={}, url={})",
         post.id, new_status, delivery_id, url
     );
+
+    // Store embedding in Qdrant for campaign learning
+    store_campaign_post_embedding(state, campaign, post, &url, &delivery_id).await;
 }
 
 // ── Schedule via Zernio ────────────────────────────────────────────────────
@@ -633,6 +636,66 @@ fn uploads_playlist_id_for_channel(channel_id: &str) -> String {
         format!("UU{}", &channel_id[2..])
     } else {
         format!("UU{}", channel_id)
+    }
+}
+
+// ── Campaign learning: store post embeddings ───────────────────────────────
+
+/// After a campaign post publishes, embed its content in Qdrant so the
+/// campaign manager agent can learn from past posts via semantic search.
+async fn store_campaign_post_embedding(
+    state: &Arc<AppState>,
+    campaign: &CampaignRow,
+    post: &PostRow,
+    output_url: &str,
+    delivery_id: &Uuid,
+) {
+    let Some(ref qdrant) = state.qdrant_client else { return };
+    let gemini = state.video_gemini_client.as_ref().or(state.gemini_client.as_ref());
+    let Some(ref gemini) = gemini else { return };
+
+    // Read the variation prompt and caption from the post/delivery
+    let prompt_caption: (Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT cp.variation_prompt, cp.caption \
+         FROM campaign_posts cp WHERE cp.id = $1",
+    )
+    .bind(post.id)
+    .fetch_optional(&state.db_pool)
+    .await
+    .ok()
+    .flatten()
+    .unwrap_or((None, None));
+
+    let variation = prompt_caption.0.as_deref().unwrap_or("");
+    let caption = prompt_caption.1.as_deref().unwrap_or("");
+
+    // Build a rich text for embedding
+    let embed_text = format!(
+        "Campaign: {} | Service: {} | Day {} | Variation: {} | Caption: {} | Output: {}",
+        campaign.name, campaign.service_type, post.day_number, variation, caption, output_url
+    );
+
+    let mut context = std::collections::HashMap::new();
+    context.insert("campaign_name".to_string(), serde_json::json!(campaign.name));
+    context.insert("service_type".to_string(), serde_json::json!(campaign.service_type));
+    context.insert("day_number".to_string(), serde_json::json!(post.day_number));
+    context.insert("output_url".to_string(), serde_json::json!(output_url));
+    context.insert("delivery_id".to_string(), serde_json::json!(delivery_id.to_string()));
+
+    if let Err(e) = qdrant
+        .store_chat_memory_with_gemini2(
+            &campaign.id.to_string(), // session_id = campaign_id
+            Some(&campaign.user_id.to_string()),
+            &embed_text,
+            &caption,
+            vec![output_url.to_string()],
+            context,
+            gemini,
+            Some("campaign_post"),
+        )
+        .await
+    {
+        tracing::warn!("campaign[{}] post[{}]: embedding store failed: {e}", campaign.id, post.id);
     }
 }
 
