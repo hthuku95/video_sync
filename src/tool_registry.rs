@@ -401,6 +401,8 @@ impl ToolRegistry {
                 ],
             },
         }
+    }
+
     fn clip_compilation_tool() -> FunctionDeclaration {
         let mut properties = HashMap::new();
         properties.insert(
