@@ -1549,7 +1549,7 @@ IMPORTANT: For fetching website content, use `browserbase_fetch_url(url)` — it
                                                         &embedding,
                                                         limit,
                                                         Some(&filter),
-                                                        qdrant_client::EmbeddingProvider::GeminiEmbedding2,
+                                                        crate::qdrant_client::EmbeddingProvider::GeminiEmbedding2,
                                                     ).await {
                                                         Ok(results) => {
                                                             let posts: Vec<serde_json::Value> = results.into_iter().map(|p| {
