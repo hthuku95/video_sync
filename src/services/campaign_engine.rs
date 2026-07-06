@@ -461,12 +461,15 @@ async fn schedule_via_zernio(
     let scheduled_for = post.scheduled_at.format("%Y-%m-%dT%H:%M:%SZ").to_string();
     let scheduled_for_clone = scheduled_for.clone();
 
+    let media_items = vec![zernio_client::MediaItem {
+        r#type: "video".to_string(),
+        url: media_url.to_string(),
+    }];
     let req = zernio_client::CreatePostRequest {
         content: Some(text),
-        text: None,
         platforms: targets,
         profileId: Some(profile_id.to_string()),
-        mediaUrls: Some(vec![media_url.to_string()]),
+        media_items: Some(media_items),
         scheduledFor: Some(scheduled_for),
         publishNow: false,
     };

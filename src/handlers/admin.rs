@@ -12386,7 +12386,7 @@ async function loadStatus() {
     const profiles = data.profiles || [];
     const accounts = data.accounts || [];
     let connected = 0, pending = 0;
-    accounts.forEach(a => { if (a.connected) connected++; else pending++; });
+    accounts.forEach(a => { if (a.isActive) connected++; else pending++; });
     document.getElementById('statusGrid').innerHTML =
       '<div class="stat-card"><div class="num">' + profiles.length + '</div><div class="label">Profiles</div></div>' +
       '<div class="stat-card"><div class="num">' + accounts.length + '</div><div class="label">Total Accounts</div></div>' +
@@ -12422,8 +12422,8 @@ function renderAccounts(accounts) {
   }
   let html = '<div class="accounts-grid">';
   accounts.forEach(a => {
-    const dot = a.connected ? 'yes' : 'no';
-    const statusText = a.connected ? 'Connected' : 'Pending';
+    const dot = a.isActive ? 'yes' : 'no';
+    const statusText = a.isActive ? 'Connected' : 'Pending';
     const badgeCls = a.connected ? 'badge-success' : 'badge-warning';
     html += '<div class="account-card">' +
       '<div class="platform"><span class="connected-dot ' + dot + '"></span>' + a.platform + '</div>' +
@@ -12454,7 +12454,7 @@ async function getConnectUrl() {
   try {
     const data = await apiFetch(SOCIAL_API + '/connect-url?platform=' + encodeURIComponent(platform) + '&profile_id=' + encodeURIComponent(profileId));
     if (data.success) {
-      document.getElementById('connectUrlInput').value = data.url;
+      document.getElementById('connectUrlInput').value = data.authUrl;
       document.getElementById('connectUrlResult').style.display = 'block';
     } else {
       showToast(data.error || 'Failed to get connect URL', 'error');

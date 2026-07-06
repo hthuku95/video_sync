@@ -128,7 +128,7 @@ async fn generate_new_background(
     // Use 16:9 aspect ratio for widescreen displays (better for UI backgrounds)
     // Use 2K resolution for good quality without being too large
     let image_data = gemini_client
-        .generate_image(&prompt, Some("16:9"), Some("2K"), None)
+        .generate_image(&prompt, Some("16:9"), Some("2K"), Some("fast"))
         .await?;
 
     // Validate that we got actual image data

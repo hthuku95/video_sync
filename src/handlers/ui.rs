@@ -9,6 +9,7 @@ use crate::{
 };
 use axum::{
     extract::{Extension, Path, Query},
+    http::Uri,
     response::Html,
     routing::{get, post},
     Json, Router,
@@ -47,7 +48,7 @@ pub fn ui_routes() -> Router {
         .route("/video-tools", get(video_tools_page))
         .route("/manual-clipping", get(manual_clipping_page))
         .route("/signup/clipper", get(clipper_signup_page))
-        // Campaign pages — public HTML with optional auth middleware
+        // Campaign pages + account/social — public HTML with optional auth middleware
         // Injects Claims if JWT cookie/header/query found; otherwise passes through without.
         // Handlers use Option<Extension<Claims>> to show login prompt when unauthenticated.
         .merge(
@@ -55,6 +56,7 @@ pub fn ui_routes() -> Router {
                 .route("/campaigns", get(campaigns_list_page))
                 .route("/campaigns/new", get(campaigns_new_page))
                 .route("/campaigns/:id", get(campaigns_detail_page))
+                .route("/account/social", get(account_social_page))
                 .layer(axum::middleware::from_fn(optional_auth_middleware)),
         )
 }
@@ -700,8 +702,10 @@ pub async fn isometric_explainer_page() -> Html<String> {
 // ── Campaign Dashboard Pages ─────────────────────────────────────────────────
 
 /// HTML fragment shown when an unauthenticated user hits a page that needs login.
-fn login_required_page() -> String {
-    r#"<!DOCTYPE html>
+/// `redirect_to` is the URL to return to after login (must be a relative path starting with '/').
+fn login_required_page(redirect_to: &str) -> String {
+    let encoded = urlencoding::encode(redirect_to);
+    format!(r#"<!DOCTYPE html>
 <html lang="en">
 <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Login Required — VideoSync</title>
@@ -719,20 +723,24 @@ fn login_required_page() -> String {
 <div class="box">
     <h1>Login Required</h1>
     <p>Please log in to access campaigns and start generating content.</p>
-    <a class="btn" href="/login">Log In</a>
-    <p style="margin-top:1rem;font-size:0.85rem;">Don't have an account? <a href="/signup" style="color:var(--blue);">Sign up</a></p>
+    <a class="btn" href="/login?redirect_to={}">Log In</a>
+    <p style="margin-top:1rem;font-size:0.85rem;">Don't have an account? <a href="/signup?redirect_to={}" style="color:var(--blue);">Sign up</a></p>
 </div>
 </body>
-</html>"#.to_string()
+</html>"#, encoded, encoded)
 }
 
 pub async fn campaigns_list_page(
+    uri: Uri,
     Extension(state): Extension<Arc<AppState>>,
     claims: Option<Extension<Claims>>,
 ) -> Html<String> {
     let user_id: i32 = match claims {
         Some(Extension(c)) => c.sub.parse().unwrap_or(0),
-        None => return Html(login_required_page()),
+        None => {
+            let redirect = uri.path_and_query().map(|pq| pq.as_str()).unwrap_or("/campaigns");
+            return Html(login_required_page(redirect));
+        }
     };
     let rows = sqlx::query_as::<_, (uuid::Uuid, String, String, String, i32, i32, i32, chrono::DateTime<chrono::Utc>)>(
         "SELECT id, name, service_type, status, posts_per_day, \
@@ -825,13 +833,17 @@ pub async fn campaigns_list_page(
 }
 
 pub async fn campaigns_new_page(
+    uri: Uri,
     Extension(state): Extension<Arc<AppState>>,
     claims: Option<Extension<Claims>>,
     Query(query): Query<std::collections::HashMap<String, String>>,
 ) -> Html<String> {
     let user_id: i32 = match claims {
         Some(Extension(c)) => c.sub.parse().unwrap_or(0),
-        None => return Html(login_required_page()),
+        None => {
+            let redirect = uri.path_and_query().map(|pq| pq.as_str()).unwrap_or("/campaigns/new");
+            return Html(login_required_page(redirect));
+        }
     };
 
     // Check subscription — non-subscribers get a paywall
@@ -1008,7 +1020,7 @@ pub async fn campaigns_new_page(
         </div>
         <div>
             <label>Social Accounts</label>
-            <p class="hint">Connect your accounts in <a href="/admin/zernio" style="color:#93c5fd;">Account Settings</a> first, then select which profile to post from.</p>
+            <p class="hint">Connect your accounts in <a href="/account/social" style="color:#93c5fd;">Account Settings</a> first, then select which profile to post from.</p>
             <select name="zernio_profile_id" id="zernioProfile">
                 <option value="">Select a profile...</option>
             </select>
@@ -1046,30 +1058,32 @@ document.getElementById('endDate').value = endDate.toISOString().split('T')[0];
 // Load connected social accounts
 async function loadZernioAccounts() {{
     try {{
-        const resp = await fetch('/api/admin/zernio/status');
-        const data = await resp.json();
-        if (data.success && data.profiles) {{
+        // Get user's auto-created Zernio profile
+        const profileResp = await fetch('/api/social/my-profile', {{ method: 'POST' }});
+        const profileData = await profileResp.json();
+        if (profileData.success && profileData.profile_id) {{
             const sel = document.getElementById('zernioProfile');
-            data.profiles.forEach(p => {{
-                const opt = document.createElement('option');
-                opt.value = p.id;
-                opt.textContent = p.name;
-                sel.appendChild(opt);
-            }});
+            const opt = document.createElement('option');
+            opt.value = profileData.profile_id;
+            opt.textContent = 'My Profile';
+            sel.appendChild(opt);
         }}
+        // Get connected accounts
+        const resp = await fetch('/api/social/my-accounts');
+        const data = await resp.json();
         if (data.success && data.accounts) {{
             const container = document.getElementById('platformAccounts');
             container.innerHTML = '';
             data.accounts.forEach(a => {{
-                if (a.connected) {{
+                if (a.isActive || a.is_active) {{
                     const label = document.createElement('label');
                     label.style.cssText = 'display:flex;align-items:center;gap:0.5rem;font-weight:400;';
-                    label.innerHTML = '<input type="checkbox" name="platform_account" value=\'' + JSON.stringify({{platform: a.platform, accountId: a.id}}) + '\'> ' + a.platform + ' (@' + (a.username || 'connected') + ')';
+                    label.innerHTML = '<input type="checkbox" name="platform_account" value=\'' + JSON.stringify({platform: a.platform, accountId: a.id}) + '\'> ' + a.platform + ' (@' + (a.display_name || a.username || 'connected') + ')';
                     container.appendChild(label);
                 }}
             }});
         }}
-    }} catch(e) {{ console.log('Account load skipped'); }}
+    }} catch(e) {{ console.log('Account load skipped', e); }}
 }}
 loadZernioAccounts();
 
@@ -1118,13 +1132,17 @@ document.getElementById('campaignForm').addEventListener('submit', async (e) => 
 }
 
 pub async fn campaigns_detail_page(
+    uri: Uri,
     Extension(state): Extension<Arc<AppState>>,
     claims: Option<Extension<Claims>>,
     Path(id): Path<uuid::Uuid>,
 ) -> Html<String> {
     let user_id: i32 = match claims {
         Some(Extension(c)) => c.sub.parse().unwrap_or(0),
-        None => return Html(login_required_page()),
+        None => {
+            let redirect = uri.path_and_query().map(|pq| pq.as_str()).unwrap_or("/campaigns");
+            return Html(login_required_page(redirect));
+        }
     };
 
     let campaign = sqlx::query_as::<_, (uuid::Uuid, String, String, String, String, f64, serde_json::Value, serde_json::Value, i32, chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>, Option<String>, Option<String>, String, i32, i32)>(
@@ -1319,6 +1337,209 @@ fn format_service_type(s: &str) -> &'static str {
         "isometric_explainer" => "Isometric",
         _ => "Unknown",
     }
+}
+
+// ── Account / Social (User-Facing Social Accounts Page) ────────────────────
+
+pub async fn account_social_page(
+    uri: Uri,
+    Extension(state): Extension<Arc<AppState>>,
+    claims: Option<Extension<Claims>>,
+) -> Html<String> {
+    let user_id: i32 = match claims {
+        Some(Extension(c)) => c.sub.parse().unwrap_or(0),
+        None => {
+            let redirect = uri.path_and_query().map(|pq| pq.as_str()).unwrap_or("/account/social");
+            return Html(login_required_page(redirect));
+        }
+    };
+
+    let html = format!(r###"<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Connected Accounts — VideoSync</title>
+<style>
+    *{{margin:0;padding:0;box-sizing:border-box}}
+    body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0f1419;color:#e5eefb;min-height:100vh}}
+    .nav{{display:flex;align-items:center;gap:1rem;padding:1rem 2rem;background:rgba(9,18,31,0.84);border-bottom:1px solid rgba(59,130,246,0.2)}}
+    .nav a{{color:#93c5fd;text-decoration:none;font-weight:500}}
+    .nav a:hover{{color:#60a5fa}}
+    .container{{max-width:720px;margin:3rem auto;padding:0 1.5rem}}
+    h1{{font-size:1.8rem;margin-bottom:0.5rem;background:linear-gradient(135deg,#3b82f6,#8b5cf6);-webkit-background-clip:text;-webkit-text-fill-color:transparent}}
+    p.subtitle{{color:#94a3b8;margin-bottom:2rem;font-size:0.95rem}}
+    .card{{background:rgba(15,23,42,0.6);border:1px solid rgba(59,130,246,0.15);border-radius:12px;padding:1.5rem;margin-bottom:1rem}}
+    .card h2{{font-size:1.1rem;margin-bottom:1rem;color:#f1f5f9}}
+    .platform-grid{{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:0.75rem}}
+    .platform-btn{{display:flex;align-items:center;gap:0.6rem;padding:0.75rem 1rem;border-radius:10px;border:1px solid rgba(59,130,246,0.2);background:rgba(30,41,59,0.5);color:#e2e8f0;cursor:pointer;font-size:0.85rem;transition:all 0.2s;text-decoration:none}}
+    .platform-btn:hover{{border-color:#3b82f6;background:rgba(59,130,246,0.1);transform:translateY(-1px)}}
+    .platform-btn.connected{{border-color:#22c55e;background:rgba(34,197,94,0.08)}}
+    .platform-btn.connected:hover{{border-color:#22c55e;background:rgba(34,197,94,0.15)}}
+    .platform-btn svg{{width:22px;height:22px;flex-shrink:0}}
+    .platform-btn .label{{flex:1}}
+    .platform-btn .status{{font-size:0.7rem;font-weight:600;text-transform:uppercase;padding:2px 8px;border-radius:4px}}
+    .status.connected{{background:rgba(34,197,94,0.15);color:#22c55e}}
+    .status.disconnected{{background:rgba(148,163,184,0.15);color:#94a3b8}}
+    .empty-state{{text-align:center;padding:2rem;color:#94a3b8}}
+    .loading{{text-align:center;padding:3rem;color:#94a3b8}}
+    .spinner{{display:inline-block;width:1.5rem;height:1.5rem;border:2px solid rgba(59,130,246,0.2);border-top-color:#3b82f6;border-radius:50%;animation:spin 0.6s linear infinite}}
+    @keyframes spin{{to{{transform:rotate(360deg)}}}}
+    .toast{{position:fixed;bottom:1.5rem;right:1.5rem;padding:0.75rem 1.25rem;border-radius:8px;color:white;font-size:0.9rem;z-index:9999;display:none}}
+    .toast.success{{background:#22c55e}}
+    .toast.error{{background:#ef4444}}
+    .account-item{{display:flex;align-items:center;gap:0.75rem;padding:0.75rem;border-radius:8px;background:rgba(30,41,59,0.3);margin-bottom:0.5rem}}
+    .account-item svg{{width:20px;height:20px}}
+    .account-item .username{{font-weight:500}}
+    .account-item .platform-name{{color:#94a3b8;font-size:0.8rem;margin-left:0.25rem}}
+    .disconnect-btn{{margin-left:auto;padding:0.3rem 0.6rem;border:none;border-radius:4px;background:rgba(239,68,68,0.15);color:#ef4444;font-size:0.75rem;cursor:pointer}}
+    .disconnect-btn:hover{{background:rgba(239,68,68,0.25)}}
+</style>
+</head>
+<body>
+<div class="nav">
+    <a href="/">← Home</a>
+    <a href="/dashboard">Dashboard</a>
+    <a href="/campaigns">Campaigns</a>
+</div>
+<div class="container">
+    <h1>Connected Accounts</h1>
+    <p class="subtitle">Connect your social media accounts to publish content directly from your campaigns.</p>
+    <div id="statusMessage" class="toast"></div>
+
+    <div class="card">
+        <h2>Available Platforms</h2>
+        <div id="platformsGrid" class="platform-grid">
+            <div class="loading"><div class="spinner"></div><p>Loading accounts...</p></div>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>Connected Accounts</h2>
+        <div id="connectedAccounts">
+            <p style="color:#94a3b8;text-align:center;padding:1rem;">Loading...</p>
+        </div>
+    </div>
+</div>
+
+<script>
+// SVG icons for each platform
+const ICONS = {{
+    youtube: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M23.5 6.19a3.02 3.02 0 0 0-2.12-2.14C19.5 3.5 12 3.5 12 3.5s-7.5 0-9.38.55A3.02 3.02 0 0 0 .5 6.19 31.6 31.6 0 0 0 0 12a31.6 31.6 0 0 0 .5 5.81 3.02 3.02 0 0 0 2.12 2.14c1.88.55 9.38.55 9.38.55s7.5 0 9.38-.55a3.02 3.02 0 0 0 2.12-2.14A31.6 31.6 0 0 0 24 12a31.6 31.6 0 0 0-.5-5.81zM9.55 15.57V8.43L16 12l-6.45 3.57z"/></svg>',
+    twitter: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>',
+    instagram: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zM12 0C8.741 0 8.333.014 7.053.072 2.695.272.273 2.69.073 7.052.014 8.333 0 8.741 0 12c0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98C8.333 23.986 8.741 24 12 24c3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98C15.668.014 15.259 0 12 0zm0 5.838a6.162 6.162 0 1 0 0 12.324 6.162 6.162 0 0 0 0-12.324zM12 16a4 4 0 1 1 0-8 4 4 0 0 1 0 8zm6.406-11.845a1.44 1.44 0 1 0 0 2.881 1.44 1.44 0 0 0 0-2.881z"/></svg>',
+    tiktok: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12.525.02c1.31-.02 2.61-.01 3.91-.02.08 1.53.63 3.09 1.75 4.17 1.12 1.11 2.7 1.62 4.24 1.79v4.03c-1.44-.05-2.89-.35-4.2-.97-.57-.26-1.1-.59-1.62-.93-.01 2.92.01 5.84-.02 8.75-.08 1.4-.54 2.79-1.35 3.94-1.31 1.92-3.58 3.17-5.91 3.21-1.43.08-2.86-.31-4.08-1.03-2.02-1.19-3.44-3.37-3.65-5.71-.02-.5-.03-1-.01-1.49.18-1.9 1.12-3.72 2.58-4.96 1.66-1.44 3.98-2.13 6.15-1.72.02 1.48-.04 2.96-.04 4.44-.99-.32-2.15-.23-3.02.37-.63.41-1.11 1.04-1.36 1.75-.21.51-.15 1.07-.14 1.61.24 1.64 1.82 3.02 3.5 2.87 1.12-.01 2.19-.66 2.77-1.61.19-.33.4-.67.41-1.06.1-1.79.06-3.57.07-5.36.01-4.03-.01-8.05.02-12.07z"/></svg>',
+    linkedin: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433a2.062 2.062 0 0 1-2.063-2.065 2.064 2.064 0 1 1 2.063 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z"/></svg>',
+    facebook: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/></svg>',
+    threads: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.477 2 2 6.477 2 12s4.477 10 10 10 10-4.477 10-10S17.523 2 12 2zm3.4 10.8c-.1.5-.3 1-.6 1.5-.3.5-.6.9-1.1 1.2-.4.3-.9.5-1.5.6-.5.1-1.1.1-1.6 0-.5-.1-1-.3-1.4-.5-.4-.2-.8-.5-1.1-.9-.3-.3-.5-.7-.7-1.1-.2-.4-.3-.9-.3-1.4 0-.5.1-1 .3-1.4.2-.5.4-.9.7-1.2.3-.4.7-.7 1.1-.9.4-.2.9-.4 1.4-.5.5-.1 1.1-.1 1.6 0 .5.1 1 .3 1.5.6.4.3.8.7 1.1 1.2.3.5.5 1 .6 1.5.1.5.1 1.1 0 1.6z"/></svg>',
+    pinterest: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.373 0 0 5.372 0 12c0 5.084 3.163 9.426 7.627 11.174-.105-.949-.2-2.405.042-3.441.218-.936 1.407-5.965 1.407-5.965s-.359-.719-.359-1.782c0-1.668.967-2.914 2.171-2.914 1.023 0 1.518.769 1.518 1.69 0 1.029-.655 2.568-.994 3.995-.283 1.194.599 2.169 1.777 2.169 2.133 0 3.772-2.249 3.772-5.495 0-2.873-2.064-4.882-5.012-4.882-3.414 0-5.418 2.561-5.418 5.207 0 1.031.397 2.138.893 2.738a.36.36 0 0 1 .083.345l-.333 1.36c-.053.22-.174.267-.402.161-1.499-.698-2.436-2.889-2.436-4.649 0-3.785 2.75-7.262 7.929-7.262 4.163 0 7.398 2.967 7.398 6.931 0 4.136-2.607 7.464-6.227 7.464-1.216 0-2.359-.631-2.75-1.378l-.748 2.853c-.271 1.043-1.002 2.35-1.492 3.146C9.57 23.812 10.763 24 12 24c6.627 0 12-5.373 12-12S18.627 0 12 0z"/></svg>',
+    reddit: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.5 7.2c.828 0 1.5.672 1.5 1.5s-.672 1.5-1.5 1.5-1.5-.672-1.5-1.5.672-1.5 1.5-1.5zM12 9c1.933 0 3.5 1.567 3.5 3.5S13.933 16 12 16s-3.5-1.567-3.5-3.5S10.067 9 12 9zm-5.5 1.2c.828 0 1.5.672 1.5 1.5s-.672 1.5-1.5 1.5-1.5-.672-1.5-1.5.672-1.5 1.5-1.5z"/></svg>',
+    bluesky: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 10.8c-1.087-2.114-4.046-6.053-6.798-7.995C2.566 1.023 0 1.57 0 4.362c0 .838.567 6.474.816 7.236C1.501 12.76 4.29 13.203 7.5 12.48c-3.373.86-5.599 1.89-6.533 3.477C.033 17.544 0 18.887 0 20.163c0 4.858 5.052 3.437 9.6 1.476-1.2.696-2.4 1.73-2.4 3.048 0 3.222 3.6 1.776 6.176.936l.64-.28.64.28c2.576.84 6.176 2.286 6.176-.936 0-1.318-1.2-2.352-2.4-3.048 4.548 1.96 9.6 3.382 9.6-1.476 0-1.276-.033-2.62-.967-4.207-.934-1.586-3.16-2.616-6.533-3.476 3.21.723 6-.28 6.684-1.04.249-.763.816-6.399.816-7.238 0-2.792-2.566-3.339-5.202-1.567-2.752 1.942-5.71 5.88-6.798 7.995z"/></svg>',
+    telegram: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z"/></svg>',
+    snapchat: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm6.05 16.12c-.12.31-.32.58-.57.82-.25.23-.56.37-.84.52-.28.14-.55.26-.78.42-.22.16-.44.35-.58.61-.13.27-.16.58-.25.87-.08.27-.22.5-.44.63-.23.12-.52.11-.76.1-.5-.03-.99-.13-1.46-.34-.48-.2-.88-.3-1.35-.43-.47-.12-.94-.13-1.41-.09-.48.04-.94.22-1.4.42-.46.2-.92.39-1.44.38-.24-.01-.53-.01-.76-.13-.22-.12-.36-.35-.44-.62-.09-.29-.12-.6-.25-.87-.14-.26-.36-.45-.58-.61-.23-.16-.5-.28-.78-.42-.28-.15-.59-.29-.84-.52-.25-.24-.45-.51-.57-.82-.14-.37-.17-.77-.14-1.15.03-.35.12-.67.25-.97.13-.3.3-.57.52-.8.22-.23.47-.41.74-.55.27-.14.56-.25.83-.32.27-.07.55-.12.82-.17.52-.1.99-.23 1.32-.54.33-.31.22-.65.56-.95.12-.11.26-.2.4-.26.14-.06.28-.08.42-.09.14-.01.28.02.41.07.13.05.26.13.37.22.11.09.2.2.27.33.07.13.14.3.25.42.11.12.28.18.5.2a1.1 1.1 0 0 0 .6-.12c.18-.09.33-.22.46-.37.12-.15.22-.32.3-.5.08-.18.14-.37.17-.56.04-.19.05-.38 0-.56-.04-.18-.11-.35-.2-.5-.1-.15-.22-.28-.36-.39-.14-.11-.3-.2-.47-.26-.17-.06-.35-.09-.53-.08-.18.01-.36.05-.53.12-.17.07-.32.17-.46.29-.14.12-.25.26-.34.42-.09.16-.15.33-.18.51-.04.18-.06.36-.07.54 0 .18 0 .36.01.54 0 .18.04.35.09.51.05.16.12.3.22.42.1.12.21.22.34.28-.28.12-.58.2-.89.22-.16.01-.32 0-.48-.02-.16-.02-.31-.07-.45-.14-.14-.07-.28-.16-.39-.28-.11-.12-.2-.26-.27-.41-.07-.15-.12-.31-.15-.48-.03-.17-.04-.34-.02-.51.02-.17.06-.33.12-.48.06-.15.14-.29.24-.42.1-.13.22-.23.36-.32.14-.09.3-.15.47-.19.17-.04.35-.05.53-.03.18.02.36.08.52.16.16.08.31.19.43.33.12.14.22.3.29.47.07.17.11.36.13.55.02.19.01.38-.02.56-.03.18-.09.35-.18.5-.09.15-.2.28-.34.38-.14.1-.3.17-.47.2-.17.03-.35.03-.52 0-.17-.03-.33-.1-.47-.2-.14-.1-.26-.24-.34-.4-.08-.16-.14-.34-.16-.53-.02-.19-.01-.37.04-.55.05-.18.13-.34.24-.48.11-.14.24-.26.4-.34.16-.08.33-.13.51-.15.18-.02.36 0 .53.05 0-.05.01-.1.02-.15.19-.01.38.02.56.07.18.05.35.13.5.24.15.11.28.24.39.39.11.15.19.32.25.5.06.18.09.37.09.56 0 .19-.03.38-.09.56-.06.18-.15.34-.27.48-.12.14-.26.26-.42.35-.16.09-.34.15-.52.19-.18.04-.37.05-.56.03-.19-.02-.37-.08-.54-.17-.17-.09-.32-.2-.45-.34-.13-.14-.23-.3-.31-.48-.08-.18-.13-.37-.15-.57-.02-.2 0-.4.05-.59.05-.19.13-.37.24-.53.11-.16.24-.3.4-.41.16-.11.34-.19.53-.24.19-.05.38-.07.58-.06.05.01.1.03.15.05.1-.11.22-.2.35-.27.13-.07.27-.12.42-.15.15-.03.3-.04.45-.03.15.01.3.05.44.11.14.06.27.15.38.26.11.11.2.24.27.39.07.15.11.31.13.48.02.17.01.34-.02.5-.03.16-.09.32-.17.46-.08.14-.18.27-.3.38-.12.11-.26.19-.41.25-.15.06-.31.1-.48.11-.17.01-.34 0-.5-.03-.16-.03-.32-.08-.46-.16-.14-.08-.26-.18-.36-.3-.1-.12-.18-.26-.23-.42.03.03.07.06.1.09.18.18.38.33.6.45.22.12.46.21.71.27.25.06.5.09.76.09.36 0 .71-.06 1.05-.17.34-.11.67-.27.98-.47.31-.2.59-.44.85-.7.26-.26.48-.55.67-.86.19-.31.33-.64.43-.99.1-.35.15-.71.15-1.08 0-.37-.05-.73-.15-1.08-.1-.35-.24-.68-.43-.99-.19-.31-.41-.6-.67-.86-.26-.26-.54-.5-.85-.7-.31-.2-.64-.36-.98-.47-.34-.11-.69-.17-1.05-.17-.36 0-.71.06-1.05.17-.34.11-.67.27-.98.47-.31.2-.59.44-.85.7-.26.26-.48.55-.67.86-.19.31-.33.64-.43.99-.1.35-.15.71-.15 1.08 0 .37.05.73.15 1.08.1.35.24.68.43.99.19.31.41.6.67.86z"/></svg>',
+}};
+
+const ALL_PLATFORMS = [
+    {{ id: 'youtube', name: 'YouTube', icon: ICONS.youtube }},
+    {{ id: 'twitter', name: 'X / Twitter', icon: ICONS.twitter }},
+    {{ id: 'instagram', name: 'Instagram', icon: ICONS.instagram }},
+    {{ id: 'tiktok', name: 'TikTok', icon: ICONS.tiktok }},
+    {{ id: 'linkedin', name: 'LinkedIn', icon: ICONS.linkedin }},
+    {{ id: 'facebook', name: 'Facebook', icon: ICONS.facebook }},
+    {{ id: 'threads', name: 'Threads', icon: ICONS.threads }},
+    {{ id: 'pinterest', name: 'Pinterest', icon: ICONS.pinterest }},
+    {{ id: 'reddit', name: 'Reddit', icon: ICONS.reddit }},
+    {{ id: 'bluesky', name: 'Bluesky', icon: ICONS.bluesky }},
+    {{ id: 'telegram', name: 'Telegram', icon: ICONS.telegram }},
+    {{ id: 'snapchat', name: 'Snapchat', icon: ICONS.snapchat }},
+];
+
+function toast(msg, type) {{
+    const t = document.getElementById('statusMessage');
+    t.textContent = msg; t.className = 'toast ' + type; t.style.display = 'block';
+    setTimeout(() => t.style.display = 'none', 4000);
+}}
+
+async function init() {{
+    // 1. Ensure user has a Zernio profile
+    const profileResp = await fetch('/api/social/my-profile', {{ method: 'POST' }});
+    const profileData = await profileResp.json();
+    if (!profileData.success) {{
+        document.getElementById('platformsGrid').innerHTML = '<p style="color:#ef4444">Failed to setup: ' + profileData.error + '</p>';
+        return;
+    }}
+    const profileId = profileData.profile_id;
+
+    // 2. Sync accounts from Zernio
+    await fetch('/api/social/sync-accounts', {{ method: 'POST' }});
+
+    // 3. Get connected accounts from DB
+    const accountsResp = await fetch('/api/social/my-accounts');
+    const accountsData = await accountsResp.json();
+    const connectedPlatforms = accountsData.success ? accountsData.accounts.map(a => a.platform) : [];
+
+    // 4. Render platform grid
+    let html = '';
+    ALL_PLATFORMS.forEach(p => {{
+        const isConnected = connectedPlatforms.includes(p.id);
+        html += '<a href="#" class="platform-btn' + (isConnected ? ' connected' : '') + '" data-platform="' + p.id + '" onclick="connectPlatform(event, \\'' + p.id + '\\', \\'' + profileId + '\\')">' +
+            p.icon +
+            '<span class="label">' + p.name + '</span>' +
+            '<span class="status ' + (isConnected ? 'connected' : 'disconnected') + '">' + (isConnected ? 'Connected' : 'Connect') + '</span>' +
+        '</a>';
+    }});
+    document.getElementById('platformsGrid').innerHTML = html;
+
+    // 5. Render connected accounts list
+    if (accountsData.success && accountsData.accounts.length > 0) {{
+        let listHtml = '';
+        accountsData.accounts.forEach(a => {{
+            const platform = ALL_PLATFORMS.find(p => p.id === a.platform);
+            const icon = platform ? platform.icon : '';
+            listHtml += '<div class="account-item">' +
+                icon +
+                '<span class="username">' + (a.display_name || a.username || a.platform) + '</span>' +
+                '<span class="platform-name">' + a.platform + '</span>' +
+            '</div>';
+        }});
+        document.getElementById('connectedAccounts').innerHTML = listHtml;
+    }} else {{
+        document.getElementById('connectedAccounts').innerHTML = '<p style="color:#94a3b8;text-align:center;padding:1rem;">No accounts connected yet. Click a platform above to connect.</p>';
+    }}
+}}
+
+async function connectPlatform(e, platform, profileId) {{
+    e.preventDefault();
+    const btn = e.currentTarget;
+    btn.innerHTML = '<div class="spinner"></div>';
+    try {{
+        const resp = await fetch('/api/social/connect-url?platform=' + encodeURIComponent(platform) + '&profile_id=' + encodeURIComponent(profileId));
+        const data = await resp.json();
+        if (data.success && data.authUrl) {{
+            // Store redirect target in sessionStorage so we come back here after OAuth
+            sessionStorage.setItem('social_oauth_return', window.location.href);
+            window.location.href = data.authUrl;
+        }} else {{
+            toast(data.error || 'Failed to get connect URL', 'error');
+            init();
+        }}
+    }} catch(err) {{
+        toast('Network error: ' + err.message, 'error');
+        init();
+    }}
+}}
+
+// Check if we returned from OAuth callback
+if (sessionStorage.getItem('social_oauth_return')) {{
+    sessionStorage.removeItem('social_oauth_return');
+    toast('Account connected successfully!', 'success');
+}}
+
+init();
+</script>
+</body>
+</html>"###);
+    Html(html)
 }
 
 pub async fn manim_explainer_page() -> Html<String> {

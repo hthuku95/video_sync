@@ -1,3 +1,4 @@
+use crate::models::auth::Claims;
 use crate::zernio_client::{PlatformTarget, ZernioClient};
 use crate::AppState;
 use axum::{
@@ -10,11 +11,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sqlx::Row;
 use std::sync::Arc;
-use tracing::warn;
+use tracing::{info, warn};
 use uuid::Uuid;
 
 pub fn social_routes() -> Router {
-    Router::new()
+    // Public admin-facing endpoints
+    let public = Router::new()
         .route("/api/social/create-profile", post(create_profile))
         .route("/api/social/profiles", get(list_profiles))
         .route("/api/social/connect-url", get(get_connect_url))
@@ -23,7 +25,14 @@ pub fn social_routes() -> Router {
         // Client-facing delivery Zernio self-service
         .route("/api/deliveries/:id/social-status", get(get_delivery_social_status))
         .route("/api/deliveries/:id/social-profile", post(create_delivery_zernio_profile))
-        .route("/api/deliveries/:id/social-targets", post(set_delivery_social_targets))
+        .route("/api/deliveries/:id/social-targets", post(set_delivery_social_targets));
+    // User-level self-service (requires auth)
+    let user_routes = Router::new()
+        .route("/api/social/my-profile", post(get_or_create_my_zernio_profile))
+        .route("/api/social/my-accounts", get(get_my_social_accounts))
+        .route("/api/social/sync-accounts", post(sync_my_social_accounts))
+        .layer(axum::middleware::from_fn(crate::middleware::auth::auth_middleware));
+    public.merge(user_routes)
 }
 
 fn client(state: &Arc<AppState>) -> Result<ZernioClient, (StatusCode, Json<serde_json::Value>)> {
@@ -116,7 +125,8 @@ pub async fn get_connect_url(
     match z.get_connect_url(&query.platform, &query.profile_id).await {
         Ok(resp) => Ok(Json(json!({
             "success": true,
-            "url": resp.url,
+            "authUrl": resp.auth_url,
+            "state": resp.state,
         }))),
         Err(e) => Ok(Json(json!({
             "success": false,
@@ -443,4 +453,186 @@ pub async fn try_publish_delivery_to_zernio(delivery_id: Uuid, state: &Arc<AppSt
             warn!("📱 Zernio auto-publish failed for delivery {}: {}", delivery_id, e);
         }
     }
+}
+
+// ── User-level self-service handlers ────────────────────────────────────────
+
+/// Get or create the authenticated user's Zernio profile.
+/// Stores the mapping in `user_zernio_profiles` table so it persists across sessions.
+async fn ensure_user_zernio_profile(
+    state: &Arc<AppState>,
+    user_id: i32,
+) -> Result<String, (StatusCode, Json<serde_json::Value>)> {
+    // Check existing mapping
+    let existing = sqlx::query(
+        "SELECT zernio_profile_id FROM user_zernio_profiles WHERE user_id = $1",
+    )
+    .bind(user_id)
+    .fetch_optional(&state.db_pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"success": false, "error": format!("DB error: {e}")})),
+        )
+    })?;
+
+    if let Some(row) = existing {
+        return Ok(row.get::<String, _>("zernio_profile_id"));
+    }
+
+    // Auto-create a Zernio profile
+    let z = state.zernio_client.clone().ok_or_else(|| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"success": false, "error": "Zernio not configured"})),
+        )
+    })?;
+
+    // Get user info for profile name
+    let user_row = sqlx::query("SELECT username, email FROM users WHERE id = $1")
+        .bind(user_id)
+        .fetch_optional(&state.db_pool)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"success": false, "error": format!("DB error: {e}")})),
+            )
+        })?;
+
+    let profile_name = match user_row {
+        Some(r) => {
+            let username: Option<String> = r.get("username");
+            let email: String = r.get("email");
+            username.unwrap_or_else(|| email.split('@').next().unwrap_or("User").to_string())
+        }
+        None => format!("User {}", user_id),
+    };
+
+    match z
+        .create_profile(
+            &format!("{} — VideoSync", profile_name),
+            Some("Auto-created for social publishing"),
+        )
+        .await
+    {
+        Ok(resp) => {
+            let profile_id = resp.profile.id.clone();
+            sqlx::query(
+                "INSERT INTO user_zernio_profiles (user_id, zernio_profile_id) VALUES ($1, $2)",
+            )
+            .bind(user_id)
+            .bind(&profile_id)
+            .execute(&state.db_pool)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"success": false, "error": format!("DB insert error: {e}")})),
+                )
+            })?;
+            info!(
+                "Created Zernio profile '{}' ({}) for user {}",
+                profile_name, profile_id, user_id
+            );
+            Ok(profile_id)
+        }
+        Err(e) => Err((
+            StatusCode::BAD_GATEWAY,
+            Json(json!({"success": false, "error": format!("Zernio create profile failed: {e}")})),
+        )),
+    }
+}
+
+pub async fn get_or_create_my_zernio_profile(
+    Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
+) -> Json<serde_json::Value> {
+    let user_id: i32 = match claims.sub.parse() {
+        Ok(id) => id,
+        Err(_) => return Json(json!({"success": false, "error": "Invalid user ID in token"})),
+    };
+    match ensure_user_zernio_profile(&state, user_id).await {
+        Ok(profile_id) => Json(json!({"success": true, "profile_id": profile_id})),
+        Err((_code, err)) => err,
+    }
+}
+
+pub async fn get_my_social_accounts(
+    Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
+) -> Json<serde_json::Value> {
+    let user_id: i32 = match claims.sub.parse() {
+        Ok(id) => id,
+        Err(_) => return Json(json!({"success": false, "error": "Invalid user ID in token"})),
+    };
+    let rows = sqlx::query_as::<_, (String, String, Option<String>, Option<String>, Option<String>, bool)>(
+        "SELECT zernio_account_id, platform, username, display_name, profile_picture, is_active \
+         FROM user_zernio_accounts WHERE user_id = $1 ORDER BY platform",
+    )
+    .bind(user_id)
+    .fetch_all(&state.db_pool)
+    .await;
+    match rows {
+        Ok(accounts) => {
+            let accounts_json: Vec<serde_json::Value> = accounts
+                .into_iter()
+                .map(|(id, platform, username, display_name, profile_picture, is_active)| {
+                    json!({
+                        "id": id,
+                        "platform": platform,
+                        "username": username,
+                        "display_name": display_name,
+                        "profile_picture": profile_picture,
+                        "isActive": is_active,
+                    })
+                })
+                .collect();
+            Json(json!({"success": true, "accounts": accounts_json}))
+        }
+        Err(e) => Json(json!({"success": false, "error": format!("DB error: {e}")})),
+    }
+}
+
+pub async fn sync_my_social_accounts(
+    Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
+) -> Json<serde_json::Value> {
+    let user_id: i32 = match claims.sub.parse() {
+        Ok(id) => id,
+        Err(_) => return Json(json!({"success": false, "error": "Invalid user ID in token"})),
+    };
+    let Some(zernio) = state.zernio_client.clone() else {
+        return Json(json!({"success": false, "error": "Zernio not configured"}));
+    };
+    let accounts = match zernio.list_accounts().await {
+        Ok(r) => r.accounts,
+        Err(e) => return Json(json!({"success": false, "error": format!("Zernio error: {e}" )})),
+    };
+    // Clear and re-insert for this user
+    let _ = sqlx::query("DELETE FROM user_zernio_accounts WHERE user_id = $1")
+        .bind(user_id)
+        .execute(&state.db_pool)
+        .await;
+    for acc in &accounts {
+        let _ = sqlx::query(
+            "INSERT INTO user_zernio_accounts \
+             (user_id, zernio_account_id, platform, username, display_name, profile_picture, is_active) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7) \
+             ON CONFLICT (user_id, zernio_account_id) DO UPDATE SET \
+             username = EXCLUDED.username, display_name = EXCLUDED.display_name, is_active = EXCLUDED.is_active, synced_at = NOW()",
+        )
+        .bind(user_id)
+        .bind(&acc.id)
+        .bind(&acc.platform)
+        .bind(&acc.username)
+        .bind(&acc.display_name)
+        .bind(&acc.profile_picture)
+        .bind(acc.is_active)
+        .execute(&state.db_pool)
+        .await;
+    }
+    info!("Synced {} Zernio accounts for user {}", accounts.len(), user_id);
+    Json(json!({"success": true, "synced_count": accounts.len(), "accounts": accounts}))
 }

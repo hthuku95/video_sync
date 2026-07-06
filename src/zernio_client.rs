@@ -40,8 +40,10 @@ pub struct ListProfilesResponse {
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct ConnectUrlResponse {
-    #[serde(alias = "connectUrl")]
-    pub url: String,
+    #[serde(rename = "authUrl")]
+    pub auth_url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -54,9 +56,18 @@ pub struct ZernioAccount {
     #[serde(rename = "_id")]
     pub id: String,
     pub platform: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub username: Option<String>,
+    #[serde(rename = "displayName", skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    #[serde(rename = "profileId", skip_serializing_if = "Option::is_none")]
     pub profile_id: Option<String>,
-    pub connected: bool,
+    #[serde(rename = "isActive")]
+    pub is_active: bool,
+    #[serde(rename = "profilePicture", skip_serializing_if = "Option::is_none")]
+    pub profile_picture: Option<String>,
+    #[serde(rename = "profileUrl", skip_serializing_if = "Option::is_none")]
+    pub profile_url: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -66,16 +77,20 @@ pub struct PlatformTarget {
 }
 
 #[derive(Debug, Serialize)]
+pub struct MediaItem {
+    pub r#type: String,
+    pub url: String,
+}
+
+#[derive(Debug, Serialize)]
 pub struct CreatePostRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub text: Option<String>,
     pub platforms: Vec<PlatformTarget>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub profileId: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub mediaUrls: Option<Vec<String>>,
+    #[serde(rename = "mediaItems", skip_serializing_if = "Option::is_none")]
+    pub media_items: Option<Vec<MediaItem>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scheduledFor: Option<String>,
     pub publishNow: bool,
@@ -243,12 +258,24 @@ impl ZernioClient {
         account_targets: Vec<PlatformTarget>,
         media_urls: Vec<String>,
     ) -> Result<CreatePostResponse> {
+        let media_items: Vec<MediaItem> = media_urls
+            .into_iter()
+            .map(|url| {
+                let is_video = url.contains(".mp4")
+                    || url.contains(".webm")
+                    || url.contains(".mov")
+                    || url.contains("video");
+                MediaItem {
+                    r#type: if is_video { "video".to_string() } else { "image".to_string() },
+                    url,
+                }
+            })
+            .collect();
         let req = CreatePostRequest {
             content: Some(text.to_string()),
-            text: None,
             platforms: account_targets,
             profileId: Some(profile_id.to_string()),
-            mediaUrls: Some(media_urls),
+            media_items: Some(media_items),
             scheduledFor: None,
             publishNow: true,
         };
