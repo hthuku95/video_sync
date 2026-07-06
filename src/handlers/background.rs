@@ -22,7 +22,7 @@ lazy_static::lazy_static! {
     static ref BACKGROUND_CACHE: Arc<RwLock<Option<BackgroundCache>>> = Arc::new(RwLock::new(None));
 }
 
-fn detect_content_type(data: &[u8]) -> &str {
+fn detect_content_type(data: &[u8]) -> &'static str {
     if std::str::from_utf8(data)
         .map(|s| s.starts_with("<svg"))
         .unwrap_or(false)

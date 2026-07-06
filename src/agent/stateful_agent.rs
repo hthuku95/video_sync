@@ -807,8 +807,8 @@ IMPORTANT: For fetching website content, use `browserbase_fetch_url(url)` — it
                                     .and_then(|v| v.as_str())
                                     .unwrap_or("history_call")
                                     .to_string();
-                                let func_decl_map = match tool_args {
-                                    serde_json::Value::Object(map) => map.clone(),
+                                let func_decl_map: std::collections::HashMap<String, serde_json::Value> = match tool_args {
+                                    serde_json::Value::Object(map) => map.clone().into_iter().collect(),
                                     other => {
                                         let mut m = std::collections::HashMap::new();
                                         m.insert("args".to_string(), other.clone());

@@ -360,7 +360,6 @@ pub async fn execute_ffmpeg_command_with_timeout(
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let args: Vec<String> = command.get_args().map(|a| a.to_string_lossy().to_string()).collect();
     let output_path = extract_output_path_from_args(&args);
 
     let mut result = if stdout.trim().is_empty() {

@@ -3,7 +3,7 @@ use crate::{
         build_service_sample_chat_title, build_service_sample_prompt,
     },
     handlers::upload::get_or_create_session,
-    middleware::auth::auth_middleware,
+    middleware::auth::{auth_middleware, optional_auth_middleware},
     models::auth::Claims,
     AppState,
 };

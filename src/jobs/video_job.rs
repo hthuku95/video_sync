@@ -238,6 +238,12 @@ impl VideoEditingJob {
                             crate::agent::conversation_manager::MessageRole::Function => {
                                 "System (Tool Output)"
                             }
+                            crate::agent::conversation_manager::MessageRole::ToolCall => {
+                                "Tool Call"
+                            }
+                            crate::agent::conversation_manager::MessageRole::ToolResult => {
+                                "Tool Result"
+                            }
                         };
                         text.push_str(&format!("{}: {}\n", role, msg.content));
                     }

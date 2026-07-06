@@ -19,30 +19,24 @@ pub fn detect_scene_changes(
     let duration = get_duration(video_url)?;
     let analysis_window = max_analysis_secs.unwrap_or(duration).min(duration);
 
-    let mut args = vec![
+    let scene_filter = format!("select='gt(scene,{})'", threshold);
+    let t_arg = format!("{:.1}", analysis_window);
+
+    let args = vec![
         "-v", "quiet",
         "-i", video_url,
-        "-filter", &format!("select='gt(scene,{})'", threshold),
+        "-filter", &scene_filter,
         "-show_entries", "frame=pts_time",
         "-vsync", "vfr",
         "-f", "null",
     ];
 
-    // If limiting analysis duration, add -t before -i
-    let mut cmd = if analysis_window < duration && analysis_window > 0.0 {
-        let mut cmd = Command::new("ffmpeg");
-        cmd.arg("-t").arg(&format!("{:.1}", analysis_window));
-        cmd.arg("-i").arg(video_url);
-        cmd.arg("-filter").arg(&format!("select='gt(scene,{})'", threshold));
-        cmd.arg("-show_entries").arg("frame=pts_time");
-        cmd.arg("-vsync").arg("vfr");
-        cmd.arg("-f").arg("null");
-        cmd
-    } else {
-        let mut cmd = Command::new("ffmpeg");
-        cmd.args(&args);
-        cmd
-    };
+    // If limiting analysis duration, prepend -t before -i
+    let mut cmd = Command::new("ffmpeg");
+    if analysis_window < duration && analysis_window > 0.0 {
+        cmd.arg("-t").arg(&t_arg);
+    }
+    cmd.args(&args);
 
     let output = cmd
         .stdout(Stdio::piped())
