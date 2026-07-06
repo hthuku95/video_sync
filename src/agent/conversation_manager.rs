@@ -318,14 +318,27 @@ impl ConversationManager {
         Ok(messages)
     }
 
-    /// Get session database ID
+    /// Get session database ID, auto-creating if missing
     async fn get_session_db_id(&self, session_uuid: &str) -> Result<i32, ConversationError> {
         let row =
             sqlx::query_as::<_, (i32,)>("SELECT id FROM chat_sessions WHERE session_uuid = $1")
                 .bind(session_uuid)
-                .fetch_one(&self.db_pool)
+                .fetch_optional(&self.db_pool)
                 .await?;
 
-        Ok(row.0)
+        if let Some(r) = row {
+            return Ok(r.0);
+        }
+
+        // Auto-create session if it doesn't exist
+        let inserted = sqlx::query_as::<_, (i32,)>(
+            "INSERT INTO chat_sessions (session_uuid) VALUES ($1) RETURNING id",
+        )
+        .bind(session_uuid)
+        .fetch_one(&self.db_pool)
+        .await?;
+
+        tracing::info!("Auto-created chat_session with uuid={}", session_uuid);
+        Ok(inserted.0)
     }
 }
