@@ -32,35 +32,11 @@ pub struct DeliveryGcsDownloadQuery {
 }
 
 pub fn admin_routes() -> Router {
-    // HTML pages - public routes with JavaScript authentication
-    let public_admin = Router::new()
+    // Truly public routes (no auth required)
+    let public_routes = Router::new()
         .route("/admin", get(admin_login_page))
         .route("/admin/login", get(admin_login_page))
-        .route("/admin/dashboard", get(admin_dashboard))
-        .route("/admin/users", get(admin_users_list))
-        .route("/admin/users/:id", get(admin_user_detail))
-        .route(
-            "/admin/clipping-activity",
-            get(admin_clipping_activity_page),
-        )
-        .route("/admin/clipping-jobs", get(admin_clipping_jobs_page))
-        .route("/admin/performance", get(admin_performance_page))
-        .route("/admin/test-runs", get(admin_test_runs_page))
-        .route("/admin/test-runs/:id", get(admin_test_run_detail_page))
-        .route("/admin/deliveries", get(admin_deliveries_page))
-        .route(
-            "/admin/portfolio-samples",
-            get(admin_portfolio_samples_page),
-        )
-        .route(
-            "/admin/monetization-guide",
-            get(admin_monetization_guide_page),
-        )
-        .route("/admin/revenue-ledger", get(admin_revenue_ledger_page))
-        .route("/admin/how-it-works", get(admin_how_it_works_page))
-        .route("/admin/service-samples", get(admin_service_samples_page))
-        .route("/admin/campaigns", get(admin_campaigns_page))
-        .route("/admin/zernio", get(admin_zernio_page))
+        // Delivery share links — public by design
         .route("/delivery/:id", get(delivery_page))
         .route("/delivery/:id/stream", get(delivery_stream))
         .route("/delivery/:id/download-gcs", get(delivery_gcs_download))
@@ -70,8 +46,32 @@ pub fn admin_routes() -> Router {
         .route("/delivery/:id/unlock-spec", get(delivery_unlock_spec))
         .route("/delivery/:id/unlock", post(delivery_unlock));
 
-    // API endpoints - protected routes with JWT authentication
+    // Admin HTML pages — now behind auth + admin middleware
+    // Merged into protected_admin BEFORE the .layer() calls so middleware wraps them too.
+    let admin_html = Router::new()
+        .route("/admin/dashboard", get(admin_dashboard))
+        .route("/admin/users", get(admin_users_list))
+        .route("/admin/users/:id", get(admin_user_detail))
+        .route("/admin/clipping-activity", get(admin_clipping_activity_page))
+        .route("/admin/clipping-jobs", get(admin_clipping_jobs_page))
+        .route("/admin/performance", get(admin_performance_page))
+        .route("/admin/test-runs", get(admin_test_runs_page))
+        .route("/admin/test-runs/:id", get(admin_test_run_detail_page))
+        .route("/admin/deliveries", get(admin_deliveries_page))
+        .route("/admin/portfolio-samples", get(admin_portfolio_samples_page))
+        .route("/admin/monetization-guide", get(admin_monetization_guide_page))
+        .route("/admin/revenue-ledger", get(admin_revenue_ledger_page))
+        .route("/admin/how-it-works", get(admin_how_it_works_page))
+        .route("/admin/service-samples", get(admin_service_samples_page))
+        .route("/admin/campaigns", get(admin_campaigns_page))
+        .route("/admin/zernio", get(admin_zernio_page));
+
+    // Protected routes — API + admin HTML, all behind auth + admin middleware.
+    // Middleware wraps the entire merged router, so it applies to all routes.
     let protected_admin = Router::new()
+        // Admin HTML pages (merged before layers)
+        .merge(admin_html)
+        // API endpoints
         .route("/admin/users", post(admin_create_user))
         .route("/admin/users/:id", put(admin_update_user))
         .route("/admin/users/:id", delete(admin_delete_user))
@@ -79,27 +79,15 @@ pub fn admin_routes() -> Router {
         .route("/api/admin/users", get(admin_users_api))
         .route("/api/admin/users/:id", get(admin_user_api))
         .route("/api/admin/users/:id", put(admin_update_user_api))
-        .route(
-            "/api/admin/users/:id/toggle-active",
-            post(admin_toggle_user_active),
-        )
-        .route(
-            "/api/admin/users/:id/dfy-customer",
-            post(admin_toggle_dfy_customer),
-        )
+        .route("/api/admin/users/:id/toggle-active", post(admin_toggle_user_active))
+        .route("/api/admin/users/:id/dfy-customer", post(admin_toggle_dfy_customer))
         .route("/api/admin/users/:id/make-staff", post(admin_make_staff))
-        .route(
-            "/api/admin/users/:id/remove-staff",
-            post(admin_remove_staff),
-        )
+        .route("/api/admin/users/:id/remove-staff", post(admin_remove_staff))
         .route("/api/admin/whitelist/status", get(get_whitelist_status))
         .route("/api/admin/whitelist/toggle", post(toggle_whitelist))
         .route("/api/admin/whitelist/emails", get(get_whitelist_emails))
         .route("/api/admin/whitelist/emails", post(add_whitelist_email))
-        .route(
-            "/api/admin/whitelist/emails/:id",
-            delete(remove_whitelist_email),
-        )
+        .route("/api/admin/whitelist/emails/:id", delete(remove_whitelist_email))
         .route("/api/admin/pricing", get(get_model_pricing))
         .route("/api/admin/pricing", post(update_model_pricing))
         .route("/api/admin/default-model", get(get_default_model))
@@ -109,78 +97,27 @@ pub fn admin_routes() -> Router {
         .route("/api/admin/clipping/auto-toggle/status", get(get_auto_clipping_status))
         .route("/api/admin/clipping/auto-toggle", post(toggle_auto_clipping))
         .route("/api/admin/clipping/stats", get(admin_clipping_stats))
-        .route(
-            "/api/admin/clipping/user/:user_id/details",
-            get(admin_user_clipping_details),
-        )
+        .route("/api/admin/clipping/user/:user_id/details", get(admin_user_clipping_details))
         .route("/api/admin/clipping/jobs", get(admin_list_all_jobs))
         .route("/api/admin/clipping/jobs/:id", get(admin_get_job_details))
         .route("/api/admin/clipping/jobs/:id/retry", post(admin_retry_job))
-        .route(
-            "/api/admin/clipping/jobs/:id/cancel",
-            post(admin_cancel_job),
-        )
-        .route(
-            "/api/admin/clipping/jobs/:id/clips",
-            get(admin_get_job_clips),
-        )
-        .route(
-            "/api/admin/clipping/throughput",
-            get(admin_clipping_throughput),
-        )
-        .route(
-            "/api/admin/performance/viral-factors",
-            get(admin_viral_factor_performance),
-        )
-        .route(
-            "/api/admin/performance/channel-health",
-            get(admin_channel_health),
-        )
-        .route(
-            "/api/admin/performance/recommendations",
-            get(admin_learning_recommendations),
-        )
-        .route(
-            "/api/admin/performance/thumbnails",
-            get(admin_thumbnail_stats),
-        )
-        .route(
-            "/api/admin/test-runs",
-            get(api_list_test_runs).post(api_trigger_test_run),
-        )
+        .route("/api/admin/clipping/jobs/:id/cancel", post(admin_cancel_job))
+        .route("/api/admin/clipping/jobs/:id/clips", get(admin_get_job_clips))
+        .route("/api/admin/clipping/throughput", get(admin_clipping_throughput))
+        .route("/api/admin/performance/viral-factors", get(admin_viral_factor_performance))
+        .route("/api/admin/performance/channel-health", get(admin_channel_health))
+        .route("/api/admin/performance/recommendations", get(admin_learning_recommendations))
+        .route("/api/admin/performance/thumbnails", get(admin_thumbnail_stats))
+        .route("/api/admin/test-runs", get(api_list_test_runs).post(api_trigger_test_run))
         .route("/api/admin/test-runs/:id", get(api_get_test_run))
-        .route(
-            "/api/admin/manual-clipping-tests/trigger",
-            post(api_trigger_manual_clipping_test),
-        )
-        .route(
-            "/api/admin/reference-assets/normalize",
-            post(api_normalize_reference_asset),
-        )
-        .route(
-            "/api/admin/deliveries",
-            get(api_list_deliveries).post(api_create_delivery),
-        )
-        .route(
-            "/api/admin/deliveries/:id/zernio-targets",
-            post(api_set_delivery_zernio_targets),
-        )
-        .route(
-            "/api/admin/portfolio-samples",
-            get(api_list_portfolio_samples),
-        )
-        .route(
-            "/api/admin/portfolio-samples/crypto-saas",
-            post(api_generate_crypto_saas_portfolio_samples),
-        )
-        .route(
-            "/api/admin/service-samples",
-            get(api_list_service_portfolio_samples),
-        )
-        .route(
-            "/api/admin/service-samples/briefs",
-            get(api_list_service_portfolio_briefs),
-        )
+        .route("/api/admin/manual-clipping-tests/trigger", post(api_trigger_manual_clipping_test))
+        .route("/api/admin/reference-assets/normalize", post(api_normalize_reference_asset))
+        .route("/api/admin/deliveries", get(api_list_deliveries).post(api_create_delivery))
+        .route("/api/admin/deliveries/:id/zernio-targets", post(api_set_delivery_zernio_targets))
+        .route("/api/admin/portfolio-samples", get(api_list_portfolio_samples))
+        .route("/api/admin/portfolio-samples/crypto-saas", post(api_generate_crypto_saas_portfolio_samples))
+        .route("/api/admin/service-samples", get(api_list_service_portfolio_samples))
+        .route("/api/admin/service-samples/briefs", get(api_list_service_portfolio_briefs))
         .route("/api/admin/revenue-ledger", get(api_revenue_ledger))
         .route("/api/admin/payments", get(api_studio_payments))
         .route("/api/admin/config", get(api_get_config))
@@ -190,20 +127,17 @@ pub fn admin_routes() -> Router {
         .layer(axum::middleware::from_fn(admin_middleware))
         .layer(axum::middleware::from_fn(auth_middleware));
 
+    // Superuser-only endpoints
     let superuser_only = Router::new()
-        .route(
-            "/api/admin/users/:id/make-superuser",
-            post(admin_make_superuser),
-        )
-        .route(
-            "/api/admin/users/:id/remove-superuser",
-            post(admin_remove_superuser),
-        )
+        .route("/api/admin/users/:id/make-superuser", post(admin_make_superuser))
+        .route("/api/admin/users/:id/remove-superuser", post(admin_remove_superuser))
         .route("/api/admin/create-superuser", post(create_superuser_api))
         .layer(axum::middleware::from_fn(superuser_middleware))
         .layer(axum::middleware::from_fn(auth_middleware));
 
-    public_admin.merge(protected_admin).merge(superuser_only)
+    public_routes
+        .merge(protected_admin)
+        .merge(superuser_only)
 }
 
 #[derive(Deserialize)]

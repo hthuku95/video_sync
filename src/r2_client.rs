@@ -113,6 +113,63 @@ impl R2Client {
         Err(last_error.unwrap_or_else(|| format!("R2 upload failed for {key}")))
     }
 
+    /// Upload bytes directly to R2 without writing to local disk.
+    /// Uses presigned PUT URL + reqwest for files ≤ 50 MB.
+    /// For larger files, writes to a temp file and uses multipart upload.
+    pub async fn upload_bytes(&self, key: &str, data: &[u8], content_type: &str) -> Result<String, String> {
+        if data.len() as u64 > MULTIPART_THRESHOLD {
+            // Large file: write to temp, use multipart, clean up
+            let tmp = format!("/tmp/opencode/r2_bytes_{}", key.replace('/', "_"));
+            if let Some(parent) = std::path::Path::new(&tmp).parent() {
+                tokio::fs::create_dir_all(parent).await
+                    .map_err(|e| format!("Cannot create temp dir: {e}"))?;
+            }
+            tokio::fs::write(&tmp, data).await
+                .map_err(|e| format!("Cannot write temp file: {e}"))?;
+            self.upload_multipart(&tmp, key).await?;
+            let _ = tokio::fs::remove_file(&tmp).await;
+            return self.presign_get(key, 7 * 24 * 3600).await;
+        }
+
+        let config = PresigningConfig::builder()
+            .expires_in(Duration::from_secs(3600))
+            .build()
+            .map_err(|e| format!("PresigningConfig error: {e}"))?;
+
+        let url = self
+            .client
+            .put_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .content_type(content_type)
+            .presigned(config)
+            .await
+            .map_err(|e| format!("Failed to presign PUT URL: {e}"))?
+            .uri()
+            .to_string();
+
+        let body_len = data.len();
+
+        let resp = self
+            .http
+            .put(&url)
+            .header("Content-Type", content_type)
+            .header("Content-Length", body_len.to_string())
+            .body(data.to_vec())
+            .send()
+            .await
+            .map_err(|e| format!("R2 presigned PUT failed: {e}"))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(format!("R2 presigned PUT HTTP {status}: {text}"));
+        }
+
+        tracing::info!("R2 upload bytes → {key} ({size} bytes)", size = body_len);
+        self.presign_get(key, 7 * 24 * 3600).await
+    }
+
     /// Legacy compatibility helper for call sites that expect upload to
     /// return a downloadable URL in one step.
     pub async fn upload_file(&self, local_path: &str, key: &str) -> Result<String, String> {

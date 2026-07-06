@@ -32,6 +32,10 @@ struct DownloadRequest {
     prefer_base64: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     timeout_seconds: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    r2_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    r2_bucket: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -44,6 +48,8 @@ struct DownloadResponse {
     file_data: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     expires_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    r2_url: Option<String>,
     metadata: VideoMetadata,
 }
 
@@ -100,6 +106,7 @@ pub struct VideoDownloadResult {
     pub duration_seconds: f64,
     pub width: Option<u32>,
     pub height: Option<u32>,
+    pub r2_url: Option<String>,
 }
 
 // ============================================================================
@@ -199,10 +206,12 @@ impl YtdlpApiClient {
 
     /// Download video via FastAPI microservice
     ///
-    /// Replaces Strategy #3 (yt-dlp CLI subprocess) in the fallback chain
+    /// If `r2_key` is set, the service streams the download directly to Cloudflare R2
+    /// and returns the R2 URL — no local disk needed for the full file.
     pub async fn download_video(
         video_url: &str,
         output_path: &str,
+        r2_key: Option<String>,
     ) -> Result<VideoDownloadResult, String> {
         info!(
             "🌐 YtdlpApiClient::download_video starting: {} → {}",
@@ -227,7 +236,7 @@ impl YtdlpApiClient {
 
         loop {
             match client
-                ._download_attempt(video_url, output_path, job_id.clone())
+                ._download_attempt(video_url, output_path, job_id.clone(), r2_key.clone())
                 .await
             {
                 Ok(result) => {
@@ -277,6 +286,7 @@ impl YtdlpApiClient {
         video_url: &str,
         output_path: &str,
         job_id: Option<String>,
+        r2_key: Option<String>,
     ) -> Result<VideoDownloadResult, String> {
         // Build request payload
         let request_payload = DownloadRequest {
@@ -286,6 +296,8 @@ impl YtdlpApiClient {
             format: Some("mp4".to_string()),
             prefer_base64: Some(false), // Always use URL mode for large files
             timeout_seconds: Some(600), // 10 minutes (matches HTTP client timeout)
+            r2_key: r2_key.clone(),
+            r2_bucket: None,
         };
 
         // POST to /api/v1/download
@@ -352,6 +364,30 @@ impl YtdlpApiClient {
             .map_err(|e| format!("Failed to create output file: {}", e))?;
 
         match download_response.method.as_str() {
+            "r2" => {
+                // Direct-to-R2 upload — no local file needed
+                let r2_url = download_response
+                    .r2_url
+                    .ok_or("r2_url missing in r2 mode")?;
+                info!("R2 direct download: {}", r2_url);
+
+                // Create empty placeholder so file validation passes
+                file.write_all(b"").await
+                    .map_err(|e| format!("Failed to write placeholder: {}", e))?;
+
+                // Return result with r2_url set
+                file.flush().await
+                    .map_err(|e| format!("Failed to flush: {}", e))?;
+
+                return Ok(VideoDownloadResult {
+                    file_path: output_path.to_string(),
+                    title: download_response.metadata.title,
+                    duration_seconds: download_response.metadata.duration_seconds,
+                    width: download_response.metadata.width,
+                    height: download_response.metadata.height,
+                    r2_url: Some(r2_url),
+                });
+            }
             "url" => {
                 // Pattern A/B: stream directly from download_url → disk (no full-file buffer)
                 let download_url = download_response
@@ -445,6 +481,7 @@ impl YtdlpApiClient {
             duration_seconds: download_response.metadata.duration_seconds,
             width: download_response.metadata.width,
             height: download_response.metadata.height,
+            r2_url: None,
         })
     }
 }

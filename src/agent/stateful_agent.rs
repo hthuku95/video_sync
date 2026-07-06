@@ -53,27 +53,92 @@ impl StatefulClaudeAgent {
             tracing::warn!("Failed to initialize conversation schema: {}", e);
         }
 
-        // Retrieve conversation history (last 20 messages)
+        // Retrieve conversation history (last 50 messages for better context retention)
         let conversation_history = conversation_manager
-            .get_conversation_history(session_id, Some(20))
+            .get_conversation_history(session_id, Some(50))
             .await
             .unwrap_or_default();
 
         // Build messages array with conversation history
         let mut messages = Vec::new();
 
-        // Add conversation history
+        // Add conversation history — including persisted tool calls/results for cross-turn context
         for msg in &conversation_history {
-            messages.push(ClaudeMessage {
-                role: match msg.role {
-                    crate::agent::conversation_manager::MessageRole::Human => "user".to_string(),
-                    crate::agent::conversation_manager::MessageRole::Assistant => {
-                        "assistant".to_string()
+            match msg.role {
+                crate::agent::conversation_manager::MessageRole::Human => {
+                    messages.push(ClaudeMessage {
+                        role: "user".to_string(),
+                        content: ClaudeContent::Text(msg.content.clone()),
+                    });
+                }
+                crate::agent::conversation_manager::MessageRole::Assistant => {
+                    messages.push(ClaudeMessage {
+                        role: "assistant".to_string(),
+                        content: ClaudeContent::Text(msg.content.clone()),
+                    });
+                }
+                crate::agent::conversation_manager::MessageRole::ToolCall => {
+                    // Reconstruct as assistant ToolUse block for Claude
+                    if let Some(ref meta) = msg.metadata {
+                        if let Some(tool_name) = meta.get("tool_name").and_then(|v| v.as_str()) {
+                            if let Some(tool_args) = meta.get("tool_args") {
+                                let use_id = meta.get("tool_call_id")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("history_tool_call")
+                                    .to_string();
+                                messages.push(ClaudeMessage {
+                                    role: "assistant".to_string(),
+                                    content: ClaudeContent::Blocks(vec![
+                                        crate::claude_client::ContentBlock::ToolUse {
+                                            id: use_id,
+                                            name: tool_name.to_string(),
+                                            input: tool_args.clone(),
+                                        },
+                                    ]),
+                                });
+                                continue;
+                            }
+                        }
                     }
-                    _ => continue, // Skip system and function messages
-                },
-                content: ClaudeContent::Text(msg.content.clone()),
-            });
+                    // Fallback: plain text
+                    messages.push(ClaudeMessage {
+                        role: "assistant".to_string(),
+                        content: ClaudeContent::Text(format!("[Previous tool call] {}", msg.content)),
+                    });
+                }
+                crate::agent::conversation_manager::MessageRole::ToolResult => {
+                    // Reconstruct as user ToolResult block for Claude
+                    if let Some(ref meta) = msg.metadata {
+                        if let Some(tool_result) = meta.get("tool_result") {
+                            let use_id = meta.get("tool_call_id")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("history_tool_result")
+                                .to_string();
+                            let result_text = match tool_result {
+                                serde_json::Value::String(s) => s.clone(),
+                                other => other.to_string(),
+                            };
+                            messages.push(ClaudeMessage {
+                                role: "user".to_string(),
+                                content: ClaudeContent::Blocks(vec![
+                                    crate::claude_client::ContentBlock::ToolResult {
+                                        tool_use_id: use_id,
+                                        content: result_text,
+                                        is_error: None,
+                                    },
+                                ]),
+                            });
+                            continue;
+                        }
+                    }
+                    // Fallback: plain text
+                    messages.push(ClaudeMessage {
+                        role: "user".to_string(),
+                        content: ClaudeContent::Text(format!("[Previous tool result] {}", msg.content)),
+                    });
+                }
+                _ => continue, // Skip system and function messages
+            }
         }
 
         // Add current user message with context (context already contains user_request, avoid duplication)
@@ -403,6 +468,27 @@ IMPORTANT: For fetching website content, use `browserbase_fetch_url(url)` — it
                 content: ClaudeContent::Blocks(tool_result_blocks),
             });
 
+            // Persist tool calls and results to DB for cross-turn context retention
+            let response_content = &response.content;
+            for (i, rc) in response_content.iter().enumerate() {
+                if let crate::claude_client::ResponseContent::ToolUse { id, name, input } = rc {
+                    // Save tool call
+                    let call_msg = crate::agent::conversation_manager::ConversationMessage::new_tool_call(
+                        session_id.to_string(), name, input.clone(), Some(id.clone()),
+                    );
+                    let _ = conversation_manager.save_message(&call_msg).await;
+
+                    // Save corresponding tool result
+                    if let Some((_, result)) = tool_results.get(i) {
+                        let result_val = serde_json::json!({"result": result});
+                        let result_msg = crate::agent::conversation_manager::ConversationMessage::new_tool_result(
+                            session_id.to_string(), name, result_val, Some(id.clone()),
+                        );
+                        let _ = conversation_manager.save_message(&result_msg).await;
+                    }
+                }
+            }
+
             // Continue loop - AI will process tool results and respond naturally
         }
 
@@ -583,9 +669,9 @@ impl StatefulGeminiAgent {
             tracing::warn!("Failed to initialize conversation schema: {}", e);
         }
 
-        // Retrieve conversation history (last 20 messages)
+        // Retrieve conversation history (last 50 messages for better context retention)
         let conversation_history = conversation_manager
-            .get_conversation_history(session_id, Some(20))
+            .get_conversation_history(session_id, Some(50))
             .await
             .unwrap_or_default();
 
@@ -600,7 +686,7 @@ The tool `generate_long_form_video` exists in your catalog but is a DELEGATION w
 ## SERVICE-SPECIFIC TOOL SELECTION
 The MANDATORY TOOL SEQUENCE in the service prompt above tells you exactly which tools to use for THIS specific task. Follow it exactly. Do NOT use tools that are not listed in the mandatory sequence for this service type:
 
-- For Clipping services: use `generate_clip_compilation` (downloads video → extracts clips → adds captions → uploads to R2 in one call). Fall back to manual editing tools (trim_video, split_video, add_subtitles) if generate_clip_compilation is unavailable. NEVER use blender_generate_scene_type or manim_execute_script.
+- For Clipping services: use `generate_clip_compilation` (streams video → analyzes content → extracts smart clips → adds captions → uploads to R2 in one call). FIRST analyze the video by downloading or reviewing it to find the best moments, THEN call generate_clip_compilation with explicit `clip_times` set to your chosen start times. If you can't analyze, omit clip_times and the tool auto-detects via scene detection + audio energy. Fall back to manual editing tools (trim_video, split_video, add_subtitles) if generate_clip_compilation is unavailable. NEVER use blender_generate_scene_type or manim_execute_script.
 - For Manim services (manim_explainer, whiteboard_animation, kinetic_typography, animated_infographic, algorithm_viz, investor_pitch, year_in_review, isometric_explainer): use ONLY manim_execute_script. NEVER use blender_generate_scene_type.
 - For Landing Page / Education: follow the prompt's sequence.
 - For all other services: follow the prompt's mandatory tool sequence.
@@ -632,7 +718,7 @@ You operate in a loop: call a tool → read the result → decide the next tool 
 4. READ the result
 5. Decide what's needed next based on what was returned and call another tool
 6. Repeat until the deliverable is complete
-7. Call `submit_final_answer` with all output file paths
+7. Call `submit_final_answer` with all output file paths — THIS IS MANDATORY. After EVERY tool call that produces an output file (add_text_overlay, apply_ffmpeg_filter, trim_video, etc.), you MUST call submit_final_answer with the output path. The workflow will not complete without it.
 
 ### Example loop pattern (tool names are placeholders — choose the right tools for YOUR task):
 - Step 1: Call a generation tool that works from text → get an output file
@@ -693,20 +779,93 @@ IMPORTANT: For fetching website content, use `browserbase_fetch_url(url)` — it
             role: None,
         };
 
-        // Add conversation history
+        // Add conversation history — including persisted tool calls/results for cross-turn context
         for msg in &conversation_history {
-            let role = match msg.role {
-                crate::agent::conversation_manager::MessageRole::Human => "user",
-                crate::agent::conversation_manager::MessageRole::Assistant => "model",
+            match msg.role {
+                crate::agent::conversation_manager::MessageRole::Human => {
+                    contents.push(crate::gemini_client::Content {
+                        parts: vec![crate::gemini_client::Part::Text {
+                            text: msg.content.clone(),
+                        }],
+                        role: Some("user".to_string()),
+                    });
+                }
+                crate::agent::conversation_manager::MessageRole::Assistant => {
+                    contents.push(crate::gemini_client::Content {
+                        parts: vec![crate::gemini_client::Part::Text {
+                            text: msg.content.clone(),
+                        }],
+                        role: Some("model".to_string()),
+                    });
+                }
+                crate::agent::conversation_manager::MessageRole::ToolCall => {
+                    // Reconstruct as model FunctionCall for Gemini
+                    if let Some(ref meta) = msg.metadata {
+                        if let Some(tool_name) = meta.get("tool_name").and_then(|v| v.as_str()) {
+                            if let Some(tool_args) = meta.get("tool_args") {
+                                let call_id = meta.get("tool_call_id")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("history_call")
+                                    .to_string();
+                                let func_decl_map = match tool_args {
+                                    serde_json::Value::Object(map) => map.clone(),
+                                    other => {
+                                        let mut m = std::collections::HashMap::new();
+                                        m.insert("args".to_string(), other.clone());
+                                        m
+                                    }
+                                };
+                                contents.push(crate::gemini_client::Content {
+                                    parts: vec![crate::gemini_client::Part::FunctionCall {
+                                        function_call: crate::gemini_client::FunctionCall {
+                                            name: tool_name.to_string(),
+                                            args: func_decl_map,
+                                            thought_signature: None,
+                                        },
+                                    }],
+                                    role: Some("model".to_string()),
+                                });
+                                continue;
+                            }
+                        }
+                    }
+                    contents.push(crate::gemini_client::Content {
+                        parts: vec![crate::gemini_client::Part::Text {
+                            text: format!("[Previous tool call] {}", msg.content),
+                        }],
+                        role: Some("model".to_string()),
+                    });
+                }
+                crate::agent::conversation_manager::MessageRole::ToolResult => {
+                    // Reconstruct as FunctionResponse for Gemini
+                    if let Some(ref meta) = msg.metadata {
+                        if let Some(tool_name) = meta.get("tool_name").and_then(|v| v.as_str()) {
+                            if let Some(result_val) = meta.get("tool_result") {
+                                let mut response_map = std::collections::HashMap::new();
+                                response_map.insert("result".to_string(), result_val.clone());
+                                contents.push(crate::gemini_client::Content {
+                                    parts: vec![crate::gemini_client::Part::FunctionResponse {
+                                        function_response: crate::gemini_client::FunctionResponse {
+                                            name: tool_name.to_string(),
+                                            response: response_map,
+                                            thought_signature: None,
+                                        },
+                                    }],
+                                    role: Some("function".to_string()),
+                                });
+                                continue;
+                            }
+                        }
+                    }
+                    contents.push(crate::gemini_client::Content {
+                        parts: vec![crate::gemini_client::Part::Text {
+                            text: format!("[Previous tool result] {}", msg.content),
+                        }],
+                        role: Some("function".to_string()),
+                    });
+                }
                 _ => continue, // Skip system and function messages
-            };
-
-            contents.push(crate::gemini_client::Content {
-                parts: vec![crate::gemini_client::Part::Text {
-                    text: msg.content.clone(),
-                }],
-                role: Some(role.to_string()),
-            });
+            }
         }
 
         // Add current user message with context (context already contains user_request, avoid duplication)
@@ -1112,14 +1271,43 @@ IMPORTANT: For fetching website content, use `browserbase_fetch_url(url)` — it
                                                 |_| serde_json::json!({"result": tool_result}),
                                             );
 
-                                    if function_name == "submit_final_answer"
-                                        || function_name == "generate_image"
-                                        || function_name == "blender_generate_scene_type"
-                                        || function_name == "manim_execute_script"
-                                        || function_name == "create_thumbnail"
-                                        || function_name == "create_thumbnail_hd"
-                                        || function_name == "merge_videos"
-                                    {
+                                    // Track ALL output-producing tools so the final response includes deliverable URLs
+                                    let is_output_tool = matches!(
+                                        function_name.as_str(),
+                                        "submit_final_answer"
+                                        | "generate_image"
+                                        | "blender_generate_scene_type"
+                                        | "manim_execute_script"
+                                        | "create_thumbnail"
+                                        | "create_thumbnail_hd"
+                                        | "merge_videos"
+                                        | "add_text_overlay"
+                                        | "add_overlay"
+                                        | "apply_ffmpeg_filter"
+                                        | "apply_audio_ffmpeg_filter"
+                                        | "trim_video"
+                                        | "split_video"
+                                        | "concat_videos"
+                                        | "generate_clip_compilation"
+                                        | "add_subtitles"
+                                        | "add_voiceover_to_video"
+                                        | "generate_text_to_speech"
+                                        | "generate_music"
+                                        | "generate_sound_effect"
+                                        | "overlay_video"
+                                        | "crop_video"
+                                        | "rotate_video"
+                                        | "resize_video"
+                                        | "adjust_speed"
+                                        | "stabilize_video"
+                                        | "add_transition"
+                                        | "extract_audio"
+                                        | "replace_audio"
+                                        | "remove_audio"
+                                        | "concat_audio"
+                                        | "add_audio"
+                                    );
+                                    if is_output_tool {
                                         last_tool_result_with_output =
                                             Some(tool_result.clone());
                                     }

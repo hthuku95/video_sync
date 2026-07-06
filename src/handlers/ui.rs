@@ -47,6 +47,16 @@ pub fn ui_routes() -> Router {
         .route("/video-tools", get(video_tools_page))
         .route("/manual-clipping", get(manual_clipping_page))
         .route("/signup/clipper", get(clipper_signup_page))
+        // Campaign pages — public HTML with optional auth middleware
+        // Injects Claims if JWT cookie/header/query found; otherwise passes through without.
+        // Handlers use Option<Extension<Claims>> to show login prompt when unauthenticated.
+        .merge(
+            Router::new()
+                .route("/campaigns", get(campaigns_list_page))
+                .route("/campaigns/new", get(campaigns_new_page))
+                .route("/campaigns/:id", get(campaigns_detail_page))
+                .layer(axum::middleware::from_fn(optional_auth_middleware)),
+        )
 }
 
 pub fn ui_private_routes() -> Router {
@@ -56,9 +66,6 @@ pub fn ui_private_routes() -> Router {
             "/api/service-samples/request",
             post(create_service_sample_request),
         )
-        .route("/campaigns", get(campaigns_list_page))
-        .route("/campaigns/new", get(campaigns_new_page))
-        .route("/campaigns/:id", get(campaigns_detail_page))
         .layer(axum::middleware::from_fn(
             crate::middleware::subscription::subscription_middleware,
         ))
@@ -379,7 +386,7 @@ pub async fn saas_launch_pack_page() -> Html<String> {
             "Campaign dashboard with analytics",
             "Variation engine — never the same demo twice",
             "Hook/caption variants per post",
-            "R2-hosted delivery links for sharing",
+            "Shareable delivery links",
             "Pause/resume/cancel anytime",
         ],
         &[
@@ -692,11 +699,41 @@ pub async fn isometric_explainer_page() -> Html<String> {
 
 // ── Campaign Dashboard Pages ─────────────────────────────────────────────────
 
+/// HTML fragment shown when an unauthenticated user hits a page that needs login.
+fn login_required_page() -> String {
+    r#"<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Login Required — VideoSync</title>
+<style>
+    :root {{ --bg:#07111d; --panel:rgba(9,18,31,0.84); --text:#e5eefb; --blue:#3b82f6; }}
+    * {{ box-sizing:border-box; }}
+    body {{ margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:var(--bg); color:var(--text); display:flex; align-items:center; justify-content:center; min-height:100vh; }}
+    .box {{ text-align:center; max-width:420px; padding:2rem; }}
+    h1 {{ font-size:2rem; margin:0 0 1rem; }}
+    p {{ color:#a8b8d3; line-height:1.6; }}
+    .btn {{ display:inline-block; padding:0.8rem 1.5rem; border-radius:5px; background:linear-gradient(135deg,var(--blue),#2563eb); color:#fff; text-decoration:none; font-weight:700; margin-top:1rem; }}
+</style>
+</head>
+<body>
+<div class="box">
+    <h1>Login Required</h1>
+    <p>Please log in to access campaigns and start generating content.</p>
+    <a class="btn" href="/login">Log In</a>
+    <p style="margin-top:1rem;font-size:0.85rem;">Don't have an account? <a href="/signup" style="color:var(--blue);">Sign up</a></p>
+</div>
+</body>
+</html>"#.to_string()
+}
+
 pub async fn campaigns_list_page(
     Extension(state): Extension<Arc<AppState>>,
-    Extension(claims): Extension<Claims>,
+    claims: Option<Extension<Claims>>,
 ) -> Html<String> {
-    let user_id: i32 = claims.sub.parse().unwrap_or(0);
+    let user_id: i32 = match claims {
+        Some(Extension(c)) => c.sub.parse().unwrap_or(0),
+        None => return Html(login_required_page()),
+    };
     let rows = sqlx::query_as::<_, (uuid::Uuid, String, String, String, i32, i32, i32, chrono::DateTime<chrono::Utc>)>(
         "SELECT id, name, service_type, status, posts_per_day, \
                 total_posts_planned, total_posts_published, created_at \
@@ -789,10 +826,13 @@ pub async fn campaigns_list_page(
 
 pub async fn campaigns_new_page(
     Extension(state): Extension<Arc<AppState>>,
-    Extension(claims): Extension<Claims>,
+    claims: Option<Extension<Claims>>,
     Query(query): Query<std::collections::HashMap<String, String>>,
 ) -> Html<String> {
-    let user_id: i32 = claims.sub.parse().unwrap_or(0);
+    let user_id: i32 = match claims {
+        Some(Extension(c)) => c.sub.parse().unwrap_or(0),
+        None => return Html(login_required_page()),
+    };
 
     // Check subscription — non-subscribers get a paywall
     let sub_ok = crate::handlers::chat::subscription_ok(&state, user_id).await.unwrap_or(false);
@@ -1079,10 +1119,13 @@ document.getElementById('campaignForm').addEventListener('submit', async (e) => 
 
 pub async fn campaigns_detail_page(
     Extension(state): Extension<Arc<AppState>>,
-    Extension(claims): Extension<Claims>,
+    claims: Option<Extension<Claims>>,
     Path(id): Path<uuid::Uuid>,
 ) -> Html<String> {
-    let user_id: i32 = claims.sub.parse().unwrap_or(0);
+    let user_id: i32 = match claims {
+        Some(Extension(c)) => c.sub.parse().unwrap_or(0),
+        None => return Html(login_required_page()),
+    };
 
     let campaign = sqlx::query_as::<_, (uuid::Uuid, String, String, String, String, f64, serde_json::Value, serde_json::Value, i32, chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>, Option<String>, Option<String>, String, i32, i32)>(
         "SELECT id, name, service_type, brief, style, duration, schedule, platforms, \
@@ -1745,12 +1788,36 @@ fn build_service_offer_page_html(
     }}
   }}catch(e){{}}
 }})();
+
+// Dynamic background from Gemini Nano Banana (refreshed every 5 min by the server)
+(async function(){{
+  try {{
+    const r = await fetch('/api/background/image');
+    const ct = r.headers.get('content-type') || '';
+    if (ct.includes('image/')) {{
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const el = document.getElementById('dyn-bg');
+      if (el) el.remove();
+      const bg = document.createElement('div');
+      bg.id = 'dyn-bg';
+      bg.style.cssText = 'position:fixed;inset:0;z-index:-3;background-size:cover;background-position:center;opacity:0;transition:opacity 1.2s ease;';
+      bg.style.backgroundImage = 'url(' + url + ')';
+      document.body.prepend(bg);
+      requestAnimationFrame(() => bg.style.opacity = '0.5');
+    }} else {{
+      const data = await r.json();
+      if (data.fallback && data.gradient) {{
+        document.body.style.background = data.gradient;
+      }}
+    }}
+  }} catch(e) {{ console.warn('Bg fetch:', e); }}
+}})();
 </script>
 </body>
 </html>"#
     )
 }
-
 
 fn service_page_nav(active_slug: &str) -> String {
     let items = [

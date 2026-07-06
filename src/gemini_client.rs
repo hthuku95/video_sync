@@ -683,8 +683,8 @@ impl GeminiClient {
     /// Resolve a user-supplied model alias to a concrete Gemini model ID.
     fn resolve_image_model(model: Option<&str>) -> &str {
         match model {
-            Some("fast") | Some("nano") => "gemini-2.0-flash-preview-image-generation",
-            Some("quality") | Some("pro") | None => "gemini-3-pro-image-preview",
+            Some("fast") | Some("nano") => "gemini-3.1-flash-image",
+            Some("quality") | Some("pro") | None => "gemini-3-pro-image",
             Some(explicit) => explicit,
         }
     }

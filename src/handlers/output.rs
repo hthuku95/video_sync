@@ -34,6 +34,7 @@ pub fn output_routes() -> Router {
         .route("/api/outputs/download/:file_id", get(download_video_output))
         .route("/api/outputs/stream/:file_id", get(stream_video_output))
         .route("/api/outputs/info/:file_id", get(get_output_info))
+        .layer(axum::middleware::from_fn(crate::middleware::auth::auth_middleware))
 }
 
 /// List all video outputs for a session

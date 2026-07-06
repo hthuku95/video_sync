@@ -651,13 +651,23 @@ That tool will start a new agent instead of clipping the actual source video.
 
 ## RECOMMENDED TOOL: generate_clip_compilation
 Use this tool to automate the entire clipping pipeline:
-- Downloads the video from the source URL (YouTube, Kick, Twitch, or any public URL)
-- Extracts highlight clips at evenly-spaced intervals
+- Downloads/streams the video from the source URL (YouTube, Kick, Twitch, or any public URL)
+- Uses smart scene detection + audio energy analysis to find the most engaging moments
+- Accepts explicit `clip_times` array if you already know where the best moments are
 - Adds auto-generated subtitles/captions
 - Uploads finished clips to R2 cloud storage
 - Returns shareable R2 URLs for each clip
 
-Call it once: generate_clip_compilation(source_url="{source}", clip_duration_seconds=15, max_clips=3, include_captions=true)
+### ⚠️ CRITICAL: ANALYZE BEFORE CLIPPING
+You have a vision-capable model. BEFORE calling generate_clip_compilation, analyze the video:
+1. Download or review the source video to understand its content
+2. Identify the most engaging moments — key highlights, funny parts, dramatic moments, educational value
+3. THEN call generate_clip_compilation with:
+   - `clip_times` set to the exact start times (in seconds) for each clip you identified
+   - Example: generate_clip_compilation(source_url="{source}", clip_times=[12.5, 48.2, 93.7], clip_duration_seconds=15, max_clips=3, include_captions=true)
+   - If you can't analyze the video, omit `clip_times` and the tool will use smart scene detection
+
+If you provide `clip_times`, the tool trims at those exact positions. If you don't, it runs scene detection + audio energy analysis to auto-pick the best moments.
 
 ## ALTERNATIVE: Manual editing (if generate_clip_compilation is unavailable)
 1. Download the source video using your available tools

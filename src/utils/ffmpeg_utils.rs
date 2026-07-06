@@ -92,6 +92,14 @@ fn execute_ffmpeg_maybe_via_mcp(
     Ok(String::new())
 }
 
+/// Extract output file path from FFmpeg command args.
+/// The output is the last positional argument that doesn't start with `-`.
+fn extract_output_path_from_args(args: &[String]) -> Option<String> {
+    // Skip program name (first arg), find last non-flag arg
+    let positional: Vec<&String> = args.iter().filter(|a| !a.starts_with('-')).collect();
+    positional.last().map(|s| s.to_string())
+}
+
 fn run_local_ffmpeg(command: &mut Command) -> Result<String, String> {
     let output = command
         .output()
@@ -102,7 +110,21 @@ fn run_local_ffmpeg(command: &mut Command) -> Result<String, String> {
         return Err(format!("FFmpeg error: {}", stderr));
     }
 
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let args: Vec<String> = command.get_args().map(|a| a.to_string_lossy().to_string()).collect();
+    let output_path = extract_output_path_from_args(&args);
+
+    let mut result = if stdout.trim().is_empty() {
+        "✅ Processing completed".to_string()
+    } else {
+        stdout.trim().to_string()
+    };
+
+    if let Some(path) = output_path {
+        result.push_str(&format!("\n📁 Output: {}", path));
+    }
+
+    Ok(result)
 }
 
 /// Execute FFmpeg command with error handling and progress info
@@ -189,7 +211,12 @@ pub fn execute_ffmpeg_command_with_sync_timeout(
                     .map(|reader| reader.join().unwrap_or_default())
                     .unwrap_or_default();
                 if status.success() {
-                    return Ok(String::new());
+                    let output_path = extract_output_path_from_args(&args);
+                    let mut msg = "✅ Processing completed".to_string();
+                    if let Some(path) = output_path {
+                        msg.push_str(&format!("\n📁 Output: {}", path));
+                    }
+                    return Ok(msg);
                 }
                 let stderr = String::from_utf8_lossy(&stderr_buf);
                 return Err(format!(
@@ -332,7 +359,19 @@ pub async fn execute_ffmpeg_command_with_timeout(
         return Err(format!("FFmpeg error: {}", stderr));
     }
 
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let args: Vec<String> = command.get_args().map(|a| a.to_string_lossy().to_string()).collect();
+    let output_path = extract_output_path_from_args(&args);
+
+    let mut result = if stdout.trim().is_empty() {
+        "✅ Processing completed".to_string()
+    } else {
+        stdout.trim().to_string()
+    };
+    if let Some(path) = output_path {
+        result.push_str(&format!("\n📁 Output: {}", path));
+    }
+    Ok(result)
 }
 
 /// Execute FFprobe for media analysis

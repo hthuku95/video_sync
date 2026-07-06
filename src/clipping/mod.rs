@@ -15,6 +15,7 @@ pub mod thumbnail_generator;
 pub mod uploader;
 pub mod ytdlp_api_client; // Strategy #3: FastAPI yt-dlp microservice (HTTP API)
 pub mod ytdlp_client; // Legacy: yt-dlp CLI wrapper (deprecated, kept for compatibility)
+pub mod smart_clipping; // Smart clip selection via scene detection + audio energy
 
 // Re-export commonly used types
 #[allow(unused_imports)] // Exported for external use

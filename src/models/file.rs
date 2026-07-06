@@ -25,6 +25,7 @@ pub struct FileUploadResponse {
     pub file_size: i64, // Changed from 'size' to match frontend expectations
     pub file_type: String,
     pub status: String,
+    pub r2_url: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

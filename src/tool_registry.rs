@@ -440,10 +440,24 @@ impl ToolRegistry {
                 "A brief description of the content for context. Used for caption generation and logging.",
             ),
         );
+        properties.insert(
+            "clip_times".to_string(),
+            gemini_property(
+                "array",
+                "Explicit start times (in seconds) for each clip. When provided, the tool trims at these exact positions instead of auto-detecting. Use your vision capability to analyze the video and determine the most engaging moments, then pass them here. Example: [12.5, 48.2, 93.7]",
+            ),
+        );
+        properties.insert(
+            "smart_selection".to_string(),
+            gemini_property(
+                "boolean",
+                "Whether to use smart scene detection + audio energy analysis to pick clip positions. Defaults to true when clip_times is not provided. Set to false to use evenly-spaced intervals (legacy behavior).",
+            ),
+        );
 
         FunctionDeclaration {
             name: "generate_clip_compilation".to_string(),
-            description: "Download a video from YouTube, Kick, Twitch, or any public URL, extract highlight clips, add captions/subtitles, and upload the clips to R2. Returns an array of R2 URLs for the finished clips. Perfect for clipping/kick_auto_clipper services. Uses yt-dlp for download and FFmpeg for editing — NEVER uses Blender or Manim.".to_string(),
+            description: "Download a video from YouTube, Kick, Twitch, or any public URL, extract highlight clips, add captions/subtitles, and upload the clips to R2. Returns an array of R2 URLs for the finished clips. Perfect for clipping/kick_auto_clipper services. Uses yt-dlp for stream and FFmpeg for editing — NEVER uses Blender or Manim. When clip_times is provided, trims at those exact timestamps. Otherwise uses smart scene detection + audio energy to find the best moments.".to_string(),
             parameters: Parameters {
                 param_type: "object".to_string(),
                 properties,

@@ -13,8 +13,6 @@ use serde_json::{json, Value};
 use sqlx::Row;
 use std::path::Path;
 use std::sync::Arc;
-use tokio::fs;
-use tokio::io::AsyncWriteExt;
 use uuid::Uuid;
 
 pub fn upload_routes() -> Router {
@@ -173,12 +171,12 @@ pub async fn upload_files(
     mut multipart: Multipart,
 ) -> Result<Json<MultipleFileUploadResponse>, StatusCode> {
     let mut uploaded_files = Vec::new();
-    let upload_dir = "uploads";
 
-    // Ensure upload directory exists
-    if let Err(_) = fs::create_dir_all(&upload_dir).await {
-        return Err(StatusCode::INTERNAL_SERVER_ERROR);
-    }
+    // Ensure R2 client is available — all media files live on Cloudflare R2
+    let r2 = state.r2_client.as_ref().ok_or_else(|| {
+        tracing::error!("R2 client not configured — no storage backend available");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
 
     while let Some(field) = multipart
         .next_field()
@@ -194,7 +192,8 @@ pub async fn upload_files(
             .and_then(|ext| ext.to_str())
             .unwrap_or("");
         let unique_filename = format!("{}_{}.{}", Uuid::new_v4(), name, file_extension);
-        let file_path = format!("{}/{}", upload_dir, unique_filename);
+        let file_id = Uuid::new_v4().to_string();
+        let r2_key = format!("uploads/global/{}/{}", file_id, unique_filename);
 
         let data = field.bytes().await.map_err(|_| StatusCode::BAD_REQUEST)?;
 
@@ -209,17 +208,13 @@ pub async fn upload_files(
             continue;
         }
 
-        // Write file to disk
-        match fs::File::create(&file_path).await {
-            Ok(mut file) => {
-                if let Err(_) = file.write_all(&data).await {
-                    return Err(StatusCode::INTERNAL_SERVER_ERROR);
-                }
-            }
-            Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR),
-        }
+        // Upload bytes directly to R2 (no local disk write)
+        let content_type = detect_mime_type(&filename).unwrap_or_else(|| "application/octet-stream".to_string());
+        let r2_url = r2.upload_bytes(&r2_key, &data, &content_type).await.map_err(|e| {
+            tracing::error!("Failed to upload '{}' to R2: {}", filename, e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
 
-        let file_id = Uuid::new_v4().to_string();
         let mime_type = detect_mime_type(&filename);
 
         // Save to database (simplified query to avoid compile-time checks)
@@ -229,7 +224,7 @@ pub async fn upload_files(
         .bind(&file_id)
         .bind(&filename)
         .bind(&unique_filename)
-        .bind(&file_path)
+        .bind(&r2_url)  // R2 URL stored as primary file_path
         .bind(data.len() as i64)
         .bind(&file_type)
         .bind(&mime_type)
@@ -243,18 +238,17 @@ pub async fn upload_files(
                     id: file_id,
                     original_name: filename.clone(),
                     stored_name: unique_filename.clone(),
-                    path: file_path.clone(),
+                    path: r2_url.clone(),
                     file_size: data.len() as i64,
                     file_type,
                     status: "uploaded".to_string(),
+                    r2_url: Some(r2_url.clone()),
                 });
 
-                tracing::info!("Uploaded and stored file: {} -> {}", filename, file_path);
+                tracing::info!("Uploaded file: {} -> R2: {}", filename, r2_url);
             }
             Err(e) => {
                 tracing::error!("Failed to save file to database: {}", e);
-                // Clean up the file if database save failed
-                let _ = fs::remove_file(&file_path).await;
                 continue;
             }
         }
@@ -375,13 +369,12 @@ pub async fn upload_files_for_session(
 ) -> Result<Json<MultipleFileUploadResponse>, StatusCode> {
     tracing::info!("Starting file upload for session: {}", session_uuid);
     let mut uploaded_files = Vec::new();
-    let upload_dir = "uploads";
 
-    // Ensure upload directory exists
-    if let Err(_) = fs::create_dir_all(&upload_dir).await {
-        tracing::error!("Failed to create upload directory: {}", upload_dir);
-        return Err(StatusCode::INTERNAL_SERVER_ERROR);
-    }
+    // Ensure R2 client is available — all media files live on Cloudflare R2
+    let r2 = state.r2_client.as_ref().ok_or_else(|| {
+        tracing::error!("R2 client not configured — no storage backend available");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
 
     // Get or create chat session
     let user_id = claims.sub.parse::<i32>().ok();
@@ -432,7 +425,8 @@ pub async fn upload_files_for_session(
             .and_then(|ext| ext.to_str())
             .unwrap_or("");
         let unique_filename = format!("{}_{}.{}", Uuid::new_v4(), name, file_extension);
-        let file_path = format!("{}/{}", upload_dir, unique_filename);
+        let file_id = Uuid::new_v4().to_string();
+        let r2_key = format!("uploads/{}/{}/{}", session_uuid, file_id, unique_filename);
 
         let data = field.bytes().await.map_err(|e| {
             tracing::error!("Failed to read field bytes for file '{}': {}", filename, e);
@@ -451,20 +445,16 @@ pub async fn upload_files_for_session(
             continue;
         }
 
-        // Write file to disk
-        match fs::File::create(&file_path).await {
-            Ok(mut file) => {
-                if let Err(_) = file.write_all(&data).await {
-                    return Err(StatusCode::INTERNAL_SERVER_ERROR);
-                }
-            }
-            Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR),
-        }
+        // Upload bytes directly to R2 (no local disk write)
+        let content_type = detect_mime_type(&filename).unwrap_or_else(|| "application/octet-stream".to_string());
+        let r2_url = r2.upload_bytes(&r2_key, &data, &content_type).await.map_err(|e| {
+            tracing::error!("Failed to upload '{}' to R2: {}", filename, e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
 
-        let file_id = Uuid::new_v4().to_string();
         let mime_type = detect_mime_type(&filename);
 
-        // Save to database with session association
+        // Save to database with R2 URL as file_path
         let insert_result = sqlx::query(
             "INSERT INTO uploaded_files (id, session_id, original_name, stored_name, file_path, file_size, file_type, mime_type, upload_status) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"
         )
@@ -472,7 +462,7 @@ pub async fn upload_files_for_session(
         .bind(session_id)
         .bind(&filename)
         .bind(&unique_filename)
-        .bind(&file_path)
+        .bind(&r2_url)  // R2 URL stored as primary file_path
         .bind(data.len() as i64)
         .bind(&file_type)
         .bind(&mime_type)
@@ -486,17 +476,18 @@ pub async fn upload_files_for_session(
                     id: file_id.clone(),
                     original_name: filename.clone(),
                     stored_name: unique_filename.clone(),
-                    path: file_path.clone(),
+                    path: r2_url.clone(),  // R2 URL is the path the agent will use
                     file_size: data.len() as i64,
                     file_type: file_type.clone(),
                     status: "uploaded".to_string(),
+                    r2_url: Some(r2_url.clone()),
                 });
 
                 tracing::info!(
-                    "Uploaded file for session {}: {} -> {}",
+                    "Uploaded file for session {}: {} -> R2: {}",
                     session_uuid,
                     filename,
-                    file_path
+                    r2_url,
                 );
 
                 // Process video files for vectorization
@@ -508,8 +499,6 @@ pub async fn upload_files_for_session(
             }
             Err(e) => {
                 tracing::error!("Failed to save file to database: {}", e);
-                // Clean up the file if database save failed
-                let _ = fs::remove_file(&file_path).await;
                 continue;
             }
         }

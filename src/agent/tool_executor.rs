@@ -4833,51 +4833,114 @@ async fn execute_clip_compilation_value(
     let include_captions = bool_arg(args, &["include_captions", "captions", "subtitles"])
         .unwrap_or(true);
 
+    // Parse new params
+    let explicit_clip_times: Option<Vec<f64>> = args.get("clip_times")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_f64().filter(|&t| t >= 0.0))
+                .collect::<Vec<f64>>()
+        })
+        .filter(|times| !times.is_empty());
+
+    let smart_selection = bool_arg(args, &["smart_selection"])
+        .unwrap_or(explicit_clip_times.is_none()); // default: smart when no explicit times
+
     let session_slug = ctx.session_id.replace('-', "_");
-    let tmp_dir = std::env::temp_dir().join(format!("clip_compilation_{}", session_slug));
+    let uuid = uuid::Uuid::new_v4();
+    let tmp_dir = std::env::temp_dir().join(format!("clip_compilation_{}_{}", session_slug, uuid));
     let _ = tokio::fs::create_dir_all(&tmp_dir).await;
+
+    // Generate R2 key for source streaming (ytdlp-service streams directly to R2)
+    let r2_key = format!("temp/clip_compilation/{}/{}/source.mp4", ctx.session_id, uuid);
     let input_path = tmp_dir.join("source.mp4");
     let input_str = input_path.to_str().unwrap_or("/tmp/source.mp4");
 
-    tracing::info!("🎬 Clip compilation: downloading {} → {}", source_url, input_str);
-    let download_result = crate::clipping::ytdlp_api_client::YtdlpApiClient::download_video(&source_url, input_str).await;
-    match download_result {
-        Ok(_) => tracing::info!("✅ Download complete"),
+    tracing::info!("🎬 Clip compilation: streaming {} via ytdlp (r2_key={})", source_url, r2_key);
+    let download_result = crate::clipping::ytdlp_api_client::YtdlpApiClient::download_video(
+        &source_url, input_str, Some(r2_key.clone()),
+    ).await;
+
+    let (source_for_ffmpeg, duration, r2_source_url) = match download_result {
+        Ok(result) => {
+            let r2_url = result.r2_url.as_deref();
+            let dur = result.duration_seconds;
+            match r2_url {
+                Some(url) if !url.is_empty() => {
+                    tracing::info!("✅ R2 direct stream available: {}", url);
+                    (url.to_string(), dur, Some(url.to_string()))
+                }
+                _ => {
+                    tracing::info!("✅ Downloaded locally: {}", input_str);
+                    (input_str.to_string(), dur, None)
+                }
+            }
+        }
         Err(e) => {
             let _ = tokio::fs::remove_dir_all(&tmp_dir).await;
             return format!(r#"{{"error":"Failed to download video: {}"}}"#, e.replace('"', "'"));
         }
-    }
+    };
 
-    // Get duration via ffprobe
-    let duration = StdCommand::new("ffprobe")
-        .args(["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", input_str])
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .and_then(|s| s.trim().parse::<f64>().ok())
-        .unwrap_or(60.0);
-
+    // Validate duration (use ytdlp metadata, no local ffprobe needed)
     if duration < 10.0 {
         let _ = tokio::fs::remove_dir_all(&tmp_dir).await;
         return format!(r#"{{"error":"Video too short ({:.1}s)"}}"#, duration);
     }
 
-    let usable = (duration / clip_duration).floor() as usize;
-    let count = max_clips.min(usable).max(1);
-    let step = (duration - clip_duration) / (count as f64).max(1.0);
+    // Determine clip start times
+    let clip_starts: Vec<f64> = if let Some(times) = explicit_clip_times {
+        // Use explicit timestamps from agent (LLM-driven clipping)
+        times.into_iter().filter(|&t| t < duration - 1.0).collect()
+    } else if smart_selection {
+        // Run smart scene detection + audio energy on the source URL
+        tracing::info!("🔍 Running smart clip selection on: {}", source_for_ffmpeg);
+        match crate::clipping::smart_clipping::select_clip_positions(
+            &source_for_ffmpeg,
+            clip_duration,
+            max_clips,
+            None, // no explicit times
+            Some(1800.0), // max 30 min analysis window
+        ) {
+            Ok(positions) => {
+                let times: Vec<f64> = positions.iter().map(|p| p.start_time).collect();
+                tracing::info!("🎯 Smart selection picked {} positions: {:?}", times.len(), times);
+                times
+            }
+            Err(e) => {
+                tracing::warn!("⚠️ Smart selection failed ({}), falling back to even spacing", e);
+                // Fallback: even spacing
+                let usable = (duration / clip_duration).floor() as usize;
+                let count = max_clips.min(usable).max(1);
+                let step = (duration - clip_duration) / (count as f64).max(1.0);
+                (0..count).map(|i| step * (i as f64)).collect()
+            }
+        }
+    } else {
+        // Legacy even spacing
+        let usable = (duration / clip_duration).floor() as usize;
+        let count = max_clips.min(usable).max(1);
+        let step = (duration - clip_duration) / (count as f64).max(1.0);
+        (0..count).map(|i| step * (i as f64)).collect()
+    };
+
+    if clip_starts.is_empty() {
+        let _ = tokio::fs::remove_dir_all(&tmp_dir).await;
+        return r#"{"error":"No valid clip positions determined"}"#.to_string();
+    }
 
     let mut clip_urls: Vec<String> = Vec::new();
 
-    for i in 0..count {
-        let start = step * (i as f64);
+    for (i, &start) in clip_starts.iter().enumerate() {
         let raw = format!("clip_{:02}.mp4", i + 1);
         let raw_path = tmp_dir.join(&raw);
 
+        // Trim using FFmpeg with HTTP input (supports R2 presigned URLs natively)
+        // -ss before -i for keyframe-accurate fast seek over HTTP
         let trim_ok = StdCommand::new("ffmpeg")
             .args([
                 "-y", "-ss", &format!("{:.1}", start),
-                "-i", input_str,
+                "-i", &source_for_ffmpeg,
                 "-t", &format!("{:.1}", clip_duration),
                 "-c", "copy",
                 raw_path.to_str().unwrap_or(""),
@@ -4887,7 +4950,7 @@ async fn execute_clip_compilation_value(
             .unwrap_or(false);
 
         if !trim_ok {
-            tracing::warn!("⚠️ Clip {} trim failed, skipping", i + 1);
+            tracing::warn!("⚠️ Clip {} trim at {:.1}s failed, skipping", i + 1, start);
             continue;
         }
 
@@ -4932,7 +4995,16 @@ async fn execute_clip_compilation_value(
         }
     }
 
+    // Clean up temp dir
     let _ = tokio::fs::remove_dir_all(&tmp_dir).await;
+
+    // Clean up R2 source file if it was streamed
+    if r2_source_url.is_some() {
+        if let Some(r2) = ctx.app_state.r2_client.as_ref() {
+            let _ = r2.delete(&r2_key).await;
+            tracing::info!("🧹 Cleaned up R2 source: {}", r2_key);
+        }
+    }
 
     if clip_urls.is_empty() {
         return r#"{"error":"No clips generated successfully"}"#.to_string();
@@ -4943,6 +5015,7 @@ async fn execute_clip_compilation_value(
         "count": clip_urls.len(),
         "source": source_url,
         "total_duration_seconds": duration,
+        "clip_start_times": clip_starts,
     })
     .to_string()
 }
@@ -6813,13 +6886,18 @@ fn execute_verify_clip_quality_tool_gemini(args: &HashMap<String, Value>) -> Str
     }
 }
 
+/// Returns true if the path is a cloud URL (FFmpeg reads HTTP/R2 URLs natively).
+fn is_cloud_url(path: &str) -> bool {
+    path.starts_with("http://") || path.starts_with("https://") || path.starts_with("r2://")
+}
+
 /// Run the full automated QA suite on a video file and return the report (Claude).
 fn execute_run_video_qa_claude(args: &Value) -> String {
     let file_path = args["file_path"].as_str().unwrap_or("");
     if file_path.is_empty() {
         return "❌ Error: file_path is required".to_string();
     }
-    if !std::path::Path::new(file_path).exists() {
+    if !is_cloud_url(file_path) && !std::path::Path::new(file_path).exists() {
         return format!("❌ File not found: {}", file_path);
     }
     run_final_qa(file_path)
@@ -6831,7 +6909,7 @@ fn execute_run_video_qa_gemini(args: &HashMap<String, Value>) -> String {
     if file_path.is_empty() {
         return "❌ Error: file_path is required".to_string();
     }
-    if !std::path::Path::new(file_path).exists() {
+    if !is_cloud_url(file_path) && !std::path::Path::new(file_path).exists() {
         return format!("❌ File not found: {}", file_path);
     }
     run_final_qa(file_path)
@@ -8650,7 +8728,7 @@ async fn execute_optimize_youtube_metadata_with_state_claude(
         .and_then(|v| v.as_str())
         .unwrap_or("professional");
 
-    if video_path.is_empty() || !std::path::Path::new(video_path).exists() {
+    if video_path.is_empty() || (!is_cloud_url(video_path) && !std::path::Path::new(video_path).exists()) {
         return format!("❌ Video not found: {}", video_path);
     }
 

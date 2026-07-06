@@ -858,7 +858,7 @@ fn build_file_context(
     }
 
     if !files.is_empty() || !output_videos.is_empty() {
-        context.push_str("CRITICAL INSTRUCTION: When using ANY video editing tool, you MUST use the PATH shown above (the path after 'USE THIS PATH:'). NEVER use just the filename like 'GothamChess.mp4' - always use the full path like 'uploads/uuid_files.mp4'. The tools will FAIL if you use only the filename!\n");
+        context.push_str("CRITICAL INSTRUCTION: When using ANY video editing tool, you MUST use the PATH shown above (the path after 'USE THIS PATH:'). NEVER use just the filename like 'GothamChess.mp4' — always use the full path. R2 cloud URLs (starting with https://) work natively with all editing tools — FFmpeg reads them over HTTP. Local paths like 'outputs/...' also work. The tools will FAIL if you use only the filename!\n");
         context.push_str("CRITICAL USER-FACING INSTRUCTION: Use the Cloud URL shown above for delivery to the user. Never expose internal paths like 'outputs/...' in user-facing responses.\n\n");
     }
 

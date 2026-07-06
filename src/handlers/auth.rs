@@ -257,7 +257,7 @@ async fn login(
     headers: HeaderMap,
     Extension(state): Extension<Arc<AppState>>,
     Json(payload): Json<LoginRequest>,
-) -> Result<Json<AuthResponse>, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<(HeaderMap, Json<AuthResponse>), (StatusCode, Json<ErrorResponse>)> {
     // Validate input
     if payload.email.is_empty() || payload.password.is_empty() {
         return Err((
@@ -370,12 +370,23 @@ async fn login(
     // Generate JWT token
     let token = generate_jwt_token(&user)?;
 
-    Ok(Json(AuthResponse {
+    // Set HttpOnly cookie so browser page navigations carry the JWT
+    let mut headers = HeaderMap::new();
+    let cookie_value = format!(
+        "token={}; HttpOnly; Secure; Path=/; SameSite=Lax; Max-Age=86400",
+        token
+    );
+    headers.insert(
+        axum::http::header::SET_COOKIE,
+        axum::http::HeaderValue::from_str(&cookie_value).unwrap(),
+    );
+
+    Ok((headers, Json(AuthResponse {
         success: true,
         message: "Login successful".to_string(),
         user: UserResponse::from(user),
         token,
-    }))
+    })))
 }
 
 fn generate_jwt_token(user: &User) -> Result<String, (StatusCode, Json<ErrorResponse>)> {
@@ -756,11 +767,11 @@ pub async fn initiate_google_oauth(
 pub async fn google_oauth_callback(
     Query(params): Query<GoogleCallbackQuery>,
     Extension(state): Extension<Arc<AppState>>,
-) -> Result<Html<String>, (StatusCode, Html<String>)> {
+) -> Result<(HeaderMap, Html<String>), (StatusCode, Html<String>)> {
     // Check for OAuth error
     if let Some(error) = params.error {
         tracing::error!("Google OAuth error: {}", error);
-        return Ok(Html(format!(
+        return Ok((HeaderMap::new(), Html(format!(
             r#"<!DOCTYPE html><html><head><title>Login Failed</title>
             <style>body {{ font-family: Arial; max-width: 600px; margin: 100px auto; text-align: center; }}</style>
             </head><body>
@@ -768,7 +779,7 @@ pub async fn google_oauth_callback(
             <a href="/login">Try Again</a>
             </body></html>"#,
             error
-        )));
+        ))));
     }
 
     let code = params.code.ok_or_else(|| {
@@ -879,7 +890,7 @@ pub async fn google_oauth_callback(
     // Only Content Machine Google sign-ins should be whitelist-restricted.
     if source_app == "content_machine" {
         if let Err(_e) = check_whitelist_for_existing_user_login(&state, &user_info.email).await {
-            return Ok(Html(r#"
+            return Ok((HeaderMap::new(), Html(r#"
 <!DOCTYPE html><html><head><title>Access Restricted</title>
 <style>body { font-family: Arial; max-width: 600px; margin: 100px auto; text-align: center; }</style>
 </head><body>
@@ -887,7 +898,7 @@ pub async fn google_oauth_callback(
 <p>Your email is not whitelisted. Please contact the administrator.</p>
 <a href="/login">Back to Login</a>
 </body></html>
-        "#.to_string()));
+        "#.to_string())));
         }
     }
 
@@ -1067,9 +1078,23 @@ pub async fn google_oauth_callback(
         redirect_to, encoded_token, encoded_user
     );
 
-    // Return HTML that redirects with token in URL hash
-    Ok(Html(format!(
-        r#"<!DOCTYPE html><html><head><title>Login Successful</title>
+    // Set HttpOnly cookie so browser page navigations carry the JWT
+    let cookie_value = format!(
+        "token={}; HttpOnly; Secure; Path=/; SameSite=Lax; Max-Age=86400",
+        token
+    );
+
+    // Return HTML that redirects with token in URL hash + cookie for page navs
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        axum::http::header::SET_COOKIE,
+        axum::http::HeaderValue::from_str(&cookie_value).unwrap(),
+    );
+
+    Ok((
+        headers,
+        Html(format!(
+            r#"<!DOCTYPE html><html><head><title>Login Successful</title>
         <style>body {{ font-family: Arial; max-width: 600px; margin: 100px auto; text-align: center; }}</style>
         </head><body>
         <h1>✅ Successfully logged in with Google</h1>
@@ -1078,8 +1103,9 @@ pub async fn google_oauth_callback(
             setTimeout(() => window.location.href = '{}', 1000);
         </script>
         </body></html>"#,
-        final_redirect
-    )))
+            final_redirect
+        )),
+    ))
 }
 
 // ============================================================================

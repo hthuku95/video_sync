@@ -1,5 +1,6 @@
 // src/agent/conversation_manager.rs
 use rust_decimal::Decimal;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::PgPool;
 use thiserror::Error;
@@ -12,13 +13,17 @@ pub enum ConversationError {
     SerializationError(#[from] serde_json::Error),
 }
 
-/// Message types following LangChain/LangGraph patterns
+/// Message types following LangChain/LangGraph patterns.
+/// Extended from standard 4-role set to include ToolCall and ToolResult
+/// for proper tool interaction persistence across conversation turns.
 #[derive(Debug, Clone, PartialEq)]
 pub enum MessageRole {
     System,
     Human,
     Assistant,
     Function,
+    ToolCall,    // Agent's tool invocation (stored with metadata containing tool_name + args)
+    ToolResult,  // Tool execution result (stored with metadata containing tool_name + result)
 }
 
 impl MessageRole {
@@ -28,6 +33,8 @@ impl MessageRole {
             MessageRole::Human => "user".to_string(), // Gemini uses "user" for human messages
             MessageRole::Assistant => "model".to_string(), // Gemini uses "model" for AI responses
             MessageRole::Function => "function".to_string(),
+            MessageRole::ToolCall => "tool_call".to_string(),
+            MessageRole::ToolResult => "tool_result".to_string(),
         }
     }
 
@@ -37,9 +44,28 @@ impl MessageRole {
             "user" | "human" => MessageRole::Human,
             "model" | "assistant" => MessageRole::Assistant,
             "function" => MessageRole::Function,
+            "tool_call" => MessageRole::ToolCall,
+            "tool_result" => MessageRole::ToolResult,
             _ => MessageRole::Human, // Default fallback
         }
     }
+}
+
+/// Structured metadata for tool call messages stored in the JSONB column.
+/// This enables the history loader to reconstruct model-specific tool formats.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCallMetadata {
+    pub tool_name: String,
+    pub tool_args: serde_json::Value,
+    pub tool_call_id: Option<String>,
+}
+
+/// Structured metadata for tool result messages stored in the JSONB column.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolResultMetadata {
+    pub tool_name: String,
+    pub tool_result: serde_json::Value,
+    pub tool_call_id: Option<String>,
 }
 
 /// Individual conversation message following modern patterns
@@ -84,6 +110,48 @@ impl ConversationMessage {
             role: MessageRole::Assistant,
             content,
             metadata: None,
+            created_at: None,
+            prompt_tokens: None,
+            completion_tokens: None,
+            total_tokens: None,
+            model: None,
+            cost_usd: None,
+        }
+    }
+
+    pub fn new_tool_call(session_id: String, tool_name: &str, tool_args: Value, tool_call_id: Option<String>) -> Self {
+        let metadata = serde_json::to_value(ToolCallMetadata {
+            tool_name: tool_name.to_string(),
+            tool_args,
+            tool_call_id,
+        }).ok();
+        Self {
+            id: None,
+            session_id,
+            role: MessageRole::ToolCall,
+            content: format!("[Tool call: {}]", tool_name),
+            metadata,
+            created_at: None,
+            prompt_tokens: None,
+            completion_tokens: None,
+            total_tokens: None,
+            model: None,
+            cost_usd: None,
+        }
+    }
+
+    pub fn new_tool_result(session_id: String, tool_name: &str, tool_result: Value, tool_call_id: Option<String>) -> Self {
+        let metadata = serde_json::to_value(ToolResultMetadata {
+            tool_name: tool_name.to_string(),
+            tool_result,
+            tool_call_id,
+        }).ok();
+        Self {
+            id: None,
+            session_id,
+            role: MessageRole::ToolResult,
+            content: format!("[Tool result: {}]", tool_name),
+            metadata,
             created_at: None,
             prompt_tokens: None,
             completion_tokens: None,

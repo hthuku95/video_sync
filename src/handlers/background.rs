@@ -22,38 +22,41 @@ lazy_static::lazy_static! {
     static ref BACKGROUND_CACHE: Arc<RwLock<Option<BackgroundCache>>> = Arc::new(RwLock::new(None));
 }
 
+fn detect_content_type(data: &[u8]) -> &str {
+    if std::str::from_utf8(data)
+        .map(|s| s.starts_with("<svg"))
+        .unwrap_or(false)
+    {
+        "image/svg+xml"
+    } else if data.starts_with(&[0x89, 0x50, 0x4E, 0x47]) {
+        "image/png"
+    } else if data.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        "image/jpeg"
+    } else if data.starts_with(&[0x47, 0x49, 0x46]) {
+        "image/gif"
+    } else if data.starts_with(&[0x52, 0x49, 0x46, 0x46]) {
+        "image/webp"
+    } else {
+        "image/png"
+    }
+}
+
+/// Return any cached image regardless of age, or None if no cache exists.
+async fn read_expired_cache() -> Option<BackgroundCache> {
+    let cache_guard = BACKGROUND_CACHE.read().await;
+    cache_guard.as_ref().cloned()
+}
+
 pub async fn get_background_image(gemini_client: Arc<GeminiClient>) -> Response {
-    // Check if we have a cached image that's less than 5 minutes old
+    // Fast path: return fresh cache (<5 min) without acquiring write lock
     {
         let cache_guard = BACKGROUND_CACHE.read().await;
         if let Some(cache) = cache_guard.as_ref() {
             let age = Utc::now().signed_duration_since(cache.generated_at);
             if age.num_minutes() < 5 {
-                // Return cached image with appropriate content type
-                let content_type = if std::str::from_utf8(&cache.image_data)
-                    .map(|s| s.starts_with("<svg"))
-                    .unwrap_or(false)
-                {
-                    "image/svg+xml"
-                } else if cache.image_data.starts_with(&[0x89, 0x50, 0x4E, 0x47]) {
-                    // PNG signature
-                    "image/png"
-                } else if cache.image_data.starts_with(&[0xFF, 0xD8, 0xFF]) {
-                    // JPEG signature
-                    "image/jpeg"
-                } else if cache.image_data.starts_with(&[0x47, 0x49, 0x46]) {
-                    // GIF signature
-                    "image/gif"
-                } else if cache.image_data.starts_with(&[0x52, 0x49, 0x46, 0x46]) {
-                    // WebP signature (RIFF)
-                    "image/webp"
-                } else {
-                    "image/png" // Default fallback
-                };
-
                 return (
                     StatusCode::OK,
-                    [(header::CONTENT_TYPE, content_type)],
+                    [(header::CONTENT_TYPE, detect_content_type(&cache.image_data))],
                     cache.image_data.clone(),
                 )
                     .into_response();
@@ -61,10 +64,9 @@ pub async fn get_background_image(gemini_client: Arc<GeminiClient>) -> Response 
         }
     }
 
-    // Generate new background image
+    // Try to generate a new background
     match generate_new_background(&gemini_client).await {
         Ok(image_data) => {
-            // Cache the new image
             let new_cache = BackgroundCache {
                 image_data: image_data.clone(),
                 generated_at: Utc::now(),
@@ -76,31 +78,9 @@ pub async fn get_background_image(gemini_client: Arc<GeminiClient>) -> Response 
                 *cache_guard = Some(new_cache);
             }
 
-            // Determine content type based on data
-            let content_type = if std::str::from_utf8(&image_data)
-                .map(|s| s.starts_with("<svg"))
-                .unwrap_or(false)
-            {
-                "image/svg+xml"
-            } else if image_data.starts_with(&[0x89, 0x50, 0x4E, 0x47]) {
-                // PNG signature
-                "image/png"
-            } else if image_data.starts_with(&[0xFF, 0xD8, 0xFF]) {
-                // JPEG signature
-                "image/jpeg"
-            } else if image_data.starts_with(&[0x47, 0x49, 0x46]) {
-                // GIF signature
-                "image/gif"
-            } else if image_data.starts_with(&[0x52, 0x49, 0x46, 0x46]) {
-                // WebP signature (RIFF)
-                "image/webp"
-            } else {
-                "image/png" // Default fallback
-            };
-
             (
                 StatusCode::OK,
-                [(header::CONTENT_TYPE, content_type)],
+                [(header::CONTENT_TYPE, detect_content_type(&image_data))],
                 image_data,
             )
                 .into_response()
@@ -108,7 +88,23 @@ pub async fn get_background_image(gemini_client: Arc<GeminiClient>) -> Response 
         Err(e) => {
             tracing::error!("Failed to generate background image: {}", e);
 
-            // Return a fallback CSS gradient as JSON
+            // Stale-cache fallback: serve the last good image even if expired
+            if let Some(stale) = read_expired_cache().await {
+                tracing::warn!(
+                    "Serving expired cache (age: {}s) — generation failed",
+                    Utc::now()
+                        .signed_duration_since(stale.generated_at)
+                        .num_seconds()
+                );
+                return (
+                    StatusCode::OK,
+                    [(header::CONTENT_TYPE, detect_content_type(&stale.image_data))],
+                    stale.image_data,
+                )
+                    .into_response();
+            }
+
+            // Last resort: CSS gradient
             (
                 StatusCode::OK,
                 [(header::CONTENT_TYPE, "application/json")],

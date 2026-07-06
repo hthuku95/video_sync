@@ -4,6 +4,11 @@ use crate::utils::{execute_ffmpeg_command, execute_ffmpeg_command_with_sync_time
 use serde_json::Value;
 use std::process::Command;
 
+/// Returns true if the path is a cloud URL (FFmpeg reads HTTP/R2 URLs natively).
+fn is_cloud_url(path: &str) -> bool {
+    path.starts_with("http://") || path.starts_with("https://") || path.starts_with("r2://")
+}
+
 pub fn apply_filter(
     input_file: &str,
     output_file: &str,
@@ -212,24 +217,26 @@ pub fn add_text_overlay(
     start_time: f64,
     end_time: f64,
 ) -> Result<String, String> {
-    // Validate input file exists and is readable
-    if !std::path::Path::new(input_file).exists() {
-        return Err(format!("❌ Input file does not exist: {}", input_file));
-    }
-
-    // Validate input file is a valid video (basic check using core::validate_video_file)
-    match crate::core::validate_video_file(input_file) {
-        Ok(is_valid) => {
-            if !is_valid {
-                return Err(format!(
-                    "❌ Input video is corrupted or unreadable: {}",
-                    input_file
-                ));
-            }
+    // Validate input — skip local file checks for cloud URLs (FFmpeg handles HTTP natively)
+    if !is_cloud_url(input_file) {
+        if !std::path::Path::new(input_file).exists() {
+            return Err(format!("❌ Input file does not exist: {}", input_file));
         }
-        Err(e) => {
-            tracing::warn!("⚠️ Could not validate input video: {}", e);
-            // Continue anyway - validation might fail for other reasons
+
+        // Validate input file is a valid video (basic check using core::validate_video_file)
+        match crate::core::validate_video_file(input_file) {
+            Ok(is_valid) => {
+                if !is_valid {
+                    return Err(format!(
+                        "❌ Input video is corrupted or unreadable: {}",
+                        input_file
+                    ));
+                }
+            }
+            Err(e) => {
+                tracing::warn!("⚠️ Could not validate input video: {}", e);
+                // Continue anyway - validation might fail for other reasons
+            }
         }
     }
 

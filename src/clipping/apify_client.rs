@@ -346,7 +346,7 @@ impl ApifyClient {
 
         // STRATEGY 1: FastAPI yt-dlp microservice (yt-dlp android - proven most reliable)
         tracing::info!("🔄 Trying Strategy 1 (FastAPI yt-dlp microservice - android client)...");
-        match YtdlpApiClient::download_video(video_url, output_path).await {
+        match YtdlpApiClient::download_video(video_url, output_path, None).await {
             Ok(result) => {
                 tracing::info!("✅ Strategy 1 (FastAPI microservice) succeeded");
                 return Ok(VideoDownloadResult {
@@ -703,7 +703,7 @@ async fn download_twitch_vod(
 
     // Strategy 1: FastAPI yt-dlp (has a maintained Twitch extractor)
     tracing::info!("🔄 Twitch S1: FastAPI yt-dlp microservice...");
-    match YtdlpApiClient::download_video(video_url, output_path).await {
+    match YtdlpApiClient::download_video(video_url, output_path, None).await {
         Ok(result) => {
             tracing::info!("✅ Twitch S1 (FastAPI yt-dlp) succeeded");
             return Ok(VideoDownloadResult {
@@ -887,7 +887,7 @@ async fn download_kick_video(
 
     // Strategy 1: FastAPI yt-dlp (supports Kick extractor)
     tracing::info!("🔄 Kick S1: FastAPI yt-dlp microservice...");
-    match YtdlpApiClient::download_video(video_url, output_path).await {
+    match YtdlpApiClient::download_video(video_url, output_path, None).await {
         Ok(result) => {
             tracing::info!("✅ Kick S1 (FastAPI yt-dlp) succeeded");
             return Ok(VideoDownloadResult {
