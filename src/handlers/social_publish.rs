@@ -253,7 +253,7 @@ pub async fn get_delivery_social_status(
                         "_id": a.id,
                         "platform": a.platform,
                         "username": a.username,
-                        "connected": a.connected,
+                        "connected": a.is_active,
                     })
                 })
                 .collect()
