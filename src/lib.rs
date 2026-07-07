@@ -22,6 +22,7 @@ pub mod gcs_client;
 pub mod handlers;
 pub mod jobs;
 pub mod kick_client;
+pub mod kick_vod_scraper;
 pub mod llm_utils;
 pub mod middleware;
 pub mod models;

@@ -534,17 +534,25 @@ async fn resolve_latest_video_url(state: &Arc<AppState>, url: &str) -> Result<St
         return Ok(trimmed.to_string());
     }
 
-    // Kick: https://kick.com/{slug}
+    // Kick: https://kick.com/{slug} or https://kick.com/{slug}/videos/{uuid}
     if let Some(slug) = parse_kick_slug(trimmed) {
-        // Verify the streamer exists, then return the channel URL for yt-dlp
+        // Verify the streamer exists via Kick API
         if let Some(ref client) = state.kick_client {
             match client.get_channel_by_slug(&slug).await {
-                Ok(Some(_)) => return Ok(format!("https://kick.com/{}", slug)),
+                Ok(Some(_)) => {} // streamer confirmed
                 Ok(None) => return Err(format!("Kick streamer '{}' not found", slug)),
                 Err(e) => return Err(format!("Kick API error: {}", e)),
             }
         }
-        // No Kick client configured — return as-is (optimistic)
+
+        // Resolve to HLS stream URL (Browserbase → VOD page → HLS m3u8)
+        let resolved = crate::kick_vod_scraper::resolve_url_to_hls(trimmed).await;
+        if resolved != trimmed {
+            tracing::info!("Kick '{}' resolved to HLS stream URL", slug);
+            return Ok(resolved);
+        }
+
+        // Fallback: return the channel URL for yt-dlp
         return Ok(format!("https://kick.com/{}", slug));
     }
 
@@ -603,6 +611,7 @@ fn is_direct_video_url(url: &str) -> bool {
         || url.contains("youtu.be/")
         || url.contains("twitch.tv/videos/")
         || url.contains("kick.com/video/")
+        || url.contains("kick.com/videos/")
         || url.contains("vimeo.com/")
         || url.ends_with(".mp4")
         || url.ends_with(".webm")
@@ -610,7 +619,9 @@ fn is_direct_video_url(url: &str) -> bool {
 }
 
 fn parse_kick_slug(url: &str) -> Option<String> {
-    let re = Regex::new(r"kick\.com/([a-zA-Z0-9_-]+)").ok()?;
+    // Match kick.com/{slug} optionally followed by /videos/{uuid}
+    // The slug is always the first path segment after kick.com
+    let re = Regex::new(r"kick\.com/([a-zA-Z0-9_-]+)(?:/videos?/[a-f0-9-]+)?").ok()?;
     re.captures(url)
         .and_then(|c| c.get(1).map(|m| m.as_str().to_lowercase()))
 }

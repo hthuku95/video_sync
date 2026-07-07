@@ -2,7 +2,7 @@ use serde_json::Value;
 
 const API_BASE: &str = "https://api.browserbase.com/v1";
 const ENV_KEY: &str = "BROWSERBASE_API_KEY";
-const DEFAULT_TIMEOUT_SECS: u64 = 30;
+const DEFAULT_TIMEOUT_SECS: u64 = 60;
 const MAX_CONTENT_CHARS: usize = 8000;
 
 fn api_key() -> Option<String> {
@@ -84,6 +84,59 @@ pub async fn fetch_url(url: &str) -> Result<Option<String>, String> {
     };
 
     Ok(Some(truncated))
+}
+
+/// Fetch a URL via BrowserBase and return the full raw HTML content (no truncation).
+/// Useful for parsing structured data embedded in <script> tags on server-rendered pages.
+pub async fn fetch_url_raw(url: &str) -> Result<Option<String>, String> {
+    if api_key().is_none() {
+        return Ok(None);
+    }
+
+    let hdrs = headers().ok_or("Failed to build BrowserBase headers")?;
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(DEFAULT_TIMEOUT_SECS))
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
+
+    let resp = client
+        .post(format!("{API_BASE}/fetch"))
+        .headers(hdrs)
+        .json(&serde_json::json!({
+            "url": url,
+            "format": "raw",
+        }))
+        .send()
+        .await
+        .map_err(|e| format!("BrowserBase raw fetch request failed: {e}"))?;
+
+    let status = resp.status();
+    let data: Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse BrowserBase raw response: {e}"))?;
+
+    if !status.is_success() {
+        let msg = data
+            .get("message")
+            .or_else(|| data.get("error"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown error");
+        return Err(format!("BrowserBase raw fetch failed (HTTP {status}): {msg}"));
+    }
+
+    let content = data
+        .get("content")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    if content.is_empty() {
+        return Err(format!("BrowserBase returned empty raw content for: {url}"));
+    }
+
+    Ok(Some(content))
 }
 
 /// Check if BrowserBase is configured (API key is set).

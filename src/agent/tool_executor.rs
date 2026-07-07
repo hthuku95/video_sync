@@ -4851,6 +4851,17 @@ async fn execute_clip_compilation_value(
     let tmp_dir = std::env::temp_dir().join(format!("clip_compilation_{}_{}", session_slug, uuid));
     let _ = tokio::fs::create_dir_all(&tmp_dir).await;
 
+    // Resolve Kick URLs to HLS stream URLs (bypasses Cloudflare)
+    let source_url = if source_url.contains("kick.com") {
+        let resolved = crate::kick_vod_scraper::resolve_url_to_hls(&source_url).await;
+        if resolved != source_url {
+            tracing::info!("Kick source resolved to HLS stream: {}", resolved);
+        }
+        resolved
+    } else {
+        source_url.clone()
+    };
+
     // Generate R2 key for source streaming (ytdlp-service streams directly to R2)
     let r2_key = format!("temp/clip_compilation/{}/{}/source.mp4", ctx.session_id, uuid);
     let input_path = tmp_dir.join("source.mp4");

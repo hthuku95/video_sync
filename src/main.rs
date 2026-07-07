@@ -26,6 +26,7 @@ mod gcs_client;
 mod handlers;
 mod jobs; // 🆕 Background job system for video editing
 mod kick_client; // 📺 Kick.com API client
+mod kick_vod_scraper; // 🎥 Kick VOD video list + HLS stream URL extraction (via BrowserBase)
 mod llm_utils;
 mod middleware;
 mod models;
