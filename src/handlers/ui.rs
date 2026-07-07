@@ -876,10 +876,26 @@ pub async fn campaigns_new_page(
         ));
     }
 
-    let preselect_service = query.get("service").cloned().unwrap_or_default();
+    // Map URL slugs to service_type values
+    let slug_to_service: std::collections::HashMap<&str, &str> = [
+        ("saas-launch-pack", "landing_page"),
+        ("clipping-pack", "clipping"),
+        ("kick-auto-clipper", "kick_auto_clipper"),
+        ("education-explainer-pack", "education"),
+        ("manim-explainer", "manim_explainer"),
+        ("whiteboard-animation", "whiteboard_animation"),
+        ("kinetic-typography", "kinetic_typography"),
+        ("animated-infographic", "animated_infographic"),
+        ("algorithm-viz", "algorithm_viz"),
+        ("investor-pitch", "investor_pitch"),
+        ("year-in-review", "year_in_review"),
+        ("isometric-explainer", "isometric_explainer"),
+    ].into_iter().collect();
+    let raw_slug = query.get("service").cloned().unwrap_or_default();
+    let preselect_service = slug_to_service.get(raw_slug.as_str()).copied().unwrap_or("").to_string();
     let service_options = [
         ("landing_page", "SaaS Demo Video"),
-        ("clipping", "Clip Enhancement"),
+        ("clipping", "Social Clipping"),
         ("kick_auto_clipper", "Kick.com Clipping"),
         ("education", "Education Explainer"),
         ("manim_explainer", "Manim Explainer"),
@@ -947,9 +963,9 @@ pub async fn campaigns_new_page(
             <select name="service_type" id="serviceType" onchange="toggleSourceUrl()">{options_html}</select>
         </div>
         <div id="sourceUrlSection" style="display:none;">
-            <label>Source Channel URL</label>
-            <input type="url" name="source_url" placeholder="https://kick.com/streamer or https://youtube.com/@channel or https://twitch.tv/channel">
-            <p class="hint">The campaign will watch this channel for new content daily and clip the latest video.</p>
+            <label id="sourceUrlLabel">Source URL</label>
+            <input type="url" name="source_url" id="sourceUrlInput" placeholder="https://...">
+            <p id="sourceUrlHint" class="hint"></p>
         </div>
         <div>
             <label>Brief / Topic</label>
@@ -1046,7 +1062,22 @@ function addScheduleEntry() {{
 function toggleSourceUrl() {{
     const val = document.getElementById('serviceType').value;
     const section = document.getElementById('sourceUrlSection');
-    section.style.display = (val === 'clipping' || val === 'kick_auto_clipper') ? 'block' : 'none';
+    const label = document.getElementById('sourceUrlLabel');
+    const input = document.getElementById('sourceUrlInput');
+    const hint = document.getElementById('sourceUrlHint');
+    if (val === 'clipping' || val === 'kick_auto_clipper') {{
+        section.style.display = 'block';
+        label.textContent = 'Source Channel URL';
+        input.placeholder = 'https://kick.com/streamer or https://youtube.com/@channel or https://twitch.tv/channel';
+        hint.textContent = 'The campaign will watch this channel for new content daily and clip the latest video.';
+    }} else if (val === 'landing_page') {{
+        section.style.display = 'block';
+        label.textContent = 'Your Website / Product URL';
+        input.placeholder = 'https://yourproduct.com';
+        hint.textContent = 'The AI will scan your website to understand your product and generate a demo video.';
+    }} else {{
+        section.style.display = 'none';
+    }}
 }}
 toggleSourceUrl();
 
@@ -1343,11 +1374,10 @@ fn format_service_type(s: &str) -> &'static str {
 
 pub async fn account_social_page(
     uri: Uri,
-    Extension(state): Extension<Arc<AppState>>,
     claims: Option<Extension<Claims>>,
 ) -> Html<String> {
-    let user_id: i32 = match claims {
-        Some(Extension(c)) => c.sub.parse().unwrap_or(0),
+    match claims {
+        Some(Extension(_c)) => { /* authenticated, render page */ }
         None => {
             let redirect = uri.path_and_query().map(|pq| pq.as_str()).unwrap_or("/account/social");
             return Html(login_required_page(redirect));
@@ -1482,13 +1512,19 @@ async function init() {{
     let html = '';
     ALL_PLATFORMS.forEach(p => {{
         const isConnected = connectedPlatforms.includes(p.id);
-        html += '<a href="#" class="platform-btn' + (isConnected ? ' connected' : '') + '" data-platform="' + p.id + '" onclick="connectPlatform(event, \\'' + p.id + '\\', \\'' + profileId + '\\')">' +
+        html += '<a href="#" class="platform-btn' + (isConnected ? ' connected' : '') + '" data-platform="' + p.id + '" data-profileid="' + profileId + '">' +
             p.icon +
             '<span class="label">' + p.name + '</span>' +
             '<span class="status ' + (isConnected ? 'connected' : 'disconnected') + '">' + (isConnected ? 'Connected' : 'Connect') + '</span>' +
         '</a>';
     }});
     document.getElementById('platformsGrid').innerHTML = html;
+    // Attach click handlers via data attributes to avoid inline onclick escaping
+    document.querySelectorAll('.platform-btn').forEach(btn => {{
+        btn.addEventListener('click', function(e) {{
+            connectPlatform(e, this.dataset.platform, this.dataset.profileid);
+        }});
+    }});
 
     // 5. Render connected accounts list
     if (accountsData.success && accountsData.accounts.length > 0) {{
@@ -1745,7 +1781,7 @@ fn build_services_overview_page_html() -> String {
     </div>
     <section class="hero">
       <div class="eyebrow">Campaign Services</div>
-      <h1>Daily AI-Generated Content — Auto-Posted to Your Platforms</h1>
+      <h1>Daily Fresh Content — Auto-Posted to Your Platforms</h1>
       <p>Set a brief once. Our campaign engine generates unique content daily and posts to your connected accounts on schedule. Never worry about “what to post today.”</p>
       <div class="badge-row">
         <span class="badge">Daily generation</span>
