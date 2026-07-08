@@ -442,9 +442,9 @@ impl ToolRegistry {
         );
         properties.insert(
             "clip_times".to_string(),
-            gemini_property(
-                "array",
+            gemini_array_property(
                 "Explicit start times (in seconds) for each clip. When provided, the tool trims at these exact positions instead of auto-detecting. Use your vision capability to analyze the video and determine the most engaging moments, then pass them here. Example: [12.5, 48.2, 93.7]",
+                "number",
             ),
         );
         properties.insert(
@@ -472,6 +472,18 @@ fn gemini_property(prop_type: &str, description: &str) -> GeminiPropertyDefiniti
         prop_type: prop_type.to_string(),
         description: description.to_string(),
         items: None,
+    }
+}
+
+fn gemini_array_property(description: &str, item_type: &str) -> GeminiPropertyDefinition {
+    GeminiPropertyDefinition {
+        prop_type: "array".to_string(),
+        description: description.to_string(),
+        items: Some(Box::new(GeminiPropertyDefinition {
+            prop_type: item_type.to_string(),
+            description: String::new(),
+            items: None,
+        })),
     }
 }
 

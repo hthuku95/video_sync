@@ -10,6 +10,14 @@ use reqwest::Client;
 pub const OLLAMA_DEFAULT_URL: &str = "http://172.31.43.45:11434";
 const OLLAMA_DEFAULT_MODEL: &str = "gemma4:12b";
 
+/// Context window size for Ollama/Gemma4.
+/// Gemma 4 12B natively supports up to 262,144 tokens.
+/// The c6i.2xlarge has 15GB usable RAM. With model weights ~7.5GB + ~2.4GB
+/// KV cache at 4096 = ~9.88GB total. 8192 context doubles KV cache to ~4.76GB,
+/// total ~12.3GB — safely fits in 15GB. 16384 would need ~9.5GB KV cache
+/// (=17GB total) which exceeds RAM. Increase only if more RAM is added.
+pub const MODEL_NUM_CTX: u32 = 8192;
+
 #[derive(Debug, Clone)]
 pub struct OllamaToolCall {
     pub id: String,
@@ -108,7 +116,7 @@ impl OllamaClient {
             "model": self.model,
             "messages": [{"role": "user", "content": "Hello — respond with exactly 'OK'."}],
             "think": false,
-            "options": {"num_predict": 10, "temperature": 0.0},
+            "options": {"num_predict": 10, "temperature": 0.0, "num_ctx": MODEL_NUM_CTX},
             "stream": false,
         });
         match tokio::time::timeout(
@@ -152,7 +160,7 @@ impl OllamaClient {
             ],
             "temperature": 0.1,
             "think": false,
-            "options": {"num_predict": 2048},
+            "options": {"num_predict": 2048, "num_ctx": MODEL_NUM_CTX},
             "stream": false,
         });
 
@@ -216,7 +224,7 @@ impl OllamaClient {
             "messages": [{"role": "user", "content": content_parts}],
             "temperature": 0.3,
             "think": false,
-            "options": {"num_predict": 4096},
+            "options": {"num_predict": 4096, "num_ctx": MODEL_NUM_CTX},
             "stream": false,
         });
 
@@ -296,8 +304,9 @@ impl OllamaClient {
             "think": false,
             "stream": false,
             "options": {
-                "num_predict": 1024,
+                "num_predict": 4096,
                 "temperature": 0.3,
+                "num_ctx": MODEL_NUM_CTX,
             },
         });
 
@@ -450,8 +459,9 @@ Provide ONLY the JSON object, no markdown, no code blocks, no other text."#,
             "think": false,
             "stream": false,
             "options": {
-                "num_predict": 8192,
-                "temperature": 0.3
+                "num_predict": 16384,
+                "temperature": 0.3,
+                "num_ctx": MODEL_NUM_CTX
             }
         });
 

@@ -88,6 +88,13 @@ impl DeepSeekClient {
 
             let err_body = resp.text().await.unwrap_or_default();
 
+            // Non-retryable: insufficient balance
+            if err_body.contains("Insufficient Balance") || status.as_u16() == 402 {
+                return Err(
+                    format!("DeepSeek: Insufficient Balance - add credits").into(),
+                );
+            }
+
             if (status.as_u16() == 429 || status.as_u16() == 503) && attempt < max_attempts - 1 {
                 let wait = 10u64 * 2u64.pow(attempt);
                 tracing::warn!(
@@ -217,6 +224,13 @@ impl DeepSeekClient {
             }
 
             let err_body = resp.text().await.unwrap_or_default();
+
+            // Non-retryable: insufficient balance
+            if err_body.contains("Insufficient Balance") || status.as_u16() == 402 {
+                return Err(
+                    format!("DeepSeek: Insufficient Balance - add credits").into(),
+                );
+            }
 
             if (status.as_u16() == 429 || status.as_u16() == 503) && attempt < max_attempts - 1 {
                 let wait = 10u64 * 2u64.pow(attempt);
