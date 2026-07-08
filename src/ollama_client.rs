@@ -7,16 +7,15 @@
 use base64::prelude::*;
 use reqwest::Client;
 
-pub const OLLAMA_DEFAULT_URL: &str = "http://172.31.43.45:11434";
+pub const OLLAMA_DEFAULT_URL: &str = "http://172.31.93.52:11434";
 const OLLAMA_DEFAULT_MODEL: &str = "gemma4:12b";
 
 /// Context window size for Ollama/Gemma4.
 /// Gemma 4 12B natively supports up to 262,144 tokens.
-/// The c6i.2xlarge has 15GB usable RAM. With model weights ~7.5GB + ~2.4GB
-/// KV cache at 4096 = ~9.88GB total. 8192 context doubles KV cache to ~4.76GB,
-/// total ~12.3GB — safely fits in 15GB. 16384 would need ~9.5GB KV cache
-/// (=17GB total) which exceeds RAM. Increase only if more RAM is added.
-pub const MODEL_NUM_CTX: u32 = 8192;
+/// g4dn.xlarge (Tesla T4 16GB VRAM): ~10GB for weights + KV cache at 32K.
+/// 32768 context leaves ~6GB VRAM headroom. 65536 would use ~14GB.
+/// For 222 tool schemas (~22K tokens) + conversation history, 32768 is ample.
+pub const MODEL_NUM_CTX: u32 = 32768;
 
 #[derive(Debug, Clone)]
 pub struct OllamaToolCall {
