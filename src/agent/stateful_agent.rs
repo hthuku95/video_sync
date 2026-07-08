@@ -2079,9 +2079,9 @@ where
     const MAX_TURNS: usize = 10;
 
     for turn in 0..MAX_TURNS {
-        let response = timeout(Duration::from_secs(300), ollama_client.generate_single(messages, tools))
+        let response = timeout(Duration::from_secs(30), ollama_client.generate_single(messages, tools))
             .await
-            .map_err(|_| "Ollama timeout after 300s".to_string())?
+            .map_err(|_| "Ollama timeout after 30s".to_string())?
             .map_err(|e| format!("Ollama API error: {}", e))?;
 
         match response {
