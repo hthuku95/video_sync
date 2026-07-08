@@ -2987,15 +2987,6 @@ async fn generate_prospect_sample_pack(
         )
     })?;
 
-    let _ = sqlx::query(
-        "UPDATE prospects SET sample_delivery_id=$1, service_type=$2, updated_at=NOW() WHERE id=$3",
-    )
-    .bind(delivery_id)
-    .bind(&service)
-    .bind(id)
-    .execute(&state.db_pool)
-    .await;
-
     let service_type = crate::services::normalize_to_service_type(&service);
     let agentic_style = if use_long_form_workflow {
         long_form_style.to_string()
@@ -3050,6 +3041,15 @@ async fn generate_prospect_sample_pack(
         .bind(delivery_id)
         .execute(&state.db_pool)
         .await;
+
+    let _ = sqlx::query(
+        "UPDATE prospects SET sample_delivery_id=$1, service_type=$2, updated_at=NOW() WHERE id=$3",
+    )
+    .bind(delivery_id)
+    .bind(&service)
+    .bind(id)
+    .execute(&state.db_pool)
+    .await;
 
     let delivery_url = format!("/delivery/{delivery_id}");
     Ok(Json(json!({
