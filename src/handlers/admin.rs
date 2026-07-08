@@ -8023,19 +8023,6 @@ async fn delivery_stream(
 
 // GCS delivery download removed — R2 is the only storage backend.
 
-    (
-        [
-            (header::CONTENT_TYPE, "video/mp4".to_string()),
-            (
-                header::CONTENT_DISPOSITION,
-                format!("attachment; filename=\"{filename}\""),
-            ),
-        ],
-        bytes,
-    )
-        .into_response()
-}
-
 // =============================================================================
 // x402 paywall — public endpoints (no auth, payment IS the auth)
 // =============================================================================
