@@ -2,7 +2,7 @@ use crate::AppState;
 use std::sync::Arc;
 use uuid::Uuid;
 
-/// Upload bytes directly to R2 + GCS, register in GeneratedArtifactService,
+/// Upload bytes directly to R2, register in GeneratedArtifactService,
 /// and return a presigned download URL. No local disk write.
 pub async fn upload_bytes_to_cloud(
     bytes: Vec<u8>,
@@ -27,7 +27,7 @@ pub async fn upload_bytes_to_cloud(
         .await
         .map_err(|e| format!("Failed to write temp file: {e}"))?;
 
-    // 2. Upload to R2
+    // 2. Upload to R2 (and register in GeneratedArtifactService)
     let mut public_url: Option<String> = None;
     if let Some(r2) = app_state.r2_client.as_ref() {
         match r2.upload(tmp.to_str().unwrap_or(""), &storage_key).await {
@@ -42,38 +42,17 @@ pub async fn upload_bytes_to_cloud(
         }
     }
 
-    // 3. Upload to GCS
-    if let Some(gcs) = app_state.gcs_client.as_ref() {
-        match gcs.upload_bytes(&bytes, &storage_key, content_type).await {
-            Ok(url) => {
-                if public_url.is_none() {
-                    public_url = Some(url.clone());
-                }
-                tracing::info!("GCS: uploaded → {storage_key}");
-            }
-            Err(e) => tracing::warn!("GCS upload failed: {e}"),
-        }
-    }
-
-    // 4. Clean up temp file
+    // 3. Clean up temp file
     let _ = tokio::fs::remove_file(&tmp).await;
 
     if public_url.is_none() {
-        return Err(format!(
-            "No cloud storage available (R2 and GCS both unavailable or failed)"
-        ));
+        return Err(format!("No cloud storage available (R2 unavailable or failed)"));
     }
 
     let public_url = public_url.unwrap();
 
-    // 5. Register in GeneratedArtifactService
-    let storage_backend = if app_state.gcs_client.is_some() && app_state.r2_client.is_some() {
-        "r2_gcs"
-    } else if app_state.r2_client.is_some() {
-        "r2"
-    } else {
-        "gcs"
-    };
+    // 4. Register in GeneratedArtifactService
+    let storage_backend = "r2";
 
     let file_name = std::path::Path::new(object_key)
         .file_name()

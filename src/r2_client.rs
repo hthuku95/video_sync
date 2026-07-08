@@ -36,12 +36,12 @@ pub struct R2Client {
 
 impl R2Client {
     pub async fn new(
-        account_id: &str,
+        endpoint_url: &str,
         access_key_id: &str,
         secret_access_key: &str,
         bucket: &str,
     ) -> Result<Self, String> {
-        let endpoint = format!("https://{account_id}.r2.cloudflarestorage.com");
+        let endpoint = endpoint_url.to_string();
 
         let creds = Credentials::new(
             access_key_id,

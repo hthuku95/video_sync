@@ -26,11 +26,6 @@ pub struct DeliveryViewQuery {
     pub token: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Default)]
-pub struct DeliveryGcsDownloadQuery {
-    pub key: Option<String>,
-}
-
 pub fn admin_routes() -> Router {
     // Truly public routes (no auth required)
     let public_routes = Router::new()
@@ -39,7 +34,6 @@ pub fn admin_routes() -> Router {
         // Delivery share links — public by design
         .route("/delivery/:id", get(delivery_page))
         .route("/delivery/:id/stream", get(delivery_stream))
-        .route("/delivery/:id/download-gcs", get(delivery_gcs_download))
         .route("/api/portfolio-samples", get(api_list_portfolio_samples))
         // x402 paywall endpoints — public on purpose; auth happens via the
         // signed USDC payment in the X-Payment header, not via JWT.
@@ -8027,75 +8021,7 @@ async fn delivery_stream(
     Ok(response)
 }
 
-pub async fn delivery_gcs_download(
-    Path(id): Path<String>,
-    Query(query): Query<DeliveryGcsDownloadQuery>,
-    Extension(state): Extension<Arc<AppState>>,
-) -> Response {
-    let uuid = match uuid::Uuid::parse_str(&id) {
-        Ok(uuid) => uuid,
-        Err(_) => return (StatusCode::BAD_REQUEST, "Invalid delivery id").into_response(),
-    };
-
-    let row = match sqlx::query("SELECT status, output_filename FROM deliveries WHERE id = $1")
-        .bind(uuid)
-        .fetch_optional(&state.db_pool)
-        .await
-    {
-        Ok(Some(row)) => row,
-        Ok(None) => return (StatusCode::NOT_FOUND, "Delivery not found").into_response(),
-        Err(error) => {
-            tracing::warn!(delivery_id = %uuid, error = %error, "Failed to load GCS delivery metadata");
-            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to load delivery").into_response();
-        }
-    };
-
-    let status: String = row.get("status");
-    if status != "completed" {
-        return (StatusCode::CONFLICT, "Delivery is not completed yet").into_response();
-    }
-
-    let filename = match row
-        .try_get::<Option<String>, _>("output_filename")
-        .ok()
-        .flatten()
-    {
-        Some(filename) if filename.starts_with("long_form_") && filename.ends_with(".mp4") => {
-            filename
-        }
-        _ => return (StatusCode::NOT_FOUND, "GCS delivery file is not available").into_response(),
-    };
-
-    let object_key = query
-        .key
-        .filter(|key| key.starts_with("generated/") && key.ends_with(".mp4"))
-        .unwrap_or_else(|| format!("generated/0/video/{filename}"));
-    let gcs = match crate::gcs_client::GcsClient::from_env().await {
-        Some(gcs) => gcs,
-        None => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "GCS delivery storage is not configured",
-            )
-                .into_response()
-        }
-    };
-    let bytes = match gcs.download_bytes(&object_key).await {
-        Ok(bytes) => bytes,
-        Err(error) => {
-            tracing::warn!(
-                delivery_id = %uuid,
-                object_key = %object_key,
-                error = %error,
-                "GCS delivery file missing or unreadable"
-            );
-            return (
-                StatusCode::NOT_FOUND,
-                "This delivery file is not available in GCS yet. Regenerate or repair storage.",
-            )
-                .into_response();
-        }
-    };
+// GCS delivery download removed — R2 is the only storage backend.
 
     (
         [
