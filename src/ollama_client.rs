@@ -7,7 +7,7 @@
 use base64::prelude::*;
 use reqwest::Client;
 
-pub const OLLAMA_DEFAULT_URL: &str = "http://172.31.93.52:11434";
+pub const OLLAMA_DEFAULT_URL: &str = "http://ollama-gpu-nlb-1b156c7109954cab.elb.us-east-1.amazonaws.com:11434";
 const OLLAMA_DEFAULT_MODEL: &str = "gemma4:12b";
 
 /// Context window size for Ollama/Gemma4.
