@@ -396,16 +396,18 @@ pub async fn crawl_website(url: &str) -> Result<CrawlResult, String> {
     let mut pages = Vec::new();
     pages.push(CrawledPage {
         url: full_url.clone(),
-        title: homepage_title,
+        title: homepage_title.clone(),
         content: homepage_md.clone(),
     });
 
     // Step 5: Fetch each subpage in parallel
+    let title_re_for_closure = title_re.clone();
     let subpage_fetches: Vec<_> = subpages.iter().map(|sub_url| {
+        let tr = title_re_for_closure.clone();
         async move {
             let md = fetch_url(sub_url).await.ok().flatten().unwrap_or_default();
             let html = fetch_url_raw(sub_url).await.ok().flatten().unwrap_or_default();
-            let title = title_re.captures(&html)
+            let title = tr.captures(&html)
                 .map(|c| c[1].to_string())
                 .unwrap_or_else(|| sub_url.rsplit('/').next().unwrap_or("page").to_string());
             CrawledPage {
