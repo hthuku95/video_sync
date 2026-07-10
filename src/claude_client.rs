@@ -1628,18 +1628,63 @@ impl ClaudeClient {
                 },
             },
             ClaudeTool {
-                name: "browserbase_fetch_url".to_string(),
-                description: "Fetch a website URL using BrowserBase — a cloud browser that renders JavaScript, solves CAPTCHAs, and returns clean markdown content. Use this instead of read_website_content for JavaScript-heavy SPAs, sites that block plain HTTP fetches, or when you need the full rendered page as markdown. Returns the page content as clean markdown (up to 8000 chars). Falls back to read_website_content if BrowserBase is not configured.".to_string(),
+                name: "browserbase_crawl_website".to_string(),
+                description: "Crawl an entire website using BrowserBase — fetches the homepage, extracts all internal links, fetches each subpage's markdown content, and extracts CSS design tokens (colors, fonts). Returns combined markdown with page titles and URLs, a design tokens summary, and a feature_tag. Use vectorize_crawled_content to store the results in Qdrant, then use search_crawled_content to query specific pages.".to_string(),
                 input_schema: InputSchema {
                     schema_type: "object".to_string(),
                     properties: HashMap::from([
                         ("url".to_string(), PropertyDefinition {
                             prop_type: "string".to_string(),
-                            description: "The website URL to fetch (e.g. 'https://stripe.com')".to_string(),
+                            description: "The website URL to crawl (e.g. 'https://stripe.com')".to_string(),
                             items: None,
                         }),
                     ]),
                     required: vec!["url".to_string()],
+                },
+            },
+            ClaudeTool {
+                name: "vectorize_crawled_content".to_string(),
+                description: "Store crawled website pages in Qdrant vector database for semantic search. Takes the feature_tag and pages array returned by browserbase_crawl_website, embeds each page with Gemini Embedding 2. After this, use search_crawled_content to find information across all pages.".to_string(),
+                input_schema: InputSchema {
+                    schema_type: "object".to_string(),
+                    properties: HashMap::from([
+                        ("feature_tag".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "The feature_tag returned by browserbase_crawl_website".to_string(),
+                            items: None,
+                        }),
+                        ("pages".to_string(), PropertyDefinition {
+                            prop_type: "array".to_string(),
+                            description: "The 'pages' array from browserbase_crawl_website result. Each element must have 'url', 'title', and 'content' fields.".to_string(),
+                            items: None,
+                        }),
+                    ]),
+                    required: vec!["feature_tag".to_string(), "pages".to_string()],
+                },
+            },
+            ClaudeTool {
+                name: "search_crawled_content".to_string(),
+                description: "Search previously vectorized crawled website content via semantic search. Takes a natural language query and the feature_tag from browserbase_crawl_website. Requires vectorize_crawled_content to have been called first.".to_string(),
+                input_schema: InputSchema {
+                    schema_type: "object".to_string(),
+                    properties: HashMap::from([
+                        ("query".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Natural language query about the website content (e.g. 'pricing plans', 'brand colors')".to_string(),
+                            items: None,
+                        }),
+                        ("feature_tag".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "The feature_tag returned by browserbase_crawl_website".to_string(),
+                            items: None,
+                        }),
+                        ("limit".to_string(), PropertyDefinition {
+                            prop_type: "number".to_string(),
+                            description: "Maximum results to return (default: 5)".to_string(),
+                            items: None,
+                        }),
+                    ]),
+                    required: vec!["query".to_string(), "feature_tag".to_string()],
                 },
             },
             ClaudeTool {

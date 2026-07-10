@@ -709,6 +709,12 @@ async fn execute_tool_claude_with_context_inner(
     if name == "set_chat_title" {
         return execute_set_chat_title_with_state_claude(args, ctx).await;
     }
+    if name == "vectorize_crawled_content" {
+        return execute_vectorize_crawled_content_with_state_claude(args, ctx).await;
+    }
+    if name == "search_crawled_content" {
+        return execute_search_crawled_content_with_state_claude(args, ctx).await;
+    }
 
     // ── Query Tools (read-only DB lookups for re-editing) ────────────
     if name == "get_output_videos" {
@@ -955,6 +961,12 @@ async fn execute_tool_gemini_with_context_inner(
     if name == "set_chat_title" {
         return execute_set_chat_title_with_state_gemini(args, ctx).await;
     }
+    if name == "vectorize_crawled_content" {
+        return execute_vectorize_crawled_content_with_state_gemini(args, ctx).await;
+    }
+    if name == "search_crawled_content" {
+        return execute_search_crawled_content_with_state_gemini(args, ctx).await;
+    }
 
     // ── Query Tools (read-only DB lookups for re-editing) ────────────
     if name == "get_output_videos" {
@@ -1187,7 +1199,7 @@ pub async fn execute_tool_claude(name: &str, args: &Value) -> String {
         "edit_image" => execute_edit_image_claude(args).await,
         "fetch_website_image" => execute_fetch_website_image_claude(args).await,
         "read_website_content" => execute_read_website_content_claude(args).await,
-        "browserbase_fetch_url" => execute_browserbase_fetch_url_claude(args).await,
+        "browserbase_crawl_website" => execute_browserbase_crawl_website_claude(args).await,
         "auto_generate_video" => execute_auto_generate_video_claude(args).await,
         "generate_video_queries" => execute_generate_video_queries_claude(args),
         "sketchfab_search" => execute_sketchfab_search_claude(args).await,
@@ -1607,7 +1619,7 @@ pub async fn execute_tool_gemini(name: &str, args: &HashMap<String, Value>) -> S
         "edit_image" => execute_edit_image_gemini(args).await,
         "fetch_website_image" => execute_fetch_website_image_gemini(args).await,
         "read_website_content" => execute_read_website_content_gemini(args).await,
-        "browserbase_fetch_url" => execute_browserbase_fetch_url_gemini(args).await,
+        "browserbase_crawl_website" => execute_browserbase_crawl_website_gemini(args).await,
         "auto_generate_video" => execute_auto_generate_video_gemini(args).await,
         "generate_video_queries" => execute_generate_video_queries_gemini(args),
         "sketchfab_search" => execute_sketchfab_search_gemini(args).await,
@@ -18808,22 +18820,22 @@ async fn execute_read_website_content_inner(url: &str) -> String {
     )
 }
 
-// ── browserbase_fetch_url ─────────────────────────────────────────────────
-// Fetches a URL using BrowserBase cloud browser (JS rendering, CAPTCHA solving).
-// Returns clean markdown content. Falls back to read_website_content if
-// BrowserBase is not configured or fails.
+// ── browserbase_crawl_website ────────────────────────────────────────────
+// Crawls a website via BrowserBase: fetches homepage, extracts internal links,
+// fetches subpages, extracts CSS design tokens. Returns combined markdown
+// with page titles + URLs + CSS info + a feature tag for Qdrant vectorization.
 
-async fn execute_browserbase_fetch_url_claude(args: &serde_json::Value) -> String {
+async fn execute_browserbase_crawl_website_claude(args: &serde_json::Value) -> String {
     let url = args.get("url").and_then(|v| v.as_str()).unwrap_or("");
-    execute_browserbase_fetch_url_inner(url).await
+    execute_browserbase_crawl_website_inner(url).await
 }
 
-async fn execute_browserbase_fetch_url_gemini(args: &HashMap<String, serde_json::Value>) -> String {
+async fn execute_browserbase_crawl_website_gemini(args: &HashMap<String, serde_json::Value>) -> String {
     let url = args.get("url").and_then(|v| v.as_str()).unwrap_or("");
-    execute_browserbase_fetch_url_inner(url).await
+    execute_browserbase_crawl_website_inner(url).await
 }
 
-async fn execute_browserbase_fetch_url_inner(url: &str) -> String {
+async fn execute_browserbase_crawl_website_inner(url: &str) -> String {
     if url.is_empty() {
         return "Error: 'url' parameter is required".to_string();
     }
@@ -18833,16 +18845,207 @@ async fn execute_browserbase_fetch_url_inner(url: &str) -> String {
         url.to_string()
     };
 
-    match crate::browserbase_client::fetch_url(&full_url).await {
-        Ok(Some(markdown)) => markdown,
-        Ok(None) => {
-            // BrowserBase not configured — fall back to read_website_content
-            execute_read_website_content_inner(&full_url).await
+    match crate::browserbase_client::crawl_website(&full_url).await {
+        Ok(result) => {
+            let mut output = String::new();
+            output.push_str(&format!("## Crawl Results for: {}\n\n", full_url));
+            if !result.css_info.is_empty() {
+                output.push_str(&format!("### Design Tokens\n{}\n\n", result.css_info));
+            }
+            output.push_str(&format!("### Pages Found ({})\n", result.pages.len()));
+            for page in &result.pages {
+                output.push_str(&format!("- {} ({})\n", page.title, page.url));
+            }
+            output.push_str(&format!("\n### Feature Tag\n{}\n\n", result.feature_tag));
+            output.push_str("### Full Content\n\n");
+            output.push_str(&result.combined_markdown);
+            output
         }
         Err(e) => {
-            format!("BrowserBase fetch error: {e}. Falling back to plain HTTP.\n\n{}",
-                execute_read_website_content_inner(&full_url).await)
+            format!("Website crawl failed: {e}. Try using a direct URL or check if BrowserBase is configured.")
         }
+    }
+}
+
+// ── vectorize_crawled_content (context-aware) ────────────────────────────
+// Takes a feature_tag and the pages from a crawl result, vectorizes each
+// page's content into Qdrant via Gemini Embedding 2 for semantic search.
+
+async fn execute_vectorize_crawled_content_with_state_claude(
+    args: &Value,
+    ctx: &ToolExecutionContext,
+) -> String {
+    let feature_tag = args.get("feature_tag").and_then(|v| v.as_str()).unwrap_or("");
+    let pages: Vec<Value> = args.get("pages")
+        .and_then(|v| v.as_array())
+        .map(|a| a.clone())
+        .unwrap_or_default();
+    execute_vectorize_crawled_content_inner(feature_tag, &pages, &ctx.app_state).await
+}
+
+async fn execute_vectorize_crawled_content_with_state_gemini(
+    args: &HashMap<String, Value>,
+    ctx: &ToolExecutionContext,
+) -> String {
+    let feature_tag = args.get("feature_tag").and_then(|v| v.as_str()).unwrap_or("");
+    let pages: Vec<Value> = args.get("pages")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    execute_vectorize_crawled_content_inner(feature_tag, &pages, &ctx.app_state).await
+}
+
+async fn execute_vectorize_crawled_content_inner(
+    feature_tag: &str,
+    pages: &[Value],
+    app_state: &Arc<AppState>,
+) -> String {
+    if feature_tag.is_empty() {
+        return "Error: 'feature_tag' parameter is required".to_string();
+    }
+    if pages.is_empty() {
+        return "Error: 'pages' array is required (must be the pages from browserbase_crawl_website)".to_string();
+    }
+
+    let qdrant = match app_state.qdrant_client.as_ref() {
+        Some(q) => q,
+        None => return "Error: Qdrant not configured".to_string(),
+    };
+    let gemini = match app_state.video_gemini_client.as_ref()
+        .or(app_state.gemini_client.as_ref())
+    {
+        Some(g) => g,
+        None => return "Error: Gemini client not configured for embeddings".to_string(),
+    };
+
+    let mut stored = 0usize;
+    let mut errors = Vec::new();
+
+    for page in pages {
+        let url = page.get("url").and_then(|v| v.as_str()).unwrap_or("unknown");
+        let title = page.get("title").and_then(|v| v.as_str()).unwrap_or("Untitled");
+        let content = page.get("content").and_then(|v| v.as_str()).unwrap_or("");
+
+        if content.is_empty() {
+            continue;
+        }
+
+        let embed_text = format!("Title: {}\nURL: {}\n\n{}", title, url, content);
+        let mut context = HashMap::new();
+        context.insert("page_url".to_string(), serde_json::json!(url));
+        context.insert("page_title".to_string(), serde_json::json!(title));
+        context.insert("crawl_time".to_string(), serde_json::json!(chrono::Utc::now().to_rfc3339()));
+
+        match qdrant.store_chat_memory_with_gemini2(
+            feature_tag,
+            None,
+            &embed_text,
+            url,
+            vec![],
+            context,
+            gemini,
+            Some(feature_tag),
+        ).await {
+            Ok(_) => stored += 1,
+            Err(e) => errors.push(format!("{}: {}", url, e)),
+        }
+    }
+
+    let mut result = format!("Vectorization complete: {} pages stored with feature tag '{}'", stored, feature_tag);
+    if !errors.is_empty() {
+        result.push_str(&format!("\nErrors ({}):\n{}", errors.len(), errors.join("\n")));
+    }
+    result
+}
+
+// ── search_crawled_content (context-aware) ───────────────────────────────
+// Searches previously vectorized crawled website content via Qdrant.
+// Embeds the query with Gemini Embedding 2 and searches by feature tag.
+
+async fn execute_search_crawled_content_with_state_claude(
+    args: &Value,
+    ctx: &ToolExecutionContext,
+) -> String {
+    let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("");
+    let feature_tag = args.get("feature_tag").and_then(|v| v.as_str()).unwrap_or("");
+    let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(5) as usize;
+    execute_search_crawled_content_inner(query, feature_tag, limit, &ctx.app_state).await
+}
+
+async fn execute_search_crawled_content_with_state_gemini(
+    args: &HashMap<String, Value>,
+    ctx: &ToolExecutionContext,
+) -> String {
+    let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("");
+    let feature_tag = args.get("feature_tag").and_then(|v| v.as_str()).unwrap_or("");
+    let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(5) as usize;
+    execute_search_crawled_content_inner(query, feature_tag, limit, &ctx.app_state).await
+}
+
+async fn execute_search_crawled_content_inner(
+    query: &str,
+    feature_tag: &str,
+    limit: usize,
+    app_state: &Arc<AppState>,
+) -> String {
+    if query.is_empty() {
+        return "Error: 'query' parameter is required".to_string();
+    }
+    if feature_tag.is_empty() {
+        return "Error: 'feature_tag' parameter is required".to_string();
+    }
+
+    let qdrant = match app_state.qdrant_client.as_ref() {
+        Some(q) => q,
+        None => return "Error: Qdrant not configured".to_string(),
+    };
+    let gemini = match app_state.video_gemini_client.as_ref()
+        .or(app_state.gemini_client.as_ref())
+    {
+        Some(g) => g,
+        None => return "Error: Gemini client not configured for embeddings".to_string(),
+    };
+
+    let embedding = match gemini.embed_content_with_model(query, "models/gemini-embedding-2", Some(1536)).await {
+        Ok(emb) => emb,
+        Err(e) => return format!("Error embedding query: {e}"),
+    };
+
+    let filter = serde_json::json!({
+        "must": [
+            {"key": "feature", "match": {"value": feature_tag}}
+        ]
+    });
+
+    match qdrant.search_points(
+        &embedding,
+        limit,
+        Some(&filter),
+        crate::qdrant_client::EmbeddingProvider::GeminiEmbedding2,
+    ).await {
+        Ok(results) => {
+            if results.is_empty() {
+                return format!("No results found for '{}' in '{}'. Make sure the content was vectorized first with vectorize_crawled_content.", query, feature_tag);
+            }
+            let mut output = format!("Search results for '{}' ({}):\n\n", query, feature_tag);
+            for (i, r) in results.iter().enumerate() {
+                let score = r.get("score").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                let url = r.get("agent_response").and_then(|v| v.as_str()).unwrap_or("unknown");
+                let title = r.get("context").and_then(|c| c.get("page_title")).and_then(|v| v.as_str()).unwrap_or("");
+                let content = r.get("user_message").and_then(|v| v.as_str()).unwrap_or("");
+                let snippet = if content.len() > 500 {
+                    format!("{}...", &content[..500])
+                } else {
+                    content.to_string()
+                };
+                output.push_str(&format!("{}. [Score: {:.2}] {} ({})\n", i + 1, score, title, url));
+                if !snippet.is_empty() {
+                    output.push_str(&format!("   {}\n\n", snippet.replace('\n', " ")));
+                }
+            }
+            output
+        }
+        Err(e) => format!("Error searching crawled content: {e}"),
     }
 }
 

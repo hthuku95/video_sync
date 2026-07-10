@@ -512,13 +512,17 @@ Style: {style}
 The tool `generate_long_form_video` is a convenience wrapper that delegates to another agent — it will NOT produce the correct output for this DFY service. You MUST call the rendering tools directly yourself.
 
 ## STEP 0: UNDERSTAND THE WEBSITE
-Before making anything, call `browserbase_fetch_url(url="{url}")` to fetch the website content via BrowserBase (JS rendering, CAPTCHA solving, markdown output). Use the extracted content to understand:
+Before making anything, call `browserbase_crawl_website(url="{url}")` to crawl the full website. This fetches all subpages and extracts CSS design tokens (colors, fonts). From the response:
+1. Note the `feature_tag` and `pages` fields — you'll need both
+2. Call `vectorize_crawled_content(feature_tag="<the tag>", pages=<the pages array>)` to store all pages in Qdrant
+3. Use `search_crawled_content(query="brand colors, fonts, and design style", feature_tag="<the tag>")` for design details
+4. Use `search_crawled_content(query="features, pricing, and product details", feature_tag="<the tag>")` for product info
+
+Use the extracted content to understand:
 - What the product/service does
 - Key features and value propositions
 - Brand colors, tone, and style
 - Call-to-action and target audience
-
-If BrowserBase is not configured, fall back to `read_website_content(url="{url}")`.
 
 ## MANDATORY TOOL SEQUENCE
 1. generate_video_script(topic, duration, style, tone) — plan the content using the website info from step 0
@@ -554,7 +558,7 @@ Style: {style}
 The tool `generate_long_form_video` delegates to another agent and will NOT produce the correct output. Call the rendering tools directly.
 
 ## STEP 0: UNDERSTAND THE WEBSITE (if source URL is provided)
-If a source URL is provided, call `browserbase_fetch_url(url="{url}")` first to extract website content via BrowserBase (JS rendering, markdown output). Use the extracted content to understand the product's features, design, and brand style. Fall back to `read_website_content(url="{url}")` if BrowserBase is not configured.
+If a source URL is provided, call `browserbase_crawl_website(url="{url}")` to crawl the full website. From the response, get the `feature_tag` and `pages`, then call `vectorize_crawled_content(feature_tag="<tag>", pages=<array>)` to store in Qdrant. Use `search_crawled_content(query="design and features", feature_tag="<tag>")` to get specific product details. Use the extracted content to understand the product's features, design, and brand style.
 
 ## MANDATORY TOOL SEQUENCE
 1. generate_video_script(topic, duration, style, tone) — plan the content

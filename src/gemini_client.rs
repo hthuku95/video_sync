@@ -2761,24 +2761,81 @@ impl GeminiClient {
                 },
             },
 
-            // BROWSERBASE FETCH — JS-rendered, CAPTCHA-solving, markdown-returning page fetch
+            // BROWSERBASE CRAWL — full website crawl with CSS info + subpages
             // =====================================================================
 
             FunctionDeclaration {
-                name: "browserbase_fetch_url".to_string(),
-                description: "Fetch a website URL using BrowserBase — a cloud browser that renders JavaScript, solves CAPTCHAs, and returns clean markdown content. Use this instead of read_website_content for JavaScript-heavy SPAs, sites that block plain HTTP fetches, or when you need the full rendered page as markdown. Returns the page content as clean markdown (up to 8000 chars). Falls back to read_website_content if BrowserBase is not configured.".to_string(),
+                name: "browserbase_crawl_website".to_string(),
+                description: "Crawl an entire website using BrowserBase — fetches the homepage, extracts all internal links, fetches each subpage's markdown content, and extracts CSS design tokens (colors, fonts). Returns combined markdown with page titles and URLs, a design tokens summary, and a feature_tag. Use vectorize_crawled_content to store the results in Qdrant for semantic search, then use search_crawled_content to query specific pages.".to_string(),
                 parameters: Parameters {
                     param_type: "object".to_string(),
                     properties: {
                         let mut props = HashMap::new();
                         props.insert("url".to_string(), PropertyDefinition {
                             prop_type: "string".to_string(),
-                            description: "The website URL to fetch (e.g. 'https://stripe.com')".to_string(),
+                            description: "The website URL to crawl (e.g. 'https://stripe.com')".to_string(),
                             items: None,
                         });
                         props
                     },
                     required: vec!["url".to_string()],
+                },
+            },
+
+            // VECTORIZE CRAWLED CONTENT — store pages in Qdrant for semantic search
+            // =====================================================================
+
+            FunctionDeclaration {
+                name: "vectorize_crawled_content".to_string(),
+                description: "Store crawled website pages in Qdrant vector database for semantic search. Takes the feature_tag and pages array returned by browserbase_crawl_website, embeds each page's content using Gemini Embedding 2, and stores it in Qdrant. After calling this, you can use search_crawled_content to find specific information across all crawled pages.".to_string(),
+                parameters: Parameters {
+                    param_type: "object".to_string(),
+                    properties: {
+                        let mut props = HashMap::new();
+                        props.insert("feature_tag".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "The feature_tag returned by browserbase_crawl_website".to_string(),
+                            items: None,
+                        });
+                        props.insert("pages".to_string(), PropertyDefinition {
+                            prop_type: "array".to_string(),
+                            description: "The 'pages' array from browserbase_crawl_website result. Each element must have 'url', 'title', and 'content' fields.".to_string(),
+                            items: None,
+                        });
+                        props
+                    },
+                    required: vec!["feature_tag".to_string(), "pages".to_string()],
+                },
+            },
+
+            // SEARCH CRAWLED CONTENT — semantic search over vectorized site content
+            // =====================================================================
+
+            FunctionDeclaration {
+                name: "search_crawled_content".to_string(),
+                description: "Search previously vectorized crawled website content via semantic search. Takes a natural language query and the feature_tag from browserbase_crawl_website. Embeds the query with Gemini Embedding 2 and returns ranked matching pages with content snippets and scores. Requires vectorize_crawled_content to have been called first on the crawl results.".to_string(),
+                parameters: Parameters {
+                    param_type: "object".to_string(),
+                    properties: {
+                        let mut props = HashMap::new();
+                        props.insert("query".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Natural language query about the website content (e.g. 'what are their pricing plans?', 'brand colors')".to_string(),
+                            items: None,
+                        });
+                        props.insert("feature_tag".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "The feature_tag returned by browserbase_crawl_website".to_string(),
+                            items: None,
+                        });
+                        props.insert("limit".to_string(), PropertyDefinition {
+                            prop_type: "number".to_string(),
+                            description: "Maximum number of results to return (default: 5)".to_string(),
+                            items: None,
+                        });
+                        props
+                    },
+                    required: vec!["query".to_string(), "feature_tag".to_string()],
                 },
             },
 

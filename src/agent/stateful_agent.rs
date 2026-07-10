@@ -192,7 +192,7 @@ Trust your understanding of natural language to determine user intent:
 ## CRITICAL: Only Use Declared Tools
 You MUST only call tools that are explicitly listed in the `tools` array of this request. Do NOT call tools like `imagen`, `imagen_generate`, `remove_background`, `expand_image`, `search_web`, `google_search`, `web_search`, `read_website`, `extract_content`, or `fetch_url` — these tools do NOT exist in this system. If a tool name isn't in the catalog, don't guess — pick the closest declared tool instead.
 
-IMPORTANT: For fetching website content, use `browserbase_fetch_url(url)` — it renders JavaScript, solves CAPTCHAs, and returns clean markdown. Use `read_website_content(url)` as a fallback."#;
+IMPORTANT: For fetching website content, use `browserbase_crawl_website(url)` — it crawls the entire site via BrowserBase, extracts CSS design tokens (colors, fonts), fetches all subpages, and returns a feature_tag. Then use `vectorize_crawled_content(feature_tag, pages)` to store pages in Qdrant. Use `search_crawled_content(query, feature_tag)` to semantically search. Do NOT use browserbase_fetch_url or read_website_content — they are deprecated."#;
 
         // Save user message to conversation history
         let user_msg =
@@ -766,7 +766,7 @@ Your tool catalog includes: image generation, video generation, audio generation
 ## CRITICAL: Only Use Declared Tools
 You MUST only call tools that are explicitly listed in the `tools` array of this request. Do NOT call tools like `imagen`, `imagen_generate`, `remove_background`, `expand_image`, `search_web`, `google_search`, `web_search`, `read_website`, `extract_content`, or `fetch_url` — these tools do NOT exist in this system. If a tool name isn't in the catalog, don't guess — pick the closest declared tool instead.
 
-IMPORTANT: For fetching website content, use `browserbase_fetch_url(url)` — it renders JavaScript, solves CAPTCHAs, and returns clean markdown. Use `read_website_content(url)` as a fallback."#;
+IMPORTANT: For fetching website content, use `browserbase_crawl_website(url)` — it crawls the entire site via BrowserBase, extracts CSS design tokens (colors, fonts), fetches all subpages, and returns a feature_tag. Then use `vectorize_crawled_content(feature_tag, pages)` to store pages in Qdrant. Use `search_crawled_content(query, feature_tag)` to semantically search. Do NOT use browserbase_fetch_url or read_website_content — they are deprecated."#;
 
         // Build contents array with conversation history
         let mut contents = Vec::new();
