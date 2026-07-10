@@ -1197,8 +1197,6 @@ pub async fn execute_tool_claude(name: &str, args: &Value) -> String {
         "create_blank_video" => execute_create_blank_video_claude(args),
         "generate_image" => execute_generate_image_claude(args).await,
         "edit_image" => execute_edit_image_claude(args).await,
-        "fetch_website_image" => execute_fetch_website_image_claude(args).await,
-        "read_website_content" => execute_read_website_content_claude(args).await,
         "browserbase_crawl_website" => execute_browserbase_crawl_website_claude(args).await,
         "auto_generate_video" => execute_auto_generate_video_claude(args).await,
         "generate_video_queries" => execute_generate_video_queries_claude(args),
@@ -1617,8 +1615,6 @@ pub async fn execute_tool_gemini(name: &str, args: &HashMap<String, Value>) -> S
         "create_blank_video" => execute_create_blank_video_gemini(args),
         "generate_image" => execute_generate_image_gemini(args).await,
         "edit_image" => execute_edit_image_gemini(args).await,
-        "fetch_website_image" => execute_fetch_website_image_gemini(args).await,
-        "read_website_content" => execute_read_website_content_gemini(args).await,
         "browserbase_crawl_website" => execute_browserbase_crawl_website_gemini(args).await,
         "auto_generate_video" => execute_auto_generate_video_gemini(args).await,
         "generate_video_queries" => execute_generate_video_queries_gemini(args),
@@ -18715,111 +18711,6 @@ async fn execute_run_director_claude(
     execute_run_director_impl(brief, feedback, ctx).await
 }
 
-// ── fetch_website_image ─────────────────────────────────────────────────
-// Fetches the og:image / twitter:image hero from a website URL.
-// Used by the agent to extract landing page visuals before passing
-// to blender_generate_scene's reference_image_url parameter.
-
-async fn execute_fetch_website_image_claude(args: &serde_json::Value) -> String {
-    let url = args.get("url").and_then(|v| v.as_str()).unwrap_or("");
-    execute_fetch_website_image_inner(url).await
-}
-
-async fn execute_fetch_website_image_gemini(args: &HashMap<String, serde_json::Value>) -> String {
-    let url = args.get("url").and_then(|v| v.as_str()).unwrap_or("");
-    execute_fetch_website_image_inner(url).await
-}
-
-async fn execute_read_website_content_claude(args: &serde_json::Value) -> String {
-    let url = args.get("url").and_then(|v| v.as_str()).unwrap_or("");
-    execute_read_website_content_inner(url).await
-}
-
-async fn execute_read_website_content_gemini(args: &HashMap<String, serde_json::Value>) -> String {
-    let url = args.get("url").and_then(|v| v.as_str()).unwrap_or("");
-    execute_read_website_content_inner(url).await
-}
-
-async fn execute_read_website_content_inner(url: &str) -> String {
-    if url.is_empty() {
-        return "Error: 'url' parameter is required".to_string();
-    }
-    let full_url = if !url.starts_with("http") {
-        format!("https://{url}")
-    } else {
-        url.to_string()
-    };
-
-    // Try BrowserBase first for JS-rendered, CAPTCHA-protected sites
-    if crate::browserbase_client::is_configured() {
-        match crate::browserbase_client::fetch_url(&full_url).await {
-            Ok(Some(markdown)) => {
-                return format!(
-                    "Website: {full_url}\n\n\
-                    Content (BrowserBase markdown):\n{markdown}\n\n\
-                    You now understand what this website is about. Use this information to:\n\
-                    1. Write a video script with generate_video_script\n\
-                    2. Extract the hero image with fetch_website_image for Blender scenes\n\
-                    3. Create title cards, lower thirds, and scene animations\n\
-                    4. Add voiceover narration with add_voiceover_to_video"
-                );
-            }
-            Ok(None) => {} // BrowserBase not configured, fall through to plain HTTP
-            Err(e) => {
-                tracing::warn!("BrowserBase fetch failed, falling back to plain HTTP: {e}");
-            }
-        }
-    }
-
-    // Fall back to plain HTTP fetch
-    let client = match reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
-        .user_agent("Mozilla/5.0 (compatible; VideoSyncBot/1.0)")
-        .redirect(reqwest::redirect::Policy::limited(5))
-        .build()
-    {
-        Ok(c) => c,
-        Err(e) => return format!("Error building HTTP client: {e}"),
-    };
-
-    let resp = match client.get(&full_url).send().await {
-        Ok(r) => r,
-        Err(e) => return format!("Error fetching {full_url}: {e}"),
-    };
-    if !resp.status().is_success() {
-        return format!("HTTP {} fetching {full_url}", resp.status());
-    }
-    let html = match resp.text().await {
-        Ok(t) => t,
-        Err(e) => return format!("Error reading response: {e}"),
-    };
-
-    let title = extract_tag_content(&html, "title").unwrap_or_default();
-    let description = extract_meta(&html, "description").unwrap_or_default();
-    let og_title = extract_meta(&html, "og:title").unwrap_or_default();
-    let og_desc = extract_meta(&html, "og:description").unwrap_or_default();
-    let og_image = extract_meta(&html, "og:image").unwrap_or_default();
-
-    // Extract visible text (strip tags, limit to first 2000 chars)
-    let text = strip_html_tags(&html);
-    let trimmed: String = text.chars().take(2000).collect();
-
-    format!(
-        "Website: {full_url}\n\
-        Title: {title}\n\
-        Description: {description}\n\
-        OG Title: {og_title}\n\
-        OG Description: {og_desc}\n\
-        OG Image: {og_image}\n\n\
-        Page Content (first 2000 chars):\n{trimmed}\n\n\
-        You now understand what this website is about. Use this information to:\n\
-        1. Write a video script with generate_video_script\n\
-        2. Extract the hero image with fetch_website_image for Blender scenes\n\
-        3. Create title cards, lower thirds, and scene animations\n\
-        4. Add voiceover narration with add_voiceover_to_video"
-    )
-}
-
 // ── browserbase_crawl_website ────────────────────────────────────────────
 // Crawls a website via BrowserBase: fetches homepage, extracts internal links,
 // fetches subpages, extracts CSS design tokens. Returns combined markdown
@@ -19205,19 +19096,6 @@ async fn execute_get_extracted_clips(_args: &Value, ctx: &ToolExecutionContext) 
     }
 }
 
-async fn execute_fetch_website_image_inner(url: &str) -> String {
-    if url.is_empty() {
-        return "Error: 'url' parameter is required".to_string();
-    }
-    match crate::handlers::prospects::fetch_landing_page_hero(url).await {
-        Some(image_url) => {
-            format!("Successfully extracted hero image from {url}. Image URL: {image_url}\n\nYou can now pass this URL as the reference_image_url parameter (inside params) to blender_generate_scene_type to create an animated landing page presentation.")
-        }
-        None => {
-            format!("Could not extract a hero image from {url} (no og:image or twitter:image meta tag found). You can still use generate_image to create a visual inspired by the website, then pass that to blender_generate_scene_type.")
-        }
-    }
-}
 
 async fn execute_apply_ffmpeg_filter_claude(args: &Value) -> String {
     let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");

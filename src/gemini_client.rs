@@ -2721,46 +2721,6 @@ impl GeminiClient {
                     required: vec!["topic".to_string(), "output_file".to_string()],
                 },
             },
-            // =====================================================================
-            // WEBSITE IMAGE EXTRACTION
-            // =====================================================================
-
-            FunctionDeclaration {
-                name: "fetch_website_image".to_string(),
-                description: "Fetch the hero/og:image from a website URL. Use this when a user provides a website URL and you need to extract its visual for use in a Blender scene or product mockup. Returns the image URL string that can be passed to blender_generate_scene_type's reference_image_url parameter.".to_string(),
-                parameters: Parameters {
-                    param_type: "object".to_string(),
-                    properties: {
-                        let mut props = HashMap::new();
-                        props.insert("url".to_string(), PropertyDefinition {
-                            prop_type: "string".to_string(),
-                            description: "The website URL to extract the hero image from (e.g. 'https://netflix.com')".to_string(),
-                            items: None,
-                        });
-                        props
-                    },
-                    required: vec!["url".to_string()],
-                },
-            },
-
-            FunctionDeclaration {
-                name: "read_website_content".to_string(),
-                description: "Fetch and read a website URL, returning its title, description, and main text content. Use this to understand what a website is about before generating a video script, voiceover, or Blender animation about it. Chain with generate_video_script and blender tools to create a full promotional/informative video from a URL.".to_string(),
-                parameters: Parameters {
-                    param_type: "object".to_string(),
-                    properties: {
-                        let mut props = HashMap::new();
-                        props.insert("url".to_string(), PropertyDefinition {
-                            prop_type: "string".to_string(),
-                            description: "The website URL to read (e.g. 'https://stripe.com')".to_string(),
-                            items: None,
-                        });
-                        props
-                    },
-                    required: vec!["url".to_string()],
-                },
-            },
-
             // BROWSERBASE CRAWL — full website crawl with CSS info + subpages
             // =====================================================================
 

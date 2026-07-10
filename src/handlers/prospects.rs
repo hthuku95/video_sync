@@ -7047,8 +7047,9 @@ Bio: {lead_bio}
 Full pipeline (LLM-driven — you pick the exact order and tools):
 
 PHASE 1 — Understand the business:
-  - read_website_content({website_url}) to understand what they do
-  - fetch_website_image({website_url}) to get hero/banner visuals
+  - browserbase_crawl_website({website_url}) to crawl the full site, extract CSS design tokens, and get all page content
+  - vectorize_crawled_content(feature_tag, pages) to store in Qdrant for semantic search
+  - search_crawled_content(query="brand colors, features, product details", feature_tag) for specific info
 
 PHASE 2 — Write a comprehensive script (3-4 minutes of narration):
   - generate_video_script for a long-form explainer:

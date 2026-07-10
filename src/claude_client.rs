@@ -1613,21 +1613,6 @@ impl ClaudeClient {
                 },
             },
             ClaudeTool {
-                name: "read_website_content".to_string(),
-                description: "Fetch and read a website URL, returning its title, description, and main text content. Use this to understand what a website is about before generating a video script, voiceover, or Blender animation about it.".to_string(),
-                input_schema: InputSchema {
-                    schema_type: "object".to_string(),
-                    properties: HashMap::from([
-                        ("url".to_string(), PropertyDefinition {
-                            prop_type: "string".to_string(),
-                            description: "The website URL to read (e.g. 'https://stripe.com')".to_string(),
-                            items: None,
-                        }),
-                    ]),
-                    required: vec!["url".to_string()],
-                },
-            },
-            ClaudeTool {
                 name: "browserbase_crawl_website".to_string(),
                 description: "Crawl an entire website using BrowserBase — fetches the homepage, extracts all internal links, fetches each subpage's markdown content, and extracts CSS design tokens (colors, fonts). Returns combined markdown with page titles and URLs, a design tokens summary, and a feature_tag. Use vectorize_crawled_content to store the results in Qdrant, then use search_crawled_content to query specific pages.".to_string(),
                 input_schema: InputSchema {
@@ -1685,21 +1670,6 @@ impl ClaudeClient {
                         }),
                     ]),
                     required: vec!["query".to_string(), "feature_tag".to_string()],
-                },
-            },
-            ClaudeTool {
-                name: "fetch_website_image".to_string(),
-                description: "Fetch the hero/og:image from a website URL. Use this when a user provides a website URL (e.g. netflix.com, stripe.com) and you need to extract its visual for use in a Blender landing page animation or product mockup. Returns the image URL that you can pass to blender_generate_scene_type's reference_image_url parameter.".to_string(),
-                input_schema: InputSchema {
-                    schema_type: "object".to_string(),
-                    properties: HashMap::from([
-                        ("url".to_string(), PropertyDefinition {
-                            prop_type: "string".to_string(),
-                            description: "The website URL to extract the hero image from (e.g. 'https://netflix.com')".to_string(),
-                            items: None,
-                        }),
-                    ]),
-                    required: vec!["url".to_string()],
                 },
             },
             ClaudeTool {
