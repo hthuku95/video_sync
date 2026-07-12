@@ -18786,7 +18786,7 @@ async fn execute_vectorize_crawled_content_with_state_gemini(
     execute_vectorize_crawled_content_inner(feature_tag, &pages, &ctx.app_state).await
 }
 
-async fn execute_vectorize_crawled_content_inner(
+pub(crate) async fn execute_vectorize_crawled_content_inner(
     feature_tag: &str,
     pages: &[Value],
     app_state: &Arc<AppState>,
@@ -18873,7 +18873,7 @@ async fn execute_search_crawled_content_with_state_gemini(
     execute_search_crawled_content_inner(query, feature_tag, limit, &ctx.app_state).await
 }
 
-async fn execute_search_crawled_content_inner(
+pub(crate) async fn execute_search_crawled_content_inner(
     query: &str,
     feature_tag: &str,
     limit: usize,

@@ -2920,12 +2920,27 @@ async fn generate_prospect_sample_pack(
         extra["reference_image_url"] = json!(hero);
     }
 
-    // For landing_page: scrape website content so the LLM agent can understand the product
+    // For landing_page: deep-crawl the website via BrowserBase so the LLM agent gets CSS tokens, all pages, and full content
     let mut scraped_site = None;
     if matches!(service.as_str(), "landing_page") && has_product_url {
-        scraped_site = scrape_website_content(&source_url).await;
-        if let Some(ref ctx) = scraped_site {
-            extra["scraped_website_content"] = json!(ctx);
+        match crate::browserbase_client::crawl_website(&source_url).await {
+            Ok(crawl) => {
+                let mut ctx = String::new();
+                ctx.push_str(&format!("## Website Crawl: {}\n\n", source_url));
+                if !crawl.css_info.is_empty() {
+                    ctx.push_str(&format!("### Design Tokens\n{}\n\n", crawl.css_info));
+                }
+                ctx.push_str(&format!("### Pages ({})\n", crawl.pages.len()));
+                for p in &crawl.pages {
+                    ctx.push_str(&format!("- {} ({})\n", p.title, p.url));
+                }
+                ctx.push_str(&format!("\n### Full Content\n{}", crawl.combined_markdown));
+                extra["scraped_website_content"] = json!(ctx);
+                scraped_site = Some(ctx);
+            }
+            Err(e) => {
+                tracing::warn!("Website crawl failed for {}: {e}", source_url);
+            }
         }
     }
 
@@ -7544,193 +7559,6 @@ pub async fn fetch_landing_page_hero(url: &str) -> Option<String> {
 
 /// Scrape a website URL and return a structured text summary (title, description, headings, body text).
 /// Used to give the LLM agent real website content so it can make informed landing page videos.
-pub async fn scrape_website_content(url: &str) -> Option<String> {
-    if !url.starts_with("https://") && !url.starts_with("http://") {
-        return None;
-    }
-
-    // Prefer BrowserBase for JS-rendered, CAPTCHA-protected sites
-    if crate::browserbase_client::is_configured() {
-        match crate::browserbase_client::fetch_url(url).await {
-            Ok(Some(markdown)) => {
-                return Some(format!(
-                    "Website: {url}\n\nBrowserBase Content:\n{markdown}"
-                ));
-            }
-            Ok(None) => {} // not configured, fall through
-            Err(e) => {
-                tracing::warn!("BrowserBase scrape failed, falling back to plain HTTP: {e}");
-            }
-        }
-    }
-
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
-        .user_agent("Mozilla/5.0 (compatible; VideoSyncBot/1.0)")
-        .redirect(reqwest::redirect::Policy::limited(5))
-        .build()
-        .ok()?;
-    let resp = client.get(url).send().await.ok()?;
-    if !resp.status().is_success() {
-        return None;
-    }
-    let html = resp.text().await.ok()?;
-
-    // Extract title
-    let title = extract_tag_content(&html, "title").unwrap_or_default();
-
-    // Extract meta description
-    let description = extract_meta_content(&html, "description").unwrap_or_default();
-
-    // Extract h1-h3 headings
-    let mut headings: Vec<String> = Vec::new();
-    for tag in &["h1", "h2", "h3"] {
-        extract_all_tag_contents(&html, tag, &mut headings);
-    }
-    let headings_text = if headings.is_empty() {
-        String::new()
-    } else {
-        format!("\nPage headings:\n- {}", headings.join("\n- "))
-    };
-
-    // Extract body text — strip tags to get readable content
-    let body_text = extract_body_text(&html);
-
-    // Truncate body to avoid blowing the prompt
-    let body_trimmed = if body_text.len() > 3000 {
-        format!("{}...", &body_text[..3000])
-    } else {
-        body_text
-    };
-
-    let summary = format!(
-        "Website: {url}\nTitle: {title}\nDescription: {description}{headings}\n\nPage content:\n{body_trimmed}",
-        url = url,
-        title = title,
-        description = description,
-        headings = headings_text,
-        body_trimmed = body_trimmed,
-    );
-
-    Some(summary)
-}
-
-fn extract_tag_content(html: &str, tag: &str) -> Option<String> {
-    let open_start = format!("<{}>", tag);
-    let open_start_upper = format!("<{}>", tag.to_uppercase());
-    let open_attr = format!("<{} ", tag);
-    let open_attr_upper = format!("<{} ", tag.to_uppercase());
-    let close = format!("</{}>", tag);
-    let close_upper = format!("</{}>", tag.to_uppercase());
-
-    let pos = html.find(&open_start)
-        .or_else(|| html.find(&open_start_upper))
-        .or_else(|| html.find(&open_attr))
-        .or_else(|| html.find(&open_attr_upper))?;
-
-    let content_start = html[pos..].find('>')? + pos + 1;
-    let end = html[content_start..].find(&close)
-        .or_else(|| html[content_start..].find(&close_upper))?;
-    let content = html[content_start..content_start + end].trim();
-    if content.is_empty() { None } else { Some(strip_html_tags(content).to_string()) }
-}
-
-fn extract_all_tag_contents(html: &str, tag: &str, results: &mut Vec<String>) {
-    let open_variants = [format!("<{}>", tag), format!("<{} ", tag), format!("<{}/>", tag)];
-    let close = format!("</{}>", tag);
-    let mut search_from = 0;
-    loop {
-        let pos = open_variants.iter()
-            .filter_map(|o| html[search_from..].find(o).map(|p| search_from + p))
-            .min();
-        let pos = match pos { Some(p) => p, None => break };
-
-        let content_start = match html[pos..].find('>').map(|p| pos + p + 1) {
-            Some(p) => p,
-            None => break,
-        };
-        let end = match html[content_start..].find(&close) {
-            Some(e) => e,
-            None => break,
-        };
-        let content = html[content_start..content_start + end].trim();
-        if !content.is_empty() {
-            let cleaned = strip_html_tags(content).to_string();
-            let trimmed = cleaned.trim().to_string();
-            if !trimmed.is_empty() {
-                results.push(trimmed);
-            }
-        }
-        search_from = content_start + end + close.len();
-    }
-}
-
-fn extract_body_text(html: &str) -> String {
-    let body_start = html.find("<body")
-        .or_else(|| html.find("<BODY"))
-        .map(|p| html[p..].find('>').map(|e| p + e + 1))
-        .flatten()
-        .unwrap_or(0);
-    let body_end = html[body_start..].find("</body>")
-        .or_else(|| html[body_start..].find("</BODY>"))
-        .map(|p| body_start + p)
-        .unwrap_or(html.len());
-    let body = &html[body_start..body_end];
-    strip_html_tags(body).to_string()
-}
-
-fn strip_html_tags(s: &str) -> String {
-    let mut result = String::with_capacity(s.len());
-    let mut in_tag = false;
-    let mut in_script = false;
-    let mut in_style = false;
-    let lower = s.to_lowercase();
-    let bytes = s.as_bytes();
-    let mut i = 0;
-    while i < s.len() {
-        if !in_tag && !in_script && !in_style {
-            if bytes[i] == b'<' {
-                if lower[i..].starts_with("<script") { in_script = true; }
-                else if lower[i..].starts_with("<style") { in_style = true; }
-                else { in_tag = true; }
-                i += 1;
-                continue;
-            }
-            result.push(s[i as usize..].chars().next().unwrap_or(' '));
-            i += s[i as usize..].chars().next().map(|c| c.len_utf8()).unwrap_or(1);
-        } else if in_tag {
-            if bytes[i] == b'>' { in_tag = false; }
-            i += 1;
-        } else if in_script {
-            if lower[i..].starts_with("</script") {
-                let end = lower[i..].find('>').unwrap_or(0);
-                i += end + 1;
-                in_script = false;
-            } else { i += 1; }
-        } else if in_style {
-            if lower[i..].starts_with("</style") {
-                let end = lower[i..].find('>').unwrap_or(0);
-                i += end + 1;
-                in_style = false;
-            } else { i += 1; }
-        }
-    }
-    // Collapse whitespace
-    let mut cleaned = String::with_capacity(result.len());
-    let mut prev_space = false;
-    for ch in result.chars() {
-        if ch.is_whitespace() {
-            if !prev_space { cleaned.push(' '); prev_space = true; }
-        } else {
-            cleaned.push(ch);
-            prev_space = false;
-        }
-    }
-    cleaned.trim().to_string()
-}
-
-/// Pull the `content` attribute of the first matching meta tag.
-/// We tolerate both `property="og:image"` and `name="og:image"` variants.
 pub fn extract_meta_content_pub(html: &str, key: &str) -> Option<String> {
     extract_meta_content(html, key)
 }
