@@ -87,6 +87,11 @@ pub fn prospect_routes() -> Router {
             "/api/admin/telegram/opportunities/:id",
             patch(telegram_update_opportunity),
         )
+        // SaaS prospects: ComparEdge product catalog → website → landing page video
+        .route(
+            "/api/admin/prospects/saas/search",
+            post(search_compar_edge_prospects),
+        )
         // MTProto watcher — login + status. Bot API lives in telegram_bot.rs.
         .route(
             "/api/admin/telegram/login/start",
@@ -4899,12 +4904,159 @@ struct InstagramContactStatusRequest {
 }
 
 #[derive(Debug, Deserialize)]
+struct ComparEdgeSearchRequest {
+    category: Option<String>,  // e.g. "crm", "project-management", "analytics"
+    min_rating: Option<f64>,   // minimum rating 0-5, default 0
+    min_starting_price: Option<f64>, // minimum monthly price in USD
+    limit: Option<usize>,      // max results, default 50
+    save: Option<bool>,        // true = upsert into prospects table
+}
+
+#[derive(Debug, Deserialize)]
 struct InstagramListQuery {
     hashtag: Option<String>,
     contact_status: Option<String>,
     min_followers: Option<i64>,
     limit: Option<i64>,
     offset: Option<i64>,
+}
+
+/// POST /api/admin/prospects/saas/search
+/// Fetches SaaS products from ComparEdge, filters by criteria, and optionally upserts into prospects.
+async fn search_compar_edge_prospects(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(req): Json<ComparEdgeSearchRequest>,
+) -> Json<serde_json::Value> {
+    let limit = req.limit.unwrap_or(50).min(200);
+    let min_rating = req.min_rating.unwrap_or(0.0);
+    let min_price = req.min_starting_price.unwrap_or(0.0);
+    let save = req.save.unwrap_or(false);
+
+    let url = "https://comparedge.com/llms-tools.json";
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .user_agent("VideoSyncBot/1.0")
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {}", e));
+
+    let client = match client {
+        Ok(c) => c,
+        Err(e) => return Json(json!({"success": false, "error": e})),
+    };
+
+    let resp = match client.get(url).send().await {
+        Ok(r) => r,
+        Err(e) => return Json(json!({"success": false, "error": format!("Failed to fetch ComparEdge data: {}", e)})),
+    };
+
+    let body: serde_json::Value = match resp.json().await {
+        Ok(v) => v,
+        Err(e) => return Json(json!({"success": false, "error": format!("Failed to parse ComparEdge JSON: {}", e)})),
+    };
+
+    let tools = match body.get("tools").and_then(|v| v.as_array()) {
+        Some(t) => t,
+        None => return Json(json!({"success": false, "error": "ComparEdge JSON missing 'tools' array"})),
+    };
+
+    let cat_filter = req.category.as_deref().unwrap_or("").to_lowercase();
+
+    let mut results: Vec<serde_json::Value> = Vec::new();
+    let mut saved_count = 0usize;
+
+    for tool in tools {
+        if results.len() >= limit {
+            break;
+        }
+
+        let name = tool.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        let website = tool.get("website").and_then(|v| v.as_str()).unwrap_or("");
+        let description = tool.get("description").and_then(|v| v.as_str()).unwrap_or("");
+        let rating = tool.get("rating").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let category = tool.get("category").and_then(|v| v.as_str()).unwrap_or("");
+        let category_name = tool.get("categoryName").and_then(|v| v.as_str()).unwrap_or("");
+        let starting_price = tool.get("startingPrice").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let slug = tool.get("slug").and_then(|v| v.as_str()).unwrap_or("");
+
+        if name.is_empty() || website.is_empty() || slug.is_empty() {
+            continue;
+        }
+
+        // Apply filters
+        if !cat_filter.is_empty() && category.to_lowercase() != cat_filter && category_name.to_lowercase() != cat_filter {
+            continue;
+        }
+        if rating < min_rating {
+            continue;
+        }
+        if starting_price < min_price {
+            continue;
+        }
+
+        let ai_score = (rating / 5.0 * 100.0).round() as i32;
+
+        if save {
+            match sqlx::query(
+                "INSERT INTO prospects (platform, channel_id, display_name, platform_url,
+                 subscriber_count, content_category, channel_description, prospect_type,
+                 ai_score, ai_reasoning, external_url, service_type, contact_enrichment)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+                 ON CONFLICT (platform, channel_id) DO UPDATE SET
+                   display_name = EXCLUDED.display_name,
+                   platform_url = EXCLUDED.platform_url,
+                   channel_description = EXCLUDED.channel_description,
+                   content_category = EXCLUDED.content_category,
+                   ai_score = EXCLUDED.ai_score,
+                   external_url = EXCLUDED.external_url,
+                   service_type = EXCLUDED.service_type,
+                   updated_at = NOW()",
+            )
+            .bind("compar_edge")
+            .bind(slug)
+            .bind(name)
+            .bind(website)
+            .bind(0i64) // subscriber_count
+            .bind(category_name)
+            .bind(description)
+            .bind("saas_founder")
+            .bind(ai_score)
+            .bind(format!("ComparEdge SaaS product; rating {}/5", rating))
+            .bind(website)
+            .bind("landing_page")
+            .bind(serde_json::json!({"source": "compar_edge", "category": category, "slug": slug, "startingPrice": starting_price}))
+            .execute(&state.db_pool)
+            .await
+            {
+                Ok(_) => saved_count += 1,
+                Err(e) => tracing::warn!("Failed to save ComparEdge prospect {}: {}", slug, e),
+            }
+        }
+
+        results.push(json!({
+            "name": name,
+            "website": website,
+            "description": description,
+            "category": category_name,
+            "rating": rating,
+            "starting_price": starting_price,
+            "ai_score": ai_score,
+            "slug": slug,
+            "service_type": "landing_page",
+        }));
+    }
+
+    let mut msg = format!("Found {} SaaS products", results.len());
+    if save {
+        msg.push_str(&format!(", saved {} to prospects", saved_count));
+    }
+
+    Json(json!({
+        "success": true,
+        "message": msg,
+        "count": results.len(),
+        "saved": if save { Some(saved_count) } else { None },
+        "results": results,
+    }))
 }
 
 /// POST /api/instagram/leads/search
