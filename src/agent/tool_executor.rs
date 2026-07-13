@@ -4859,26 +4859,43 @@ async fn execute_clip_compilation_value(
     let tmp_dir = std::env::temp_dir().join(format!("clip_compilation_{}_{}", session_slug, uuid));
     let _ = tokio::fs::create_dir_all(&tmp_dir).await;
 
-    // Resolve Kick URLs to HLS stream URLs (bypasses Cloudflare)
-    let source_url = if source_url.contains("kick.com") {
-        let resolved = crate::kick_vod_scraper::resolve_url_to_hls(&source_url).await;
-        if resolved != source_url {
-            tracing::info!("Kick source resolved to HLS stream: {}", resolved);
-        }
-        resolved
-    } else {
-        source_url.clone()
-    };
-
-    // Generate R2 key for source streaming (ytdlp-service streams directly to R2)
-    let r2_key = format!("temp/clip_compilation/{}/{}/source.mp4", ctx.session_id, uuid);
     let input_path = tmp_dir.join("source.mp4");
     let input_str = input_path.to_str().unwrap_or("/tmp/source.mp4");
+    let is_kick = source_url.contains("kick.com");
 
-    tracing::info!("🎬 Clip compilation: streaming {} via ytdlp (r2_key={})", source_url, r2_key);
-    let download_result = crate::clipping::ytdlp_api_client::YtdlpApiClient::download_video(
-        &source_url, input_str, Some(r2_key.clone()),
-    ).await;
+    // For Kick.com URLs: use local yt-dlp CLI (FastAPI service is YouTube-only and fails on Kick).
+    // The yt-dlp CLI has a native Kick extractor that handles both channel and VOD URLs.
+    // For non-Kick URLs: try to resolve to HLS first, then use FastAPI yt-dlp service for R2 streaming.
+    let mut resolved_url = source_url.clone();
+    if is_kick {
+        tracing::info!("🎬 Kick URL detected — using local yt-dlp CLI (native Kick extractor)");
+    } else {
+        let resolved = crate::kick_vod_scraper::resolve_url_to_hls(&resolved_url).await;
+        if resolved != resolved_url {
+            tracing::info!("Source resolved to HLS stream: {}", resolved);
+            resolved_url = resolved;
+        }
+    }
+
+    let r2_key = format!("temp/clip_compilation/{}/{}/source.mp4", ctx.session_id, uuid);
+
+    let download_result = if is_kick {
+        let res = crate::clipping::ytdlp_client::YtDlpClient::download_video(&resolved_url, input_str).await;
+        res.map(|r| crate::clipping::ytdlp_api_client::VideoDownloadResult {
+            file_path: r.file_path,
+            title: r.title,
+            duration_seconds: r.duration_seconds.unwrap_or(0.0),
+            width: None,
+            height: None,
+            r2_url: None,
+        })
+        .map_err(|e| e.to_string())
+    } else {
+        tracing::info!("🎬 Clip compilation: streaming {} via ytdlp (r2_key={})", resolved_url, r2_key);
+        crate::clipping::ytdlp_api_client::YtdlpApiClient::download_video(
+            &resolved_url, input_str, Some(r2_key.clone()),
+        ).await
+    };
 
     let (source_for_ffmpeg, duration, r2_source_url) = match download_result {
         Ok(result) => {
@@ -18748,6 +18765,12 @@ pub(crate) async fn execute_browserbase_crawl_website_inner(url: &str) -> String
                 output.push_str(&format!("- {} ({})\n", page.title, page.url));
             }
             output.push_str(&format!("\n### Feature Tag\n{}\n\n", result.feature_tag));
+            output.push_str("### Pages Array (copy this JSON verbatim into `vectorize_crawled_content(pages=...)`)\n");
+            output.push_str("```json\n");
+            if let Ok(json) = serde_json::to_string_pretty(&result.pages) {
+                output.push_str(&json);
+            }
+            output.push_str("\n```\n\n");
             output.push_str("### Full Content\n\n");
             output.push_str(&result.combined_markdown);
             output

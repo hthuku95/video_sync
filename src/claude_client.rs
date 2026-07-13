@@ -1641,7 +1641,11 @@ impl ClaudeClient {
                         ("pages".to_string(), PropertyDefinition {
                             prop_type: "array".to_string(),
                             description: "The 'pages' array from browserbase_crawl_website result. Each element must have 'url', 'title', and 'content' fields.".to_string(),
-                            items: None,
+                            items: Some(Box::new(PropertyDefinition {
+                                prop_type: "object".to_string(),
+                                description: "A single crawled page with url, title, and content".to_string(),
+                                items: None,
+                            })),
                         }),
                     ]),
                     required: vec!["feature_tag".to_string(), "pages".to_string()],
