@@ -68,8 +68,8 @@ lettre = { version = "0.11", default-features = false, features = ["builder", "s
 # Telegram MTProto: grammers-client 0.9 (SenderPool + UpdateStream API).
 # grammers-session sqlite-storage uses libsql (not sqlite3), so no link
 # collision with sqlx (which has default-features = false, no sqlite driver).
-grammers-client = "0.9"
-grammers-session = { version = "0.9", default-features = false, features = ["sqlite-storage"] }
+grammers-client = "0.10"
+grammers-session = { version = "0.10", default-features = false, features = ["sqlite-storage"] }
 
 [profile.release]
 lto = false
