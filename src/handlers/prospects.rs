@@ -4927,7 +4927,7 @@ async fn search_compar_edge_prospects(
     Extension(state): Extension<Arc<AppState>>,
     Json(req): Json<ComparEdgeSearchRequest>,
 ) -> Json<serde_json::Value> {
-    let limit = req.limit.unwrap_or(50).min(200);
+    let limit = req.limit.unwrap_or(50).min(500);
     let min_rating = req.min_rating.unwrap_or(0.0);
     let min_price = req.min_starting_price.unwrap_or(0.0);
     let save = req.save.unwrap_or(false);
