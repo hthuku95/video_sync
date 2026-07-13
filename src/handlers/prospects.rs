@@ -92,6 +92,11 @@ pub fn prospect_routes() -> Router {
             "/api/admin/prospects/saas/search",
             post(search_compar_edge_prospects),
         )
+        // SaaS prospects: Product Hunt → website → landing page video
+        .route(
+            "/api/admin/prospects/product-hunt/search",
+            post(search_product_hunt_prospects),
+        )
         // MTProto watcher — login + status. Bot API lives in telegram_bot.rs.
         .route(
             "/api/admin/telegram/login/start",
@@ -5046,6 +5051,121 @@ async fn search_compar_edge_prospects(
     }
 
     let mut msg = format!("Found {} SaaS products", results.len());
+    if save {
+        msg.push_str(&format!(", saved {} to prospects", saved_count));
+    }
+
+    Json(json!({
+        "success": true,
+        "message": msg,
+        "count": results.len(),
+        "saved": if save { Some(saved_count) } else { None },
+        "results": results,
+    }))
+}
+
+#[derive(Debug, Deserialize)]
+struct ProductHuntSearchRequest {
+    topic: Option<String>,   // Product Hunt topic/category (e.g. "ai", "saas", "developer-tools")
+    query: Option<String>,   // Direct text search (overrides topic if set)
+    limit: Option<i32>,      // Max results, default 20, max 50
+    order: Option<String>,   // "VOTES" (default), "NEWEST", "FEATURED"
+    save: Option<bool>,      // true = upsert into prospects table
+}
+
+/// POST /api/admin/prospects/product-hunt/search
+/// Fetches SaaS products from Product Hunt API, filters, and optionally upserts into prospects.
+async fn search_product_hunt_prospects(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(req): Json<ProductHuntSearchRequest>,
+) -> Json<serde_json::Value> {
+    let limit = req.limit.unwrap_or(20).min(50);
+    let order = req.order.as_deref().unwrap_or("VOTES");
+    let save = req.save.unwrap_or(false);
+
+    let posts = if let Some(query) = &req.query {
+        if query.trim().is_empty() {
+            return Json(json!({"success": false, "error": "query is empty"}));
+        }
+        crate::product_hunt_client::search_posts(query, limit).await
+    } else {
+        let topic = req.topic.as_deref().unwrap_or("saas");
+        crate::product_hunt_client::fetch_top_posts(Some(topic), limit, Some(order)).await
+    };
+
+    let posts = match posts {
+        Ok(p) => p,
+        Err(e) => return Json(json!({"success": false, "error": e})),
+    };
+
+    let mut results: Vec<serde_json::Value> = Vec::new();
+    let mut saved_count = 0usize;
+
+    for post in posts {
+        let name = post.name;
+        let tagline = post.tagline.unwrap_or_default();
+        let website = post.website.unwrap_or_default();
+        let description = post.description.or(Some(tagline.clone())).unwrap_or_default();
+
+        if name.is_empty() || website.is_empty() {
+            continue;
+        }
+
+        let votes = post.votes_count.unwrap_or(0);
+        let ai_score = (votes as f64).min(100.0).max(1.0) as i32;
+
+        let slug = post.id.clone();
+
+        if save {
+            match sqlx::query(
+                "INSERT INTO prospects (platform, channel_id, display_name, platform_url,
+                 subscriber_count, content_category, channel_description, prospect_type,
+                 ai_score, ai_reasoning, external_url, service_type, contact_enrichment)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+                 ON CONFLICT (platform, channel_id) DO UPDATE SET
+                   display_name = EXCLUDED.display_name,
+                   platform_url = EXCLUDED.platform_url,
+                   channel_description = EXCLUDED.channel_description,
+                   content_category = EXCLUDED.content_category,
+                   ai_score = EXCLUDED.ai_score,
+                   external_url = EXCLUDED.external_url,
+                   service_type = EXCLUDED.service_type,
+                   updated_at = NOW()",
+            )
+            .bind("product_hunt")
+            .bind(&slug)
+            .bind(&name)
+            .bind(&website)
+            .bind(0i64)
+            .bind(req.topic.as_deref().unwrap_or("saas"))
+            .bind(&description)
+            .bind("saas_founder")
+            .bind(ai_score)
+            .bind(format!("Product Hunt product; {} votes", votes))
+            .bind(&website)
+            .bind("landing_page")
+            .bind(serde_json::json!({"source": "product_hunt", "slug": slug, "votes": votes, "tagline": tagline}))
+            .execute(&state.db_pool)
+            .await
+            {
+                Ok(_) => saved_count += 1,
+                Err(e) => tracing::warn!("Failed to save Product Hunt prospect {}: {}", slug, e),
+            }
+        }
+
+        results.push(json!({
+            "name": name,
+            "website": website,
+            "description": description,
+            "tagline": tagline,
+            "votes": votes,
+            "ai_score": ai_score,
+            "slug": slug,
+            "service_type": "landing_page",
+        }));
+    }
+
+    let mut msg = format!("Found {} Product Hunt products", results.len());
     if save {
         msg.push_str(&format!(", saved {} to prospects", saved_count));
     }

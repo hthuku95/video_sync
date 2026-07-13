@@ -33,6 +33,7 @@ mod nvidia_nim_client;
 mod ollama_client;
 mod pexels_client;
 mod phantombuster_client; // 🎯 PhantomBuster — LinkedIn Sales Navigator scraping
+mod product_hunt_client; // 🚀 Product Hunt API v2 — SaaS product discovery
 mod portfolio_samples;
 mod qdrant_client;
 mod r2_client; // ☁️ Cloudflare R2 object storage
