@@ -18726,7 +18726,7 @@ async fn execute_browserbase_crawl_website_gemini(args: &HashMap<String, serde_j
     execute_browserbase_crawl_website_inner(url).await
 }
 
-async fn execute_browserbase_crawl_website_inner(url: &str) -> String {
+pub(crate) async fn execute_browserbase_crawl_website_inner(url: &str) -> String {
     if url.is_empty() {
         return "Error: 'url' parameter is required".to_string();
     }

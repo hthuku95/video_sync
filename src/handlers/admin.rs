@@ -107,6 +107,7 @@ pub fn admin_routes() -> Router {
         .route("/api/admin/test/crawl-website", post(api_test_crawl_website))
         .route("/api/admin/test/vectorize-content", post(api_test_vectorize_content))
         .route("/api/admin/test/search-content", post(api_test_search_content))
+
         .route("/api/admin/manual-clipping-tests/trigger", post(api_trigger_manual_clipping_test))
         .route("/api/admin/reference-assets/normalize", post(api_normalize_reference_asset))
         .route("/api/admin/deliveries", get(api_list_deliveries).post(api_create_delivery))
@@ -6768,6 +6769,59 @@ pub async fn api_get_test_run(
         },
         "results": results_json,
     })))
+}
+
+// ── Admin test endpoints for the crawl pipeline ──────────────────────────
+
+/// POST /api/admin/test/crawl-website
+/// Crawl a website via BrowserBase, extract pages + CSS tokens.
+pub async fn api_test_crawl_website(
+    Json(body): Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    let url = body.get("url").and_then(|v| v.as_str()).unwrap_or("");
+    if url.is_empty() {
+        return Json(json!({"success": false, "error": "url parameter required"}));
+    }
+    let result = crate::agent::tool_executor::execute_browserbase_crawl_website_inner(url).await;
+    Json(json!({"success": true, "result": result}))
+}
+
+/// POST /api/admin/test/vectorize-content
+/// Store crawled pages in Qdrant via Gemini Embedding 2.
+pub async fn api_test_vectorize_content(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(body): Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    let feature_tag = body.get("feature_tag").and_then(|v| v.as_str()).unwrap_or("");
+    let pages: Vec<serde_json::Value> = body.get("pages")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    if feature_tag.is_empty() {
+        return Json(json!({"success": false, "error": "feature_tag parameter required"}));
+    }
+    let result = crate::agent::tool_executor::execute_vectorize_crawled_content_inner(
+        feature_tag, &pages, &state,
+    ).await;
+    Json(json!({"success": true, "result": result}))
+}
+
+/// POST /api/admin/test/search-content
+/// Semantic search over vectorized website content via Qdrant.
+pub async fn api_test_search_content(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(body): Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    let query = body.get("query").and_then(|v| v.as_str()).unwrap_or("");
+    let feature_tag = body.get("feature_tag").and_then(|v| v.as_str()).unwrap_or("");
+    let limit = body.get("limit").and_then(|v| v.as_u64()).unwrap_or(5) as usize;
+    if query.is_empty() || feature_tag.is_empty() {
+        return Json(json!({"success": false, "error": "query and feature_tag parameters required"}));
+    }
+    let result = crate::agent::tool_executor::execute_search_crawled_content_inner(
+        query, feature_tag, limit, &state,
+    ).await;
+    Json(json!({"success": true, "result": result}))
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
