@@ -124,6 +124,8 @@ impl YtDlpClient {
             .arg("--extractor-args")
             .arg(Self::extractor_args())
             .arg("--no-check-certificates")
+            .arg("--max-filesize")
+            .arg("500M")
             .arg(video_url)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
