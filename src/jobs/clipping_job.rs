@@ -1129,35 +1129,72 @@ pub async fn update_linkage_stats(
 /// After the agentic pipeline or clip extraction completes, compile all extracted clips
 /// into a single MP4 compilation, upload to R2, and store all clip R2 keys in
 /// deliveries.extra_args for the gallery view on the delivery page.
+///
+/// Supports two data sources:
+/// 1. `deliveries.extra_args.clip_urls` — presigned URLs set by the pipeline from agent response
+/// 2. `extracted_clips` table — rows from the legacy deterministic clipping path
 pub async fn post_process_clipping_delivery(
     job_id: i32,
     delivery_id: uuid::Uuid,
     app_state: &crate::AppState,
 ) -> Result<(), String> {
-    // 1. Fetch clip R2 keys and URLs from extracted_clips
-    let clip_rows = sqlx::query(
-        "SELECT r2_clip_key, r2_clip_url, clip_number FROM extracted_clips \
-         WHERE clipping_job_id = $1 AND r2_clip_url IS NOT NULL \
-         ORDER BY clip_number",
+    // 1a. Try fetching clip URLs from deliveries.extra_args.clip_urls first (default agentic path)
+    let delivery_row = sqlx::query(
+        "SELECT extra_args FROM deliveries WHERE id = $1",
     )
-    .bind(job_id)
-    .fetch_all(&app_state.db_pool)
+    .bind(delivery_id)
+    .fetch_optional(&app_state.db_pool)
     .await
-    .map_err(|e| format!("Failed to fetch clips for compilation: {e}"))?;
+    .map_err(|e| format!("Failed to fetch delivery {delivery_id}: {e}"))?;
 
-    if clip_rows.is_empty() {
-        tracing::info!("No clips to compile for job {job_id}");
-        return Ok(());
+    let (mut clip_urls, mut clip_keys): (Vec<String>, Vec<String>) = (vec![], vec![]);
+    if let Some(row) = delivery_row {
+        if let Ok(Some(extra)) = row.try_get::<Option<serde_json::Value>, _>("extra_args") {
+            if let Some(urls) = extra.get("clip_urls").and_then(|v| v.as_array()) {
+                let parsed: Vec<String> = urls
+                    .iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect();
+                if !parsed.is_empty() {
+                    clip_urls = parsed;
+                    // Extract R2 keys from presigned URLs for gallery regeneration
+                    if let Some(ref r2) = app_state.r2_client {
+                        clip_keys = clip_urls
+                            .iter()
+                            .filter_map(|u| r2_key_from_presigned_url(u, &r2.bucket))
+                            .collect();
+                    }
+                }
+            }
+        }
     }
 
-    let clip_urls: Vec<String> = clip_rows
-        .iter()
-        .filter_map(|r| r.try_get::<Option<String>, _>("r2_clip_url").ok().flatten())
-        .collect();
-    let clip_keys: Vec<Option<String>> = clip_rows
-        .iter()
-        .map(|r| r.try_get::<Option<String>, _>("r2_clip_key").ok().flatten())
-        .collect();
+    // 1b. Fall back to extracted_clips table (legacy deterministic path)
+    if clip_urls.is_empty() {
+        let clip_rows = sqlx::query(
+            "SELECT r2_clip_key, r2_clip_url, clip_number FROM extracted_clips \
+             WHERE clipping_job_id = $1 AND r2_clip_url IS NOT NULL \
+             ORDER BY clip_number",
+        )
+        .bind(job_id)
+        .fetch_all(&app_state.db_pool)
+        .await
+        .map_err(|e| format!("Failed to fetch clips for compilation: {e}"))?;
+
+        if clip_rows.is_empty() {
+            tracing::info!("No clips to compile for job {job_id}");
+            return Ok(());
+        }
+
+        clip_urls = clip_rows
+            .iter()
+            .filter_map(|r| r.try_get::<Option<String>, _>("r2_clip_url").ok().flatten())
+            .collect();
+        clip_keys = clip_rows
+            .iter()
+            .filter_map(|r| r.try_get::<Option<String>, _>("r2_clip_key").ok().flatten())
+            .collect();
+    }
 
     tracing::info!("Compiling {} clips for delivery {delivery_id}", clip_urls.len());
 
@@ -1201,10 +1238,9 @@ pub async fn post_process_clipping_delivery(
         .await
         .map_err(|e| format!("R2 compilation upload failed: {e}"))?;
 
-    // 5. Build clip keys JSON (non-null keys only)
-    let clip_keys_json: Vec<String> = clip_keys.into_iter().flatten().collect();
+    // 5. Build clip keys JSON for gallery on delivery page
     let extra_args_update = serde_json::json!({
-        "clip_keys": clip_keys_json,
+        "clip_keys": clip_keys,
         "clip_count": clip_urls.len(),
     });
 
@@ -1233,4 +1269,13 @@ pub async fn post_process_clipping_delivery(
         n = clip_urls.len()
     );
     Ok(())
+}
+
+/// Extract the R2 object key from a presigned URL like:
+/// `https://<bucket>.<account>.r2.cloudflarestorage.com/<key>?<query>`
+fn r2_key_from_presigned_url(url: &str, bucket: &str) -> Option<String> {
+    let pattern = format!(".r2.cloudflarestorage.com/");
+    let after_bucket = url.split(&pattern).nth(1)?;
+    let key = after_bucket.split('?').next()?;
+    Some(urlencoding::decode(key).ok()?.into_owned())
 }

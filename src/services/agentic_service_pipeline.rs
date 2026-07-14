@@ -314,6 +314,39 @@ impl AgenticServicePipeline {
             let produced = locate_output_from_result(&agent_result, &output_dir);
             retries_used = attempt as i32;
 
+            // Capture all clip URLs from the agent response for gallery view.
+            // The generate_clip_compilation tool emits "Cloud URL:" lines.
+            // Store as extra_args.clip_urls so the delivery page can show each clip.
+            if service_type == ServiceType::Clipping {
+                if let Ok(text) = &agent_result {
+                    let clip_urls: Vec<String> = text
+                        .lines()
+                        .filter_map(|line| {
+                            let t = line.trim();
+                            t.strip_prefix("📤 Cloud URL: ")
+                                .or_else(|| t.strip_prefix("Cloud URL: "))
+                                .map(|u| u.trim().to_string())
+                        })
+                        .collect();
+                    if !clip_urls.is_empty() {
+                        let clip_meta = serde_json::json!({"clip_urls": clip_urls});
+                        let _ = sqlx::query(
+                            "UPDATE deliveries SET \
+                             extra_args = COALESCE(extra_args, '{}'::jsonb) || $1::jsonb \
+                             WHERE id = $2",
+                        )
+                        .bind(&clip_meta.to_string())
+                        .bind(input.delivery_id)
+                        .execute(&state.db_pool)
+                        .await
+                        .map_err(|e| tracing::warn!(
+                            "Failed to store clip URLs for delivery {}: {e}",
+                            input.delivery_id
+                        ));
+                    }
+                }
+            }
+
             let template_name = match service_type {
                 ServiceType::Thumbnails => "agentic_thumbnail",
                 _ => "agentic_service_video",
