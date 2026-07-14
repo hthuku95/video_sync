@@ -15,6 +15,7 @@ use crate::clipping::rustube_client::RustubeClient;
 use crate::clipping::rusty_ytdl_client::RustyYtdlClient;
 use crate::clipping::ytdlp_api_client::YtdlpApiClient;
 use crate::clipping::ytdlp_client::YtDlpClient;
+use crate::r2_client::R2Client;
 use tokio::process::Command as TokioCommand;
 
 #[derive(Debug)]
@@ -24,6 +25,7 @@ pub struct VideoDownloadResult {
     pub duration_seconds: Option<f64>,
     pub width: Option<i32>,
     pub height: Option<i32>,
+    pub r2_url: Option<String>,
 }
 
 #[derive(Debug)]
@@ -320,16 +322,17 @@ impl ApifyClient {
         &self,
         video_url: &str,
         output_path: &str,
+        r2_client: Option<&R2Client>,
+        r2_key: Option<&str>,
     ) -> Result<VideoDownloadResult, String> {
         // Twitch VODs need a dedicated download path — strategies 2-5 are YouTube-only
-        // and rusty_ytdl returns misleading "The video not found" for any non-YouTube URL.
         if video_url.contains("twitch.tv/videos") {
-            return download_twitch_vod(video_url, output_path).await;
+            return download_twitch_vod(video_url, output_path, r2_client, r2_key).await;
         }
 
         // Kick.com broadcasts — yt-dlp natively supports kick.com but other strategies don't.
         if video_url.contains("kick.com") {
-            return download_kick_video(video_url, output_path).await;
+            return download_kick_video(video_url, output_path, r2_client, r2_key).await;
         }
 
         // Ensure parent directory exists
@@ -346,7 +349,7 @@ impl ApifyClient {
 
         // STRATEGY 1: FastAPI yt-dlp microservice (yt-dlp android - proven most reliable)
         tracing::info!("🔄 Trying Strategy 1 (FastAPI yt-dlp microservice - android client)...");
-        match YtdlpApiClient::download_video(video_url, output_path, None).await {
+        match YtdlpApiClient::download_video(video_url, output_path, r2_key.map(|s| s.to_string())).await {
             Ok(result) => {
                 tracing::info!("✅ Strategy 1 (FastAPI microservice) succeeded");
                 return Ok(VideoDownloadResult {
@@ -355,6 +358,7 @@ impl ApifyClient {
                     duration_seconds: Some(result.duration_seconds),
                     width: result.width.map(|w| w as i32),
                     height: result.height.map(|h| h as i32),
+                    r2_url: result.r2_url.clone(),
                 });
             }
             Err(e) => {
@@ -364,7 +368,7 @@ impl ApifyClient {
 
         // STRATEGY 2: local yt-dlp CLI with optional browser cookies / auth
         tracing::info!("🔄 Trying Strategy 2 (local yt-dlp CLI with auth support)...");
-        match YtDlpClient::download_video(video_url, output_path).await {
+        match YtDlpClient::download_video(video_url, output_path, r2_client, r2_key).await {
             Ok(result) => {
                 tracing::info!("✅ Strategy 2 (local yt-dlp CLI) succeeded");
                 return Ok(VideoDownloadResult {
@@ -373,6 +377,7 @@ impl ApifyClient {
                     duration_seconds: result.duration_seconds,
                     width: result.width.map(|w| w as i32),
                     height: result.height.map(|h| h as i32),
+                    r2_url: result.r2_url.clone(),
                 });
             }
             Err(e) => {
@@ -388,7 +393,7 @@ impl ApifyClient {
 
         if should_try_apify {
             tracing::info!("🔄 Trying Strategy 3 (Apify - paid service)...");
-            match self.download_via_apify(video_url, output_path).await {
+            match self.download_via_apify(video_url, output_path, r2_client, r2_key).await {
                 Ok(result) => {
                     tracing::info!("✅ Strategy 3 (Apify) succeeded");
                     let mut breaker = self.circuit_breaker.lock().unwrap();
@@ -408,7 +413,7 @@ impl ApifyClient {
 
         // STRATEGY 4: rustube (pure Rust, no external deps)
         tracing::info!("🔄 Trying Strategy 4 (rustube - pure Rust)...");
-        match RustubeClient::download_video(video_url, output_path).await {
+        match RustubeClient::download_video(video_url, output_path, r2_client, r2_key).await {
             Ok(result) => {
                 tracing::info!("✅ Strategy 4 (rustube) succeeded");
                 return Ok(result);
@@ -420,7 +425,7 @@ impl ApifyClient {
 
         // STRATEGY 5: rust-yt-downloader (feature-rich yt-dlp wrapper)
         tracing::info!("🔄 Trying Strategy 5 (rust-yt-downloader)...");
-        match RustYtDownloaderClient::download_video(video_url, output_path).await {
+        match RustYtDownloaderClient::download_video(video_url, output_path, r2_client, r2_key).await {
             Ok(result) => {
                 tracing::info!("✅ Strategy 5 (rust-yt-downloader) succeeded");
                 return Ok(result);
@@ -432,7 +437,7 @@ impl ApifyClient {
 
         // STRATEGY 6: rusty_ytdl (last resort, pure Rust)
         tracing::info!("🔄 Trying Strategy 6 (rusty_ytdl - last resort)...");
-        match RustyYtdlClient::download_video(video_url, output_path).await {
+        match RustyYtdlClient::download_video(video_url, output_path, r2_client, r2_key).await {
             Ok(result) => {
                 tracing::info!("✅ Strategy 6 (rusty_ytdl) succeeded");
                 return Ok(result);
@@ -452,6 +457,8 @@ impl ApifyClient {
         &self,
         video_url: &str,
         output_path: &str,
+        r2_client: Option<&R2Client>,
+        r2_key: Option<&str>,
     ) -> Result<VideoDownloadResult, String> {
         tracing::info!("🎬 Starting Apify actor run for: {}", video_url);
 
@@ -600,32 +607,44 @@ impl ApifyClient {
             .await
             .map_err(|e| format!("Failed to download video: {}", e))?;
 
-        // Write to file
-        let mut file = fs::File::create(output_path)
-            .await
-            .map_err(|e| format!("Failed to create output file: {}", e))?;
-
         let bytes = video_response
             .bytes()
             .await
             .map_err(|e| format!("Failed to read video bytes: {}", e))?;
 
-        file.write_all(&bytes)
-            .await
-            .map_err(|e| format!("Failed to write video file: {}", e))?;
-
-        tracing::info!("💾 Video saved: {}", output_path);
-
-        // Validate downloaded file
-        Self::validate_download(output_path).await?;
-
-        Ok(VideoDownloadResult {
-            file_path: output_path.to_string(),
-            title: item.title.clone().unwrap_or_else(|| "Unknown".to_string()),
-            duration_seconds: item.duration,
-            width: None,
-            height: None,
-        })
+        if let (Some(client), Some(key)) = (r2_client, r2_key) {
+            // Stream bytes directly to R2
+            let content_type = "video/mp4";
+            let r2_url = client.upload_bytes(key, &bytes, content_type).await
+                .map_err(|e| format!("R2 upload failed: {e}"))?;
+            tracing::info!("✅ Apify video uploaded to R2: {r2_url}");
+            Ok(VideoDownloadResult {
+                file_path: output_path.to_string(),
+                title: item.title.clone().unwrap_or_else(|| "Unknown".to_string()),
+                duration_seconds: item.duration,
+                width: None,
+                height: None,
+                r2_url: Some(r2_url),
+            })
+        } else {
+            // Write to file (legacy)
+            let mut file = fs::File::create(output_path)
+                .await
+                .map_err(|e| format!("Failed to create output file: {}", e))?;
+            file.write_all(&bytes)
+                .await
+                .map_err(|e| format!("Failed to write video file: {}", e))?;
+            tracing::info!("💾 Video saved: {}", output_path);
+            Self::validate_download(output_path).await?;
+            Ok(VideoDownloadResult {
+                file_path: output_path.to_string(),
+                title: item.title.clone().unwrap_or_else(|| "Unknown".to_string()),
+                duration_seconds: item.duration,
+                width: None,
+                height: None,
+                r2_url: None,
+            })
+        }
     }
 
     // NOTE: yt-dlp fallback methods removed - now using rusty_ytdl (pure Rust)
@@ -691,37 +710,37 @@ impl ApifyClient {
 async fn download_twitch_vod(
     video_url: &str,
     output_path: &str,
+    r2_client: Option<&R2Client>,
+    r2_key: Option<&str>,
 ) -> Result<VideoDownloadResult, String> {
     tracing::info!("🎮 Twitch VOD detected — using Twitch-specific download strategies");
 
-    // Ensure parent directory exists
     if let Some(parent) = std::path::Path::new(output_path).parent() {
         fs::create_dir_all(parent)
             .await
             .map_err(|e| format!("Failed to create output directory: {}", e))?;
     }
 
-    // Strategy 1: FastAPI yt-dlp (has a maintained Twitch extractor)
     tracing::info!("🔄 Twitch S1: FastAPI yt-dlp microservice...");
-    match YtdlpApiClient::download_video(video_url, output_path, None).await {
+    match YtdlpApiClient::download_video(video_url, output_path, r2_key.map(|s| s.to_string())).await {
         Ok(result) => {
             tracing::info!("✅ Twitch S1 (FastAPI yt-dlp) succeeded");
             return Ok(VideoDownloadResult {
-                file_path: result.file_path,
-                title: result.title,
-                duration_seconds: Some(result.duration_seconds),
-                width: result.width.map(|w| w as i32),
-                height: result.height.map(|h| h as i32),
-            });
+                    file_path: result.file_path,
+                    title: result.title,
+                    duration_seconds: Some(result.duration_seconds),
+                    width: result.width.map(|w| w as i32),
+                    height: result.height.map(|h| h as i32),
+                    r2_url: result.r2_url.clone(),
+                });
+            }
+            Err(e) => {
+                tracing::warn!("⚠️ Twitch S1 (FastAPI yt-dlp) failed: {}", e);
+            }
         }
-        Err(e) => {
-            tracing::warn!("⚠️ Twitch S1 (FastAPI yt-dlp) failed: {}", e);
-        }
-    }
 
-    // Strategy 2: Twitch GQL playback token + FFmpeg HLS
-    tracing::info!("🔄 Twitch S2: GQL access token + FFmpeg HLS...");
-    download_twitch_hls(video_url, output_path).await
+        tracing::info!("🔄 Twitch S2: GQL access token + FFmpeg HLS...");
+        download_twitch_hls(video_url, output_path, r2_client, r2_key).await
 }
 
 /// Download a Twitch VOD using the Twitch GQL API for a signed playback token,
@@ -733,6 +752,8 @@ async fn download_twitch_vod(
 async fn download_twitch_hls(
     video_url: &str,
     output_path: &str,
+    r2_client: Option<&R2Client>,
+    r2_key: Option<&str>,
 ) -> Result<VideoDownloadResult, String> {
     // Extract numeric VOD ID from URL: https://www.twitch.tv/videos/2025985859
     let vod_id = video_url
@@ -829,33 +850,47 @@ async fn download_twitch_hls(
 
     // Step 3: Download the HLS stream via FFmpeg (handles HLS/TS segmented streams natively)
     tracing::info!("🎞  Downloading Twitch HLS for VOD {} via FFmpeg", vod_id);
-    let status = TokioCommand::new("ffmpeg")
-        .args([
-            "-y",
-            "-i",
-            &m3u8_url,
-            "-c",
-            "copy",
-            "-bsf:a",
-            "aac_adtstoasc",
-            output_path,
-        ])
-        .status()
-        .await
-        .map_err(|e| format!("FFmpeg HLS spawn failed: {}", e))?;
 
-    if !status.success() {
-        return Err(format!(
-            "FFmpeg HLS download failed (exit {}): Twitch VOD {} may be deleted or restricted",
-            status.code().unwrap_or(-1),
-            vod_id
-        ));
+    if let (Some(client), Some(key)) = (r2_client, r2_key) {
+        // Download to temp, upload to R2, clean up
+        let tmp_path = format!("/tmp/twitch_hls_{}_{}.mp4", vod_id, std::process::id());
+        let status = TokioCommand::new("ffmpeg")
+            .args(["-y", "-i", &m3u8_url, "-c", "copy", "-bsf:a", "aac_adtstoasc", &tmp_path])
+            .status().await
+            .map_err(|e| format!("FFmpeg HLS spawn failed: {e}"))?;
+        if !status.success() {
+            let _ = tokio::fs::remove_file(&tmp_path).await;
+            return Err(format!(
+                "FFmpeg HLS download failed (exit {}): Twitch VOD {} may be deleted or restricted",
+                status.code().unwrap_or(-1), vod_id
+            ));
+        }
+        let r2_url = client.upload_file(&tmp_path, key).await
+            .map_err(|e| format!("R2 upload failed: {e}"))?;
+        let _ = tokio::fs::remove_file(&tmp_path).await;
+        tracing::info!("✅ Twitch S2 succeeded for VOD {}, uploaded to R2", vod_id);
+        return Ok(VideoDownloadResult {
+            file_path: output_path.to_string(),
+            title: format!("Twitch VOD {}", vod_id),
+            duration_seconds: None,
+            width: None,
+            height: None,
+            r2_url: Some(r2_url),
+        });
+    } else {
+        // Legacy: write directly to output_path
+        let status = TokioCommand::new("ffmpeg")
+            .args(["-y", "-i", &m3u8_url, "-c", "copy", "-bsf:a", "aac_adtstoasc", output_path])
+            .status().await
+            .map_err(|e| format!("FFmpeg HLS spawn failed: {e}"))?;
+        if !status.success() {
+            return Err(format!(
+                "FFmpeg HLS download failed (exit {}): Twitch VOD {} may be deleted or restricted",
+                status.code().unwrap_or(-1), vod_id
+            ));
+        }
+        tracing::info!("✅ Twitch S2 (GQL + FFmpeg HLS) succeeded for VOD {}", vod_id);
     }
-
-    tracing::info!(
-        "✅ Twitch S2 (GQL + FFmpeg HLS) succeeded for VOD {}",
-        vod_id
-    );
 
     // Metadata is populated by the caller's validate_video_file → analyze_video; skip double ffprobe.
     Ok(VideoDownloadResult {
@@ -864,6 +899,7 @@ async fn download_twitch_hls(
         duration_seconds: None,
         width: None,
         height: None,
+        r2_url: None,
     })
 }
 
@@ -875,19 +911,19 @@ async fn download_twitch_hls(
 async fn download_kick_video(
     video_url: &str,
     output_path: &str,
+    r2_client: Option<&R2Client>,
+    r2_key: Option<&str>,
 ) -> Result<VideoDownloadResult, String> {
     tracing::info!("💥 Kick.com broadcast detected — using kick-specific download strategies");
 
-    // Ensure parent directory exists
     if let Some(parent) = std::path::Path::new(output_path).parent() {
         fs::create_dir_all(parent)
             .await
             .map_err(|e| format!("Failed to create output directory: {}", e))?;
     }
 
-    // Strategy 1: FastAPI yt-dlp (supports Kick extractor)
     tracing::info!("🔄 Kick S1: FastAPI yt-dlp microservice...");
-    match YtdlpApiClient::download_video(video_url, output_path, None).await {
+    match YtdlpApiClient::download_video(video_url, output_path, r2_key.map(|s| s.to_string())).await {
         Ok(result) => {
             tracing::info!("✅ Kick S1 (FastAPI yt-dlp) succeeded");
             return Ok(VideoDownloadResult {
@@ -896,6 +932,7 @@ async fn download_kick_video(
                 duration_seconds: Some(result.duration_seconds),
                 width: result.width.map(|w| w as i32),
                 height: result.height.map(|h| h as i32),
+                r2_url: result.r2_url.clone(),
             });
         }
         Err(e) => {
@@ -903,9 +940,8 @@ async fn download_kick_video(
         }
     }
 
-    // Strategy 2: Local yt-dlp CLI (also has Kick extractor)
     tracing::info!("🔄 Kick S2: local yt-dlp CLI...");
-    match YtDlpClient::download_video(video_url, output_path).await {
+    match YtDlpClient::download_video(video_url, output_path, r2_client, r2_key).await {
         Ok(result) => {
             tracing::info!("✅ Kick S2 (local yt-dlp CLI) succeeded");
             return Ok(VideoDownloadResult {
@@ -914,6 +950,7 @@ async fn download_kick_video(
                 duration_seconds: result.duration_seconds,
                 width: result.width.map(|w| w as i32),
                 height: result.height.map(|h| h as i32),
+                r2_url: result.r2_url.clone(),
             });
         }
         Err(e) => {

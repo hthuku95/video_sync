@@ -1369,9 +1369,9 @@ impl GeminiClippingAgent {
 
         let apify = ApifyClient::new(apify_token, apify_actor);
         apify
-            .download_video(video_url, path)
+            .download_video(video_url, path, None, None)
             .await
-            .map(|_| ()) // discard VideoDownloadResult; file is at `path`
+            .map(|_| ())
             .map_err(|e| format!("Download failed: {}", e))
     }
 

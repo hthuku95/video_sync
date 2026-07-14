@@ -544,7 +544,7 @@ Provide ONLY the JSON object, no markdown, no code blocks, no other text."#,
 
         tracing::info!("Downloading {} for Ollama video analysis", video_url);
         apify_client
-            .download_video(video_url, &dl_path)
+            .download_video(video_url, &dl_path, None, None)
             .await
             .map_err(|e| {
                 format!(

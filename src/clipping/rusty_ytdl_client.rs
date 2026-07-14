@@ -8,6 +8,7 @@ use tokio::io::AsyncWriteExt;
 
 // Use the same types as apify_client to ensure compatibility
 use crate::clipping::apify_client::{VideoDownloadResult, VideoInfo};
+use crate::r2_client::R2Client;
 
 pub struct RustyYtdlClient;
 
@@ -16,34 +17,21 @@ impl RustyYtdlClient {
     pub async fn download_video(
         video_url: &str,
         output_path: &str,
+        r2_client: Option<&R2Client>,
+        r2_key: Option<&str>,
     ) -> Result<VideoDownloadResult, String> {
-        // Ensure parent directory exists
-        if let Some(parent) = Path::new(output_path).parent() {
-            fs::create_dir_all(parent)
-                .await
-                .map_err(|e| format!("Failed to create output directory: {}", e))?;
-        }
+        tracing::info!("📥 Downloading video from YouTube using rusty_ytdl: {}", video_url);
 
-        tracing::info!(
-            "📥 Downloading video from YouTube using rusty_ytdl: {}",
-            video_url
-        );
-
-        // Configure video options for best quality MP4
         let video_options = VideoOptions {
             quality: VideoQuality::Highest,
-            filter: VideoSearchOptions::VideoAudio, // Get streams with both video and audio
+            filter: VideoSearchOptions::VideoAudio,
             ..Default::default()
         };
 
-        // Create video instance
         let video = Video::new_with_options(video_url, video_options)
             .map_err(|e| format!("Failed to create video instance: {}", e))?;
 
-        // Get video info
-        let video_info = video
-            .get_info()
-            .await
+        let video_info = video.get_info().await
             .map_err(|e| format!("Failed to fetch video info: {}", e))?;
 
         let title = video_info.video_details.title.clone();
@@ -51,92 +39,57 @@ impl RustyYtdlClient {
         let video_id = video_info.video_details.video_id.clone();
 
         tracing::info!("📹 Video: {} (ID: {})", title, video_id);
-        if let Some(duration) = duration_secs {
-            tracing::info!("⏱️ Duration: {:.1}s", duration);
-        }
 
-        // Download video stream with timeout
         use tokio::time::{timeout, Duration};
-
-        tracing::info!("⬇️ Starting download with 1-hour timeout");
-
-        let temp_path = format!("{}.tmp", output_path);
+        let temp_path = format!("/tmp/rustyytdl_{}_{}.mp4", video_id, std::process::id());
 
         let download_future = async {
-            // Open stream
-            let stream = video
-                .stream()
-                .await
+            let stream = video.stream().await
                 .map_err(|e| format!("Failed to open video stream: {}", e))?;
-
-            // Create output file
-            let mut file = fs::File::create(&temp_path)
-                .await
+            let mut file = fs::File::create(&temp_path).await
                 .map_err(|e| format!("Failed to create output file: {}", e))?;
 
-            let mut total_bytes = 0u64;
-            let mut chunk_count = 0u32;
-
-            // Download chunks and write to file
-            while let Some(chunk) = stream
-                .chunk()
-                .await
+            while let Some(chunk) = stream.chunk().await
                 .map_err(|e| format!("Failed to read chunk: {}", e))?
             {
-                file.write_all(&chunk)
-                    .await
+                file.write_all(&chunk).await
                     .map_err(|e| format!("Failed to write chunk: {}", e))?;
-
-                total_bytes += chunk.len() as u64;
-                chunk_count += 1;
-
-                // Log progress every 100 chunks (~10MB at typical chunk size)
-                if chunk_count % 100 == 0 {
-                    tracing::info!(
-                        "📦 Downloaded {:.2} MB ({} chunks)",
-                        total_bytes as f64 / 1_000_000.0,
-                        chunk_count
-                    );
-                }
             }
-
-            file.flush()
-                .await
-                .map_err(|e| format!("Failed to flush file: {}", e))?;
-
-            tracing::info!(
-                "💾 Download complete: {:.2} MB ({} chunks)",
-                total_bytes as f64 / 1_000_000.0,
-                chunk_count
-            );
-
+            file.flush().await.map_err(|e| format!("Failed to flush: {}", e))?;
             Ok::<(), String>(())
         };
 
-        timeout(Duration::from_secs(3600), download_future)
-            .await
+        timeout(Duration::from_secs(3600), download_future).await
             .map_err(|_| "Download timed out after 1 hour".to_string())?
             .map_err(|e: String| e)?;
 
-        // Move from temp to final location
-        fs::rename(&temp_path, output_path)
-            .await
-            .map_err(|e| format!("Failed to save final file: {}", e))?;
-
-        tracing::info!("✅ Saved video to: {}", output_path);
-
-        // Validate downloaded file
-        Self::validate_download(output_path).await?;
-
-        tracing::info!("✅ Video downloaded successfully: {}", output_path);
-
-        Ok(VideoDownloadResult {
-            file_path: output_path.to_string(),
-            title,
-            duration_seconds: duration_secs,
-            width: None, // rusty_ytdl doesn't expose dimensions easily
-            height: None,
-        })
+        if let (Some(client), Some(key)) = (r2_client, r2_key) {
+            let r2_url = client.upload_file(&temp_path, key).await
+                .map_err(|e| format!("R2 upload failed: {e}"))?;
+            let _ = fs::remove_file(&temp_path).await;
+            tracing::info!("✅ Video uploaded to R2: {r2_url}");
+            Ok(VideoDownloadResult {
+                file_path: output_path.to_string(),
+                title,
+                duration_seconds: duration_secs,
+                width: None,
+                height: None,
+                r2_url: Some(r2_url),
+            })
+        } else {
+            fs::rename(&temp_path, output_path).await
+                .map_err(|e| format!("Failed to save final file: {}", e))?;
+            Self::validate_download(output_path).await?;
+            tracing::info!("✅ Video saved: {}", output_path);
+            Ok(VideoDownloadResult {
+                file_path: output_path.to_string(),
+                title,
+                duration_seconds: duration_secs,
+                width: None,
+                height: None,
+                r2_url: None,
+            })
+        }
     }
 
     /// Get video metadata without downloading

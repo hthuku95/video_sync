@@ -7,6 +7,7 @@ use tokio::fs;
 
 // Use shared types from apify_client to ensure compatibility
 use crate::clipping::apify_client::VideoDownloadResult;
+use crate::r2_client::R2Client;
 
 pub struct RustubeClient;
 
@@ -15,116 +16,82 @@ impl RustubeClient {
     pub async fn download_video(
         video_url: &str,
         output_path: &str,
+        r2_client: Option<&R2Client>,
+        r2_key: Option<&str>,
     ) -> Result<VideoDownloadResult, String> {
-        // Ensure parent directory exists
-        if let Some(parent) = Path::new(output_path).parent() {
-            fs::create_dir_all(parent)
-                .await
-                .map_err(|e| format!("Failed to create output directory: {}", e))?;
-        }
+        tracing::info!("📥 Downloading video from YouTube using Rustube: {}", video_url);
 
-        tracing::info!(
-            "📥 Downloading video from YouTube using Rustube: {}",
-            video_url
-        );
-
-        // Extract video ID from URL
         let video_id = Self::extract_video_id(video_url)?;
-
         tracing::info!("🔍 Fetching video metadata for ID: {}", video_id);
 
-        // Fetch video using rustube
-        let id =
-            Id::from_raw(&video_id).map_err(|e| format!("Invalid video ID {}: {}", video_id, e))?;
-
-        let video = Video::from_id(id.into_owned())
-            .await
+        let id = Id::from_raw(&video_id)
+            .map_err(|e| format!("Invalid video ID {}: {}", video_id, e))?;
+        let video = Video::from_id(id.into_owned()).await
             .map_err(|e| format!("Failed to fetch video: {}", e))?;
 
         let video_details = video.video_details();
         let title = video_details.title.clone();
         let duration_secs = video_details.length_seconds as f64;
-
         tracing::info!("📹 Video: {} ({}s)", title, duration_secs);
 
-        // Get all streams
         let streams = video.streams();
-
-        // Try to get a stream with both video and audio (best quality)
-        let stream = streams
-            .iter()
+        let stream = streams.iter()
             .filter(|s| s.includes_video_track && s.includes_audio_track)
             .max_by_key(|s| s.width.unwrap_or(0))
-            .or_else(|| {
-                // Fallback: get best video stream
-                tracing::warn!(
-                    "⚠️ No combined video+audio stream found, using best video-only stream"
-                );
-                streams
-                    .iter()
-                    .filter(|s| s.includes_video_track)
-                    .max_by_key(|s| s.width.unwrap_or(0))
-            })
+            .or_else(|| streams.iter().filter(|s| s.includes_video_track).max_by_key(|s| s.width.unwrap_or(0)))
             .ok_or_else(|| "No suitable video stream found".to_string())?;
 
         let width = stream.width.map(|w| w as i32);
         let height = stream.height.map(|h| h as i32);
 
-        tracing::info!(
-            "⬇️ Downloading stream: {}x{}, codec: {:?}, mime: {}",
-            width.unwrap_or(0),
-            height.unwrap_or(0),
-            stream.codecs,
-            stream.mime
-        );
-
-        // Download the video stream
         use tokio::time::{timeout, Duration};
-
-        tracing::info!("⏳ Starting download with 1-hour timeout");
-
-        // Download to a temporary location first, then move to final location
-        let temp_path = format!("{}.tmp", output_path);
+        let temp_path = format!("/tmp/rustube_{}_{}.mp4", video_id, std::process::id());
 
         let download_future = async {
-            // Download returns PathBuf to the downloaded file
-            let downloaded_path = stream
-                .download()
-                .await
+            let downloaded_path = stream.download().await
                 .map_err(|e| format!("Failed to download video: {}", e))?;
-
-            // Move the downloaded file to our desired location
-            fs::rename(&downloaded_path, &temp_path)
-                .await
+            fs::rename(&downloaded_path, &temp_path).await
                 .map_err(|e| format!("Failed to move downloaded file: {}", e))?;
-
             Ok::<(), String>(())
         };
 
-        timeout(Duration::from_secs(3600), download_future)
-            .await
+        timeout(Duration::from_secs(3600), download_future).await
             .map_err(|_| "Download timed out after 1 hour".to_string())?
             .map_err(|e: String| e)?;
 
-        // Move from temp to final location
-        fs::rename(&temp_path, output_path)
-            .await
-            .map_err(|e| format!("Failed to save final file: {}", e))?;
-
-        tracing::info!("💾 Saved video to: {}", output_path);
-
-        // Validate downloaded file
-        Self::validate_download(output_path).await?;
-
-        tracing::info!("✅ Video downloaded successfully: {}", output_path);
-
-        Ok(VideoDownloadResult {
-            file_path: output_path.to_string(),
-            title,
-            duration_seconds: Some(duration_secs),
-            width,
-            height,
-        })
+        if let (Some(client), Some(key)) = (r2_client, r2_key) {
+            let r2_url = client.upload_file(&temp_path, key).await
+                .map_err(|e| format!("R2 upload failed: {e}"))?;
+            let _ = fs::remove_file(&temp_path).await;
+            tracing::info!("✅ Video uploaded to R2: {r2_url}");
+            Ok(VideoDownloadResult {
+                file_path: output_path.to_string(),
+                title,
+                duration_seconds: Some(duration_secs),
+                width,
+                height,
+                r2_url: Some(r2_url),
+            })
+        } else {
+            let dest = if Path::new(output_path).parent().is_some() {
+                if let Some(parent) = Path::new(output_path).parent() {
+                    fs::create_dir_all(parent).await.map_err(|e| format!("Failed to create dir: {e}"))?;
+                }
+                output_path
+            } else { output_path };
+            fs::rename(&temp_path, dest).await
+                .map_err(|e| format!("Failed to save final file: {}", e))?;
+            Self::validate_download(output_path).await?;
+            tracing::info!("✅ Video saved: {}", output_path);
+            Ok(VideoDownloadResult {
+                file_path: output_path.to_string(),
+                title,
+                duration_seconds: Some(duration_secs),
+                width,
+                height,
+                r2_url: None,
+            })
+        }
     }
 
     /// Extract video ID from various YouTube URL formats
