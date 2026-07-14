@@ -7552,7 +7552,7 @@ async fn delivery_page(
                     .iter()
                     .enumerate()
                     .map(|(i, url)| {
-                        let label = if clip_count == 1 { "Clip" } else { format!("Clip {}", i + 1) };
+                        let label = if clip_count == 1 { "Clip".to_string() } else { format!("Clip {}", i + 1) };
                         format!(
                             r#"<div class="clip-item"><video controls preload="metadata"><source src="{url}" type="video/mp4"></video><div class="clip-label">{label}</div></div>"#
                         )
