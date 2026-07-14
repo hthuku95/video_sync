@@ -4859,7 +4859,7 @@ async fn execute_clip_compilation_value(
     let tmp_dir = std::path::PathBuf::from("/tmp").join(format!("clip_compilation_{}_{}", session_slug, uuid));
     let _ = tokio::fs::create_dir_all(&tmp_dir).await;
     let is_kick = source_url.contains("kick.com");
-    let r2_key = format!("temp/clip_compilation/{}/{}/source.mp4", ctx.session_id, uuid);
+    let r2_key = format!("downloads/clip_compilation/{}/{}/source.mp4", ctx.session_id, uuid);
 
     let download_result = if is_kick {
         let r2_client = match ctx.app_state.r2_client.as_ref() {
