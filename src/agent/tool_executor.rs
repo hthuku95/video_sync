@@ -4856,7 +4856,7 @@ async fn execute_clip_compilation_value(
 
     let session_slug = ctx.session_id.replace('-', "_");
     let uuid = uuid::Uuid::new_v4();
-    let tmp_dir = std::env::temp_dir().join(format!("clip_compilation_{}_{}", session_slug, uuid));
+    let tmp_dir = std::path::PathBuf::from("/tmp").join(format!("clip_compilation_{}_{}", session_slug, uuid));
     let _ = tokio::fs::create_dir_all(&tmp_dir).await;
 
     let input_path = tmp_dir.join("source.mp4");
