@@ -4863,18 +4863,15 @@ async fn execute_clip_compilation_value(
     let input_str = input_path.to_str().unwrap_or("/tmp/source.mp4");
     let is_kick = source_url.contains("kick.com");
 
-    // For Kick.com URLs: use local yt-dlp CLI (FastAPI service is YouTube-only and fails on Kick).
-    // The yt-dlp CLI has a native Kick extractor that handles both channel and VOD URLs.
+    // For Kick.com URLs: resolve via BrowserBase to HLS stream URL first (bypasses Kick's 403),
+    // then use local yt-dlp CLI to download the HLS stream. The yt-dlp CLI can download HLS
+    // streams directly without needing the Kick extractor, which is blocked by Kick's API.
     // For non-Kick URLs: try to resolve to HLS first, then use FastAPI yt-dlp service for R2 streaming.
     let mut resolved_url = source_url.clone();
-    if is_kick {
-        tracing::info!("🎬 Kick URL detected — using local yt-dlp CLI (native Kick extractor)");
-    } else {
-        let resolved = crate::kick_vod_scraper::resolve_url_to_hls(&resolved_url).await;
-        if resolved != resolved_url {
-            tracing::info!("Source resolved to HLS stream: {}", resolved);
-            resolved_url = resolved;
-        }
+    let resolved = crate::kick_vod_scraper::resolve_url_to_hls(&resolved_url).await;
+    if resolved != resolved_url {
+        tracing::info!("Source resolved to HLS stream: {}", resolved);
+        resolved_url = resolved;
     }
 
     let r2_key = format!("temp/clip_compilation/{}/{}/source.mp4", ctx.session_id, uuid);
