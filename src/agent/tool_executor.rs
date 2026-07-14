@@ -4854,81 +4854,106 @@ async fn execute_clip_compilation_value(
     let smart_selection = bool_arg(args, &["smart_selection"])
         .unwrap_or(explicit_clip_times.is_none()); // default: smart when no explicit times
 
-    let session_slug = ctx.session_id.replace('-', "_");
     let uuid = uuid::Uuid::new_v4();
+    let session_slug = ctx.session_id.replace('-', "_");
     let tmp_dir = std::path::PathBuf::from("/tmp").join(format!("clip_compilation_{}_{}", session_slug, uuid));
     let _ = tokio::fs::create_dir_all(&tmp_dir).await;
-
-    let input_path = tmp_dir.join("source.mp4");
-    let input_str = input_path.to_str().unwrap_or("/tmp/source.mp4");
     let is_kick = source_url.contains("kick.com");
-
-    // For Kick.com URLs: resolve to HLS stream via yt-dlp -g, then use ffmpeg -t 300
-    // to download a limited 5-minute segment. This avoids yt-dlp's broken live stream
-    // downloader (which creates invisible temp files that max-filesize can't monitor).
-    // For non-Kick URLs: try to resolve to HLS first, then use FastAPI yt-dlp service for R2 streaming.
-    let mut resolved_url = source_url.clone();
-    let resolved = crate::kick_vod_scraper::resolve_url_to_hls(&resolved_url).await;
-    if resolved != resolved_url {
-        tracing::info!("Source resolved to HLS stream: {}", resolved);
-        resolved_url = resolved;
-    }
-
     let r2_key = format!("temp/clip_compilation/{}/{}/source.mp4", ctx.session_id, uuid);
 
     let download_result = if is_kick {
-        // If BrowserBase didn't return an HLS URL, try yt-dlp -g to extract the HLS stream URL
-        let hls_url = if resolved_url == source_url {
-            match crate::clipping::ytdlp_client::YtDlpClient::extract_hls_url(&source_url).await {
-                Ok(hls) => {
-                    tracing::info!("Kick → HLS via yt-dlp -g: {}", hls);
-                    hls
-                }
-                Err(e) => {
-                    tracing::warn!("Kick HLS extraction failed ({}), falling back to yt-dlp download", e);
-                    resolved_url.clone()
-                }
-            }
-        } else {
-            resolved_url.clone()
+        let r2_client = match ctx.app_state.r2_client.as_ref() {
+            Some(c) => c,
+            None => return format!(r#"{{"error":"R2 client not configured for Kick streaming"}}"#),
         };
 
-        // Use ffmpeg with -t 300 to download only 5 minutes from the HLS stream
-        let ffmpeg_result = crate::utils::ffmpeg_utils::download_hls_segment(&hls_url, input_str, 300).await;
-        match ffmpeg_result {
-            Ok(_) => {
-                // Validate the downloaded file
-                let meta = tokio::fs::metadata(input_str).await.ok();
-                let size = meta.map(|m| m.len()).unwrap_or(0);
-                tracing::info!("✅ Kick HLS segment downloaded: {} bytes", size);
+        // Step 1: Get metadata (title, duration) via dry-run --print
+        let ytdlp_bin = if std::path::Path::new("/usr/local/bin/yt-dlp").exists() {
+            "/usr/local/bin/yt-dlp"
+        } else if std::path::Path::new("/usr/bin/yt-dlp").exists() {
+            "/usr/bin/yt-dlp"
+        } else {
+            "yt-dlp"
+        };
+
+        let meta_output = tokio::process::Command::new(ytdlp_bin)
+            .arg("--print").arg("title")
+            .arg("--print").arg("duration")
+            .arg("--no-download")
+            .arg(&source_url)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output().await;
+
+        let (title, duration_raw) = match meta_output {
+            Ok(out) if out.status.success() => {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                let lines: Vec<&str> = stdout.lines().collect();
+                let t = lines.first().unwrap_or(&"Kick Stream").to_string();
+                let d: f64 = lines.get(1).and_then(|s| s.parse().ok()).unwrap_or(0.0);
+                (t, d)
+            }
+            _ => ("Kick Stream".to_string(), 0.0)
+        };
+
+        // Step 2: Spawn yt-dlp to stdout, pipe directly to R2 multipart upload
+        let mut child = match tokio::process::Command::new(ytdlp_bin)
+            .arg("--format").arg("bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best")
+            .arg("--merge-output-format").arg("mp4")
+            .arg("-o").arg("-")
+            .arg("--no-playlist")
+            .arg("--user-agent")
+            .arg("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+            .arg("--no-check-certificates")
+            .arg(&source_url)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+        {
+            Ok(c) => c,
+            Err(e) => return format!(r#"{{"error":"yt-dlp spawn failed: {}"}}"#, e),
+        };
+
+        let mut stdout = match child.stdout.take() {
+            Some(s) => s,
+            None => return format!(r#"{{"error":"yt-dlp: no stdout"}}"#),
+        };
+
+        // Stream yt-dlp stdout directly to R2 (multipart upload, no local disk)
+        let r2_result = r2_client.upload_stream(&r2_key, &mut stdout).await;
+
+        // Wait for yt-dlp to finish
+        let _exit_status = child.wait().await;
+
+        match r2_result {
+            Ok(()) => {
+                let r2_url = match r2_client.presign_get(&r2_key, 7 * 24 * 3600).await {
+                    Ok(u) => u,
+                    Err(e) => return format!(r#"{{"error":"R2 presign failed: {}"}}"#, e),
+                };
+                let actual_duration = crate::core::analyze_video(&r2_url)
+                    .ok().map(|m| m.duration_seconds).unwrap_or(duration_raw);
+                if actual_duration < 1.0 {
+                    return format!(r#"{{"error":"Downloaded video invalid (0s)"}}"#);
+                }
                 Ok(crate::clipping::ytdlp_api_client::VideoDownloadResult {
-                    file_path: input_str.to_string(),
-                    title: "Kick Stream".to_string(),
-                    duration_seconds: 300.0,
-                    width: None,
-                    height: None,
-                    r2_url: None,
+                    file_path: r2_url.clone(),
+                    title,
+                    duration_seconds: actual_duration,
+                    width: None, height: None,
+                    r2_url: Some(r2_url),
                 })
             }
-            Err(e) => {
-                tracing::warn!("ffmpeg HLS segment download failed ({}), falling back to yt-dlp", e);
-                let res = crate::clipping::ytdlp_client::YtDlpClient::download_video(&resolved_url, input_str).await;
-                res.map(|r| crate::clipping::ytdlp_api_client::VideoDownloadResult {
-                    file_path: r.file_path,
-                    title: r.title,
-                    duration_seconds: r.duration_seconds.unwrap_or(0.0),
-                    width: None,
-                    height: None,
-                    r2_url: None,
-                })
-                .map_err(|e| e.to_string())
-            }
+            Err(e) => Err(e)
         }
     } else {
-        tracing::info!("🎬 Clip compilation: streaming {} via ytdlp (r2_key={})", resolved_url, r2_key);
-        crate::clipping::ytdlp_api_client::YtdlpApiClient::download_video(
-            &resolved_url, input_str, Some(r2_key.clone()),
-        ).await
+        tracing::info!("🎬 Clip compilation: streaming {} via ytdlp api (r2_key={})", source_url, r2_key);
+        let tmp_path = format!("/tmp/ytdlp_api_dl_{}", uuid);
+        let result = crate::clipping::ytdlp_api_client::YtdlpApiClient::download_video(
+            &source_url, &tmp_path, Some(r2_key.clone()),
+        ).await;
+        let _ = tokio::fs::remove_file(&tmp_path).await;
+        result
     };
 
     let (source_for_ffmpeg, duration, r2_source_url) = match download_result {
@@ -4937,24 +4962,22 @@ async fn execute_clip_compilation_value(
             let dur = result.duration_seconds;
             match r2_url {
                 Some(url) if !url.is_empty() => {
-                    tracing::info!("✅ R2 direct stream available: {}", url);
+                    tracing::info!("✅ R2 source available: {}", url);
                     (url.to_string(), dur, Some(url.to_string()))
                 }
                 _ => {
-                    tracing::info!("✅ Downloaded locally: {}", input_str);
-                    (input_str.to_string(), dur, None)
+                    // Should not happen if R2 upload succeeded
+                    return format!(r#"{{"error":"No R2 URL from download pipeline"}}"#);
                 }
             }
         }
         Err(e) => {
-            let _ = tokio::fs::remove_dir_all(&tmp_dir).await;
             return format!(r#"{{"error":"Failed to download video: {}"}}"#, e.replace('"', "'"));
         }
     };
 
-    // Validate duration (use ytdlp metadata, no local ffprobe needed)
+    // Validate duration via R2 ffprobe
     if duration < 10.0 {
-        let _ = tokio::fs::remove_dir_all(&tmp_dir).await;
         return format!(r#"{{"error":"Video too short ({:.1}s)"}}"#, duration);
     }
 

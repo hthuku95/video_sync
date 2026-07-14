@@ -21,7 +21,7 @@ use aws_sdk_s3::Client;
 use std::path::Path;
 use std::time::Duration;
 use tokio::fs::File;
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncRead, AsyncReadExt};
 
 const MULTIPART_THRESHOLD: u64 = 50 * 1024 * 1024; // 50 MB — use multipart above this
 const PART_SIZE: usize = 50 * 1024 * 1024; // 50 MB parts
@@ -296,6 +296,85 @@ impl R2Client {
             .map_err(|e| format!("complete_multipart_upload failed: {e}"))?;
 
         tracing::info!("R2 multipart upload: {local_path} → {key}");
+        Ok(())
+    }
+
+    /// Multipart upload from an arbitrary async reader (e.g. subprocess stdout).
+    /// No local disk needed — streams directly to R2.
+    pub async fn upload_stream(
+        &self,
+        key: &str,
+        reader: &mut (dyn AsyncRead + Unpin + Send),
+    ) -> Result<(), String> {
+        let resp = self
+            .client
+            .create_multipart_upload()
+            .bucket(&self.bucket)
+            .key(key)
+            .send()
+            .await
+            .map_err(|e| format!("create_multipart_upload failed: {e}"))?;
+
+        let upload_id = resp
+            .upload_id()
+            .ok_or("No upload_id in multipart response")?
+            .to_string();
+
+        let mut part_number = 1i32;
+        let mut completed_parts: Vec<CompletedPart> = Vec::new();
+        let mut buf = vec![0u8; PART_SIZE];
+
+        loop {
+            let n = reader
+                .read(&mut buf)
+                .await
+                .map_err(|e| format!("Read error during stream upload: {e}"))?;
+            if n == 0 {
+                break;
+            }
+
+            let part = self
+                .client
+                .upload_part()
+                .bucket(&self.bucket)
+                .key(key)
+                .upload_id(&upload_id)
+                .part_number(part_number)
+                .body(ByteStream::from(buf[..n].to_vec()))
+                .send()
+                .await
+                .map_err(|e| format!("upload_part {part_number} failed: {e}"))?;
+
+            let etag = part
+                .e_tag()
+                .ok_or("No ETag in upload_part response")?
+                .to_string();
+
+            completed_parts.push(
+                CompletedPart::builder()
+                    .part_number(part_number)
+                    .e_tag(etag)
+                    .build(),
+            );
+
+            part_number += 1;
+        }
+
+        let completed = CompletedMultipartUpload::builder()
+            .set_parts(Some(completed_parts))
+            .build();
+
+        self.client
+            .complete_multipart_upload()
+            .bucket(&self.bucket)
+            .key(key)
+            .upload_id(&upload_id)
+            .multipart_upload(completed)
+            .send()
+            .await
+            .map_err(|e| format!("complete_multipart_upload failed: {e}"))?;
+
+        tracing::info!("R2 stream upload complete: {key} ({part_number} parts)");
         Ok(())
     }
 
