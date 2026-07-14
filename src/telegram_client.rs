@@ -13,6 +13,7 @@
 //!      connects, streams channel updates, AI-scores them, inserts matches.
 
 use crate::AppState;
+use futures::StreamExt;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -405,6 +406,8 @@ pub async fn discover_public_channels(
             .invoke(&tl::functions::contacts::Search {
                 q: q.to_string(),
                 limit: limit_per_query,
+                bots: false,
+                broadcasts: true,
             })
             .await
             .map_err(|e| format!("contacts.search({q}): {e}"))?;
@@ -512,7 +515,9 @@ async fn try_run_watcher(state: &Arc<AppState>) -> Result<(), String> {
         catch_up: true,
         ..Default::default()
     };
-    let mut stream = client.stream_updates(updates_rx, config).await;
+    let mut stream = client.stream_updates(updates_rx, config)
+        .await
+        .map_err(|e| format!("stream_updates error: {e}"))?;
 
     // Mark last_poll_at on connect.
     let _ = sqlx::query(
