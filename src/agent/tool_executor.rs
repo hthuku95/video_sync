@@ -4863,9 +4863,9 @@ async fn execute_clip_compilation_value(
     let input_str = input_path.to_str().unwrap_or("/tmp/source.mp4");
     let is_kick = source_url.contains("kick.com");
 
-    // For Kick.com URLs: resolve via BrowserBase to HLS stream URL first (bypasses Kick's 403),
-    // then use local yt-dlp CLI to download the HLS stream. The yt-dlp CLI can download HLS
-    // streams directly without needing the Kick extractor, which is blocked by Kick's API.
+    // For Kick.com URLs: resolve to HLS stream via yt-dlp -g, then use ffmpeg -t 300
+    // to download a limited 5-minute segment. This avoids yt-dlp's broken live stream
+    // downloader (which creates invisible temp files that max-filesize can't monitor).
     // For non-Kick URLs: try to resolve to HLS first, then use FastAPI yt-dlp service for R2 streaming.
     let mut resolved_url = source_url.clone();
     let resolved = crate::kick_vod_scraper::resolve_url_to_hls(&resolved_url).await;
@@ -4877,16 +4877,53 @@ async fn execute_clip_compilation_value(
     let r2_key = format!("temp/clip_compilation/{}/{}/source.mp4", ctx.session_id, uuid);
 
     let download_result = if is_kick {
-        let res = crate::clipping::ytdlp_client::YtDlpClient::download_video(&resolved_url, input_str).await;
-        res.map(|r| crate::clipping::ytdlp_api_client::VideoDownloadResult {
-            file_path: r.file_path,
-            title: r.title,
-            duration_seconds: r.duration_seconds.unwrap_or(0.0),
-            width: None,
-            height: None,
-            r2_url: None,
-        })
-        .map_err(|e| e.to_string())
+        // If BrowserBase didn't return an HLS URL, try yt-dlp -g to extract the HLS stream URL
+        let hls_url = if resolved_url == source_url {
+            match crate::clipping::ytdlp_client::YtDlpClient::extract_hls_url(&source_url).await {
+                Ok(hls) => {
+                    tracing::info!("Kick → HLS via yt-dlp -g: {}", hls);
+                    hls
+                }
+                Err(e) => {
+                    tracing::warn!("Kick HLS extraction failed ({}), falling back to yt-dlp download", e);
+                    resolved_url.clone()
+                }
+            }
+        } else {
+            resolved_url.clone()
+        };
+
+        // Use ffmpeg with -t 300 to download only 5 minutes from the HLS stream
+        let ffmpeg_result = crate::utils::ffmpeg_utils::download_hls_segment(&hls_url, input_str, 300).await;
+        match ffmpeg_result {
+            Ok(_) => {
+                // Validate the downloaded file
+                let meta = tokio::fs::metadata(input_str).await.ok();
+                let size = meta.map(|m| m.len()).unwrap_or(0);
+                tracing::info!("✅ Kick HLS segment downloaded: {} bytes", size);
+                Ok(crate::clipping::ytdlp_api_client::VideoDownloadResult {
+                    file_path: input_str.to_string(),
+                    title: "Kick Stream".to_string(),
+                    duration_seconds: 300.0,
+                    width: None,
+                    height: None,
+                    r2_url: None,
+                })
+            }
+            Err(e) => {
+                tracing::warn!("ffmpeg HLS segment download failed ({}), falling back to yt-dlp", e);
+                let res = crate::clipping::ytdlp_client::YtDlpClient::download_video(&resolved_url, input_str).await;
+                res.map(|r| crate::clipping::ytdlp_api_client::VideoDownloadResult {
+                    file_path: r.file_path,
+                    title: r.title,
+                    duration_seconds: r.duration_seconds.unwrap_or(0.0),
+                    width: None,
+                    height: None,
+                    r2_url: None,
+                })
+                .map_err(|e| e.to_string())
+            }
+        }
     } else {
         tracing::info!("🎬 Clip compilation: streaming {} via ytdlp (r2_key={})", resolved_url, r2_key);
         crate::clipping::ytdlp_api_client::YtdlpApiClient::download_video(

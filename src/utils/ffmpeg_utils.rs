@@ -813,3 +813,44 @@ pub fn create_blank_video(
 
     execute_ffmpeg_command(command)
 }
+
+/// Download a segment of an HLS stream using ffmpeg.
+/// Downloads `duration_secs` seconds from the HLS URL and writes to `output_path`.
+pub async fn download_hls_segment(hls_url: &str, output_path: &str, duration_secs: u64) -> Result<(), String> {
+    let parent = std::path::Path::new(output_path).parent();
+    if let Some(p) = parent {
+        tokio::fs::create_dir_all(p).await
+            .map_err(|e| format!("Failed to create output directory: {}", e))?;
+    }
+
+    let status = TokioCommand::new("ffmpeg")
+        .arg("-y")
+        .arg("-i")
+        .arg(hls_url)
+        .arg("-t")
+        .arg(duration_secs.to_string())
+        .arg("-c")
+        .arg("copy")
+        .arg("-avoid_negative_ts")
+        .arg("make_zero")
+        .arg("-fflags")
+        .arg("+discardcorrupt")
+        .arg(output_path)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .await
+        .map_err(|e| format!("Failed to run ffmpeg: {}", e))?;
+
+    if !status.success() {
+        return Err(format!("ffmpeg exited with status: {:?}", status.code()));
+    }
+
+    let meta = tokio::fs::metadata(output_path).await
+        .map_err(|e| format!("Downloaded file not found: {}", e))?;
+    if meta.len() < 100_000 {
+        return Err(format!("Downloaded file too small: {} bytes", meta.len()));
+    }
+
+    Ok(())
+}

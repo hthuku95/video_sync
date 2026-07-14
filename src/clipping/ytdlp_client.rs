@@ -252,6 +252,41 @@ impl YtDlpClient {
         })
     }
 
+    /// Extract HLS stream URL from a video URL using yt-dlp -g.
+    /// Returns the raw m3u8 URL for direct ffmpeg download.
+    pub async fn extract_hls_url(video_url: &str) -> Result<String, String> {
+        Self::check_ytdlp_installed().await?;
+        let ytdlp_binary = if Path::new("/usr/local/bin/yt-dlp").exists() {
+            "/usr/local/bin/yt-dlp"
+        } else if Path::new("/usr/bin/yt-dlp").exists() {
+            "/usr/bin/yt-dlp"
+        } else {
+            "yt-dlp"
+        };
+
+        let output = tokio::process::Command::new(ytdlp_binary)
+            .arg("-g")
+            .arg("--no-playlist")
+            .arg(video_url)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .await
+            .map_err(|e| format!("Failed to execute yt-dlp -g: {}", e))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("yt-dlp -g failed: {}", stderr));
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let hls_url = stdout.lines().next().unwrap_or("").trim().to_string();
+        if hls_url.is_empty() || !hls_url.contains(".m3u8") {
+            return Err(format!("No HLS URL found in yt-dlp output: {}", stdout));
+        }
+        Ok(hls_url)
+    }
+
     /// Check if yt-dlp is installed
     async fn check_ytdlp_installed() -> Result<(), String> {
         use std::path::Path;
