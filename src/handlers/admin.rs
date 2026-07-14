@@ -7282,6 +7282,7 @@ async fn delivery_page(
         .unwrap_or(false);
 
     // Try test_results first, then custom deliveries table
+    let mut clip_presigned_urls: Vec<String> = Vec::new();
     let (name, gig_type, status, r2_url, filename, score, feedback, unlock_price, unlocked_until) =
         if let Ok(uuid) = uuid::Uuid::parse_str(&id) {
             // 1. Portfolio test result
@@ -7319,7 +7320,7 @@ async fn delivery_page(
                 // 2. Custom delivery — these CAN be paywalled.
                 let dr = sqlx::query(
                     "SELECT title, gig_type, status, output_r2_url, output_filename, \
-                     unlock_price_usdc, unlocked_until, preview_r2_url \
+                     unlock_price_usdc, unlocked_until, preview_r2_url, extra_args \
                      FROM deliveries WHERE id = $1",
                 )
                 .bind(uuid)
@@ -7357,6 +7358,22 @@ async fn delivery_page(
                         row.try_get("unlock_price_usdc").ok().flatten();
                     let until: Option<chrono::DateTime<chrono::Utc>> =
                         row.try_get("unlocked_until").ok().flatten();
+
+                    // Build clip gallery from extra_args.clip_keys
+                    if let Ok(Some(extra)) = row.try_get::<Option<serde_json::Value>, _>("extra_args") {
+                        if let Some(keys) = extra.get("clip_keys").and_then(|v| v.as_array()) {
+                            if let Some(ref r2) = state.r2_client {
+                                for key_val in keys {
+                                    if let Some(key) = key_val.as_str() {
+                                        if let Ok(url) = r2.presign_get(key, 7 * 24 * 3600).await {
+                                            clip_presigned_urls.push(url);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     // Pick which URL to show: locked → preview (or full fallback),
                     // unlocked → full clean HD. The preview URL is the agent's
                     // watermarked 30-60s clip; paying unlocks the full 3-4min.
@@ -7527,6 +7544,26 @@ async fn delivery_page(
                 _ => String::new(),
             };
 
+            let clip_gallery_html = if clip_presigned_urls.is_empty() {
+                String::new()
+            } else {
+                let clip_count = clip_presigned_urls.len();
+                let clips: String = clip_presigned_urls
+                    .iter()
+                    .enumerate()
+                    .map(|(i, url)| {
+                        let label = if clip_count == 1 { "Clip" } else { format!("Clip {}", i + 1) };
+                        format!(
+                            r#"<div class="clip-item"><video controls preload="metadata"><source src="{url}" type="video/mp4"></video><div class="clip-label">{label}</div></div>"#
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                format!(
+                    r#"<div class="clip-gallery"><h3>Individual Clips ({clip_count})</h3><div class="clip-grid">{clips}</div></div>"#
+                )
+            };
+
             let status_color = match status.as_str() {
                 "passed" => "#4ade80",
                 "failed" => "#f87171",
@@ -7604,6 +7641,12 @@ async fn delivery_page(
                   padding: 20px; margin-bottom: 24px; }}
   .unlock-headline {{ font-size: 16px; font-weight: 700; color: #fff; margin-bottom: 4px; }}
   .unlock-sub {{ font-size: 13px; color: #9999bb; line-height: 1.5; margin-bottom: 8px; }}
+  .clip-gallery {{ margin-top: 24px; border-top: 1px solid #2a2a36; padding-top: 20px; }}
+  .clip-gallery h3 {{ font-size: 15px; font-weight: 700; color: #fff; margin-bottom: 14px; }}
+  .clip-grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; }}
+  .clip-item {{ background: #12121a; border-radius: 10px; overflow: hidden; border: 1px solid #2a2a36; }}
+  .clip-item video {{ width: 100%; display: block; aspect-ratio: 16/9; background: #000; }}
+  .clip-label {{ font-size: 11px; color: #9999bb; padding: 6px 10px; text-align: center; }}
 </style>
 </head>
 <body>
@@ -7617,6 +7660,7 @@ async fn delivery_page(
   <div class="media-wrap">{media_html}</div>
   {download_btn}
   {score_html}
+  {clip_gallery_html}
   <div id="zernio-section" style="margin-top:16px;"></div>
 </div>
 <div class="footer">

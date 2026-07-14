@@ -25,6 +25,7 @@ use chrono::Utc;
 use serde_json::json;
 use sqlx::{PgPool, Row};
 use std::sync::Arc;
+use uuid::Uuid;
 
 /// Phase determination for smart job resumption.
 #[derive(Debug, PartialEq, PartialOrd)]
@@ -93,7 +94,14 @@ pub async fn execute_clipping_job(job_id: i32, app_state: Arc<AppState>) -> Resu
                 .bind(job_id)
                 .execute(&app_state.db_pool)
                 .await;
-            Ok(format!("Started agentic clipping workflow for job {}", job_id))
+
+            // Post-process: compile clips into a single compilation video + store clip URLs
+            // Best-effort — failure doesn't fail the core job
+            if let Err(e) = post_process_clipping_delivery(job_id, delivery_id, &app_state).await {
+                tracing::warn!("Clip compilation failed (delivery still works): {e}");
+            }
+
+            Ok(format!("Agentic clipping workflow completed for job {}", job_id))
         }
         Err(e) => Err(format!("Agentic clipping failed: {}", e)),
     }
@@ -1115,5 +1123,114 @@ pub async fn update_linkage_stats(
     .await
     .map_err(|e| format!("Failed to update linkage stats: {}", e))?;
 
+    Ok(())
+}
+
+/// After the agentic pipeline or clip extraction completes, compile all extracted clips
+/// into a single MP4 compilation, upload to R2, and store all clip R2 keys in
+/// deliveries.extra_args for the gallery view on the delivery page.
+pub async fn post_process_clipping_delivery(
+    job_id: i32,
+    delivery_id: uuid::Uuid,
+    app_state: &crate::AppState,
+) -> Result<(), String> {
+    // 1. Fetch clip R2 keys and URLs from extracted_clips
+    let clip_rows = sqlx::query(
+        "SELECT r2_clip_key, r2_clip_url, clip_number FROM extracted_clips \
+         WHERE clipping_job_id = $1 AND r2_clip_url IS NOT NULL \
+         ORDER BY clip_number",
+    )
+    .bind(job_id)
+    .fetch_all(&app_state.db_pool)
+    .await
+    .map_err(|e| format!("Failed to fetch clips for compilation: {e}"))?;
+
+    if clip_rows.is_empty() {
+        tracing::info!("No clips to compile for job {job_id}");
+        return Ok(());
+    }
+
+    let clip_urls: Vec<String> = clip_rows
+        .iter()
+        .filter_map(|r| r.try_get::<Option<String>, _>("r2_clip_url").ok().flatten())
+        .collect();
+    let clip_keys: Vec<Option<String>> = clip_rows
+        .iter()
+        .map(|r| r.try_get::<Option<String>, _>("r2_clip_key").ok().flatten())
+        .collect();
+
+    tracing::info!("Compiling {} clips for delivery {delivery_id}", clip_urls.len());
+
+    // 2. Download each clip from R2 to temp files
+    let http = reqwest::Client::new();
+    let mut temp_paths: Vec<String> = Vec::new();
+    for (i, url) in clip_urls.iter().enumerate() {
+        let path = crate::utils::ffmpeg_utils::create_temp_file(
+            &format!("clip_compilation_{job_id}_{i}"),
+            "mp4",
+        );
+        let resp = http
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| format!("Failed to download clip {i}: {e}"))?;
+        let bytes = resp
+            .bytes()
+            .await
+            .map_err(|e| format!("Failed to read clip {i}: {e}"))?;
+        tokio::fs::write(&path, &bytes)
+            .await
+            .map_err(|e| format!("Failed to write clip {i}: {e}"))?;
+        temp_paths.push(path);
+    }
+
+    // 3. Merge clips into a single compilation video
+    let output_path = crate::utils::ffmpeg_utils::create_temp_file(
+        &format!("compilation_{job_id}"),
+        "mp4",
+    );
+    let _ = crate::core::merge_videos(&temp_paths, &output_path)?;
+
+    // 4. Upload compilation to R2
+    let compilation_key = format!("clip_compilation/{delivery_id}/{job_id}/compilation.mp4");
+    let compilation_url = app_state
+        .r2_client
+        .as_ref()
+        .ok_or("R2 client not configured for clip compilation")?
+        .upload_file(&output_path, &compilation_key)
+        .await
+        .map_err(|e| format!("R2 compilation upload failed: {e}"))?;
+
+    // 5. Build clip keys JSON (non-null keys only)
+    let clip_keys_json: Vec<String> = clip_keys.into_iter().flatten().collect();
+    let extra_args_update = serde_json::json!({
+        "clip_keys": clip_keys_json,
+        "clip_count": clip_urls.len(),
+    });
+
+    // 6. Update delivery: output_r2_url = compilation, extra_args with clip metadata
+    let _ = sqlx::query(
+        "UPDATE deliveries SET \
+         output_r2_url = COALESCE($1, output_r2_url), \
+         extra_args = COALESCE(extra_args, '{}'::jsonb) || $2::jsonb \
+         WHERE id = $3",
+    )
+    .bind(&compilation_url)
+    .bind(&extra_args_update)
+    .bind(delivery_id)
+    .execute(&app_state.db_pool)
+    .await
+    .map_err(|e| tracing::warn!("Failed to update delivery {delivery_id}: {e}"));
+
+    // 7. Cleanup temp files
+    for p in &temp_paths {
+        let _ = tokio::fs::remove_file(p).await;
+    }
+    let _ = tokio::fs::remove_file(&output_path).await;
+
+    tracing::info!(
+        "✅ Compiled {n} clips into compilation for delivery {delivery_id}: {compilation_url}",
+        n = clip_urls.len()
+    );
     Ok(())
 }
