@@ -22,6 +22,7 @@ use crate::services::agentic_service_pipeline::{AgenticServicePipeline, ServiceI
 use crate::services::VideoVectorizationService;
 use crate::AppState;
 use chrono::Utc;
+use tokio::sync::mpsc;
 use serde_json::json;
 use sqlx::{PgPool, Row};
 use std::sync::Arc;
@@ -745,10 +746,10 @@ pub async fn handle_download_failure_fallback(
     );
 
     let delivery_title = format!(
-        "Fallback summary delivery for {}",
+        "{} — Animated Summary",
         job.source_video_title
             .as_deref()
-            .filter(|value| !value.trim().is_empty())
+            .filter(|v| !v.trim().is_empty())
             .unwrap_or(&job.source_video_id)
     );
 
@@ -791,50 +792,90 @@ pub async fn handle_download_failure_fallback(
     .await
     .map_err(|e| format!("Failed to create fallback delivery: {}", e))?;
 
-    let workflow_id = crate::services::LongFormVideoWorkflow::start(
-        app_state.clone(),
-        crate::services::LongFormVideoRequest {
-            title: delivery_title.clone(),
-            brief: fallback_prompt.clone(),
-            target_duration_seconds: 60.0,
-            segment_duration_seconds: 15.0,
-            style: "cinematic animated summary, high-retention YouTube short, bold motion graphics"
-                .to_string(),
-            offer_type: "fallback_summary".to_string(),
-            narration_speaker: "Emma".to_string(),
-            include_narration: true,
-            reference_url: Some(original_video_url.to_string()),
-            session_uuid: None,
-            user_id: Some(linkage.user_id),
-            source_table: Some("deliveries".to_string()),
-            source_record_id: Some(delivery_id),
-            idempotency_key: Some(format!("clipping-fallback-long-form:{}", job.id)),
-        },
-    )
-    .await?;
+    let gemini_client = match app_state
+        .video_gemini_client
+        .as_ref()
+        .or(app_state.gemini_client.as_ref())
+    {
+        Some(c) => Arc::new(c.clone()),
+        None => {
+            return Err(
+                "No Gemini client available for fallback video".to_string(),
+            )
+        }
+    };
 
-    sqlx::query("UPDATE deliveries SET workflow_id = $1 WHERE id = $2")
-        .bind(workflow_id)
-        .bind(delivery_id)
-        .execute(&app_state.db_pool)
-        .await
-        .map_err(|e| format!("Failed to attach fallback delivery workflow: {}", e))?;
+    let agent = crate::agent::stateful_agent::StatefulGeminiAgent::new(gemini_client);
+
+    let fallback_session_id = format!("clipping-fallback:{}:{}", job.id, uuid::Uuid::new_v4());
+
+    let top_moments_str = analysis
+        .top_moments(3)
+        .into_iter()
+        .enumerate()
+        .map(|(i, m)| format!("{}. {} - {}", i + 1, m.title, m.hook))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let agent_prompt = format!(
+        r#"Create a 10-minute animated summary video based on this content analysis.
+
+The original video '{title}' covered:
+{video_summary}
+
+Key segments to cover:
+{top_moments}
+
+Use Blender scenes, Manim animations, and VibeVoice narration to create a standalone long-form video that feels like an intentional animated documentary — NOT a placeholder or error recovery. The viewer should have no idea this was automatically generated. Upload the final video to R2 and return the cloud URL.
+
+Target: 600 seconds (10 minutes). Use multiple scenes — don't try to fit everything into one shot. Add narration via add_voiceover_to_video using the content analysis as your script."#,
+        title = job.source_video_title.as_deref().unwrap_or("Unknown Video"),
+        video_summary = analysis.video_summary,
+        top_moments = top_moments_str,
+    );
+
+    let (progress_tx, _progress_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+
+    let agent_result = agent
+        .chat(
+            &agent_prompt,
+            &fallback_session_id,
+            String::new(),
+            app_state.clone(),
+            app_state.job_manager.clone(),
+            Some(progress_tx),
+            None, // workflow_id
+            None, // user_message_rx
+            Some(linkage.user_id),
+        )
+        .await?;
+
+    let output_url = agent_result.trim().to_string();
+
+    sqlx::query(
+        "UPDATE deliveries SET output_r2_url = $1, status = 'completed', completed_at = NOW() WHERE id = $2",
+    )
+    .bind(&output_url)
+    .bind(delivery_id)
+    .execute(&app_state.db_pool)
+    .await
+    .map_err(|e| format!("Failed to update fallback delivery: {}", e))?;
 
     sqlx::query(
         "UPDATE clipping_jobs
          SET status = 'fallback_rendering',
              progress_percent = 85,
-             current_step = 'fallback_delivery_queued',
+             current_step = 'fallback_delivery_completed',
              error_message = $1,
              fallback_delivery_id = $2,
-             fallback_strategy = 'generated_summary_delivery',
+             fallback_strategy = 'generated_summary_via_agent',
              fallback_activated_at = NOW(),
-             completed_at = NULL,
+             completed_at = NOW(),
              updated_at = NOW()
          WHERE id = $3",
     )
     .bind(format!(
-        "Source download failed; created fallback delivery workflow instead: {}",
+        "Source download failed; generated fallback animated summary via full agent pipeline: {}",
         failure_reason
     ))
     .bind(delivery_id)
@@ -849,9 +890,9 @@ pub async fn handle_download_failure_fallback(
     })?;
 
     Ok(format!(
-        "Clipping download failed, so a segmented fallback summary delivery was created and queued. Delivery ID: {}. Workflow ID: {}.",
+        "Clipping download failed, so an AI-generated animated summary was created via the full agent pipeline. Delivery ID: {}. Output URL: {}.",
         delivery_id,
-        workflow_id
+        output_url,
     ))
 }
 

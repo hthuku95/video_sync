@@ -12,6 +12,22 @@ use std::sync::Arc;
 use tokio::fs;
 use uuid::Uuid;
 
+fn campaign_price_cents(service_type: &str) -> u64 {
+    match service_type {
+        "clipping" | "kick_auto_clipper" => 29700,
+        "education" => 19900,
+        "landing_page" => 14900,
+        "manim_explainer" | "whiteboard_animation" | "kinetic_typography"
+        | "animated_infographic" | "algorithm_viz" | "investor_pitch"
+        | "year_in_review" | "isometric_explainer" => 14900,
+        _ => 14900,
+    }
+}
+
+fn base_url() -> String {
+    std::env::var("PUBLIC_BASE_URL").unwrap_or_else(|_| "https://videosync.video".to_string())
+}
+
 /// Client-facing campaign routes (with auth middleware).
 pub fn campaign_routes() -> Router {
     Router::new()
@@ -20,6 +36,8 @@ pub fn campaign_routes() -> Router {
         .route("/api/campaigns/:id/pause", post(client_pause_campaign))
         .route("/api/campaigns/:id/resume", post(client_resume_campaign))
         .route("/api/campaigns/:id/cancel", post(client_cancel_campaign))
+        .route("/api/campaigns/:id/pay-spec", get(campaign_pay_spec))
+        .route("/api/campaigns/:id/settle", post(campaign_settle))
         .layer(axum::middleware::from_fn(crate::middleware::auth::auth_middleware))
 }
 
@@ -31,6 +49,8 @@ pub fn admin_campaign_routes() -> Router {
         .route("/api/admin/campaigns/:id/pause", post(admin_pause_campaign))
         .route("/api/admin/campaigns/:id/resume", post(admin_resume_campaign))
         .route("/api/admin/campaigns/:id/cancel", post(admin_cancel_campaign))
+        .route("/api/admin/campaigns/:id/pay-spec", get(campaign_pay_spec))
+        .route("/api/admin/campaigns/:id/settle", post(campaign_settle))
         .route("/api/admin/campaigns/:id/files", get(list_campaign_files).post(upload_campaign_file))
         .route("/api/admin/campaigns/:id/files/:file_id", delete(delete_campaign_file))
         .layer(DefaultBodyLimit::max(100 * 1024 * 1024))
@@ -64,7 +84,8 @@ async fn admin_list_campaigns(
     let rows = sqlx::query(
         "SELECT c.id, c.user_id, u.email, c.name, c.service_type, c.brief, c.style, c.duration, \
                 c.schedule, c.platforms, c.posts_per_day, c.start_date, c.end_date, \
-                c.zernio_profile_id, c.source_url, c.status, c.total_posts_planned, c.total_posts_published, c.created_at \
+                c.zernio_profile_id, c.source_url, c.status, c.total_posts_planned, c.total_posts_published, \
+                c.paid_until, c.created_at \
          FROM campaigns c JOIN users u ON u.id = c.user_id \
          ORDER BY c.created_at DESC",
     )
@@ -92,6 +113,7 @@ async fn admin_list_campaigns(
                 "status": row.get::<String, _>("status"),
                 "total_posts_planned": row.get::<i32, _>("total_posts_planned"),
                 "total_posts_published": row.get::<i32, _>("total_posts_published"),
+                "paid_until": row.get::<Option<chrono::DateTime<chrono::Utc>>, _>("paid_until").map(|d| d.to_rfc3339()),
                 "created_at": row.get::<chrono::DateTime<chrono::Utc>, _>("created_at").to_rfc3339(),
             })
         }).collect(),
@@ -126,8 +148,8 @@ async fn admin_create_campaign(
 
     let id = sqlx::query_scalar::<_, Uuid>(
         "INSERT INTO campaigns (user_id, name, service_type, brief, style, duration, schedule, platforms, \
-                                posts_per_day, start_date, end_date, source_url) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING id",
+                                posts_per_day, start_date, end_date, source_url, status, paid_until) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'pending_payment', NULL) RETURNING id",
     )
     .bind(0i32) // user_id — admin-created, no specific user
     .bind(&req.name)
@@ -145,7 +167,8 @@ async fn admin_create_campaign(
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
 
-    Ok(Json(json!({"success": true, "id": id.to_string()})))
+    let payment_url = format!("/api/campaigns/{}/pay-spec", id);
+    Ok(Json(json!({"success": true, "id": id.to_string(), "payment_url": payment_url, "status": "pending_payment"})))
 }
 
 // ── Admin: Get campaign details ─────────────────────────────────────────────
@@ -362,8 +385,8 @@ async fn client_create_campaign(
 
     let id = sqlx::query_scalar::<_, Uuid>(
         "INSERT INTO campaigns (user_id, name, service_type, brief, style, duration, schedule, platforms, \
-                                posts_per_day, start_date, end_date, zernio_profile_id, source_url) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING id",
+                                posts_per_day, start_date, end_date, zernio_profile_id, source_url, status, paid_until) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'pending_payment', NULL) RETURNING id",
     )
     .bind(user_id)
     .bind(&req.name)
@@ -382,7 +405,8 @@ async fn client_create_campaign(
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
 
-    Ok(Json(json!({"success": true, "id": id.to_string()})))
+    let payment_url = format!("/api/campaigns/{}/pay-spec", id);
+    Ok(Json(json!({"success": true, "id": id.to_string(), "payment_url": payment_url, "status": "pending_payment"})))
 }
 
 // ── Client: List own campaigns ──────────────────────────────────────────────
@@ -499,6 +523,96 @@ async fn client_get_campaign(
         },
         "posts": posts_json,
     }))
+}
+
+// ── Campaign Payment (x402) ──────────────────────────────────────────────────
+
+/// GET /api/campaigns/:id/pay-spec — returns x402 payment requirements to activate the campaign
+async fn campaign_pay_spec(
+    Path(id): Path<Uuid>,
+    Extension(state): Extension<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let row = sqlx::query(
+        "SELECT service_type, status, name FROM campaigns WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(&state.db_pool)
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?
+    .ok_or_else(|| (StatusCode::NOT_FOUND, Json(json!({"error": "Campaign not found"}))))?;
+
+    let status: String = row.get("status");
+    if status == "active" {
+        return Ok(Json(json!({"success": true, "already_active": true})));
+    }
+
+    let service_type: String = row.get("service_type");
+    let name: String = row.get("name");
+    let price_cents = campaign_price_cents(&service_type);
+
+    let recipient = std::env::var("X402_RECIPIENT_ADDRESS")
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "X402_RECIPIENT_ADDRESS not configured"}))))?;
+
+    let resource_url = format!("{}/api/campaigns/{}/settle", base_url(), id);
+    let description = format!("Activate campaign '{}' — ${:.2} month", name, price_cents as f64 / 100.0);
+
+    let spec = crate::x402::build_payment_required(price_cents, &recipient, &resource_url, &description);
+    Ok(Json(serde_json::to_value(spec).unwrap_or(json!({"error": "spec serialise failed"}))))
+}
+
+/// POST /api/campaigns/:id/settle — accepts X-Payment header, activates campaign for 30 days
+async fn campaign_settle(
+    Path(id): Path<Uuid>,
+    headers: axum::http::HeaderMap,
+    Extension(state): Extension<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let row = sqlx::query(
+        "SELECT service_type, status FROM campaigns WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(&state.db_pool)
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?
+    .ok_or_else(|| (StatusCode::NOT_FOUND, Json(json!({"error": "Campaign not found"}))))?;
+
+    let status: String = row.get("status");
+    if status == "active" {
+        return Ok(Json(json!({"success": true, "already_active": true})));
+    }
+
+    let service_type: String = row.get("service_type");
+    let price_cents = campaign_price_cents(&service_type);
+
+    let x_payment = headers.get("X-Payment").and_then(|h| h.to_str().ok())
+        .ok_or_else(|| (StatusCode::PAYMENT_REQUIRED, Json(json!({"error": "Missing X-Payment header"}))))?;
+
+    let recipient = std::env::var("X402_RECIPIENT_ADDRESS")
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "X402_RECIPIENT_ADDRESS not configured"}))))?;
+
+    let resource_url = format!("{}/api/campaigns/{}/settle", base_url(), id);
+    let description = format!("Activate campaign '{}'", "campaign");
+
+    let spec = crate::x402::build_payment_required(price_cents, &recipient, &resource_url, &description);
+    let req = spec.accepts.into_iter().next()
+        .ok_or_else(|| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "No payment requirements"}))))?;
+
+    let tx_hash = crate::x402::settle_or_reject(x_payment, &req).await
+        .map_err(|e| (StatusCode::PAYMENT_REQUIRED, Json(json!({"error": e}))))?;
+
+    // Activate campaign for 30 days
+    sqlx::query(
+        "UPDATE campaigns SET status = 'active', paid_until = NOW() + INTERVAL '30 days' WHERE id = $1",
+    )
+    .bind(id)
+    .execute(&state.db_pool)
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+
+    Ok(Json(json!({
+        "success": true,
+        "tx_hash": tx_hash,
+        "active_until": (chrono::Utc::now() + chrono::Duration::days(30)).to_rfc3339(),
+    })))
 }
 
 // ── Campaign Files: Upload, List, Delete ─────────────────────────────────────

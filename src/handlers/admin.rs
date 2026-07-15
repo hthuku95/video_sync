@@ -34,11 +34,7 @@ pub fn admin_routes() -> Router {
         // Delivery share links — public by design
         .route("/delivery/:id", get(delivery_page))
         .route("/delivery/:id/stream", get(delivery_stream))
-        .route("/api/portfolio-samples", get(api_list_portfolio_samples))
-        // x402 paywall endpoints — public on purpose; auth happens via the
-        // signed USDC payment in the X-Payment header, not via JWT.
-        .route("/delivery/:id/unlock-spec", get(delivery_unlock_spec))
-        .route("/delivery/:id/unlock", post(delivery_unlock));
+        .route("/api/portfolio-samples", get(api_list_portfolio_samples));
 
     // Admin HTML pages — now behind auth + admin middleware
     // Merged into protected_admin BEFORE the .layer() calls so middleware wraps them too.
@@ -7317,10 +7313,9 @@ async fn delivery_page(
                 // demos that need to be visible to anyone.
                 (Some(n), Some(g), Some(s), u, f, sc, fb, None, None)
             } else {
-                // 2. Custom delivery — these CAN be paywalled.
+                // 2. Custom delivery.
                 let dr = sqlx::query(
-                    "SELECT title, gig_type, status, output_r2_url, output_filename, \
-                     unlock_price_usdc, unlocked_until, preview_r2_url, extra_args \
+                    "SELECT title, gig_type, status, output_r2_url, output_filename, extra_args \
                      FROM deliveries WHERE id = $1",
                 )
                 .bind(uuid)
@@ -7337,27 +7332,13 @@ async fn delivery_page(
                         .try_get::<Option<String>, _>("output_r2_url")
                         .ok()
                         .flatten();
-                    let preview_u = row
-                        .try_get::<Option<String>, _>("preview_r2_url")
-                        .ok()
-                        .flatten();
                     let full_u = match full_u {
                         Some(existing) => {
                             refresh_r2_presigned_url_from_existing(&state, &existing).await
                         }
                         None => None,
                     };
-                    let preview_u = match preview_u {
-                        Some(existing) => {
-                            refresh_r2_presigned_url_from_existing(&state, &existing).await
-                        }
-                        None => None,
-                    };
                     let f: Option<String> = row.try_get("output_filename").ok();
-                    let price: Option<sqlx::types::Decimal> =
-                        row.try_get("unlock_price_usdc").ok().flatten();
-                    let until: Option<chrono::DateTime<chrono::Utc>> =
-                        row.try_get("unlocked_until").ok().flatten();
 
                     // Build clip gallery from extra_args.clip_keys
                     if let Ok(Some(extra)) = row.try_get::<Option<serde_json::Value>, _>("extra_args") {
@@ -7374,17 +7355,7 @@ async fn delivery_page(
                         }
                     }
 
-                    // Pick which URL to show: locked → preview (or full fallback),
-                    // unlocked → full clean HD. The preview URL is the agent's
-                    // watermarked 30-60s clip; paying unlocks the full 3-4min.
-                    let is_unlocked_now = internal_reviewer
-                        || price.is_none()
-                        || until.map(|t| t > chrono::Utc::now()).unwrap_or(false);
-                    let served = if is_unlocked_now {
-                        full_u.clone()
-                    } else {
-                        preview_u.or(full_u.clone())
-                    };
+                    let served = full_u.clone();
                     (
                         Some(n),
                         Some(g),
@@ -7393,8 +7364,8 @@ async fn delivery_page(
                         f,
                         None,
                         None,
-                        price,
-                        until,
+                        None,
+                        None,
                     )
                 } else {
                     (None, None, None, None, None, None, None, None, None)
@@ -7404,23 +7375,9 @@ async fn delivery_page(
             (None, None, None, None, None, None, None, None, None)
         };
 
-    // Unlocked = the deliverable can show full-quality download buttons.
-    // Either: no price set (free delivery), or unlocked_until is in the future.
-    let is_unlocked = internal_reviewer
-        || unlock_price.is_none()
-        || unlocked_until
-            .map(|t| t > chrono::Utc::now())
-            .unwrap_or(false);
-    let price_cents: u64 = unlock_price
-        .as_ref()
-        .and_then(|d| {
-            // Decimal → cents (multiply by 100, truncate fractional).
-            use sqlx::types::Decimal;
-            let hundred = Decimal::new(100, 0);
-            let cents_dec = d * hundred;
-            cents_dec.trunc().to_string().parse::<u64>().ok()
-        })
-        .unwrap_or(500);
+    // All deliveries are free — no paywall.
+    let is_unlocked = true;
+    let price_cents: u64 = 0;
 
     let result: Option<()> = name.as_ref().map(|_| ());
 
@@ -7477,19 +7434,8 @@ async fn delivery_page(
                             r#"<div class="media-stack"><img src="{media_src}" alt="Delivered image" style="max-width:100%;border-radius:12px;">{watermark_overlay}</div>"#
                         )
                     } else {
-                        let watermark_overlay = if !is_unlocked {
-                            r#"<div class="watermark"><div class="watermark-label">PREVIEW · UNLOCK FULL HD BELOW</div></div>"#
-                        } else {
-                            ""
-                        };
-                        // Disable right-click + downloads on the locked preview
-                        // by removing `controlsList=download` and adding
-                        // `disablepictureinpicture` etc. Best-effort.
-                        let video_attrs = if is_unlocked {
-                            "controls"
-                        } else {
-                            r#"controls controlsList="nodownload" disablepictureinpicture oncontextmenu="return false""#
-                        };
+                        let watermark_overlay = "";
+                        let video_attrs = "controls";
                         format!(
                             r#"<div class="media-stack">
 <video {video_attrs} style="width:100%;border-radius:12px;background:#000;">
@@ -7502,28 +7448,16 @@ async fn delivery_page(
             };
 
             let stream_url_str = stream_url.as_deref().unwrap_or("");
-            // Download button is gated. When LOCKED, show the unlock CTA
-            // instead — this is the entire revenue surface.
-            let download_btn = match (&r2_url, is_unlocked) {
-                (None, _) => String::new(),
-                (Some(_url), true) => {
+            // Download is now always free — no paywall.
+            let download_btn = match &r2_url {
+                None => String::new(),
+                Some(_url) => {
                     let fname = filename.as_deref().unwrap_or("output");
                     format!(
                         r#"<div class="delivery-actions">
   <a href="{stream_url_str}" target="_blank" rel="noopener" class="btn-secondary">Open media</a>
   <button type="button" class="btn-secondary" onclick="navigator.clipboard.writeText(window.location.href);this.textContent='Link copied';setTimeout(()=>this.textContent='Copy delivery link',1800)">Copy delivery link</button>
-  <a href="{stream_url_str}" download="{fname}" class="btn-download">Download HD {fname}</a>
-</div>"#
-                    )
-                }
-                (Some(_), false) => {
-                    let dollars = price_cents as f64 / 100.0;
-                    format!(
-                        r#"<div class="unlock-cta">
-  <div class="unlock-headline">Preview only — unlock the HD download for ${dollars:.2} USDC</div>
-  <div class="unlock-sub">Pay once with any wallet (Phantom, Coinbase, MetaMask) on Base. 30-day access. No account needed.</div>
-  <button id="x402-unlock-btn" class="btn-download" style="background:#7a4cff;margin-top:8px">🔓 Pay ${dollars:.2} USDC &amp; Unlock</button>
-  <div id="x402-status" style="margin-top:10px;font-size:13px;color:#9999bb"></div>
+  <a href="{stream_url_str}" download="{fname}" class="btn-download">Download HD</a>
 </div>"#
                     )
                 }
@@ -7613,34 +7547,7 @@ async fn delivery_page(
   .feedback {{ font-size: 13px; color: #9999bb; line-height: 1.6; }}
   .footer {{ margin-top: 32px; font-size: 12px; color: #666680; text-align: center; }}
   .footer a {{ color: #6366f1; text-decoration: none; }}
-  /* x402 paywall styling — preview = full-length, watermarked diagonally.
-     Buyer sees the entire clip so they know what they're paying for, while
-     the watermark reinforces the paid HD unlock CTA on every frame. */
   .media-stack {{ position: relative; overflow: hidden; }}
-  .watermark {{
-    position: absolute; top: 0; left: 0; right: 0; bottom: 0;
-    display: flex; align-items: center; justify-content: center;
-    pointer-events: none; user-select: none;
-    background-image: repeating-linear-gradient(
-      -22deg,
-      rgba(255,255,255,0.10) 0px,
-      rgba(255,255,255,0.10) 2px,
-      transparent 2px,
-      transparent 170px
-    );
-  }}
-  .watermark-label {{
-    font-size: 22px; font-weight: 800; color: rgba(255,255,255,0.85);
-    background: rgba(122,76,255,0.55); padding: 10px 24px; border-radius: 10px;
-    letter-spacing: 0.10em; transform: rotate(-15deg);
-    text-shadow: 0 2px 6px rgba(0,0,0,0.4);
-    border: 1px solid rgba(255,255,255,0.25);
-  }}
-  .unlock-cta {{ background: linear-gradient(135deg, rgba(122,76,255,0.12), rgba(99,102,241,0.06));
-                  border: 1px solid rgba(122,76,255,0.3); border-radius: 12px;
-                  padding: 20px; margin-bottom: 24px; }}
-  .unlock-headline {{ font-size: 16px; font-weight: 700; color: #fff; margin-bottom: 4px; }}
-  .unlock-sub {{ font-size: 13px; color: #9999bb; line-height: 1.5; margin-bottom: 8px; }}
   .clip-gallery {{ margin-top: 24px; border-top: 1px solid #2a2a36; padding-top: 20px; }}
   .clip-gallery h3 {{ font-size: 15px; font-weight: 700; color: #fff; margin-bottom: 14px; }}
   .clip-grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; }}
@@ -7666,172 +7573,7 @@ async fn delivery_page(
 <div class="footer">
   Delivered by <a href="https://videosync.video">VideoSync</a> — AI-Powered Video Generation
 </div>
-<script>
-// x402 paywall flow — runs only when the unlock button is rendered (locked state).
-(function() {{
-  const btn    = document.getElementById('x402-unlock-btn');
-  const status = document.getElementById('x402-status');
-  if (!btn) return; // Already unlocked; nothing to do.
 
-  const setStatus = (msg, isError) => {{
-    status.style.color = isError ? '#f87171' : '#9999bb';
-    status.textContent = msg;
-  }};
-
-  btn.addEventListener('click', async () => {{
-    btn.disabled = true;
-    btn.textContent = 'Connecting wallet...';
-
-    // Step 1 — pull the 402 payment spec from the server.
-    let spec;
-    try {{
-      const r = await fetch(window.location.pathname + '/unlock-spec');
-      if (!r.ok) throw new Error('unlock-spec returned ' + r.status);
-      spec = await r.json();
-    }} catch (e) {{
-      setStatus('Could not fetch payment spec: ' + e.message, true);
-      btn.disabled = false; btn.textContent = '🔓 Try again';
-      return;
-    }}
-
-    const req = (spec.accepts || [])[0];
-    if (!req) {{ setStatus('Payment spec missing requirements.', true); return; }}
-
-    // Step 2 — find an EVM provider. Phantom exposes window.phantom.ethereum
-    // when EVM mode is enabled; MetaMask + Coinbase Wallet expose window.ethereum.
-    const provider = (window.phantom && window.phantom.ethereum) || window.ethereum;
-    if (!provider) {{
-      setStatus('No crypto wallet detected. Install Phantom, MetaMask, or Coinbase Wallet.', true);
-      btn.disabled = false; btn.textContent = '🔓 Try again';
-      return;
-    }}
-
-    // Step 3 — request accounts and ensure we're on Base mainnet (chainId 0x2105).
-    let accounts;
-    try {{
-      accounts = await provider.request({{ method: 'eth_requestAccounts' }});
-    }} catch (e) {{
-      setStatus('Wallet connection rejected.', true);
-      btn.disabled = false; btn.textContent = '🔓 Try again';
-      return;
-    }}
-    const from = accounts[0];
-
-    try {{
-      await provider.request({{
-        method: 'wallet_switchEthereumChain',
-        params: [{{ chainId: '0x2105' }}],
-      }});
-    }} catch (switchErr) {{
-      // Chain might not be added — try adding it.
-      try {{
-        await provider.request({{
-          method: 'wallet_addEthereumChain',
-          params: [{{
-            chainId: '0x2105',
-            chainName: 'Base',
-            nativeCurrency: {{ name: 'Ether', symbol: 'ETH', decimals: 18 }},
-            rpcUrls: ['https://mainnet.base.org'],
-            blockExplorerUrls: ['https://basescan.org']
-          }}]
-        }});
-      }} catch {{
-        setStatus('Switch your wallet to Base network and try again.', true);
-        btn.disabled = false; btn.textContent = '🔓 Try again';
-        return;
-      }}
-    }}
-
-    setStatus('Sign the USDC payment in your wallet to unlock...', false);
-    btn.textContent = 'Awaiting signature...';
-
-    // Step 4 — build the EIP-3009 transferWithAuthorization typed data.
-    const validAfter  = 0;
-    const validBefore = Math.floor(Date.now() / 1000) + req.maxTimeoutSeconds;
-    const nonce       = '0x' + Array.from(crypto.getRandomValues(new Uint8Array(32)))
-                                    .map(b => b.toString(16).padStart(2, '0')).join('');
-    const typedData = {{
-      types: {{
-        EIP712Domain: [
-          {{ name: 'name', type: 'string' }},
-          {{ name: 'version', type: 'string' }},
-          {{ name: 'chainId', type: 'uint256' }},
-          {{ name: 'verifyingContract', type: 'address' }},
-        ],
-        TransferWithAuthorization: [
-          {{ name: 'from',        type: 'address' }},
-          {{ name: 'to',          type: 'address' }},
-          {{ name: 'value',       type: 'uint256' }},
-          {{ name: 'validAfter',  type: 'uint256' }},
-          {{ name: 'validBefore', type: 'uint256' }},
-          {{ name: 'nonce',       type: 'bytes32' }},
-        ],
-      }},
-      primaryType: 'TransferWithAuthorization',
-      domain: {{
-        name: req.extra && req.extra.name    || 'USD Coin',
-        version: req.extra && req.extra.version || '2',
-        chainId: 8453, // Base mainnet
-        verifyingContract: req.asset,
-      }},
-      message: {{
-        from, to: req.payTo,
-        value: req.maxAmountRequired,
-        validAfter, validBefore, nonce,
-      }},
-    }};
-
-    let signature;
-    try {{
-      signature = await provider.request({{
-        method: 'eth_signTypedData_v4',
-        params: [from, JSON.stringify(typedData)],
-      }});
-    }} catch (e) {{
-      setStatus('Signature rejected.', true);
-      btn.disabled = false; btn.textContent = '🔓 Try again';
-      return;
-    }}
-
-    // Step 5 — POST signed authorization back to our /unlock endpoint.
-    setStatus('Submitting payment to Base network...', false);
-    btn.textContent = 'Settling on-chain...';
-
-    const xPaymentBody = {{
-      x402Version: 1,
-      scheme:  req.scheme,
-      network: req.network,
-      payload: {{
-        signature,
-        authorization: {{
-          from, to: req.payTo,
-          value: req.maxAmountRequired,
-          validAfter: String(validAfter),
-          validBefore: String(validBefore),
-          nonce,
-        }},
-      }},
-    }};
-    const xPaymentB64 = btoa(JSON.stringify(xPaymentBody));
-
-    try {{
-      const r = await fetch(window.location.pathname + '/unlock', {{
-        method: 'POST',
-        headers: {{ 'X-Payment': xPaymentB64 }},
-      }});
-      const data = await r.json();
-      if (!r.ok || !data.success) {{
-        throw new Error(data.error || ('HTTP ' + r.status));
-      }}
-      setStatus('✅ Unlocked! Reloading...', false);
-      setTimeout(() => window.location.reload(), 800);
-    }} catch (e) {{
-      setStatus('Settlement failed: ' + e.message, true);
-      btn.disabled = false; btn.textContent = '🔓 Try again';
-    }}
-  }});
-}})();
-</script>
 </body>
 </html>"#);
             const ZERNIO_SCRIPT: &str = r###"
@@ -8063,8 +7805,7 @@ async fn delivery_stream(
             Some(url)
         } else {
             let row = sqlx::query(
-                "SELECT output_r2_url, preview_r2_url, unlock_price_usdc, unlocked_until \
-                 FROM deliveries WHERE id = $1",
+                "SELECT output_r2_url FROM deliveries WHERE id = $1",
             )
             .bind(uuid)
             .fetch_optional(&state.db_pool)
@@ -8076,15 +7817,7 @@ async fn delivery_stream(
             match row {
                 Some(r) => {
                     let full_u: Option<String> = r.try_get("output_r2_url").ok().flatten();
-                    let preview_u: Option<String> = r.try_get("preview_r2_url").ok().flatten();
-                    let price: Option<sqlx::types::Decimal> = r.try_get("unlock_price_usdc").ok().flatten();
-                    let until: Option<chrono::DateTime<chrono::Utc>> =
-                        r.try_get("unlocked_until").ok().flatten();
-
-                    let is_unlocked = price.is_none()
-                        || until.map(|t| t > chrono::Utc::now()).unwrap_or(false);
-
-                    if is_unlocked { full_u } else { preview_u.or(full_u) }
+                    full_u
                 }
                 None => None,
             }
@@ -8124,211 +7857,9 @@ async fn delivery_stream(
 
 // GCS delivery download removed — R2 is the only storage backend.
 
-// =============================================================================
-// x402 paywall — public endpoints (no auth, payment IS the auth)
-// =============================================================================
 
-/// GET /delivery/:id/unlock-spec — returns the HTTP 402 payment requirements
-/// the buyer's wallet needs to sign. We render this as 200 OK with the spec
-/// in the body (rather than literal HTTP 402 with the spec) so the browser's
-/// fetch() doesn't bin it as an error before the JS can parse it.
-pub async fn delivery_unlock_spec(
-    Path(id): Path<String>,
-    Extension(state): Extension<Arc<AppState>>,
-) -> Json<serde_json::Value> {
-    let uuid = match uuid::Uuid::parse_str(&id) {
-        Ok(u) => u,
-        Err(_) => return Json(json!({"error": "Invalid delivery id"})),
-    };
-
-    // Look up the price + title for the spec description.
-    let row =
-        sqlx::query("SELECT title, unlock_price_usdc, source_url FROM deliveries WHERE id = $1")
-            .bind(uuid)
-            .fetch_optional(&state.db_pool)
-            .await
-            .ok()
-            .flatten();
-
-    let (title, price_usd, source_url) = match row {
-        Some(r) => {
-            let t: String = r.get("title");
-            let p: Option<sqlx::types::Decimal> = r.try_get("unlock_price_usdc").ok().flatten();
-            let s: Option<String> = r.try_get("source_url").ok().flatten();
-            (t, p, s)
-        }
-        None => return Json(json!({"error": "Delivery not found"})),
-    };
-
-    let recipient = match std::env::var("X402_RECIPIENT_ADDRESS") {
-        Ok(a) if !a.is_empty() => a,
-        _ => return Json(json!({"error": "X402_RECIPIENT_ADDRESS env var not set on server"})),
-    };
-
-    // Legacy rows can have a missing price. Fall back to the same market-
-    // aligned strategy used when lead-generated samples are created:
-    // website-driven presentation videos are premium; lighter renders are not.
-    let price_cents: u64 = price_usd
-        .and_then(|d| {
-            use sqlx::types::Decimal;
-            let hundred = Decimal::new(100, 0);
-            (d * hundred).trunc().to_string().parse::<u64>().ok()
-        })
-        .unwrap_or_else(|| {
-            let fallback_usd =
-                crate::handlers::prospects::unlock_price_for(None, source_url.is_some());
-            (fallback_usd * 100.0).round() as u64
-        });
-
-    let resource_url = format!("{}/delivery/{}/unlock", base_url(), uuid);
-    let description = format!("Unlock HD download — {}", title);
-
-    let spec =
-        crate::x402::build_payment_required(price_cents, &recipient, &resource_url, &description);
-    Json(serde_json::to_value(spec).unwrap_or(json!({"error": "spec serialise failed"})))
-}
-
-/// POST /delivery/:id/unlock — accepts the X-Payment header, settles via the
-/// facilitator, flips the delivery row to unlocked-for-30-days, returns the
-/// receipt id.
-pub async fn delivery_unlock(
-    Path(id): Path<String>,
-    headers: axum::http::HeaderMap,
-    Extension(state): Extension<Arc<AppState>>,
-) -> (axum::http::StatusCode, Json<serde_json::Value>) {
-    let uuid = match uuid::Uuid::parse_str(&id) {
-        Ok(u) => u,
-        Err(_) => {
-            return (
-                axum::http::StatusCode::BAD_REQUEST,
-                Json(json!({"success": false, "error": "Invalid delivery id"})),
-            )
-        }
-    };
-
-    let x_payment = match headers.get("X-Payment").and_then(|h| h.to_str().ok()) {
-        Some(s) if !s.is_empty() => s.to_string(),
-        _ => {
-            return (
-                axum::http::StatusCode::PAYMENT_REQUIRED,
-                Json(
-                    json!({"success": false, "error": "Missing X-Payment header. Fetch /unlock-spec first, sign with your wallet, then retry with the signed payload."}),
-                ),
-            )
-        }
-    };
-
-    // Re-derive the same requirements we'd put in the 402 spec so the
-    // facilitator can sanity-check the signature. Has to match exactly.
-    let row = match sqlx::query(
-        "SELECT title, unlock_price_usdc, source_url FROM deliveries WHERE id = $1",
-    )
-    .bind(uuid)
-    .fetch_optional(&state.db_pool)
-    .await
-    {
-        Ok(Some(r)) => r,
-        Ok(None) => {
-            return (
-                axum::http::StatusCode::NOT_FOUND,
-                Json(json!({"success": false, "error": "Delivery not found"})),
-            )
-        }
-        Err(e) => {
-            return (
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"success": false, "error": format!("DB error: {}", e)})),
-            )
-        }
-    };
-
-    let title: String = row.get("title");
-    let price_usd: Option<sqlx::types::Decimal> = row.try_get("unlock_price_usdc").ok().flatten();
-    let source_url: Option<String> = row.try_get("source_url").ok().flatten();
-    let price_cents: u64 = price_usd
-        .and_then(|d| {
-            use sqlx::types::Decimal;
-            let hundred = Decimal::new(100, 0);
-            (d * hundred).trunc().to_string().parse::<u64>().ok()
-        })
-        .unwrap_or_else(|| {
-            let fallback_usd =
-                crate::handlers::prospects::unlock_price_for(None, source_url.is_some());
-            (fallback_usd * 100.0).round() as u64
-        });
-
-    let recipient = match std::env::var("X402_RECIPIENT_ADDRESS") {
-        Ok(a) if !a.is_empty() => a,
-        _ => {
-            return (
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"success": false, "error": "X402_RECIPIENT_ADDRESS not configured"})),
-            )
-        }
-    };
-
-    let resource_url = format!("{}/delivery/{}/unlock", base_url(), uuid);
-    let description = format!("Unlock HD download — {}", title);
-    let spec =
-        crate::x402::build_payment_required(price_cents, &recipient, &resource_url, &description);
-    let req = match spec.accepts.first() {
-        Some(r) => r.clone(),
-        None => {
-            return (
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"success": false, "error": "Failed to build payment requirements"})),
-            )
-        }
-    };
-
-    let tx_hash = match crate::x402::settle_or_reject(&x_payment, &req).await {
-        Ok(h) => h,
-        Err(e) => {
-            return (
-                axum::http::StatusCode::PAYMENT_REQUIRED,
-                Json(json!({"success": false, "error": e})),
-            )
-        }
-    };
-
-    // Persist the unlock + receipt. 30-day window.
-    let _ = sqlx::query(
-        "UPDATE deliveries
-         SET unlocked_until = NOW() + INTERVAL '30 days',
-             payment_receipt_id = $1
-         WHERE id = $2",
-    )
-    .bind(&tx_hash)
-    .bind(uuid)
-    .execute(&state.db_pool)
-    .await;
-
-    // Admin Telegram ping — fire-and-forget.
-    let tx_preview = tx_hash.chars().take(10).collect::<String>();
-    let notify_text = format!(
-        "💰 *Delivery HD unlock — ${:.2} USDC*\n\
-         Delivery: `{}`\n\
-         Tx: `{}...`",
-        price_cents as f64 / 100.0,
-        uuid,
-        tx_preview
-    );
-    tokio::spawn(async move {
-        crate::telegram_bot::notify_admin(&notify_text).await;
-    });
-
-    (
-        axum::http::StatusCode::OK,
-        Json(json!({
-            "success":    true,
-            "tx_hash":    tx_hash,
-            "unlocked_for_days": 30,
-        })),
-    )
-}
 
 /// Read the public base URL from env, falling back to videosync.video.
-/// Used in x402 spec responses so the wallet shows the canonical resource.
 fn base_url() -> String {
     std::env::var("PUBLIC_BASE_URL").unwrap_or_else(|_| "https://videosync.video".to_string())
 }
@@ -8415,46 +7946,33 @@ pub async fn api_create_delivery(
     };
 
     let workflow_id = if req.gig_type == "long_form_video" {
-        match crate::services::LongFormVideoWorkflow::start(
+        let service_type = crate::services::normalize_to_service_type(&req.gig_type);
+        let agentic_input = crate::services::ServiceInput {
+            title: req.title.clone(),
+            brief: req.prompt.clone(),
+            source_url: extra
+                .get("source_url")
+                .or_else(|| extra.get("reference_url"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            style: style.clone(),
+            duration_seconds: duration.max(15.0),
+            delivery_id,
+            prospect_id: None,
+            session_uuid: None,
+            user_id: extra
+                .get("sample_owner_user_id")
+                .and_then(|v| v.as_i64())
+                .and_then(|v| i32::try_from(v).ok()),
+            source_table: Some("deliveries".to_string()),
+            source_record_id: Some(delivery_id),
+            idempotency_key: Some(format!("delivery-long-form:{delivery_id}")),
+            reference_images: vec![],
+        };
+        match crate::services::AgenticServicePipeline::start(
             state.clone(),
-            crate::services::LongFormVideoRequest {
-                title: req.title.clone(),
-                brief: req.prompt.clone(),
-                target_duration_seconds: duration.max(30.0),
-                segment_duration_seconds: extra
-                    .get("segment_duration_seconds")
-                    .and_then(|value| value.as_f64())
-                    .unwrap_or(30.0),
-                style: style.clone(),
-                offer_type: extra
-                    .get("offer_type")
-                    .or_else(|| extra.get("service_offer"))
-                    .and_then(|value| value.as_str())
-                    .unwrap_or("long_form_video")
-                    .to_string(),
-                narration_speaker: extra
-                    .get("narration_speaker")
-                    .and_then(|value| value.as_str())
-                    .unwrap_or("Emma")
-                    .to_string(),
-                include_narration: extra
-                    .get("include_narration")
-                    .and_then(|value| value.as_bool())
-                    .unwrap_or(true),
-                reference_url: extra
-                    .get("source_url")
-                    .or_else(|| extra.get("reference_url"))
-                    .and_then(|value| value.as_str())
-                    .map(ToOwned::to_owned),
-                session_uuid: None,
-                user_id: extra
-                    .get("sample_owner_user_id")
-                    .and_then(|value| value.as_i64())
-                    .and_then(|value| i32::try_from(value).ok()),
-                source_table: Some("deliveries".to_string()),
-                source_record_id: Some(delivery_id),
-                idempotency_key: Some(format!("delivery-long-form:{delivery_id}")),
-            },
+            service_type,
+            agentic_input,
         )
         .await
         {
@@ -8474,9 +7992,7 @@ pub async fn api_create_delivery(
                 .bind(delivery_id)
                 .execute(&state.db_pool)
                 .await;
-                return Json(
-                    json!({"error": format!("Long-form workflow failed to start: {error}")}),
-                );
+                Some("agentic_pipeline_failed".to_string())
             }
         }
     } else {
@@ -8661,8 +8177,7 @@ pub async fn api_generate_crypto_saas_portfolio_samples(
                 if status == "failed" {
                     let (prompt, extra) = build_crypto_saas_render_inputs(&state, target).await;
                     let title = format!("Portfolio sample - {} Web3 SaaS video", target.company);
-                    let unlock_price =
-                        crate::handlers::prospects::unlock_price_for(Some("landing_page"), true);
+                    let unlock_price = 0.0;
                     let delivery_id: Uuid = row.get("id");
 
                     let updated = sqlx::query(
@@ -8734,7 +8249,7 @@ pub async fn api_generate_crypto_saas_portfolio_samples(
 
         let (prompt, extra) = build_crypto_saas_render_inputs(&state, target).await;
         let title = format!("Portfolio sample - {} Web3 SaaS video", target.company);
-        let unlock_price = crate::handlers::prospects::unlock_price_for(Some("landing_page"), true);
+        let unlock_price = 0.0;
 
         let inserted = sqlx::query(
             "INSERT INTO deliveries (client_ref, title, gig_type, prompt, style, duration, extra_args, status,
@@ -9132,26 +8647,7 @@ pub async fn api_normalize_reference_asset(
 pub async fn api_list_service_portfolio_briefs(
     Extension(_state): Extension<Arc<AppState>>,
 ) -> Json<serde_json::Value> {
-    let all = crate::handlers::service_catalog::all_service_portfolio_briefs();
-    let mut services: Vec<serde_json::Value> = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-    for brief in &all {
-        if seen.insert(brief.service_slug) {
-            let briefs_for_service = crate::handlers::service_catalog::get_service_portfolio_briefs(brief.service_slug);
-            let briefs_json: Vec<serde_json::Value> = briefs_for_service.iter().map(|b| {
-                json!({
-                    "name": b.name,
-                    "description": b.description,
-                    "brief": b.brief,
-                })
-            }).collect();
-            services.push(json!({
-                "service_slug": brief.service_slug,
-                "briefs": briefs_json,
-            }));
-        }
-    }
-    Json(json!({ "success": true, "services": services }))
+    Json(json!({ "success": true, "services": [] }))
 }
 
 pub async fn api_list_service_portfolio_samples(
@@ -9476,7 +8972,7 @@ pub async fn admin_portfolio_samples_page() -> Html<String> {
     <section class="hero">
       <h1>Crypto SaaS portfolio samples</h1>
       <p>
-        Generate five speculative website-to-video samples for real Web3 SaaS targets. These queue into the existing delivery pipeline, so every sample gets a public <code>/delivery/:id</code> link, R2-hosted output, and USDC unlock support.
+        Generate five speculative website-to-video samples for real Web3 SaaS targets. These queue into the existing delivery pipeline, so every sample gets a public <code>/delivery/:id</code> link with R2-hosted output.
       </p>
       <div class="actions">
         <button id="generate-btn">Generate 5 Crypto SaaS Samples</button>
@@ -9558,7 +9054,7 @@ pub async fn admin_portfolio_samples_page() -> Html<String> {
           <span class="status ${sample.status || 'pending'}">${sample.status || 'pending'}</span>
           ${output ? `<video class="preview" src="${output}" ${poster ? `poster="${poster}"` : ''} controls preload="metadata"></video>` : ''}
           <div class="meta">Source: ${source ? `<a href="${source}" target="_blank" rel="noreferrer">${source}</a>` : 'Not set'}</div>
-          <div class="meta">Price: ${sample.unlock_price_usdc ? `$${sample.unlock_price_usdc} USDC` : 'Uses default delivery price'}</div>
+          <div class="meta">Price: Free (sample delivery)</div>
           <div class="meta">Turnaround: ${formatMinutes(sample.completed_in_minutes)}</div>
           <div class="meta">Narration: ${sample.include_narration ? 'Enabled' : 'Silent'}</div>
           ${sample.error ? `<p style="color:#fb7185">${sample.error}</p>` : ''}
@@ -10708,7 +10204,7 @@ pub async fn admin_deliveries_page() -> Html<String> {
       <!-- Duration -->
       <div class="form-group" id="grp-duration">
         <label>Duration (seconds)</label>
-        <input id="duration" type="number" value="10" min="3" max="60" step="1">
+        <input id="duration" type="number" value="30" min="10" step="5">
       </div>
       <!-- Data Viz: chart type + data JSON -->
       <div class="form-group hidden" id="grp-chart-type">
@@ -11374,11 +10870,8 @@ pub async fn api_revenue_ledger(
             COALESCE(lead_counts.total_leads, 0)      AS leads_sourced,
             COALESCE(lead_counts.contacted_leads, 0)  AS leads_contacted,
             COALESCE(lead_counts.converted_leads, 0)  AS leads_converted,
-            -- Delivery + payment rollup
-            COALESCE(delivery_stats.deliveries_created, 0)       AS deliveries_created,
-            COALESCE(delivery_stats.deliveries_unlocked, 0)      AS deliveries_unlocked,
-            COALESCE(delivery_stats.total_usdc_paid, 0)::numeric AS total_usdc_paid,
-            (COALESCE(delivery_stats.total_usdc_paid, 0) * 0.5)::numeric AS pending_payout_usdc
+            -- Sample delivery counts
+            COALESCE(delivery_stats.deliveries_created, 0)       AS deliveries_created
         FROM users u
         LEFT JOIN (
             SELECT user_id,
@@ -11391,18 +10884,14 @@ pub async fn api_revenue_ledger(
         ) lead_counts ON lead_counts.user_id = u.id
         LEFT JOIN (
             SELECT il.user_id,
-                   COUNT(d.id)                                               AS deliveries_created,
-                   COUNT(*) FILTER (WHERE d.unlocked_until IS NOT NULL)      AS deliveries_unlocked,
-                   COALESCE(SUM(d.unlock_price_usdc) FILTER (WHERE d.unlocked_until IS NOT NULL), 0)
-                                                                             AS total_usdc_paid
+                   COUNT(d.id)                                               AS deliveries_created
             FROM deliveries d
             JOIN instagram_leads il ON il.id = d.sourced_from_lead_id
             GROUP BY il.user_id
         ) delivery_stats ON delivery_stats.user_id = u.id
         WHERE COALESCE(lead_counts.total_leads, 0) > 0
            OR COALESCE(delivery_stats.deliveries_created, 0) > 0
-        ORDER BY COALESCE(delivery_stats.total_usdc_paid, 0) DESC,
-                 COALESCE(lead_counts.total_leads, 0) DESC
+        ORDER BY COALESCE(lead_counts.total_leads, 0) DESC
         "#,
     )
     .fetch_all(&state.db_pool)
@@ -11415,10 +10904,6 @@ pub async fn api_revenue_ledger(
     let items: Vec<serde_json::Value> = rows
         .iter()
         .map(|r| {
-            let dec_to_f64 = |d: Option<sqlx::types::Decimal>| -> f64 {
-                d.and_then(|d| d.to_string().parse::<f64>().ok())
-                    .unwrap_or(0.0)
-            };
             json!({
                 "user_id":             r.get::<i32, _>("user_id"),
                 "username":            r.get::<String, _>("username"),
@@ -11427,9 +10912,6 @@ pub async fn api_revenue_ledger(
                 "leads_contacted":     r.get::<i64, _>("leads_contacted"),
                 "leads_converted":     r.get::<i64, _>("leads_converted"),
                 "deliveries_created":  r.get::<i64, _>("deliveries_created"),
-                "deliveries_unlocked": r.get::<i64, _>("deliveries_unlocked"),
-                "total_usdc_paid":     dec_to_f64(r.try_get("total_usdc_paid").ok().flatten()),
-                "pending_payout_usdc": dec_to_f64(r.try_get("pending_payout_usdc").ok().flatten()),
             })
         })
         .collect();
@@ -11602,8 +11084,8 @@ const REVENUE_LEDGER_HTML: &str = r###"<!DOCTYPE html>
 </div>
 <div class="container">
   <div class="intro">
-    <h2>Per-user lead attribution + revenue share</h2>
-    <p>Each row aggregates the full lead funnel for a whitelisted team member: leads they sourced on Instagram → leads they DMed → leads that converted to paid clients → deliveries created → USDC paid on HD unlocks. <strong>Pending payout</strong> shows the 50% cut owed — settle by sending USDC on Base to the user's wallet (you collect email/wallet off-ledger for now). A user only appears here when they've either sourced a lead or had a delivery created from their lead.</p>
+    <h2>Per-user lead attribution</h2>
+    <p>Each row aggregates the full lead funnel for a whitelisted team member: Instagram leads sourced → contacted → converted → deliveries created. Sample deliveries are free (proofs-of-work sent in DMs). Revenue from campaigns and subscriptions is tracked in the Payments tab. A user only appears here when they've sourced a lead or had a delivery created from their lead.</p>
   </div>
   <div id="totals" class="totals"></div>
   <div class="table-wrap">
@@ -11621,25 +11103,21 @@ async function loadLedger() {
   if (!data.success) { root.innerHTML = '<div class="empty">Failed to load ledger</div>'; return; }
   const rows = data.ledger || [];
   if (rows.length === 0) {
-    root.innerHTML = '<div class="empty"><div class="empty-icon">🪙</div>No revenue attribution yet.<div style="font-size:0.85rem;margin-top:8px;color:var(--dim)">As whitelisted users source IG leads and those leads pay for HD unlocks, rows will appear here.</div></div>';
+    root.innerHTML = '<div class="empty"><div class="empty-icon">📊</div>No lead attribution yet.<div style="font-size:0.85rem;margin-top:8px;color:var(--dim)">As whitelisted users source IG leads and generate samples, rows will appear here.</div></div>';
     document.getElementById('totals').innerHTML = '';
     return;
   }
   const totals = rows.reduce((acc, r) => ({
     leads:    acc.leads    + (r.leads_sourced || 0),
     convs:    acc.convs    + (r.leads_converted || 0),
-    unlocks:  acc.unlocks  + (r.deliveries_unlocked || 0),
-    paid:     acc.paid     + (r.total_usdc_paid || 0),
-    pending:  acc.pending  + (r.pending_payout_usdc || 0),
-  }), {leads:0, convs:0, unlocks:0, paid:0, pending:0});
+    creates:  acc.creates  + (r.deliveries_created || 0),
+  }), {leads:0, convs:0, creates:0});
   document.getElementById('totals').innerHTML = `
     <div class="stat-card"><div class="stat-val">${totals.leads}</div><div class="stat-label">Total leads sourced</div></div>
     <div class="stat-card"><div class="stat-val">${totals.convs}</div><div class="stat-label">Conversions</div></div>
-    <div class="stat-card"><div class="stat-val">${totals.unlocks}</div><div class="stat-label">HD unlocks paid</div></div>
-    <div class="stat-card"><div class="stat-val money">$${totals.paid.toFixed(2)}</div><div class="stat-label">Gross USDC</div></div>
-    <div class="stat-card"><div class="stat-val pending">$${totals.pending.toFixed(2)}</div><div class="stat-label">Pending payout (50%)</div></div>
+    <div class="stat-card"><div class="stat-val">${totals.creates}</div><div class="stat-label">Sample deliveries</div></div>
   `;
-  root.innerHTML = '<table><thead><tr><th>User</th><th class="numeric">Leads sourced</th><th class="numeric">Contacted</th><th class="numeric">Converted</th><th class="numeric">Deliveries created</th><th class="numeric">HD unlocks paid</th><th class="numeric">Gross USDC</th><th class="numeric">Payout owed (50%)</th></tr></thead><tbody>' +
+  root.innerHTML = '<table><thead><tr><th>User</th><th class="numeric">Leads sourced</th><th class="numeric">Contacted</th><th class="numeric">Converted</th><th class="numeric">Sample deliveries</th></tr></thead><tbody>' +
     rows.map(r => `
       <tr>
         <td class="user-cell"><strong>@${r.username}</strong><small>${r.email}</small></td>
@@ -11647,9 +11125,6 @@ async function loadLedger() {
         <td class="numeric num">${r.leads_contacted}</td>
         <td class="numeric num">${r.leads_converted}</td>
         <td class="numeric num">${r.deliveries_created}</td>
-        <td class="numeric num">${r.deliveries_unlocked}</td>
-        <td class="numeric num money">$${(r.total_usdc_paid || 0).toFixed(2)}</td>
-        <td class="numeric num pending">$${(r.pending_payout_usdc || 0).toFixed(2)}</td>
       </tr>
     `).join('') +
     '</tbody></table>';
@@ -11734,7 +11209,7 @@ const HOW_WE_WORK_HTML: &str = r###"<!DOCTYPE html>
 
 <div class="intro">
   <h2>The platform in one paragraph</h2>
-  <p>VideoSync is an AI video production studio monetised 4 ways: (1) <b>service sales</b> to creators / founders you source via Instagram, LinkedIn, Telegram, YouTube, and Twitch; (2) <b>per-delivery x402 USDC unlocks</b> on <code>/delivery/:id</code> preview pages; (3) <b>monthly subscriptions</b> — $15/mo creator tier + $99/$199 agency tier; (4) <b>clipping-payout platforms</b> (Whop, Reach.cat, etc.) where we post authorised clips and get paid per 1,000 views. Everything flows to USDC on Base — no Stripe, no contracts.</p>
+  <p>VideoSync is an AI video production studio monetised 3 ways: (1) <b>service sales</b> to creators / founders you source via Instagram, LinkedIn, Telegram, YouTube, and Twitch — sample deliveries are free proofs-of-work sent to prospects; (2) <b>monthly subscriptions</b> — $15/mo creator tier + $99/$199 agency tier; (3) <b>clipping-payout platforms</b> (Whop, Reach.cat, etc.) where we post authorised clips and get paid per 1,000 views. Everything flows to USDC on Base — no Stripe, no contracts.</p>
 </div>
 
 <div class="toc">
@@ -11882,8 +11357,8 @@ const HOW_WE_WORK_HTML: &str = r###"<!DOCTYPE html>
   <div class="step">
     <div class="step-num">7</div>
     <div class="step-body">
-      <strong>Close via DM or delivery unlock</strong>
-      Big deals: invoice direct in USDC (your Base address). Smaller one-offs: client unlocks the HD delivery on the delivery page at the sample's market-aligned price. Both attribute correctly on the Revenue Ledger.
+      <strong>Close via DM</strong>
+      Big deals: invoice direct in USDC (your Base address). Smaller one-offs: client commissions via the campaign or retainer model. Both attribute correctly on the Revenue Ledger.
     </div>
   </div>
 
@@ -11916,7 +11391,7 @@ const HOW_WE_WORK_HTML: &str = r###"<!DOCTYPE html>
     <li>Status moves: <em>new</em> → <em>contacted</em> → <em>replied</em> → <em>converted</em>.</li>
     <li>When converted, fulfilment happens inside VideoSync's main app.</li>
   </ol>
-  <div class="callout ok">Team members pay NO subscription — they're grandfathered. Their work generates revenue → admin splits 50% on delivery unlocks via the <a href="/admin/revenue-ledger">Revenue Ledger</a>.</div>
+  <div class="callout ok">Team members pay NO subscription — they're grandfathered. Their work generates revenue → admin splits 50% on campaign/subscription revenue via the <a href="/admin/revenue-ledger">Revenue Ledger</a>.</div>
   <p>Team members can see the <strong>How It Works</strong> tab inside their own Instagram Leads page — covers the same workflow from their side.</p>
 </section>
 
@@ -11926,15 +11401,15 @@ const HOW_WE_WORK_HTML: &str = r###"<!DOCTYPE html>
 
   <h3>Payment rails</h3>
   <ul>
-    <li><strong>x402 USDC on Base</strong> — every /subscribe, /api-access, /delivery/:id unlock uses the same EIP-3009 transferWithAuthorization flow. Wallet signs once, Coinbase facilitator settles on-chain in ~1s.</li>
+    <li><strong>x402 USDC on Base</strong> — every /subscribe and /api-access uses the same EIP-3009 transferWithAuthorization flow. Wallet signs once, Coinbase facilitator settles on-chain in ~1s.</li>
     <li><strong>Direct wallet-to-wallet USDC</strong> — for big retainer deals closed via DM. Give the client your Base address, they send USDC, you invoice outside the app.</li>
   </ul>
 
   <h3>Attribution (who sourced who)</h3>
   <ul>
     <li>Every Instagram lead has a <code>user_id</code> — the whitelisted user who sourced it. Leads are private to that user.</li>
-    <li>When a team member creates a sample via "+ Attach sample", the generated delivery row gets <code>sourced_from_lead_id</code> plus a market-aligned <code>unlock_price_usdc</code> based on the service and whether a live website was used.</li>
-    <li>When a client pays to unlock that delivery, x402 settles on your wallet — but the <a href="/admin/revenue-ledger">Revenue Ledger</a> records which team member's lead drove it.</li>
+    <li>When a team member creates a sample via "+ Attach sample", the generated delivery row gets <code>sourced_from_lead_id</code> to attribute the lead.</li>
+    <li>All sample deliveries are free — revenue comes from monthly campaigns and subscriptions.</li>
   </ul>
 
   <h3>Revenue share</h3>
@@ -11993,13 +11468,13 @@ const HOW_WE_WORK_HTML: &str = r###"<!DOCTYPE html>
   <p>POST to <code>/api/admin/telegram/channels</code> or edit the <code>telegram_watch_channels</code> table directly. Default list: cryptojobslist, cryptojobs, web3_jobs, SaaSFounders, directoryofmarketers, contentcreators_hub.</p>
 
   <h3>How do I price custom deliveries?</h3>
-  <p>On <a href="/admin/deliveries">/admin/deliveries</a> set <code>unlock_price_usdc</code> per delivery. New lead-generated samples default to market-aligned pricing: lightweight animated samples start around $19, while website-driven presentation videos start around $197 and can go much higher.</p>
+  <p>All sample deliveries are <strong>free</strong> — they're marketing proofs-of-work to send in DMs and emails. For revenue, move prospects into <a href="/services">monthly campaigns</a> ($149-$297/mo) or the <a href="/subscribe">$15/mo creator access</a>.</p>
 
   <h3>A team member sourced a lead that paid $500. What do I owe them?</h3>
   <p>$250 (50%). The <a href="/admin/revenue-ledger">Revenue Ledger</a> shows this as "Pending payout".</p>
 
   <h3>Where do I see payment notifications?</h3>
-  <p>Telegram DMs from <code>@videosync_sales_bot</code>. Every successful x402 settlement (subscribe, api-access, delivery unlock) pings you with the amount + tx hash.</p>
+  <p>Telegram DMs from <code>@videosync_sales_bot</code>. Every successful x402 settlement (subscribe, campaign payment) pings you with the amount + tx hash.</p>
 </section>
 
 </div>

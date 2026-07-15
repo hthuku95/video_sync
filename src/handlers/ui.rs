@@ -1,7 +1,4 @@
 use crate::{
-    handlers::service_catalog::{
-        build_service_sample_chat_title, build_service_sample_prompt,
-    },
     handlers::upload::get_or_create_session,
     middleware::auth::{auth_middleware, optional_auth_middleware},
     models::auth::Claims,
@@ -195,8 +192,8 @@ pub async fn create_service_sample_request(
         .source
         .unwrap_or_else(|| "videosync_service".to_string());
     let session_uuid = uuid::Uuid::new_v4().to_string();
-    let session_title =
-        build_service_sample_chat_title(service_slug, brief, prospect_name.as_deref());
+    let name_tag = prospect_name.as_deref().unwrap_or("Client");
+    let session_title = format!("Custom video: {name_tag} — {brief}");
 
     let session_db_id = match get_or_create_session(&state, &session_uuid, Some(user_id)).await {
         Ok(id) => id,
@@ -219,11 +216,13 @@ pub async fn create_service_sample_request(
     .await;
 
     let request_id = uuid::Uuid::new_v4();
-    let prompt = build_service_sample_prompt(
-        service_slug,
-        reference_url.as_deref(),
-        prospect_name.as_deref(),
-        brief,
+    let url_line = reference_url.as_deref().map(|u| format!("Reference URL: {u}\n")).unwrap_or_default();
+    let contact_line = prospect_name.as_deref().map(|n| format!("Client: {n}\n")).unwrap_or_default();
+    let prompt = format!(
+        "Custom video request.\n{url_line}{contact_line}Brief: {brief}\n\n\
+         Generate the requested video from scratch using the available tools. \
+         Do NOT ask for uploaded files or report missing source media. \
+         After generating, call submit_final_answer with the output file paths."
     );
     let workflow_runtime = crate::services::WorkflowRuntime::new(state.db_pool.clone());
     let workflow_id = match workflow_runtime
@@ -983,7 +982,7 @@ pub async fn campaigns_new_page(
             </div>
             <div>
                 <label>Duration (seconds)</label>
-                <input type="number" name="duration" value="30" min="5" max="600">
+                <input type="number" name="duration" value="30" min="5">
             </div>
         </div>
         <div class="form-row">
@@ -1684,18 +1683,18 @@ fn service_page_theme(service_slug: &str) -> ServicePageTheme {
 
 fn build_services_overview_page_html() -> String {
     let cards = [
-        ("saas-launch-pack", "SaaS Demo Campaign", "$399/mo", "Turn your product URL into daily buyer-facing demos — auto-posted to Twitter, LinkedIn, and YouTube.", "AI demos from any URL"),
-        ("clipping-pack", "Social Clipping Campaign", "$147/mo", "Daily highlight clips with captions, hooks, and thumbnails from any VOD.", "Clip extraction from VODs"),
+        ("saas-launch-pack", "SaaS Demo Campaign", "$149/mo", "Turn your product URL into daily buyer-facing demos — auto-posted to Twitter, LinkedIn, and YouTube.", "AI demos from any URL"),
+        ("clipping-pack", "Social Clipping Campaign", "$297/mo", "Daily highlight clips with captions, hooks, and thumbnails from any VOD.", "Clip extraction from VODs"),
         ("kick-auto-clipper", "Kick Auto-Clipper Campaign", "$297/mo", "Kick VOD monitoring, highlight clipping, and daily auto-posting.", "Kick VOD clipping"),
         ("education-explainer-pack", "Education Explainer Campaign", "$199/mo", "Daily animated explainers with narration, diagrams, and captions.", "Education explainers"),
         ("manim-explainer", "Manim Explainer Campaign", "$149/mo", "Narrated Manim-animated explainers — 5-20x faster than Blender.", "Manim animation"),
         ("whiteboard-animation", "Whiteboard Animation Campaign", "$149/mo", "Daily whiteboard-style hand-drawn sketch explainers.", "Whiteboard animation"),
         ("kinetic-typography", "Kinetic Typography Campaign", "$149/mo", "Animated text-motion videos from scripts and quotes.", "Kinetic text"),
-        ("animated-infographic", "Animated Infographic Campaign", "$199/mo", "Animated charts, timelines, and data stories from reports.", "Data visualization"),
-        ("algorithm-viz", "Algorithm Visualization Campaign", "$199/mo", "Animated algorithm walkthroughs visualized with Manim.", "Algorithm viz"),
-        ("investor-pitch", "Investor Pitch Campaign", "$299/mo", "Animated pitch videos with traction charts and demos.", "Pitch videos"),
-        ("year-in-review", "Year in Review Campaign", "$99/mo", "Daily highlight reels with animated stats and milestones.", "Review videos"),
-        ("isometric-explainer", "Isometric Explainer Campaign", "$199/mo", "Isometric-style animated explainers on a 2D plane.", "Isometric animation"),
+        ("animated-infographic", "Animated Infographic Campaign", "$149/mo", "Animated charts, timelines, and data stories from reports.", "Data visualization"),
+        ("algorithm-viz", "Algorithm Visualization Campaign", "$149/mo", "Animated algorithm walkthroughs visualized with Manim.", "Algorithm viz"),
+        ("investor-pitch", "Investor Pitch Campaign", "$149/mo", "Animated pitch videos with traction charts and demos.", "Pitch videos"),
+        ("year-in-review", "Year in Review Campaign", "$149/mo", "Daily highlight reels with animated stats and milestones.", "Review videos"),
+        ("isometric-explainer", "Isometric Explainer Campaign", "$149/mo", "Isometric-style animated explainers on a 2D plane.", "Isometric animation"),
     ];
 
     let cards_html: String = cards.iter().map(|(slug, title, price, tagline, brief)| {
@@ -2801,8 +2800,8 @@ fn build_landing_page_html() -> &'static str {
             </div>
 
             <div style="text-align:center;margin-top:36px;padding:20px;background:#fff;border-radius:12px;max-width:740px;margin-left:auto;margin-right:auto;box-shadow:0 2px 10px rgba(0,0,0,0.04)">
-                <div style="font-size:13px;font-weight:600;color:#7a4cff;letter-spacing:0.05em;text-transform:uppercase;margin-bottom:6px">How delivery monetization works</div>
-                <p style="color:#666;font-size:14px;line-height:1.6;margin:0">You can sell directly from previews. Lightweight samples unlock from <strong>$19</strong>. Website-driven launch videos unlock from <strong>$197+</strong>. For recurring clients, move them into <strong>$15 creator access</strong> or the <strong>$99-$199 white-label API</strong>.</p>
+                <div style="font-size:13px;font-weight:600;color:#7a4cff;letter-spacing:0.05em;text-transform:uppercase;margin-bottom:6px">No lock-in, no hidden fees</div>
+                <p style="color:#666;font-size:14px;line-height:1.6;margin:0">All sample deliveries are <strong>free</strong> — send them as proofs-of-work in DMs and emails. For recurring content, move clients into <strong>$149+/mo campaigns</strong> or the <strong>$15/mo creator access</strong>.</p>
             </div>
         </div>
     </section>

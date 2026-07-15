@@ -533,8 +533,8 @@ impl AgenticServicePipeline {
     fn landing_page_prompt(input: &ServiceInput) -> String {
         let url = input.source_url.as_deref().unwrap_or("");
         format!(
-            r#"## SERVICE: SaaS/App Demo Video
-GOAL: Create a polished {duration_seconds}s SaaS demo video.
+            r#"## SERVICE: Business Landing Page Video
+GOAL: Create a polished landing page video for the business at {url} (target ~{duration_seconds}s — can be longer if the content requires it).
 
 Source: {url}
 Title: {title}
@@ -561,7 +561,7 @@ Use the extracted content to understand:
 1. generate_video_script(topic, duration, style, tone) — plan the content using the website info from step 0
 2. Render the MAIN VISUAL using blender_generate_scene_type(prompt, params) — this is the core of your landing page video. Use it for product mockups, device frames, animated UI mockups, title cards, logos, and any 3D content.
 3. If your video needs animated diagrams, data visualizations, or math/technical content, use manim_execute_script(description, ...) and merge with merge_videos
-4. add_voiceover_to_video(video_path, script) or generate_text_to_speech(text, voice) — narrate the demo
+4. add_voiceover_to_video(video_path, script) or generate_text_to_speech(text, voice) — narrate the video
 5. review_video(video_path_or_url) — check quality, fix issues, iterate
 6. submit_final_answer(summary, output_files=[path]) — only after review passes
 
@@ -580,7 +580,7 @@ Save your final video with .mp4 extension"#,
         let url = input.source_url.as_deref().unwrap_or("");
         format!(
             r#"## SERVICE: Product Mockup Video
-GOAL: Create an animated {duration_seconds}s product/UI mockup video.
+GOAL: Create an animated product/UI mockup video (target ~{duration_seconds}s — can be longer if the content requires it).
 
 Source: {url}
 Title: {title}
@@ -642,7 +642,7 @@ Save as .png or .jpg"#,
         let out = format!("outputs/agentic_{}", input.delivery_id);
         format!(
             r#"## SERVICE: Education Explainer Video
-GOAL: {duration_seconds}s narrated educational video.
+GOAL: Create a narrated educational video (target ~{duration_seconds}s — can be longer if the content requires it).
 
 Topic: {brief}
 Title: {title}
@@ -794,7 +794,7 @@ Save main_video.mp4, thumbnail.png, audio.mp3"#,
         let url = input.source_url.as_deref().unwrap_or("");
         format!(
             r#"## SERVICE: Business Explainer Video
-GOAL: Create a professional {duration_seconds}s narrated business explainer video.
+GOAL: Create a professional narrated business explainer video (target ~{duration_seconds}s — can be longer if the content requires it).
 
 Source: {url}
 Title: {title}
@@ -851,7 +851,7 @@ Save your final video as .mp4 (landscape 16:9 recommended)"#,
         let out = format!("outputs/agentic_{}", input.delivery_id);
         format!(
             r#"## SERVICE: Manim Explainer Video
-GOAL: Create a {duration}s narrated animated explainer video using ONLY Manim.
+GOAL: target ~{duration}s narrated animated explainer video — can be longer if the content requires it. Use ONLY Manim.
 
 Topic: {brief}
 Title: {title}
@@ -883,7 +883,7 @@ That tool delegates to another agent and will NOT produce the correct output.
         let out = format!("outputs/agentic_{}", input.delivery_id);
         format!(
             r#"## SERVICE: Whiteboard Animation Video
-GOAL: Create a {duration}s narrated whiteboard-style explainer video using ONLY Manim.
+GOAL: target ~{duration}s narrated whiteboard-style explainer video — can be longer if the content requires it. Use ONLY Manim.
 
 Topic: {brief}
 Title: {title}
@@ -922,7 +922,7 @@ Use ONLY manim_execute_script for ALL visual content — every render call uploa
         let out = format!("outputs/agentic_{}", input.delivery_id);
         format!(
             r#"## SERVICE: Kinetic Typography Video
-GOAL: Create a {duration}s kinetic typography video using ONLY Manim.
+GOAL: target ~{duration}s kinetic typography video — can be longer if the content requires it. Use ONLY Manim.
 
 Topic: {brief}
 Title: {title}
@@ -961,7 +961,7 @@ Use ONLY manim_execute_script for ALL visual content — every render call uploa
         let out = format!("outputs/agentic_{}", input.delivery_id);
         format!(
             r#"## SERVICE: Animated Infographic Video
-GOAL: Create a {duration}s animated data infographic video using ONLY Manim.
+GOAL: target ~{duration}s animated data infographic video — can be longer if the content requires it. Use ONLY Manim.
 
 Topic: {brief}
 Title: {title}
@@ -1000,7 +1000,7 @@ Use ONLY manim_execute_script for ALL visual content — every render call uploa
         let out = format!("outputs/agentic_{}", input.delivery_id);
         format!(
             r#"## SERVICE: Algorithm Visualization Video
-GOAL: Create a {duration}s algorithm visualization video using ONLY Manim.
+GOAL: target ~{duration}s algorithm visualization video — can be longer if the content requires it. Use ONLY Manim.
 
 Topic: {brief}
 Title: {title}
@@ -1039,7 +1039,7 @@ Use ONLY manim_execute_script for ALL visual content — every render call uploa
         let out = format!("outputs/agentic_{}", input.delivery_id);
         format!(
             r#"## SERVICE: Investor Pitch Video
-GOAL: Create a {duration}s professional investor pitch video using ONLY Manim + voiceover.
+GOAL: target ~{duration}s professional investor pitch video — can be longer if the content requires it. Use ONLY Manim + voiceover.
 
 Topic: {brief}
 Title: {title}
@@ -1078,7 +1078,7 @@ Use ONLY manim_execute_script for ALL visual content — every render call uploa
         let out = format!("outputs/agentic_{}", input.delivery_id);
         format!(
             r#"## SERVICE: Year-in-Review / Wrapped Video
-GOAL: Create a {duration}s personalized year-in-review recap video using ONLY Manim.
+GOAL: target ~{duration}s personalized year-in-review recap video — can be longer if the content requires it. Use ONLY Manim.
 
 Topic: {brief}
 Title: {title}
@@ -1118,7 +1118,7 @@ Use ONLY manim_execute_script for ALL visual content — every render call uploa
         let out = format!("outputs/agentic_{}", input.delivery_id);
         format!(
             r#"## SERVICE: Isometric Explainer Video
-GOAL: Create a {duration}s isometric 3D explainer video using ONLY Manim.
+GOAL: target ~{duration}s isometric 3D explainer video — can be longer if the content requires it. Use ONLY Manim.
 
 Topic: {brief}
 Title: {title}

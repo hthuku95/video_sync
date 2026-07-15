@@ -11,8 +11,8 @@
 //! * No Stripe account needed — the user explicitly didn't have one.
 //! * Phantom wallet (which the user already has) supports EVM signing on
 //!   Base as of their multi-chain update.
-//! * Per-delivery micropayments unlock the gated `/delivery/:id` HD page:
-//!   delivery-specific USDC pricing → 30 days of full-quality download access.
+//! * Campaign and subscription activation via x402 USDC on Base.
+//!   Used for campaign pay-spec/settle flow and /subscribe payments.
 //!
 //! Reference:
 //!   <https://github.com/coinbase/x402/blob/main/specs/schemes/exact/scheme_exact_evm.md>

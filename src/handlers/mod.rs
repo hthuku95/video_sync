@@ -15,7 +15,7 @@ pub mod manual_clipping; // ✂️ Manual clipping — paste URL, get download l
 pub mod output;
 pub mod paypal;
 pub mod prospects; // 🎯 Admin prospect finder
-pub mod service_catalog;
+
 pub mod social_publish;
 pub mod subscribe;
 pub mod tools; // 🎬 On-demand FFmpeg tool endpoints

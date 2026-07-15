@@ -53,7 +53,8 @@ async fn fetch_active_campaigns(state: &Arc<AppState>) -> Result<Vec<CampaignRow
         "SELECT id, user_id, name, service_type, brief, style, duration, schedule, platforms, \
                 posts_per_day, start_date, zernio_profile_id, source_url \
          FROM campaigns \
-         WHERE status = 'active' AND start_date <= NOW() AND end_date >= NOW()",
+         WHERE status = 'active' AND start_date <= NOW() AND end_date >= NOW() \
+           AND paid_until IS NOT NULL AND paid_until > NOW()",
     )
     .fetch_all(&state.db_pool)
     .await

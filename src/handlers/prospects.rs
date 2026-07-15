@@ -5356,14 +5356,6 @@ async fn instagram_generate_dm(
     Path(id): Path<uuid::Uuid>,
     Json(req): Json<Option<InstagramDmRequest>>,
 ) -> Json<serde_json::Value> {
-    fn format_unlock_price_usd(price: f64) -> String {
-        if (price.fract()).abs() < f64::EPSILON {
-            format!("{:.0}", price)
-        } else {
-            format!("{:.2}", price)
-        }
-    }
-
     let user_id: i32 = claims.sub.parse().unwrap_or(0);
 
     // Fetch the lead — scoped to the caller so one user can't DM another
@@ -5409,24 +5401,12 @@ async fn instagram_generate_dm(
     let has_website = !ext_url.trim().is_empty();
     let sample_block = match sample_id {
         Some(sid) => {
-            let sample_unlock_price = sqlx::query_scalar::<_, sqlx::types::Decimal>(
-                "SELECT unlock_price_usdc FROM deliveries WHERE id = $1",
-            )
-            .bind(sid)
-            .fetch_optional(&state.db_pool)
-            .await
-            .ok()
-            .flatten()
-            .and_then(|d| d.to_string().parse::<f64>().ok())
-            .unwrap_or_else(|| unlock_price_for(service.as_deref(), has_website));
-            let sample_unlock_price_str = format_unlock_price_usd(sample_unlock_price);
+            let sample_unlock_price = 0.0;
 
             format!(
-                "SAMPLE LINK (must appear in the DM, woven in naturally - e.g. \"here's a quick mockup I made: <URL>\" - do NOT just paste it at the end): {}/delivery/{}\nThe link shows a free watermarked preview. Full HD download is ${} USDC - the DM can hint at that naturally (\"full HD version is ${} if you want it for prod\") but don't hard-sell it.",
+                "SAMPLE LINK (must appear in the DM, woven in naturally - e.g. \"here's a quick mockup I made: <URL>\" - do NOT just paste it at the end): {}/delivery/{}",
                 base_url.trim_end_matches('/'),
                 sid,
-                sample_unlock_price_str,
-                sample_unlock_price_str
             )
         }
         None => sample_block,
@@ -5708,11 +5688,9 @@ async fn instagram_generate_sample(
 
     let title = format!("Sample for @{}", username);
 
-    // Stamp the origin lead on the delivery so future x402 unlocks can
-    // trace revenue back to the whitelisted user who sourced this lead.
-    // Price is market-aligned per service type + whether we have a
-    // website URL (agent-generated comprehensive videos cost more).
-    let unlock_price = unlock_price_for(service.as_deref(), source_url.is_some());
+    // Stamp the origin lead on the delivery so attribution tracks back
+    // to the whitelisted user who sourced this lead.
+    let unlock_price = 0.0;
     let source_url_str: Option<String> = source_url.clone();
     let delivery_id: uuid::Uuid = match sqlx::query_scalar::<_, uuid::Uuid>(
         "INSERT INTO deliveries (client_ref, title, gig_type, prompt, style, duration, extra_args, status,
@@ -5749,27 +5727,29 @@ async fn instagram_generate_sample(
 
     let render_state = state.clone();
     if gig_type == "long_form_video" {
-        match crate::services::LongFormVideoWorkflow::start(
+        let service_type = crate::services::normalize_to_service_type(service_key);
+        let agentic_input = crate::services::ServiceInput {
+            title: title.clone(),
+            brief: format!(
+                "{prompt}\n\nInstagram lead: @{username}\nBio/context: {bio}\n\nCreate a buyer-facing sample for this service: {offer}. It should be useful as outreach proof for a whitelisted marketer and should demonstrate the relevant creative tools for the offer.",
+                offer = service_offer_line(service_key)
+            ),
+            source_url: source_url.clone(),
+            style: style.to_string(),
+            duration_seconds: duration.max(15.0),
+            delivery_id,
+            prospect_id: None,
+            session_uuid: None,
+            user_id: Some(user_id),
+            source_table: Some("deliveries".to_string()),
+            source_record_id: Some(delivery_id),
+            idempotency_key: Some(format!("instagram-lead-long-form:{id}")),
+            reference_images: vec![],
+        };
+        match crate::services::AgenticServicePipeline::start(
             state.clone(),
-            crate::services::LongFormVideoRequest {
-                title: title.clone(),
-                brief: format!(
-                    "{prompt}\n\nInstagram lead: @{username}\nBio/context: {bio}\n\nCreate a buyer-facing sample for this service: {offer}. It should be useful as outreach proof for a whitelisted marketer and should demonstrate the relevant creative tools for the offer.",
-                    offer = service_offer_line(service_key)
-                ),
-                target_duration_seconds: duration,
-                segment_duration_seconds: 15.0,
-                style: style.to_string(),
-                offer_type: service_long_form_offer_type(service_key),
-                narration_speaker: "Emma".to_string(),
-                include_narration: true,
-                reference_url: source_url.clone(),
-                session_uuid: None,
-                user_id: Some(user_id),
-                source_table: Some("deliveries".to_string()),
-                source_record_id: Some(delivery_id),
-                idempotency_key: Some(format!("instagram-lead-long-form:{id}")),
-            },
+            service_type,
+            agentic_input,
         )
         .await
         {
@@ -7241,44 +7221,6 @@ Return ONLY valid JSON (no markdown):
 // ============================================================================
 // Market-aligned unlock pricing for delivery samples
 // ============================================================================
-//
-// Market rates (per research + honest pricing for cold-DM impulse buys):
-//   SaaS explainer videos:   $1,500-$7,000 (agency rates)
-//   Product promo videos:    $500-$3,000
-//   Landing page videos:     $1,000-$5,000
-//
-// Our pricing (AI-produced, first-touch cold DM, priced for conversion):
-//   Comprehensive agent video w/ website:  $197-$497
-//   Single-shot Blender animation:          $49-$97
-//   Thumbnails / basic Blender:             $9-$29
-
-pub fn unlock_price_for(service: Option<&str>, has_website: bool) -> f64 {
-    let service = service.map(normalize_revenue_service);
-    if has_website {
-        match service {
-            Some("landing_page") => 297.00,
-            Some("education") => 197.00,
-            Some("clipping") | Some("kick_auto_clipper") => 147.00,
-            Some("manim_explainer") | Some("whiteboard_animation") => 175.00,
-            Some("kinetic_typography") | Some("animated_infographic") => 147.00,
-            Some("algorithm_viz") | Some("investor_pitch") => 247.00,
-            Some("year_in_review") | Some("isometric_explainer") => 197.00,
-            _ => 197.00,
-        }
-    } else {
-        match service {
-            Some("landing_page") | Some("education") => 97.00,
-            Some("clipping") | Some("kick_auto_clipper") => 49.00,
-            Some("manim_explainer") | Some("whiteboard_animation") |
-            Some("kinetic_typography") | Some("animated_infographic") |
-            Some("algorithm_viz") | Some("investor_pitch") |
-            Some("year_in_review") | Some("isometric_explainer") => 75.00,
-            _ => 29.00,
-        }
-    }
-}
-
-// ============================================================================
 // Full AI agent video generation for high-value leads
 // ============================================================================
 
@@ -7350,10 +7292,9 @@ PHASE 3 — Produce the full video:
   - add_voiceover_to_video to narrate the full script with ElevenLabs TTS
   - Composite / concatenate the scenes into ONE final video at: {full_path}
 
-PHASE 4 — Cut a branded preview for free sharing:
-  - Use FFmpeg tools to trim the most engaging 30-60 second segment
-  - Add a watermark overlay: "VideoSync.video — PREVIEW" diagonal text across the frame
-  - Add an "Unlock full video at videosync.video/delivery/{delivery_id}" text banner
+PHASE 4 — Cut a short preview for social sharing:
+  - Use FFmpeg tools to trim the most engaging 15-30 second segment
+  - Add a clean lower-third overlay: "Made with VideoSync.video"
   - Save the preview at: {preview_path}
 
 Deliverables (MUST produce both files):
@@ -8410,39 +8351,6 @@ mod tests {
     }
 
     #[test]
-    fn test_unlock_price_for_has_website() {
-        let has_website = true;
-        assert_eq!(unlock_price_for(Some("landing_page"), has_website), 297.00);
-        assert_eq!(unlock_price_for(Some("education"), has_website), 197.00);
-        assert_eq!(unlock_price_for(Some("clipping"), has_website), 147.00);
-        assert_eq!(unlock_price_for(Some("kick_auto_clipper"), has_website), 147.00);
-        assert_eq!(unlock_price_for(Some("manim_explainer"), has_website), 175.00);
-        assert_eq!(unlock_price_for(Some("whiteboard_animation"), has_website), 175.00);
-        assert_eq!(unlock_price_for(Some("kinetic_typography"), has_website), 147.00);
-        assert_eq!(unlock_price_for(Some("animated_infographic"), has_website), 147.00);
-        assert_eq!(unlock_price_for(Some("algorithm_viz"), has_website), 247.00);
-        assert_eq!(unlock_price_for(Some("investor_pitch"), has_website), 247.00);
-        assert_eq!(unlock_price_for(Some("year_in_review"), has_website), 197.00);
-        assert_eq!(unlock_price_for(Some("isometric_explainer"), has_website), 197.00);
-    }
-
-    #[test]
-    fn test_unlock_price_for_no_website() {
-        let no_website = false;
-        assert_eq!(unlock_price_for(Some("landing_page"), no_website), 97.00);
-        assert_eq!(unlock_price_for(Some("education"), no_website), 97.00);
-        assert_eq!(unlock_price_for(Some("clipping"), no_website), 49.00);
-        assert_eq!(unlock_price_for(Some("kick_auto_clipper"), no_website), 49.00);
-        assert_eq!(unlock_price_for(Some("manim_explainer"), no_website), 75.00);
-        assert_eq!(unlock_price_for(Some("whiteboard_animation"), no_website), 75.00);
-        assert_eq!(unlock_price_for(Some("kinetic_typography"), no_website), 75.00);
-        assert_eq!(unlock_price_for(Some("animated_infographic"), no_website), 75.00);
-        assert_eq!(unlock_price_for(Some("algorithm_viz"), no_website), 75.00);
-        assert_eq!(unlock_price_for(Some("investor_pitch"), no_website), 75.00);
-        assert_eq!(unlock_price_for(Some("year_in_review"), no_website), 75.00);
-        assert_eq!(unlock_price_for(Some("isometric_explainer"), no_website), 75.00);
-    }
-
     #[test]
     fn test_service_offer_line() {
         for service in &["clipping", "landing_page", "education",

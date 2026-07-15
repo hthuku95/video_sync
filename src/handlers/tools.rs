@@ -295,24 +295,30 @@ pub async fn run_workflow(
 pub async fn start_long_form_video(
     Extension(state): Extension<Arc<AppState>>,
     Extension(claims): Extension<crate::models::auth::Claims>,
-    Json(mut req): Json<crate::services::LongFormVideoRequest>,
+    Json(mut req): Json<crate::services::ServiceInput>,
 ) -> Result<Json<WorkflowStartResult>, StatusCode> {
     if req.user_id.is_none() {
         req.user_id = claims.sub.parse::<i32>().ok();
     }
     if req.idempotency_key.is_none() {
         req.idempotency_key = Some(format!(
-            "long-form:{}:{}:{:.0}",
+            "tool-long-form:{}:{}:{:.0}",
             req.user_id.unwrap_or_default(),
             req.title.trim().to_lowercase(),
-            req.target_duration_seconds
+            req.duration_seconds
         ));
     }
 
-    match crate::services::LongFormVideoWorkflow::start(state, req).await {
+    match crate::services::AgenticServicePipeline::start(
+        state,
+        crate::services::normalize_to_service_type("landing_page"),
+        req,
+    )
+    .await
+    {
         Ok(workflow_id) => Ok(Json(WorkflowStartResult {
             success: true,
-            message: "Long-form video workflow started. The agent will plan, render, narrate, review, and assemble bounded segments.".to_string(),
+            message: "Agentic video workflow started. The agent will plan, render, narrate, review, and assemble the video using all available tools.".to_string(),
             workflow_id: Some(workflow_id.to_string()),
             status_url: Some(format!("/api/workflows/{workflow_id}/status")),
         })),
