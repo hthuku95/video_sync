@@ -7311,7 +7311,7 @@ async fn delivery_page(
                 let fb: Option<String> = row.try_get("llm_review_feedback").ok();
                 // Portfolio test results are never paywalled — they're
                 // demos that need to be visible to anyone.
-                (Some(n), Some(g), Some(s), u, f, sc, fb, None, None)
+                (Some(n), Some(g), Some(s), u, f, sc, fb, None::<sqlx::types::Decimal>, None::<chrono::DateTime<chrono::Utc>>)
             } else {
                 // 2. Custom delivery.
                 let dr = sqlx::query(

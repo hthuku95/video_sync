@@ -7308,7 +7308,6 @@ Output file paths clearly in your final response so the delivery pipeline can fi
         lead_bio = lead_bio.chars().take(200).collect::<String>(),
         full_path = full_path,
         preview_path = preview_path,
-        delivery_id = delivery_id,
     );
     let prompt = base_prompt.clone();
 
