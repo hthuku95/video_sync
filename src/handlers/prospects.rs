@@ -2379,7 +2379,9 @@ fn should_use_long_form_for_revenue_sample(service: &str, has_reference_url: boo
     ) && (has_reference_url
         || matches!(
             normalize_revenue_service(service),
-            "education" | "manim_explainer" | "whiteboard_animation" | "animated_infographic" | "algorithm_viz" | "investor_pitch"
+            "education" | "kick_auto_clipper" | "manim_explainer" | "whiteboard_animation"
+            | "kinetic_typography" | "animated_infographic" | "algorithm_viz" | "investor_pitch"
+            | "year_in_review" | "isometric_explainer"
         ))
 }
 
@@ -5556,11 +5558,12 @@ async fn instagram_generate_sample(
     // For clipping the lead, we'd need their actual video URL. Tell the
     // frontend so it can ask the user for one. Don't burn a render slot on
     // a placeholder for clipping — the value is in clipping THEIR content.
-    if matches!(service.as_deref(), Some("clipping")) && !has_reference_url {
+    if matches!(service.as_deref(), Some("clipping" | "kick_auto_clipper")) && !has_reference_url {
+        let service_label = if service.as_deref() == Some("kick_auto_clipper") { "Kick auto-clipper" } else { "Clipping" };
         return Json(json!({
             "success":              false,
             "requires_source_url":  true,
-            "error":                "Clipping samples need a YouTube/podcast/Twitch URL. Paste one of @{username}'s long-form videos and try again.".replace("{username}", &username),
+            "error":                format!("{} samples need a source video URL (YouTube/Kick/Twitch). Paste a URL related to @{}'s content and try again.", service_label, username),
         }));
     }
 

@@ -11,60 +11,95 @@ pub struct ServiceOffer {
     pub best_fit: &'static str,
 }
 
-pub const SERVICE_OFFERS: [ServiceOffer; 7] = [
+pub const SERVICE_OFFERS: [ServiceOffer; 12] = [
     ServiceOffer {
         key: "clipping",
         title: "SHORT-FORM CLIPPING",
-        what_you_offer: "turn long-form videos, podcasts, or streams into a managed short-form package when the workflow is actively supervised.",
-        pricing_tiers: "$297-$899/month depending on clip count, review level, and turnaround.",
-        best_fit: "podcasters, long-form YouTubers, and streamers with enough source material to justify an ongoing package.",
+        what_you_offer: "automated daily clip generation from long-form videos, podcasts, or streams — posted to your connected social accounts.",
+        pricing_tiers: "$297/mo for a daily campaign with up to 3 posts/day across your connected platforms.",
+        best_fit: "podcasters, streamers, and YouTubers with regular source content who want a daily short-form presence.",
     },
     ServiceOffer {
-        key: "animations",
-        title: "AI-DRIVEN BLENDER ANIMATIONS",
-        what_you_offer: "explainer scenes, data visualizations, title cards, lower thirds, motion graphics, and visual support assets.",
-        pricing_tiers: "$75-$400 per asset, or custom monthly retainers for recurring production.",
-        best_fit: "educators, finance/crypto creators, product marketers, and agencies that need premium visual support.",
-    },
-    ServiceOffer {
-        key: "thumbnails",
-        title: "AI-OPTIMISED YOUTUBE THUMBNAILS",
-        what_you_offer: "click-focused thumbnail concepts, branded title treatments, and premium packaging around YouTube content or launch media.",
-        pricing_tiers: "$25-$75 per thumbnail, or recurring monthly packaging retainers.",
-        best_fit: "growing channels, creators, and teams that want stronger presentation before a viewer clicks play.",
-    },
-    ServiceOffer {
-        key: "business_explainer",
-        title: "BUSINESS EXPLAINER VIDEOS",
-        what_you_offer: "narrated animated explainers for business, finance, and B2B/SaaS concepts — combining Blender motion graphics, data visualizations, and professional voiceover.",
-        pricing_tiers: "$200-$600 per video depending on scope, duration, and asset complexity.",
-        best_fit: "SaaS founders, finance creators, business coaches, B2B marketers, and agencies needing premium professional explainers.",
-    },
-    ServiceOffer {
-        key: "product_mockup",
-        title: "3D PRODUCT MOCKUPS",
-        what_you_offer: "rendered product visuals, device mockups, and motion-enhanced presentation assets for launches, promos, and demos.",
-        pricing_tiers: "$100-$600 per asset or multi-asset package.",
-        best_fit: "ecommerce, hardware, app launches, and product marketing teams.",
+        key: "kick_auto_clipper",
+        title: "KICK AUTO-CLIPPER",
+        what_you_offer: "automated daily clips from Kick streamer VODs — discover, clip, caption, and post to your connected social accounts.",
+        pricing_tiers: "$297/mo for a daily campaign with up to 3 posts/day.",
+        best_fit: "clipping channels that repost big Kick streamers' content and need fresh clips daily.",
     },
     ServiceOffer {
         key: "landing_page",
         title: "ANIMATED LANDING PAGE HERO",
-        what_you_offer: "homepage hero videos, narrated product demos, launch cutdowns, and landing-page motion built from a real product site or app flow.",
-        pricing_tiers: "$299-$1,500+ depending on whether the buyer needs a hero loop, a narrated demo, or a fuller launch package.",
-        best_fit: "indie founders, SaaS teams, launch marketers, and agencies selling product video.",
+        what_you_offer: "animated homepage hero videos, narrated product demos, and brand videos generated from your website URL — posted to your connected social accounts.",
+        pricing_tiers: "$149/mo for a daily campaign with up to 3 posts/day.",
+        best_fit: "SaaS founders, business owners, consultants, and marketers who want a daily video presence.",
     },
     ServiceOffer {
-        key: "full_stack",
-        title: "FULL-STACK PRODUCTION BUNDLE",
-        what_you_offer: "a private production backend covering product demos, thumbnails, motion graphics, mockups, and recurring delivery under the buyer's own brand.",
-        pricing_tiers: "$1,000-$3,000+/month depending on output mix, review load, and turnaround.",
-        best_fit: "boutique agencies, creator managers, and operators who want backend production support instead of a one-off asset.",
+        key: "education",
+        title: "EDUCATIONAL ANIMATED VIDEOS",
+        what_you_offer: "Manim/LaTeX-powered educational explainer videos — math, science, finance, coding — posted to your connected social accounts.",
+        pricing_tiers: "$199/mo for a daily campaign with up to 3 posts/day.",
+        best_fit: "educators, course creators, edu-YouTubers, and academic content channels.",
+    },
+    ServiceOffer {
+        key: "manim_explainer",
+        title: "MANIM EXPLAINER VIDEOS",
+        what_you_offer: "Manim-animated explainer videos on any topic — generated from a brief, posted daily to your connected social accounts.",
+        pricing_tiers: "$149/mo for a daily campaign with up to 3 posts/day.",
+        best_fit: "creators who want animated explainer content without learning Manim themselves.",
+    },
+    ServiceOffer {
+        key: "whiteboard_animation",
+        title: "WHITEBOARD ANIMATION CAMPAIGN",
+        what_you_offer: "hand-drawn style whiteboard animations generated from your brief — posted daily to your connected social accounts.",
+        pricing_tiers: "$149/mo for a daily campaign with up to 3 posts/day.",
+        best_fit: "educators, trainers, and B2B marketers who want explainer-style whiteboard content.",
+    },
+    ServiceOffer {
+        key: "kinetic_typography",
+        title: "KINETIC TYPOGRAPHY CAMPAIGN",
+        what_you_offer: "text-driven kinetic typography videos — quotes, key messages, lyric-style motion text — posted daily to your connected social accounts.",
+        pricing_tiers: "$149/mo for a daily campaign with up to 3 posts/day.",
+        best_fit: "quote pages, motivational content creators, and brands wanting text-driven video content.",
+    },
+    ServiceOffer {
+        key: "animated_infographic",
+        title: "ANIMATED INFOGRAPHIC CAMPAIGN",
+        what_you_offer: "animated data visualizations and infographics from your data or brief — posted daily to your connected social accounts.",
+        pricing_tiers: "$149/mo for a daily campaign with up to 3 posts/day.",
+        best_fit: "data-driven creators, finance channels, and businesses with metrics to visualize.",
+    },
+    ServiceOffer {
+        key: "algorithm_viz",
+        title: "ALGORITHM VISUALIZATION CAMPAIGN",
+        what_you_offer: "animated algorithm visualizations — sorting, searching, graph traversal, data structures — posted daily to your connected social accounts.",
+        pricing_tiers: "$149/mo for a daily campaign with up to 3 posts/day.",
+        best_fit: "coding bootcamps, computer science educators, and tech content creators.",
+    },
+    ServiceOffer {
+        key: "investor_pitch",
+        title: "INVESTOR PITCH DECK CAMPAIGN",
+        what_you_offer: "animated investor pitch videos from your deck or brief — posted daily to your connected social accounts.",
+        pricing_tiers: "$149/mo for a daily campaign with up to 3 posts/day.",
+        best_fit: "startup founders preparing for fundraising who want video-enhanced pitches.",
+    },
+    ServiceOffer {
+        key: "year_in_review",
+        title: "YEAR-IN-REVIEW CAMPAIGN",
+        what_you_offer: "animated year-in-review or wrapped-style recap videos — posted to your connected social accounts.",
+        pricing_tiers: "$149/mo for a daily campaign with up to 3 posts/day.",
+        best_fit: "creators, brands, and channels wanting regular recap/annual-style content.",
+    },
+    ServiceOffer {
+        key: "isometric_explainer",
+        title: "ISOMETRIC EXPLAINER CAMPAIGN",
+        what_you_offer: "isometric 3D-style animated explainer videos from your brief — posted daily to your connected social accounts.",
+        pricing_tiers: "$149/mo for a daily campaign with up to 3 posts/day.",
+        best_fit: "tech companies, product marketers, and creators wanting distinctive isometric visuals.",
     },
 ];
 
 pub fn delivery_unlock_price_summary() -> &'static str {
-    "$19-$97 for lightweight sample assets; $197+ for stronger website-driven presentation videos and higher-value delivery unlocks."
+    "All sample deliveries are free — no payment required to view or download."
 }
 
 pub fn service_offer_prompt(service: Option<&str>) -> String {
@@ -95,7 +130,7 @@ pub fn telegram_system_pitch() -> String {
 VideoSync offers:\n\
 - Regular users: 7-day free trial, then ${}/mo USDC for AI thumbnails, Blender animations (title cards, data viz, LaTeX, lower thirds, UI mockups), full agent video pipeline, and FFmpeg tool API.\n\
 - Agencies: API access - ${}/mo Starter (1k clips + 500 thumbs + 50 animations), ${}/mo Pro (5k clips + 2.5k thumbs + 200 animations + white-label delivery pages).\n\
-- Paid deliveries: delivery-specific unlocks on /delivery/:id pages. Typical range: {}.\n\n\
+- DFY campaign subscriptions: ${}/mo for clipping/kick-auto-clipper, ${}/mo for education, ${}/mo for all other services (landing page, manim, whiteboard, etc.) — daily content generation + auto-posting to connected social accounts.\n\n\
 All payments are USDC on Base (Phantom, MetaMask, Coinbase Wallet). No Stripe, no contracts.\n\n\
 Sign up: https://www.videosync.video\n\
 Subscribe: https://www.videosync.video/subscribe\n\
@@ -109,6 +144,8 @@ RULES:\n\
         CREATOR_MONTHLY_USDC_CENTS / 100,
         AGENCY_STARTER_USDC_CENTS / 100,
         AGENCY_PRO_USDC_CENTS / 100,
-        delivery_unlock_price_summary()
+        297,
+        199,
+        149
     )
 }
