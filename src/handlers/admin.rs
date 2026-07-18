@@ -11613,7 +11613,20 @@ tr:hover{background:#f8f9fa}
       </div>
       <div class="form-group">
         <label>Service Type</label>
-        <select id="formService"><option value="clipping">Clipping</option><option value="education">Education</option></select>
+        <select id="formService">
+  <option value="clipping">Clipping</option>
+  <option value="kick_auto_clipper">Kick Auto-Clipper</option>
+  <option value="education">Education</option>
+  <option value="landing_page">Landing Page</option>
+  <option value="manim_explainer">Manim Explainer</option>
+  <option value="whiteboard_animation">Whiteboard Animation</option>
+  <option value="kinetic_typography">Kinetic Typography</option>
+  <option value="animated_infographic">Animated Infographic</option>
+  <option value="algorithm_viz">Algorithm Viz</option>
+  <option value="investor_pitch">Investor Pitch</option>
+  <option value="year_in_review">Year in Review</option>
+  <option value="isometric_explainer">Isometric Explainer</option>
+</select>
       </div>
     </div>
     <div class="form-group">

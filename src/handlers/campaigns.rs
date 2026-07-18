@@ -86,7 +86,7 @@ async fn admin_list_campaigns(
                 c.schedule, c.platforms, c.posts_per_day, c.start_date, c.end_date, \
                 c.zernio_profile_id, c.source_url, c.status, c.total_posts_planned, c.total_posts_published, \
                 c.paid_until, c.created_at \
-         FROM campaigns c JOIN users u ON u.id = c.user_id \
+         FROM campaigns c LEFT JOIN users u ON u.id = c.user_id \
          ORDER BY c.created_at DESC",
     )
     .fetch_all(&state.db_pool)

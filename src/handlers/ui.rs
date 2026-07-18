@@ -1354,7 +1354,7 @@ async function updateStatus(newStatus) {{
 
 fn format_service_type(s: &str) -> &'static str {
     match s {
-        "landing_page" => "SaaS Demo",
+        "landing_page" => "Landing Page",
         "clipping" | "kick_auto_clipper" => "Clipping",
         "education" => "Education",
         "manim_explainer" => "Manim",
