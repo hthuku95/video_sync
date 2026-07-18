@@ -134,6 +134,10 @@ pub fn instagram_routes() -> Router {
             "/api/instagram/leads/auto-discover",
             post(instagram_auto_discover),
         )
+        .route(
+            "/api/instagram/leads/kick-auto-discover",
+            post(instagram_kick_auto_discover),
+        )
         .route("/api/instagram/leads/top", get(instagram_top_leads))
         .route("/api/instagram/leads", get(instagram_list_leads))
         .route(
@@ -3394,6 +3398,7 @@ tr:hover td{background:rgba(92,84,112,0.12)}
     <div class="tab" onclick="showSource('linkedin',this)">💼 LinkedIn</div>
     <div class="tab" onclick="showSource('telegram',this)">✈️ Telegram Opportunities</div>
     <div class="tab" onclick="showSource('jobs',this)">🚦 PB Job Status</div>
+    <div class="tab" onclick="showSource('instagram',this)">📸 Instagram</div>
   </div>
 
   <!-- YouTube / Twitch Search -->
@@ -3550,6 +3555,28 @@ tr:hover td{background:rgba(92,84,112,0.12)}
     <div id="pb-jobs-list" style="margin-top:14px"></div>
   </div>
 
+  <!-- Instagram Kick Clipper -->
+  <div id="src-instagram" class="search-card" style="display:none">
+    <h2>Find Kick Clipper Channels on Instagram</h2>
+    <p>AI picks Kick-specific hashtags (e.g. #kickclips, #kickstreamer, #kickhighlights) to find Instagram accounts that repost Kick.com streamer clips. Results are scored and Kick creators are auto-detected from captions.</p>
+    <div class="form-grid">
+      <div>
+        <label>Kick Category / Niche</label>
+        <input id="ig-kick-category" placeholder="gaming, just chatting, sports..." value="gaming">
+      </div>
+      <div>
+        <label>Max Posts per Hashtag</label>
+        <input id="ig-kick-posts" type="number" value="30" min="10" max="100">
+      </div>
+      <div>
+        <label>Number of Hashtags</label>
+        <input id="ig-kick-hashtags" type="number" value="3" min="1" max="6">
+      </div>
+    </div>
+    <button class="btn btn-primary" onclick="runKickInstagramSearch()">🔍 Find Kick Clipper Channels</button>
+    <span id="ig-kick-status" style="margin-left:12px;color:var(--dim);font-size:0.85rem"></span>
+  </div>
+
   <!-- View Switcher -->
   <div class="action-row" style="margin-bottom:16px">
     <button class="btn btn-primary" id="btn-prospects" onclick="showView('prospects')">📋 Prospects</button>
@@ -3659,7 +3686,7 @@ function showMsg(text, ok=true){
 function showSource(name, btn){
   document.querySelectorAll('.tabs > .tab').forEach(t=>t.classList.remove('active'));
   btn.classList.add('active');
-  ['yt-tw','linkedin','telegram','jobs'].forEach(s=>{
+  ['yt-tw','linkedin','telegram','jobs','instagram'].forEach(s=>{
     const el = document.getElementById('src-'+s);
     if(el) el.style.display = (s===name)?'block':'none';
   });
@@ -4115,6 +4142,26 @@ async function runSearch(){
   const data = await res.json();
   if(data.success){ showMsg(data.message); loadProspects(); }
   else showMsg(data.message||'Search failed', false);
+  status.textContent = '';
+}
+
+async function runKickInstagramSearch(){
+  const status = document.getElementById('ig-kick-status');
+  status.textContent = 'Launching Kick Instagram search…';
+  const payload = {
+    niche: document.getElementById('ig-kick-category').value||'gaming',
+    max_posts_per_hashtag: parseInt(document.getElementById('ig-kick-posts').value)||30,
+    hashtag_count: parseInt(document.getElementById('ig-kick-hashtags').value)||3,
+  };
+  try{
+    const res = await fetch('/api/instagram/leads/kick-auto-discover', {
+      method:'POST', headers:{'Authorization':'Bearer '+token,'Content-Type':'application/json'},
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if(data.success){ showMsg('Kick IG search started: '+data.message); }
+    else showMsg(data.error||'Kick IG search failed', false);
+  }catch(e){ showMsg('Kick IG search error: '+e.message, false); }
   status.textContent = '';
 }
 
@@ -6018,6 +6065,164 @@ Return ONLY a JSON array of strings. No explanation. Example: ["youtuber", "cont
     }))
 }
 
+/// POST /api/instagram/leads/kick-auto-discover
+///
+/// AI picks Kick-specific Instagram hashtags to find accounts that repost
+/// Kick.com streamer clips. Launches PhantomBuster searches, then the
+/// background poller imports + scores leads with Kick creator detection.
+async fn instagram_kick_auto_discover(
+    Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
+    Json(req): Json<Option<AutoDiscoverRequest>>,
+) -> Json<serde_json::Value> {
+    let user_id: i32 = claims.sub.parse().unwrap_or(0);
+    if user_id == 0 {
+        return Json(json!({"success": false, "error": "Invalid user id in JWT"}));
+    }
+
+    let req = req.unwrap_or(AutoDiscoverRequest {
+        niche: None,
+        max_posts_per_hashtag: None,
+        hashtag_count: None,
+    });
+    let category = req.niche.as_deref().unwrap_or("gaming");
+    let max_posts = req.max_posts_per_hashtag.unwrap_or(30).min(100);
+    let hashtag_count = req.hashtag_count.unwrap_or(3).min(6).max(1);
+
+    let Some(pb) = state.phantombuster_client.as_ref() else {
+        return Json(json!({"success": false, "error": "PhantomBuster not configured"}));
+    };
+
+    let session_cookie = match std::env::var("INSTAGRAM_SESSION_COOKIE") {
+        Ok(c) if !c.is_empty() => c,
+        _ => return Json(json!({"success": false, "error": "INSTAGRAM_SESSION_COOKIE not set"})),
+    };
+
+    let agent = match pb.find_instagram_hashtag_agent().await {
+        Ok(Some(a)) => a,
+        Ok(None) => {
+            return Json(
+                json!({"success": false, "error": "No Instagram Hashtag phantom found in PhantomBuster. Add 'Instagram Hashtag Search Export' from the Phantom Store."}),
+            )
+        }
+        Err(e) => {
+            return Json(json!({"success": false, "error": format!("Agent lookup failed: {}", e)}))
+        }
+    };
+
+    // ── Ask AI to pick Kick-specific Instagram hashtags ─────────────
+    let prompt = format!(
+        r#"You are finding Instagram accounts that repost clips from Kick.com streamers.
+These accounts take Kick stream VODs, edit them into short-form clips (Reels), and repost them with the Kick.com green watermark.
+
+Target niche/category: "{category}"
+
+List {count} Instagram hashtags (no # symbol) that Kick clipper channels in the "{category}" niche actually use when posting their clips.
+Choose hashtags that:
+1. Kick clip channels actually tag their posts with (e.g. kickclips, kickhighlights, kickstreamer, streamclips)
+2. Will surface accounts that repost Kick streamer content
+3. Are actively used by clipping/editing accounts, NOT just by fans or the streamers themselves
+
+Return ONLY a JSON array of strings. No explanation. Example: ["kickclips", "kickhighlights", "kickstreamer"]"#,
+        category = category,
+        count = hashtag_count,
+    );
+
+    let hashtags_json = match generate_text_best_effort(
+        state.ollama_fast_client.as_ref(),
+        state.ollama_client.as_ref(),
+        state.nvidia_nim_client.as_ref(),
+        state.gemma_client.as_ref(),
+        state.gemini_client.as_ref(),
+        state.deepseek_client.as_ref(),
+        &prompt,
+    )
+    .await
+    {
+        Ok(t) => t,
+        Err(e) => {
+            return Json(
+                json!({"success": false, "error": format!("AI hashtag selection failed: {}", e)}),
+            )
+        }
+    };
+
+    // Strip markdown fences and parse JSON array
+    let cleaned = hashtags_json
+        .trim()
+        .trim_start_matches("```json")
+        .trim_start_matches("```")
+        .trim_end_matches("```")
+        .trim();
+
+    let hashtags: Vec<String> = match serde_json::from_str(cleaned) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(
+                "Failed to parse AI Kick hashtag response: {} | raw: {}",
+                e,
+                cleaned
+            );
+            vec![
+                "kickclips".to_string(),
+                "kickhighlights".to_string(),
+                "kickstreamer".to_string(),
+            ]
+        }
+    };
+
+    tracing::info!(
+        "🎯 Instagram kick-auto-discover for category '{}': hashtags = {:?}",
+        category,
+        hashtags
+    );
+
+    // ── Launch a PB search for each hashtag, tagged as kick_clipper ─
+    let mut launched_jobs: Vec<serde_json::Value> = Vec::new();
+    let mut errors: Vec<String> = Vec::new();
+
+    for hashtag in &hashtags {
+        let tag = hashtag.trim_start_matches('#').to_string();
+        // Override search_url to include "kick:" prefix so the poller can
+        // identify these as Kick clipper leads.
+        match try_launch_or_queue_ig_hashtag_job_with_prefix(
+            &state,
+            pb,
+            &agent,
+            &session_cookie,
+            &tag,
+            max_posts,
+            user_id,
+            "instagram:kick:#",
+        )
+        .await
+        {
+            Ok((job_id, status, container_id)) => {
+                launched_jobs.push(json!({
+                    "job_id":       job_id.to_string(),
+                    "container_id": container_id,
+                    "hashtag":      tag,
+                    "status":       status,
+                }));
+            }
+            Err(e) => errors.push(format!("#{}: {}", tag, e)),
+        }
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+    }
+
+    Json(json!({
+        "success":     !launched_jobs.is_empty(),
+        "category":    category,
+        "hashtags":    hashtags,
+        "jobs":        launched_jobs,
+        "errors":      errors,
+        "message":     format!(
+            "Kick clipper auto-discovery launched {} PB searches for category '{}'. Results auto-import in ~5–10 minutes. Kick creators will be auto-detected from captions.",
+            launched_jobs.len(), category
+        )
+    }))
+}
+
 /// GET /api/instagram/leads/top
 /// Returns the highest-scored leads (score >= 60), ready for outreach.
 async fn instagram_top_leads(
@@ -6119,8 +6324,11 @@ pub async fn poll_instagram_jobs(state: &Arc<AppState>) {
         let search_url: String = row.get("search_url");
         let job_user_id: Option<i32> = row.try_get("user_id").ok().flatten();
 
-        // Extract hashtag from search_url ("instagram:#contentcreator")
+        // Extract hashtag from search_url ("instagram:#contentcreator" or "instagram:kick:#contentcreator")
+        let is_kick_clipper = search_url.contains(":kick:");
         let hashtag_source = search_url
+            .trim_start_matches("instagram:kick:#")
+            .trim_start_matches("instagram:kick:")
             .trim_start_matches("instagram:#")
             .trim_start_matches("instagram:")
             .trim_start_matches('#')
@@ -6185,6 +6393,12 @@ pub async fn poll_instagram_jobs(state: &Arc<AppState>) {
             // itself a qualification — AI scoring and the DM generator decide
             // which to pursue.
 
+            let category_value = if is_kick_clipper {
+                "kick_clipper".to_string()
+            } else {
+                hashtag_source.clone()
+            };
+
             let result = sqlx::query(
                 "INSERT INTO instagram_leads
                     (username, full_name, bio, followers_count, following_count, posts_count,
@@ -6194,6 +6408,7 @@ pub async fn poll_instagram_jobs(state: &Arc<AppState>) {
                  ON CONFLICT (user_id, username) DO UPDATE
                    SET followers_count = EXCLUDED.followers_count,
                        bio = COALESCE(EXCLUDED.bio, instagram_leads.bio),
+                       category = COALESCE(EXCLUDED.category, instagram_leads.category),
                        updated_at = NOW()",
             )
             .bind(&lead.username)
@@ -6208,7 +6423,7 @@ pub async fn poll_instagram_jobs(state: &Arc<AppState>) {
             .bind(lead.is_verified)
             .bind(&lead.external_url)
             .bind(&lead.email)
-            .bind(&hashtag_source)
+            .bind(&category_value)
             .bind(&hashtag_source)
             .bind(job_user_id)
             .execute(&state.db_pool)
@@ -6355,6 +6570,71 @@ async fn try_launch_or_queue_ig_hashtag_job(
     Ok((job_id, "queued", None))
 }
 
+/// Like `try_launch_or_queue_ig_hashtag_job` but accepts a custom
+/// `search_url_prefix` (e.g. "instagram:kick:#") so the poller can
+/// distinguish Kick-clipper mode from general Instagram leads.
+async fn try_launch_or_queue_ig_hashtag_job_with_prefix(
+    state: &Arc<AppState>,
+    pb: &crate::phantombuster_client::PhantomBusterClient,
+    agent: &crate::phantombuster_client::PbAgent,
+    session_cookie: &str,
+    hashtag: &str,
+    max_posts: u32,
+    user_id: i32,
+    search_url_prefix: &str,
+) -> Result<(uuid::Uuid, &'static str, Option<String>), String> {
+    let tag = hashtag.trim_start_matches('#').to_string();
+    let search_url = format!("{}{}", search_url_prefix, tag);
+
+    let occupied = agent_has_running_job(&state.db_pool, &agent.id).await;
+
+    if !occupied {
+        match pb
+            .launch_instagram_hashtag_search(&agent.id, session_cookie, &tag, max_posts)
+            .await
+        {
+            Ok(container_id) => {
+                let job_id = sqlx::query_scalar::<_, uuid::Uuid>(
+                    "INSERT INTO phantombuster_jobs
+                        (agent_id, agent_name, search_url, status, launched_at, user_id)
+                     VALUES ($1, $2, $3, 'running', NOW(), $4) RETURNING id",
+                )
+                .bind(&agent.id)
+                .bind(&agent.name)
+                .bind(&search_url)
+                .bind(user_id)
+                .fetch_one(&state.db_pool)
+                .await
+                .map_err(|e| format!("DB insert failed: {}", e))?;
+                return Ok((job_id, "running", Some(container_id)));
+            }
+            Err(e) if is_pb_parallel_limit_error(&e) => {
+                tracing::warn!("PB parallel limit hit launching #{}: {} — queuing", tag, e);
+            }
+            Err(e) => return Err(e),
+        }
+    }
+
+    let job_id = sqlx::query_scalar::<_, uuid::Uuid>(
+        "INSERT INTO phantombuster_jobs
+            (agent_id, agent_name, search_url, status, created_at, user_id)
+         VALUES ($1, $2, $3, 'queued', NOW(), $4) RETURNING id",
+    )
+    .bind(&agent.id)
+    .bind(&agent.name)
+    .bind(&search_url)
+    .bind(user_id)
+    .fetch_one(&state.db_pool)
+    .await
+    .map_err(|e| format!("DB insert failed: {}", e))?;
+
+    tracing::info!(
+        "📥 Queued Instagram job {} for #{} (agent busy, user={}, prefix={})",
+        job_id, tag, user_id, search_url_prefix
+    );
+    Ok((job_id, "queued", None))
+}
+
 /// Background dispatcher — runs periodically, promoting the oldest `queued`
 /// job per agent to `running` if the agent has no in-flight job. One promote
 /// per tick per agent keeps PB well under the parallel limit even across
@@ -6485,7 +6765,7 @@ async fn score_instagram_leads(state: &Arc<AppState>, hashtag: &str, user_id: i3
     // is unknown. Scoped to one user's leads so we don't pay to re-score
     // the same lead for multiple users.
     let unscored = match sqlx::query(
-        "SELECT id, username, full_name, bio, followers_count, external_url
+        "SELECT id, username, full_name, bio, followers_count, external_url, category
          FROM instagram_leads
          WHERE score IS NULL
            AND hashtag_source = $1
@@ -6511,6 +6791,10 @@ async fn score_instagram_leads(state: &Arc<AppState>, hashtag: &str, user_id: i3
         let ext_url: String = row
             .get::<Option<String>, _>("external_url")
             .unwrap_or_default();
+        let category: String = row
+            .get::<Option<String>, _>("category")
+            .unwrap_or_default();
+        let is_kick_lead = category == "kick_clipper";
 
         let followers_str = match followers {
             Some(n) if n > 0 => n.to_string(),
@@ -6606,6 +6890,56 @@ Return ONLY valid JSON (no markdown, no code fence):
                 .bind(id)
                 .execute(&state.db_pool)
                 .await;
+            }
+        }
+
+        // ── Kick clipper: detect which Kick creators they clip ──────
+        if is_kick_lead && !bio.is_empty() {
+            let creator_prompt = format!(
+                "This Instagram account reposts clips from Kick.com streamers. \
+                 Based on their bio and post captions below, identify which \
+                 specific Kick.com streamers/creators they clip content from. \
+                 \n\nBio/captions: {bio}\n\n\
+                 Return ONLY a comma-separated list of Kick usernames/slugs. \
+                 If you cannot identify specific creators, return 'unknown'.",
+                bio = bio,
+            );
+            if let Ok(creators_raw) = generate_text_fast(
+                state.ollama_fast_client.as_ref(),
+                state.ollama_client.as_ref(),
+                state.gemini_client.as_ref(),
+                state.deepseek_client.as_ref(),
+                &creator_prompt,
+            )
+            .await
+            {
+                let raw = creators_raw.trim().to_lowercase();
+                if !raw.contains("unknown") && !raw.is_empty() {
+                    let detected: Vec<String> = raw
+                        .split(|c| c == ',' || c == '\n')
+                        .map(|s| s.trim().trim_start_matches('@').to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect();
+                    if !detected.is_empty() {
+                        let enrichment = serde_json::json!({
+                            "detected_source_creators": detected,
+                        });
+                        let _ = sqlx::query(
+                            "UPDATE instagram_leads
+                             SET contact_enrichment = $1
+                             WHERE id = $2",
+                        )
+                        .bind(&enrichment)
+                        .bind(id)
+                        .execute(&state.db_pool)
+                        .await;
+                        tracing::info!(
+                            "🎯 Detected Kick creators for @{}: {:?}",
+                            username,
+                            detected
+                        );
+                    }
+                }
             }
         }
 
