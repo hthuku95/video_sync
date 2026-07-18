@@ -149,7 +149,7 @@ async fn admin_create_campaign(
     let id = sqlx::query_scalar::<_, Uuid>(
         "INSERT INTO campaigns (user_id, name, service_type, brief, style, duration, schedule, platforms, \
                                 posts_per_day, start_date, end_date, source_url, status, paid_until) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'pending_payment', NULL) RETURNING id",
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'active', NOW() + INTERVAL '365 days') RETURNING id",
     )
     .bind(0i32) // user_id — admin-created, no specific user
     .bind(&req.name)
@@ -167,8 +167,7 @@ async fn admin_create_campaign(
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
 
-    let payment_url = format!("/api/campaigns/{}/pay-spec", id);
-    Ok(Json(json!({"success": true, "id": id.to_string(), "payment_url": payment_url, "status": "pending_payment"})))
+    Ok(Json(json!({"success": true, "id": id.to_string(), "status": "active"})))
 }
 
 // ── Admin: Get campaign details ─────────────────────────────────────────────
@@ -378,6 +377,23 @@ async fn client_create_campaign(
         return Err((StatusCode::BAD_REQUEST, Json(json!({"error": "service_type must be one of: clipping, education, landing_page, kick_auto_clipper, manim_explainer, whiteboard_animation, kinetic_typography, animated_infographic, algorithm_viz, investor_pitch, year_in_review, isometric_explainer"}))));
     }
 
+    // Staff, superusers, and whitelisted users bypass payment — campaign is active immediately.
+    let is_privileged = claims.is_superuser || claims.is_staff || {
+        sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(SELECT 1 FROM whitelist_emails WHERE email = $1)",
+        )
+        .bind(&claims.email)
+        .fetch_one(&state.db_pool)
+        .await
+        .unwrap_or(false)
+    };
+
+    let (status, paid_until) = if is_privileged {
+        ("active", Some(chrono::Utc::now() + chrono::Duration::days(365)))
+    } else {
+        ("pending_payment", None)
+    };
+
     let style = req.style.unwrap_or_else(|| "cinematic".to_string());
     let duration = req.duration.unwrap_or(30.0);
     let posts_per_day = req.posts_per_day.unwrap_or(3);
@@ -386,7 +402,7 @@ async fn client_create_campaign(
     let id = sqlx::query_scalar::<_, Uuid>(
         "INSERT INTO campaigns (user_id, name, service_type, brief, style, duration, schedule, platforms, \
                                 posts_per_day, start_date, end_date, zernio_profile_id, source_url, status, paid_until) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'pending_payment', NULL) RETURNING id",
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING id",
     )
     .bind(user_id)
     .bind(&req.name)
@@ -401,12 +417,18 @@ async fn client_create_campaign(
     .bind(end_date)
     .bind(&req.zernio_profile_id)
     .bind(source_url)
+    .bind(status)
+    .bind(paid_until)
     .fetch_one(&state.db_pool)
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
 
-    let payment_url = format!("/api/campaigns/{}/pay-spec", id);
-    Ok(Json(json!({"success": true, "id": id.to_string(), "payment_url": payment_url, "status": "pending_payment"})))
+    if is_privileged {
+        Ok(Json(json!({"success": true, "id": id.to_string(), "status": "active"})))
+    } else {
+        let payment_url = format!("/api/campaigns/{}/pay-spec", id);
+        Ok(Json(json!({"success": true, "id": id.to_string(), "payment_url": payment_url, "status": "pending_payment"})))
+    }
 }
 
 // ── Client: List own campaigns ──────────────────────────────────────────────
