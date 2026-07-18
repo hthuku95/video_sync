@@ -6904,7 +6904,7 @@ Return ONLY valid JSON (no markdown, no code fence):
                  If you cannot identify specific creators, return 'unknown'.",
                 bio = bio,
             );
-            if let Ok(creators_raw) = generate_text_fast(
+            if let Ok(creators_raw) = crate::llm_utils::generate_text_fast(
                 state.ollama_fast_client.as_ref(),
                 state.ollama_client.as_ref(),
                 state.gemini_client.as_ref(),
