@@ -2276,33 +2276,31 @@ fn is_valid_revenue_service(service: &str) -> bool {
 
 fn service_offer_line(service: &str) -> &'static str {
     match normalize_revenue_service(service) {
-        "clipping" => "turn long-form videos into short-form clips with captions and thumbnails",
-        "education" => "a narrated animated explainer with motion graphics",
-        "landing_page" => "a 30-90s homepage hero or narrated product demo video from your site",
-        "kick_auto_clipper" => "auto-generated Kick clips from VODs with branding and captions",
-        "manim_explainer" => "a narrated Manim animated explainer with motion graphics and math diagrams",
-        "whiteboard_animation" => "a narrated whiteboard-style hand-drawn explainer video",
-        "kinetic_typography" => "a dynamic kinetic typography text animation video",
-        "animated_infographic" => "an animated data infographic with charts and counters",
-        "algorithm_viz" => "an algorithm visualization with animated data structures",
-        "investor_pitch" => "a professional investor pitch deck video with motion graphics",
-        "year_in_review" => "a personalized year-in-review wrapped-style recap video",
-        "isometric_explainer" => "an isometric 3D perspective explainer video",
-        _ => "a product video or motion asset from your website or app",
+        "clipping" => "automated clip generation from your streams and VODs — posted to your social accounts daily",
+        "education" => "animated educational videos with narration and motion graphics — generated and posted to your social accounts daily",
+        "landing_page" => "videos generated from your website URL — posted to your social accounts as marketing content daily",
+        "kick_auto_clipper" => "automated Kick VOD clipping from your favorite streamers — posted to your social accounts daily",
+        "manim_explainer" => "narrated animated explainer videos — generated and posted to your social accounts daily",
+        "whiteboard_animation" => "narrated whiteboard-style hand-drawn explainer videos — generated and posted daily",
+        "kinetic_typography" => "animated text-motion videos from your scripts — posted to your social accounts daily",
+        "animated_infographic" => "animated data infographics with charts — generated from your data and posted daily",
+        "algorithm_viz" => "animated algorithm and data structure visualizations — posted to your social accounts daily",
+        "investor_pitch" => "animated investor pitch videos with motion graphics — generated and posted to your social accounts daily",
+        "year_in_review" => "personalized recap and highlight videos — generated from your content and posted daily",
+        "isometric_explainer" => "isometric-style animated explainer videos — generated and posted to your social accounts daily",
+        _ => "videos generated from your website or brief — posted to your social accounts daily",
     }
 }
 
 fn service_price_line(service: &str) -> &'static str {
     match normalize_revenue_service(service) {
-        "clipping" => "$297-$899/mo",
-        "education" => "$75-$400 per asset",
-        "landing_page" => "$299-$1,500+",
-        "kick_auto_clipper" => "$297-$899/mo",
-        "manim_explainer" | "whiteboard_animation" => "$75-$300 per asset",
-        "kinetic_typography" | "animated_infographic" => "$75-$250 per asset",
-        "algorithm_viz" | "investor_pitch" => "$150-$500 per asset",
-        "year_in_review" | "isometric_explainer" => "$100-$400 per asset",
-        _ => "$99 starter",
+        "clipping" | "kick_auto_clipper" => "$297/mo",
+        "education" => "$199/mo",
+        "landing_page" => "$149/mo",
+        "manim_explainer" | "whiteboard_animation" | "kinetic_typography"
+        | "animated_infographic" | "algorithm_viz" | "investor_pitch"
+        | "year_in_review" | "isometric_explainer" => "$149/mo",
+        _ => "$149/mo",
     }
 }
 
@@ -2387,20 +2385,18 @@ fn should_use_long_form_for_revenue_sample(service: &str, has_reference_url: boo
 
 fn default_x_dm(name: &str, service: &str) -> String {
     format!(
-        "Hey {} — I’m using my verified X to reach a few founders/creators directly. I can make {} for {}. Want me to send a quick sample link?",
+        "Hey {} — I put together a free sample of what I can do for your content — {}.",
         name,
         service_offer_line(service),
-        service_price_line(service)
     )
 }
 
 fn default_email_script(name: &str, service: &str) -> String {
     format!(
-        "Subject: quick VideoSync sample for {}\n\nHey {},\n\nI run VideoSync, an AI production system that can make {}. The starter range is {} and I can usually turn around a first sample within 24 hours.\n\nIf you send me your website/product link, I can create a short preview pack and send you a delivery page before you commit.\n\nWant me to make one for you?",
+        "Subject: free sample for {}\n\nHey {},\n\nI put together a free sample of what VideoSync can do for your content — {}. The link is in this message.\n\nLet me know what you think!\n\nBest,\nVideoSync",
         name,
         name,
         service_offer_line(service),
-        service_price_line(service)
     )
 }
 
@@ -2715,29 +2711,27 @@ async fn generate_outreach_message(
 
     let pitch_focus = service_offer_line(&service);
     let prompt = format!(
-        r#"Write two outreach variants from VideoSync to {name}, a {category} {pt} with {audience} audience.
+        r#"Write a personalized X DM and email from VideoSync to {name}, a {category} {pt} with {audience} audience.
+The subject already has a free sample ready at this link: {delivery_url}
+Include the delivery link naturally in both the DM and email — do NOT ask for permission to send it.
 
 Offer: {pitch_focus}
-Price anchor: {price}
-Include this delivery link naturally: {delivery_url}
-Mention you already created a free sample for them.
-X DM must be under 280 characters and can mention "I'm verified on X so I can DM this directly."
-Email must include a subject and a concise body.
-Be conversational, specific to their niche, and end with a soft call-to-action.
+
+X DM must be short and direct (under 280 chars). Email must include a subject and brief body.
+Be conversational, specific to their content/niche, and end with a soft call-to-action.
 DO NOT use emojis excessively. Return only the message text, no preamble.
 Return ONLY valid JSON:
 {{"x_dm":"...","email_script":"Subject: ...\n\n..."}}
 
 Tone references:
-X DM: {existing_x_dm}
-Email: {existing_email}
-Legacy DM: {existing_dm}"#,
+X DM tone: {existing_x_dm}
+Email tone: {existing_email}
+Legacy DM tone: {existing_dm}"#,
         name = name,
         category = category,
         pt = pt.replace('_', " "),
         audience = audience_label,
         pitch_focus = pitch_focus,
-        price = service_price_line(&service),
         delivery_url = payload.delivery_url,
         existing_x_dm = existing_x_dm.chars().take(220).collect::<String>(),
         existing_email = existing_email.chars().take(300).collect::<String>(),

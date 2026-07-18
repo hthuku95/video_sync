@@ -372,7 +372,7 @@ pub async fn saas_launch_pack_page() -> Html<String> {
     Html(build_service_offer_page_html(
         "saas-launch-pack",
         "SaaS Demo Campaign",
-        "$399/mo",
+        "$149/mo",
         "Turn your product URL into daily buyer-facing demos — auto-posted to Twitter, LinkedIn, and YouTube.",
         "For SaaS founders, product marketers, and sales teams who need a steady stream of polished product videos without hiring a studio.",
         &[
@@ -402,7 +402,7 @@ pub async fn clipping_pack_page() -> Html<String> {
     Html(build_service_offer_page_html(
         "clipping-pack",
         "Social Clipping Campaign",
-        "$147/mo",
+        "$297/mo",
         "Paste a VOD or long video URL. Our AI extracts daily highlights with captions, hooks, and thumbnails — auto-posted to TikTok, Shorts, Reels, and X.",
         "For creators, streamers, clip channels, and social media managers who need a consistent stream of short-form clips without manual editing.",
         &[
@@ -552,7 +552,7 @@ pub async fn animated_infographic_page() -> Html<String> {
     Html(build_service_offer_page_html(
         "animated-infographic",
         "Animated Infographic Campaign",
-        "$199/mo",
+        "$149/mo",
         "Turn data, reports, and statistics into daily animated infographics — bar charts, pie charts, timelines, and data stories.",
         "For analysts, data journalists, business channels, and educators who need visual data storytelling at scale.",
         &[
@@ -582,7 +582,7 @@ pub async fn algorithm_viz_page() -> Html<String> {
     Html(build_service_offer_page_html(
         "algorithm-viz",
         "Algorithm Visualization Campaign",
-        "$199/mo",
+        "$149/mo",
         "Daily animated algorithm walkthroughs — sorting, search, graph traversal, data structures visualized with Manim.",
         "For CS educators, coding channels, tutorial creators, and technical interview prep content producers.",
         &[
@@ -612,7 +612,7 @@ pub async fn investor_pitch_page() -> Html<String> {
     Html(build_service_offer_page_html(
         "investor-pitch",
         "Investor Pitch Campaign",
-        "$299/mo",
+        "$149/mo",
         "Daily narrated pitch videos for fundraising — market analysis, product demo, traction charts, and team slides, animated and auto-posted.",
         "For startups raising rounds, accelerators, and pitch coaches who need consistent investor-ready video content.",
         &[
@@ -642,7 +642,7 @@ pub async fn year_in_review_page() -> Html<String> {
     Html(build_service_offer_page_html(
         "year-in-review",
         "Year in Review Campaign",
-        "$99/mo",
+        "$149/mo",
         "Daily highlight-reel videos — curated from your content, with animated stats, milestones, and timeline visuals.",
         "For creators, businesses, and teams who want ongoing highlight content without end-of-year scramble.",
         &[
@@ -672,7 +672,7 @@ pub async fn isometric_explainer_page() -> Html<String> {
     Html(build_service_offer_page_html(
         "isometric-explainer",
         "Isometric Explainer Campaign",
-        "$199/mo",
+        "$149/mo",
         "Daily isometric-style animated explainers — 3D-like visuals on a 2D plane, perfect for product demos, architecture, and technical concepts.",
         "For product teams, architects, game devs, and technical educators who want isometric visual explanations at scale.",
         &[
