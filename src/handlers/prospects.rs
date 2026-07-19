@@ -5559,7 +5559,8 @@ async fn instagram_generate_sample(
     let source_url = req.as_ref().and_then(|r| r.source_url.clone());
 
     let row = match sqlx::query(
-        "SELECT username, full_name, bio, service_type, sample_delivery_id, external_url
+        "SELECT username, full_name, bio, service_type, sample_delivery_id, external_url,
+                contact_enrichment
          FROM instagram_leads WHERE id = $1 AND user_id = $2",
     )
     .bind(id)
@@ -5590,10 +5591,30 @@ async fn instagram_generate_sample(
     let bio: String = row.get::<Option<String>, _>("bio").unwrap_or_default();
     let service: Option<String> = row.get::<Option<String>, _>("service_type");
     let lead_ext_url: Option<String> = row.get::<Option<String>, _>("external_url");
+    let contact_enrichment: Option<serde_json::Value> = row.get::<Option<serde_json::Value>, _>("contact_enrichment");
 
     // Auto-detect the lead's website: prefer explicit source_url from request,
     // fall back to the lead's external_url from their profile (IG bio link, etc.)
-    let source_url = source_url.or(lead_ext_url);
+    let mut source_url = source_url.or(lead_ext_url);
+
+    // For kick_auto_clipper leads with detected source creators, auto-resolve
+    // the Kick VOD URL from the first detected creator.
+    if service.as_deref() == Some("kick_auto_clipper") && source_url.is_none() {
+        if let Some(ref enrichment) = contact_enrichment {
+            if let Some(creators) = enrichment.get("detected_source_creators").and_then(|c| c.as_array()) {
+                if let Some(first) = creators.first().and_then(|c| c.as_str()) {
+                    let kick_url = format!("https://kick.com/{}", first.trim_start_matches('@'));
+                    source_url = Some(kick_url);
+                    tracing::info!(
+                        "🎯 Auto-resolved Kick URL for IG lead @{}: {}",
+                        username,
+                        source_url.as_deref().unwrap_or("")
+                    );
+                }
+            }
+        }
+    }
+
     let service_key = service.as_deref().unwrap_or("landing_page");
     let has_reference_url = source_url
         .as_deref()
