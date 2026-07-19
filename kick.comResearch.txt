@@ -1,0 +1,674 @@
+I want you to help me with a research of some sort. So I have built an automated tool that can clip kick.com vods/streams powered by AI (it is an AI Agent). the pipeline also has the ability of editing videos. I am planning on licencing/selling it to clippers who clip content for the big kick.com creators like Neon. Because those clippers I hear they get paid by kick.com also. But there are strict guidlines on how to edit the videos. for example adding the green kick.com logos on the clips for their clips to be eligible for monitization. What I want you to do is research on this editing guidelines so that I can configure the Agent to be doing those edits in those specific patterns/guidelines. I hope you understand what i am saying
+
+Yes, I understand exactly what you're trying to do, and I actually think you're approaching it the right way.
+
+What you're aren't trying to build is "another auto clipper." You're building an AI Clipping Agent that produces clips that are already compliant with the workflow professional Kick clippers use. That makes it much more valuable because the customer doesn't have to manually edit every clip before posting.
+
+However, there is one important thing to point out:
+
+The "official" editing guidelines used by paid Kick clippers are not publicly documented (at least not in any Help Center or public policy I could find). Kick's public documentation covers monetization, partnerships and clipping itself, but not the exact branding template that clip pages are instructed to use.
+
+So the research has to be done the same way a product designer would do it:
+
+Gather everything Kick officially says.
+Reverse engineer what the large clip pages are consistently doing.
+Talk to people in the clipping Discords if necessary.
+Configure your AI around those patterns.
+What Kick officially says
+
+From Kick's documentation:
+
+Clips are between 10 and 180 seconds.
+Clips can be created from livestreams or VODs.
+Streamers can disable clipping.
+Creators must follow Community Guidelines and copyright rules.
+Partner status can be affected by misuse or copyright violations.
+
+Notice what's missing:
+
+no logo placement guide
+no caption guide
+no font guide
+no export settings
+no safe areas
+no watermark instructions
+
+Those appear to be handled internally by the clipping program rather than publicly documented.
+
+What the professional Kick clip pages consistently do
+
+After looking at the biggest Kick creators (Neon, Adin Ross, Jack Doherty, N3on, etc.), there are very consistent editing patterns.
+
+1. Vertical 9:16 format
+
+Almost every monetized clip is
+
+1080 × 1920
+TikTok
+Shorts
+Reels
+
+Your agent should automatically crop to vertical.
+
+2. Facecam priority
+
+Instead of cropping the whole game, most clips keep
+
+streamer face
+important gameplay
+
+simultaneously.
+
+Your AI should detect
+
+webcam
+gameplay
+talking head
+
+and dynamically crop.
+
+This is already something your pipeline probably does.
+
+3. Burned-in captions
+
+Nearly every successful Kick clip has
+
+large captions
+word highlighting
+animated text
+
+Typical style:
+
+white
+black outline
+one word highlighted
+
+Exactly like OpusClip or Captions AI.
+
+4. Green Kick branding
+
+This is the part you're interested in.
+
+Professional clip pages usually include
+
+green Kick logo
+small
+one corner
+always visible
+
+Sometimes:
+
+KICK
+
+Sometimes only
+
+the green logo.
+
+The placement is usually
+
+top left
+
+or
+
+bottom left
+
+depending on caption placement.
+
+5. Creator name
+
+Many clips contain
+
+@Neon
+
+or
+
+Kick.com/Neon
+
+or
+
+LIVE ON KICK
+
+This appears very consistently.
+
+6. Outro
+
+Many clip pages finish with
+
+Watch Live
+
+Kick.com/Neon
+
+lasting
+
+1–2 seconds.
+
+7. Zoom effects
+
+Successful clip pages frequently add
+
+zoom when screaming
+punch-in on reactions
+camera shake
+sound effects
+
+These increase retention.
+
+8. Dead-space removal
+
+Professional editors remove
+
+silence
+loading screens
+walking
+pauses
+
+Your AI should aggressively trim these.
+
+Features I would add to your AI
+
+Instead of making users manually configure edits, I'd expose presets.
+
+Example:
+
+Kick Standard
+
+✓ Vertical
+✓ Auto captions
+✓ Kick logo
+✓ Creator name
+✓ Dynamic crop
+✓ Auto zoom
+✓ Profanity filter
+✓ Outro
+
+Another:
+
+TikTok Viral
+
+✓ Heavy zooms
+✓ Animated captions
+✓ Emoji reactions
+✓ Progress bar
+✓ Sound effects
+
+Another:
+
+YouTube Shorts
+
+✓ Minimal captions
+✓ Cleaner layout
+✓ Larger gameplay
+I think you should support templates
+
+Instead of hardcoding everything.
+
+Example JSON
+
+{
+  "logo": {
+    "enabled": true,
+    "position": "top_left",
+    "scale": 0.08,
+    "margin": 40
+  },
+  "captions": {
+    "style": "kick",
+    "highlight": true
+  },
+  "outro": {
+    "duration": 2,
+    "text": "Watch Live on Kick"
+  }
+}
+
+Then every creator can have their own preset.
+
+There is another opportunity you're probably missing
+
+From discussions around Kick's clipping ecosystem, clippers aren't simply uploading clips—they're typically posting them to TikTok, YouTube Shorts, Instagram Reels, and X, and some qualify for payments through creator-specific clipping programs or agreements rather than through an open, platform-wide monetization system. Community discussions also mention follower/view thresholds and Discord-based onboarding, but these requirements are not officially documented and may vary by creator or program.
+
+That means your AI agent could go beyond editing:
+
+Detect the best moments from a VOD.
+Generate multiple clip variants (30s, 45s, 60s).
+Apply the creator's branded editing template.
+Generate SEO-friendly titles.
+Write platform-specific captions.
+Export in the correct aspect ratios.
+Schedule uploads to TikTok, Shorts, Instagram, and X.
+
+That becomes much harder to replace than a simple clipping tool.
+
+I recommend one more phase of research
+
+The missing piece is the private clipping playbook used by the official clip pages. I can help you reverse-engineer it by analyzing 50–100 clips from major Kick creators (Neon, Adin Ross, Jack Doherty, xQc on Kick, etc.) and produce a detailed specification with measurements such as:
+
+Exact Kick logo position (pixel offsets and size)
+Caption fonts and animation style
+Zoom timing rules
+Crop behavior
+Transition patterns
+Intro/outro design
+Safe margins
+Export settings
+An implementation guide that can be translated directly into your AI agent's editing pipeline.
+
+That would give you an engineering specification rather than just general recommendations.
+
+I actually think getting 2 replies out of 10 cold DMs is a better signal than most people realize.
+
+For cold outreach, a 20% response rate is quite healthy, especially if you're contacting people who are busy and already have established workflows. The important question isn't "Did they reply?"—it's what they said next.
+
+If they replied because they're curious about saving time, that's validation that you're solving a real problem. If they replied but immediately asked, "How accurate is it?" or "Can it edit like our current workflow?", then you've learned that editing quality and reliability are the biggest hurdles before they'll pay.
+
+About charging $300/month
+
+I wouldn't start by asking whether $300/month is too high. I'd ask whether your tool creates more than $300/month in value for them.
+
+Imagine a professional clipper:
+
+They produce 20–50 clips a day.
+Each clip might take 10–20 minutes to find, edit, caption, brand, and export.
+If your agent reduces that to 2–3 minutes of review and approval, it could save several hours every day.
+
+If someone earns thousands of dollars a month from clipping, paying $300/month could be entirely reasonable if your tool is reliable.
+
+On the other hand, if your customer is:
+
+only clipping part-time,
+producing 5–10 clips a week,
+or just experimenting,
+
+then $300/month is likely too expensive.
+
+I would validate pricing before locking it in
+
+Rather than saying:
+
+"It's $300/month."
+
+I'd say something like:
+
+"I'm looking for a few beta users. In exchange for feedback, you'll get early access. Once the product is production-ready, it'll move to a paid plan."
+
+Then ask questions like:
+
+How many clips do you make per day?
+What's the slowest part of your workflow?
+If this worked perfectly, what would it be worth to you?
+Would you pay for it monthly, or would you prefer a pay-per-clip model?
+
+Those answers are often more valuable than guessing a price.
+
+Your biggest competitive advantage
+
+From what you've described, you're not building:
+
+an editor,
+a transcription tool,
+or an auto clipper.
+
+You're building an AI clipping employee.
+
+That's a very different product.
+
+If your agent can:
+
+watch a 6-hour VOD,
+identify the top 30 moments,
+generate titles,
+edit them,
+add captions,
+add Kick branding,
+export them ready for upload,
+
+then you're replacing a large portion of a clipper's workflow rather than just giving them another editing tool.
+
+The thing I'd focus on right now
+
+I wouldn't spend the next month thinking about pricing.
+
+I'd spend it making sure the first few users say:
+
+"I can actually use this in my daily workflow."
+
+Professional clippers are usually forgiving of rough interfaces or missing features if the output saves them time. They are much less forgiving if they have to fix every clip manually.
+
+If those two clippers become daily users and tell you, "This saves me two hours a day," then you'll be in a much stronger position to justify $300/month—or even more if your product continues to improve. The workflow quality and trustworthiness are what will ultimately determine whether that price feels like a bargain or a stretch.
+
+the application has also been integrated with zernio. meaning they can connect as many social media accounts as they want and create social media campaigns. that is why I think 300 USD might be Okay. What do you think?
+
+Honestly? Yes — with the Zernio integration, $300/month becomes much more defensible. In fact, I’d stop thinking of this as “an AI clipper” and start positioning it as a content operations platform for Kick clippers.
+
+Here’s the key mindset shift:
+
+You’re no longer selling editing software
+
+You’re selling this workflow:
+
+INPUT
+
+6-hour Kick VOD
+
+AI
+
+Agent finds viral moments
+
+EDIT
+
+FFmpeg applies captions, zooms, Kick branding
+
+PUBLISH
+
+Zernio distributes to TikTok, Shorts, Reels, X
+
+SCALE
+
+Multiple accounts + scheduled campaigns
+
+That is way more valuable than a clipping tool.
+
+The real pricing question
+
+Let’s do rough economics.
+
+What a serious clipper looks like
+
+Metric
+
+	
+
+Estimate
+
+
+
+
+Clips/day
+
+	
+
+20–40
+
+
+
+
+Time per clip (manual)
+
+	
+
+10–15 min
+
+
+
+
+Total editing time
+
+	
+
+3–8 hrs/day
+
+
+
+
+Value of their time
+
+	
+
+$10–25/hr
+
+If your agent cuts the workflow down to review + approve (1–2 min per clip):
+
+You save 2–6 hours per day
+
+That’s 60–180 hours per month
+
+Even at $10/hour, that’s $600–$1,800/month of value created
+
+So $300/month is not crazy at all if the tool is actually production-ready.
+
+But I would NOT launch at a flat $300 immediately
+
+Because you’re still validating the editing workflow.
+
+Here’s the structure I’d use:
+
+Beta
+
+Best now
+
+$0–49
+
+/month
+
+Early adopter
+
+$99–149
+
+/month
+
+Pro
+
+$299
+
+/month
+
+Agency / Team
+
+$499–999+
+
+/month
+
+Why this is better
+
+Beta users give feedback while you fix branding/caption rules.
+
+You can say “You’re locked in at this price forever.”
+
+When you raise prices later, it feels fair.
+
+You’ll learn what features people actually use before committing to infrastructure costs.
+
+Your strongest differentiator is “unlimited social accounts”
+
+Most tools charge per connected account.
+
+If Zernio lets them connect unlimited TikTok/YouTube/Instagram/X accounts, that’s a huge agency feature.
+
+A clipper working for Neon might manage:
+
+3 TikTok accounts
+
+2 YouTube Shorts channels
+
+1 Instagram page
+
+1 X account
+
+That’s 7 accounts.
+
+Many social media tools would charge $50–200/month just for that.
+
+So your pitch becomes:
+
+AI clipping + editing + publishing + multi-account campaign management
+
+That is much easier to justify at $299/month.
+
+Here’s the positioning I’d use
+
+Most clippers spend hours finding moments, editing, branding, exporting, and uploading to multiple platforms.
+
+Our AI Agent watches the VOD, finds viral moments, edits them with Kick-compliant branding, generates captions/titles, and publishes them across unlimited social accounts through Zernio.
+
+You go from a 6-hour VOD to 20 ready-to-post clips in minutes.
+
+That sounds like a business tool, not a hobby project.
+
+One thing I’d change immediately
+
+Do not advertise “unlimited” forever unless you’ve tested the infrastructure cost.
+
+A power user could connect:
+
+50 TikTok accounts
+
+50 YouTube channels
+
+schedule thousands of posts
+
+and generate massive API/storage costs
+
+I’d word it as:
+
+Connect multiple social accounts (fair-use policy applies)
+
+or
+
+Up to 20 connected accounts on Pro
+
+You can always increase limits later.
+
+The editing workflow is the make-or-break part
+
+Before charging $300, I’d make sure these are 100% automatic:
+
+Vertical crop keeps facecam visible
+
+Captions never overlap the Kick logo
+
+Logo is always placed in a safe corner
+
+Creator handle is burned in consistently
+
+Outro card is added automatically
+
+Export settings match TikTok/Shorts requirements
+
+If a clipper has to fix even one of these manually on every clip, they’ll eventually stop using the tool.
+
+My honest recommendation
+Right now (testing phase)
+
+Give the 2 responding clippers free access for 30 days
+
+Get them to use it on real Neon VODs
+
+Watch them edit the output
+
+Note every manual correction they make
+
+Create a spreadsheet:
+
+Issue
+
+	
+
+Frequency
+
+
+
+
+Logo overlaps captions
+
+	
+
+12%
+
+
+
+
+Crop misses facecam
+
+	
+
+8%
+
+
+
+
+Captions too small
+
+	
+
+25%
+
+
+
+
+Wrong clip boundaries
+
+	
+
+15%
+
+Fix the highest-frequency issue first.
+
+What I’d charge
+
+Today (beta)
+
+$49
+
+When 3 users are posting daily
+
+$149
+
+When output is consistently publish-ready
+
+$299
+
+So my answer is:
+
+Yes — $300/month is a reasonable target price for the product you’re describing.
+
+I just wouldn’t start there while the editing workflow is still being tuned. The fact that two clippers already responded gives you exactly what you need right now: design partners. Use them to reverse-engineer the real Kick clipping workflow, make the AI output indistinguishable from a human editor, and then you’ll have a much stronger case for a $299/month Pro plan.
+
+Btw I DMd them 1 week ago and i have not responded back to the when they told me they would like to see the tool. Will that affect me?
+
+It definitely doesn't help, but I don't think you've lost the opportunity.
+
+In the startup world, a week isn't unusual. People get busy, and creators receive lots of DMs. The important thing is how you follow up.
+
+In fact, if you've spent the week improving the product, you now have a better reason to reach back out.
+
+I would avoid saying something like:
+
+"Sorry for the late reply."
+
+Instead, make the conversation about the product:
+
+"Hey! Thanks for getting back to me last week. I've been improving the AI clipping workflow and it's now at a stage where I'd love to get feedback from someone who actually clips Kick content. Would you be interested in trying an early beta? I'm mainly looking for honest feedback on the editing quality and workflow."
+
+This does a few things:
+
+It acknowledges the gap without making a big deal of it.
+It gives a legitimate reason for the delay.
+It makes them feel like a collaborator rather than someone you're trying to sell to.
+I also wouldn't try to sell them immediately.
+
+Your goal for these first two people is not revenue.
+
+Your goal is to learn:
+
+What edits did they have to fix manually?
+What took too long?
+Would they trust the AI enough to use it daily?
+What feature would make them say, "I can't go back to editing manually"?
+
+If one of them starts using the tool every day, that feedback will be worth far more than the first $300.
+
+One suggestion
+
+When you message them, don't just say, "Here's the tool."
+
+Record a 2–3 minute demo video showing the complete workflow:
+
+Select a Kick VOD.
+AI detects the best moments.
+FFmpeg edits the clips (captions, logo, zooms, etc.).
+Clips appear ready for review.
+One click publishes through Zernio.
+
+A short demo communicates the value much faster than a wall of text and makes it easier for them to decide whether they want to try it.
+
+So, no—I don't think a one-week delay has ruined your chances. I would message them today while their earlier interest is still relatively fresh. The sooner you get real users testing it, the faster you'll discover the changes that matter most.
