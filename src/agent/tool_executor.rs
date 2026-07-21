@@ -1528,6 +1528,7 @@ pub async fn execute_tool_claude(name: &str, args: &Value) -> String {
         "export_video" => execute_export_video_claude(args),
         "blender_generate_scene_type" => execute_blender_generate_scene_type_claude(args).await,
         "manim_execute_script" => execute_manim_execute_script_claude(args).await,
+        "download_asset" => execute_download_asset_claude(args).await,
 
         _ => format!("❌ Unknown tool: {}", name),
     }
@@ -1946,6 +1947,7 @@ pub async fn execute_tool_gemini(name: &str, args: &HashMap<String, Value>) -> S
         "export_video" => execute_export_video_gemini(args),
         "blender_generate_scene_type" => execute_blender_generate_scene_type_gemini(args).await,
         "manim_execute_script" => execute_manim_execute_script_gemini(args).await,
+        "download_asset" => execute_download_asset_gemini(args).await,
 
         _ => format!("❌ Unknown tool: {}", name),
     }
@@ -18836,6 +18838,385 @@ pub(crate) async fn execute_browserbase_crawl_website_inner(url: &str) -> String
             format!("Website crawl failed: {e}. Try using a direct URL or check if BrowserBase is configured.")
         }
     }
+}
+
+// ── download_asset (universal, BrowserBase + R2 cache) ───────────────────
+// Downloads external assets (images, videos, audio, files) from URLs,
+// caches them in R2 for reuse. Handles both direct file URLs and web pages
+// (uses BrowserBase to scrape and find media assets).
+
+fn is_direct_asset_url(url: &str) -> bool {
+    let lower = url.to_lowercase();
+    let asset_extensions = [
+        ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".ico", ".bmp", ".tiff", ".tif",
+        ".mp4", ".webm", ".mov", ".avi", ".mkv", ".m4v",
+        ".mp3", ".wav", ".ogg", ".aac", ".flac", ".m4a", ".wma",
+        ".pdf", ".zip", ".gz", ".tar",
+        ".woff", ".woff2", ".ttf", ".otf", ".eot",
+        ".glb", ".gltf", ".obj", ".fbx",
+    ];
+    asset_extensions.iter().any(|ext| lower.contains(ext))
+}
+
+fn get_filename_from_url(url: &str) -> &str {
+    // Extract filename from URL, e.g. "logo.png" from "https://example.com/images/logo.png"
+    if let Some(pos) = url.rfind('/') {
+        let after_slash = &url[pos + 1..];
+        // Strip query params
+        if let Some(qpos) = after_slash.find('?') {
+            &after_slash[..qpos]
+        } else {
+            after_slash
+        }
+    } else {
+        url
+    }
+}
+
+fn get_domain_from_url(url: &str) -> String {
+    // Extract domain from URL, e.g. "kick.com" from "https://kick.com/brand-assets"
+    let url = url.trim_start_matches("http://").trim_start_matches("https://");
+    let domain = url.split('/').next().unwrap_or("unknown");
+    domain.to_lowercase()
+}
+
+fn extract_media_urls_from_html(html: &str) -> Vec<String> {
+    use regex::Regex;
+    let mut urls = Vec::new();
+
+    // Extract from <img src="...">
+    if let Ok(re) = Regex::new(r#"(?i)<img[^>]+src\s*=\s*"([^"]+)"#) {
+        for cap in re.captures_iter(html) {
+            if let Some(url) = cap.get(1) {
+                let u = url.as_str().to_string();
+                if !u.is_empty() && !urls.contains(&u) {
+                    urls.push(u);
+                }
+            }
+        }
+        // Also match single-quoted and unquoted src attributes
+        let re2 = Regex::new(r#"(?i)<img[^>]+src\s*=\s*'([^']+)"#).ok();
+        if let Some(re2) = re2 {
+            for cap in re2.captures_iter(html) {
+                if let Some(url) = cap.get(1) {
+                    let u = url.as_str().to_string();
+                    if !u.is_empty() && !urls.contains(&u) {
+                        urls.push(u);
+                    }
+                }
+            }
+        }
+    }
+
+    // Extract from <video src="..."> and <video><source src="...">
+    if let Ok(re) = Regex::new(r#"(?i)(?:<video[^>]+src\s*=\s*"([^"]+)"|<source[^>]+src\s*=\s*"([^"]+)"|<video[^>]+poster\s*=\s*"([^"]+)")#) {
+        for cap in re.captures_iter(html) {
+            for i in 1..=3 {
+                if let Some(url) = cap.get(i) {
+                    let u = url.as_str().to_string();
+                    if !u.is_empty() && !urls.contains(&u) {
+                        urls.push(u);
+                    }
+                }
+            }
+        }
+    }
+
+    // Extract <a href="..."> for download links
+    if let Ok(re) = Regex::new(r#"(?i)<a[^>]+href\s*=\s*"([^"]+)"[^>]*>(?:download|asset|file|media|logo|brand)</a>"#) {
+        for cap in re.captures_iter(html) {
+            if let Some(url) = cap.get(1) {
+                let u = url.as_str().to_string();
+                if !u.is_empty() && !urls.contains(&u) {
+                    urls.push(u);
+                }
+            }
+        }
+    }
+
+    // Also extract og:image and twitter:image meta tags
+    if let Ok(re) = Regex::new(r#"(?i)<meta[^>]+(?:property|name)\s*=\s*"(?:og:image|twitter:image)"[^>]+content\s*=\s*"([^"]+)"#) {
+        for cap in re.captures_iter(html) {
+            if let Some(url) = cap.get(1) {
+                let u = url.as_str().to_string();
+                if !u.is_empty() && !urls.contains(&u) {
+                    urls.push(u);
+                }
+            }
+        }
+    }
+
+    // Resolve relative URLs to absolute — filter to only media-like URLs
+    urls.retain(|u| {
+        u.starts_with("http://") || u.starts_with("https://") || u.starts_with("//")
+    });
+
+    // Prepend https: for // protocol-relative URLs
+    let resolved: Vec<String> = urls.iter().map(|u| {
+        if u.starts_with("//") {
+            format!("https:{}", u)
+        } else {
+            u.clone()
+        }
+    }).collect();
+
+    // Deduplicate and keep only media-looking URLs
+    let mut seen = std::collections::HashSet::new();
+    resolved.into_iter()
+        .filter(|u| seen.insert(u.clone()))
+        .filter(|u| is_direct_asset_url(u))
+        .collect()
+}
+
+fn resolve_url(html_base_url: &str, maybe_relative: &str) -> String {
+    if maybe_relative.starts_with("http://") || maybe_relative.starts_with("https://") {
+        return maybe_relative.to_string();
+    }
+    if maybe_relative.starts_with("//") {
+        return format!("https:{}", maybe_relative);
+    }
+    // Relative path: resolve against the base URL
+    let base = html_base_url.trim_end_matches('/');
+    if maybe_relative.starts_with('/') {
+        // Absolute path relative to domain
+        let domain = get_domain_from_url(base);
+        // Use the protocol from the base URL
+        let protocol = if base.starts_with("https") { "https" } else { "http" };
+        format!("{}://{}{}", protocol, domain, maybe_relative)
+    } else {
+        // Relative path
+        let last_slash = base.rfind('/');
+        match last_slash {
+            Some(pos) => format!("{}/{}", &base[..=pos].trim_end_matches('/'), maybe_relative),
+            None => format!("{}/{}", base, maybe_relative),
+        }
+    }
+}
+
+async fn execute_download_asset_claude(args: &Value) -> String {
+    let url = args["url"].as_str().unwrap_or("");
+    let description = args.get("description").and_then(|v| v.as_str()).unwrap_or("");
+    execute_download_asset_inner(url, description).await
+}
+
+async fn execute_download_asset_gemini(args: &HashMap<String, Value>) -> String {
+    let url = args.get("url").and_then(|v| v.as_str()).unwrap_or("");
+    let description = args.get("description").and_then(|v| v.as_str()).unwrap_or("");
+    execute_download_asset_inner(url, description).await
+}
+
+async fn execute_download_asset_inner(url: &str, description: &str) -> String {
+    use sha2::{Digest, Sha256};
+
+    if url.is_empty() {
+        return "❌ Error: 'url' parameter is required".to_string();
+    }
+
+    let full_url = if !url.starts_with("http") {
+        format!("https://{}", url)
+    } else {
+        url.to_string()
+    };
+
+    let domain = get_domain_from_url(&full_url);
+    let is_direct = is_direct_asset_url(&full_url);
+
+    // Collect all asset URLs to download
+    let asset_urls: Vec<String> = if is_direct {
+        vec![full_url.clone()]
+    } else {
+        // Scrape the web page for media assets
+        match crate::browserbase_client::fetch_url_raw(&full_url).await {
+            Ok(Some(html)) => {
+                let mut found = extract_media_urls_from_html(&html);
+
+                // Also try markdown-based fetch as fallback for img tags in markdown
+                if found.is_empty() {
+                    if let Ok(Some(markdown)) = crate::browserbase_client::fetch_url(&full_url).await {
+                        // Look for markdown image syntax: ![alt](url)
+                        if let Ok(re) = regex::Regex::new(r"!\[.*?\]\(([^)]+)\)") {
+                            for cap in re.captures_iter(&markdown) {
+                                if let Some(url_match) = cap.get(1) {
+                                    let u = url_match.as_str().to_string();
+                                    if !found.contains(&u) && (u.starts_with("http://") || u.starts_with("https://")) {
+                                        found.push(u);
+                                    }
+                                }
+                            }
+                        }
+                        // Also look for plain URLs in markdown that end in image extensions
+                        if let Ok(re) = regex::Regex::new(r"https?://[^\s)]+\.(?:png|jpg|jpeg|gif|svg|webp)") {
+                            for cap in re.captures_iter(&markdown) {
+                                let u = cap.get(0).map(|m| m.as_str().to_string()).unwrap_or_default();
+                                if !u.is_empty() && !found.contains(&u) {
+                                    found.push(u);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Resolve relative URLs
+                let resolved: Vec<String> = found.iter()
+                    .map(|u| resolve_url(&full_url, u))
+                    .filter(|u| is_direct_asset_url(u))
+                    .collect();
+
+                if resolved.is_empty() {
+                    return format!(
+                        "❌ No media assets found on the page. The URL '{}' appears to be a web page, \
+                         but BrowserBase couldn't extract any image/video/media URLs from it. \
+                         Try providing a direct URL to the asset file instead{}.",
+                        full_url,
+                        if !description.is_empty() {
+                            format!(" (looking for: {})", description)
+                        } else {
+                            String::new()
+                        }
+                    );
+                }
+
+                // Remove duplicates
+                let mut seen = std::collections::HashSet::new();
+                resolved.into_iter().filter(|u| seen.insert(u.clone())).collect()
+            }
+            Ok(None) => {
+                return "❌ BrowserBase is not configured or returned no content. Set BROWSERBASE_API_KEY to enable web page scraping. You can also try providing a direct URL to the asset file instead.".to_string();
+            }
+            Err(e) => {
+                return format!("❌ BrowserBase scraping failed: {}. Try providing a direct URL to the asset file instead.", e);
+            }
+        }
+    };
+
+    if asset_urls.is_empty() {
+        return "❌ No assets found to download.".to_string();
+    }
+
+    // Download each asset, cache in R2
+    let mut results: Vec<String> = Vec::new();
+    let mut errors: Vec<String> = Vec::new();
+    let temp_dir = std::env::temp_dir();
+
+    for asset_url in &asset_urls {
+        let filename = get_filename_from_url(asset_url);
+        let filename = if filename.is_empty() { "asset" } else { filename };
+
+        // Compute cache key: sha256 of the URL
+        let mut hasher = Sha256::new();
+        hasher.update(asset_url.as_bytes());
+        let hash_hex = format!("{:x}", hasher.finalize());
+        let prefix = &hash_hex[..16];
+
+        let ext = if let Some(dot) = filename.rfind('.') {
+            &filename[dot..]
+        } else {
+            ".bin"
+        };
+        let r2_key = format!("assets/{}/{}-{}", domain, prefix, filename);
+
+        // Check R2 cache
+        let account_id = match std::env::var("R2_ACCOUNT_ID") {
+            Ok(id) => id,
+            Err(_) => {
+                errors.push(format!("R2_ACCOUNT_ID not set — cannot upload '{}'", filename));
+                continue;
+            }
+        };
+        let access_key_id = match std::env::var("R2_ACCESS_KEY_ID") {
+            Ok(id) => id,
+            Err(_) => {
+                errors.push(format!("R2_ACCESS_KEY_ID not set — cannot upload '{}'", filename));
+                continue;
+            }
+        };
+        let secret_access_key = match std::env::var("R2_SECRET_ACCESS_KEY") {
+            Ok(id) => id,
+            Err(_) => {
+                errors.push(format!("R2_SECRET_ACCESS_KEY not set — cannot upload '{}'", filename));
+                continue;
+            }
+        };
+        let bucket = std::env::var("R2_BUCKET").unwrap_or_else(|_| "video-editor".to_string());
+
+        let r2 = match crate::r2_client::R2Client::new(&account_id, &access_key_id, &secret_access_key, &bucket).await {
+            Ok(c) => c,
+            Err(e) => {
+                errors.push(format!("R2 client init failed: {e}"));
+                continue;
+            }
+        };
+
+        // Check cache
+        if r2.exists(&r2_key) {
+            let cached_url = match r2.presign_get(&r2_key, 604800).await {
+                Ok(u) => u,
+                Err(e) => {
+                    errors.push(format!("Failed to get presigned URL for cached '{}': {e}", filename));
+                    continue;
+                }
+            };
+            results.push(format!("✅ [CACHED] {} → {}", filename, cached_url));
+            continue;
+        }
+
+        // Download to temp
+        let temp_path = temp_dir.join(format!("dl_{}_{}", prefix, filename));
+        let temp_str = temp_path.to_string_lossy().to_string();
+
+        match download_file_to_path(asset_url, &temp_str).await {
+            Ok(()) => {
+                let uploaded_url = match r2.upload_file(&temp_str, &r2_key).await {
+                    Ok(u) => u,
+                    Err(e) => {
+                        let _ = tokio::fs::remove_file(&temp_path).await;
+                        errors.push(format!("Upload failed for '{}': {e}", filename));
+                        continue;
+                    }
+                };
+                let _ = tokio::fs::remove_file(&temp_path).await;
+                results.push(format!("✅ {} → {}", filename, uploaded_url));
+            }
+            Err(e) => {
+                errors.push(format!("Download failed for '{}': {e}", filename));
+            }
+        }
+    }
+
+    // Build output
+    let mut output = String::new();
+    if results.is_empty() && errors.is_empty() {
+        output.push_str("❌ No assets were downloaded.");
+    } else {
+        output.push_str(&format!("## Asset Download Results\n\n"));
+        output.push_str(&format!("**Source**: {}\n", full_url));
+        if !description.is_empty() {
+            output.push_str(&format!("**Looking for**: {}\n", description));
+        }
+        output.push_str(&format!("**Assets found**: {}\n\n", asset_urls.len()));
+
+        if !results.is_empty() {
+            output.push_str("### Downloaded Assets\n");
+            for r in &results {
+                output.push_str(&format!("- {}\n", r));
+            }
+            output.push('\n');
+        }
+
+        if !errors.is_empty() {
+            output.push_str("### Errors\n");
+            for e in &errors {
+                output.push_str(&format!("- {}\n", e));
+            }
+        }
+
+        output.push_str(&format!(
+            "\n---\n**R2 prefix**: assets/{}/\n**Usage**: Pass these R2 URLs to FFmpeg overlay tools or reference them in your pipeline.",
+            domain
+        ));
+    }
+
+    output
 }
 
 // ── vectorize_crawled_content (context-aware) ────────────────────────────

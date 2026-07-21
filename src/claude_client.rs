@@ -3667,6 +3667,26 @@ impl ClaudeClient {
                     required: vec!["input_file".to_string(), "output_file".to_string()],
                 },
             },
+            ClaudeTool {
+                name: "download_asset".to_string(),
+                description: "Downloads an external asset (image, video, audio, or any file) from a URL and stores it in R2 with caching. For direct media URLs, downloads immediately (checks R2 cache first). For web pages, uses BrowserBase to extract all media URLs. Returns R2 URLs of downloaded assets. Auto-names as assets/{domain}/{sha256_prefix}-{filename}.{ext}. Parameters: url (required) - direct file URL or web page, description (optional) - what you're looking for (e.g. 'the Kick logo').".to_string(),
+                input_schema: InputSchema {
+                    schema_type: "object".to_string(),
+                    properties: HashMap::from([
+                        ("url".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "URL of the asset to download (direct file URL or web page URL)".to_string(),
+                            items: None,
+                        }),
+                        ("description".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Optional description of what you're looking for (e.g. 'the Kick.com logo')".to_string(),
+                            items: None,
+                        }),
+                    ]),
+                    required: vec!["url".to_string()],
+                },
+            },
         ]
     }
 

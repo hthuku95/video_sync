@@ -714,7 +714,73 @@ If you provide `clip_times`, the tool trims at those exact positions. If you don
 5. submit_final_answer with all clip paths
 
 OUTPUT to: {output_dir}/
-Save each clip as clip_N.mp4"#,
+Save each clip as clip_N.mp4
+
+## KICK CLIP EDITING SPECIFICATIONS (for Kick.com content only, skip for other sources)
+When the source video comes from Kick.com or the user explicitly asks for Kick-compliant clips:
+
+### LOGO / WATERMARK
+- Place in the **top-left** corner (never overlaps content in the center)
+- Size: **~8% of video width** (~86px on 1080p)
+- Margin: **30-40px from top and left edges** (never touch the edge)
+- Duration: **Entire clip** — must be visible for full duration
+- Opacity: **100%** (solid, never translucent)
+- Use the exact Kick logo file (download via download_asset tool from kick.com's brand assets)
+- Color reference: Kick green is `#53FC18`
+
+### CAPTIONS (Karaoke/Word-by-Word — NOT static subtitles)
+- Style: **Word-by-word highlighting** (karaoke-style), NOT full-line static subtitles
+- Font: **Montserrat Bold** or Inter Bold (bold weights only)
+- Colors: **White fill** with **black/dark outline** (high contrast for mobile viewing)
+- Position: **Lower-third** — leave bottom ~20% of frame clear as safe zone
+- Minimum size: **30px** when scaled for mobile viewing (1280px width reference)
+
+### LAYOUT (Stack / Split Screen — 9:16 vertical)
+- Frame size: **1080×1920** (9:16 vertical, NOT horizontal)
+- Facecam zone: **Top ~30-40%** of frame — zoomed and tracked to keep visible
+- Gameplay/Content zone: **Middle to bottom ~40-50%** — zoomed to action areas, not full frame
+- Gap fill: Blurred original source or gradient background between zones
+- Never leave black bars (horizontal video in vertical feed = algorithm penalty)
+
+### OUTRO CARD
+- Duration: **1-2 seconds** at end of each clip
+- Text: **"Watch Live on Kick"** or the streamer's handle (e.g. `@Neon`, `Kick.com/Neon`)
+- Style: Branded lower-third card or full-screen
+
+### ZOOM & RETENTION EFFECTS
+- **Zoom on strong reactions**: Punch-in on screaming, laughing, or emotional moments
+- **Camera shake**: On impact moments (hits, explosions, jumpscares)
+- **Sound effects**: For emphasis on punchlines or dramatic reveals
+- Auto-detect emotional peaks via audio analysis and apply zooms
+
+### DEAD-SPACE REMOVAL
+Aggressively trim out:
+- Silence / pauses in speaking
+- Loading screens
+- Walking / travel between action
+- Menu navigation
+- Any segment without engagement
+- Use silence detection + scene detection to identify these regions
+
+### EXPORT SPECIFICATIONS
+- Resolution: **1080×1920** (9:16 vertical)
+- Codec: **H.264** (MP4 container)
+- Frame rate: **60fps** (gaming content) / **30fps** (commentary/talking head)
+- Bitrate: **15-20 Mbps**
+- Max duration: **58 seconds** (safety margin for TikTok/Shorts 60s limit)
+- Audio: **AAC 128-256 kbps** stereo
+- File size: **Under 500MB**
+
+### ❌ COMMON REJECTION REASONS (AVOID THESE)
+1. Logo too small — not visible at mobile viewing size
+2. Logo touching edge — no margin between logo and screen border
+3. Logo not visible for full duration — fades out or gets covered
+4. Modified logo file — recolored, stretched, filtered (use exact file from R2)
+5. No captions or captions too small (below 30px when scaled)
+6. Horizontal video in vertical feed — black bars = algorithm penalty
+7. Stream UI left in frame — alerts, donation tickers, subscriber counters
+8. Music copyright — Content ID flagging on YouTube
+9. Missing streamer credit — title, description, on-screen handle"#,
             title = input.title,
             brief = input.brief,
             source = source,

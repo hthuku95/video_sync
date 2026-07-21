@@ -6019,6 +6019,29 @@ impl GeminiClient {
                     required: vec!["job_id".to_string()],
                 },
             },
+            // ── Asset download tool (universal, BrowserBase + R2 cache) ─────
+            FunctionDeclaration {
+                name: "download_asset".to_string(),
+                description: "Downloads an external asset (image, video, audio, or any file) from a URL and stores it in R2 for future use. For direct media URLs (ending in .png, .jpg, .mp4, etc.), downloads immediately with R2 caching (checks R2 first, reuses cached copy). For web pages, uses BrowserBase to scrape the page, extracts all media URLs (images, videos, download links), and downloads them all. Use this when you need logos, brand assets, overlay images, reference media, or any external file mentioned in the user's request. Auto-names as assets/{domain}/{sha256_prefix}-{filename}.{ext} in R2.".to_string(),
+                parameters: Parameters {
+                    param_type: "object".to_string(),
+                    properties: {
+                        let mut props = HashMap::new();
+                        props.insert("url".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "URL of the asset to download (direct file URL or web page URL)".to_string(),
+                            items: None,
+                        });
+                        props.insert("description".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Optional description of what you're looking for (e.g. 'the Kick.com logo', 'the company logo'). Helps the agent identify the right asset on a web page.".to_string(),
+                            items: None,
+                        });
+                        props
+                    },
+                    required: vec!["url".to_string()],
+                },
+            },
         ]
     }
 
