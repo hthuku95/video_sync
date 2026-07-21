@@ -19148,7 +19148,7 @@ async fn execute_download_asset_inner(url: &str, description: &str) -> String {
         };
 
         // Check cache
-        if r2.exists(&r2_key) {
+        if r2.exists(&r2_key).await {
             let cached_url = match r2.presign_get(&r2_key, 604800).await {
                 Ok(u) => u,
                 Err(e) => {

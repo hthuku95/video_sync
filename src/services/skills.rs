@@ -132,7 +132,7 @@ pub async fn get_relevant_skills(
     .await
     .map_err(|e| format!("Failed to query skills: {}", e))?;
 
-    let mut skills: Vec<Skill> = rows
+    let skills: Vec<Skill> = rows
         .into_iter()
         .map(|(
             id, uid, st, cid, name, desc, tc, ts, src, corr, count, scope, rest, qpid, ca, ua,
