@@ -228,7 +228,7 @@ async fn process_clipping_jobs_parallel(
 /// Execute a single claimed job. Used as the JoinSet task body.
 /// Runs GeminiClippingAgent::process_job or falls back to execute_clipping_job.
 /// On failure, classifies error and sets 'cancelled' for permanent failures.
-pub async fn execute_claimed_job(app_state: Arc<AppState>, job_id: i32) -> Result<i32, String> {
+async fn execute_claimed_job(app_state: Arc<AppState>, job_id: i32) -> Result<i32, String> {
     tracing::info!("🎬 Processing job {} (claimed)", job_id);
 
     let job_timeout_secs: u64 = std::env::var("JOB_EXECUTION_TIMEOUT_SECS")

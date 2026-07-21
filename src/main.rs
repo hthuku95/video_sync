@@ -103,7 +103,6 @@ pub struct AppState {
     pub active_agent_channels: Arc<tokio::sync::RwLock<HashMap<String, UnboundedSender<String>>>>, // Interactive agent channels
     pub kick_client: Option<kick_client::KickClient>, // 📺 Kick.com API client
     pub zernio_client: Option<zernio_client::ZernioClient>, // 📱 Multi-platform social publishing
-    pub sqs_client: Option<services::sqs_client::SQSClient>, // 📨 SQS queue for Batch worker jobs
 }
 
 /// Validate Apify API token on startup
@@ -740,24 +739,6 @@ async fn main() {
                 None
             }
         },
-        sqs_client: {
-            let queue_url = std::env::var("CLIPPING_SQS_QUEUE_URL").unwrap_or_default();
-            if !queue_url.is_empty() {
-                match services::sqs_client::SQSClient::new(queue_url).await {
-                    Ok(client) => {
-                        tracing::info!("📨 SQS client initialized");
-                        Some(client)
-                    }
-                    Err(e) => {
-                        tracing::warn!("📨 SQS client failed to initialize: {}", e);
-                        None
-                    }
-                }
-            } else {
-                tracing::warn!("SQS client not configured (missing CLIPPING_SQS_QUEUE_URL)");
-                None
-            }
-        },
     });
 
     // ── WORKER_MODE: skip HTTP server, run only clipping worker ──────────
@@ -817,22 +798,6 @@ async fn main() {
         }
     }
     // ── End WORKER_MODE ─────────────────────────────────────────────────
-
-    // ── BATCH_JOB_ID: process a single clipping job and exit ────────────
-    if let Ok(job_id_str) = std::env::var("BATCH_JOB_ID") {
-        if let Ok(job_id) = job_id_str.parse::<i32>() {
-            tracing::info!("🧵 BATCH_JOB_ID={} — processing single job then exiting", job_id);
-            let state = shared_state.clone();
-            match jobs::clipping_worker::execute_claimed_job(state, job_id).await {
-                Ok(_) => tracing::info!("✅ BATCH_JOB_ID={} completed successfully", job_id),
-                Err(e) => tracing::error!("💥 BATCH_JOB_ID={} failed: {}", job_id, e),
-            }
-        } else {
-            tracing::error!("💥 BATCH_JOB_ID is not a valid i32: {}", job_id_str);
-        }
-        return;
-    }
-    // ── End BATCH_JOB_ID ────────────────────────────────────────────────
 
     // Admin-only routes
     let admin_only_routes = Router::new()
