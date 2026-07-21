@@ -741,6 +741,64 @@ async fn main() {
         },
     });
 
+    // ── WORKER_MODE: skip HTTP server, run only clipping worker ──────────
+    if std::env::var("WORKER_MODE").as_deref() == Ok("true") {
+        tracing::info!("🧵 WORKER_MODE enabled — running clipping worker only, no HTTP server");
+
+        let worker_state = shared_state.clone();
+        std::thread::spawn(move || loop {
+            let state = worker_state.clone();
+            let handle = std::thread::spawn(move || {
+                let rt = tokio::runtime::Runtime::new()
+                    .expect("Failed to create tokio runtime for worker");
+                rt.block_on(
+                    async move { jobs::clipping_worker::run_clipping_worker_loop(state).await },
+                );
+            });
+            match handle.join() {
+                Ok(_) => tracing::warn!("⚠️ Clipping worker exited. Restarting in 5s..."),
+                Err(e) => tracing::error!("💥 Worker panicked: {:?}. Restarting in 5s...", e),
+            }
+            std::thread::sleep(std::time::Duration::from_secs(5));
+        });
+
+        let stuck_state = shared_state.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(60));
+            interval.tick().await;
+            loop {
+                interval.tick().await;
+                if let Err(e) = jobs::clipping_worker::run_stuck_job_detection(&stuck_state).await {
+                    tracing::warn!("Stuck job detection error: {}", e);
+                }
+            }
+        });
+
+        let hb_state = shared_state.clone();
+        let hb_worker_id = {
+            let config = jobs::worker_config::WorkerConfig::from_env();
+            config.worker_id.clone()
+        };
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(30));
+            loop {
+                interval.tick().await;
+                jobs::clipping_worker::update_worker_heartbeat(&hb_state, &hb_worker_id, None).await;
+            }
+        });
+
+        let supervisor_state = shared_state.clone();
+        tokio::spawn(async move {
+            jobs::clipping_supervisor::run_clipping_supervisor_loop(supervisor_state).await;
+        });
+
+        tracing::info!("✅ WORKER_MODE initialized — all worker tasks running");
+        loop {
+            tokio::time::sleep(tokio::time::Duration::from_secs(3600)).await;
+        }
+    }
+    // ── End WORKER_MODE ─────────────────────────────────────────────────
+
     // Admin-only routes
     let admin_only_routes = Router::new()
         .route("/api/docs", axum::routing::get(api_documentation))
