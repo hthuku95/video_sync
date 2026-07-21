@@ -7,6 +7,7 @@ pub mod media_review;
 pub mod monetization;
 pub mod output_video;
 pub mod skills;
+pub mod sqs_client;
 pub mod token_pricing;
 pub mod token_usage;
 pub mod twitch_mapper;
