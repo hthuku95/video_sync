@@ -38,6 +38,7 @@ pub fn campaign_routes() -> Router {
         .route("/api/campaigns/:id/cancel", post(client_cancel_campaign))
         .route("/api/campaigns/:id/pay-spec", get(campaign_pay_spec))
         .route("/api/campaigns/:id/settle", post(campaign_settle))
+        .route("/api/campaigns/:id/chat", post(campaign_chat))
         .layer(axum::middleware::from_fn(crate::middleware::auth::auth_middleware))
 }
 
@@ -780,9 +781,181 @@ async fn delete_campaign_file(
     }
 }
 
+// ── Campaign Chat ──────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct CampaignChatRequest {
+    pub message: String,
+}
+
+/// POST /api/campaigns/:id/chat — Chat with the AI about a specific campaign.
+/// Injects campaign context, past posts, and reference files into the agent prompt.
+async fn campaign_chat(
+    Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<crate::models::auth::Claims>,
+    Path(id): Path<Uuid>,
+    Json(req): Json<CampaignChatRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let user_id: i32 = claims.sub.parse().unwrap_or(0);
+
+    let campaign_row = sqlx::query_as::<_, (
+        Uuid, String, String, String, String, f64, serde_json::Value, serde_json::Value,
+        i32, chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>, Option<String>, String, i32, i32,
+    )>(
+        "SELECT id, name, service_type, brief, style, duration, schedule, platforms, \
+                posts_per_day, start_date, end_date, source_url, status, \
+                total_posts_planned, total_posts_published \
+         FROM campaigns WHERE id = $1 AND user_id = $2",
+    )
+    .bind(id)
+    .bind(user_id)
+    .fetch_optional(&state.db_pool)
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?
+    .ok_or_else(|| (StatusCode::NOT_FOUND, Json(json!({"error": "Campaign not found"}))))?;
+
+    let (campaign_id, name, service_type, brief, style, duration, _schedule, _platforms, posts_per_day,
+         start_date, end_date, source_url, status, total_planned, total_published) = campaign_row;
+
+    let posts = sqlx::query_as::<_, (Uuid, i32, i32, chrono::DateTime<chrono::Utc>, Option<String>, Option<String>, Option<String>, String)>(
+        "SELECT id, day_number, slot_index, scheduled_at, variation_prompt, caption, media_r2_url, status \
+         FROM campaign_posts WHERE campaign_id = $1 \
+         ORDER BY scheduled_at DESC LIMIT 10",
+    )
+    .bind(campaign_id)
+    .fetch_all(&state.db_pool)
+    .await
+    .unwrap_or_default();
+
+    let files = sqlx::query_as::<_, (String, String, String)>(
+        "SELECT file_name, r2_url, file_type FROM campaign_files WHERE campaign_id = $1 ORDER BY uploaded_at",
+    )
+    .bind(campaign_id)
+    .fetch_all(&state.db_pool)
+    .await
+    .unwrap_or_default();
+
+    let posts_context = if posts.is_empty() {
+        "No posts yet.".to_string()
+    } else {
+        posts.iter().map(|(_, day, slot, _, variation, caption, media_url, post_status)| {
+            let var_str = variation.as_deref().unwrap_or("no prompt");
+            let cap_str = caption.as_deref().unwrap_or("no caption");
+            let url_str = media_url.as_deref().unwrap_or("no URL");
+            format!("- Day {} Slot {} [{}]: var=\"{}\" cap=\"{}\" url={}", day, slot, post_status, var_str, cap_str, url_str)
+        }).collect::<Vec<_>>().join("\n")
+    };
+
+    let files_context = if files.is_empty() {
+        "No reference files.".to_string()
+    } else {
+        files.iter().map(|(fname, url, ftype)| {
+            format!("- {} ({}) url={}", fname, ftype, url)
+        }).collect::<Vec<_>>().join("\n")
+    };
+
+    // Load relevant skills for context injection
+    let skills = crate::services::skills::get_relevant_skills(
+        &state.db_pool,
+        Some(&service_type),
+        Some(campaign_id),
+        Some(user_id),
+        5,
+    )
+    .await
+    .unwrap_or_default();
+    let skills_context = crate::services::skills::format_skills_context(&skills);
+
+    let context = format!(
+        "## ACTIVE CAMPAIGN CONTEXT\n\
+         Name: {name}\n\
+         Service: {service_type}\n\
+         Brief: {brief}\n\
+         Style: {style}\n\
+         Duration: {duration}s\n\
+         Status: {status}\n\
+         Posts Per Day: {posts_per_day}\n\
+         Period: {start} to {end}\n\
+         Source URL: {source_url}\n\
+         Published: {published}/{planned}\n\n\
+         ## RECENT POSTS\n{posts_context}\n\n\
+         ## REFERENCE FILES\n{files_context}\n\n\
+         {skills_context}\
+         ## USER QUESTION\n{user_message}",
+        name = name,
+        service_type = service_type,
+        brief = brief,
+        style = style,
+        duration = duration,
+        status = status,
+        posts_per_day = posts_per_day,
+        start = start_date.format("%Y-%m-%d"),
+        end = end_date.format("%Y-%m-%d"),
+        source_url = source_url.as_deref().unwrap_or("none"),
+        published = total_published,
+        planned = total_planned,
+        posts_context = posts_context,
+        files_context = files_context,
+        skills_context = skills_context,
+        user_message = req.message,
+    );
+
+    let session_uuid = format!("campaign-chat-{}", campaign_id);
+    let _ = crate::handlers::upload::get_or_create_session(&state, &session_uuid, Some(user_id)).await;
+
+    let gemini_client = match state.video_gemini_client.as_ref().or(state.gemini_client.as_ref()) {
+        Some(c) => Arc::new(c.clone()),
+        None => return Err((StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": "AI service unavailable"})))),
+    };
+
+    let gemini_client_for_corrections = gemini_client.clone();
+
+    let ollama_client = state.ollama_client.clone().map(Arc::new);
+
+    let agent = crate::agent::stateful_agent::StatefulGeminiAgent::new_with_nvidia(
+        gemini_client,
+        state.bedrock_client.clone(),
+        state.nvidia_nim_client.clone().map(Arc::new),
+        ollama_client,
+    );
+
+    let agent_result = agent.chat(
+        &req.message,
+        &session_uuid,
+        context,
+        state.clone(),
+        state.job_manager.clone(),
+        None,
+        None,
+        None,
+        Some(user_id),
+    ).await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))))?;
+
+    // Background skill detection from corrections
+    let user_message = req.message.clone();
+    let agent_result_for_corrections = agent_result.clone();
+    tokio::spawn(async move {
+        crate::services::skills::detect_and_store_correction(
+            state.db_pool.clone(),
+            state.qdrant_client.clone(),
+            gemini_client_for_corrections,
+            Some(user_id),
+            Some(service_type),
+            Some(campaign_id),
+            user_message,
+            agent_result_for_corrections,
+        )
+        .await;
+    });
+
+    Ok(Json(json!({
+        "success": true,
+        "session_id": session_uuid,
+        "response": agent_result,
+    })))
+}
+
 fn extract_r2_key_from_url(url: &str) -> Option<String> {
-    // Presigned URL format: https://<bucket>.<account_id>.r2.cloudflarestorage.com/<key>?...
-    // Try to extract the key portion
     let after_bucket = url.split(".r2.cloudflarestorage.com/").nth(1)?;
     let key = after_bucket.split('?').next()?;
     Some(urlencoding::decode(key).ok()?.into_owned())
