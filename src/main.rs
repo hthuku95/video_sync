@@ -823,7 +823,7 @@ async fn main() {
         if let Ok(job_id) = job_id_str.parse::<i32>() {
             tracing::info!("🧵 BATCH_JOB_ID={} — processing single job then exiting", job_id);
             let state = shared_state.clone();
-            match jobs::clipping_worker::execute_claimed_job(&state, job_id).await {
+            match jobs::clipping_worker::execute_claimed_job(state, job_id).await {
                 Ok(_) => tracing::info!("✅ BATCH_JOB_ID={} completed successfully", job_id),
                 Err(e) => tracing::error!("💥 BATCH_JOB_ID={} failed: {}", job_id, e),
             }
