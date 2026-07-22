@@ -799,6 +799,88 @@ async fn main() {
     }
     // ── End WORKER_MODE ─────────────────────────────────────────────────
 
+    // ── BATCH_MODE: process one SQS message and exit ────────────────────
+    if std::env::var("BATCH_MODE").as_deref() == Ok("true") {
+        tracing::info!("🧵 BATCH_MODE enabled — processing one SQS message then exiting");
+
+        let queue_url = std::env::var("CLIPPING_SQS_QUEUE_URL")
+            .unwrap_or_default();
+
+        if queue_url.is_empty() {
+            tracing::error!("💥 BATCH_MODE requires CLIPPING_SQS_QUEUE_URL env var");
+            std::process::exit(1);
+        }
+
+        let config = aws_config::defaults(aws_config::BehaviorVersion::latest())
+            .region(aws_config::Region::new("us-east-1"))
+            .load()
+            .await;
+        let sqs_client = aws_sdk_sqs::Client::new(&config);
+
+        let receive_result = sqs_client
+            .receive_message()
+            .queue_url(&queue_url)
+            .max_number_of_messages(1)
+            .wait_time_seconds(20)
+            .send()
+            .await;
+
+        match receive_result {
+            Ok(output) => {
+                if let Some(msg) = output.messages().unwrap_or_default().first().cloned() {
+                    let body = msg.body().unwrap_or("{}");
+                    let receipt_handle = msg.receipt_handle().unwrap_or("");
+
+                    match serde_json::from_str::<serde_json::Value>(body) {
+                        Ok(payload) => {
+                            let job_id = payload["job_id"].as_i64().unwrap_or(0) as i32;
+                            if job_id == 0 {
+                                tracing::error!("💥 Invalid job_id in SQS message: {}", body);
+                                std::process::exit(1);
+                            }
+                            tracing::info!("🎬 Batch processing job {}", job_id);
+                            match jobs::clipping_worker::execute_claimed_job(
+                                shared_state.clone(),
+                                job_id,
+                            )
+                            .await
+                            {
+                                Ok(_) => {
+                                    // Delete the message from SQS on success
+                                    let _ = sqs_client
+                                        .delete_message()
+                                        .queue_url(&queue_url)
+                                        .receipt_handle(receipt_handle)
+                                        .send()
+                                        .await;
+                                    tracing::info!("✅ Batch job {} completed, message deleted", job_id);
+                                    std::process::exit(0);
+                                }
+                                Err(e) => {
+                                    tracing::error!("💥 Batch job {} failed: {}", job_id, e);
+                                    // Don't delete — SQS visibility timeout will retry
+                                    std::process::exit(1);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            tracing::error!("💥 Failed to parse SQS message: {}", e);
+                            std::process::exit(1);
+                        }
+                    }
+                } else {
+                    tracing::info!("No messages in queue — exiting");
+                    std::process::exit(0);
+                }
+            }
+            Err(e) => {
+                tracing::error!("💥 SQS receive_message failed: {}", e);
+                std::process::exit(1);
+            }
+        }
+    }
+    // ── End BATCH_MODE ──────────────────────────────────────────────────
+
     // Admin-only routes
     let admin_only_routes = Router::new()
         .route("/api/docs", axum::routing::get(api_documentation))

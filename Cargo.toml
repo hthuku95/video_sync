@@ -54,6 +54,7 @@ hostname = "0.4"                     # Worker ID generation for parallel process
 # clash with openssl-sys's dynamic libssl.so.3 (pulled in by qdrant-client →
 # native-tls) causing a nonZeroExit:101 Rust panic on startup in production.
 aws-sdk-s3 = "1"
+aws-sdk-sqs = "1"
 aws-sdk-bedrockruntime = "1"
 aws-config = "1"
 aws-credential-types = "1"

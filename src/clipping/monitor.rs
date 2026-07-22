@@ -2,6 +2,7 @@
 
 use crate::clipping::models::{ChannelLinkage, SourceChannel};
 use crate::youtube_client::YouTubeClient;
+use aws_config::BehaviorVersion;
 use chrono::Utc;
 use sqlx::PgPool;
 use std::sync::Arc;
@@ -127,24 +128,29 @@ async fn enqueue_clipping_job(
     .fetch_one(pool)
     .await
     {
-        Ok(job_id) => {
-            let _ = sqlx::query(
-                "UPDATE app_workflows
-                 SET metadata = jsonb_set(
-                         COALESCE(metadata, '{}'::jsonb),
-                         '{clipping_job_id}',
-                         to_jsonb($1::int),
-                         true
-                     ),
-                     updated_at = NOW()
-                 WHERE id = $2
-                   AND source_table = 'clipping_jobs'",
-            )
-            .bind(job_id)
-            .bind(workflow_id)
-            .execute(pool)
-            .await;
-            Ok((job_id, true))
+            Ok(job_id) => {
+                let _ = sqlx::query(
+                    "UPDATE app_workflows
+                     SET metadata = jsonb_set(
+                             COALESCE(metadata, '{}'::jsonb),
+                             '{clipping_job_id}',
+                             to_jsonb($1::int),
+                             true
+                         ),
+                         updated_at = NOW()
+                     WHERE id = $2
+                       AND source_table = 'clipping_jobs'",
+                )
+                .bind(job_id)
+                .bind(workflow_id)
+                .execute(pool)
+                .await;
+                tokio::spawn(async move {
+                    if let Err(e) = sqs_enqueue_clipping_job(job_id).await {
+                        tracing::warn!("SQS enqueue failed (non-fatal): {}", e);
+                    }
+                });
+                Ok((job_id, true))
         }
         Err(sqlx::Error::Database(db_err)) if db_err.is_unique_violation() => {
             let existing_job_id = find_active_clipping_job(pool, linkage.id, source_video_id)
@@ -720,4 +726,27 @@ impl ChannelMonitor {
 
         Ok(())
     }
+}
+
+/// Fire-and-forget SQS enqueue for clipping jobs.
+/// Reads CLIPPING_SQS_QUEUE_URL env var; no-ops if unset.
+async fn sqs_enqueue_clipping_job(job_id: i32) -> Result<(), String> {
+    let queue_url = match std::env::var("CLIPPING_SQS_QUEUE_URL") {
+        Ok(url) if !url.is_empty() => url,
+        _ => return Ok(()),
+    };
+    let config = aws_config::defaults(BehaviorVersion::latest())
+        .region(aws_config::Region::new("us-east-1"))
+        .load()
+        .await;
+    let client = aws_sdk_sqs::Client::new(&config);
+    let body = serde_json::json!({"job_id": job_id});
+    client
+        .send_message()
+        .queue_url(&queue_url)
+        .message_body(body.to_string())
+        .send()
+        .await
+        .map_err(|e| format!("SQS send_message failed: {}", e))?;
+    Ok(())
 }
