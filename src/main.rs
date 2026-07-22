@@ -827,7 +827,7 @@ async fn main() {
 
         match receive_result {
             Ok(output) => {
-                if let Some(msg) = output.messages().unwrap_or_default().first().cloned() {
+                    if let Some(msg) = output.messages().unwrap_or(&[]).first().cloned() {
                     let body = msg.body().unwrap_or("{}");
                     let receipt_handle = msg.receipt_handle().unwrap_or("");
 
