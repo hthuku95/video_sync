@@ -69,6 +69,7 @@ impl PubSubBus {
             .map_err(|e| format!("Redis subscribe error: {}", e))?;
 
         let (tx, rx) = mpsc::unbounded_channel::<String>();
+        let chan_name = channel.to_string();
 
         tokio::spawn(async move {
             let mut stream = pubsub.into_on_message();
@@ -78,7 +79,7 @@ impl PubSubBus {
                     break; // Receiver dropped
                 }
             }
-            tracing::info!("🗑️ Redis pubsub subscription dropped: {}", channel);
+            tracing::info!("🗑️ Redis pubsub subscription dropped: {}", chan_name);
         });
 
         Ok(rx)

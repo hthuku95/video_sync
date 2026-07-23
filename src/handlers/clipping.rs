@@ -181,7 +181,7 @@ async fn clipping_job_ws(stream: WebSocket, state: Arc<AppState>, job_id: i32) {
 
     // Path 2: Redis pub/sub (cross-instance)
     if let Some(ref bus) = state.pubsub_bus {
-        if let Ok(redis_rx) = bus.subscribe(&format!("progress:{}", session_key)).await {
+        if let Ok(mut redis_rx) = bus.subscribe(&format!("progress:{}", session_key)).await {
             tracing::info!("📡 Subscribed to Redis progress for clipping job {}", job_id);
             let prog_tx = progress_tx.clone();
             tokio::spawn(async move {

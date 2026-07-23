@@ -329,34 +329,6 @@ impl JobManager {
             .collect()
     }
 
-    /// Register control channel for a job.
-    /// Stores in-memory for same-instance delivery; also supports Redis pub/sub.
-    pub async fn register_control_channel(
-        &self,
-        job_id: JobId,
-        sender: mpsc::UnboundedSender<JobControl>,
-    ) {
-        let mut channels = self.control_channels.write().await;
-        channels.insert(job_id, sender);
-    }
-
-    /// Send control command to a job via Redis pub/sub.
-    pub async fn send_control(&self, job_id: &str, command: JobControl) -> Result<(), String> {
-        let pb = self.pubsub_bus.read().await;
-        if let Some(ref bus) = *pb {
-            let channel = format!("control:{}", job_id);
-            let payload =
-                serde_json::to_string(&command).map_err(|e| format!("Serialize control: {}", e))?;
-            bus.publish(&channel, &payload)
-                .await
-                .map_err(|e| format!("Redis publish control: {}", e))?;
-            tracing::info!("🎛️ Sent control to job {} via Redis", job_id);
-            Ok(())
-        } else {
-            Err(format!("No PubSubBus available for control channel job {}", job_id))
-        }
-    }
-
     /// Cleanup completed/failed jobs older than specified duration
     pub async fn cleanup_old_jobs(&self, max_age_hours: i64) {
         let mut jobs = self.jobs.write().await;
