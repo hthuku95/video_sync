@@ -25,11 +25,12 @@ pub struct PubSubBus {
 impl PubSubBus {
     /// Connect to Redis and return a PubSubBus.
     ///
-    /// `redis_url` defaults to `redis://127.0.0.1:6379` if empty.
+    /// Returns `Err` immediately if no URL is provided — no default fallback
+    /// to avoid hanging when Redis is not configured.
     pub async fn connect(redis_url: Option<&str>) -> Result<Self, String> {
         let url = redis_url
             .filter(|u| !u.is_empty())
-            .unwrap_or("redis://127.0.0.1:6379");
+            .ok_or_else(|| "REDIS_URL not set — Redis pub/sub disabled".to_string())?;
         let client = redis::Client::open(url).map_err(|e| format!("Redis URL error: {}", e))?;
         let conn_mgr = ConnectionManager::new(client)
             .await
