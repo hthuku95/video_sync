@@ -157,29 +157,53 @@ async fn clipping_job_ws(stream: WebSocket, state: Arc<AppState>, job_id: i32) {
 
     tracing::info!("🔌 WebSocket connected for clipping job {}", job_id);
 
-    // Register a channel to receive progress updates for this job
-    let (progress_tx, mut progress_rx) =
-        tokio::sync::mpsc::unbounded_channel::<crate::jobs::ProgressUpdate>();
-    state
-        .job_manager
-        .register_progress_sender(session_key.clone(), progress_tx)
-        .await;
+    // Subscribe to progress updates — combines in-memory + Redis paths.
+    let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+
+    // Path 1: In-memory bridge (same-instance)
+    {
+        let (pg_tx, mut pg_rx) = tokio::sync::mpsc::unbounded_channel::<crate::jobs::ProgressUpdate>();
+        state
+            .job_manager
+            .register_progress_sender(session_key.clone(), pg_tx)
+            .await;
+        let prog_tx = progress_tx.clone();
+        tokio::spawn(async move {
+            while let Some(update) = pg_rx.recv().await {
+                if let Ok(json) = serde_json::to_string(&update) {
+                    if prog_tx.send(json).is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+    }
+
+    // Path 2: Redis pub/sub (cross-instance)
+    if let Some(ref bus) = state.pubsub_bus {
+        if let Ok(redis_rx) = bus.subscribe(&format!("progress:{}", session_key)).await {
+            tracing::info!("📡 Subscribed to Redis progress for clipping job {}", job_id);
+            let prog_tx = progress_tx.clone();
+            tokio::spawn(async move {
+                while let Some(msg) = redis_rx.recv().await {
+                    if prog_tx.send(msg).is_err() {
+                        break;
+                    }
+                }
+            });
+        } else {
+            tracing::warn!("Failed to subscribe to Redis progress");
+        }
+    }
 
     // Forward progress updates to the WebSocket client
     let send_loop = async {
         loop {
             tokio::select! {
-                // Progress from agent
-                Some(update) = progress_rx.recv() => {
-                    match serde_json::to_string(&update) {
-                        Ok(text) => {
-                            if sender.send(Message::Text(text)).await.is_err() {
-                                break; // Client disconnected
-                            }
-                        }
-                        Err(e) => {
-                            tracing::error!("Failed to serialize progress update: {}", e);
-                        }
+                // Progress from agent (parsed from JSON string)
+                Some(msg) = progress_rx.recv() => {
+                    if sender.send(Message::Text(msg)).await.is_err() {
+                        break; // Client disconnected
                     }
                 }
                 // Handle incoming client messages (ping/pong or close)
@@ -198,11 +222,6 @@ async fn clipping_job_ws(stream: WebSocket, state: Arc<AppState>, job_id: i32) {
 
     send_loop.await;
 
-    // Cleanup on disconnect
-    state
-        .job_manager
-        .unregister_progress_sender(&session_key)
-        .await;
     tracing::info!("🔌 WebSocket disconnected for clipping job {}", job_id);
 }
 

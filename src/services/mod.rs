@@ -6,6 +6,7 @@ pub mod generated_artifacts;
 pub mod media_review;
 pub mod monetization;
 pub mod output_video;
+pub mod redis_pubsub;
 pub mod skills;
 pub mod token_pricing;
 pub mod token_usage;

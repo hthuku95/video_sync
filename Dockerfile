@@ -1,31 +1,7 @@
-# Stage 1: Build Rust application
-# rust:1.82 is Debian Bookworm (OpenSSL 3) — matches runtime image
-FROM rust:1.94.1 as builder
-WORKDIR /app
-
-# Allow overriding parallelism at build time (e.g., --build-arg CARGO_JOBS=2).
-# Cloud Build E2_HIGHCPU_8 can handle 2 concurrent jobs safely.
-ARG CARGO_JOBS=1
-ENV CARGO_BUILD_JOBS=${CARGO_JOBS}
-
-# Install OpenSSL dev libraries (needed by openssl-sys, qdrant-client, reqwest)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    pkg-config \
-    libssl-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy source code and manifest
-COPY Cargo.toml Cargo.lock ./
-COPY src ./src
-COPY migrations ./migrations
-
-# Build only the main binary (skip broken experiments bin)
-RUN cargo build --release -j ${CARGO_JOBS} --bin video_editor
-
-# Stage 2: Runtime image — Debian Trixie to match the builder's glibc/OpenSSL ABI
+# Runtime image — Debian Trixie (same glibc/OpenSSL as the build host)
 FROM debian:trixie-slim
 
-# Install system dependencies including Python and yt-dlp
+# Install system dependencies including Python, yt-dlp, and AWS CLI
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     ca-certificates \
@@ -34,14 +10,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     python3 \
     python3-pip \
-    && pip3 install --no-cache-dir --break-system-packages yt-dlp \
+    && pip3 install --no-cache-dir --break-system-packages yt-dlp awscli \
     && rm -rf /var/lib/apt/lists/*
 
 # Verify yt-dlp installation
 RUN yt-dlp --version
 
-# Copy compiled binary from builder
-COPY --from=builder /app/target/release/video_editor /usr/local/bin/video_editor
+# Copy pre-compiled binary from host
+COPY target/release/video_editor /usr/local/bin/video_editor
+
+# Copy entrypoint script
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
 # Create necessary directories for video processing
 RUN mkdir -p /app/outputs /app/uploads /app/downloads
@@ -50,5 +30,6 @@ WORKDIR /app
 # Expose port (Render uses PORT env var)
 EXPOSE 3000
 
-# Run the application
+# Use entrypoint to load env from S3 for Batch, then run the binary
+ENTRYPOINT ["/entrypoint.sh"]
 CMD ["video_editor"]

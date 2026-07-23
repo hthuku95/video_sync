@@ -633,26 +633,25 @@ pub async fn workflow_feedback(
         return (StatusCode::BAD_REQUEST, "Missing 'message' field").into_response();
     }
 
-    let channels = state.active_agent_channels.read().await;
-    // Try exact workflow_id first, then search for any matching session key
-    let found = if let Some(tx) = channels.get(&session_id.to_string()) {
-        tx.send(message.clone()).is_ok()
-    } else {
-        // Fallback: search all channels for workflows containing this UUID
-        let mut sent = false;
-        for (key, tx) in channels.iter() {
-            if key.contains(&session_id.to_string()) {
-                if tx.send(message.clone()).is_ok() {
-                    sent = true;
-                    break;
-                }
+    // Publish feedback to Redis pub/sub channel
+    let published = if let Some(ref bus) = state.pubsub_bus {
+        let channel = format!("feedback:{}", session_id);
+        match bus.publish(&channel, &message).await {
+            Ok(n) if n > 0 => {
+                tracing::info!("📨 Feedback sent to workflow {} via Redis: {:.60}", session_id, message);
+                true
+            }
+            Ok(_) => false,
+            Err(e) => {
+                tracing::warn!("Redis publish failed for feedback: {}", e);
+                false
             }
         }
-        sent
+    } else {
+        false
     };
 
-    if found {
-        tracing::info!("📨 Feedback sent to workflow {}: {:.60}", session_id, message);
+    if published {
         (StatusCode::OK, "Feedback sent to running agent").into_response()
     } else {
         (StatusCode::NOT_FOUND, "No active agent found for this workflow").into_response()
@@ -670,24 +669,25 @@ pub async fn workflow_cancel(
         Err(_) => return (StatusCode::BAD_REQUEST, "Invalid workflow id").into_response(),
     };
 
-    let channels = state.active_agent_channels.read().await;
-    let found = if let Some(tx) = channels.get(&session_id.to_string()) {
-        tx.send("__CANCEL__".to_string()).is_ok()
-    } else {
-        let mut sent = false;
-        for (key, tx) in channels.iter() {
-            if key.contains(&session_id.to_string()) {
-                if tx.send("__CANCEL__".to_string()).is_ok() {
-                    sent = true;
-                    break;
-                }
+    // Publish cancel signal to Redis pub/sub channel
+    let published = if let Some(ref bus) = state.pubsub_bus {
+        let channel = format!("feedback:{}", session_id);
+        match bus.publish(&channel, "__CANCEL__").await {
+            Ok(n) if n > 0 => {
+                tracing::info!("🛑 Cancel signal sent to workflow {} via Redis", session_id);
+                true
+            }
+            Ok(_) => false,
+            Err(e) => {
+                tracing::warn!("Redis publish failed for cancel: {}", e);
+                false
             }
         }
-        sent
+    } else {
+        false
     };
 
-    if found {
-        tracing::info!("🛑 Cancel signal sent to workflow {}", session_id);
+    if published {
         // Also mark the workflow as cancelled in the DB
         let _ = sqlx::query(
             "UPDATE app_workflows SET status = 'cancelled', current_step = 'cancelled_by_user',

@@ -107,8 +107,7 @@ pub struct AppState {
     pub download_semaphore: Arc<Semaphore>,
     pub delivery_render_semaphore: Arc<Semaphore>,
     pub phantombuster_client: Option<phantombuster_client::PhantomBusterClient>,
-    pub active_agent_channels:
-        std::sync::Arc<tokio::sync::RwLock<std::collections::HashMap<String, tokio::sync::mpsc::UnboundedSender<String>>>>,
+    pub pubsub_bus: Option<crate::services::redis_pubsub::PubSubBus>,
     pub kick_client: Option<kick_client::KickClient>,
     pub zernio_client: Option<zernio_client::ZernioClient>,
 }

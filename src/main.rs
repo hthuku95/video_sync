@@ -1,9 +1,7 @@
 // Build: 2026-03-10 — deploy with YOUTUBE_API_KEY + Gemini retry fixes
 use axum::{extract::DefaultBodyLimit, Extension, Router};
 mod tool_registry;
-use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::Semaphore;
 use tower_http::cors::CorsLayer;
 
@@ -100,7 +98,7 @@ pub struct AppState {
     pub download_semaphore: Arc<Semaphore>, // 🔒 Limits concurrent downloads to 2
     pub delivery_render_semaphore: Arc<Semaphore>, // 🎬 Limits concurrent delivery renders to avoid OOM
     pub phantombuster_client: Option<phantombuster_client::PhantomBusterClient>, // 🎯 LinkedIn scraping
-    pub active_agent_channels: Arc<tokio::sync::RwLock<HashMap<String, UnboundedSender<String>>>>, // Interactive agent channels
+    pub pubsub_bus: Option<crate::services::redis_pubsub::PubSubBus>, // Redis pub/sub for cross-instance channels
     pub kick_client: Option<kick_client::KickClient>, // 📺 Kick.com API client
     pub zernio_client: Option<zernio_client::ZernioClient>, // 📱 Multi-platform social publishing
 }
@@ -668,6 +666,25 @@ async fn main() {
         }
     };
 
+    // Initialize PubSubBus before AppState so JobManager can also use it
+    let pubsub_bus = crate::services::redis_pubsub::PubSubBus::connect(
+        std::env::var("REDIS_URL").ok().as_deref(),
+    )
+    .await
+    .map_err(|e| {
+        tracing::warn!(
+            "⚠️ Redis pubsub not available (Fargate scaling will be limited): {}",
+            e
+        )
+    })
+    .ok();
+
+    // Attach PubSubBus to JobManager for cross-instance progress/control delivery
+    if let Some(ref bus) = pubsub_bus {
+        job_manager.set_pubsub_bus(bus.clone()).await;
+        tracing::info!("🔗 PubSubBus attached to JobManager");
+    }
+
     // Create the shared state
     let shared_state = Arc::new(AppState {
         db_pool,
@@ -717,7 +734,7 @@ async fn main() {
                 .and_then(|v| v.parse::<usize>().ok())
                 .unwrap_or(1), // default to 1 active delivery render to reduce memory spikes
         )),
-        active_agent_channels: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+        pubsub_bus,
         kick_client: {
             let id = std::env::var("KICK_CLIENT_ID").unwrap_or_default();
             let secret = std::env::var("KICK_CLIENT_SECRET").unwrap_or_default();

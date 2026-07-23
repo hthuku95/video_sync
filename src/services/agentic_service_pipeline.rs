@@ -287,11 +287,23 @@ impl AgenticServicePipeline {
                 }
             });
 
-            // ── RE-EDITING CHANNEL ──
-            // Register a feedback channel so POST /api/workflows/{workflow_id}/feedback
-            // can send messages to the running agent (re-editing / add-on requests).
-            let (feedback_tx, feedback_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-            let _ = state.active_agent_channels.write().await.insert(session_id.clone(), feedback_tx);
+            // ── RE-EDITING CHANNEL (Redis pub/sub) ──
+            // Subscribe to a Redis feedback channel so
+            // POST /api/workflows/{workflow_id}/feedback can send messages to the
+            // running agent (re-editing / add-on requests) across Fargate instances.
+            let feedback_rx = if let Some(ref bus) = state.pubsub_bus {
+                match bus.subscribe(&format!("feedback:{}", session_id)).await {
+                    Ok(rx) => Some(rx),
+                    Err(e) => {
+                        tracing::warn!("Failed to subscribe to feedback channel: {}", e);
+                        let (_tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+                        Some(rx)
+                    }
+                }
+            } else {
+                let (_tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+                Some(rx)
+            };
 
             let agent_result = agent
                 .chat(
@@ -302,13 +314,10 @@ impl AgenticServicePipeline {
                     state.job_manager.clone(),
                     Some(progress_tx),
                     Some(workflow_id),
-                    Some(feedback_rx),
+                    feedback_rx,
                     input.user_id,
                 )
                 .await;
-
-            // Clean up progress bridge and feedback channel
-            state.active_agent_channels.write().await.remove(&session_id);
             // Dropping progress_tx closes the channel, stopping progress_task
 
             let produced = locate_output_from_result(&agent_result, &output_dir);

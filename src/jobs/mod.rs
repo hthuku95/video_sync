@@ -9,6 +9,8 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
 use uuid::Uuid;
 
+use crate::services::redis_pubsub::PubSubBus;
+
 pub mod analytics_sync_job;
 pub mod clipping_job;
 pub mod clipping_supervisor;
@@ -153,10 +155,12 @@ pub enum JobControl {
 pub struct JobManager {
     /// Active jobs indexed by job_id
     jobs: Arc<RwLock<HashMap<JobId, Job>>>,
-    /// Progress senders indexed by session_id (for WebSocket delivery)
+    /// In-memory progress senders (legacy fallback when Redis is unavailable)
     progress_senders: Arc<RwLock<HashMap<String, mpsc::UnboundedSender<ProgressUpdate>>>>,
-    /// Control channels for each job
+    /// In-memory control channels (legacy fallback when Redis is unavailable)
     control_channels: Arc<RwLock<HashMap<JobId, mpsc::UnboundedSender<JobControl>>>>,
+    /// Redis pub/sub bus for cross-instance messaging when available.
+    pubsub_bus: Arc<RwLock<Option<PubSubBus>>>,
 }
 
 impl JobManager {
@@ -165,58 +169,108 @@ impl JobManager {
             jobs: Arc::new(RwLock::new(HashMap::new())),
             progress_senders: Arc::new(RwLock::new(HashMap::new())),
             control_channels: Arc::new(RwLock::new(HashMap::new())),
+            pubsub_bus: Arc::new(RwLock::new(None)),
         }
     }
 
-    /// Register a WebSocket sender for a session to receive progress updates
+    /// Attach a PubSubBus (called after AppState initialization).
+    pub async fn set_pubsub_bus(&self, bus: PubSubBus) {
+        let mut pb = self.pubsub_bus.write().await;
+        *pb = Some(bus);
+        tracing::info!("🔗 PubSubBus attached to JobManager");
+    }
+
+    /// Register a WebSocket sender for a session to receive progress updates.
+    /// Kept as-is for backward compatibility; WebSocket handlers may also
+    /// subscribe via Redis pub/sub for cross-instance delivery.
     pub async fn register_progress_sender(
         &self,
         session_id: String,
         sender: mpsc::UnboundedSender<ProgressUpdate>,
     ) {
         let mut senders = self.progress_senders.write().await;
-        let session_id_clone = session_id.clone();
         senders.insert(session_id, sender);
-        tracing::info!(
-            "📡 Registered progress sender for session: {}",
-            session_id_clone
-        );
     }
 
-    /// Unregister progress sender when WebSocket disconnects
+    /// Unregister progress sender when WebSocket disconnects.
     pub async fn unregister_progress_sender(&self, session_id: &str) {
         let mut senders = self.progress_senders.write().await;
         senders.remove(session_id);
-        tracing::info!(
-            "📡 Unregistered progress sender for session: {}",
-            session_id
-        );
     }
 
-    /// Send progress update to session's WebSocket
+    /// Send progress update to a session's WebSocket.
+    /// Primary path: Redis pub/sub (cross-instance).
+    /// Fallback: in-memory HashMap (same instance, no Redis).
     pub async fn send_progress(&self, session_id: &str, update: ProgressUpdate) {
-        let senders = self.progress_senders.read().await;
-        if let Some(sender) = senders.get(session_id) {
-            if let Err(e) = sender.send(update.clone()) {
-                tracing::warn!(
-                    "Failed to send progress update to session {}: {}",
-                    session_id,
-                    e
-                );
+        // Try in-memory first (fast path for same-instance)
+        {
+            let senders = self.progress_senders.read().await;
+            if let Some(sender) = senders.get(session_id) {
+                if sender.send(update.clone()).is_ok() {
+                    tracing::info!("📤 Sent progress to session {} (in-memory)", session_id);
+                    return;
+                }
+            }
+        }
+        // Try Redis pub/sub for cross-instance delivery
+        let pb = self.pubsub_bus.read().await;
+        if let Some(ref bus) = *pb {
+            let channel = format!("progress:{}", session_id);
+            let payload = match serde_json::to_string(&update) {
+                Ok(p) => p,
+                Err(e) => {
+                    tracing::error!("Failed to serialize progress update: {}", e);
+                    return;
+                }
+            };
+            if let Err(e) = bus.publish(&channel, &payload).await {
+                tracing::warn!("Redis pub/sub publish failed: {}", e);
             } else {
-                tracing::info!(
-                    "📤 Sent progress to session {}: {}",
-                    session_id,
-                    update.message
-                );
+                tracing::info!("📤 Published progress to {} via Redis", channel);
             }
         } else {
             tracing::warn!(
-                "⚠️ No active WebSocket for session {}, progress not sent (message: {})",
-                session_id,
-                update.message
+                "⚠️ No active WebSocket for session {} and no Redis — progress not sent",
+                session_id
             );
         }
+    }
+
+    /// Register control channel for a job (in-memory fallback).
+    pub async fn register_control_channel(
+        &self,
+        job_id: JobId,
+        sender: mpsc::UnboundedSender<JobControl>,
+    ) {
+        let mut channels = self.control_channels.write().await;
+        channels.insert(job_id, sender);
+    }
+
+    /// Send control command to a job.
+    /// Primary: Redis pub/sub. Fallback: in-memory HashMap.
+    pub async fn send_control(&self, job_id: &str, command: JobControl) -> Result<(), String> {
+        // Try in-memory first
+        {
+            let channels = self.control_channels.read().await;
+            if let Some(sender) = channels.get(job_id) {
+                return sender
+                    .send(command)
+                    .map_err(|e| format!("Failed to send control: {}", e));
+            }
+        }
+        // Try Redis
+        let pb = self.pubsub_bus.read().await;
+        if let Some(ref bus) = *pb {
+            let channel = format!("control:{}", job_id);
+            let payload =
+                serde_json::to_string(&command).map_err(|e| format!("Serialize control: {}", e))?;
+            bus.publish(&channel, &payload)
+                .await
+                .map_err(|e| format!("Redis publish control: {}", e))?;
+            tracing::info!("🎛️ Sent control to job {} via Redis", job_id);
+            return Ok(());
+        }
+        Err(format!("No control channel for job {}", job_id))
     }
 
     /// Create and store a new job
@@ -275,27 +329,31 @@ impl JobManager {
             .collect()
     }
 
-    /// Register control channel for a job
+    /// Register control channel for a job.
+    /// Stores in-memory for same-instance delivery; also supports Redis pub/sub.
     pub async fn register_control_channel(
         &self,
         job_id: JobId,
         sender: mpsc::UnboundedSender<JobControl>,
     ) {
         let mut channels = self.control_channels.write().await;
-        channels.insert(job_id.clone(), sender);
-        tracing::info!("🎛️ Registered control channel for job: {}", job_id);
+        channels.insert(job_id, sender);
     }
 
-    /// Send control command to a job
+    /// Send control command to a job via Redis pub/sub.
     pub async fn send_control(&self, job_id: &str, command: JobControl) -> Result<(), String> {
-        let channels = self.control_channels.read().await;
-        if let Some(sender) = channels.get(job_id) {
-            sender
-                .send(command)
-                .map_err(|e| format!("Failed to send control: {}", e))?;
+        let pb = self.pubsub_bus.read().await;
+        if let Some(ref bus) = *pb {
+            let channel = format!("control:{}", job_id);
+            let payload =
+                serde_json::to_string(&command).map_err(|e| format!("Serialize control: {}", e))?;
+            bus.publish(&channel, &payload)
+                .await
+                .map_err(|e| format!("Redis publish control: {}", e))?;
+            tracing::info!("🎛️ Sent control to job {} via Redis", job_id);
             Ok(())
         } else {
-            Err(format!("No control channel for job {}", job_id))
+            Err(format!("No PubSubBus available for control channel job {}", job_id))
         }
     }
 

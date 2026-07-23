@@ -352,13 +352,47 @@ async fn websocket(
     // Ensure the session exists in the database, attributed to the authenticated user
     let _ = get_or_create_session(&state, &session_id, user_id).await;
 
-    // 🆕 BACKGROUND JOBS: Create progress channel for this WebSocket connection
-    let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel();
-    state
-        .job_manager
-        .register_progress_sender(session_id.clone(), progress_tx)
-        .await;
-    tracing::info!("📡 Registered progress updates for session: {}", session_id);
+    // 🆕 BACKGROUND JOBS: Subscribe to progress updates.
+    // Two delivery paths converge into one mpsc channel:
+    //   1. In-memory (JobManager -> register_progress_sender) — same-instance
+    //   2. Redis pub/sub (PubSubBus -> subscribe) — cross-instance Fargate
+    let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+
+    // Path 1: In-memory bridge — JobManager sends ProgressUpdate, we serialize to String
+    {
+        let (pg_tx, mut pg_rx) = tokio::sync::mpsc::unbounded_channel::<crate::jobs::ProgressUpdate>();
+        state
+            .job_manager
+            .register_progress_sender(session_id.clone(), pg_tx)
+            .await;
+        let prog_tx = progress_tx.clone();
+        tokio::spawn(async move {
+            while let Some(update) = pg_rx.recv().await {
+                if let Ok(json) = serde_json::to_string(&update) {
+                    if prog_tx.send(json).is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+    }
+
+    // Path 2: Redis pub/sub bridge — for cross-instance delivery
+    if let Some(ref bus) = state.pubsub_bus {
+        if let Ok(mut redis_rx) = bus.subscribe(&format!("progress:{}", session_id)).await {
+            tracing::info!("📡 Subscribed to Redis progress channel for session: {}", session_id);
+            let prog_tx = progress_tx.clone();
+            tokio::spawn(async move {
+                while let Some(msg) = redis_rx.recv().await {
+                    if prog_tx.send(msg).is_err() {
+                        break;
+                    }
+                }
+            });
+        } else {
+            tracing::warn!("Failed to subscribe to Redis progress channel");
+        }
+    }
 
     // 🆕 AGENT PROGRESS: Create separate channel for agent thinking/tool calling updates
     let (agent_progress_tx, mut agent_progress_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -495,11 +529,10 @@ async fn websocket(
             let _has_context = context.is_some() || !file_context.is_empty();
 
             // 🆕 INTERACTIVE AGENT: If there's an active background agent for this
-            // session, forward the user's message directly to it instead of spawning
-            // a new one. The agent will respond conversationally mid-work.
+            // session, forward the user's message to it via Redis pub/sub.
             {
-                let channels = state.active_agent_channels.read().await;
-                if let Some(tx) = channels.get(&session_id) {
+                let forwarded = if let Some(ref bus) = state.pubsub_bus {
+                    let channel = format!("feedback:{}", session_id);
                     let enhanced_query = {
                         let mut query_parts = Vec::new();
                         if !file_context.is_empty() {
@@ -511,17 +544,18 @@ async fn websocket(
                         query_parts.push(format!("USER REQUEST:\n{}", text));
                         query_parts.join("\n\n")
                     };
-                    if tx.send(enhanced_query).is_ok() {
-                        tracing::info!(
-                            "📨 Forwarded message to running agent for session: {}",
-                            session_id
-                        );
-                        continue;
+                    let subs = bus.publish(&channel, &enhanced_query).await.unwrap_or(0);
+                    if subs > 0 {
+                        tracing::info!("📨 Forwarded message to running agent for session: {} via Redis", session_id);
+                        true
+                    } else {
+                        false
                     }
-                    tracing::warn!(
-                        "Agent channel closed for session {}, falling through to spawn new agent",
-                        session_id
-                    );
+                } else {
+                    false
+                };
+                if forwarded {
+                    continue;
                 }
             }
 
@@ -601,15 +635,27 @@ async fn websocket(
             let agent_tx_bg = agent_progress_tx.clone();
             let user_id_bg = user_id; // Some(i32) from JWT
 
-            // 🆕 Create agent channel for interactive messaging
-            let (agent_user_tx, agent_user_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-            {
-                let mut channels = state.active_agent_channels.write().await;
-                channels.insert(session_id.clone(), agent_user_tx);
-            }
+            // 🆕 Subscribe to feedback channel so running agent receives
+            // user follow-up messages via Redis pub/sub (cross-instance).
+            let feedback_rx = if let Some(ref bus) = state.pubsub_bus {
+                match bus.subscribe(&format!("feedback:{}", session_id)).await {
+                    Ok(rx) => {
+                        tracing::info!("📡 Subscribed to feedback channel for session: {}", session_id);
+                        Some(rx)
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to subscribe to feedback channel: {}", e);
+                        let (_tx, rx) = tokio::sync::mpsc::unbounded_channel();
+                        Some(rx)
+                    }
+                }
+            } else {
+                let (_tx, rx) = tokio::sync::mpsc::unbounded_channel();
+                Some(rx)
+            };
 
-            let state_bg_clone = state_bg.clone();
-            let session_id_clone = session_id.clone();
+            // Drop the session_id_clone variable — feedback channel cleanup
+            // is automatic when the receiver is dropped inside run_agent_background.
             tokio::spawn(async move {
                 run_agent_background(
                     state_bg,
@@ -620,13 +666,10 @@ async fn websocket(
                     job_id,
                     job_manager_bg,
                     agent_tx_bg,
-                    agent_user_rx,
+                    feedback_rx,
                     user_id_bg,
                 )
                 .await;
-                // Unregister agent channel on completion
-                let mut channels = state_bg_clone.active_agent_channels.write().await;
-                channels.remove(&session_id_clone);
             });
 
             // Send immediate ACK so the user knows the agent has started
@@ -663,7 +706,16 @@ async fn websocket(
             }
 
             // 🆕 BACKGROUND JOBS: Handle progress updates from background jobs
-            Some(progress_update) = progress_rx.recv() => {
+            // (receives serialized ProgressUpdate JSON — parses from Redis pub/sub string)
+            progress_msg = progress_rx.recv() => {
+                let Some(msg) = progress_msg else { break; };
+                let progress_update: crate::jobs::ProgressUpdate = match serde_json::from_str(&msg) {
+                    Ok(p) => p,
+                    Err(_) => {
+                        tracing::warn!("Failed to parse progress update JSON");
+                        continue;
+                    }
+                };
                 tracing::debug!("📡 Received progress update: {}", progress_update.message);
 
                 // 💾 Save completed job results to conversation history (PostgreSQL + Qdrant)
@@ -2317,7 +2369,7 @@ async fn run_agent_background(
     job_id: Option<uuid::Uuid>,
     job_manager: std::sync::Arc<crate::jobs::JobManager>,
     agent_progress_tx: tokio::sync::mpsc::UnboundedSender<String>,
-    user_message_rx: tokio::sync::mpsc::UnboundedReceiver<String>,
+    user_message_rx: Option<tokio::sync::mpsc::UnboundedReceiver<String>>,
     user_id: Option<i32>,
 ) {
     tracing::info!(
@@ -2367,9 +2419,6 @@ async fn run_agent_background(
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(1800);
 
-    // Wrap receiver in Option so it can be moved into one branch
-    let mut user_msg_rx_opt = Some(user_message_rx);
-
     let response = tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), async {
         if use_claude {
             if let Some(ref claude_client) = state.claude_client {
@@ -2405,7 +2454,7 @@ async fn run_agent_background(
                     job_manager.clone(),
                     Some(proxy_tx),
                     agent_workflow_id,
-                    user_msg_rx_opt.take(),
+                    user_message_rx,
                     user_id,
                 )
                 .await
