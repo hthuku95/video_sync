@@ -68,7 +68,10 @@ pub async fn execute_clipping_job(job_id: i32, app_state: Arc<AppState>) -> Resu
     .await
     .ok();
 
-    match crate::services::AgenticServicePipeline::start(
+    // IMPORTANT: start() spawns the pipeline as a fire-and-forget background task.
+    // For Batch workers, we MUST wait for the pipeline to complete before proceeding,
+    // otherwise the container exits and the background work is lost.
+    let workflow_id = match crate::services::AgenticServicePipeline::start(
         app_state.clone(),
         crate::services::ServiceType::Clipping,
         crate::services::ServiceInput {
@@ -89,23 +92,75 @@ pub async fn execute_clipping_job(job_id: i32, app_state: Arc<AppState>) -> Resu
     )
     .await
     {
-        Ok(workflow_id) => {
-            let _ = sqlx::query("UPDATE clipping_jobs SET workflow_id = $1 WHERE id = $2")
-                .bind(workflow_id)
-                .bind(job_id)
-                .execute(&app_state.db_pool)
-                .await;
+        Ok(id) => id,
+        Err(e) => return Err(format!("Agentic clipping failed: {}", e)),
+    };
 
-            // Post-process: compile clips into a single compilation video + store clip URLs
-            // Best-effort — failure doesn't fail the core job
-            if let Err(e) = post_process_clipping_delivery(job_id, delivery_id, &app_state).await {
-                tracing::warn!("Clip compilation failed (delivery still works): {e}");
-            }
+    let _ = sqlx::query("UPDATE clipping_jobs SET workflow_id = $1 WHERE id = $2")
+        .bind(workflow_id)
+        .bind(job_id)
+        .execute(&app_state.db_pool)
+        .await;
 
-            Ok(format!("Agentic clipping workflow completed for job {}", job_id))
+    // Wait for the pipeline to complete by polling the workflow status.
+    // The pipeline is running in a spawned background task and updates the
+    // app_workflows table as it progresses.
+    let max_wait = std::time::Duration::from_secs(7200); // 2 hour max
+    let poll_interval = std::time::Duration::from_secs(10);
+    let start_time = std::time::Instant::now();
+    let mut last_status = String::new();
+
+    loop {
+        if start_time.elapsed() > max_wait {
+            return Err(format!("Pipeline timeout for job {} after 2 hours", job_id));
         }
-        Err(e) => Err(format!("Agentic clipping failed: {}", e)),
+
+        tokio::time::sleep(poll_interval).await;
+
+        let status: Option<String> = sqlx::query_scalar::<_, String>(
+            "SELECT status FROM app_workflows WHERE id = $1"
+        )
+        .bind(workflow_id)
+        .fetch_optional(&app_state.db_pool)
+        .await
+        .map_err(|e| format!("Failed to poll workflow: {}", e))?;
+
+        match status.as_deref() {
+            Some("completed") => {
+                tracing::info!("Pipeline completed for job {}", job_id);
+                break;
+            }
+            Some("failed") => {
+                let reason: Option<String> = sqlx::query_scalar::<_, String>(
+                    "SELECT error_message FROM app_workflows WHERE id = $1"
+                )
+                .bind(workflow_id)
+                .fetch_optional(&app_state.db_pool)
+                .await
+                .ok()
+                .flatten();
+                return Err(format!("Pipeline failed for job {}: {}", job_id, reason.unwrap_or_else(|| "unknown".to_string())));
+            }
+            Some(s) => {
+                if last_status != s {
+                    tracing::info!("Pipeline status for job {}: {}", job_id, s);
+                    last_status = s.to_string();
+                }
+                continue;
+            }
+            None => {
+                return Err(format!("Workflow {} not found for job {}", workflow_id, job_id));
+            }
+        }
     }
+
+    // Post-process: compile clips into a single compilation video + store clip URLs
+    // Best-effort — failure doesn't fail the core job
+    if let Err(e) = post_process_clipping_delivery(job_id, delivery_id, &app_state).await {
+        tracing::warn!("Clip compilation failed (delivery still works): {e}");
+    }
+
+    Ok(format!("Agentic clipping workflow completed for job {}", job_id))
 }
 
 
