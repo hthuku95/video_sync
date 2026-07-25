@@ -107,10 +107,12 @@ impl WorkflowRuntime {
                 last_heartbeat_at
             )
             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NOW())
+            ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL
+            DO NOTHING
             RETURNING id
             "#,
         )
-        .bind(workflow.idempotency_key)
+        .bind(workflow.idempotency_key.clone())
         .bind(&workflow.workflow_type)
         .bind(workflow.status.as_str())
         .bind(workflow.session_uuid.as_deref())
@@ -121,22 +123,64 @@ impl WorkflowRuntime {
         .bind(workflow.current_step.as_deref())
         .bind(workflow.metadata)
         .bind(workflow.artifact_requirements)
-        .fetch_one(&self.pool)
+        .fetch_optional(&self.pool)
         .await
         .map_err(|e| format!("Failed to create workflow: {}", e))?;
 
-        tracing::info!(
-            workflow_id = %created_id,
-            workflow_type = %workflow_type,
-            status = %status,
-            session_uuid = session_uuid.as_deref().unwrap_or(""),
-            user_id = user_id.unwrap_or_default(),
-            idempotency_key = idempotency_key.as_deref().unwrap_or(""),
-            current_step = current_step.as_deref().unwrap_or(""),
-            "Created durable workflow"
-        );
+        match created_id {
+            Some(id) => {
+                tracing::info!(
+                    workflow_id = %id,
+                    workflow_type = %workflow_type,
+                    status = %status,
+                    session_uuid = session_uuid.as_deref().unwrap_or(""),
+                    user_id = user_id.unwrap_or_default(),
+                    idempotency_key = idempotency_key.as_deref().unwrap_or(""),
+                    current_step = current_step.as_deref().unwrap_or(""),
+                    "Created durable workflow"
+                );
+                Ok(id)
+            }
+            None => {
+                let existing_id = self
+                    .find_workflow_by_idempotency_key(
+                        workflow.idempotency_key.as_deref().unwrap_or(""),
+                    )
+                    .await?
+                    .ok_or_else(|| {
+                        format!(
+                            "Idempotency key conflict but no existing workflow found for '{}'",
+                            workflow.idempotency_key.as_deref().unwrap_or("")
+                        )
+                    })?;
 
-        Ok(created_id)
+                tracing::info!(
+                    workflow_id = %existing_id,
+                    idempotency_key = workflow.idempotency_key.as_deref().unwrap_or(""),
+                    "Reusing existing workflow after concurrent insert conflict"
+                );
+                Ok(existing_id)
+            }
+        }
+    }
+
+    pub async fn find_workflow_by_idempotency_key(
+        &self,
+        idempotency_key: &str,
+    ) -> Result<Option<Uuid>, String> {
+        sqlx::query_scalar::<_, Uuid>(
+            r#"
+            SELECT id
+              FROM app_workflows
+             WHERE idempotency_key = $1
+             ORDER BY created_at DESC
+             LIMIT 1
+            "#,
+        )
+        .bind(idempotency_key)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| format!("Failed to lookup workflow by idempotency key: {}", e))
     }
 
     pub async fn create_or_reuse_workflow(&self, workflow: NewWorkflow) -> Result<Uuid, String> {
