@@ -1,6 +1,7 @@
 use futures::StreamExt;
 use redis::aio::ConnectionManager;
 use redis::AsyncCommands;
+use std::time::Duration;
 use tokio::sync::mpsc;
 
 /// A Redis pub/sub bus that bridges Fargate instances.
@@ -32,9 +33,13 @@ impl PubSubBus {
             .filter(|u| !u.is_empty())
             .ok_or_else(|| "REDIS_URL not set — Redis pub/sub disabled".to_string())?;
         let client = redis::Client::open(url).map_err(|e| format!("Redis URL error: {}", e))?;
-        let conn_mgr = ConnectionManager::new(client)
-            .await
-            .map_err(|e| format!("Redis connect error: {}", e))?;
+        let conn_mgr = tokio::time::timeout(
+            Duration::from_secs(5),
+            ConnectionManager::new(client),
+        )
+        .await
+        .map_err(|_| "Redis connection timeout after 5s".to_string())?
+        .map_err(|e| format!("Redis connect error: {}", e))?;
         tracing::info!("✅ Redis PubSubBus connected to {}", url);
         Ok(Self {
             conn_mgr,
@@ -59,10 +64,13 @@ impl PubSubBus {
         let client =
             redis::Client::open(self.redis_url.as_str())
                 .map_err(|e| format!("Redis client error: {}", e))?;
-        let conn = client
-            .get_async_connection()
-            .await
-            .map_err(|e| format!("Redis conn error: {}", e))?;
+        let conn = tokio::time::timeout(
+            Duration::from_secs(5),
+            client.get_async_connection(),
+        )
+        .await
+        .map_err(|_| "Redis subscribe connection timeout after 5s".to_string())?
+        .map_err(|e| format!("Redis conn error: {}", e))?;
         let mut pubsub = conn.into_pubsub();
         pubsub
             .subscribe(channel)
