@@ -62,6 +62,7 @@ pub struct CreateProfilePayload {
 pub struct ConnectUrlQuery {
     pub platform: String,
     pub profile_id: String,
+    pub redirect_url: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -122,7 +123,7 @@ pub async fn get_connect_url(
     Query(query): Query<ConnectUrlQuery>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let z = client(&state)?;
-    match z.get_connect_url(&query.platform, &query.profile_id).await {
+    match z.get_connect_url(&query.platform, &query.profile_id, query.redirect_url.as_deref()).await {
         Ok(resp) => Ok(Json(json!({
             "success": true,
             "authUrl": resp.auth_url,

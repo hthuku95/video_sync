@@ -7706,10 +7706,10 @@ async fn delivery_page(
         if (!profileId) { zernioToast('No profile', true); return; }
         this.disabled = true;
         this.textContent = 'Getting URL...';
-        var result = await zernioFetch('/api/social/connect-url?platform=' + encodeURIComponent(platform) + '&profile_id=' + encodeURIComponent(profileId));
+        var result = await zernioFetch('/api/social/connect-url?platform=' + encodeURIComponent(platform) + '&profile_id=' + encodeURIComponent(profileId) + '&redirect_url=' + encodeURIComponent(window.location.href));
         if (result.success) {
           zernioToast('OAuth URL ready \u2014 opening in new tab');
-          window.open(result.url, '_blank', 'width=600,height=700');
+          window.open(result.authUrl, '_blank', 'width=600,height=700');
           this.textContent = '\ud83d\udd17 Connect (opened)';
           var self = this;
           setTimeout(function() { self.disabled = false; self.textContent = '\ud83d\udd17 Connect Account'; }, 3000);

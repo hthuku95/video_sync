@@ -228,10 +228,13 @@ impl ZernioClient {
 
     // ── Connect / OAuth ────────────────────────────────────────────────────
 
-    pub async fn get_connect_url(&self, platform: &str, profile_id: &str) -> Result<ConnectUrlResponse> {
+    pub async fn get_connect_url(&self, platform: &str, profile_id: &str, redirect_url: Option<&str>) -> Result<ConnectUrlResponse> {
         info!("Getting Zernio connect URL for platform {} profile {}", platform, profile_id);
         let mut params = HashMap::new();
         params.insert("profileId", profile_id.to_string());
+        if let Some(url) = redirect_url {
+            params.insert("redirectUrl", url.to_string());
+        }
         self.get_json::<ConnectUrlResponse>(&format!("/connect/{}", platform), Some(&params)).await
     }
 

@@ -1548,7 +1548,7 @@ async function connectPlatform(e, platform, profileId) {{
     const btn = e.currentTarget;
     btn.innerHTML = '<div class="spinner"></div>';
     try {{
-        const resp = await fetch('/api/social/connect-url?platform=' + encodeURIComponent(platform) + '&profile_id=' + encodeURIComponent(profileId));
+        const resp = await fetch('/api/social/connect-url?platform=' + encodeURIComponent(platform) + '&profile_id=' + encodeURIComponent(profileId) + '&redirect_url=' + encodeURIComponent(window.location.href));
         const data = await resp.json();
         if (data.success && data.authUrl) {{
             // Store redirect target in sessionStorage so we come back here after OAuth
