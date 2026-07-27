@@ -1085,10 +1085,9 @@ async fn search_kick_clipper_prospects(
         base_category
     );
     let search_query = match crate::llm_utils::generate_text_fast(
-        state.ollama_fast_client.as_ref(),
         state.ollama_client.as_ref(),
-        state.gemini_client.as_ref(),
         state.deepseek_client.as_ref(),
+        state.gemini_client.as_ref(),
         &query_prompt,
     ).await {
         Ok(q) => q.trim().trim_matches('"').to_string(),
@@ -1251,10 +1250,9 @@ async fn search_kick_clipper_prospects(
                 display_name, video_titles
             );
             if let Ok(creators_raw) = crate::llm_utils::generate_text_fast(
-                state.ollama_fast_client.as_ref(),
                 state.ollama_client.as_ref(),
-                state.gemini_client.as_ref(),
                 state.deepseek_client.as_ref(),
+                state.gemini_client.as_ref(),
                 &creator_prompt,
             ).await {
                 let raw = creators_raw.trim().to_lowercase();
@@ -1422,10 +1420,9 @@ async fn search_kick_clipper_prospects_top_streamers(
             slug, stream_title, base_category
         );
         let search_query = match crate::llm_utils::generate_text_fast(
-            state.ollama_fast_client.as_ref(),
             state.ollama_client.as_ref(),
-            state.gemini_client.as_ref(),
             state.deepseek_client.as_ref(),
+            state.gemini_client.as_ref(),
             &query_prompt,
         ).await {
             Ok(q) => q.trim().trim_matches('"').to_string(),
@@ -2077,10 +2074,9 @@ Return ONLY valid JSON (no markdown):
     );
 
     match crate::llm_utils::generate_text_fast(
-        state.ollama_fast_client.as_ref(),
         state.ollama_client.as_ref(),
-        state.gemini_client.as_ref(),
         state.deepseek_client.as_ref(),
+        state.gemini_client.as_ref(),
         &prompt,
     )
     .await
@@ -2749,7 +2745,6 @@ Legacy DM tone: {existing_dm}"#,
     );
 
     let (x_dm, email_script) = match generate_text_best_effort(
-        state.ollama_fast_client.as_ref(),
         state.ollama_client.as_ref(),
         state.nvidia_nim_client.as_ref(),
         state.gemma_client.as_ref(),
@@ -5503,7 +5498,6 @@ Output ONLY the DM body. No quotes, no labels, no preamble."#,
     );
 
     let dm_text = match generate_text_best_effort(
-        state.ollama_fast_client.as_ref(),
         state.ollama_client.as_ref(),
         state.nvidia_nim_client.as_ref(),
         state.gemma_client.as_ref(),
@@ -5990,7 +5984,6 @@ Return ONLY a JSON array of strings. No explanation. Example: ["youtuber", "cont
     );
 
     let hashtags_json = match generate_text_best_effort(
-        state.ollama_fast_client.as_ref(),
         state.ollama_client.as_ref(),
         state.nvidia_nim_client.as_ref(),
         state.gemma_client.as_ref(),
@@ -6150,7 +6143,6 @@ Return ONLY a JSON array of strings. No explanation. Example: ["kickclips", "kic
     );
 
     let hashtags_json = match generate_text_best_effort(
-        state.ollama_fast_client.as_ref(),
         state.ollama_client.as_ref(),
         state.nvidia_nim_client.as_ref(),
         state.gemma_client.as_ref(),
@@ -6861,7 +6853,6 @@ Return ONLY valid JSON (no markdown, no code fence):
         );
 
         let result = generate_text_best_effort(
-            state.ollama_fast_client.as_ref(),
             state.ollama_client.as_ref(),
             state.nvidia_nim_client.as_ref(),
             state.gemma_client.as_ref(),
@@ -6926,10 +6917,9 @@ Return ONLY valid JSON (no markdown, no code fence):
                 bio = bio,
             );
             if let Ok(creators_raw) = crate::llm_utils::generate_text_fast(
-                state.ollama_fast_client.as_ref(),
                 state.ollama_client.as_ref(),
-                state.gemini_client.as_ref(),
                 state.deepseek_client.as_ref(),
+                state.gemini_client.as_ref(),
                 &creator_prompt,
             )
             .await
@@ -7007,10 +6997,9 @@ Return ONLY the raw search query string, nothing else."#
     );
 
     match crate::llm_utils::generate_text_fast(
-        state.ollama_fast_client.as_ref(),
         state.ollama_client.as_ref(),
-        state.gemini_client.as_ref(),
         state.deepseek_client.as_ref(),
+        state.gemini_client.as_ref(),
         &prompt,
     )
     .await
@@ -7055,10 +7044,9 @@ Return ONLY the category name, nothing else."#
     );
 
     match crate::llm_utils::generate_text_fast(
-        state.ollama_fast_client.as_ref(),
         state.ollama_client.as_ref(),
-        state.gemini_client.as_ref(),
         state.deepseek_client.as_ref(),
+        state.gemini_client.as_ref(),
         &prompt,
     )
     .await
@@ -7114,7 +7102,6 @@ Return ONLY the JSON, no explanation."#
     );
 
     let text = generate_text_best_effort(
-        state.ollama_fast_client.as_ref(),
         state.ollama_client.as_ref(),
         state.nvidia_nim_client.as_ref(),
         state.gemma_client.as_ref(),
@@ -7525,7 +7512,6 @@ Return ONLY valid JSON (no markdown):
     );
 
     let response = match crate::llm_utils::generate_text_best_effort(
-        state.ollama_fast_client.as_ref(),
         state.ollama_client.as_ref(),
         state.nvidia_nim_client.as_ref(),
         state.gemma_client.as_ref(),

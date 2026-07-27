@@ -1,11 +1,13 @@
 /// LLM utility functions — multi-provider text generation with automatic fallback.
 ///
-/// Priority order for text-only tasks:
-///   1. Ollama (self-hosted Gemma 4 12B, encoder-free multimodal, vision+audio on t3.xlarge)
-///   2. NVIDIA NIM (Gemma 4 31B, 40 RPM, own quota pool)
-///   3. Gemma 4 via Gemini API (own quota pool, separate from Gemini Flash)
-///   4. Primary Gemini client (last resort)
-///   5. DeepSeek V4 (OpenAI-compatible, 1M context, cheap fallback)
+/// Priority order for ALL text tasks:
+///   1. Ollama (Gemma 4 12B — self-hosted, free, auto-scaled GPU cluster via NLB)
+///   2. NVIDIA NIM (Gemma 4 31B, 40 RPM, own quota pool — best-effort only)
+///   3. Gemini 2.5 Flash (last resort fallback, quota-limited)
+///   4. DeepSeek V4 (OpenAI-compatible, 1M context — cheapest cloud fallback)
+///
+/// ⚠️ Ollama (gemma4:12b) MUST be the first attempt for EVERY LLM call.
+///    No text-only models are permitted. The qwen3:4b model was removed.
 use crate::deepseek_client::DeepSeekClient;
 use crate::gemini_client::GeminiClient;
 use crate::nvidia_nim_client::NvidiaNimClient;
@@ -43,18 +45,15 @@ macro_rules! try_provider {
     }};
 }
 
-/// Fast text generation — tries Ollama Fast (qwen3:4b) first, then Ollama (gemma4:12b),
-/// then DeepSeek, then Gemini.
+/// Fast text generation — tries Ollama (gemma4:12b) first, then DeepSeek, then Gemini.
 /// Use for bulk/scoring tasks where speed matters.
 pub async fn generate_text_fast(
-    ollama_fast: Option<&OllamaClient>,
     ollama: Option<&OllamaClient>,
-    gemini: Option<&GeminiClient>,
     deepseek: Option<&DeepSeekClient>,
+    gemini: Option<&GeminiClient>,
     prompt: &str,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-    try_provider!(ollama_fast, prompt, "Ollama (Qwen 3 4B, fast path)", "trying Ollama Gemma 4B");
-    try_provider!(ollama, prompt, "Ollama (Gemma 4B, fast path)", "trying DeepSeek");
+    try_provider!(ollama, prompt, "Ollama (Gemma 4 12B, fast path)", "trying DeepSeek");
     try_provider!(deepseek, prompt, "DeepSeek V4 (fast path)", "trying Gemini");
     try_provider!(gemini, prompt, "Gemini Flash (fast path)", "no more fallbacks");
 
@@ -67,7 +66,6 @@ pub async fn generate_text_fast(
 /// code generation) to avoid hitting Gemini Flash quota limits.
 /// Do NOT use this for video analysis — call GeminiClient::analyze_video_from_url directly.
 pub async fn generate_text_best_effort(
-    ollama_fast: Option<&OllamaClient>,
     ollama: Option<&OllamaClient>,
     nvidia: Option<&NvidiaNimClient>,
     gemma: Option<&GeminiClient>,
@@ -75,10 +73,9 @@ pub async fn generate_text_best_effort(
     deepseek: Option<&DeepSeekClient>,
     prompt: &str,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-    try_provider!(ollama_fast, prompt, "Ollama (Qwen 3 4B)", "trying Ollama Gemma 4B fallback");
-    try_provider!(ollama, prompt, "Ollama (Gemma 4B)", "trying NVIDIA NIM fallback");
-    try_provider!(nvidia, prompt, "NVIDIA NIM (Gemma 4)", "trying Gemma fallback");
-    try_provider!(gemma, prompt, "Gemma 4 (Gemini API)", "trying Gemini Flash fallback");
+    try_provider!(ollama, prompt, "Ollama (Gemma 4 12B)", "trying NVIDIA NIM fallback");
+    try_provider!(nvidia, prompt, "NVIDIA NIM (Gemma 4)", "trying Gemma via AI Studio fallback");
+    try_provider!(gemma, prompt, "Gemma 4 (Google AI Studio)", "trying Gemini Flash fallback");
     try_provider!(gemini, prompt, "Gemini Flash", "trying DeepSeek fallback");
     try_provider!(deepseek, prompt, "DeepSeek V4", "no more fallbacks");
 

@@ -193,7 +193,10 @@ pub fn format_skills_context(skills: &[Skill]) -> String {
 pub async fn detect_and_store_correction(
     pool: sqlx::PgPool,
     qdrant: Option<crate::qdrant_client::QdrantClient>,
-    gemini: std::sync::Arc<crate::gemini_client::GeminiClient>,
+    gemini_for_embedding: Option<std::sync::Arc<crate::gemini_client::GeminiClient>>,
+    ollama: Option<&crate::ollama_client::OllamaClient>,
+    deepseek: Option<&crate::deepseek_client::DeepSeekClient>,
+    gemini_for_llm: Option<&crate::gemini_client::GeminiClient>,
     user_id: Option<i32>,
     service_type: Option<String>,
     campaign_id: Option<Uuid>,
@@ -227,7 +230,14 @@ pub async fn detect_and_store_correction(
         agent = agent_response,
     );
 
-    match gemini.generate_text(prompt.as_str()).await {
+    let extraction_result = crate::llm_utils::generate_text_fast(
+        ollama,
+        deepseek,
+        gemini_for_llm,
+        &prompt,
+    ).await;
+
+    match extraction_result {
         Ok(response) => {
             let trimmed = response.trim();
             if trimmed.starts_with('{') {
@@ -256,7 +266,7 @@ pub async fn detect_and_store_correction(
                         match store_skill(
                             &pool,
                             qdrant.as_ref(),
-                            Some(gemini.as_ref()),
+                            gemini_for_embedding.as_deref(),
                             user_id,
                             service_type.as_deref(),
                             campaign_id,

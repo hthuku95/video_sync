@@ -2500,18 +2500,19 @@ async fn run_agent_background(
             let _state_for_correction = state.clone();
             let _uid_for_correction = user_id;
             tokio::spawn(async move {
-                if let Some(ref gemini) = _state_for_correction.gemini_client {
-                    crate::services::skills::detect_and_store_correction(
-                        _state_for_correction.db_pool.clone(),
-                        _state_for_correction.qdrant_client.clone(),
-                        gemini.clone(),
-                        _uid_for_correction,
-                        None, // service_type — unknown in general chat
-                        None, // campaign_id — unknown in general chat
-                        _user_msg_for_correction,
-                        _agent_resp_for_correction,
-                    ).await;
-                }
+                crate::services::skills::detect_and_store_correction(
+                    _state_for_correction.db_pool.clone(),
+                    _state_for_correction.qdrant_client.clone(),
+                    _state_for_correction.gemini_client.clone().map(std::sync::Arc::new),
+                    _state_for_correction.ollama_client.as_ref(),
+                    _state_for_correction.deepseek_client.as_ref(),
+                    _state_for_correction.gemini_client.as_ref(),
+                    _uid_for_correction,
+                    None, // service_type — unknown in general chat
+                    None, // campaign_id — unknown in general chat
+                    _user_msg_for_correction,
+                    _agent_resp_for_correction,
+                ).await;
             });
 
             if !response.is_empty() {

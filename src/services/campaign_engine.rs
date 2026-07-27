@@ -345,7 +345,7 @@ async fn generate_variation(
          - Return ONLY the variation text, no explanations"
     );
 
-    if let Some(ref client) = state.ollama_fast_client {
+    if let Some(ref client) = state.ollama_client {
         let resp = client.generate_text(&prompt).await
             .map_err(|e| format!("Ollama: {e}"))?;
         return Ok(resp);
@@ -516,7 +516,7 @@ async fn create_skill_from_workflow(
         campaign.service_type, campaign.brief, tool_seq_json
     );
 
-    let result = if let Some(ref client) = state.ollama_fast_client {
+    let result = if let Some(ref client) = state.ollama_client {
         client.generate_text(&prompt).await
     } else if let Some(ref client) = state.gemma_client {
         client.generate_text(&prompt).await

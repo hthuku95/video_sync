@@ -78,8 +78,7 @@ pub struct AppState {
     pub nvidia_nim_client: Option<nvidia_nim_client::NvidiaNimClient>, // NVIDIA NIM (text + tools, 40 RPM)
     pub nvidia_nim_vision_client: Option<nvidia_nim_client::NvidiaNimClient>, // NVIDIA NIM (vision + tools, Gemini fallback)
     pub deepseek_client: Option<deepseek_client::DeepSeekClient>, // DeepSeek V4 (OpenAI-compatible, tool calling)
-    pub ollama_client: Option<ollama_client::OllamaClient>, // Self-hosted Gemma 4B via Ollama (free, multimodal)
-    pub ollama_fast_client: Option<ollama_client::OllamaClient>, // Self-hosted Qwen 3 4B (fast, lightweight)
+    pub ollama_client: Option<ollama_client::OllamaClient>, // Self-hosted Gemma 4 12B via Ollama (free, multimodal, GPU auto-scaled)
     pub claude_client: Option<claude_client::ClaudeClient>,
     pub vertex_multimodal_embeddings: Option<vertex_multimodal_embeddings::VertexMultimodalEmbeddingsClient>,
     pub voyage_embeddings: Option<voyage_embeddings::VoyageEmbeddings>,
@@ -441,19 +440,6 @@ async fn main() {
         Some(client)
     };
 
-    // Ollama fast — lightweight Qwen 3 4B (2.5GB) for fast text-only tasks.
-    // Used as the first attempt in generate_text_fast / generate_text_best_effort
-    // before falling back to the heavier gemma4:12b.
-    let ollama_fast_client = {
-        tracing::info!("Initializing Ollama fast client (qwen3:4b on {})...", ollama_client::OLLAMA_DEFAULT_URL);
-        let client = ollama_client::OllamaClient::new_with_model("qwen3:4b");
-        let warmup_fast = client.clone();
-        tokio::spawn(async move {
-            warmup_fast.warmup().await;
-        });
-        Some(client)
-    };
-
     let vertex_multimodal_embeddings =
         vertex_multimodal_embeddings::VertexMultimodalEmbeddingsClient::from_env().map(|client| {
             tracing::info!("Initializing Vertex multimodal embeddings client for gemini_mm lane...");
@@ -699,7 +685,6 @@ async fn main() {
         nvidia_nim_vision_client,
         deepseek_client,
         ollama_client,
-        ollama_fast_client,
         claude_client,
         vertex_multimodal_embeddings,
         voyage_embeddings,

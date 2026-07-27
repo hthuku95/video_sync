@@ -934,11 +934,15 @@ async fn campaign_chat(
     // Background skill detection from corrections
     let user_message = req.message.clone();
     let agent_result_for_corrections = agent_result.clone();
+    let state_for_corrections = state.clone();
     tokio::spawn(async move {
         crate::services::skills::detect_and_store_correction(
-            state.db_pool.clone(),
-            state.qdrant_client.clone(),
+            state_for_corrections.db_pool.clone(),
+            state_for_corrections.qdrant_client.clone(),
             gemini_client_for_corrections,
+            state_for_corrections.ollama_client.as_ref(),
+            state_for_corrections.deepseek_client.as_ref(),
+            state_for_corrections.gemini_client.as_ref(),
             Some(user_id),
             Some(service_type),
             Some(campaign_id),
