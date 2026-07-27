@@ -4824,6 +4824,91 @@ async fn execute_clip_compilation_gemini(
 }
 
 /// Core clip compilation logic
+/// Apply Kick-compliant post-processing to a trimmed clip.
+/// Converts to 9:16 (1080x1920) with blurred background, adds logo watermark,
+/// styled captions, outro card, and re-encodes to H.264/AAC.
+async fn kick_post_process_clip(
+    input_path: &Path,
+    output_path: &Path,
+    logo_path: Option<&Path>,
+    streamer_name: Option<&str>,
+    caption_text: &str,
+    clip_duration: f64,
+) -> Result<(), String> {
+    let font = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf";
+    let outro_text = match streamer_name {
+        Some(name) if !name.is_empty() => format!("Watch Live on Kick\\n@{}", name),
+        _ => "Watch Live on Kick".to_string(),
+    };
+    let outro_start = (clip_duration - 2.0).max(0.0);
+
+    // Build complex filtergraph dynamically based on whether logo is provided
+    let mut inputs = vec![
+        "-i".to_string(),
+        input_path.to_string_lossy().to_string(),
+    ];
+    let mut filter = String::from(
+        "[0:v]split=2[fg][bgsrc];\
+         [bgsrc]scale=1080:1920:force_original_aspect_ratio=increase,boxblur=20:5[bg];\
+         [fg]scale='if(gt(a,9/16),1080,-1)':'if(gt(a,9/16),-1,1920)',setsar=1[fg_scaled];\
+         [bg][fg_scaled]overlay=(W-w)/2:(H-h)/2[base]"
+    );
+    let mut current_label = "base";
+
+    if let Some(logo) = logo_path {
+        inputs.push("-i".to_string());
+        inputs.push(logo.to_string_lossy().to_string());
+        filter.push_str(
+            ";[1:v]scale='min(86,iw)':-1[logo_scaled];\
+             [base][logo_scaled]overlay=40:40[with_logo]"
+        );
+        current_label = "with_logo";
+    }
+
+    // Caption text (lower-third, full duration)
+    let safe_caption = caption_text.replace('\'', "'\\\\''");
+    filter.push_str(&format!(
+        ";[{}]drawtext=text='{}':x=40:y=h-100:fontfile={}:fontsize=36:fontcolor=white:box=1:boxcolor=black@0.5:boxborderw=8[captioned]",
+        current_label, safe_caption, font
+    ));
+    current_label = "captioned";
+
+    // Outro text (last 2 seconds)
+    let safe_outro = outro_text.replace('\'', "'\\\\''");
+    filter.push_str(&format!(
+        ";[{}]drawtext=text='{}':x=(w-text_w)/2:y=h-200:fontfile={}:fontsize=48:fontcolor=white:box=1:boxcolor=black@0.5:boxborderw=10:enable='gte(t,{})'[vout]",
+        current_label, safe_outro, font, outro_start
+    ));
+
+    let mut cmd = StdCommand::new("ffmpeg");
+    cmd.arg("-y");
+    for input in &inputs {
+        cmd.arg("-i");
+        cmd.arg(input);
+    }
+    cmd.arg("-filter_complex");
+    cmd.arg(&filter);
+    cmd.arg("-map").arg("[vout]");
+    cmd.arg("-map").arg("0:a?"); // optional audio
+    cmd.arg("-c:v").arg("libx264");
+    cmd.arg("-preset").arg("medium");
+    cmd.arg("-crf").arg("18");
+    cmd.arg("-c:a").arg("aac");
+    cmd.arg("-b:a").arg("128k");
+    cmd.arg("-r").arg("30");
+    cmd.arg("-pix_fmt").arg("yuv420p");
+    cmd.arg("-movflags").arg("+faststart");
+    cmd.arg(output_path.to_str().unwrap_or(""));
+
+    let output = cmd.output().map_err(|e| format!("FFmpeg spawn failed: {}", e))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Kick post-process FFmpeg failed: {}", stderr));
+    }
+
+    Ok(())
+}
+
 async fn execute_clip_compilation_value(
     args: &Value,
     ctx: &ToolExecutionContext,
@@ -4842,6 +4927,9 @@ async fn execute_clip_compilation_value(
         .min(10.0) as usize;
     let include_captions = bool_arg(args, &["include_captions", "captions", "subtitles"])
         .unwrap_or(true);
+    let kick_style = bool_arg(args, &["kick_style"]).unwrap_or(false);
+    let logo_url = string_arg(args, &["logo_url"]);
+    let streamer_name = string_arg(args, &["streamer_name"]);
 
     // Parse new params
     let explicit_clip_times: Option<Vec<f64>> = args.get("clip_times")
@@ -5049,7 +5137,43 @@ async fn execute_clip_compilation_value(
             continue;
         }
 
-        let final_path = if include_captions {
+        let final_path = if kick_style {
+            let kick_name = format!("clip_{:02}_kick.mp4", i + 1);
+            let kick_path = tmp_dir.join(&kick_name);
+
+            let logo_local = if let Some(url) = &logo_url {
+                if !url.is_empty() {
+                    let logo_path = tmp_dir.join("logo.png");
+                    match download_file_to_path(url, logo_path.to_str().unwrap_or("/tmp/logo.png")).await {
+                        Ok(_) => Some(logo_path),
+                        Err(e) => {
+                            tracing::warn!("⚠️ Logo download failed: {}", e);
+                            None
+                        }
+                    }
+                } else { None }
+            } else { None };
+
+            let caption = match &streamer_name {
+                Some(name) if !name.is_empty() => format!("Kick Highlight — @{}", name),
+                _ => "Kick Highlight".to_string(),
+            };
+
+            match kick_post_process_clip(
+                &raw_path,
+                &kick_path,
+                logo_local.as_ref().map(|p| p.as_path()),
+                streamer_name.as_deref(),
+                &caption,
+                clip_duration,
+            ).await {
+                Ok(_) => kick_path,
+                Err(e) => {
+                    tracing::warn!("⚠️ Kick post-process failed ({}), using raw clip", e);
+                    raw_path
+                }
+            }
+        } else if include_captions {
             let captioned = format!("clip_{:02}_captioned.mp4", i + 1);
             let cap_path = tmp_dir.join(&captioned);
             let srt = tmp_dir.join("overlay.srt");
@@ -19843,6 +19967,7 @@ async fn execute_manim_execute_script_gemini(args: &HashMap<String, Value>) -> S
             "quality": quality,
             "include_narration": include_narration,
             "narration_text": narration_text,
+            "narration           "narration_text": narration_text,
             "narration_speaker": narration_speaker,
         }),
     ).await {

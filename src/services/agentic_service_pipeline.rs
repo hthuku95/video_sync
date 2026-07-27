@@ -710,10 +710,20 @@ You have a vision-capable model. BEFORE calling generate_clip_compilation, analy
 2. Identify the most engaging moments — key highlights, funny parts, dramatic moments, educational value
 3. THEN call generate_clip_compilation with:
    - `clip_times` set to the exact start times (in seconds) for each clip you identified
-   - Example: generate_clip_compilation(source_url="{source}", clip_times=[12.5, 48.2, 93.7], clip_duration_seconds=15, max_clips=3, include_captions=true)
+   - Example (Kick): generate_clip_compilation(source_url="https://kick.com/neon", clip_times=[12.5, 48.2, 93.7], clip_duration_seconds=15, max_clips=3, kick_style=true, logo_url="<R2 URL from download_asset>", streamer_name="Neon")
+   - Example (general): generate_clip_compilation(source_url="{source}", clip_times=[12.5, 48.2, 93.7], clip_duration_seconds=15, max_clips=3, include_captions=true)
    - If you can't analyze the video, omit `clip_times` and the tool will use smart scene detection
 
 If you provide `clip_times`, the tool trims at those exact positions. If you don't, it runs scene detection + audio energy analysis to auto-pick the best moments.
+
+### 🔥 NEW: `kick_style` Auto Post-Processing
+When `kick_style=true` is set, `generate_clip_compilation` automatically applies ALL Kick editing specs:
+- 9:16 vertical (1080x1920) with blurred background — NO manual FFmpeg needed
+- Logo watermark (download_asset → pass R2 URL as `logo_url`)
+- Styled captions with bold font, white fill + black outline, lower-third
+- Outro card "Watch Live on Kick" with streamer handle
+- Proper H.264 encoding with AAC audio at TikTok/Shorts specs
+- DO NOT try to do these edits manually with add_overlay/add_subtitles — use `kick_style`!
 
 ## ALTERNATIVE: Manual editing (if generate_clip_compilation is unavailable)
 1. Download the source video using your available tools

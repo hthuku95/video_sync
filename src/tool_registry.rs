@@ -454,6 +454,27 @@ impl ToolRegistry {
                 "Whether to use smart scene detection + audio energy analysis to pick clip positions. Defaults to true when clip_times is not provided. Set to false to use evenly-spaced intervals (legacy behavior).",
             ),
         );
+        properties.insert(
+            "kick_style".to_string(),
+            gemini_property(
+                "boolean",
+                "Enable Kick-compliant clip editing: 9:16 vertical (1080x1920) with blurred background, logo watermark, styled captions, and outro card. Defaults to false. When enabled, logo_url and streamer_name can customize the output.",
+            ),
+        );
+        properties.insert(
+            "logo_url".to_string(),
+            gemini_property(
+                "string",
+                "URL to the Kick streamer logo/watermark image (PNG with transparency). Use with kick_style=true. Download via download_asset tool first, then pass the R2 URL here.",
+            ),
+        );
+        properties.insert(
+            "streamer_name".to_string(),
+            gemini_property(
+                "string",
+                "The streamer/channel name (e.g. 'Neon') for the outro card. Use with kick_style=true.",
+            ),
+        );
 
         FunctionDeclaration {
             name: "generate_clip_compilation".to_string(),
