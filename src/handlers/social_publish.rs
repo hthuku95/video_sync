@@ -482,6 +482,43 @@ async fn ensure_user_zernio_profile(
         return Ok(row.get::<String, _>("zernio_profile_id"));
     }
 
+    let z = state.zernio_client.clone().ok_or_else(|| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"success": false, "error": "Zernio not configured"})),
+        )
+    })?;
+
+    // Search for an existing profile on Zernio before creating a new one
+    match z.list_profiles().await {
+        Ok(profiles_resp) => {
+            for profile in &profiles_resp.profiles {
+                // Check if the profile name matches our naming convention:
+                // "{username} — VideoSync"
+                if let Some(ref profile_name) = profile.name {
+                    if profile_name.contains("— VideoSync") {
+                        // Found a matching profile — adopt it
+                        sqlx::query(
+                            "INSERT INTO user_zernio_profiles (user_id, zernio_profile_id) VALUES ($1, $2) \
+                             ON CONFLICT DO NOTHING",
+                        )
+                        .bind(user_id)
+                        .bind(&profile.id)
+                        .execute(&state.db_pool)
+                        .await
+                        .ok();
+                        info!(
+                            "Adopted existing Zernio profile '{}' ({}) for user {}",
+                            profile_name, profile.id, user_id
+                        );
+                        return Ok(profile.id.clone());
+                    }
+                }
+            }
+        }
+        Err(e) => warn!("Failed to list Zernio profiles (will create new): {e}"),
+    }
+
     // Auto-create a Zernio profile
     let z = state.zernio_client.clone().ok_or_else(|| {
         (
@@ -607,7 +644,14 @@ pub async fn sync_my_social_accounts(
     let Some(zernio) = state.zernio_client.clone() else {
         return Json(json!({"success": false, "error": "Zernio not configured"}));
     };
-    let accounts = match zernio.list_accounts().await {
+
+    // Get the user's Zernio profile_id for scoped sync
+    let profile_id = match ensure_user_zernio_profile(state, user_id).await {
+        Ok(pid) => pid,
+        Err((_code, err)) => return err,
+    };
+
+    let accounts = match zernio.list_accounts(Some(&profile_id)).await {
         Ok(r) => r.accounts,
         Err(e) => return Json(json!({"success": false, "error": format!("Zernio error: {e}" )})),
     };

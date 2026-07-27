@@ -240,9 +240,14 @@ impl ZernioClient {
 
     // ── Accounts ───────────────────────────────────────────────────────────
 
-    pub async fn list_accounts(&self) -> Result<ListAccountsResponse> {
+    pub async fn list_accounts(&self, profile_id: Option<&str>) -> Result<ListAccountsResponse> {
         info!("Listing Zernio accounts");
-        self.get_json::<ListAccountsResponse>("/accounts", None).await
+        let params = profile_id.map(|pid| {
+            let mut p = HashMap::new();
+            p.insert("profileId", pid.to_string());
+            p
+        });
+        self.get_json::<ListAccountsResponse>("/accounts", params.as_ref()).await
     }
 
     // ── Posts ──────────────────────────────────────────────────────────────

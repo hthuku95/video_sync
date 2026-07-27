@@ -1328,6 +1328,21 @@ pub async fn campaigns_detail_page(
 
     <div class="actions">
         {status_actions}
+        <button class="btn" onclick="toggleChat()" style="margin-left:auto">\u{1f4ac} Chat with AI</button>
+    </div>
+
+    <div id="chat-modal" style="display:none;position:fixed;bottom:0;right:20px;width:400px;max-height:500px;background:var(--panel);border:1px solid var(--line);border-radius:12px 12px 0 0;box-shadow:0 -4px 20px rgba(0,0,0,0.3);z-index:1000;display:none;flex-direction:column">
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:0.8rem 1rem;border-bottom:1px solid var(--line)">
+            <strong>Campaign AI Assistant</strong>
+            <button onclick="toggleChat()" style="background:none;border:none;cursor:pointer;font-size:1.2rem">\u2716</button>
+        </div>
+        <div id="chat-messages" style="flex:1;overflow-y:auto;padding:0.8rem 1rem;min-height:200px;max-height:350px">
+            <div style="color:var(--muted);text-align:center;padding:2rem">Ask the AI about this campaign\u2019s content, progress, or settings.</div>
+        </div>
+        <div style="display:flex;gap:0.5rem;padding:0.8rem 1rem;border-top:1px solid var(--line)">
+            <input id="chat-input" type="text" placeholder="Ask about this campaign..." style="flex:1;padding:0.5rem;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--fg);font-size:0.9rem" onkeydown="if(event.key==='Enter') sendChat()" />
+            <button class="btn" onclick="sendChat()" style="white-space:nowrap">Send</button>
+        </div>
     </div>
 
     <h2>Post Calendar</h2>
@@ -1345,6 +1360,48 @@ async function updateStatus(newStatus) {{
     const data = await resp.json();
     if (data.success) {{ location.reload(); }}
     else {{ alert('Failed: ' + (data.error || 'Unknown')); }}
+}}
+
+function toggleChat() {{
+    const modal = document.getElementById('chat-modal');
+    const isHidden = modal.style.display === 'none' || !modal.style.display;
+    modal.style.display = isHidden ? 'flex' : 'none';
+    if (isHidden) document.getElementById('chat-input').focus();
+}}
+
+async function sendChat() {{
+    const input = document.getElementById('chat-input');
+    const msg = input.value.trim();
+    if (!msg) return;
+    input.value = '';
+    const msgs = document.getElementById('chat-messages');
+    msgs.innerHTML += `<div style="background:var(--accent);color:white;padding:0.5rem 0.8rem;border-radius:8px;margin-bottom:0.5rem;align-self:flex-end;max-width:85%;margin-left:auto">${{escapeHtml(msg)}}</div>`;
+    msgs.innerHTML += `<div style="color:var(--muted);padding:0.5rem 0;text-align:center;font-size:0.85rem">Thinking...</div>`;
+    msgs.scrollTop = msgs.scrollHeight;
+    try {{
+        const resp = await fetch('/api/campaigns/{id}/chat', {{
+            method: 'POST',
+            headers: {{ 'Content-Type': 'application/json' }},
+            body: JSON.stringify({{ message: msg }}),
+        }});
+        const data = await resp.json();
+        msgs.querySelector('div:last-child').remove();
+        if (data.success) {{
+            msgs.innerHTML += `<div style="background:var(--panel);border:1px solid var(--line);padding:0.5rem 0.8rem;border-radius:8px;margin-bottom:0.5rem;max-width:85%">${{escapeHtml(data.response)}}</div>`;
+        }} else {{
+            msgs.innerHTML += `<div style="color:#ef4444;padding:0.5rem 0">Error: ${{escapeHtml(data.error || 'Unknown')}}</div>`;
+        }}
+        msgs.scrollTop = msgs.scrollHeight;
+    }} catch(e) {{
+        msgs.querySelector('div:last-child').remove();
+        msgs.innerHTML += `<div style="color:#ef4444;padding:0.5rem 0">Network error: ${{escapeHtml(e.message)}}</div>`;
+    }}
+}}
+
+function escapeHtml(text) {{
+    const d = document.createElement('div');
+    d.textContent = text;
+    return d.innerHTML;
 }}
 </script>
 </body>
