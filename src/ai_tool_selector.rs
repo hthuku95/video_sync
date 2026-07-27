@@ -98,17 +98,17 @@ Return ONLY a valid JSON array of tool names. No explanation, no markdown, no co
         catalog = catalog,
     );
 
-    // Try Gemma 4 via NVIDIA NIM first (free quota, doesn't touch Gemini)
-    let selected_names = if let Some(nim) = nvidia_nim_client {
-        match nim.generate_text_with_tokens(&selection_prompt, 512).await {
+    // Try Ollama first (self-hosted, free, GPU auto-scaled), then NIM, then Gemini
+    let selected_names = if let Some(ollama) = ollama_client {
+        match ollama.generate_text(&selection_prompt).await {
             Ok(text) => parse_tool_names(&text),
             Err(e) => {
-                tracing::warn!("AI tool selection via NIM failed: {} — trying Gemini", e);
-                try_gemini_selection(gemini_client, &selection_prompt).await
+                tracing::warn!("AI tool selection via Ollama failed: {} — trying NIM", e);
+                try_nim_selection(nvidia_nim_client, gemini_client, &selection_prompt).await
             }
         }
     } else {
-        try_gemini_selection(gemini_client, &selection_prompt).await
+        try_nim_selection(nvidia_nim_client, gemini_client, &selection_prompt).await
     };
 
     tracing::info!(
@@ -121,6 +121,20 @@ Return ONLY a valid JSON array of tool names. No explanation, no markdown, no co
     build_tool_list(selected_names, all_video_tools)
 }
 
+async fn try_nim_selection(
+    nvidia_nim_client: Option<&crate::nvidia_nim_client::NvidiaNimClient>,
+    gemini_client: Option<&crate::gemini_client::GeminiClient>,
+    prompt: &str,
+) -> Vec<String> {
+    if let Some(nim) = nvidia_nim_client {
+        match nim.generate_text_with_tokens(prompt, 512).await {
+            Ok(text) => return parse_tool_names(&text),
+            Err(e) => tracing::warn!("AI tool selection via NIM failed: {} — trying Gemini", e),
+        }
+    }
+    try_gemini_selection(gemini_client, prompt).await
+}
+
 async fn try_gemini_selection(
     gemini_client: Option<&crate::gemini_client::GeminiClient>,
     prompt: &str,
@@ -131,7 +145,6 @@ async fn try_gemini_selection(
             Err(e) => tracing::warn!("AI tool selection via Gemini failed: {}", e),
         }
     }
-    // Both providers failed — return empty (caller will use general fallback)
     vec![]
 }
 

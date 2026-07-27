@@ -15,13 +15,6 @@ pub async fn auto_map_kick_channel(
         .as_ref()
         .ok_or_else(|| "Kick client not configured".to_string())?;
 
-    let gemini = state
-        .video_gemini_client
-        .as_ref()
-        .or(state.gemini_client.as_ref())
-        .ok_or_else(|| "Gemini not configured".to_string())?;
-
-    // Ask Gemini to guess the Kick.com username for this creator
     let prompt = format!(
         r#"Given a content creator known as "{}", what is their most likely Kick.com channel slug?
 A Kick.com slug is the part after kick.com/ in their profile URL (e.g., "xqc" for https://kick.com/xqc).
@@ -34,12 +27,16 @@ Rules:
         creator_name
     );
 
-    let guessed_slug = gemini
-        .generate_text(&prompt)
-        .await
-        .map_err(|e| format!("Gemini slug guess failed: {}", e))?
-        .trim()
-        .to_string();
+    let guessed_slug = crate::llm_utils::generate_text_fast(
+        state.ollama_client.as_ref(),
+        state.deepseek_client.as_ref(),
+        state.video_gemini_client.as_ref().or(state.gemini_client.as_ref()),
+        &prompt,
+    )
+    .await
+    .map_err(|e| format!("LLM slug guess failed: {}", e))?
+    .trim()
+    .to_string();
 
     if guessed_slug.eq_ignore_ascii_case("NONE") || guessed_slug.is_empty() {
         return Err("Gemini could not guess a Kick slug".to_string());

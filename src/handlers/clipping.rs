@@ -362,14 +362,11 @@ async fn add_source_channel(
     // If either is missing, the channel is rejected.
 
     // 1. Try Twitch mapping
-    let twitch_ok = if let (Some(twitch_client), Some(gemini)) = (
-        state.twitch_client.as_ref(),
-        state.video_gemini_client.as_ref().or(state.gemini_client.as_ref()),
-    ) {
+    let twitch_ok = if let Some(twitch_client) = state.twitch_client.as_ref() {
         match crate::services::twitch_mapper::auto_map_youtube_to_twitch(
             &source_channel,
             twitch_client,
-            gemini,
+            &state,
             &state.db_pool,
         )
         .await

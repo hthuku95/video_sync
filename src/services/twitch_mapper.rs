@@ -5,8 +5,8 @@
 // 1:1 mapping automatically.
 
 use crate::clipping::models::{SourceChannel, TwitchSourceChannel};
-use crate::gemini_client::GeminiClient;
 use crate::twitch_client::TwitchClient;
+use crate::AppState;
 use sqlx::PgPool;
 
 pub enum MappingResult {
@@ -18,10 +18,10 @@ pub enum MappingResult {
 pub async fn auto_map_youtube_to_twitch(
     youtube_channel: &SourceChannel,
     twitch_client: &TwitchClient,
-    gemini_client: &GeminiClient,
+    state: &AppState,
     db_pool: &PgPool,
 ) -> Result<MappingResult, String> {
-    // 1. Ask Gemini for the Twitch login name
+    // 1. Ask LLM (Ollama first via fallback chain) for the Twitch login name
     let prompt = format!(
         "You are a social media research assistant.\n\
          Given this YouTube channel:\n\
@@ -33,10 +33,14 @@ pub async fn auto_map_youtube_to_twitch(
         name = youtube_channel.channel_name,
     );
 
-    let response = gemini_client
-        .generate_text(&prompt)
-        .await
-        .map_err(|e| format!("Gemini error during mapping: {}", e))?;
+    let response = crate::llm_utils::generate_text_fast(
+        state.ollama_client.as_ref(),
+        state.deepseek_client.as_ref(),
+        state.gemini_client.as_ref(),
+        &prompt,
+    )
+    .await
+    .map_err(|e| format!("LLM error during mapping: {}", e))?;
 
     let twitch_login = response.trim().to_lowercase();
 

@@ -5782,7 +5782,7 @@ async fn execute_auto_generate_video_hybrid_gemini(
 
     let mut downloaded_files: Vec<String> = Vec::new();
     let mut used_ids: std::collections::HashSet<i64> = std::collections::HashSet::new();
-    let search_queries = generate_search_queries_ai(topic, num_clips).await;
+    let search_queries = generate_search_queries_ai(topic, num_clips, ctx).await;
 
     for (i, query) in search_queries.iter().enumerate().take(num_clips) {
         result.push_str(&format!(
@@ -6162,7 +6162,7 @@ async fn execute_auto_generate_video_claude(args: &Value) -> String {
 
     // Step 1: Generate search queries via AI (with heuristic fallback)
     result.push_str("📝 Step 1: Generating AI-powered search queries...\n");
-    let search_queries = generate_search_queries_ai(topic, num_clips).await;
+    let search_queries = generate_search_queries_ai(topic, num_clips, ctx).await;
     tracing::info!(
         "✅ Generated {} search queries: {:?}",
         search_queries.len(),
@@ -6586,7 +6586,7 @@ async fn execute_auto_generate_video_gemini(args: &HashMap<String, Value>) -> St
 
     // Step 1: Generate search queries via AI (with heuristic fallback)
     result.push_str("📝 Step 1: Generating AI-powered search queries...\n");
-    let search_queries = generate_search_queries_ai(topic, num_clips).await;
+    let search_queries = generate_search_queries_ai(topic, num_clips, ctx).await;
     tracing::info!(
         "✅ Generated {} search queries: {:?}",
         search_queries.len(),
@@ -7277,25 +7277,28 @@ fn run_final_qa(output_file: &str) -> String {
     qa
 }
 
-/// AI-powered search query generation using Gemini for visual diversity
-async fn generate_search_queries_ai(topic: &str, num_queries: usize) -> Vec<String> {
-    let api_key = std::env::var("VIDEO_GEMINI_API_KEY")
-        .or_else(|_| std::env::var("GEMINI_API_KEY"))
-        .or_else(|_| std::env::var("GOOGLE_API_KEY"))
-        .unwrap_or_default();
-    if api_key.is_empty() {
-        return generate_search_queries_fallback(topic, num_queries);
-    }
-    let client = crate::gemini_client::GeminiClient::new(api_key);
+/// AI-powered search query generation using the fallback chain (Ollama first)
+async fn generate_search_queries_ai(
+    topic: &str,
+    num_queries: usize,
+    ctx: &ToolExecutionContext,
+) -> Vec<String> {
     let prompt = format!(
         "Generate exactly {num_queries} diverse Pexels stock video search queries for this topic: \"{topic}\".\n\
-        Rules:\n\
-        - Each query is 2-4 words, specific and visual (something a camera would capture)\n\
-        - Cover different visual aspects of the topic across queries for variety\n\
-        - Avoid abstract concepts; focus on concrete visual scenes\n\
-        - Output ONLY the queries, one per line, no numbering, no extra text."
+         Rules:\n\
+         - Each query is 2-4 words, specific and visual (something a camera would capture)\n\
+         - Cover different visual aspects of the topic across queries for variety\n\
+         - Avoid abstract concepts; focus on concrete visual scenes\n\
+         - Output ONLY the queries, one per line, no numbering, no extra text."
     );
-    match client.generate_text(&prompt).await {
+    match crate::llm_utils::generate_text_fast(
+        ctx.app_state.ollama_client.as_ref(),
+        ctx.app_state.deepseek_client.as_ref(),
+        ctx.app_state.gemini_client.as_ref(),
+        &prompt,
+    )
+    .await
+    {
         Ok(response) => {
             let queries: Vec<String> = response
                 .lines()
@@ -8966,43 +8969,16 @@ async fn execute_optimize_youtube_metadata_with_state_claude(
         info.duration_seconds as i32, duration_min, resolution, audience, style
     );
 
-    let metadata = if let Some(claude) = ctx.app_state.claude_client.as_ref() {
-        claude
-            .generate_text(&prompt)
-            .await
-            .unwrap_or_else(|_| "❌ AI generation failed".to_string())
-    } else {
-        // For Gemini, create a simple GenerateContentRequest
-        if let Some(gemini) = ctx.app_state.gemini_client.as_ref() {
-            let request = crate::gemini_client::GenerateContentRequest {
-                contents: vec![crate::gemini_client::Content {
-                    role: Some("user".to_string()),
-                    parts: vec![crate::gemini_client::Part::Text {
-                        text: prompt.clone(),
-                    }],
-                }],
-                tools: None,
-                generation_config: None,
-                tool_config: None,
-                system_instruction: None,
-            };
-
-            match gemini.generate_content(request).await {
-                Ok(response) => response
-                    .candidates
-                    .first()
-                    .and_then(|c| c.content.as_ref())
-                    .and_then(|content| content.parts.first())
-                    .and_then(|p| match p {
-                        crate::gemini_client::Part::Text { text } => Some(text.clone()),
-                        _ => None,
-                    })
-                    .unwrap_or_else(|| "❌ AI generation failed".to_string()),
-                Err(e) => format!("❌ Gemini failed: {}", e),
-            }
-        } else {
-            return "❌ No AI client available".to_string();
-        }
+    let metadata = match crate::llm_utils::generate_text_fast(
+        ctx.app_state.ollama_client.as_ref(),
+        ctx.app_state.deepseek_client.as_ref(),
+        ctx.app_state.gemini_client.as_ref(),
+        &prompt,
+    )
+    .await
+    {
+        Ok(t) => t,
+        Err(_) => "❌ AI generation failed".to_string(),
     };
 
     format!(

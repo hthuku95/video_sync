@@ -345,25 +345,14 @@ async fn generate_variation(
          - Return ONLY the variation text, no explanations"
     );
 
-    if let Some(ref client) = state.ollama_client {
-        let resp = client.generate_text(&prompt).await
-            .map_err(|e| format!("Ollama: {e}"))?;
-        return Ok(resp);
-    }
-
-    if let Some(ref client) = state.gemma_client {
-        let resp = client.generate_text(&prompt).await
-            .map_err(|e| format!("Gemma: {e}"))?;
-        return Ok(resp);
-    }
-
-    if let Some(ref client) = state.gemini_client {
-        let resp = client.generate_text(&prompt).await
-            .map_err(|e| format!("Gemini: {e}"))?;
-        return Ok(resp);
-    }
-
-    Err("No LLM client available".to_string())
+    crate::llm_utils::generate_text_fast(
+        state.ollama_client.as_ref(),
+        state.deepseek_client.as_ref(),
+        state.gemini_client.as_ref(),
+        &prompt,
+    )
+    .await
+    .map_err(|e| format!("LLM error: {e}"))
 }
 
 // ── Check rendering post for completion ────────────────────────────────────
@@ -516,17 +505,14 @@ async fn create_skill_from_workflow(
         campaign.service_type, campaign.brief, tool_seq_json
     );
 
-    let result = if let Some(ref client) = state.ollama_client {
-        client.generate_text(&prompt).await
-    } else if let Some(ref client) = state.gemma_client {
-        client.generate_text(&prompt).await
-    } else if let Some(ref client) = state.gemini_client {
-        client.generate_text(&prompt).await
-    } else {
-        return;
-    };
-
-    let text = match result {
+    let text = match crate::llm_utils::generate_text_fast(
+        state.ollama_client.as_ref(),
+        state.deepseek_client.as_ref(),
+        state.gemini_client.as_ref(),
+        &prompt,
+    )
+    .await
+    {
         Ok(t) => t,
         Err(e) => {
             tracing::warn!("create_skill_from_workflow: LLM call failed: {}", e);

@@ -2262,29 +2262,14 @@ User:
         serde_json::to_string(user_message).ok()?
     );
 
-    let raw = if prefer_claude {
-        if let Some(ref claude_client) = state.claude_client {
-            claude_client.generate_text(&prompt).await.ok()
-        } else if let Some(gemini_client) = state
-            .video_gemini_client
-            .as_ref()
-            .or(state.gemini_client.as_ref())
-        {
-            gemini_client.generate_text(&prompt).await.ok()
-        } else {
-            None
-        }
-    } else if let Some(gemini_client) = state
-        .video_gemini_client
-        .as_ref()
-        .or(state.gemini_client.as_ref())
-    {
-        gemini_client.generate_text(&prompt).await.ok()
-    } else if let Some(ref claude_client) = state.claude_client {
-        claude_client.generate_text(&prompt).await.ok()
-    } else {
-        None
-    }?;
+    let raw = crate::llm_utils::generate_text_fast(
+        state.ollama_client.as_ref(),
+        state.deepseek_client.as_ref(),
+        state.gemini_client.as_ref(),
+        &prompt,
+    )
+    .await
+    .ok()?;
 
     let decision: WorkflowFollowupDecision = parse_json_object(&raw)?;
     if decision.mode != "reply" {

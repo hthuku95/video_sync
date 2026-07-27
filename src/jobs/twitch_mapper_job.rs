@@ -16,21 +16,15 @@ pub async fn run_twitch_mapping_cron(app_state: Arc<AppState>) {
     loop {
         interval.tick().await;
 
-        match (&app_state.twitch_client, &app_state.gemini_client) {
-            (Some(twitch), Some(gemini)) => {
-                run_mapping_pass(twitch, gemini, &app_state.db_pool).await;
-            }
-            _ => {
-                // Either Twitch or Gemini is not configured — skip silently
-            }
+        if let Some(twitch) = &app_state.twitch_client {
+            run_mapping_pass(twitch, &app_state).await;
         }
     }
 }
 
 async fn run_mapping_pass(
     twitch: &crate::twitch_client::TwitchClient,
-    gemini: &crate::gemini_client::GeminiClient,
-    db: &sqlx::PgPool,
+    app_state: &AppState,
 ) {
     let unmapped: Vec<SourceChannel> = match sqlx::query_as(
         "SELECT * FROM youtube_source_channels
@@ -62,7 +56,7 @@ async fn run_mapping_pass(
     );
 
     for channel in &unmapped {
-        match auto_map_youtube_to_twitch(channel, twitch, gemini, db).await {
+        match auto_map_youtube_to_twitch(channel, twitch, app_state, &app_state.db_pool).await {
             Ok(MappingResult::Mapped(tc)) => {
                 tracing::info!(
                     "Twitch mapper: mapped '{}' → Twitch:{} ({})",
