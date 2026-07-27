@@ -269,9 +269,25 @@ async fn process_pending_post(state: &Arc<AppState>, campaign: &CampaignRow, pos
         None
     };
 
+    // Inject relevant skills into the brief as LESSONS LEARNED
+    let enriched_brief = {
+        let campaign_id = campaign.id;
+        let campaign_service_type = &campaign.service_type;
+        let skills = crate::services::skills::get_relevant_skills(
+            &state.db_pool, Some(campaign_service_type), Some(campaign_id),
+            Some(campaign.user_id), 5,
+        ).await.unwrap_or_default();
+        let skills_context = crate::services::skills::format_skills_context(&skills);
+        if skills_context.is_empty() {
+            variation_text.clone()
+        } else {
+            format!("{}\n\n{}", skills_context, variation_text)
+        }
+    };
+
     let input = ServiceInput {
         title: format!("{} — Day {} Slot {}", campaign.name, post.day_number, post.slot_index + 1),
-        brief: variation_text,
+        brief: enriched_brief,
         source_url,
         style: campaign.style.clone(),
         duration_seconds: campaign.duration,
@@ -425,6 +441,140 @@ async fn check_rendering_post(state: &Arc<AppState>, campaign: &CampaignRow, pos
 
     // Store embedding in Qdrant for campaign learning
     store_campaign_post_embedding(state, campaign, post, &url, &delivery_id).await;
+
+    // Create skill from successful workflow
+    create_skill_from_workflow(state, campaign, post, &delivery_id).await;
+}
+
+// ── Skill creation from successful workflow ───────────────────────────────────
+
+async fn create_skill_from_workflow(
+    state: &Arc<AppState>,
+    campaign: &CampaignRow,
+    _post: &PostRow,
+    delivery_id: &Uuid,
+) {
+    // Get workflow_id from delivery
+    let workflow_id: Option<Uuid> = sqlx::query_scalar(
+        "SELECT workflow_id FROM deliveries WHERE id = $1 AND workflow_id IS NOT NULL",
+    )
+    .bind(delivery_id)
+    .fetch_optional(&state.db_pool)
+    .await
+    .ok()
+    .flatten()
+    .flatten();
+
+    let Some(workflow_id) = workflow_id else {
+        return;
+    };
+
+    // Load workflow nodes
+    let runtime = crate::services::workflow_runtime::WorkflowRuntime::new(state.db_pool.clone());
+    let nodes = match runtime.list_nodes(workflow_id).await {
+        Ok(n) => n,
+        Err(e) => {
+            tracing::warn!("create_skill_from_workflow: list_nodes failed: {}", e);
+            return;
+        }
+    };
+
+    let completed_nodes: Vec<&crate::services::workflow_runtime::WorkflowNode> = nodes
+        .iter()
+        .filter(|n| n.status == "completed" && !n.node_type.is_empty())
+        .collect();
+
+    if completed_nodes.is_empty() {
+        return;
+    }
+
+    // Build tool sequence summary from completed nodes
+    let tool_seq: Vec<serde_json::Value> = completed_nodes
+        .iter()
+        .map(|n| {
+            json!({
+                "node_key": n.node_key,
+                "node_type": n.node_type,
+                "input": n.input,
+            })
+        })
+        .collect();
+
+    let tool_seq_json = serde_json::to_string_pretty(&tool_seq).unwrap_or_default();
+
+    // LLM prompt to extract a reusable skill
+    let prompt = format!(
+        "You are analyzing a successful content generation workflow. Below is the sequence \
+         of tool calls that produced a high-quality output for a '{}' campaign with brief: '{}'.\n\n\
+         Tool sequence:\n{}\n\n\
+         Extract a reusable skill from this workflow. Respond in JSON format:\n\
+         {{\n\
+           \"name\": \"Short skill name (max 60 chars)\",\n\
+           \"description\": \"What this pattern does and when to apply it (1-2 sentences)\",\n\
+           \"trigger_conditions\": {{\"brief_contains\": \"keyword or leave empty\"}}\n\
+         }}",
+        campaign.service_type, campaign.brief, tool_seq_json
+    );
+
+    let result = if let Some(ref client) = state.ollama_fast_client {
+        client.generate_text(&prompt).await
+    } else if let Some(ref client) = state.gemma_client {
+        client.generate_text(&prompt).await
+    } else if let Some(ref client) = state.gemini_client {
+        client.generate_text(&prompt).await
+    } else {
+        return;
+    };
+
+    let text = match result {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::warn!("create_skill_from_workflow: LLM call failed: {}", e);
+            return;
+        }
+    };
+
+    let parsed: serde_json::Value = match serde_json::from_str(&text) {
+        Ok(v) => v,
+        Err(_) => {
+            // Try to extract JSON from the response
+            let re = regex::Regex::new(r"\{[^}]*\}").unwrap();
+            if let Some(cap) = re.find(&text) {
+                serde_json::from_str(cap.as_str()).unwrap_or(json!({}))
+            } else {
+                json!({})
+            }
+        }
+    };
+
+    let name = parsed["name"].as_str().unwrap_or("Workflow pattern");
+    let description = parsed["description"]
+        .as_str()
+        .unwrap_or("Learned from successful workflow");
+    let trigger_conditions = parsed
+        .get("trigger_conditions")
+        .cloned()
+        .unwrap_or(json!({}));
+
+    if let Err(e) = crate::services::skills::store_skill(
+        &state.db_pool,
+        state.qdrant_client.as_ref().map(|c| c.as_ref()),
+        state.gemini_client.as_ref(),
+        Some(campaign.user_id),
+        Some(&campaign.service_type),
+        Some(campaign.id),
+        name,
+        description,
+        trigger_conditions,
+        json!(tool_seq),
+        "successful_workflow",
+        None,
+        "campaign",
+    )
+    .await
+    {
+        tracing::warn!("create_skill_from_workflow: store_skill failed: {}", e);
+    }
 }
 
 // ── Schedule via Zernio ────────────────────────────────────────────────────

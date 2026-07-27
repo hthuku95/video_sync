@@ -2494,6 +2494,26 @@ async fn run_agent_background(
                 return;
             }
 
+            // Detect corrections in general chat and create skills
+            let _user_msg_for_correction = text.clone();
+            let _agent_resp_for_correction = response.clone();
+            let _state_for_correction = state.clone();
+            let _uid_for_correction = user_id;
+            tokio::spawn(async move {
+                if let Some(ref gemini) = _state_for_correction.gemini_client {
+                    crate::services::skills::detect_and_store_correction(
+                        _state_for_correction.db_pool.clone(),
+                        _state_for_correction.qdrant_client.clone().map(|c| c.as_ref().clone()),
+                        gemini.clone(),
+                        _uid_for_correction,
+                        None, // service_type — unknown in general chat
+                        None, // campaign_id — unknown in general chat
+                        _user_msg_for_correction,
+                        _agent_resp_for_correction,
+                    ).await;
+                }
+            });
+
             if !response.is_empty() {
                 let update = crate::jobs::ProgressUpdate::new(
                     job_id
