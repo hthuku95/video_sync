@@ -939,7 +939,7 @@ async fn campaign_chat(
         crate::services::skills::detect_and_store_correction(
             state_for_corrections.db_pool.clone(),
             state_for_corrections.qdrant_client.clone(),
-            gemini_client_for_corrections,
+            Some(gemini_client_for_corrections),
             state_for_corrections.ollama_client.as_ref(),
             state_for_corrections.deepseek_client.as_ref(),
             state_for_corrections.gemini_client.as_ref(),
