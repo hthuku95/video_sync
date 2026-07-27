@@ -1253,6 +1253,7 @@ pub async fn campaigns_detail_page(
         format!(r#"<div class="detail-item"><div class="dl">Source</div><div class="dd"><a href="{u}" target="_blank" style="color:#93c5fd;word-break:break-all;">{u}</a></div></div>"#)
     }).unwrap_or_default();
 
+    let chat_icon = "\u{1f4ac}";
     Html(format!(
         r#"<!DOCTYPE html>
 <html lang="en">
@@ -1328,7 +1329,7 @@ pub async fn campaigns_detail_page(
 
     <div class="actions">
         {status_actions}
-        <button class="btn" onclick="toggleChat()" style="margin-left:auto">\u{1f4ac} Chat with AI</button>
+        <button class="btn" onclick="toggleChat()" style="margin-left:auto">{chat_icon} Chat with AI</button>
     </div>
 
     <div id="chat-modal" style="display:none;position:fixed;bottom:0;right:20px;width:400px;max-height:500px;background:var(--panel);border:1px solid var(--line);border-radius:12px 12px 0 0;box-shadow:0 -4px 20px rgba(0,0,0,0.3);z-index:1000;display:none;flex-direction:column">
