@@ -140,7 +140,7 @@ pub async fn list_accounts(
     Extension(state): Extension<Arc<AppState>>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let z = client(&state)?;
-    match z.list_accounts().await {
+    match z.list_accounts(None).await {
         Ok(resp) => Ok(Json(json!({
             "success": true,
             "accounts": resp.accounts,
@@ -230,7 +230,7 @@ pub async fn get_delivery_social_status(
     // Fetch all profiles and accounts from Zernio
     let (profiles, all_accounts) = match (
         zernio.list_profiles().await,
-        zernio.list_accounts().await,
+        zernio.list_accounts(None).await,
     ) {
         (Ok(p), Ok(a)) => (p.profiles, a.accounts),
         (Err(e), _) | (_, Err(e)) => {
@@ -495,24 +495,22 @@ async fn ensure_user_zernio_profile(
             for profile in &profiles_resp.profiles {
                 // Check if the profile name matches our naming convention:
                 // "{username} — VideoSync"
-                if let Some(ref profile_name) = profile.name {
-                    if profile_name.contains("— VideoSync") {
-                        // Found a matching profile — adopt it
-                        sqlx::query(
-                            "INSERT INTO user_zernio_profiles (user_id, zernio_profile_id) VALUES ($1, $2) \
-                             ON CONFLICT DO NOTHING",
-                        )
-                        .bind(user_id)
-                        .bind(&profile.id)
-                        .execute(&state.db_pool)
-                        .await
-                        .ok();
-                        info!(
-                            "Adopted existing Zernio profile '{}' ({}) for user {}",
-                            profile_name, profile.id, user_id
-                        );
-                        return Ok(profile.id.clone());
-                    }
+                if profile.name.contains("— VideoSync") {
+                    // Found a matching profile — adopt it
+                    sqlx::query(
+                        "INSERT INTO user_zernio_profiles (user_id, zernio_profile_id) VALUES ($1, $2) \
+                         ON CONFLICT DO NOTHING",
+                    )
+                    .bind(user_id)
+                    .bind(&profile.id)
+                    .execute(&state.db_pool)
+                    .await
+                    .ok();
+                    info!(
+                        "Adopted existing Zernio profile '{}' ({}) for user {}",
+                        profile.name, profile.id, user_id
+                    );
+                    return Ok(profile.id.clone());
                 }
             }
         }
@@ -646,7 +644,7 @@ pub async fn sync_my_social_accounts(
     };
 
     // Get the user's Zernio profile_id for scoped sync
-    let profile_id = match ensure_user_zernio_profile(state, user_id).await {
+    let profile_id = match ensure_user_zernio_profile(&state, user_id).await {
         Ok(pid) => pid,
         Err((_code, err)) => return err,
     };

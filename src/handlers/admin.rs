@@ -11985,7 +11985,7 @@ pub async fn api_admin_zernio_status(
         Err(e) => return Json(json!({"success": false, "error": format!("Failed to list profiles: {e}")})),
     };
 
-    let accounts = match zernio.list_accounts().await {
+    let accounts = match zernio.list_accounts(None).await {
         Ok(r) => r.accounts,
         Err(e) => return Json(json!({"success": false, "error": format!("Failed to list accounts: {e}")})),
     };
