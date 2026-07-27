@@ -19967,7 +19967,6 @@ async fn execute_manim_execute_script_gemini(args: &HashMap<String, Value>) -> S
             "quality": quality,
             "include_narration": include_narration,
             "narration_text": narration_text,
-            "narration           "narration_text": narration_text,
             "narration_speaker": narration_speaker,
         }),
     ).await {
