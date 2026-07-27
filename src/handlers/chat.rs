@@ -2503,7 +2503,7 @@ async fn run_agent_background(
                 if let Some(ref gemini) = _state_for_correction.gemini_client {
                     crate::services::skills::detect_and_store_correction(
                         _state_for_correction.db_pool.clone(),
-                        _state_for_correction.qdrant_client.clone().map(|c| c.as_ref().clone()),
+                        _state_for_correction.qdrant_client.clone(),
                         gemini.clone(),
                         _uid_for_correction,
                         None, // service_type — unknown in general chat

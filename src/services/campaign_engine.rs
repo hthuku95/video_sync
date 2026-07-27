@@ -558,7 +558,7 @@ async fn create_skill_from_workflow(
 
     if let Err(e) = crate::services::skills::store_skill(
         &state.db_pool,
-        state.qdrant_client.as_ref().map(|c| c.as_ref()),
+        state.qdrant_client.as_ref(),
         state.gemini_client.as_ref(),
         Some(campaign.user_id),
         Some(&campaign.service_type),
