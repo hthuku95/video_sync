@@ -1,12 +1,13 @@
 // src/clipping/clip_enhancer.rs
 //
-// Phase C+ — Gemini-driven per-clip enhancement in the clipping pipeline.
+// Phase C+ — multimodal (Ollama → Gemini) per-clip enhancement in the clipping pipeline.
 //
 // Runs between clip extraction (Phase C) and thumbnail generation.
 // For each extracted clip:
 //   1. Extract 3 JPEG frames at 15 / 50 / 85 % of clip duration.
-//   2. Send frames + ffprobe metadata to Gemini (multi-image request — no video upload).
-//   3. Gemini returns a JSON enhancement plan listing specific tools to apply.
+//   2. Send frames + ffprobe metadata to Ollama (gemma4:12b multimodal via generate_text_with_images)
+//      or Gemini (fallback) (multi-image request — no video upload).
+//   3. LLM returns a JSON enhancement plan listing specific tools to apply.
 //   4. Apply only those tools in sequence using temp files (never modifies on failure).
 //   5. Overwrite the clip with the enhanced version.
 //
@@ -21,6 +22,7 @@ use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use std::time::Duration;
 
 pub struct ClipEnhancer {
     pub app_state: Arc<AppState>,
@@ -101,29 +103,22 @@ impl ClipEnhancer {
         clip: &ExtractedClipData,
         content_type: &str,
     ) -> Result<(usize, Vec<String>, String), String> {
-        // Need Gemini client — skip if not configured
-        let gemini_client = self
-            .app_state
-            .gemini_client
-            .as_ref()
-            .ok_or("Gemini client not available — skipping enhancement")?;
-
         // Step 1: assess clip quality via ffprobe
         let metadata = assess_clip_quality(&clip.local_clip_path)?;
 
         // Step 2: extract 3 inspection frames
         let frame_paths = extract_inspection_frames(&clip.local_clip_path, clip.clip_number)?;
 
-        // Step 3: ask Gemini for an enhancement plan (45s timeout)
-        let plan_future = ask_gemini_for_plan(
-            gemini_client,
+        // Step 3: ask multimodal for an enhancement plan (Ollama → Gemini fallback)
+        let plan_future = ask_multimodal_for_plan(
+            &self.app_state,
             &clip.ai_title,
             content_type,
             &metadata,
             &frame_paths,
         );
         let plan_result =
-            tokio::time::timeout(tokio::time::Duration::from_secs(45), plan_future).await;
+            tokio::time::timeout(Duration::from_secs(90), plan_future).await;
 
         // Always clean up frame files regardless of success/failure/timeout
         cleanup_temp_files(&frame_paths);
@@ -131,7 +126,7 @@ impl ClipEnhancer {
         let plan = match plan_result {
             Err(_elapsed) => {
                 tracing::warn!(
-                    "Clip {}: Gemini enhancement timed out after 45s, keeping original",
+                    "Clip {}: enhancement timed out after 90s, keeping original",
                     clip.clip_number
                 );
                 return Ok((0, Vec::new(), String::new()));
@@ -144,7 +139,7 @@ impl ClipEnhancer {
         }
 
         tracing::info!(
-            "🛠  Clip {}: Gemini selected {} tool(s): {:?} — \"{}\"",
+            "🛠  Clip {}: selected {} tool(s): {:?} — \"{}\"",
             clip.clip_number,
             plan.tools.len(),
             plan.tools,
@@ -204,9 +199,9 @@ fn extract_inspection_frames(clip_path: &str, clip_number: i32) -> Result<Vec<St
     Ok(frame_paths)
 }
 
-/// Ask Gemini to analyze the clip frames and return an enhancement plan.
-async fn ask_gemini_for_plan(
-    gemini_client: &crate::gemini_client::GeminiClient,
+/// Ask Ollama (first) or Gemini (fallback) to analyze the clip frames and return an enhancement plan.
+async fn ask_multimodal_for_plan(
+    app_state: &AppState,
     title: &str,
     content_type: &str,
     metadata: &ClipQualityMetadata,
@@ -221,7 +216,140 @@ async fn ask_gemini_for_plan(
         frame_bytes_vec.push(bytes);
     }
 
-    let prompt = format!(
+    let prompt = build_enhancement_prompt(title, content_type, metadata, frame_paths.len());
+
+    // Try Ollama first (gemma4:12b multimodal via generate_text_with_images)
+    if let Some(ollama_client) = &app_state.ollama_client {
+        let frame_pairs: Vec<(String, Vec<u8>)> = frame_bytes_vec
+            .iter()
+            .map(|bytes| (String::new(), bytes.clone()))
+            .collect();
+
+        match tokio::time::timeout(Duration::from_secs(45), async {
+            ollama_client
+                .generate_text_with_images(&prompt, frame_pairs)
+                .await
+        })
+        .await
+        {
+            Ok(Ok(response)) => {
+                let json_str = strip_json_fences(&response);
+                match serde_json::from_str::<ClipEnhancementPlan>(json_str) {
+                    Ok(plan) => {
+                        tracing::info!(
+                            "Ollama plan for '{}': {} tools selected",
+                            title,
+                            plan.tools.len()
+                        );
+                        return Ok(plan);
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "Ollama plan parse error ({}), falling back to Gemini. Raw: {}",
+                            e,
+                            json_str
+                        );
+                    }
+                }
+            }
+            Ok(Err(e)) => {
+                tracing::warn!("Ollama enhancement failed: {}, falling back to Gemini", e);
+            }
+            Err(_) => {
+                tracing::warn!("Ollama enhancement timed out, falling back to Gemini");
+            }
+        }
+    }
+
+    // Fallback: Gemini (if available)
+    let gemini_client = match &app_state.gemini_client {
+        Some(c) => c,
+        None => {
+            tracing::warn!("No Gemini client available either — skipping enhancement");
+            return Ok(ClipEnhancementPlan {
+                needs_enhancement: false,
+                tools: vec![],
+                reasoning: "no_provider".to_string(),
+            });
+        }
+    };
+
+    // Build multi-image request: text prompt + frame images as InlineData parts
+    let mut content_parts = vec![crate::gemini_client::Part::Text { text: prompt }];
+    for frame_bytes in &frame_bytes_vec {
+        content_parts.push(crate::gemini_client::Part::InlineData {
+            inline_data: crate::gemini_client::InlineData {
+                mime_type: "image/jpeg".to_string(),
+                data: BASE64_STANDARD.encode(frame_bytes),
+            },
+        });
+    }
+
+    let request = crate::gemini_client::GenerateContentRequest {
+        contents: vec![crate::gemini_client::Content {
+            role: Some("user".to_string()),
+            parts: content_parts,
+        }],
+        generation_config: None,
+        tools: None,
+        tool_config: None,
+        system_instruction: None,
+    };
+
+    match gemini_client.generate_content(request).await {
+        Ok(response) => {
+            let response_text = response
+                .candidates
+                .first()
+                .and_then(|c| c.content.as_ref())
+                .and_then(|content| content.parts.first())
+                .and_then(|part| {
+                    if let crate::gemini_client::Part::Text { text } = part {
+                        Some(text.clone())
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_default();
+
+            let json_str = strip_json_fences(&response_text);
+            match serde_json::from_str::<ClipEnhancementPlan>(json_str) {
+                Ok(plan) => Ok(plan),
+                Err(e) => {
+                    tracing::warn!(
+                        "Gemini plan parse error ({}), skipping enhancement. Raw: {}",
+                        e,
+                        json_str
+                    );
+                    Ok(ClipEnhancementPlan {
+                        needs_enhancement: false,
+                        tools: vec![],
+                        reasoning: "parse_error".to_string(),
+                    })
+                }
+            }
+        }
+        Err(e) => {
+            tracing::warn!(
+                "Gemini enhancement failed ({}), keeping original",
+                e
+            );
+            Ok(ClipEnhancementPlan {
+                needs_enhancement: false,
+                tools: vec![],
+                reasoning: "gemini_failed".to_string(),
+            })
+        }
+    }
+}
+
+fn build_enhancement_prompt(
+    title: &str,
+    content_type: &str,
+    metadata: &ClipQualityMetadata,
+    frame_count: usize,
+) -> String {
+    format!(
         r#"You are a professional video editor analyzing a YouTube Shorts clip for quality improvements.
 
 Clip title: {title}
@@ -264,66 +392,8 @@ Respond with valid JSON only — no markdown, no code fences:
         size = metadata.file_size_mb,
         fps = metadata.fps,
         audio = metadata.has_audio,
-        n = frame_paths.len(),
-    );
-
-    // Build multi-image request: text prompt + frame images as InlineData parts
-    let mut content_parts = vec![crate::gemini_client::Part::Text { text: prompt }];
-    for frame_bytes in frame_bytes_vec {
-        content_parts.push(crate::gemini_client::Part::InlineData {
-            inline_data: crate::gemini_client::InlineData {
-                mime_type: "image/jpeg".to_string(),
-                data: BASE64_STANDARD.encode(&frame_bytes),
-            },
-        });
-    }
-
-    let request = crate::gemini_client::GenerateContentRequest {
-        contents: vec![crate::gemini_client::Content {
-            role: Some("user".to_string()),
-            parts: content_parts,
-        }],
-        generation_config: None,
-        tools: None,
-        tool_config: None,
-        system_instruction: None,
-    };
-
-    let response = gemini_client
-        .generate_content(request)
-        .await
-        .map_err(|e| format!("Gemini enhancement analysis failed: {}", e))?;
-
-    let response_text = response
-        .candidates
-        .first()
-        .and_then(|c| c.content.as_ref())
-        .and_then(|content| content.parts.first())
-        .and_then(|part| {
-            if let crate::gemini_client::Part::Text { text } = part {
-                Some(text.clone())
-            } else {
-                None
-            }
-        })
-        .ok_or("Gemini returned empty response for enhancement plan")?;
-
-    let json_str = strip_json_fences(&response_text);
-    match serde_json::from_str::<ClipEnhancementPlan>(json_str) {
-        Ok(plan) => Ok(plan),
-        Err(e) => {
-            tracing::warn!(
-                "Could not parse Gemini enhancement plan ({}), skipping enhancement. Raw: {}",
-                e,
-                json_str
-            );
-            Ok(ClipEnhancementPlan {
-                needs_enhancement: false,
-                tools: vec![],
-                reasoning: "parse_error".to_string(),
-            })
-        }
-    }
+        n = frame_count,
+    )
 }
 
 /// Strip ```json ... ``` or ``` ... ``` wrappers from a Gemini response.

@@ -1,10 +1,11 @@
 // AI-Powered Thumbnail Generator for YouTube Shorts
-// Implements Hybrid Approach: Best frame selection + AI text overlay
+// Implements Hybrid Approach: Best frame selection (Ollama → Gemini) + AI text overlay (Gemini only)
 
 use crate::AppState;
 use base64::Engine; // For base64 encoding/decoding
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 
 pub struct ThumbnailGenerator {
     app_state: Arc<AppState>,
@@ -138,7 +139,8 @@ impl ThumbnailGenerator {
     }
 
     /// Use AI to select the best frame for thumbnail
-    /// Analyzes visual appeal, clarity, energy, and relevance to viral_factors
+    /// Analyzes visual appeal, clarity, energy, and relevance to viral_factors.
+    /// Tries Ollama (gemma4:12b multimodal) first, falls back to Gemini.
     async fn select_best_frame(
         &self,
         candidate_frames: &[String],
@@ -149,13 +151,6 @@ impl ThumbnailGenerator {
         if candidate_frames.len() == 1 {
             return Ok(candidate_frames[0].clone());
         }
-
-        // Use Gemini vision to analyze frames
-        let gemini_client = self
-            .app_state
-            .gemini_client
-            .as_ref()
-            .ok_or("Gemini client not available")?;
 
         // Read all frames into memory for analysis
         let mut frame_data_vec = Vec::new();
@@ -188,16 +183,65 @@ No explanation, just the number."#,
             viral_factors_text
         );
 
-        // Build request with all frames
-        let mut content_parts = vec![crate::gemini_client::Part::Text {
-            text: prompt.clone(),
-        }];
+        // Try Ollama first (gemma4:12b multimodal vision)
+        if let Some(ollama_client) = &self.app_state.ollama_client {
+            let frame_pairs: Vec<(String, Vec<u8>)> = frame_data_vec
+                .iter()
+                .map(|bytes| (String::new(), bytes.clone()))
+                .collect();
 
-        for frame_bytes in frame_data_vec {
+            match tokio::time::timeout(
+                Duration::from_secs(30),
+                ollama_client.generate_text_with_images(&prompt, frame_pairs),
+            )
+            .await
+            {
+                Ok(Ok(response)) => {
+                    let trimmed = response.trim();
+                    // Try exact parse first
+                    if let Ok(idx) = trimmed.parse::<usize>() {
+                        if idx < candidate_frames.len() {
+                            tracing::info!("Ollama selected frame index: {}", idx);
+                            return Ok(candidate_frames[idx].clone());
+                        }
+                    }
+                    // Fallback: find first single digit in response
+                    for ch in trimmed.chars() {
+                        if let Some(d) = ch.to_digit(10) {
+                            let idx = d as usize;
+                            if idx < candidate_frames.len() {
+                                tracing::info!("Ollama selected frame index: {}", idx);
+                                return Ok(candidate_frames[idx].clone());
+                            }
+                        }
+                    }
+                    tracing::warn!(
+                        "Ollama frame selection parse error ({}), falling back to Gemini",
+                        trimmed
+                    );
+                }
+                Ok(Err(e)) => {
+                    tracing::warn!("Ollama frame selection failed: {}, falling back to Gemini", e);
+                }
+                Err(_) => {
+                    tracing::warn!("Ollama frame selection timed out, falling back to Gemini");
+                }
+            }
+        }
+
+        // Fallback: Gemini
+        let gemini_client = self
+            .app_state
+            .gemini_client
+            .as_ref()
+            .ok_or("No Gemini client available for frame selection")?;
+
+        let mut content_parts = vec![crate::gemini_client::Part::Text { text: prompt }];
+        for frame_bytes in &frame_data_vec {
             content_parts.push(crate::gemini_client::Part::InlineData {
                 inline_data: crate::gemini_client::InlineData {
                     mime_type: "image/jpeg".to_string(),
-                    data: base64::prelude::BASE64_STANDARD.encode(&frame_bytes),
+                    data: base64::prelude::BASE64_STANDARD.encode(frame_bytes),
                 },
             });
         }
@@ -216,9 +260,8 @@ No explanation, just the number."#,
         let response = gemini_client
             .generate_content(request)
             .await
-            .map_err(|e| format!("AI analysis failed: {}", e))?;
+            .map_err(|e| format!("Gemini frame selection failed: {}", e))?;
 
-        // Parse response to get selected frame index
         let response_text = response
             .candidates
             .first()
@@ -239,12 +282,16 @@ No explanation, just the number."#,
             .unwrap_or(0)
             .min(candidate_frames.len() - 1);
 
-        tracing::info!("AI selected frame index: {}", selected_index);
+        tracing::info!("Gemini selected frame index: {}", selected_index);
 
         Ok(candidate_frames[selected_index].clone())
     }
 
     /// Overlay the clip title onto the best frame using Gemini image editing.
+    ///
+    /// This stays on Gemini because it requires image *generation* (gemini-3-pro-image-preview),
+    /// not image understanding. Ollama's gemma4:12b can analyze/describe images but cannot
+    /// generate or edit them. If Gemini is unavailable, the raw frame serves as fallback.
     ///
     /// Calls `generate_image_from_frame` which passes the frame + a styling prompt
     /// to `gemini-3-pro-image-preview` and returns the edited image bytes.
