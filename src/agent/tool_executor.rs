@@ -19896,7 +19896,6 @@ async fn execute_manim_execute_script_claude(args: &Value) -> String {
     let quality = args.get("quality").and_then(|v| v.as_str()).unwrap_or("m");
     let include_narration = args.get("include_narration").and_then(|v| v.as_bool()).unwrap_or(false);
     let narration_text = args.get("narration_text").and_then(|v| v.as_str()).unwrap_or("");
-    let narration_speaker = args.get()).unwrap_or("");
     let narration_speaker = args.get("narration_speaker").and_then(|v| v.as_str()).unwrap_or("Emma");
 
     let base_url = std::env::var("BLENDER_MCP_URL").unwrap_or_default();
