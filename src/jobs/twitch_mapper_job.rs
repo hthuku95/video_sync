@@ -32,7 +32,7 @@ async fn run_mapping_pass(
          ORDER BY created_at ASC
          LIMIT 3",
     )
-    .fetch_all(db)
+    .fetch_all(&app_state.db_pool)
     .await
     {
         Ok(rows) => rows,

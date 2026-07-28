@@ -5782,7 +5782,12 @@ async fn execute_auto_generate_video_hybrid_gemini(
 
     let mut downloaded_files: Vec<String> = Vec::new();
     let mut used_ids: std::collections::HashSet<i64> = std::collections::HashSet::new();
-    let search_queries = generate_search_queries_ai(topic, num_clips, ctx).await;
+    let search_queries = generate_search_queries_ai(
+        topic, num_clips,
+        ctx.app_state.ollama_client.as_ref(),
+        ctx.app_state.deepseek_client.as_ref(),
+        ctx.app_state.gemini_client.as_ref(),
+    ).await;
 
     for (i, query) in search_queries.iter().enumerate().take(num_clips) {
         result.push_str(&format!(
@@ -6162,7 +6167,7 @@ async fn execute_auto_generate_video_claude(args: &Value) -> String {
 
     // Step 1: Generate search queries via AI (with heuristic fallback)
     result.push_str("📝 Step 1: Generating AI-powered search queries...\n");
-    let search_queries = generate_search_queries_ai(topic, num_clips, ctx).await;
+    let search_queries = generate_search_queries_ai(topic, num_clips, None, None, None).await;
     tracing::info!(
         "✅ Generated {} search queries: {:?}",
         search_queries.len(),
@@ -6586,7 +6591,7 @@ async fn execute_auto_generate_video_gemini(args: &HashMap<String, Value>) -> St
 
     // Step 1: Generate search queries via AI (with heuristic fallback)
     result.push_str("📝 Step 1: Generating AI-powered search queries...\n");
-    let search_queries = generate_search_queries_ai(topic, num_clips, ctx).await;
+    let search_queries = generate_search_queries_ai(topic, num_clips, None, None, None).await;
     tracing::info!(
         "✅ Generated {} search queries: {:?}",
         search_queries.len(),
@@ -7277,11 +7282,14 @@ fn run_final_qa(output_file: &str) -> String {
     qa
 }
 
-/// AI-powered search query generation using the fallback chain (Ollama first)
+/// AI-powered search query generation using the fallback chain (Ollama first).
+/// Pass `None` for all clients to skip AI and use heuristic fallback.
 async fn generate_search_queries_ai(
     topic: &str,
     num_queries: usize,
-    ctx: &ToolExecutionContext,
+    ollama: Option<&crate::ollama_client::OllamaClient>,
+    deepseek: Option<&crate::deepseek_client::DeepSeekClient>,
+    gemini: Option<&crate::gemini_client::GeminiClient>,
 ) -> Vec<String> {
     let prompt = format!(
         "Generate exactly {num_queries} diverse Pexels stock video search queries for this topic: \"{topic}\".\n\
@@ -7292,9 +7300,9 @@ async fn generate_search_queries_ai(
          - Output ONLY the queries, one per line, no numbering, no extra text."
     );
     match crate::llm_utils::generate_text_fast(
-        ctx.app_state.ollama_client.as_ref(),
-        ctx.app_state.deepseek_client.as_ref(),
-        ctx.app_state.gemini_client.as_ref(),
+        ollama,
+        deepseek,
+        gemini,
         &prompt,
     )
     .await
@@ -19888,6 +19896,7 @@ async fn execute_manim_execute_script_claude(args: &Value) -> String {
     let quality = args.get("quality").and_then(|v| v.as_str()).unwrap_or("m");
     let include_narration = args.get("include_narration").and_then(|v| v.as_bool()).unwrap_or(false);
     let narration_text = args.get("narration_text").and_then(|v| v.as_str()).unwrap_or("");
+    let narration_speaker = args.get()).unwrap_or("");
     let narration_speaker = args.get("narration_speaker").and_then(|v| v.as_str()).unwrap_or("Emma");
 
     let base_url = std::env::var("BLENDER_MCP_URL").unwrap_or_default();
