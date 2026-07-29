@@ -374,18 +374,15 @@ async fn check_rendering_post(state: &Arc<AppState>, campaign: &CampaignRow, pos
     };
 
     // Check delivery status
-    let delivery = sqlx::query_as::<_, (String, Option<String>, Option<String>, Option<chrono::DateTime<chrono::Utc>>)>(
+    let (status, output_url, error_msg, updated_at) = match sqlx::query_as::<_, (String, Option<String>, Option<String>, Option<chrono::DateTime<chrono::Utc>>)>(
         "SELECT status, output_r2_url, error_message, updated_at FROM deliveries WHERE id = $1",
     )
     .bind(delivery_id)
     .fetch_optional(&state.db_pool)
-    .await;
-
-    let Some((status, output_url, error_msg, updated_at)) = match delivery {
-        Ok(Some(r)) => Some(r),
-        _ => None,
-    } else {
-        return;
+    .await
+    {
+        Ok(Some(r)) => r,
+        _ => return,
     };
 
     // Handle failed deliveries
