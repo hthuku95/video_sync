@@ -373,24 +373,40 @@ async fn check_rendering_post(state: &Arc<AppState>, campaign: &CampaignRow, pos
         return;
     };
 
-    // Check if the delivery has completed output
-    let output = sqlx::query_as::<_, (Option<String>, Option<String>)>(
-        "SELECT output_r2_url, error_message FROM deliveries WHERE id = $1 AND status = 'completed'",
+    // Check delivery status
+    let delivery = sqlx::query_as::<_, (String, Option<String>, Option<String>, Option<chrono::DateTime<chrono::Utc>>)>(
+        "SELECT status, output_r2_url, error_message, updated_at FROM deliveries WHERE id = $1",
     )
     .bind(delivery_id)
     .fetch_optional(&state.db_pool)
     .await;
 
-    let (output_url, error_msg) = match output {
-        Ok(Some(r)) => r,
-        _ => return, // Not yet complete
+    let Some((status, output_url, error_msg, updated_at)) = match delivery {
+        Ok(Some(r)) => Some(r),
+        _ => None,
+    } else {
+        return;
     };
 
-    if let Some(ref err) = error_msg {
+    // Handle failed deliveries
+    if status == "failed" {
+        let err = error_msg.as_deref().unwrap_or("Unknown delivery failure");
         mark_post_failed(state, post.id, err).await;
         return;
     }
 
+    // Handle stale pending deliveries (stuck >1 hour — likely lost on restart)
+    if status == "pending" {
+        if let Some(updated) = updated_at {
+            if chrono::Utc::now() - updated > chrono::Duration::hours(1) {
+                mark_post_failed(state, post.id, "Delivery stalled (pending >1h — pipeline may have been interrupted)").await;
+                return;
+            }
+        }
+        return; // Still within grace period
+    }
+
+    // Completed — check output URL
     let Some(url) = output_url else {
         return;
     };
