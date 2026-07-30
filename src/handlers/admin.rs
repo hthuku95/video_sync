@@ -8842,7 +8842,7 @@ pub async fn api_generate_service_portfolio_sample(
     .bind(svc.slug)
     .bind(&body.brief_name.unwrap_or_else(|| svc.name.to_string()))
     .bind(svc.brief)
-    .execute(&state.db_pool)
+    .fetch_one(&state.db_pool)
     .await;
 
     match inserted {
