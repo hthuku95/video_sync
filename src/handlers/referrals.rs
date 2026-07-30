@@ -17,11 +17,26 @@ pub fn referral_routes() -> Router {
         .layer(axum::middleware::from_fn(auth_middleware))
 }
 
+async fn check_whitelisted(state: &Arc<AppState>, email: &str) -> bool {
+    let in_whitelist = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM whitelist_emails WHERE email = $1)",
+    )
+    .bind(email)
+    .fetch_one(&state.db_pool)
+    .await
+    .unwrap_or(false);
+    in_whitelist
+}
+
 /// GET /api/referrals/my-code
 async fn api_get_my_referral_code(
     Extension(state): Extension<Arc<AppState>>,
     Extension(claims): Extension<Claims>,
 ) -> Json<serde_json::Value> {
+    if !claims.is_superuser && !claims.is_staff && !check_whitelisted(&state, &claims.email).await {
+        return Json(serde_json::json!({"success": false, "error": "Access restricted. Email not whitelisted."}));
+    }
+
     let user_id: i32 = match claims.sub.parse() {
         Ok(id) => id,
         Err(_) => return Json(serde_json::json!({"success": false, "error": "Invalid user ID in token"})),
@@ -67,6 +82,10 @@ async fn api_create_my_referral_code(
     Extension(claims): Extension<Claims>,
     Json(req): Json<CreateMyReferralCodeRequest>,
 ) -> Json<serde_json::Value> {
+    if !claims.is_superuser && !claims.is_staff && !check_whitelisted(&state, &claims.email).await {
+        return Json(serde_json::json!({"success": false, "error": "Access restricted. Email not whitelisted."}));
+    }
+
     let user_id: i32 = match claims.sub.parse() {
         Ok(id) => id,
         Err(_) => return Json(serde_json::json!({"success": false, "error": "Invalid user ID in token"})),
@@ -108,6 +127,10 @@ async fn api_get_my_commissions(
     Extension(state): Extension<Arc<AppState>>,
     Extension(claims): Extension<Claims>,
 ) -> Json<serde_json::Value> {
+    if !claims.is_superuser && !claims.is_staff && !check_whitelisted(&state, &claims.email).await {
+        return Json(serde_json::json!({"success": false, "error": "Access restricted. Email not whitelisted."}));
+    }
+
     let user_id: i32 = match claims.sub.parse() {
         Ok(id) => id,
         Err(_) => return Json(serde_json::json!({"success": false, "error": "Invalid user ID in token"})),

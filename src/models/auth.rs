@@ -45,6 +45,7 @@ pub struct RegisterRequest {
     pub username: String,
     pub password: String,
     pub confirm_password: String,
+    pub referred_by: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

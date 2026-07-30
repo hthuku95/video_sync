@@ -10,6 +10,7 @@ use serde_json::json;
 use sqlx::Row;
 use std::sync::Arc;
 use tokio::fs;
+use tracing::info;
 use uuid::Uuid;
 
 fn campaign_price_cents(service_type: &str) -> u64 {
@@ -590,7 +591,7 @@ async fn campaign_settle(
     Extension(state): Extension<Arc<AppState>>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let row = sqlx::query(
-        "SELECT service_type, status FROM campaigns WHERE id = $1",
+        "SELECT user_id, service_type, status FROM campaigns WHERE id = $1",
     )
     .bind(id)
     .fetch_optional(&state.db_pool)
@@ -604,6 +605,7 @@ async fn campaign_settle(
     }
 
     let service_type: String = row.get("service_type");
+    let user_id: i32 = row.get("user_id");
     let price_cents = campaign_price_cents(&service_type);
 
     let x_payment = headers.get("X-Payment").and_then(|h| h.to_str().ok())
@@ -630,6 +632,31 @@ async fn campaign_settle(
     .execute(&state.db_pool)
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+
+    // Auto-create referral commission if this user was referred
+    let referrer_id: Option<i32> = sqlx::query_scalar(
+        "SELECT referrer_user_id FROM users WHERE id = $1 AND referrer_user_id IS NOT NULL",
+    )
+    .bind(user_id)
+    .fetch_optional(&state.db_pool)
+    .await
+    .unwrap_or(None)
+    .flatten();
+
+    if let Some(referrer_uid) = referrer_id {
+        let commission_id: Result<Uuid, _> = sqlx::query_scalar(
+            "INSERT INTO referral_commission (referrer_user_id, deal_amount_cents, commission_rate) \
+             VALUES ($1, $2, 0.40) RETURNING id",
+        )
+        .bind(referrer_uid)
+        .bind(price_cents)
+        .fetch_one(&state.db_pool)
+        .await;
+
+        if let Ok(cid) = commission_id {
+            info!("Created referral commission {cid} for referrer {referrer_uid} on campaign {id}");
+        }
+    }
 
     Ok(Json(json!({
         "success": true,

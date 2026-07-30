@@ -8312,7 +8312,20 @@ pub async fn api_generate_crypto_saas_portfolio_samples(
 
 pub async fn api_generate_dfy_portfolio_samples(
     Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
 ) -> Json<serde_json::Value> {
+    // Content Machine users must be whitelisted
+    let whitelisted = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM whitelist_emails WHERE email = $1)",
+    )
+    .bind(&claims.email)
+    .fetch_one(&state.db_pool)
+    .await
+    .unwrap_or(false);
+    if !claims.is_superuser && !claims.is_staff && !whitelisted {
+        return Json(json!({"success": false, "error": "Access restricted. Email not whitelisted."}));
+    }
+
     let mut samples = Vec::new();
     let mut queued = 0usize;
 
@@ -8440,7 +8453,20 @@ pub async fn api_generate_dfy_portfolio_samples(
 
 pub async fn api_list_dfy_portfolio_samples(
     Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
 ) -> Json<serde_json::Value> {
+    // Content Machine users must be whitelisted
+    let whitelisted = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM whitelist_emails WHERE email = $1)",
+    )
+    .bind(&claims.email)
+    .fetch_one(&state.db_pool)
+    .await
+    .unwrap_or(false);
+    if !claims.is_superuser && !claims.is_staff && !whitelisted {
+        return Json(json!({"success": false, "error": "Access restricted. Email not whitelisted."}));
+    }
+
     let rows = sqlx::query(
         "SELECT id, client_ref, title, gig_type, status, output_r2_url, preview_r2_url, workflow_id,
                 source_url, unlock_price_usdc, created_at, completed_at, error_message, extra_args

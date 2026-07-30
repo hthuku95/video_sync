@@ -909,7 +909,7 @@ async fn main() {
         .merge(handlers::gig_templates::gig_template_routes()) // 💼 Gig templates
         .merge(handlers::manual_clipping::manual_clipping_routes()) // ✂️ Manual clipping
         .merge(handlers::prospects::prospect_routes()) // 🎯 Prospect finder (admin)
-        .merge(handlers::prospects::instagram_routes()) // 📸 Instagram leads (all users)
+        .merge(handlers::prospects::instagram_routes()) // 📸 Instagram leads (whitelisted content machine users only)
         .merge(handlers::referrals::referral_routes()) // 🔗 Referral codes + commissions for content machine users
         .merge(handlers::api_access::api_access_routes()) // 💳 Agency USDC license
         .merge(handlers::subscribe::subscribe_routes()) // 💳 Regular-user $15/mo paywall

@@ -3,7 +3,7 @@
 // and generates personalized DM scripts.
 
 use crate::llm_utils::generate_text_best_effort;
-use crate::middleware::admin::admin_middleware;
+use crate::middleware::admin::{admin_middleware, admin_or_whitelisted_middleware};
 use crate::middleware::auth::auth_middleware;
 use crate::models::auth::{Claims, ErrorResponse};
 use crate::services::monetization::service_offer_prompt;
@@ -29,8 +29,8 @@ pub fn prospect_routes() -> Router {
     // `Authorization` headers on `<a href>` or address-bar loads.
     let public_page = Router::new().route("/admin/prospect-finder", get(prospect_finder_page));
 
-    // API endpoints — still protected by JWT + admin claim.
-    let protected_api = Router::new()
+    // Admin-only API routes (staff/superuser only — search, LinkedIn, Telegram, etc.)
+    let admin_only = Router::new()
         .route("/api/admin/prospects/search", post(search_prospects))
         .route(
             "/api/admin/prospects/linkedin/agents",
@@ -52,27 +52,16 @@ pub fn prospect_routes() -> Router {
             "/api/admin/prospects/linkedin/jobs/:job_id/results",
             get(linkedin_fetch_results),
         )
-        .route("/api/admin/prospects", get(list_prospects))
-        .route("/api/admin/prospects/:id", patch(update_prospect))
+        // SaaS prospects
         .route(
-            "/api/admin/prospects/:id/dm-script",
-            post(regenerate_dm_script),
+            "/api/admin/prospects/saas/search",
+            post(search_compar_edge_prospects),
         )
         .route(
-            "/api/admin/prospects/:id/generate-outreach",
-            post(generate_outreach_message),
+            "/api/admin/prospects/product-hunt/search",
+            post(search_product_hunt_prospects),
         )
-        .route(
-            "/api/admin/prospects/:id/generate-sample-pack",
-            post(generate_prospect_sample_pack),
-        )
-        .route(
-            "/api/admin/prospects/:id/send-email",
-            post(send_prospect_email_handler),
-        )
-        .route("/api/admin/prospects/:id", delete(delete_prospect))
-        // Telegram opportunity tab (phase 1: manual entry + AI scoring;
-        // phase 2 will add automated grammers-client watcher).
+        // Telegram
         .route("/api/admin/telegram/channels", get(telegram_list_channels))
         .route("/api/admin/telegram/channels", post(telegram_add_channel))
         .route(
@@ -91,17 +80,7 @@ pub fn prospect_routes() -> Router {
             "/api/admin/telegram/opportunities/:id",
             patch(telegram_update_opportunity),
         )
-        // SaaS prospects: ComparEdge product catalog → website → landing page video
-        .route(
-            "/api/admin/prospects/saas/search",
-            post(search_compar_edge_prospects),
-        )
-        // SaaS prospects: Product Hunt → website → landing page video
-        .route(
-            "/api/admin/prospects/product-hunt/search",
-            post(search_product_hunt_prospects),
-        )
-        // MTProto watcher — login + status. Bot API lives in telegram_bot.rs.
+        // MTProto
         .route(
             "/api/admin/telegram/login/start",
             post(telegram_login_start),
@@ -122,7 +101,31 @@ pub fn prospect_routes() -> Router {
         .layer(axum::middleware::from_fn(admin_middleware))
         .layer(axum::middleware::from_fn(auth_middleware));
 
-    public_page.merge(protected_api)
+    // Admin or whitelisted API routes (staff/superuser + whitelisted content machine users)
+    let admin_or_whitelisted = Router::new()
+        .route("/api/admin/prospects", get(list_prospects))
+        .route("/api/admin/prospects/:id", patch(update_prospect))
+        .route(
+            "/api/admin/prospects/:id/dm-script",
+            post(regenerate_dm_script),
+        )
+        .route(
+            "/api/admin/prospects/:id/generate-outreach",
+            post(generate_outreach_message),
+        )
+        .route(
+            "/api/admin/prospects/:id/generate-sample-pack",
+            post(generate_prospect_sample_pack),
+        )
+        .route(
+            "/api/admin/prospects/:id/send-email",
+            post(send_prospect_email_handler),
+        )
+        .route("/api/admin/prospects/:id", delete(delete_prospect))
+        .layer(axum::middleware::from_fn(admin_or_whitelisted_middleware))
+        .layer(axum::middleware::from_fn(auth_middleware));
+
+    public_page.merge(admin_only).merge(admin_or_whitelisted)
 }
 
 /// Routes accessible to any authenticated (whitelisted) user — NOT admin-only.
@@ -165,6 +168,7 @@ pub fn instagram_routes() -> Router {
             "/api/instagram/leads/:id/service-type",
             patch(instagram_update_service_type),
         )
+        .layer(axum::middleware::from_fn(admin_or_whitelisted_middleware))
         .layer(axum::middleware::from_fn(auth_middleware))
 }
 
@@ -2419,8 +2423,11 @@ fn default_email_script(name: &str, service: &str) -> String {
 
 async fn list_prospects(
     Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
     Query(q): Query<ListQuery>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    let is_admin = claims.is_superuser || claims.is_staff;
+
     // Build query with parameterized binds — collect active filters first so
     // we know which $N placeholders to emit.
     let mut conditions: Vec<&str> = vec![];
@@ -2433,7 +2440,8 @@ async fn list_prospects(
     if q.platform.is_some() {
         conditions.push("platform");
     }
-    if q.sourced_by.is_some() {
+    if q.sourced_by.is_some() || (!is_admin) {
+        // Non-admin users always filtered to their sourced prospects
         conditions.push("sourced_by");
     }
 
@@ -2476,6 +2484,10 @@ async fn list_prospects(
     }
     if let Some(sb) = q.sourced_by {
         query = query.bind(sb);
+    } else if !is_admin {
+        // Auto-filter to user's sourced prospects
+        let user_id: i32 = claims.sub.parse().unwrap_or(0);
+        query = query.bind(user_id);
     }
 
     let rows = query.fetch_all(&state.db_pool).await.map_err(|e| {

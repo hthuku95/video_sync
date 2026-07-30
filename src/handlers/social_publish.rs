@@ -13,6 +13,7 @@ use sqlx::Row;
 use std::sync::Arc;
 use tracing::{info, warn};
 use uuid::Uuid;
+use chrono::{DateTime, Utc};
 
 pub fn social_routes() -> Router {
     // Public admin-facing endpoints
@@ -25,7 +26,11 @@ pub fn social_routes() -> Router {
         // Client-facing delivery Zernio self-service
         .route("/api/deliveries/:id/social-status", get(get_delivery_social_status))
         .route("/api/deliveries/:id/social-profile", post(create_delivery_zernio_profile))
-        .route("/api/deliveries/:id/social-targets", post(set_delivery_social_targets));
+        .route("/api/deliveries/:id/social-targets", post(set_delivery_social_targets))
+        // Manual retry for failed/partial Zernio posts
+        .route("/api/social/posts/:id/retry", post(retry_post))
+        // Zernio webhook for push-based status updates (replaces polling)
+        .route("/api/social/webhook", post(zernio_webhook));
     // User-level self-service (requires auth)
     let user_routes = Router::new()
         .route("/api/social/my-profile", post(get_or_create_my_zernio_profile))
@@ -678,4 +683,105 @@ pub async fn sync_my_social_accounts(
     }
     info!("Synced {} Zernio accounts for user {}", accounts.len(), user_id);
     Json(json!({"success": true, "synced_count": accounts.len(), "accounts": accounts}))
+}
+
+/// POST /api/social/posts/:id/retry — Manually retry a failed or partially-published Zernio post.
+async fn retry_post(
+    Extension(state): Extension<Arc<AppState>>,
+    Path(post_id): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let z = client(&state)?;
+    match z.retry_post(&post_id).await {
+        Ok(resp) => Ok(Json(json!({
+            "success": true,
+            "post": resp.post,
+        }))),
+        Err(e) => Ok(Json(json!({
+            "success": false,
+            "error": e.to_string(),
+        }))),
+    }
+}
+
+/// POST /api/social/webhook — Receives push-based status updates from Zernio.
+///
+/// Zernio calls this endpoint when a post's status changes (published, failed, partial).
+/// This replaces (or supplements) the polling-based `check_zernio_post_status()` in campaign_engine.
+#[derive(Deserialize)]
+struct ZernioWebhookPayload {
+    #[serde(default)]
+    event: String,                          // "post.status_changed"
+    post_id: Option<String>,                // Zernio's post ID
+    status: Option<String>,                 // "published" | "failed" | "partial"
+    #[serde(default)]
+    platforms: Vec<serde_json::Value>,      // Per-platform status array
+    #[serde(default)]
+    error: Option<String>,                  // Top-level error message
+}
+
+async fn zernio_webhook(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(payload): Json<ZernioWebhookPayload>,
+) -> Json<serde_json::Value> {
+    // Acknowledge receipt immediately (Zernio expects 2xx fast)
+    // Then fire-and-forget the DB updates so we don't block Zernio.
+    let Some(post_id) = payload.post_id else {
+        return Json(json!({"success": true, "message": "ignored — no post_id"}));
+    };
+    let Some(status) = payload.status else {
+        return Json(json!({"success": true, "message": "ignored — no status"}));
+    };
+
+    let status_lower = status.to_lowercase();
+    info!(post_id = %post_id, status = %status_lower, "Zernio webhook received");
+
+    // Map Zernio post status to our internal campaign_posts status
+    let mapped = match status_lower.as_str() {
+        "published" | "partial" => "published",
+        "failed" => "failed",
+        "cancelled" => "failed",
+        _ => {
+            warn!(post_id = %post_id, status = %status_lower, "Zernio webhook: unhandled status");
+            return Json(json!({"success": true, "message": "unhandled status — ignored"}));
+        }
+    };
+
+    // Update campaign_posts
+    let now = chrono::Utc::now();
+    let updated = sqlx::query(
+        "UPDATE campaign_posts SET status = $1, published_at = COALESCE(published_at, $2), updated_at = $2 WHERE zernio_post_id = $3",
+    )
+    .bind(mapped)
+    .bind(now)
+    .bind(&post_id)
+    .execute(&state.db_pool)
+    .await;
+
+    match updated {
+        Ok(r) => {
+            if r.rows_affected() > 0 {
+                info!(post_id = %post_id, status = %mapped, rows = %r.rows_affected(), "Updated campaign_post via webhook");
+            } else {
+                // Not a campaign_post — may be a delivery auto-publish
+                info!(post_id = %post_id, "No campaign_post matched; checking deliveries");
+            }
+        }
+        Err(e) => {
+            warn!(post_id = %post_id, error = %e, "Failed to update campaign_post via webhook");
+        }
+    }
+
+    // Also update deliveries.extra_args with platform results if provided
+    if !payload.platforms.is_empty() {
+        let _ = sqlx::query(
+            "UPDATE deliveries SET extra_args = jsonb_set(COALESCE(extra_args, '{}'::jsonb), '{zernio_platform_results}', $1::jsonb), updated_at = $2 WHERE id IN (SELECT delivery_id FROM campaign_posts WHERE zernio_post_id = $3)",
+        )
+        .bind(serde_json::json!(payload.platforms))
+        .bind(now)
+        .bind(&post_id)
+        .execute(&state.db_pool)
+        .await;
+    }
+
+    Json(json!({"success": true, "message": "processed"}))
 }

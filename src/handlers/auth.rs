@@ -189,6 +189,32 @@ async fn register(
         }
     };
 
+    // Look up referral code if provided
+    let mut referrer_user_id: Option<i32> = None;
+    if let Some(ref code) = payload.referred_by {
+        let trimmed = code.trim();
+        if !trimmed.is_empty() {
+            match sqlx::query_scalar::<_, i32>(
+                "SELECT user_id FROM referral_codes WHERE code = $1",
+            )
+            .bind(trimmed)
+            .fetch_optional(&state.db_pool)
+            .await
+            {
+                Ok(Some(uid)) => {
+                    referrer_user_id = Some(uid);
+                    tracing::info!(referrer = %uid, code = %trimmed, "Registration via referral link");
+                }
+                Ok(None) => {
+                    tracing::warn!(code = %trimmed, "Invalid referral code used in registration");
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "Error looking up referral code");
+                }
+            }
+        }
+    }
+
     // Insert new user. Starts a 7-day free trial immediately — the
     // subscription_middleware will flip status to 'expired' after
     // trial_ends_at passes. (Existing users were grandfathered by the
@@ -196,15 +222,19 @@ async fn register(
     let user_row = sqlx::query(
         "INSERT INTO users (email, username, password_hash, is_active, is_superuser,
                             is_staff, is_clipper, created_at, updated_at,
-                            subscription_status, trial_ends_at)
+                            subscription_status, trial_ends_at,
+                            referred_by, referrer_user_id)
          VALUES ($1, $2, $3, true, false, false, false, NOW(), NOW(),
-                 'trial', NOW() + INTERVAL '7 days')
+                 'trial', NOW() + INTERVAL '7 days',
+                 $4, $5)
          RETURNING id, email, username, password_hash, is_active, is_superuser, is_staff, is_clipper, created_at, updated_at,
                    subscription_status, trial_ends_at, subscription_active_until, subscription_tier, last_payment_at, is_dfy_customer"
     )
     .bind(&payload.email)
     .bind(&payload.username)
     .bind(&password_hash)
+    .bind(&payload.referred_by)
+    .bind(referrer_user_id)
     .fetch_one(&state.db_pool)
     .await;
 
