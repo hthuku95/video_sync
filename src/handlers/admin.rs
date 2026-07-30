@@ -8337,7 +8337,7 @@ pub async fn api_generate_dfy_portfolio_samples(
                     // Recreate
                     let _ = sqlx::query("DELETE FROM deliveries WHERE id = $1")
                         .bind(row.get::<Uuid, _>("id"))
-                        .execute(&state.db_pool)
+    .fetch_one(&state.db_pool)
                         .await;
                 } else {
                     samples.push(portfolio_sample_json_with_fresh_media_urls(&state, &row).await);
@@ -8354,7 +8354,7 @@ pub async fn api_generate_dfy_portfolio_samples(
         // Create delivery row
         let delivery_id = Uuid::new_v4();
         let input = crate::portfolio_samples::service_input_for(service);
-        let mut extra = input.extra_args.clone();
+        let mut extra = crate::portfolio_samples::portfolio_extra_args(service);
         mark_portfolio_sample_as_shared_seed(&mut extra);
 
         let inserted = sqlx::query(
@@ -8431,7 +8431,7 @@ pub async fn api_generate_dfy_portfolio_samples(
         "queued": queued,
         "samples": samples,
         "message": if queued == 0 {
-            "All 12 DFY portfolio samples already exist."
+            "All 12 DFY portfolio samples already exist.".to_string()
         } else {
             format!("{queued} DFY portfolio samples queued for generation.")
         }
@@ -8452,9 +8452,10 @@ pub async fn api_list_dfy_portfolio_samples(
     .await
     .unwrap_or_default();
 
-    let samples: Vec<serde_json::Value> = rows.iter()
-        .map(|row| portfolio_sample_json_with_fresh_media_urls(&state, row))
-        .collect();
+    let mut samples = Vec::new();
+    for row in &rows {
+        samples.push(portfolio_sample_json_with_fresh_media_urls(&state, row).await);
+    }
 
     Json(json!({
         "success": true,
@@ -12464,7 +12465,7 @@ pub async fn api_list_referral_commissions(
 }
 
 /// GET /admin/referrals — Admin page for referral management.
-pub async fn admin_referrals_page() -> Html<String> {
+pub async fn admin_referrals_page() -> Html<&'static str> {
     Html(
         r###"<!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8">

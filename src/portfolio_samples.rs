@@ -186,21 +186,32 @@ pub fn dfy_services() -> &'static [DfyServiceDef] {
 /// Build an AgenticServicePipeline ServiceInput for a DFY service.
 pub fn service_input_for(def: &DfyServiceDef) -> crate::services::agentic_service_pipeline::ServiceInput {
     crate::services::agentic_service_pipeline::ServiceInput {
-        service_type: crate::services::agentic_service_pipeline::ServiceType::from_normalized(def.slug),
+        title: def.name.to_string(),
         brief: def.brief.to_string(),
         style: def.style.to_string(),
         duration_seconds: def.duration_seconds,
         source_url: if def.source_url.is_empty() { None } else { Some(def.source_url.to_string()) },
-        reference_image_url: None,
-        extra_args: json!({
-            "portfolio_category": "dfy_service_demo",
-            "service_slug": def.slug,
-            "service_name": def.name,
-            "price_mo": def.price_mo,
-            "sample_visibility": "shared_seed",
-            "is_shared_seed": true,
-        }),
+        delivery_id: uuid::Uuid::nil(),
+        prospect_id: None,
+        session_uuid: None,
+        user_id: None,
+        source_table: None,
+        source_record_id: None,
+        idempotency_key: None,
+        reference_images: vec![],
     }
+}
+
+/// Build the extra_args JSON for a DFY portfolio sample delivery.
+pub fn portfolio_extra_args(def: &DfyServiceDef) -> serde_json::Value {
+    serde_json::json!({
+        "portfolio_category": "dfy_service_demo",
+        "service_slug": def.slug,
+        "service_name": def.name,
+        "price_mo": def.price_mo,
+        "sample_visibility": "shared_seed",
+        "is_shared_seed": true,
+    })
 }
 
 /// Generate a delivery-style client_ref for a DFY portfolio sample.

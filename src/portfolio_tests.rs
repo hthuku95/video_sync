@@ -208,7 +208,7 @@ impl PortfolioTestRunner {
             .ok_or_else(|| format!("DFY service '{}' not found", scenario.slug))?;
 
         let input = crate::portfolio_samples::service_input_for(service_def);
-        let mut extra = input.extra_args.clone();
+        let mut extra = crate::portfolio_samples::portfolio_extra_args(service_def);
         extra["test_run_id"] = json!(delivery_id.to_string());
 
         let title = format!("Test Run — {}", scenario.name);

@@ -1,6 +1,5 @@
 use aws_sdk_sesv2::types::{Body, Content, Destination, EmailContent, Message};
 use sqlx::PgPool;
-use std::sync::Arc;
 use std::time::Duration;
 
 const SES_TIMEOUT: Duration = Duration::from_secs(30);
@@ -72,11 +71,13 @@ pub async fn send_email(
         .charset("UTF-8")
         .build()
         .map_err(|e| format!("Failed to build body content: {e}"))?;
+    let body = Body::builder()
+        .text(body_content)
+        .build();
     let msg = Message::builder()
         .subject(subject_content)
-        .body(Body::builder().text(body_content).build())
-        .build()
-        .map_err(|e| format!("Failed to build message: {e}"))?;
+        .body(body)
+        .build();
 
     match tokio::time::timeout(SES_TIMEOUT, async {
         client

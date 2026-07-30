@@ -729,7 +729,7 @@ async fn check_zernio_post_status(state: &Arc<AppState>, campaign: &CampaignRow,
         }
         zernio_client::PostStatus::PUBLISHING | zernio_client::PostStatus::SCHEDULED => {
             // Still in flight — update per-platform statuses next cycle
-            if post.status != "publishing" {
+            if post.status.as_deref() != Some("publishing") {
                 let _ = sqlx::query("UPDATE campaign_posts SET status = 'publishing' WHERE id = $1")
                     .bind(post.id)
                     .execute(&state.db_pool)
