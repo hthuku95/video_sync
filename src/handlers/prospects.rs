@@ -133,6 +133,11 @@ pub fn instagram_routes() -> Router {
             "/api/portfolio-samples/crypto-saas",
             post(crate::handlers::admin::api_generate_crypto_saas_portfolio_samples),
         )
+        .route(
+            "/api/portfolio-samples/dfy",
+            get(crate::handlers::admin::api_list_dfy_portfolio_samples)
+                .post(crate::handlers::admin::api_generate_dfy_portfolio_samples),
+        )
         .route("/api/instagram/leads/search", post(instagram_search_leads))
         .route(
             "/api/instagram/leads/auto-discover",
