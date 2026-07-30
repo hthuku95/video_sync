@@ -42,7 +42,7 @@ fn is_allowed_redirect_url(url: &str) -> bool {
         // Get allowed origins from environment
         let allowed_origins = std::env::var("ALLOWED_REDIRECT_ORIGINS")
             .unwrap_or_else(|_| {
-                "localhost:5173,localhost:3000,cmachine.devthuku.io,www.videosync.video,videosync.video".to_string()
+                "localhost:5173,localhost:3000,content-machine-pbjp.vercel.app,www.videosync.video,videosync.video".to_string()
             });
 
         tracing::debug!(
@@ -669,7 +669,6 @@ fn request_requires_content_machine_whitelist(headers: &HeaderMap) -> bool {
 
     let matches_content_machine = |value: &str| {
         value.contains("content-machine-pbjp.vercel.app")
-            || value.contains("cmachine.devthuku.io")
             || value.contains("localhost:5173")
             || value.contains("localhost:4173")
     };
@@ -729,8 +728,7 @@ pub async fn initiate_google_oauth(
     }
 
     // Detect source app from redirect URL to ensure proper redirection
-    let source_app = if redirect_to.contains("cmachine.devthuku.io")
-        || redirect_to.contains("content-machine-pbjp.vercel.app")
+    let source_app = if redirect_to.contains("content-machine-pbjp.vercel.app")
     {
         "content_machine"
     } else if redirect_to.contains("localhost:5173") || redirect_to.contains("localhost:4173") {

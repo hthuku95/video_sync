@@ -910,6 +910,7 @@ async fn main() {
         .merge(handlers::manual_clipping::manual_clipping_routes()) // ✂️ Manual clipping
         .merge(handlers::prospects::prospect_routes()) // 🎯 Prospect finder (admin)
         .merge(handlers::prospects::instagram_routes()) // 📸 Instagram leads (all users)
+        .merge(handlers::referrals::referral_routes()) // 🔗 Referral codes + commissions for content machine users
         .merge(handlers::api_access::api_access_routes()) // 💳 Agency USDC license
         .merge(handlers::subscribe::subscribe_routes()) // 💳 Regular-user $15/mo paywall
         .merge(handlers::paypal::paypal_routes()) // 💳 PayPal/card checkout for service packs

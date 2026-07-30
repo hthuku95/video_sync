@@ -42,7 +42,7 @@ fn is_allowed_redirect_url(url: &str) -> bool {
         // Get allowed origins from environment
         let allowed_origins = std::env::var("ALLOWED_REDIRECT_ORIGINS")
             .unwrap_or_else(|_| {
-                "localhost:5173,localhost:3000,cmachine.devthuku.io,www.videosync.video,videosync.video".to_string()
+                "localhost:5173,localhost:3000,content-machine-pbjp.vercel.app,www.videosync.video,videosync.video".to_string()
             });
 
         tracing::debug!(
@@ -274,7 +274,7 @@ pub async fn initiate_youtube_connection(
     }
 
     // Detect source app from redirect URL to ensure proper redirection
-    let source_app = if redirect_to.contains("cmachine.devthuku.io") {
+    let source_app = if redirect_to.contains("content-machine-pbjp.vercel.app") {
         "content_machine"
     } else if redirect_to.contains("localhost:5173") || redirect_to.contains("localhost:4173") {
         "content_machine_local"
@@ -400,7 +400,7 @@ pub async fn youtube_oauth_callback(
     } else {
         // Provide appropriate fallback based on source app
         let fallback = match source_app {
-            "content_machine" => "https://cmachine.devthuku.io/channels/connected",
+            "content_machine" => "https://content-machine-pbjp.vercel.app/channels/connected",
             "content_machine_local" => "http://localhost:5173/channels/connected",
             _ => "/youtube/manage",
         };

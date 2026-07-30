@@ -66,6 +66,10 @@ pub fn prospect_routes() -> Router {
             "/api/admin/prospects/:id/generate-sample-pack",
             post(generate_prospect_sample_pack),
         )
+        .route(
+            "/api/admin/prospects/:id/send-email",
+            post(send_prospect_email_handler),
+        )
         .route("/api/admin/prospects/:id", delete(delete_prospect))
         // Telegram opportunity tab (phase 1: manual entry + AI scoring;
         // phase 2 will add automated grammers-client watcher).
@@ -167,6 +171,7 @@ struct SearchRequest {
     min_viewers: Option<i64>,
     max_viewers: Option<i64>,
     limit: Option<usize>,
+    sourced_by: Option<i32>, // User ID of the whitelisted content machine user who sourced this
 }
 
 #[derive(Debug, Serialize)]
@@ -194,6 +199,7 @@ struct ListQuery {
     prospect_type: Option<String>,
     contact_status: Option<String>,
     platform: Option<String>,
+    sourced_by: Option<i32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2422,12 +2428,16 @@ async fn list_prospects(
     if q.platform.is_some() {
         conditions.push("platform");
     }
+    if q.sourced_by.is_some() {
+        conditions.push("sourced_by");
+    }
 
     let mut sql = "SELECT id, platform, channel_id, display_name, platform_url, \
                    subscriber_count, avg_viewer_count, content_category, prospect_type, \
                    ai_score, ai_reasoning, dm_script_creator, dm_script_clipper, \
                    x_dm_script, email_script, contact_status, notes, twitter_handle, instagram_handle, \
-                   business_email, external_url, service_type, sample_delivery_id, contact_enrichment, created_at, \
+                   business_email, external_url, service_type, sample_delivery_id, contact_enrichment, \
+                   referred_by, sourced_by, created_at, \
                    ((CASE WHEN business_email IS NOT NULL AND business_email <> '' THEN 60 ELSE 0 END) + \
                     (CASE WHEN twitter_handle IS NOT NULL AND twitter_handle <> '' THEN 50 ELSE 0 END) + \
                     (CASE WHEN external_url IS NOT NULL AND external_url <> '' THEN 25 ELSE 0 END) + \
@@ -2458,6 +2468,9 @@ async fn list_prospects(
     }
     if let Some(ref pl) = q.platform {
         query = query.bind(pl);
+    }
+    if let Some(sb) = q.sourced_by {
+        query = query.bind(sb);
     }
 
     let rows = query.fetch_all(&state.db_pool).await.map_err(|e| {
@@ -2501,6 +2514,8 @@ async fn list_prospects(
                 "sample_delivery_url": r.get::<Option<Uuid>, _>("sample_delivery_id").map(|id| format!("/delivery/{id}")),
                 "contact_enrichment": r.get::<serde_json::Value, _>("contact_enrichment"),
                 "revenue_priority": r.get::<i32, _>("revenue_priority"),
+                "referred_by": r.get::<Option<String>, _>("referred_by"),
+                "sourced_by": r.get::<Option<i32>, _>("sourced_by"),
                 "created_at": r.get::<chrono::DateTime<chrono::Utc>, _>("created_at"),
             })
         })
@@ -3080,6 +3095,102 @@ async fn generate_prospect_sample_pack(
         "unlock_price_usdc": unlock_price,
         "message": "Revenue sample pack queued. The delivery link is shareable immediately and will update when rendering completes."
     })))
+}
+
+async fn send_prospect_email_handler(
+    Extension(state): Extension<Arc<AppState>>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    let row = sqlx::query(
+        "SELECT display_name, business_email, email_script
+         FROM prospects WHERE id=$1",
+    )
+    .bind(id)
+    .fetch_optional(&state.db_pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                success: false,
+                message: e.to_string(),
+            }),
+        )
+    })?
+    .ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                success: false,
+                message: "Prospect not found".to_string(),
+            }),
+        )
+    })?;
+
+    let display_name: String = row.get("display_name");
+    let email: Option<String> = row.get("business_email");
+    let email_script: Option<String> = row.get("email_script");
+
+    let to_email = match email {
+        Some(e) if !e.is_empty() => e,
+        _ => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    success: false,
+                    message: "Prospect has no business_email".to_string(),
+                }),
+            ));
+        }
+    };
+
+    let script = match email_script {
+        Some(s) if !s.is_empty() => s,
+        _ => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    success: false,
+                    message: "Prospect has no email_script — generate outreach first".to_string(),
+                }),
+            ));
+        }
+    };
+
+    match crate::services::email_service::send_prospect_email(
+        &state.db_pool,
+        &to_email,
+        &display_name,
+        &script,
+        id,
+    )
+    .await
+    {
+        Ok((message_id, log_id)) => {
+            let _ = sqlx::query(
+                "UPDATE prospects SET contact_status='contacted', updated_at=NOW() WHERE id=$1",
+            )
+            .bind(id)
+            .execute(&state.db_pool)
+            .await;
+
+            Ok(Json(json!({
+                "success": true,
+                "message_id": message_id,
+                "log_id": log_id,
+                "to": to_email,
+                "prospect_name": display_name,
+                "message": "Email sent via AWS SES. Prospect marked as contacted."
+            })))
+        }
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                success: false,
+                message: format!("Failed to send email: {e}"),
+            }),
+        )),
+    }
 }
 
 // ============================================================================
@@ -4018,6 +4129,7 @@ function renderContactQueue(prospects){
         ${sampleUrl?`<a href="${sampleUrl}" target="_blank" class="btn btn-sm action-success">Sample</a>`:`<button class="btn btn-sm action-primary" onclick="generateSamplePack('${p.id}', '${encodeURIComponent(url)}', '${encodeURIComponent(service)}')">Generate Sample</button>`}
         ${x?`<a class="btn btn-sm btn-copy" target="_blank" href="https://x.com/${x.replace('@','')}">Open X</a>`:''}
         ${email?`<button class="btn btn-sm btn-copy" onclick="copyText('${encodeURIComponent(p.email_script||'')}')">Copy Email</button>`:''}
+        ${email&&p.email_script?`<button class="btn btn-sm action-primary" onclick="sendEmail('${p.id}')">📧 Send</button>`:''}
         <button class="btn btn-sm btn-copy" onclick="copyText('${encodeURIComponent(p.x_dm_script||p.dm_script_creator||'')}')">Copy DM</button>
       </span>
     </div>`;
@@ -4200,6 +4312,20 @@ async function generateSamplePack(id, encodedUrl, encodedService){
     loadProspects();
   } else {
     showMsg(data.message||data.error||'Sample pack failed', false);
+  }
+}
+
+async function sendEmail(id){
+  showMsg('Sending email via AWS SES…');
+  const res = await fetch(`/api/admin/prospects/${id}/send-email`, {
+    method:'POST',
+    headers:{'Authorization':'Bearer '+token,'Content-Type':'application/json'}
+  });
+  const data = await res.json();
+  if(data.success){
+    showMsg(`Email sent to ${data.to} (ID: ${data.message_id})`);
+  } else {
+    showMsg(data.message||data.error||'Send failed', false);
   }
 }
 

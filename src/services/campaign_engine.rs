@@ -39,11 +39,16 @@ struct CampaignRow {
     source_url: Option<String>,
 }
 
+#[derive(Clone)]
 struct PostRow {
     id: Uuid,
+    campaign_id: Uuid,
     day_number: i32,
     slot_index: i32,
     scheduled_at: chrono::DateTime<chrono::Utc>,
+    status: Option<String>,
+    zernio_post_id: Option<String>,
+    published_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 // ── Step 1: Fetch active campaigns ──────────────────────────────────────────
@@ -93,6 +98,18 @@ async fn process_campaign(state: &Arc<AppState>, campaign: CampaignRow) {
             }
         }
         Err(e) => tracing::error!("campaign[{}]: fetch rendering failed: {e}", campaign.id),
+    }
+
+    // Poll Zernio for scheduled+published posts to surface publishing/partial/failed states
+    if state.zernio_client.is_some() {
+        match fetch_scheduled_posts(state, campaign.id, 50).await {
+            Ok(posts) => {
+                for post in &posts {
+                    check_zernio_post_status(state, &campaign, post.clone()).await;
+                }
+            }
+            Err(e) => tracing::error!("campaign[{}]: fetch scheduled failed: {e}", campaign.id),
+        }
     }
 
     update_campaign_counts(state, campaign.id).await;
@@ -165,8 +182,8 @@ async fn fetch_posts_by_status(
     status: &str,
     limit: i32,
 ) -> Result<Vec<PostRow>, sqlx::Error> {
-    sqlx::query_as::<_, (Uuid, i32, i32, chrono::DateTime<chrono::Utc>)>(
-        "SELECT id, day_number, slot_index, scheduled_at \
+    sqlx::query_as::<_, (Uuid, Uuid, i32, i32, chrono::DateTime<chrono::Utc>, Option<String>, Option<String>, Option<chrono::DateTime<chrono::Utc>>)>(
+        "SELECT id, campaign_id, day_number, slot_index, scheduled_at, status, zernio_post_id, published_at \
          FROM campaign_posts \
          WHERE campaign_id = $1 AND status = $2 \
          ORDER BY day_number, slot_index \
@@ -179,11 +196,15 @@ async fn fetch_posts_by_status(
     .await
     .map(|rows| {
         rows.into_iter()
-            .map(|(id, day_number, slot_index, scheduled_at)| PostRow {
+            .map(|(id, campaign_id, day_number, slot_index, scheduled_at, status, zernio_post_id, published_at)| PostRow {
                 id,
+                campaign_id,
                 day_number,
                 slot_index,
                 scheduled_at,
+                status,
+                zernio_post_id,
+                published_at,
             })
             .collect()
     })
@@ -642,6 +663,223 @@ async fn schedule_via_zernio(
             tracing::warn!("campaign post {} Zernio schedule failed: {e}", post.id);
         }
     }
+}
+
+// ── Zernio post status polling ──────────────────────────────────────────────
+
+async fn fetch_scheduled_posts(state: &Arc<AppState>, campaign_id: Uuid, limit: i32) -> Result<Vec<PostRow>, sqlx::Error> {
+    sqlx::query_as::<_, (Uuid, Uuid, i32, i32, chrono::DateTime<chrono::Utc>, Option<String>, Option<String>, Option<chrono::DateTime<chrono::Utc>>)>(
+        "SELECT id, campaign_id, day_number, slot_index, scheduled_at, status, zernio_post_id, published_at \
+         FROM campaign_posts \
+         WHERE campaign_id = $1 AND zernio_post_id IS NOT NULL \
+           AND status IN ('scheduled', 'publishing') \
+         ORDER BY scheduled_at ASC LIMIT $2",
+    )
+    .bind(campaign_id)
+    .bind(limit)
+    .fetch_all(&state.db_pool)
+    .await
+    .map(|rows| {
+        rows.into_iter()
+            .map(|(id, campaign_id, day_number, slot_index, scheduled_at, status, zernio_post_id, published_at)| PostRow {
+                id,
+                campaign_id,
+                day_number,
+                slot_index,
+                scheduled_at,
+                status,
+                zernio_post_id,
+                published_at,
+            })
+            .collect()
+    })
+}
+
+/// Poll Zernio for the actual status of a scheduled post. Updates the
+/// local campaign_post status to reflect publishing/partial/failed states.
+async fn check_zernio_post_status(state: &Arc<AppState>, campaign: &CampaignRow, post: PostRow) {
+    let Some(ref zernio) = state.zernio_client else { return };
+    let Some(ref zernio_post_id) = post.zernio_post_id else { return };
+
+    let detail = match zernio.get_post(zernio_post_id).await {
+        Ok(r) => r.post,
+        Err(e) => {
+            tracing::warn!("campaign_post[{}] Zernio poll failed: {e}", post.id);
+            return;
+        }
+    };
+
+    let api_status = detail.status.as_deref().unwrap_or("");
+    let new_local_status = match api_status {
+        zernio_client::PostStatus::PUBLISHED => "published",
+        zernio_client::PostStatus::PARTIAL => {
+            // Log which platforms succeeded and which failed
+            let failures: Vec<&str> = detail.platforms
+                .iter()
+                .filter(|p| p.status == zernio_client::PlatformStatus::FAILED)
+                .filter_map(|p| Some(p.errorMessage.as_deref().unwrap_or("unknown error")))
+                .collect();
+            if !failures.is_empty() {
+                tracing::warn!(
+                    "campaign_post[{}] partial publish — failures: {:?}",
+                    post.id, failures
+                );
+            }
+            "published" // Partial is still publishable; surface failures in logs
+        }
+        zernio_client::PostStatus::PUBLISHING | zernio_client::PostStatus::SCHEDULED => {
+            // Still in flight — update per-platform statuses next cycle
+            if post.status != "publishing" {
+                let _ = sqlx::query("UPDATE campaign_posts SET status = 'publishing' WHERE id = $1")
+                    .bind(post.id)
+                    .execute(&state.db_pool)
+                    .await;
+            }
+            return; // Don't update counters yet
+        }
+        zernio_client::PostStatus::FAILED => {
+            let first_err = detail.platforms
+                .iter()
+                .find(|p| p.status == zernio_client::PlatformStatus::FAILED);
+            let err_msg = first_err
+                .and_then(|p| p.errorMessage.as_deref())
+                .unwrap_or("Zernio post failed (unknown cause)");
+            // Attempt retry once
+            match zernio.retry_post(zernio_post_id).await {
+                Ok(retry_resp) => {
+                    tracing::info!(
+                        "campaign_post[{}] Zernio retry initiated (post_id={}, status={:?})",
+                        post.id, zernio_post_id, retry_resp.post.status
+                    );
+                    // Don't mark failed yet; next poll cycle will see the new status
+                    let _ = sqlx::query("UPDATE campaign_posts SET status = 'publishing' WHERE id = $1")
+                        .bind(post.id)
+                        .execute(&state.db_pool)
+                        .await;
+                    return;
+                }
+                Err(e) => {
+                    tracing::warn!("campaign_post[{}] Zernio retry failed: {e}", post.id);
+                    // Fall through to mark failed
+                }
+            }
+            mark_post_failed(state, post.id, &format!("Zernio: {err_msg}")).await;
+            return;
+        }
+        zernio_client::PostStatus::CANCELLED | zernio_client::PostStatus::DRAFT => {
+            // These shouldn't happen in normal flow; log and leave as-is
+            tracing::warn!("campaign_post[{}] unexpected Zernio status: {api_status}", post.id);
+            return;
+        }
+        _ => {
+            tracing::warn!("campaign_post[{}] unknown Zernio status: {api_status}", post.id);
+            return;
+        }
+    };
+
+    // Update local status and published_at
+    let _ = sqlx::query(
+        "UPDATE campaign_posts SET status = $1, published_at = NOW() WHERE id = $2 AND status != 'published'",
+    )
+    .bind(new_local_status)
+    .bind(post.id)
+    .execute(&state.db_pool)
+    .await;
+
+    tracing::info!(
+        "campaign_post[{}] Zernio status update: {} → {} (platforms: {} total, {} published, {} failed)",
+        post.id, api_status, new_local_status,
+        detail.platforms.len(),
+        detail.platforms.iter().filter(|p| p.status == zernio_client::PlatformStatus::PUBLISHED).count(),
+        detail.platforms.iter().filter(|p| p.status == zernio_client::PlatformStatus::FAILED).count(),
+    );
+
+    // Store per-platform results in delivery metadata
+    let delivery_id: Option<Uuid> = sqlx::query_scalar(
+        "SELECT delivery_id FROM campaign_posts WHERE id = $1",
+    )
+    .bind(post.id)
+    .fetch_optional(&state.db_pool)
+    .await
+    .ok()
+    .flatten()
+    .flatten();
+
+    if let Some(did) = delivery_id {
+        let platform_results: Vec<serde_json::Value> = detail.platforms
+            .iter()
+            .map(|p| {
+                json!({
+                    "platform": p.platform,
+                    "status": p.status,
+                    "accountUsername": p.accountId.username,
+                    "postUrl": p.platformPostUrl,
+                    "errorMessage": p.errorMessage,
+                    "errorType": p.errorType,
+                })
+            })
+            .collect();
+        // Store platform results in extra_args JSONB column
+        let _ = sqlx::query(
+            "UPDATE deliveries SET extra_args = \
+               COALESCE(extra_args, '{}'::jsonb) || $1::jsonb WHERE id = $2",
+        )
+        .bind(serde_json::json!({"zernio_platform_results": platform_results}).to_string())
+        .bind(did)
+        .execute(&state.db_pool)
+        .await;
+    }
+
+    // Create skill from successful publish
+    if new_local_status == "published" {
+        let caption: Option<String> = sqlx::query_scalar(
+            "SELECT caption FROM campaign_posts WHERE id = $1",
+        )
+        .bind(post.id)
+        .fetch_optional(&state.db_pool)
+        .await
+        .ok()
+        .flatten()
+        .flatten();
+
+        // Simple skill extraction from Zernio publish success
+        let skill_prompt = format!(
+            "A '{}' campaign post was successfully published via Zernio. \
+             Brief: '{}'. Caption: {:?}. \
+             Platforms: {} published, {} failed. \
+             Extract a 1-sentence skill about what platform combination works well for '{}' content.",
+            campaign.service_type, campaign.brief, caption,
+            detail.platforms.iter().filter(|p| p.status == zernio_client::PlatformStatus::PUBLISHED).count(),
+            detail.platforms.iter().filter(|p| p.status == zernio_client::PlatformStatus::FAILED).count(),
+            campaign.service_type,
+        );
+
+        let skill_text = crate::llm_utils::generate_text_fast(
+            state.ollama_client.as_ref(),
+            state.deepseek_client.as_ref(),
+            state.gemini_client.as_ref(),
+            &skill_prompt,
+        )
+        .await
+        .unwrap_or_default();
+
+        if !skill_text.is_empty() {
+            let _ = sqlx::query(
+                "INSERT INTO skills (user_id, service_type, campaign_id, name, description, \
+                 source, scope, success_count) \
+                 VALUES ($1, $2, $3, 'Zernio publish pattern', $4, 'successful_workflow', 'campaign', 1) \
+                 ON CONFLICT DO NOTHING",
+            )
+            .bind(campaign.user_id)
+            .bind(&campaign.service_type)
+            .bind(post.campaign_id)
+            .bind(&skill_text)
+            .execute(&state.db_pool)
+            .await;
+        }
+    }
+
+    update_campaign_counts(state, campaign.id).await;
 }
 
 // ── Update campaign counters ───────────────────────────────────────────────

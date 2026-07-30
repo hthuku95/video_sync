@@ -101,11 +101,93 @@ pub struct CreatePostResponse {
     pub post: ZernioPost,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct GetPostResponse {
+    pub post: ZernioPostDetail,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ZernioPost {
     #[serde(rename = "_id")]
     pub id: String,
     pub status: Option<String>,
+}
+
+/// Full post detail with per-platform status, errors, and URLs.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ZernioPostDetail {
+    #[serde(rename = "_id")]
+    pub id: String,
+    pub status: Option<String>,
+    pub content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scheduledFor: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timezone: Option<String>,
+    pub platforms: Vec<PlatformStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub publishedAt: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub createdAt: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub updatedAt: Option<String>,
+}
+
+/// Per-platform publishing status with error details and post URLs.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct PlatformStatus {
+    pub platform: String,
+    pub accountId: PlatformAccountId,
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub platformPostId: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub platformPostUrl: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub errorMessage: Option<String>,
+    /// Machine-readable error type: account_issue, platform_rejected, platform_error, system_error, unknown
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub errorType: Option<String>,
+}
+
+/// Per-platform state constants
+impl PlatformStatus {
+    pub const PENDING: &'static str = "pending";
+    pub const PROCESSING: &'static str = "processing";
+    pub const UPLOADING: &'static str = "uploading";
+    pub const PUBLISHED: &'static str = "published";
+    pub const FAILED: &'static str = "failed";
+    pub const CANCELLED: &'static str = "cancelled";
+}
+
+/// Post-level state constants
+pub struct PostStatus;
+impl PostStatus {
+    pub const DRAFT: &'static str = "draft";
+    pub const SCHEDULED: &'static str = "scheduled";
+    pub const PUBLISHING: &'static str = "publishing";
+    pub const PUBLISHED: &'static str = "published";
+    pub const PARTIAL: &'static str = "partial";
+    pub const FAILED: &'static str = "failed";
+    pub const CANCELLED: &'static str = "cancelled";
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct PlatformAccountId {
+    #[serde(rename = "_id")]
+    pub id: String,
+    pub platform: String,
+    pub username: Option<String>,
+    #[serde(rename = "displayName")]
+    pub display_name: Option<String>,
+    #[serde(rename = "isActive")]
+    pub is_active: bool,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct RetryPostResponse {
+    pub message: String,
+    pub post: ZernioPostDetail,
 }
 
 #[derive(Debug, Serialize)]
@@ -256,6 +338,18 @@ impl ZernioClient {
         let target_count = req.platforms.len();
         info!("Creating Zernio post for {} platform(s), publishNow: {}", target_count, req.publishNow);
         self.post_json("/posts", req).await
+    }
+
+    /// Get a post by ID (full detail with per-platform status).
+    pub async fn get_post(&self, post_id: &str) -> Result<GetPostResponse> {
+        info!("Fetching Zernio post: {}", post_id);
+        self.get_json::<GetPostResponse>(&format!("/posts/{}", post_id), None).await
+    }
+
+    /// Retry a failed or partially-published post.
+    pub async fn retry_post(&self, post_id: &str) -> Result<RetryPostResponse> {
+        info!("Retrying Zernio post: {}", post_id);
+        self.post_json::<RetryPostResponse, serde_json::Value>(&format!("/posts/{}/retry", post_id), &serde_json::json!({})).await
     }
 
     /// Convenience: publish text+media to multiple accounts immediately.

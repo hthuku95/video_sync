@@ -34,7 +34,9 @@ pub fn admin_routes() -> Router {
         // Delivery share links — public by design
         .route("/delivery/:id", get(delivery_page))
         .route("/delivery/:id/stream", get(delivery_stream))
-        .route("/api/portfolio-samples", get(api_list_portfolio_samples));
+        .route("/api/portfolio-samples", get(api_list_portfolio_samples))
+        // Referral link redirects
+        .route("/ref/:code", get(referral_redirect));
 
     // Admin HTML pages — now behind auth + admin middleware
     // Merged into protected_admin BEFORE the .layer() calls so middleware wraps them too.
@@ -110,8 +112,14 @@ pub fn admin_routes() -> Router {
         .route("/api/admin/deliveries/:id/zernio-targets", post(api_set_delivery_zernio_targets))
         .route("/api/admin/portfolio-samples", get(api_list_portfolio_samples))
         .route("/api/admin/portfolio-samples/crypto-saas", post(api_generate_crypto_saas_portfolio_samples))
-        .route("/api/admin/service-samples", get(api_list_service_portfolio_samples))
+        .route("/api/admin/portfolio-samples/dfy", get(api_list_dfy_portfolio_samples).post(api_generate_dfy_portfolio_samples))
+        .route("/api/admin/service-samples", get(api_list_service_portfolio_samples).post(api_generate_service_portfolio_sample))
         .route("/api/admin/service-samples/briefs", get(api_list_service_portfolio_briefs))
+        .route("/api/admin/email-logs", get(api_email_logs))
+        .route("/admin/email-logs", get(admin_email_logs_page))
+        .route("/api/admin/referral-codes", get(api_list_referral_codes).post(api_create_referral_code))
+        .route("/api/admin/referral-commissions", get(api_list_referral_commissions))
+        .route("/admin/referrals", get(admin_referrals_page))
         .route("/api/admin/revenue-ledger", get(api_revenue_ledger))
         .route("/api/admin/payments", get(api_studio_payments))
         .route("/api/admin/config", get(api_get_config))
@@ -335,6 +343,7 @@ pub async fn admin_dashboard() -> Html<String> {
             <li><a href="/admin/portfolio-samples">🧠 Portfolio Samples</a></li>
             <li><a href="/admin/campaigns">📋 Campaigns</a></li>
             <li><a href="/admin/prospect-finder">🎯 Prospect Finder</a></li>
+            <li><a href="/admin/email-logs">📧 Email Logs</a></li>
             <li><a href="/admin/monetization-guide">💰 Monetization Guide</a></li>
             <li><a href="/admin/revenue-ledger">💸 Revenue Ledger</a></li>
             <li><a href="/admin/zernio">📱 Social</a></li>
@@ -7945,68 +7954,56 @@ pub async fn api_create_delivery(
         Err(e) => return Json(json!({"error": format!("DB insert failed: {e}")})),
     };
 
-    let workflow_id = if req.gig_type == "long_form_video" {
-        let service_type = crate::services::normalize_to_service_type(&req.gig_type);
-        let agentic_input = crate::services::ServiceInput {
-            title: req.title.clone(),
-            brief: req.prompt.clone(),
-            source_url: extra
-                .get("source_url")
-                .or_else(|| extra.get("reference_url"))
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string()),
-            style: style.clone(),
-            duration_seconds: duration.max(15.0),
-            delivery_id,
-            prospect_id: None,
-            session_uuid: None,
-            user_id: extra
-                .get("sample_owner_user_id")
-                .and_then(|v| v.as_i64())
-                .and_then(|v| i32::try_from(v).ok()),
-            source_table: Some("deliveries".to_string()),
-            source_record_id: Some(delivery_id),
-            idempotency_key: Some(format!("delivery-long-form:{delivery_id}")),
-            reference_images: vec![],
-        };
-        match crate::services::AgenticServicePipeline::start(
-            state.clone(),
-            service_type,
-            agentic_input,
-        )
-        .await
-        {
-            Ok(id) => {
-                let _ = sqlx::query("UPDATE deliveries SET workflow_id = $1 WHERE id = $2")
-                    .bind(id)
-                    .bind(delivery_id)
-                    .execute(&state.db_pool)
-                    .await;
-                Some(id.to_string())
-            }
-            Err(error) => {
-                let _ = sqlx::query(
-                    "UPDATE deliveries SET status='failed', error_message=$1, completed_at=NOW() WHERE id=$2",
-                )
-                .bind(&error)
+    // Route all deliveries through AgenticServicePipeline
+    let service_type = crate::services::normalize_to_service_type(&req.gig_type);
+    let duration = duration.max(15.0);
+    let agentic_input = crate::services::ServiceInput {
+        title: req.title.clone(),
+        brief: req.prompt.clone(),
+        source_url: extra
+            .get("source_url")
+            .or_else(|| extra.get("reference_url"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        style: style.clone(),
+        duration_seconds: duration,
+        delivery_id,
+        prospect_id: None,
+        session_uuid: None,
+        user_id: extra
+            .get("sample_owner_user_id")
+            .and_then(|v| v.as_i64())
+            .and_then(|v| i32::try_from(v).ok()),
+        source_table: Some("deliveries".to_string()),
+        source_record_id: Some(delivery_id),
+        idempotency_key: Some(format!("delivery-agentic:{delivery_id}")),
+        reference_images: vec![],
+    };
+    let workflow_id = match crate::services::AgenticServicePipeline::start(
+        state.clone(),
+        service_type,
+        agentic_input,
+    )
+    .await
+    {
+        Ok(id) => {
+            let _ = sqlx::query("UPDATE deliveries SET workflow_id = $1 WHERE id = $2")
+                .bind(id)
                 .bind(delivery_id)
                 .execute(&state.db_pool)
                 .await;
-                Some("agentic_pipeline_failed".to_string())
-            }
+            Some(id.to_string())
         }
-    } else {
-        let workflow_id = ensure_delivery_workflow(&state, delivery_id)
-            .await
-            .ok()
-            .map(|id| id.to_string());
-
-        let state_clone = state.clone();
-        tokio::spawn(async move {
-            run_delivery_job(delivery_id, state_clone).await;
-        });
-
-        workflow_id
+        Err(error) => {
+            let _ = sqlx::query(
+                "UPDATE deliveries SET status='failed', error_message=$1, completed_at=NOW() WHERE id=$2",
+            )
+            .bind(&error)
+            .bind(delivery_id)
+            .execute(&state.db_pool)
+            .await;
+            Some("agentic_pipeline_failed".to_string())
+        }
     };
 
     Json(json!({
@@ -8145,7 +8142,12 @@ pub async fn api_list_portfolio_samples(
         samples.push(portfolio_sample_json_with_fresh_media_urls(&state, row).await);
     }
     Json(
-        json!({"success": true, "samples": samples, "targets": crate::portfolio_samples::crypto_saas_targets()}),
+        json!({
+            "success": true,
+            "samples": samples,
+            "targets": crate::portfolio_samples::crypto_saas_targets(),
+            "dfy_services": crate::portfolio_samples::dfy_services(),
+        }),
     )
 }
 
@@ -8305,6 +8307,159 @@ pub async fn api_generate_crypto_saas_portfolio_samples(
         } else {
             "Portfolio samples queued. Delivery links are shareable immediately and will show previews when renders finish."
         }
+    }))
+}
+
+pub async fn api_generate_dfy_portfolio_samples(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    let mut samples = Vec::new();
+    let mut queued = 0usize;
+
+    for service in crate::portfolio_samples::dfy_services() {
+        let client_ref = crate::portfolio_samples::dfy_client_ref(service.slug);
+        let title = format!("DFY Demo — {}", service.name);
+
+        let existing = sqlx::query(
+            "SELECT id, client_ref, title, gig_type, status, output_r2_url, preview_r2_url, workflow_id,
+                    source_url, unlock_price_usdc, created_at, completed_at, error_message, extra_args
+             FROM deliveries
+             WHERE client_ref = $1 LIMIT 1",
+        )
+        .bind(&client_ref)
+        .fetch_optional(&state.db_pool)
+        .await;
+
+        match existing {
+            Ok(Some(row)) => {
+                let status: String = row.try_get("status").unwrap_or_default();
+                if status == "failed" || status == "pending" {
+                    // Recreate
+                    let _ = sqlx::query("DELETE FROM deliveries WHERE id = $1")
+                        .bind(row.get::<Uuid, _>("id"))
+                        .execute(&state.db_pool)
+                        .await;
+                } else {
+                    samples.push(portfolio_sample_json_with_fresh_media_urls(&state, &row).await);
+                    continue;
+                }
+            }
+            Ok(None) => {}
+            Err(e) => {
+                samples.push(json!({"client_ref": client_ref, "service": service.slug, "success": false, "error": format!("DB lookup failed: {e}")}));
+                continue;
+            }
+        }
+
+        // Create delivery row
+        let delivery_id = Uuid::new_v4();
+        let input = crate::portfolio_samples::service_input_for(service);
+        let mut extra = input.extra_args.clone();
+        mark_portfolio_sample_as_shared_seed(&mut extra);
+
+        let inserted = sqlx::query(
+            "INSERT INTO deliveries (id, client_ref, title, gig_type, prompt, style, duration, extra_args, status, unlock_price_usdc, source_url)
+             VALUES ($1, $2, $3, 'agentic_pipeline', $4, $5, $6, $7, 'pending', 0.0, $8)
+             RETURNING id, client_ref, title, gig_type, status, output_r2_url, preview_r2_url, workflow_id,
+                       source_url, unlock_price_usdc, created_at, completed_at, error_message, extra_args",
+        )
+        .bind(delivery_id)
+        .bind(&client_ref)
+        .bind(&title)
+        .bind(&input.brief)
+        .bind(&input.style)
+        .bind(input.duration_seconds)
+        .bind(&extra)
+        .bind(&input.source_url)
+        .fetch_one(&state.db_pool)
+        .await;
+
+        let row = match inserted {
+            Ok(r) => r,
+            Err(e) => {
+                samples.push(json!({"client_ref": client_ref, "service": service.slug, "success": false, "error": format!("DB insert failed: {e}")}));
+                continue;
+            }
+        };
+
+        // Spawn AgenticServicePipeline
+        let spawn_state = state.clone();
+        let service_type = crate::services::agentic_service_pipeline::ServiceType::from_normalized(service.slug);
+        let svc_input = crate::services::agentic_service_pipeline::ServiceInput {
+            title: title.clone(),
+            brief: input.brief.clone(),
+            source_url: input.source_url.clone(),
+            style: input.style.clone(),
+            duration_seconds: input.duration_seconds,
+            delivery_id,
+            prospect_id: None,
+            session_uuid: None,
+            user_id: None,
+            source_table: Some("deliveries".to_string()),
+            source_record_id: Some(delivery_id),
+            idempotency_key: Some(format!("portfolio-dfy:{}", service.slug)),
+            reference_images: vec![],
+        };
+        let slug = service.slug;
+
+        tokio::spawn(async move {
+            match crate::services::AgenticServicePipeline::start(spawn_state.clone(), service_type, svc_input).await {
+                Ok(wf_id) => {
+                    let _ = sqlx::query("UPDATE deliveries SET workflow_id = $1 WHERE id = $2")
+                        .bind(wf_id)
+                        .bind(delivery_id)
+                        .execute(&spawn_state.db_pool)
+                        .await;
+                }
+                Err(e) => {
+                    tracing::error!("DFY portfolio sample '{}' failed: {e}", slug);
+                    let _ = sqlx::query("UPDATE deliveries SET status = 'failed', error_message = $1 WHERE id = $2")
+                        .bind(&format!("AgenticServicePipeline failed: {e}"))
+                        .bind(delivery_id)
+                        .execute(&spawn_state.db_pool)
+                        .await;
+                }
+            }
+        });
+
+        queued += 1;
+        samples.push(portfolio_sample_json_with_fresh_media_urls(&state, &row).await);
+    }
+
+    Json(json!({
+        "success": true,
+        "queued": queued,
+        "samples": samples,
+        "message": if queued == 0 {
+            "All 12 DFY portfolio samples already exist."
+        } else {
+            format!("{queued} DFY portfolio samples queued for generation.")
+        }
+    }))
+}
+
+pub async fn api_list_dfy_portfolio_samples(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    let rows = sqlx::query(
+        "SELECT id, client_ref, title, gig_type, status, output_r2_url, preview_r2_url, workflow_id,
+                source_url, unlock_price_usdc, created_at, completed_at, error_message, extra_args
+         FROM deliveries
+         WHERE client_ref LIKE 'portfolio:dfy:%'
+         ORDER BY created_at DESC",
+    )
+    .fetch_all(&state.db_pool)
+    .await
+    .unwrap_or_default();
+
+    let samples: Vec<serde_json::Value> = rows.iter()
+        .map(|row| portfolio_sample_json_with_fresh_media_urls(&state, row))
+        .collect();
+
+    Json(json!({
+        "success": true,
+        "samples": samples,
+        "dfy_services": crate::portfolio_samples::dfy_services(),
     }))
 }
 
@@ -8572,6 +8727,17 @@ fn portfolio_sample_json_from_row(row: &sqlx::postgres::PgRow) -> serde_json::Va
         .try_get::<String, _>("client_ref")
         .ok()
         .and_then(|client_ref| client_ref.split(':').last().map(str::to_string));
+    let service_slug = extra
+        .get("service_slug")
+        .and_then(|value| value.as_str())
+        .map(|value| value.to_string());
+    let service_name = extra
+        .get("service_name")
+        .and_then(|value| value.as_str())
+        .map(|value| value.to_string());
+    let price_mo = extra
+        .get("price_mo")
+        .and_then(|value| value.as_u64());
     let unlock_price = row
         .try_get::<Option<sqlx::types::Decimal>, _>("unlock_price_usdc")
         .ok()
@@ -8606,6 +8772,7 @@ fn portfolio_sample_json_from_row(row: &sqlx::postgres::PgRow) -> serde_json::Va
         "completed_in_seconds": completed_in_seconds,
         "completed_in_minutes": completed_in_minutes,
         "error": row.try_get::<Option<String>, _>("error_message").ok().flatten(),
+        "output_filename": row.try_get::<Option<String>, _>("output_filename").ok().flatten(),
         "portfolio_category": portfolio_category,
         "sales_positioning": sales_positioning,
         "visual_direction": visual_direction,
@@ -8613,6 +8780,9 @@ fn portfolio_sample_json_from_row(row: &sqlx::postgres::PgRow) -> serde_json::Va
         "include_narration": include_narration,
         "narration_text": narration_text,
         "narration_speaker": narration_speaker,
+        "service_slug": service_slug,
+        "service_name": service_name,
+        "price_mo": price_mo,
         "extra": extra,
     })
 }
@@ -8644,10 +8814,106 @@ pub async fn api_normalize_reference_asset(
     }
 }
 
+#[derive(Deserialize)]
+struct GenerateServiceSampleRequest {
+    service_slug: String,
+    brief_name: Option<String>,
+}
+
+pub async fn api_generate_service_portfolio_sample(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(body): Json<GenerateServiceSampleRequest>,
+) -> Json<serde_json::Value> {
+    // Find the matching DFY service definition
+    let service_def = crate::portfolio_samples::dfy_services()
+        .iter()
+        .find(|s| s.slug == body.service_slug);
+
+    let Some(svc) = service_def else {
+        return Json(json!({"success": false, "error": format!("Unknown service: {}", body.service_slug)}));
+    };
+
+    let inserted = sqlx::query(
+        "INSERT INTO service_portfolio_samples (service_slug, sample_name, brief, status, created_at) \
+         VALUES ($1, $2, $3, 'pending', NOW()) \
+         RETURNING id",
+    )
+    .bind(svc.slug)
+    .bind(&body.brief_name.unwrap_or_else(|| svc.name.to_string()))
+    .bind(svc.brief)
+    .execute(&state.db_pool)
+    .await;
+
+    match inserted {
+        Ok(row) => {
+            let sample_id: uuid::Uuid = row.get("id");
+            // AgenticServicePipeline background generation
+            let gen_state = state.clone();
+            let slug = svc.slug.to_string();
+            let style = svc.style.to_string();
+            let brief = svc.brief.to_string();
+            let duration = svc.duration_seconds;
+            let source_url = if svc.source_url.is_empty() { None } else { Some(svc.source_url.to_string()) };
+
+            tokio::spawn(async move {
+                let service_type = crate::services::agentic_service_pipeline::ServiceType::from_normalized(&slug);
+                let input = crate::services::agentic_service_pipeline::ServiceInput {
+                    title: format!("DFY Service Demo — {}", slug),
+                    brief,
+                    source_url,
+                    style,
+                    duration_seconds: duration,
+                    delivery_id: sample_id,
+                    prospect_id: None,
+                    session_uuid: None,
+                    user_id: None,
+                    source_table: Some("service_portfolio_samples".to_string()),
+                    source_record_id: Some(sample_id),
+                    idempotency_key: Some(format!("service-sample:{}", slug)),
+                    reference_images: vec![],
+                };
+
+                match crate::services::AgenticServicePipeline::start(gen_state.clone(), service_type, input).await {
+                    Ok(wf_id) => {
+                        let _ = sqlx::query("UPDATE service_portfolio_samples SET workflow_id = $1, status = 'running' WHERE id = $2")
+                            .bind(wf_id)
+                            .bind(sample_id)
+                            .execute(&gen_state.db_pool)
+                            .await;
+                    }
+                    Err(e) => {
+                        tracing::error!("service sample '{}' failed: {e}", slug);
+                        let _ = sqlx::query("UPDATE service_portfolio_samples SET status = 'failed', error_message = $1 WHERE id = $2")
+                            .bind(format!("AgenticServicePipeline failed: {e}"))
+                            .bind(sample_id)
+                            .execute(&gen_state.db_pool)
+                            .await;
+                    }
+                }
+            });
+
+            Json(json!({"success": true, "sample_id": sample_id, "message": "Sample queued for generation via AgenticServicePipeline."}))
+        }
+        Err(e) => Json(json!({"success": false, "error": format!("DB insert failed: {e}")})),
+    }
+}
+
 pub async fn api_list_service_portfolio_briefs(
     Extension(_state): Extension<Arc<AppState>>,
 ) -> Json<serde_json::Value> {
-    Json(json!({ "success": true, "services": [] }))
+    let services: Vec<serde_json::Value> = crate::portfolio_samples::dfy_services().iter().map(|svc| {
+        json!({
+            "service_slug": svc.slug,
+            "service_name": svc.name,
+            "briefs": [{
+                "name": svc.name,
+                "description": svc.brief,
+                "duration_seconds": svc.duration_seconds,
+                "style": svc.style,
+            }],
+        })
+    }).collect();
+    Json(json!({ "success": true, "services": services }))
 }
 
 pub async fn api_list_service_portfolio_samples(
@@ -8948,14 +9214,6 @@ pub async fn admin_portfolio_samples_page() -> Html<String> {
       aspect-ratio: 16 / 9;
       object-fit: cover;
     }
-    .pitch {
-      margin-top: 12px;
-      padding: 12px;
-      border-radius: 16px;
-      border: 1px dashed rgba(148,163,184,0.25);
-      background: rgba(2, 6, 23, 0.35);
-      color: var(--text);
-    }
     .empty { border: 1px dashed var(--line); border-radius: 18px; padding: 24px; color: var(--muted); margin-top: 24px; }
     .notice { color: var(--muted); margin-top: 14px; min-height: 24px; }
   </style>
@@ -8969,112 +9227,72 @@ pub async fn admin_portfolio_samples_page() -> Html<String> {
       <a href="/admin/prospect-finder">Prospects</a>
       <a href="/admin/revenue-ledger">Revenue Ledger</a>
     </nav>
-    <section class="hero">
-      <h1>Crypto SaaS portfolio samples</h1>
-      <p>
-        Generate five speculative website-to-video samples for real Web3 SaaS targets. These queue into the existing delivery pipeline, so every sample gets a public <code>/delivery/:id</code> link with R2-hosted output.
-      </p>
-      <div class="actions">
-        <button id="generate-btn">Generate 5 Crypto SaaS Samples</button>
-        <button id="refresh-btn" class="secondary">Refresh Status</button>
-        <a class="button secondary" href="/admin/deliveries">Open Deliveries</a>
-      </div>
-      <div class="stats" id="stats"></div>
-      <div id="notice" class="notice"></div>
-    </section>
-  </header>
-  <main>
-    <div id="samples" class="grid"></div>
-    <div id="empty" class="empty" style="display:none;">No portfolio samples yet. Generate the first batch to create shareable proof for outbound pitches.</div>
-  </main>
+      <section class="hero">
+        <h1>12 DFY Service Demos</h1>
+        <p>
+          Generate one sample video per DFY service using the AgenticServicePipeline with full ~223-tool access.
+          Each sample gets a public delivery link with R2-hosted output — shareable immediately.
+        </p>
+        <div class="actions">
+          <button id="dfy-generate-btn">Generate All 12 DFY Samples</button>
+          <button id="dfy-refresh-btn" class="secondary">Refresh Status</button>
+          <a class="button secondary" href="/admin/deliveries">Open Deliveries</a>
+        </div>
+        <div class="stats" id="dfy-stats"></div>
+        <div id="dfy-notice" class="notice"></div>
+      </section>
+    </header>
+    <main>
+      <div id="dfy-samples" class="grid"></div>
+      <div id="dfy-empty" class="empty" style="display:none;">No DFY service demos yet. Generate to create samples for all 12 services.</div>
+    </main>
   <script>
     const token = localStorage.getItem('auth_token') || localStorage.getItem('authToken') || localStorage.getItem('admin_token');
     const headers = token ? { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' } : { 'Content-Type': 'application/json' };
-    const notice = document.getElementById('notice');
-    const samplesEl = document.getElementById('samples');
-    const emptyEl = document.getElementById('empty');
-    const statsEl = document.getElementById('stats');
+    const notice = document.getElementById('dfy-notice');
+    const samplesEl = document.getElementById('dfy-samples');
+    const emptyEl = document.getElementById('dfy-empty');
+    const statsEl = document.getElementById('dfy-stats');
 
-    function setNotice(message) {
-      notice.textContent = message || '';
-    }
+    function setNotice(message) { notice.textContent = message || ''; }
 
-    function formatMinutes(value) {
-      if (typeof value !== 'number' || !isFinite(value)) return 'In progress';
-      return `${value.toFixed(1)} min`;
-    }
-
-    function averageMinutes(samples) {
-      const completed = samples.filter(sample => typeof sample.completed_in_minutes === 'number');
-      if (!completed.length) return null;
-      const total = completed.reduce((sum, sample) => sum + sample.completed_in_minutes, 0);
-      return total / completed.length;
-    }
-
-    function renderStats(samples) {
-      const completed = samples.filter(sample => sample.status === 'completed').length;
-      const running = samples.filter(sample => sample.status === 'running').length;
-      const pending = samples.filter(sample => sample.status === 'pending').length;
-      const avg = averageMinutes(samples);
-      statsEl.innerHTML = [
-        { label: 'Completed', value: completed },
-        { label: 'Running', value: running },
-        { label: 'Queued', value: pending },
-        { label: 'Avg Render Time', value: avg ? `${avg.toFixed(1)} min` : 'Waiting' },
-      ].map(stat => `
-        <div class="stat">
-          <strong>${stat.value}</strong>
-          <span>${stat.label}</span>
-        </div>
-      `).join('');
-    }
-
-    function salesPitch(sample) {
-      const company = sample.company || (sample.extra && sample.extra.company) || 'this company';
-      const angle = sample.visual_direction || (sample.extra && sample.extra.visual_direction) || 'a fast product story';
-      return `Spec ad for ${company}: 15-second crypto SaaS explainer focused on ${angle}. Use this as proof-of-execution in outreach.`;
-    }
-
-    function card(sample) {
-      const company = sample.company || (sample.extra && sample.extra.company) || sample.title;
-      const deliveryUrl = sample.delivery_url || `/delivery/${sample.id}`;
+    function dfyCard(sample) {
+      const svc = sample.service_slug || (sample.extra && sample.extra.service_slug) || 'unknown';
+      const name = sample.service_name || (sample.extra && sample.extra.service_name) || sample.title;
+      const price = sample.price_mo || (sample.extra && sample.extra.price_mo) || '';
+      const deliveryUrl = sample.delivery_url || '/delivery/' + sample.id;
       const publicDeliveryUrl = sample.public_delivery_url || deliveryUrl;
-      const source = sample.source_url || (sample.extra && sample.extra.source_url) || '';
       const output = sample.output_r2_url || sample.preview_r2_url;
-      const downloadName = (sample.output_filename || sample.title || company || 'videosync-delivery')
-        .toString()
-        .replace(/[^a-z0-9._-]+/gi, '-')
-        .replace(/^-+|-+$/g, '') || 'videosync-delivery';
-      const poster = sample.reference_image_url || (sample.extra && sample.extra.reference_image_url) || '';
-      return `
-        <article class="card">
-          <div class="eyebrow">${sample.portfolio_category || 'portfolio sample'}</div>
-          <h3>${company}</h3>
-          <div class="meta">${sample.title || ''}</div>
-          <span class="status ${sample.status || 'pending'}">${sample.status || 'pending'}</span>
-          ${output ? `<video class="preview" src="${output}" ${poster ? `poster="${poster}"` : ''} controls preload="metadata"></video>` : ''}
-          <div class="meta">Source: ${source ? `<a href="${source}" target="_blank" rel="noreferrer">${source}</a>` : 'Not set'}</div>
-          <div class="meta">Price: Free (sample delivery)</div>
-          <div class="meta">Turnaround: ${formatMinutes(sample.completed_in_minutes)}</div>
-          <div class="meta">Narration: ${sample.include_narration ? 'Enabled' : 'Silent'}</div>
-          ${sample.error ? `<p style="color:#fb7185">${sample.error}</p>` : ''}
-          <div class="pitch">${sample.sales_positioning || salesPitch(sample)}</div>
-          <div class="links">
-            <a href="${deliveryUrl}" target="_blank" rel="noreferrer">Delivery Page</a>
-            ${output ? `<a href="${output}" download="${downloadName}" target="_blank" rel="noreferrer">Download Media</a>` : ''}
-            <button type="button" data-copy="${publicDeliveryUrl.replace(/"/g, '&quot;')}">Copy Share Link</button>
-          </div>
-        </article>
-      `;
+      const downloadName = (sample.output_filename || sample.title || svc || 'videosync-dfy').replace(/[^a-z0-9._-]+/gi, '-').replace(/^-+|-+$/g, '') || 'videosync-dfy';
+      return '<article class="card">' +
+        '<div class="eyebrow">' + svc + '</div>' +
+        '<h3>' + name + '</h3>' +
+        '<div class="meta">' + (price ? '$' + price + '/mo' : '') + '</div>' +
+        '<span class="status ' + (sample.status || 'pending') + '">' + (sample.status || 'pending') + '</span>' +
+        (output ? '<video class="preview" src="' + output + '" controls preload="metadata"></video>' : '') +
+        (sample.error ? '<p style="color:#fb7185">' + sample.error + '</p>' : '') +
+        '<div class="links">' +
+        '<a href="' + deliveryUrl + '" target="_blank" rel="noreferrer">Delivery Page</a>' +
+        (output ? '<a href="' + output + '" download="' + downloadName + '" target="_blank" rel="noreferrer">Download</a>' : '') +
+        '<button type="button" data-copy="' + publicDeliveryUrl.replace(/"/g, '&quot;') + '">Copy Share Link</button>' +
+        '</div></article>';
     }
 
     async function loadSamples() {
-      const resp = await fetch('/api/admin/portfolio-samples', { headers });
+      const resp = await fetch('/api/admin/portfolio-samples/dfy', { headers });
       const data = await resp.json();
-      if (!data.success) throw new Error(data.error || 'Failed to load samples');
+      if (!data.success) throw new Error(data.error || 'Failed to load DFY samples');
       const samples = data.samples || [];
-      renderStats(samples);
-      samplesEl.innerHTML = samples.map(card).join('');
+      const completed = samples.filter(s => s.status === 'completed').length;
+      const running = samples.filter(s => s.status === 'running').length;
+      const failed = samples.filter(s => s.status === 'failed').length;
+      statsEl.innerHTML = [
+        { label: 'Completed', value: completed },
+        { label: 'Running', value: running },
+        { label: 'Failed', value: failed },
+        { label: 'Total', value: samples.length },
+      ].map(s => '<div class="stat"><strong>' + s.value + '</strong><span>' + s.label + '</span></div>').join('');
+      samplesEl.innerHTML = samples.map(dfyCard).join('');
       emptyEl.style.display = samples.length ? 'none' : 'block';
       document.querySelectorAll('[data-copy]').forEach((button) => {
         button.addEventListener('click', async () => {
@@ -9090,28 +9308,83 @@ pub async fn admin_portfolio_samples_page() -> Html<String> {
     }
 
     async function generateSamples() {
-      setNotice('Queueing portfolio samples and fetching website hero images...');
-      document.getElementById('generate-btn').disabled = true;
+      setNotice('Queueing all 12 DFY service samples via AgenticServicePipeline...');
+      document.getElementById('dfy-generate-btn').disabled = true;
       try {
-        const resp = await fetch('/api/admin/portfolio-samples/crypto-saas', {
-          method: 'POST',
-          headers,
-          body: '{}',
-        });
+        const resp = await fetch('/api/admin/portfolio-samples/dfy', { method: 'POST', headers, body: '{}' });
         const data = await resp.json();
-        if (!data.success) throw new Error(data.error || 'Failed to queue samples');
-        setNotice(data.message || `Queued ${data.queued || 0} samples.`);
+        if (!data.success) throw new Error(data.error || 'Failed to queue DFY samples');
+        setNotice(data.message || 'Queued ' + (data.queued || 0) + ' DFY samples.');
         await loadSamples();
-      } catch (err) {
-        setNotice(err.message || String(err));
-      } finally {
-        document.getElementById('generate-btn').disabled = false;
-      }
+      } catch (err) { setNotice(err.message || String(err)); }
+      finally { document.getElementById('dfy-generate-btn').disabled = false; }
     }
 
-    document.getElementById('generate-btn').addEventListener('click', generateSamples);
-    document.getElementById('refresh-btn').addEventListener('click', () => loadSamples().catch(err => setNotice(err.message)));
+    document.getElementById('dfy-generate-btn').addEventListener('click', generateSamples);
+    document.getElementById('dfy-refresh-btn').addEventListener('click', () => loadSamples().catch(err => setNotice(err.message)));
     loadSamples().catch(err => setNotice(err.message));
+    const dfyNotice = document.getElementById('dfy-notice');
+    const dfySamplesEl = document.getElementById('dfy-samples');
+    const dfyEmptyEl = document.getElementById('dfy-empty');
+    const dfyStatsEl = document.getElementById('dfy-stats');
+
+    function setDfyNotice(message) { dfyNotice.textContent = message || ''; }
+
+    function dfyCard(sample) {
+      const svc = sample.service_slug || (sample.extra && sample.extra.service_slug) || 'unknown';
+      const name = sample.service_name || (sample.extra && sample.extra.service_name) || sample.title;
+      const price = sample.price_mo || (sample.extra && sample.extra.price_mo) || '';
+      const deliveryUrl = sample.delivery_url || '/delivery/' + sample.id;
+      const output = sample.output_r2_url || sample.preview_r2_url;
+      const downloadName = (sample.output_filename || sample.title || svc || 'videosync-dfy').replace(/[^a-z0-9._-]+/gi, '-').replace(/^-+|-+$/g, '') || 'videosync-dfy';
+      return '<article class="card">' +
+        '<div class="eyebrow">' + svc + '</div>' +
+        '<h3>' + name + '</h3>' +
+        '<div class="meta">' + (price ? '$' + price + '/mo' : '') + '</div>' +
+        '<span class="status ' + (sample.status || 'pending') + '">' + (sample.status || 'pending') + '</span>' +
+        (output ? '<video class="preview" src="' + output + '" controls preload="metadata"></video>' : '') +
+        (sample.error ? '<p style="color:#fb7185">' + sample.error + '</p>' : '') +
+        '<div class="links">' +
+        '<a href="' + deliveryUrl + '" target="_blank" rel="noreferrer">Delivery Page</a>' +
+        (output ? '<a href="' + output + '" download="' + downloadName + '" target="_blank" rel="noreferrer">Download</a>' : '') +
+        '</div></article>';
+    }
+
+    async function loadDfySamples() {
+      const resp = await fetch('/api/admin/portfolio-samples/dfy', { headers });
+      const data = await resp.json();
+      if (!data.success) throw new Error(data.error || 'Failed to load DFY samples');
+      const samples = data.samples || [];
+      const completed = samples.filter(s => s.status === 'completed').length;
+      const running = samples.filter(s => s.status === 'running').length;
+      const failed = samples.filter(s => s.status === 'failed').length;
+      dfyStatsEl.innerHTML = [
+        { label: 'Completed', value: completed },
+        { label: 'Running', value: running },
+        { label: 'Failed', value: failed },
+        { label: 'Total', value: samples.length },
+      ].map(s => '<div class="stat"><strong>' + s.value + '</strong><span>' + s.label + '</span></div>').join('');
+      dfySamplesEl.innerHTML = samples.map(dfyCard).join('');
+      dfyEmptyEl.style.display = samples.length ? 'none' : 'block';
+      return samples;
+    }
+
+    async function generateDfySamples() {
+      setDfyNotice('Queueing all 12 DFY service samples...');
+      document.getElementById('dfy-generate-btn').disabled = true;
+      try {
+        const resp = await fetch('/api/admin/portfolio-samples/dfy', { method: 'POST', headers, body: '{}' });
+        const data = await resp.json();
+        if (!data.success) throw new Error(data.error || 'Failed to queue DFY samples');
+        setDfyNotice(data.message || 'Queued ' + (data.queued || 0) + ' DFY samples.');
+        await loadDfySamples();
+      } catch (err) { setDfyNotice(err.message || String(err)); }
+      finally { document.getElementById('dfy-generate-btn').disabled = false; }
+    }
+
+    document.getElementById('dfy-generate-btn').addEventListener('click', generateDfySamples);
+    document.getElementById('dfy-refresh-btn').addEventListener('click', () => loadDfySamples().catch(err => setDfyNotice(err.message)));
+    loadDfySamples().catch(err => setDfyNotice(err.message));
   </script>
 </body>
 </html>
@@ -10133,6 +10406,8 @@ pub async fn admin_deliveries_page() -> Html<String> {
   <a href="/admin/clipping-activity">Activity</a>
   <a href="/admin/performance">Performance</a>
   <a href="/admin/test-runs">Portfolio Tests</a>
+  <a href="/admin/portfolio-samples">Portfolio Samples</a>
+  <a href="/admin/email-logs">Email Logs</a>
   <a href="/admin/deliveries" class="active">Deliveries</a>
 </div>
 <div class="main">
@@ -10157,11 +10432,19 @@ pub async fn admin_deliveries_page() -> Html<String> {
       <div class="form-group">
         <label>Service / Gig Type *</label>
         <select id="gig_type" onchange="onGigTypeChange()">
-          <optgroup label="Monetization Offers">
-            <option value="saas_launch_pack">SaaS Launch Pack</option>
-            <option value="clipper_enhancement_pack">Motion Pack</option>
-            <option value="creator_manager_fulfillment">Agency Production Backend</option>
-            <option value="x402_asset_api">Programmable Payments</option>
+          <optgroup label="DFY Services (AgenticPipeline)">
+            <option value="clipping">Clip Distribution ($297/mo)</option>
+            <option value="kick_auto_clipper">Kick Auto-Clipper ($297/mo)</option>
+            <option value="landing_page">Landing Page Video ($149/mo)</option>
+            <option value="education">Educational Explainer ($199/mo)</option>
+            <option value="manim_explainer">Manim Explainer ($149/mo)</option>
+            <option value="whiteboard_animation">Whiteboard Animation ($149/mo)</option>
+            <option value="kinetic_typography">Kinetic Typography ($149/mo)</option>
+            <option value="animated_infographic">Animated Infographic ($149/mo)</option>
+            <option value="algorithm_viz">Algorithm Visualization ($149/mo)</option>
+            <option value="investor_pitch">Investor Pitch ($149/mo)</option>
+            <option value="year_in_review">Year-in-Review ($149/mo)</option>
+            <option value="isometric_explainer">Isometric Explainer ($149/mo)</option>
           </optgroup>
           <optgroup label="Production Tools">
             <option value="scene">3D Scene / B-Roll Clip</option>
@@ -10172,8 +10455,14 @@ pub async fn admin_deliveries_page() -> Html<String> {
             <option value="latex">LaTeX / Math Animation</option>
             <option value="ui_mockup">UI Mockup (Phone/Screen)</option>
           </optgroup>
+          <optgroup label="Legacy Monetization">
+            <option value="saas_launch_pack">SaaS Launch Pack</option>
+            <option value="clipper_enhancement_pack">Motion Pack</option>
+            <option value="creator_manager_fulfillment">Agency Production Backend</option>
+            <option value="x402_asset_api">Programmable Payments</option>
+          </optgroup>
         </select>
-        <span class="hint">Choose a sellable offer for client-facing packages, or a raw production tool when you need a specific render primitive.</span>
+        <span class="hint">DFY services route through AgenticServicePipeline. Production tools and legacy options still use the full agent pipeline.</span>
       </div>
       <div class="form-group" id="grp-style">
         <label>Style</label>
@@ -10317,10 +10606,24 @@ pub async fn admin_deliveries_page() -> Html<String> {
 
 <script>
 const GIG_CONFIG = {
-  saas_launch_pack: { promptLabel:'Website / Product Brief', style:true, subtitle:false, titleText:false, duration:true, chartType:false, dataJson:false, animType:false, bgStyle:false, device:false, mockupAnim:false, screenshotUrl:false, refImageUrl:true, narration:true, defaultDuration:20, submitGigType:'scene', serviceOffer:'saas_launch_pack' },
-  clipper_enhancement_pack: { promptLabel:'Visual Packaging Brief', style:true, subtitle:false, titleText:false, duration:true, chartType:false, dataJson:false, animType:false, bgStyle:false, device:false, mockupAnim:false, screenshotUrl:false, refImageUrl:true, narration:true, defaultDuration:15, submitGigType:'scene', serviceOffer:'clipper_enhancement_pack' },
-  creator_manager_fulfillment: { promptLabel:'Agency Production Brief', style:true, subtitle:false, titleText:false, duration:true, chartType:false, dataJson:false, animType:false, bgStyle:false, device:false, mockupAnim:false, screenshotUrl:false, refImageUrl:true, narration:true, defaultDuration:20, submitGigType:'scene', serviceOffer:'creator_manager_fulfillment' },
-  x402_asset_api: { promptLabel:'Programmable Payments Brief', style:true, subtitle:false, titleText:false, duration:true, chartType:false, dataJson:false, animType:false, bgStyle:false, device:false, mockupAnim:false, screenshotUrl:false, refImageUrl:true, narration:true, defaultDuration:15, submitGigType:'scene', serviceOffer:'x402_asset_api' },
+  // ── 12 DFY Services ────────────────────────────────────────────────────
+  clipping:           { promptLabel:'Content / VOD Brief', style:true, subtitle:false, titleText:false, duration:true, chartType:false, dataJson:false, animType:false, bgStyle:false, device:false, mockupAnim:false, screenshotUrl:false, refImageUrl:true, narration:true, defaultDuration:15 },
+  kick_auto_clipper:  { promptLabel:'Kick VOD / Streamer Brief', style:true, subtitle:false, titleText:false, duration:true, chartType:false, dataJson:false, animType:false, bgStyle:false, device:false, mockupAnim:false, screenshotUrl:false, refImageUrl:true, narration:true, defaultDuration:45 },
+  landing_page:       { promptLabel:'Business / Website Brief', style:true, subtitle:false, titleText:false, duration:true, chartType:false, dataJson:false, animType:false, bgStyle:false, device:false, mockupAnim:false, screenshotUrl:false, refImageUrl:true, narration:true, defaultDuration:30 },
+  education:          { promptLabel:'Topic / Lesson Brief', style:true, subtitle:false, titleText:false, duration:true, chartType:false, dataJson:false, animType:false, bgStyle:false, device:false, mockupAnim:false, screenshotUrl:false, refImageUrl:true, narration:true, defaultDuration:60 },
+  manim_explainer:    { promptLabel:'Concept / Topic Brief', style:true, subtitle:false, titleText:false, duration:true, chartType:false, dataJson:false, animType:false, bgStyle:false, device:false, mockupAnim:false, screenshotUrl:false, refImageUrl:true, narration:true, defaultDuration:45 },
+  whiteboard_animation: { promptLabel:'Topic Brief', style:true, subtitle:false, titleText:false, duration:true, chartType:false, dataJson:false, animType:false, bgStyle:false, device:false, mockupAnim:false, screenshotUrl:false, refImageUrl:true, narration:true, defaultDuration:30 },
+  kinetic_typography: { promptLabel:'Quote / Text Brief', style:true, subtitle:false, titleText:false, duration:true, chartType:false, dataJson:false, animType:false, bgStyle:false, device:false, mockupAnim:false, screenshotUrl:false, refImageUrl:true, narration:true, defaultDuration:20 },
+  animated_infographic: { promptLabel:'Data / Topic Brief', style:true, subtitle:false, titleText:false, duration:true, chartType:false, dataJson:false, animType:false, bgStyle:false, device:false, mockupAnim:false, screenshotUrl:false, refImageUrl:true, narration:true, defaultDuration:30 },
+  algorithm_viz:      { promptLabel:'Algorithm / Code Brief', style:true, subtitle:false, titleText:false, duration:true, chartType:false, dataJson:false, animType:false, bgStyle:false, device:false, mockupAnim:false, screenshotUrl:false, refImageUrl:true, narration:true, defaultDuration:45 },
+  investor_pitch:     { promptLabel:'Startup / Pitch Brief', style:true, subtitle:false, titleText:false, duration:true, chartType:false, dataJson:false, animType:false, bgStyle:false, device:false, mockupAnim:false, screenshotUrl:false, refImageUrl:true, narration:true, defaultDuration:60 },
+  year_in_review:     { promptLabel:'Creator / Stats Brief', style:true, subtitle:false, titleText:false, duration:true, chartType:false, dataJson:false, animType:false, bgStyle:false, device:false, mockupAnim:false, screenshotUrl:false, refImageUrl:true, narration:true, defaultDuration:30 },
+  isometric_explainer: { promptLabel:'Process / Concept Brief', style:true, subtitle:false, titleText:false, duration:true, chartType:false, dataJson:false, animType:false, bgStyle:false, device:false, mockupAnim:false, screenshotUrl:false, refImageUrl:true, narration:true, defaultDuration:30 },
+  // ── Legacy ─────────────────────────────────────────────────────────────
+  saas_launch_pack: { promptLabel:'Website / Product Brief', style:true, subtitle:false, titleText:false, duration:true, chartType:false, dataJson:false, animType:false, bgStyle:false, device:false, mockupAnim:false, screenshotUrl:false, refImageUrl:true, narration:true, defaultDuration:20 },
+  clipper_enhancement_pack: { promptLabel:'Visual Packaging Brief', style:true, subtitle:false, titleText:false, duration:true, chartType:false, dataJson:false, animType:false, bgStyle:false, device:false, mockupAnim:false, screenshotUrl:false, refImageUrl:true, narration:true, defaultDuration:15 },
+  creator_manager_fulfillment: { promptLabel:'Agency Production Brief', style:true, subtitle:false, titleText:false, duration:true, chartType:false, dataJson:false, animType:false, bgStyle:false, device:false, mockupAnim:false, screenshotUrl:false, refImageUrl:true, narration:true, defaultDuration:20 },
+  x402_asset_api: { promptLabel:'Programmable Payments Brief', style:true, subtitle:false, titleText:false, duration:true, chartType:false, dataJson:false, animType:false, bgStyle:false, device:false, mockupAnim:false, screenshotUrl:false, refImageUrl:true, narration:true, defaultDuration:15 },
   scene:       { promptLabel:'Scene Description', style:true,  subtitle:false, titleText:false, duration:true,  chartType:false, dataJson:false, animType:false, bgStyle:false, device:false, mockupAnim:false, screenshotUrl:false, refImageUrl:true,  narration:true,  defaultDuration:15 },
   thumbnail:   { promptLabel:'Thumbnail Description', style:true,  subtitle:false, titleText:true,  duration:false, chartType:false, dataJson:false, animType:false, bgStyle:false, device:false, mockupAnim:false, screenshotUrl:false, refImageUrl:false, narration:false, defaultDuration:0  },
   title_card:  { promptLabel:'Main Title Text', style:true,  subtitle:true,  titleText:false, duration:true,  chartType:false, dataJson:false, animType:false, bgStyle:false, device:false, mockupAnim:false, screenshotUrl:false, refImageUrl:false, narration:false, defaultDuration:5  },
@@ -11244,7 +11547,7 @@ const HOW_WE_WORK_HTML: &str = r###"<!DOCTYPE html>
     <div class="source-card">
       <div class="who">Whitelisted team (primary) + you</div>
       <h4>📸 Instagram</h4>
-      <p>PhantomBuster hashtag search + per-user scoping. Team uses <a href="https://cmachine.devthuku.io/instagram-leads">cmachine → Instagram Leads</a>. You can also run it from the admin prospect-finder. Attribution per whitelisted user flows to the <a href="/admin/revenue-ledger">Revenue Ledger</a>.</p>
+      <p>PhantomBuster hashtag search + per-user scoping. Team uses <a href="https://content-machine-pbjp.vercel.app/instagram-leads">cmachine → Instagram Leads</a>. You can also run it from the admin prospect-finder. Attribution per whitelisted user flows to the <a href="/admin/revenue-ledger">Revenue Ledger</a>.</p>
     </div>
     <div class="source-card">
       <div class="who">You only (automated)</div>
@@ -11382,7 +11685,7 @@ const HOW_WE_WORK_HTML: &str = r###"<!DOCTYPE html>
 <!-- ═══════ TEAM ═══════ -->
 <section id="team">
   <h2>4. How the whitelisted clipping team works</h2>
-  <p>Your 15-person team operates through <a href="https://cmachine.devthuku.io">content_machine</a>. They have their own scoped view — each user only sees the leads they sourced.</p>
+  <p>Your 15-person team operates through <a href="https://content-machine-pbjp.vercel.app">content_machine</a>. They have their own scoped view — each user only sees the leads they sourced.</p>
   <ol>
     <li>Log in → <strong>Instagram Leads</strong> page.</li>
     <li>Run Auto-Discover (AI picks hashtags for their niche) OR Manual Search.</li>
@@ -11991,4 +12294,270 @@ pub async fn api_admin_zernio_status(
     };
 
     Json(json!({"success": true, "profiles": profiles, "accounts": accounts}))
+}
+
+pub async fn api_email_logs(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    match crate::services::email_service::list_email_logs(&state.db_pool, 100).await {
+        Ok(logs) => Json(json!({"success": true, "logs": logs})),
+        Err(e) => Json(json!({"success": false, "error": e})),
+    }
+}
+
+pub async fn admin_email_logs_page() -> Html<String> {
+    Html(format!(
+        r###"<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Email Logs — VideoSync Admin</title>
+<style>
+  body {{ font-family: system-ui, sans-serif; background: #121218; color: #e0e0e0; margin: 0; padding: 24px; }}
+  h1 {{ font-size: 20px; font-weight: 600; margin-bottom: 20px; }}
+  table {{ width: 100%; border-collapse: collapse; background: #1a1a24; border-radius: 8px; overflow: hidden; }}
+  th {{ padding: 10px 14px; text-align: left; font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid #2a2a36; }}
+  td {{ padding: 10px 14px; font-size: 13px; border-bottom: 1px solid #1f1f2e; }}
+  tr:hover td {{ background: #1f1f2a; }}
+  .badge {{ padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }}
+  .badge-sent {{ background: #16a34a22; color: #4ade80; }}
+  .badge-failed {{ background: #dc262622; color: #f87171; }}
+  .badge-bounced {{ background: #f59e0b22; color: #fbbf24; }}
+  .badge-sending {{ background: #2563eb22; color: #60a5fa; }}
+  .empty {{ text-align: center; padding: 60px; color: #666; }}
+  .nav {{ margin-bottom: 20px; display: flex; gap: 16px; }}
+  .nav a {{ color: #a99ef7; text-decoration: none; font-size: 13px; }}
+  .nav a:hover {{ text-decoration: underline; }}
+</style></head><body>
+<div class="nav">
+  <a href="/admin/dashboard">← Dashboard</a>
+  <a href="/admin/prospect-finder">Prospects</a>
+</div>
+<h1>📧 Email Logs</h1>
+<p style="color:#888;font-size:13px;margin-bottom:16px">Recent email sends via AWS SES. Reload to see new entries.</p>
+<table><thead><tr>
+  <th>Time</th><th>To</th><th>Subject</th><th>Status</th><th>Message ID</th><th>Error</th>
+</tr></thead><tbody id="logs-body">
+  <tr><td colspan="6" class="empty">Loading...</td></tr>
+</tbody></table>
+<script>
+async function loadLogs() {{
+  const token = localStorage.getItem('auth_token') || localStorage.getItem('admin_token');
+  const res = await fetch('/api/admin/email-logs', {{ headers: {{ 'Authorization': `Bearer ${{token}}` }} }});
+  const data = await res.json();
+  const tbody = document.getElementById('logs-body');
+  if (!data.success || !data.logs?.length) {{
+    tbody.innerHTML = '<tr><td colspan="6" class="empty">No emails sent yet.</td></tr>';
+    return;
+  }}
+  tbody.innerHTML = data.logs.map(l => ``
+    <tr>
+      <td style="font-size:11px;color:#888">${{new Date(l.created_at).toLocaleString()}}</td>
+      <td>${{l.to_email}}</td>
+      <td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${{l.subject}}</td>
+      <td><span class="badge badge-${{l.status}}">${{l.status}}</span></td>
+      <td style="font-size:11px;font-family:monospace;color:#888">${{(l.message_id||'').substring(0,20)}}…</td>
+      <td style="font-size:11px;color:#f87171;max-width:200px">${{l.error_message||''}}</td>
+    </tr>
+  ``).join('');
+}}
+loadLogs();
+setInterval(loadLogs, 15000);
+</script>
+</body></html>"###,
+    ))
+}
+
+// ── Referral System ──────────────────────────────────────────────────────
+
+/// GET /ref/{code} — Redirect referral links and tag the referring code.
+/// The landing page stores `?ref={code}` in session/cookie via JS.
+pub async fn referral_redirect(
+    Path(code): Path<String>,
+) -> axum::response::Redirect {
+    axum::response::Redirect::to(&format!("/?ref={code}"))
+}
+
+/// POST /api/admin/referral-codes — Create a referral code for a user.
+#[derive(Deserialize)]
+struct CreateReferralCodeRequest {
+    user_id: i32,
+    code: Option<String>,
+}
+
+pub async fn api_create_referral_code(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(req): Json<CreateReferralCodeRequest>,
+) -> Json<serde_json::Value> {
+    let code = req.code.unwrap_or_else(|| {
+        let suffix = &Uuid::new_v4().to_string()[..8];
+        format!("ref-{suffix}")
+    });
+
+    let result = sqlx::query(
+        "INSERT INTO referral_codes (user_id, code) VALUES ($1, $2) RETURNING id, code",
+    )
+    .bind(req.user_id)
+    .bind(&code)
+    .fetch_one(&state.db_pool)
+    .await;
+
+    match result {
+        Ok(row) => {
+            let id: Uuid = row.get("id");
+            let code: String = row.get("code");
+            Json(json!({"success": true, "id": id, "code": code, "ref_url": format!("/ref/{code}")}))
+        }
+        Err(e) => Json(json!({"success": false, "error": format!("Failed to create referral code: {e}")})),
+    }
+}
+
+/// GET /api/admin/referral-codes — List all referral codes with user info.
+pub async fn api_list_referral_codes(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    let rows = sqlx::query_as::<_, (Uuid, i32, String, chrono::DateTime<chrono::Utc>)>(
+        "SELECT rc.id, rc.user_id, rc.code, rc.created_at \
+         FROM referral_codes rc ORDER BY rc.created_at DESC",
+    )
+    .fetch_all(&state.db_pool)
+    .await;
+
+    match rows {
+        Ok(rows) => {
+            let codes: Vec<serde_json::Value> = rows
+                .into_iter()
+                .map(|(id, user_id, code, created_at)| {
+                    json!({"id": id, "user_id": user_id, "code": code, "ref_url": format!("/ref/{code}"), "created_at": created_at})
+                })
+                .collect();
+            Json(json!({"success": true, "codes": codes}))
+        }
+        Err(e) => Json(json!({"success": false, "error": format!("Failed to list referral codes: {e}")})),
+    }
+}
+
+/// GET /api/admin/referral-commissions — List all commissions.
+pub async fn api_list_referral_commissions(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    let rows = sqlx::query_as::<_, (Uuid, i32, Uuid, i32, f64, String, Option<chrono::DateTime<chrono::Utc>>, chrono::DateTime<chrono::Utc>)>(
+        "SELECT id, referrer_user_id, prospect_id, deal_amount_cents, commission_rate, status, paid_at, created_at \
+         FROM referral_commission ORDER BY created_at DESC",
+    )
+    .fetch_all(&state.db_pool)
+    .await;
+
+    match rows {
+        Ok(rows) => {
+            let commissions: Vec<serde_json::Value> = rows
+                .into_iter()
+                .map(|(id, referrer_user_id, prospect_id, deal_amount_cents, commission_rate, status, paid_at, created_at)| {
+                    json!({"id": id, "referrer_user_id": referrer_user_id, "prospect_id": prospect_id,
+                           "deal_amount_cents": deal_amount_cents, "commission_rate": commission_rate,
+                           "status": status, "paid_at": paid_at, "created_at": created_at})
+                })
+                .collect();
+            Json(json!({"success": true, "commissions": commissions}))
+        }
+        Err(e) => Json(json!({"success": false, "error": format!("Failed to list commissions: {e}")})),
+    }
+}
+
+/// GET /admin/referrals — Admin page for referral management.
+pub async fn admin_referrals_page() -> Html<String> {
+    Html(
+        r###"<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Referrals — VideoSync Admin</title>
+<style>
+  body {{ font-family: system-ui, sans-serif; background: #121218; color: #e0e0e0; margin: 0; padding: 24px; }}
+  h1 {{ font-size: 20px; font-weight: 600; }}
+  .nav {{ margin-bottom: 20px; display: flex; gap: 16px; }}
+  .nav a {{ color: #a99ef7; text-decoration: none; font-size: 13px; }}
+  .section {{ background: #1a1a24; border: 1px solid #2a2a36; border-radius: 8px; padding: 20px; margin-bottom: 20px; }}
+  input, select {{ background: #22222e; border: 1px solid #333; color: #e0e0e0; padding: 8px 12px; border-radius: 6px; font-size: 13px; }}
+  .btn {{ padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; }}
+  .btn-primary {{ background: #6c5ce7; color: #fff; }}
+  .btn-primary:hover {{ background: #5a4bd1; }}
+  table {{ width: 100%; border-collapse: collapse; }}
+  th {{ padding: 10px 14px; text-align: left; font-size: 11px; color: #888; text-transform: uppercase; border-bottom: 1px solid #2a2a36; }}
+  td {{ padding: 10px 14px; font-size: 13px; border-bottom: 1px solid #1f1f2e; }}
+  .badge {{ padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }}
+  .badge-pending {{ background: #f59e0b22; color: #fbbf24; }}
+  .badge-paid {{ background: #16a34a22; color: #4ade80; }}
+  .badge-cancelled {{ background: #dc262622; color: #f87171; }}
+</style></head><body>
+<div class="nav">
+  <a href="/admin/dashboard">← Dashboard</a>
+</div>
+<h1>🔗 Referral System</h1>
+
+<div class="section">
+  <h2>Create Referral Code</h2>
+  <p style="font-size:13px;color:#888;margin-bottom:12px">Generate a referral code for a whitelisted content machine user.</p>
+  <div style="display:flex;gap:12px;align-items:center">
+    <input id="ref-user-id" type="number" placeholder="User ID" style="width:120px">
+    <input id="ref-code" type="text" placeholder="Custom code (optional)" style="width:200px">
+    <button class="btn btn-primary" onclick="createCode()">Generate</button>
+  </div>
+  <div id="ref-result" style="margin-top:10px;font-size:13px;color:#4ade80"></div>
+</div>
+
+<div class="section">
+  <h2>Referral Codes</h2>
+  <table><thead><tr><th>Code</th><th>User ID</th><th>Ref URL</th><th>Created</th></tr></thead>
+    <tbody id="codes-body"><tr><td colspan="4" style="text-align:center;color:#666;padding:40px">Loading...</td></tr></tbody>
+  </table>
+</div>
+
+<div class="section">
+  <h2>Commissions</h2>
+  <table><thead><tr><th>Referrer</th><th>Prospect</th><th>Deal Amount</th><th>Rate</th><th>Commission</th><th>Status</th></tr></thead>
+    <tbody id="commissions-body"><tr><td colspan="6" style="text-align:center;color:#666;padding:40px">Loading...</td></tr></tbody>
+  </table>
+</div>
+
+<script>
+const token = localStorage.getItem('auth_token') || localStorage.getItem('admin_token');
+
+async function createCode() {
+  const userId = parseInt(document.getElementById('ref-user-id').value);
+  if (!userId) { document.getElementById('ref-result').textContent = 'Enter a user ID'; return; }
+  const code = document.getElementById('ref-code').value.trim() || null;
+  const res = await fetch('/api/admin/referral-codes', {
+    method:'POST', headers:{'Authorization':'Bearer '+token,'Content-Type':'application/json'},
+    body: JSON.stringify({user_id: userId, code})
+  });
+  const data = await res.json();
+  document.getElementById('ref-result').textContent = data.success
+    ? `Created: ${data.code} → ${window.location.origin}${data.ref_url}`
+    : 'Error: '+(data.error||'unknown');
+  if (data.success) loadCodes();
+}
+
+async function loadCodes() {
+  const res = await fetch('/api/admin/referral-codes', {headers:{'Authorization':'Bearer '+token}});
+  const data = await res.json();
+  document.getElementById('codes-body').innerHTML = data.success && data.codes?.length
+    ? data.codes.map(c=>`<tr><td><code>${c.code}</code></td><td>${c.user_id}</td><td><a href="${c.ref_url}" style="color:#a99ef7">${c.ref_url}</a></td><td style="font-size:11px;color:#888">${new Date(c.created_at).toLocaleString()}</td></tr>`).join('')
+    : '<tr><td colspan="4" style="text-align:center;color:#666;padding:40px">No codes yet</td></tr>';
+}
+
+async function loadCommissions() {
+  const res = await fetch('/api/admin/referral-commissions', {headers:{'Authorization':'Bearer '+token}});
+  const data = await res.json();
+  document.getElementById('commissions-body').innerHTML = data.success && data.commissions?.length
+    ? data.commissions.map(c=>{
+        const commission = Math.round(c.deal_amount_cents * c.commission_rate);
+        return `<tr><td>${c.referrer_user_id}</td><td>${c.prospect_id.substring(0,8)}</td><td>$${(c.deal_amount_cents/100).toFixed(2)}</td><td>${(c.commission_rate*100).toFixed(0)}%</td><td>$${(commission/100).toFixed(2)}</td><td><span class="badge badge-${c.status}">${c.status}</span></td></tr>`;
+      }).join('')
+    : '<tr><td colspan="6" style="text-align:center;color:#666;padding:40px">No commissions yet</td></tr>';
+}
+
+loadCodes();
+loadCommissions();
+</script>
+</body></html>"###,
+    )
 }

@@ -59,6 +59,7 @@ redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }
 # native-tls) causing a nonZeroExit:101 Rust panic on startup in production.
 aws-sdk-s3 = "1"
 aws-sdk-sqs = "1"
+aws-sdk-sesv2 = "1"
 aws-sdk-bedrockruntime = "1"
 aws-config = "1"
 aws-credential-types = "1"

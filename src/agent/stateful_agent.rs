@@ -998,7 +998,9 @@ IMPORTANT: For fetching website content, use `browserbase_crawl_website(url)` �
             };
 
             // ── Provider Fallback Chain ──
-            // Order: NVIDIA NIM (fastest, GPU) → AWS Bedrock → Ollama (self-hosted) → Gemini → DeepSeek
+            // Per spec: Ollama (self-hosted, FREE, GPU) is the DEFAULT FIRST ATTEMPT for every LLM call.
+            // Cloud providers (NVIDIA NIM, Gemini, DeepSeek) are billable fallbacks only.
+            // Order: Ollama → NVIDIA NIM → Gemini → DeepSeek
 
             // Helper to build OpenAI-format messages for OpenAI-compatible APIs (NVIDIA, Ollama, DeepSeek)
             let build_messages = |sys_inst: &str| -> Vec<serde_json::Value> {
@@ -1022,15 +1024,48 @@ IMPORTANT: For fetching website content, use `browserbase_crawl_website(url)` �
                 msgs
             };
 
-            // 1. Try NVIDIA NIM (GPU, fastest path)
+            let exec_context = crate::agent::tool_executor::ToolExecutionContext {
+                session_id: session_id.to_string(),
+                user_id,
+                app_state: app_state.clone(),
+                workflow_id,
+            };
+
+            // 1. Try Ollama (self-hosted, FREE, GPU cluster via NLB) — DEFAULT FIRST ATTEMPT
+            let ollama_client = self.ollama_client.as_ref()
+                .map(|arc| arc.as_ref())
+                .or_else(|| app_state.ollama_client.as_ref());
+            if let Some(ollama) = ollama_client {
+                let mut oa_messages = build_messages(system_instruction);
+                send_progress("🤖 Processing your request...");
+                match run_ollama_tool_loop(
+                    ollama,
+                    &mut oa_messages,
+                    &all_tools,
+                    &exec_context,
+                    &send_progress,
+                )
+                .await
+                {
+                    Ok(response) => {
+                        let clean = response.trim().to_string();
+                        let msg = ConversationMessage::new_assistant(
+                            session_id.to_string(),
+                            clean.clone(),
+                        );
+                        let _ = conversation_manager.save_message(&msg).await;
+                        tracing::info!("✅ Ollama completed task for session {}", session_id);
+                        return Ok(clean);
+                    }
+                    Err(ollama_err) => {
+                        tracing::warn!("⚠️ Ollama failed, trying NVIDIA NIM: {}", ollama_err);
+                    }
+                }
+            }
+
+            // 2. Try NVIDIA NIM (cloud fallback, 40 RPM free tier)
             if let Some(ref nim) = self.nvidia_nim_client {
                 let mut nim_messages = build_messages(system_instruction);
-                let exec_context = crate::agent::tool_executor::ToolExecutionContext {
-                    session_id: session_id.to_string(),
-                    user_id,
-                    app_state: app_state.clone(),
-                    workflow_id,
-                };
                 match run_nvidia_tool_loop(
                     nim,
                     &mut nim_messages,
@@ -1051,117 +1086,15 @@ IMPORTANT: For fetching website content, use `browserbase_crawl_website(url)` �
                         return Ok(clean);
                     }
                     Err(nim_err) => {
-                        tracing::warn!("⚠️ NVIDIA NIM failed, trying Bedrock: {}", nim_err);
+                        tracing::warn!("⚠️ NVIDIA NIM failed, trying Gemini: {}", nim_err);
                     }
                 }
             }
 
-            // 2. Try AWS Bedrock
-            if let Some(ref bedrock) = self.bedrock_client {
-                let mut bd_messages: Vec<aws_sdk_bedrockruntime::types::Message> = Vec::new();
-                for msg in &conversation_history {
-                    let role = match msg.role {
-                        crate::agent::conversation_manager::MessageRole::Human => aws_sdk_bedrockruntime::types::ConversationRole::User,
-                        crate::agent::conversation_manager::MessageRole::Assistant => aws_sdk_bedrockruntime::types::ConversationRole::Assistant,
-                        _ => continue,
-                    };
-                    if let Ok(m) = bedrock_text_message(role, &msg.content) {
-                        bd_messages.push(m);
-                    }
-                }
-                let current_msg = if !context.is_empty() {
-                    context.to_string()
-                } else {
-                    user_input.to_string()
-                };
-                if let Ok(m) = bedrock_text_message(
-                    aws_sdk_bedrockruntime::types::ConversationRole::User,
-                    &format!("{}\n\n{}", system_instruction, current_msg),
-                ) {
-                    bd_messages.push(m);
-                }
+            // 3. Try Gemini (quota-limited, last resort for free tier)
+            let response = self.client.generate_content(request).await;
 
-                let exec_context = crate::agent::tool_executor::ToolExecutionContext {
-                    session_id: session_id.to_string(),
-                    user_id,
-                    app_state: app_state.clone(),
-                    workflow_id,
-                };
-                match run_bedrock_tool_loop(
-                    bedrock,
-                    &mut bd_messages,
-                    &all_tools,
-                    &exec_context,
-                    &send_progress,
-                )
-                .await
-                {
-                    Ok(response) => {
-                        let clean = response.trim().to_string();
-                        let msg = ConversationMessage::new_assistant(
-                            session_id.to_string(),
-                            clean.clone(),
-                        );
-                        let _ = conversation_manager.save_message(&msg).await;
-                        tracing::info!("✅ Bedrock completed task for session {}", session_id);
-                        return Ok(clean);
-                    }
-                    Err(bedrock_err) => {
-                        tracing::warn!("⚠️ Bedrock failed, trying Ollama: {}", bedrock_err);
-                    }
-                }
-            }
-
-            // 3. Try Ollama (self-hosted, free)
-            let ollama_client = self.ollama_client.as_ref()
-                .map(|arc| arc.as_ref())
-                .or_else(|| app_state.ollama_client.as_ref());
-            let response = match ollama_client {
-                Some(ollama) => {
-                    let mut oa_messages = build_messages(system_instruction);
-
-                    send_progress("🤖 Processing your request...");
-
-                    let exec_context = crate::agent::tool_executor::ToolExecutionContext {
-                        session_id: session_id.to_string(),
-                        user_id,
-                        app_state: app_state.clone(),
-                        workflow_id,
-                    };
-
-                    match run_ollama_tool_loop(
-                        ollama,
-                        &mut oa_messages,
-                        &all_tools,
-                        &exec_context,
-                        &send_progress,
-                    )
-                    .await
-                    {
-                        Ok(response) => {
-                            let clean = response.trim().to_string();
-                            let msg = ConversationMessage::new_assistant(
-                                session_id.to_string(),
-                                clean.clone(),
-                            );
-                            let _ = conversation_manager.save_message(&msg).await;
-                            tracing::info!(
-                                "✅ Ollama completed task for session {}",
-                                session_id
-                            );
-                            return Ok(clean);
-                        }
-                        Err(ollama_err) => {
-                            tracing::warn!("⚠️ Ollama failed, trying Gemini: {}", ollama_err);
-                            self.client.generate_content(request).await
-                        }
-                    }
-                }
-                None => self.client.generate_content(request).await,
-            };
-
-            // 4. Gemini — if all prior providers failed
-            // 5. DeepSeek (last resort) — if Gemini also fails
+            // 4. DeepSeek V4 (last resort fallback) — if Gemini also fails
             let response = match response {
                 Ok(r) => r,
                 Err(gemini_err) => {
@@ -1170,14 +1103,6 @@ IMPORTANT: For fetching website content, use `browserbase_crawl_website(url)` �
 
                     if let Some(ref ds_client) = app_state.deepseek_client {
                         send_progress("🤖 Processing your request...");
-
-                        let exec_context = crate::agent::tool_executor::ToolExecutionContext {
-                            session_id: session_id.to_string(),
-                            user_id,
-                            app_state: app_state.clone(),
-                            workflow_id,
-                        };
-
                         match run_deepseek_tool_loop(
                             ds_client,
                             &mut ds_messages,
@@ -2309,6 +2234,7 @@ where
     Err(format!("NVIDIA NIM exceeded max turns ({})", MAX_TURNS))
 }
 
+#[allow(dead_code)]
 /// Multi-turn tool loop for AWS Bedrock (Meta Llama 4 Maverick 17B).
 /// Uses AWS SDK Message types. Same contract as run_ollama_tool_loop.
 async fn run_bedrock_tool_loop<F>(
@@ -2389,6 +2315,7 @@ where
     Err(format!("Bedrock exceeded max turns ({})", MAX_TURNS))
 }
 
+#[allow(dead_code)]
 fn bedrock_text_message(
     role: aws_sdk_bedrockruntime::types::ConversationRole,
     text: &str,

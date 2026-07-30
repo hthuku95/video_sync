@@ -136,15 +136,39 @@ pub async fn extract_stream_url(vod_url: &str) -> Result<String, String> {
     ))
 }
 
-/// Resolve a Kick channel URL to the latest VOD URL, then extract its HLS stream URL.
+/// Resolve a Kick channel URL to the latest working VOD HLS stream URL.
+/// Tries the 5 most recent VODs in order. If all fail, returns an error
+/// so the caller can fall back to yt-dlp or the raw channel URL.
 /// Returns `(vod_url, hls_url)`.
 pub async fn resolve_latest_stream(slug: &str) -> Result<(String, String), String> {
     let vods = list_vods(slug).await?;
-    let latest = vods
-        .into_iter()
-        .next()
-        .ok_or_else(|| format!("No VODs found for Kick channel '{}'", slug))?;
 
-    let hls = extract_stream_url(&latest).await?;
-    Ok((latest, hls))
+    // Try up to 5 most recent VODs
+    let max_attempts = 5usize.min(vods.len());
+    let mut last_error = String::new();
+    for vod in vods.into_iter().take(max_attempts) {
+        match extract_stream_url(&vod).await {
+            Ok(hls) => {
+                tracing::info!("Kick VOD → HLS (attempt #{}/{}): {}", max_attempts - max_attempts + 1, max_attempts, hls);
+                return Ok((vod, hls));
+            }
+            Err(e) => {
+                tracing::warn!("Kick VOD failed (attempt #{}/{}): {} — {}. Trying next...",
+                    max_attempts - max_attempts + 1, max_attempts, vod, e);
+                last_error = e;
+            }
+        }
+    }
+
+    // Log channel URL as fallback for yt-dlp
+    let channel_url = format!("https://kick.com/{}", slug);
+    tracing::warn!(
+        "All {} VOD attempts failed for '{}'. Last error: {}. yt-dlp may resolve the channel URL directly: {}",
+        max_attempts, slug, last_error, channel_url
+    );
+    Err(format!(
+        "No working VOD HLS found for '{}' (tried {} VODs). Last error: {}. \
+         Fallback: return channel URL for yt-dlp: {}",
+        slug, max_attempts, last_error, channel_url
+    ))
 }

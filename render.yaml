@@ -33,7 +33,7 @@ services:
       - key: RUST_LOG
         value: info
       - key: FRONTEND_URL
-        value: https://cmachine.devthuku.io
+        value: https://content-machine-pbjp.vercel.app
       - key: DATABASE_URL
         sync: false
       - key: JWT_SECRET

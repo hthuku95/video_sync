@@ -15,6 +15,7 @@ pub mod manual_clipping; // ✂️ Manual clipping — paste URL, get download l
 pub mod output;
 pub mod paypal;
 pub mod prospects; // 🎯 Admin prospect finder
+pub mod referrals; // 🔗 Referral codes + commissions for content machine users
 
 pub mod social_publish;
 pub mod subscribe;
