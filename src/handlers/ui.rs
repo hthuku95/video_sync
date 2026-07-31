@@ -4042,8 +4042,8 @@ fn build_modern_landing_page_html() -> &'static str {
                 </div>
                 <aside class="hero-summary">
                     <div class="hero-summary-label">Two ways to work with us</div>
-                    <h3>Subscribe to the AI workspace or order a done-for-you video.</h3>
-                    <p>Use the $15/mo workspace to edit and generate yourself, or let our AI agent produce a custom video for you — delivered in hours, priced at a fraction of agency cost.</p>
+                    <h3>Subscribe to the AI workspace or order a managed campaign.</h3>
+                    <p>Use the $15/mo workspace to edit and generate yourself, or let our AI agent run a custom video campaign for you — delivered in hours, priced at a fraction of agency cost.</p>
                     <div class="hero-metrics">
                         <div class="hero-metric">
                             <strong>$15/mo</strong>
@@ -4051,7 +4051,7 @@ fn build_modern_landing_page_html() -> &'static str {
                         </div>
                         <div class="hero-metric">
                             <strong>$149-$2,500</strong>
-                            <span>Done-For-You — we produce it for you</span>
+                            <span>Managed Campaign — we run it for you</span>
                         </div>
                     </div>
                 </aside>
@@ -4063,8 +4063,8 @@ fn build_modern_landing_page_html() -> &'static str {
         <div class="container">
             <div class="section-intro">
                 <div class="section-kicker">Two Tiers, No Confusion</div>
-                <h2>DIY Workspace or Done-For-You Production</h2>
-                <p>Choose the <strong>$15/month workspace</strong> to edit and generate yourself, or order a <strong>custom video production</strong> starting at $149 — our AI agent does the work and delivers in hours, not weeks.</p>
+                <h2>DIY Workspace or Managed Campaigns</h2>
+                <p>Choose the <strong>$15/month workspace</strong> to edit and generate yourself, or order a <strong>managed campaign</strong> starting at $149 — our AI agent does the work and delivers in hours, not weeks.</p>
             </div>
             <div class="pricing-grid">
                 <article class="pricing-card featured">
@@ -4082,8 +4082,8 @@ fn build_modern_landing_page_html() -> &'static str {
                     <a href="/subscribe" class="btn btn-primary" style="margin-top:1rem">Start 7-day trial</a>
                 </article>
                 <article class="pricing-card">
-                    <div class="featured-badge" style="background:var(--accent-secondary,#f59e0b)">Tier 2 — DFY</div>
-                    <div class="eyebrow">Done-For-You Production</div>
+                    <div class="featured-badge" style="background:var(--accent-secondary,#f59e0b)">Tier 2 — Managed Campaigns</div>
+                    <div class="eyebrow">Managed Production</div>
                     <h3>$149<span style="font-size:0.5em;color:#94a3b8;margin-left:0.35rem">to $2,500</span></h3>
                     <p>One-off project pricing. SaaS hero videos, product demos, 3D mockups, animated scenes, explainers, audiograms, clip packs, and white-label production — priced at a fraction of agency cost because our AI agent does the heavy lifting.</p>
                     <ul class="pricing-list">

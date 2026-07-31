@@ -253,7 +253,7 @@ pub async fn get_delivery_social_status(
         .map(|p| {
             all_accounts
                 .iter()
-                .filter(|a| a.profile_id.as_deref() == Some(&p.id))
+                .filter(|a| a.profile_id.as_ref().map(|pid| pid.id()) == Some(p.id.as_str()))
                 .map(|a| {
                     json!({
                         "_id": a.id,
@@ -595,7 +595,7 @@ pub async fn get_or_create_my_zernio_profile(
         Err(_) => return Json(json!({"success": false, "error": "Invalid user ID in token"})),
     };
     match ensure_user_zernio_profile(&state, user_id).await {
-        Ok(profile_id) => Json(json!({"success": true, "profile_id": profile_id})),
+        Ok(profile_id) => Json(json!({"success": true, "profile": {"id": profile_id}})),
         Err((_code, err)) => err,
     }
 }
@@ -608,8 +608,8 @@ pub async fn get_my_social_accounts(
         Ok(id) => id,
         Err(_) => return Json(json!({"success": false, "error": "Invalid user ID in token"})),
     };
-    let rows = sqlx::query_as::<_, (String, String, Option<String>, Option<String>, Option<String>, bool)>(
-        "SELECT zernio_account_id, platform, username, display_name, profile_picture, is_active \
+    let rows = sqlx::query_as::<_, (String, String, Option<String>, Option<String>, Option<String>, bool, Option<chrono::DateTime<chrono::Utc>>)>(
+        "SELECT zernio_account_id, platform, username, display_name, profile_picture, is_active, synced_at \
          FROM user_zernio_accounts WHERE user_id = $1 ORDER BY platform",
     )
     .bind(user_id)
@@ -619,14 +619,14 @@ pub async fn get_my_social_accounts(
         Ok(accounts) => {
             let accounts_json: Vec<serde_json::Value> = accounts
                 .into_iter()
-                .map(|(id, platform, username, display_name, profile_picture, is_active)| {
+                .map(|(id, platform, username, display_name, profile_picture, is_active, synced_at)| {
                     json!({
                         "id": id,
                         "platform": platform,
-                        "username": username,
-                        "display_name": display_name,
-                        "profile_picture": profile_picture,
-                        "isActive": is_active,
+                        "account_name": display_name.or(username).unwrap_or_else(|| platform.clone()),
+                        "avatar_url": profile_picture,
+                        "status": if is_active { "active" } else { "inactive" },
+                        "created_at": synced_at.map(|t| t.to_rfc3339()),
                     })
                 })
                 .collect();

@@ -610,7 +610,7 @@ pub async fn get_workflow_debug(
 
 // ── Workflow Feedback / Cancel / Events ──────────────────────────────────
 // These endpoints allow re-editing, cancellation, and progress polling
-// for StatefulGeminiAgent runs (including the DFY pipeline).
+// for StatefulGeminiAgent runs (including the Managed Campaign pipeline).
 
 /// POST /api/workflows/{workflow_id}/feedback
 /// Send a follow-up message to a running agent for re-editing / add-on requests.

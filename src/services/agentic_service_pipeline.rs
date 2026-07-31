@@ -551,7 +551,7 @@ Brief: {brief}
 Style: {style}
 
 ## ⚠️ CRITICAL: DO NOT USE generate_long_form_video
-The tool `generate_long_form_video` is a convenience wrapper that delegates to another agent — it will NOT produce the correct output for this DFY service. You MUST call the rendering tools directly yourself.
+The tool `generate_long_form_video` is a convenience wrapper that delegates to another agent — it will NOT produce the correct output for this Managed Campaign service. You MUST call the rendering tools directly yourself.
 
 ## STEP 0: UNDERSTAND THE WEBSITE
 Before making anything, call `browserbase_crawl_website(url="{url}")` to crawl the full website. This fetches all subpages and extracts CSS design tokens (colors, fonts). From the response:

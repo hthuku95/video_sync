@@ -394,9 +394,11 @@ async fn check_rendering_post(state: &Arc<AppState>, campaign: &CampaignRow, pos
         return;
     };
 
-    // Check delivery status
-    let (status, output_url, error_msg, updated_at) = match sqlx::query_as::<_, (String, Option<String>, Option<String>, Option<chrono::DateTime<chrono::Utc>>)>(
-        "SELECT status, output_r2_url, error_message, updated_at FROM deliveries WHERE id = $1",
+    // Check delivery status. NOTE: `deliveries` has NO `updated_at` column —
+    // only `created_at` + `completed_at`. Use `created_at` as the staleness
+    // baseline so the query doesn't error and stall the campaign.
+    let (status, output_url, error_msg, created_at) = match sqlx::query_as::<_, (String, Option<String>, Option<String>, Option<chrono::DateTime<chrono::Utc>>)>(
+        "SELECT status, output_r2_url, error_message, created_at FROM deliveries WHERE id = $1",
     )
     .bind(delivery_id)
     .fetch_optional(&state.db_pool)
@@ -415,8 +417,8 @@ async fn check_rendering_post(state: &Arc<AppState>, campaign: &CampaignRow, pos
 
     // Handle stale pending deliveries (stuck >1 hour — likely lost on restart)
     if status == "pending" {
-        if let Some(updated) = updated_at {
-            if chrono::Utc::now() - updated > chrono::Duration::hours(1) {
+        if let Some(created) = created_at {
+            if chrono::Utc::now() - created > chrono::Duration::hours(1) {
                 mark_post_failed(state, post.id, "Delivery stalled (pending >1h — pipeline may have been interrupted)").await;
                 return;
             }

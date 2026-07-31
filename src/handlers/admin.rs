@@ -515,7 +515,7 @@ pub async fn admin_dashboard() -> Html<String> {
                         <th>Status</th>
                         <th>Role</th>
                         <th>Subscription</th>
-                        <th>DFY</th>
+                        <th>Managed Campaigns</th>
                         <th>Joined</th>
                         <th>Actions</th>
                     </tr>
@@ -581,7 +581,7 @@ pub async fn admin_dashboard() -> Html<String> {
                             <td><span class="badge ${user.is_active ? 'badge-success' : 'badge-danger'}">${user.is_active ? 'Active' : 'Inactive'}</span></td>
                             <td><span class="badge ${user.is_superuser ? 'badge-danger' : user.is_staff ? 'badge-warning' : 'badge-success'}">${user.is_superuser ? 'Superuser' : user.is_staff ? 'Staff' : 'User'}</span></td>
                             <td><span class="badge ${subBadge(status)}">${status}</span></td>
-                            <td>${user.is_dfy_customer ? '<span class="badge badge-warning" style="font-weight:700;">DFY</span>' : '—'}</td>
+                            <td>${user.is_dfy_customer ? '<span class="badge badge-warning" style="font-weight:700;">Managed</span>' : '—'}</td>
                             <td>${new Date(user.created_at).toLocaleDateString()}</td>
                             <td><a href="/admin/users/${user.id}" class="btn" style="padding: 0.25rem 0.5rem; font-size: 0.8rem;">View</a></td>
                         </tr>`;
@@ -1414,7 +1414,7 @@ pub async fn admin_users_list() -> Html<String> {
                         <th>Status</th>
                         <th>Role</th>
                         <th>Subscription</th>
-                        <th>DFY</th>
+                        <th>Managed Campaigns</th>
                         <th>Trial / Paid Until</th>
                         <th>Last Payment</th>
                         <th>Created</th>
@@ -1547,7 +1547,7 @@ pub async fn admin_users_list() -> Html<String> {
                     <td><span class="badge ${user.is_active ? 'badge-success' : 'badge-danger'}">${user.is_active ? 'Active' : 'Inactive'}</span></td>
                     <td><span class="badge ${user.is_superuser ? 'badge-danger' : user.is_staff ? 'badge-warning' : 'badge-success'}">${user.is_superuser ? 'Superuser' : user.is_staff ? 'Staff' : 'User'}</span></td>
                     <td><span class="badge ${subBadgeClass(status)}">${status}</span></td>
-                    <td>${user.is_dfy_customer ? '<span class="badge badge-warning">DFY</span>' : '—'}</td>
+                    <td>${user.is_dfy_customer ? '<span class="badge badge-warning">Managed</span>' : '—'}</td>
                     <td>${fmtDate(untilDate)}</td>
                     <td>${fmtDate(user.last_payment_at)}</td>
                     <td>${fmtDate(user.created_at)}</td>
@@ -1738,7 +1738,7 @@ pub async fn admin_user_detail(Path(id): Path<i32>) -> Html<String> {
                 <div class="info-label">Role:</div>
                 <div class="info-value" id="role">Loading...</div>
 
-                <div class="info-label">DFY Customer:</div>
+                <div class="info-label">Managed Campaigns Customer:</div>
                 <div class="info-value" id="dfyCustomer">Loading...</div>
 
                 <div class="info-label">Created:</div>
@@ -1773,8 +1773,8 @@ pub async fn admin_user_detail(Path(id): Path<i32>) -> Html<String> {
         </div>
 
         <div class="card">
-            <h2>DFY Customer Status</h2>
-            <p style="color: #6c757d; margin-bottom: 1rem;">Mark this user as a DFY (done-for-you) customer for monetization tracking and invoicing.</p>
+            <h2>Managed Campaigns Customer Status</h2>
+            <p style="color: #6c757d; margin-bottom: 1rem;">Mark this user as a Managed Campaigns customer for monetization tracking and invoicing.</p>
             <button onclick="toggleDfyCustomer()" id="toggleDfyBtn" class="btn btn-warning">Loading...</button>
         </div>
 
@@ -1834,7 +1834,7 @@ pub async fn admin_user_detail(Path(id): Path<i32>) -> Html<String> {
             document.getElementById('status').innerHTML = `<span class="badge ${{user.is_active ? 'badge-success' : 'badge-danger'}}">${{user.is_active ? 'Active' : 'Inactive'}}</span>`;
             document.getElementById('role').innerHTML = `<span class="badge ${{user.is_superuser ? 'badge-danger' : user.is_staff ? 'badge-warning' : 'badge-success'}}">${{user.is_superuser ? 'Superuser' : user.is_staff ? 'Staff' : 'User'}}</span>`;
             document.getElementById('dfyCustomer').innerHTML = user.is_dfy_customer
-                ? '<span class="badge badge-warning" style="font-weight:700;">Yes — DFY Customer</span>'
+                ? '<span class="badge badge-warning" style="font-weight:700;">Yes — Managed Campaigns Customer</span>'
                 : '<span class="badge" style="background:#e9ecef;color:#495057;">No</span>';
             document.getElementById('created').textContent = new Date(user.created_at).toLocaleString();
             document.getElementById('updated').textContent = new Date(user.updated_at).toLocaleString();
@@ -1852,9 +1852,9 @@ pub async fn admin_user_detail(Path(id): Path<i32>) -> Html<String> {
             activeBtn.className = user.is_active ? 'btn' : 'btn btn-success';
             activeBtn.disabled = isSelf;
 
-            // Toggle DFY Customer button
+            // Toggle Managed Campaigns Customer button
             const dfyBtn = document.getElementById('toggleDfyBtn');
-            dfyBtn.textContent = user.is_dfy_customer ? 'Remove DFY Customer Label' : 'Mark as DFY Customer';
+            dfyBtn.textContent = user.is_dfy_customer ? 'Remove Managed Campaigns Customer Label' : 'Mark as Managed Campaigns Customer';
             dfyBtn.className = user.is_dfy_customer ? 'btn' : 'btn btn-success';
             dfyBtn.disabled = false;
 
@@ -1943,7 +1943,7 @@ pub async fn admin_user_detail(Path(id): Path<i32>) -> Html<String> {
             const newStatus = !userData.is_dfy_customer;
             const action = newStatus ? 'mark' : 'unmark';
 
-            if (!confirm(`Are you sure you want to ${{action}} this user as a DFY customer? This affects monetization tracking and invoicing.`)) return;
+            if (!confirm(`Are you sure you want to ${{action}} this user as a Managed Campaigns customer? This affects monetization tracking and invoicing.`)) return;
 
             try {{
                 const response = await fetch(`/api/admin/users/${{userId}}/dfy-customer`, {{
@@ -2347,7 +2347,7 @@ pub async fn admin_toggle_user_active(
     })))
 }
 
-/// POST /api/admin/users/:id/dfy-customer — toggle the DFY customer label.
+/// POST /api/admin/users/:id/dfy-customer — toggle the Managed Campaigns customer label.
 pub async fn admin_toggle_dfy_customer(
     Path(id): Path<i32>,
     Extension(state): Extension<Arc<AppState>>,
@@ -2367,13 +2367,13 @@ pub async fn admin_toggle_dfy_customer(
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({
                 "success": false,
-                "message": "Failed to update DFY customer status"
+                "message": "Failed to update Managed Campaigns customer status"
             })),
         )
     })?;
 
     tracing::info!(
-        "👤 User {} DFY customer {} by admin {}",
+        "👤 User {} Managed Campaigns customer {} by admin {}",
         updated_user.username,
         if payload.is_dfy_customer { "marked" } else { "unmarked" },
         claims.username
@@ -2382,9 +2382,9 @@ pub async fn admin_toggle_dfy_customer(
     Ok(Json(json!({
         "success": true,
         "message": if payload.is_dfy_customer {
-            "User marked as DFY customer"
+            "User marked as Managed Campaigns customer"
         } else {
-            "DFY customer label removed"
+            "Managed Campaigns customer label removed"
         },
         "user": UserResponse::from(updated_user)
     })))
@@ -8331,7 +8331,7 @@ pub async fn api_generate_dfy_portfolio_samples(
 
     for service in crate::portfolio_samples::dfy_services() {
         let client_ref = crate::portfolio_samples::dfy_client_ref(service.slug);
-        let title = format!("DFY Demo — {}", service.name);
+        let title = format!("Managed Campaign Demo — {}", service.name);
 
         let existing = sqlx::query(
             "SELECT id, client_ref, title, gig_type, status, output_r2_url, preview_r2_url, workflow_id,
@@ -8425,7 +8425,7 @@ pub async fn api_generate_dfy_portfolio_samples(
                         .await;
                 }
                 Err(e) => {
-                    tracing::error!("DFY portfolio sample '{}' failed: {e}", slug);
+                    tracing::error!("Managed Campaign sample '{}' failed: {e}", slug);
                     let _ = sqlx::query("UPDATE deliveries SET status = 'failed', error_message = $1 WHERE id = $2")
                         .bind(&format!("AgenticServicePipeline failed: {e}"))
                         .bind(delivery_id)
@@ -8444,9 +8444,9 @@ pub async fn api_generate_dfy_portfolio_samples(
         "queued": queued,
         "samples": samples,
         "message": if queued == 0 {
-            "All 12 DFY portfolio samples already exist.".to_string()
+            "All 12 Managed Campaign samples already exist.".to_string()
         } else {
-            format!("{queued} DFY portfolio samples queued for generation.")
+            format!("{queued} Managed Campaign samples queued for generation.")
         }
     }))
 }
@@ -8851,7 +8851,7 @@ pub async fn api_generate_service_portfolio_sample(
     Extension(state): Extension<Arc<AppState>>,
     Json(body): Json<GenerateServiceSampleRequest>,
 ) -> Json<serde_json::Value> {
-    // Find the matching DFY service definition
+    // Find the matching Managed Campaign service definition
     let service_def = crate::portfolio_samples::dfy_services()
         .iter()
         .find(|s| s.slug == body.service_slug);
@@ -8885,7 +8885,7 @@ pub async fn api_generate_service_portfolio_sample(
             tokio::spawn(async move {
                 let service_type = crate::services::agentic_service_pipeline::ServiceType::from_normalized(&slug);
                 let input = crate::services::agentic_service_pipeline::ServiceInput {
-                    title: format!("DFY Service Demo — {}", slug),
+                    title: format!("Managed Campaign Demo — {}", slug),
                     brief,
                     source_url,
                     style,
@@ -9028,9 +9028,9 @@ pub async fn admin_service_samples_page() -> Html<String> {
       <li><a href="/admin">Dashboard</a></li>
       <li><a href="/admin/portfolio-samples">Crypto SaaS Samples</a></li>
       <li><a href="/admin/test-runs">Animation Tool Tests</a></li>
-      <li><a class="active" href="/admin/service-samples">DFY Service Samples</a></li>
+      <li><a class="active" href="/admin/service-samples">Managed Campaign Samples</a></li>
     </ul>
-    <p style="color:var(--muted)">Generate agent-produced portfolio samples for each done-for-you service. Each sample runs the full agent pipeline — the same flow a paying customer would use.</p>
+    <p style="color:var(--muted)">Generate agent-produced portfolio samples for each managed campaign service. Each sample runs the full agent pipeline — the same flow a paying customer would use.</p>
     <div id="services-container"></div>
   </div>
   <script>
@@ -9255,13 +9255,13 @@ pub async fn admin_portfolio_samples_page() -> Html<String> {
       <a href="/admin/revenue-ledger">Revenue Ledger</a>
     </nav>
       <section class="hero">
-        <h1>12 DFY Service Demos</h1>
+        <h1>12 Managed Campaign Demos</h1>
         <p>
-          Generate one sample video per DFY service using the AgenticServicePipeline with full ~223-tool access.
+          Generate one sample video per Managed Campaign service using the AgenticServicePipeline with full ~223-tool access.
           Each sample gets a public delivery link with R2-hosted output — shareable immediately.
         </p>
         <div class="actions">
-          <button id="dfy-generate-btn">Generate All 12 DFY Samples</button>
+          <button id="dfy-generate-btn">Generate All 12 Managed Campaign Samples</button>
           <button id="dfy-refresh-btn" class="secondary">Refresh Status</button>
           <a class="button secondary" href="/admin/deliveries">Open Deliveries</a>
         </div>
@@ -9271,7 +9271,7 @@ pub async fn admin_portfolio_samples_page() -> Html<String> {
     </header>
     <main>
       <div id="dfy-samples" class="grid"></div>
-      <div id="dfy-empty" class="empty" style="display:none;">No DFY service demos yet. Generate to create samples for all 12 services.</div>
+      <div id="dfy-empty" class="empty" style="display:none;">No Managed Campaign demos yet. Generate to create samples for all 12 services.</div>
     </main>
   <script>
     const token = localStorage.getItem('auth_token') || localStorage.getItem('authToken') || localStorage.getItem('admin_token');
@@ -9308,7 +9308,7 @@ pub async fn admin_portfolio_samples_page() -> Html<String> {
     async function loadSamples() {
       const resp = await fetch('/api/admin/portfolio-samples/dfy', { headers });
       const data = await resp.json();
-      if (!data.success) throw new Error(data.error || 'Failed to load DFY samples');
+      if (!data.success) throw new Error(data.error || 'Failed to load Managed Campaign samples');
       const samples = data.samples || [];
       const completed = samples.filter(s => s.status === 'completed').length;
       const running = samples.filter(s => s.status === 'running').length;
@@ -9335,13 +9335,13 @@ pub async fn admin_portfolio_samples_page() -> Html<String> {
     }
 
     async function generateSamples() {
-      setNotice('Queueing all 12 DFY service samples via AgenticServicePipeline...');
+      setNotice('Queueing all 12 Managed Campaign samples via AgenticServicePipeline...');
       document.getElementById('dfy-generate-btn').disabled = true;
       try {
         const resp = await fetch('/api/admin/portfolio-samples/dfy', { method: 'POST', headers, body: '{}' });
         const data = await resp.json();
-        if (!data.success) throw new Error(data.error || 'Failed to queue DFY samples');
-        setNotice(data.message || 'Queued ' + (data.queued || 0) + ' DFY samples.');
+        if (!data.success) throw new Error(data.error || 'Failed to queue Managed Campaign samples');
+        setNotice(data.message || 'Queued ' + (data.queued || 0) + ' Managed Campaign samples.');
         await loadSamples();
       } catch (err) { setNotice(err.message || String(err)); }
       finally { document.getElementById('dfy-generate-btn').disabled = false; }
@@ -9380,7 +9380,7 @@ pub async fn admin_portfolio_samples_page() -> Html<String> {
     async function loadDfySamples() {
       const resp = await fetch('/api/admin/portfolio-samples/dfy', { headers });
       const data = await resp.json();
-      if (!data.success) throw new Error(data.error || 'Failed to load DFY samples');
+      if (!data.success) throw new Error(data.error || 'Failed to load Managed Campaign samples');
       const samples = data.samples || [];
       const completed = samples.filter(s => s.status === 'completed').length;
       const running = samples.filter(s => s.status === 'running').length;
@@ -9397,13 +9397,13 @@ pub async fn admin_portfolio_samples_page() -> Html<String> {
     }
 
     async function generateDfySamples() {
-      setDfyNotice('Queueing all 12 DFY service samples...');
+      setDfyNotice('Queueing all 12 Managed Campaign samples...');
       document.getElementById('dfy-generate-btn').disabled = true;
       try {
         const resp = await fetch('/api/admin/portfolio-samples/dfy', { method: 'POST', headers, body: '{}' });
         const data = await resp.json();
-        if (!data.success) throw new Error(data.error || 'Failed to queue DFY samples');
-        setDfyNotice(data.message || 'Queued ' + (data.queued || 0) + ' DFY samples.');
+        if (!data.success) throw new Error(data.error || 'Failed to queue Managed Campaign samples');
+        setDfyNotice(data.message || 'Queued ' + (data.queued || 0) + ' Managed Campaign samples.');
         await loadDfySamples();
       } catch (err) { setDfyNotice(err.message || String(err)); }
       finally { document.getElementById('dfy-generate-btn').disabled = false; }
@@ -10459,7 +10459,7 @@ pub async fn admin_deliveries_page() -> Html<String> {
       <div class="form-group">
         <label>Service / Gig Type *</label>
         <select id="gig_type" onchange="onGigTypeChange()">
-          <optgroup label="DFY Services (AgenticPipeline)">
+          <optgroup label="Managed Campaign Services (AgenticPipeline)">
             <option value="clipping">Clip Distribution ($297/mo)</option>
             <option value="kick_auto_clipper">Kick Auto-Clipper ($297/mo)</option>
             <option value="landing_page">Landing Page Video ($149/mo)</option>
@@ -10489,7 +10489,7 @@ pub async fn admin_deliveries_page() -> Html<String> {
             <option value="x402_asset_api">Programmable Payments</option>
           </optgroup>
         </select>
-        <span class="hint">DFY services route through AgenticServicePipeline. Production tools and legacy options still use the full agent pipeline.</span>
+        <span class="hint">Managed Campaign services route through AgenticServicePipeline. Production tools and legacy options still use the full agent pipeline.</span>
       </div>
       <div class="form-group" id="grp-style">
         <label>Style</label>
@@ -10633,7 +10633,7 @@ pub async fn admin_deliveries_page() -> Html<String> {
 
 <script>
 const GIG_CONFIG = {
-  // ── 12 DFY Services ────────────────────────────────────────────────────
+  // ── 12 Managed Campaign Services ───────────────────────────────────────
   clipping:           { promptLabel:'Content / VOD Brief', style:true, subtitle:false, titleText:false, duration:true, chartType:false, dataJson:false, animType:false, bgStyle:false, device:false, mockupAnim:false, screenshotUrl:false, refImageUrl:true, narration:true, defaultDuration:15 },
   kick_auto_clipper:  { promptLabel:'Kick VOD / Streamer Brief', style:true, subtitle:false, titleText:false, duration:true, chartType:false, dataJson:false, animType:false, bgStyle:false, device:false, mockupAnim:false, screenshotUrl:false, refImageUrl:true, narration:true, defaultDuration:45 },
   landing_page:       { promptLabel:'Business / Website Brief', style:true, subtitle:false, titleText:false, duration:true, chartType:false, dataJson:false, animType:false, bgStyle:false, device:false, mockupAnim:false, screenshotUrl:false, refImageUrl:true, narration:true, defaultDuration:30 },
@@ -10919,7 +10919,7 @@ td{padding:8px 12px;border-bottom:1px solid #0f3460;color:#e0e0e0}
       <thead><tr><th>Tier</th><th>Clips/Month</th><th>Price</th><th>Pitch</th></tr></thead>
       <tbody>
         <tr><td>Demo Pack</td><td>10 clips</td><td class="highlight">$97 one-time</td><td>Conversion tool — gets relationship started</td></tr>
-        <tr><td>Starter</td><td>30 clips</td><td class="highlight">$297/month</td><td>"30 viral moments, done for you"</td></tr>
+        <tr><td>Starter</td><td>30 clips</td><td class="highlight">$297/month</td><td>"30 viral moments, managed for you"</td></tr>
         <tr><td>Growth</td><td>50 clips</td><td class="highlight">$497/month</td><td>"Post daily Shorts without lifting a finger"</td></tr>
         <tr><td>Agency</td><td>100 clips + thumbnails</td><td class="highlight">$997/month</td><td>"Full content team, AI-powered"</td></tr>
         <tr><td>Podcast per-episode</td><td>5-10 clips/episode</td><td class="highlight">$150-$350/episode</td><td>Auto-clip every new episode within 24hr</td></tr>

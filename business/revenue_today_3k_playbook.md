@@ -1,6 +1,6 @@
 # VideoSync Revenue Today Playbook
 
-Goal: close or collect deposits toward USD 3,000 today using done-for-you offers powered by VideoSync. Automatic clipping is not part of this sprint; it stays a whitelisted-user/background product.
+Goal: close or collect deposits toward USD 3,000 today using managed campaign offers powered by VideoSync. Automatic clipping is not part of this sprint; it stays a whitelisted-user/background product.
 
 ## Offer Ladder
 

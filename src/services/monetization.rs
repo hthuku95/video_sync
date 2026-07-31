@@ -130,7 +130,7 @@ pub fn telegram_system_pitch() -> String {
 VideoSync offers:\n\
 - Regular users: 7-day free trial, then ${}/mo USDC for AI thumbnails, Blender animations (title cards, data viz, LaTeX, lower thirds, UI mockups), full agent video pipeline, and FFmpeg tool API.\n\
 - Agencies: API access - ${}/mo Starter (1k clips + 500 thumbs + 50 animations), ${}/mo Pro (5k clips + 2.5k thumbs + 200 animations + white-label delivery pages).\n\
-- DFY campaign subscriptions: ${}/mo for clipping/kick-auto-clipper, ${}/mo for education, ${}/mo for all other services (landing page, manim, whiteboard, etc.) — daily content generation + auto-posting to connected social accounts.\n\n\
+- Managed campaign subscriptions: ${}/mo for clipping/kick-auto-clipper, ${}/mo for education, ${}/mo for all other services (landing page, manim, whiteboard, etc.) — daily content generation + auto-posting to connected social accounts.\n\n\
 All payments are USDC on Base (Phantom, MetaMask, Coinbase Wallet). No Stripe, no contracts.\n\n\
 Sign up: https://www.videosync.video\n\
 Subscribe: https://www.videosync.video/subscribe\n\

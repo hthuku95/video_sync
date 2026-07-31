@@ -57,7 +57,7 @@ pub fn build_crypto_saas_extra(target: &PortfolioTarget, reference_image_url: Op
     })
 }
 
-// ── 12 DFY Service targets ───────────────────────────────────────────────
+// ── 12 Managed Campaign Service targets ───────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DfyServiceDef {
@@ -183,7 +183,7 @@ pub fn dfy_services() -> &'static [DfyServiceDef] {
     ]
 }
 
-/// Build an AgenticServicePipeline ServiceInput for a DFY service.
+/// Build an AgenticServicePipeline ServiceInput for a Managed Campaign service.
 pub fn service_input_for(def: &DfyServiceDef) -> crate::services::agentic_service_pipeline::ServiceInput {
     crate::services::agentic_service_pipeline::ServiceInput {
         title: def.name.to_string(),
@@ -202,7 +202,7 @@ pub fn service_input_for(def: &DfyServiceDef) -> crate::services::agentic_servic
     }
 }
 
-/// Build the extra_args JSON for a DFY portfolio sample delivery.
+/// Build the extra_args JSON for a Managed Campaign portfolio sample delivery.
 pub fn portfolio_extra_args(def: &DfyServiceDef) -> serde_json::Value {
     serde_json::json!({
         "portfolio_category": "dfy_service_demo",
@@ -214,7 +214,7 @@ pub fn portfolio_extra_args(def: &DfyServiceDef) -> serde_json::Value {
     })
 }
 
-/// Generate a delivery-style client_ref for a DFY portfolio sample.
+/// Generate a delivery-style client_ref for a Managed Campaign portfolio sample.
 pub fn dfy_client_ref(slug: &str) -> String {
     format!("portfolio:dfy:{}", slug)
 }

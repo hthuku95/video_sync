@@ -151,7 +151,7 @@ pub fn instagram_routes() -> Router {
             post(instagram_kick_auto_discover),
         )
         .route("/api/instagram/leads/top", get(instagram_top_leads))
-        .route("/api/instagram/leads", get(instagram_list_leads))
+        .route("/api/instagram/leads", get(instagram_list_leads).delete(instagram_clear_leads))
         .route(
             "/api/instagram/leads/:id/generate-dm",
             post(instagram_generate_dm),
@@ -1073,7 +1073,7 @@ async fn search_kick_prospects(
 /// Unlike `search_kick_prospects` which searches Kick.com live streams, this function
 /// finds YouTube channels whose content shows Kick.com branding (green watermark),
 /// indicating they clip Kick streamers and repost to YouTube. These are the actual
-/// target prospects for the `kick_auto_clipper` DFY service.
+/// target prospects for the `kick_auto_clipper` Managed Campaign service.
 async fn search_kick_clipper_prospects(
     state: &Arc<AppState>,
     payload: &SearchRequest,
@@ -5527,6 +5527,30 @@ async fn instagram_list_leads(
         .collect();
 
     Json(json!({"success": true, "leads": leads, "count": leads.len()}))
+}
+
+/// DELETE /api/instagram/leads
+/// Delete all Instagram leads for the authenticated user. Scoped to the
+/// caller so one user can never touch another user's leads.
+async fn instagram_clear_leads(
+    Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
+) -> Json<serde_json::Value> {
+    let user_id: i32 = claims.sub.parse().unwrap_or(0);
+    if user_id == 0 {
+        return Json(json!({"success": false, "error": "Invalid user id in JWT"}));
+    }
+    match sqlx::query("DELETE FROM instagram_leads WHERE user_id = $1")
+        .bind(user_id)
+        .execute(&state.db_pool)
+        .await
+    {
+        Ok(r) => Json(json!({
+            "success": true,
+            "deleted": r.rows_affected(),
+        })),
+        Err(e) => Json(json!({"success": false, "error": format!("DB error: {e}")})),
+    }
 }
 
 /// POST /api/instagram/leads/:id/generate-dm

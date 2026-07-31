@@ -26,11 +26,13 @@ pub struct CreateProfileResponse {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ZernioProfile {
-    #[serde(rename = "_id")]
+    #[serde(rename(deserialize = "_id"))]
     pub id: String,
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    #[serde(rename(deserialize = "createdAt"), skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -51,17 +53,39 @@ pub struct ListAccountsResponse {
     pub accounts: Vec<ZernioAccount>,
 }
 
+/// Zernio returns `profileId` either as a plain string (e.g. `"abc123"`) or as an
+/// object `{"_id": "abc123", "name": "Default"}`. This wrapper accepts both and
+/// normalizes to the string id so downstream code always sees the raw id.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum ZernioProfileRef {
+    Plain(String),
+    Object {
+        #[serde(rename = "_id")]
+        id: String,
+    },
+}
+
+impl ZernioProfileRef {
+    pub fn id(&self) -> &str {
+        match self {
+            ZernioProfileRef::Plain(id) => id.as_str(),
+            ZernioProfileRef::Object { id } => id.as_str(),
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 pub struct ZernioAccount {
-    #[serde(rename = "_id")]
+    #[serde(rename(deserialize = "_id"))]
     pub id: String,
     pub platform: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub username: Option<String>,
     #[serde(rename = "displayName", skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
-    #[serde(rename = "profileId", skip_serializing_if = "Option::is_none")]
-    pub profile_id: Option<String>,
+    #[serde(rename = "profileId", skip_serializing_if = "Option::is_none", default)]
+    pub profile_id: Option<ZernioProfileRef>,
     #[serde(rename = "isActive")]
     pub is_active: bool,
     #[serde(rename = "profilePicture", skip_serializing_if = "Option::is_none")]
