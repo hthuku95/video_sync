@@ -804,14 +804,11 @@ async fn update_platform_results(
         return;
     }
 
-    let now = chrono::Utc::now();
-
     if !platforms.is_empty() {
         let _ = sqlx::query(
-            "UPDATE deliveries SET extra_args = jsonb_set(COALESCE(extra_args, '{}'::jsonb), '{zernio_platform_results}', $1::jsonb), updated_at = $2 WHERE id IN (SELECT delivery_id FROM campaign_posts WHERE zernio_post_id = $3)",
+            "UPDATE deliveries SET extra_args = jsonb_set(COALESCE(extra_args, '{}'::jsonb), '{zernio_platform_results}', $1::jsonb) WHERE id IN (SELECT delivery_id FROM campaign_posts WHERE zernio_post_id = $2)",
         )
         .bind(serde_json::json!(platforms))
-        .bind(now)
         .bind(post_id)
         .execute(db_pool)
         .await;
