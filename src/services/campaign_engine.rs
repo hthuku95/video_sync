@@ -815,7 +815,8 @@ async fn check_zernio_post_status(state: &Arc<AppState>, campaign: &CampaignRow,
                     "accountUsername": p.accountId.username,
                     "postUrl": p.platformPostUrl,
                     "errorMessage": p.errorMessage,
-                    "errorType": p.errorType,
+                    "errorCategory": p.error_category,
+                    "errorSource": p.error_source,
                 })
             })
             .collect();

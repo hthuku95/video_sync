@@ -5252,6 +5252,13 @@ pub async fn signup_page() -> Html<String> {
             const username = document.getElementById('username').value;
             const password = document.getElementById('password').value;
             const confirmPassword = document.getElementById('confirmPassword').value;
+
+            // Capture referral code from ?ref= (set by /ref/{code} redirect) for prospect tagging
+            const refParam = new URLSearchParams(window.location.search).get('ref')?.trim();
+            const referredBy = refParam || localStorage.getItem('cm_referral_ref')?.trim() || undefined;
+            if (refParam) {
+                localStorage.setItem('cm_referral_ref', refParam);
+            }
             
             if (password !== confirmPassword) {
                 document.getElementById('errorMessage').textContent = 'Passwords do not match.';
@@ -5273,7 +5280,7 @@ pub async fn signup_page() -> Html<String> {
                     headers: {
                         'Content-Type': 'application/json',
                     },
-                    body: JSON.stringify({ email, username, password, confirm_password: confirmPassword }),
+                    body: JSON.stringify({ email, username, password, confirm_password: confirmPassword, ...(referredBy ? { referred_by: referredBy } : {}) }),
                 });
                 const raw = await response.text();
                 let data = {};

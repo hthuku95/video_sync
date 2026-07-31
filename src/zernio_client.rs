@@ -145,9 +145,33 @@ pub struct PlatformStatus {
     pub platformPostUrl: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub errorMessage: Option<String>,
-    /// Machine-readable error type: account_issue, platform_rejected, platform_error, system_error, unknown
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub errorType: Option<String>,
+    /// Machine-readable error category per Zernio docs: auth_expired, user_content, user_abuse,
+    /// account_issue, platform_rejected, platform_error, system_error, unknown
+    #[serde(rename = "errorCategory", skip_serializing_if = "Option::is_none")]
+    pub error_category: Option<String>,
+    /// Who can fix the error: user, platform, or system
+    #[serde(rename = "errorSource", skip_serializing_if = "Option::is_none")]
+    pub error_source: Option<String>,
+}
+
+/// Error category constants matching Zernio docs
+impl PlatformStatus {
+    /// Token expired or revoked — user needs to reconnect the account
+    pub const ERR_AUTH_EXPIRED: &'static str = "auth_expired";
+    /// Content violates platform constraints (format, length, media specs)
+    pub const ERR_USER_CONTENT: &'static str = "user_content";
+    /// Platform rate limits or spam detection
+    pub const ERR_USER_ABUSE: &'static str = "user_abuse";
+    /// Account configuration problem (e.g. wrong account type)
+    pub const ERR_ACCOUNT_ISSUE: &'static str = "account_issue";
+    /// Platform rejected for policy reasons
+    pub const ERR_PLATFORM_REJECTED: &'static str = "platform_rejected";
+    /// Platform 5xx or maintenance — transient, retry later
+    pub const ERR_PLATFORM_ERROR: &'static str = "platform_error";
+    /// Zernio-side issue — retry or contact support
+    pub const ERR_SYSTEM_ERROR: &'static str = "system_error";
+    /// Unclassified — inspect errorMessage
+    pub const ERR_UNKNOWN: &'static str = "unknown";
 }
 
 /// Per-platform state constants

@@ -705,18 +705,25 @@ async fn retry_post(
 
 /// POST /api/social/webhook — Receives push-based status updates from Zernio.
 ///
-/// Zernio calls this endpoint when a post's status changes (published, failed, partial).
+/// Zernio calls this endpoint on post lifecycle transitions. Events per docs.zernio.com:
+///   post.scheduled, post.published, post.partial, post.failed, post.cancelled,
+///   post.recycled, post.platform.published, post.platform.failed,
+///   post.tiktok.url_resolved, post.platform.deleted
+///
 /// This replaces (or supplements) the polling-based `check_zernio_post_status()` in campaign_engine.
 #[derive(Deserialize)]
 struct ZernioWebhookPayload {
     #[serde(default)]
-    event: String,                          // "post.status_changed"
+    event: String,                          // e.g. "post.published", "post.platform.failed"
     post_id: Option<String>,                // Zernio's post ID
-    status: Option<String>,                 // "published" | "failed" | "partial"
+    status: Option<String>,                 // "published" | "failed" | "partial" (legacy, some events use this)
     #[serde(default)]
     platforms: Vec<serde_json::Value>,      // Per-platform status array
     #[serde(default)]
     error: Option<String>,                  // Top-level error message
+    /// Per-platform event details (populated for post.platform.* events)
+    platform: Option<String>,
+    account_id: Option<String>,
 }
 
 async fn zernio_webhook(
@@ -724,29 +731,38 @@ async fn zernio_webhook(
     Json(payload): Json<ZernioWebhookPayload>,
 ) -> Json<serde_json::Value> {
     // Acknowledge receipt immediately (Zernio expects 2xx fast)
-    // Then fire-and-forget the DB updates so we don't block Zernio.
     let Some(post_id) = payload.post_id else {
         return Json(json!({"success": true, "message": "ignored — no post_id"}));
     };
-    let Some(status) = payload.status else {
-        return Json(json!({"success": true, "message": "ignored — no status"}));
-    };
 
-    let status_lower = status.to_lowercase();
-    info!(post_id = %post_id, status = %status_lower, "Zernio webhook received");
+    let event_lower = payload.event.to_lowercase();
+    info!(post_id = %post_id, event = %event_lower, "Zernio webhook received");
 
-    // Map Zernio post status to our internal campaign_posts status
-    let mapped = match status_lower.as_str() {
-        "published" | "partial" => "published",
-        "failed" => "failed",
-        "cancelled" => "failed",
+    // Map Zernio event to internal campaign_posts status
+    let mapped = match event_lower.as_str() {
+        "post.published" => "published",
+        "post.partial" => "published",
+        "post.failed" => "failed",
+        "post.cancelled" => "failed",
+        "post.scheduled" | "post.recycled" => {
+            // Scheduled or recycled — keep current status, just log
+            info!(post_id = %post_id, event = %event_lower, "Zernio webhook: non-terminal event, no status change");
+            return Json(json!({"success": true, "message": "event acknowledged"}));
+        }
+        // Per-platform events are logged but don't change post-level status
+        ev if ev.starts_with("post.platform.") || ev == "post.tiktok.url_resolved" || ev == "post.platform.deleted" => {
+            info!(post_id = %post_id, event = %event_lower, platform = ?payload.platform, "Zernio per-platform event");
+            // Still update extra_args with platform data but don't change post status
+            update_platform_results(&state.db_pool, &post_id, &payload.platforms, &payload.platform).await;
+            return Json(json!({"success": true, "message": "per-platform event acknowledged"}));
+        }
         _ => {
-            warn!(post_id = %post_id, status = %status_lower, "Zernio webhook: unhandled status");
-            return Json(json!({"success": true, "message": "unhandled status — ignored"}));
+            warn!(post_id = %post_id, event = %event_lower, "Zernio webhook: unhandled event");
+            return Json(json!({"success": true, "message": "unhandled event — ignored"}));
         }
     };
 
-    // Update campaign_posts
+    // Update campaign_posts status
     let now = chrono::Utc::now();
     let updated = sqlx::query(
         "UPDATE campaign_posts SET status = $1, published_at = COALESCE(published_at, $2), updated_at = $2 WHERE zernio_post_id = $3",
@@ -771,17 +787,33 @@ async fn zernio_webhook(
         }
     }
 
-    // Also update deliveries.extra_args with platform results if provided
-    if !payload.platforms.is_empty() {
+    // Update platform results in extra_args
+    update_platform_results(&state.db_pool, &post_id, &payload.platforms, &payload.platform).await;
+
+    Json(json!({"success": true, "message": "processed"}))
+}
+
+/// Helper: write per-platform results into deliveries.extra_args.zernio_platform_results
+async fn update_platform_results(
+    db_pool: &sqlx::PgPool,
+    post_id: &str,
+    platforms: &[serde_json::Value],
+    single_platform: &Option<String>,
+) {
+    if platforms.is_empty() && single_platform.is_none() {
+        return;
+    }
+
+    let now = chrono::Utc::now();
+
+    if !platforms.is_empty() {
         let _ = sqlx::query(
             "UPDATE deliveries SET extra_args = jsonb_set(COALESCE(extra_args, '{}'::jsonb), '{zernio_platform_results}', $1::jsonb), updated_at = $2 WHERE id IN (SELECT delivery_id FROM campaign_posts WHERE zernio_post_id = $3)",
         )
-        .bind(serde_json::json!(payload.platforms))
+        .bind(serde_json::json!(platforms))
         .bind(now)
-        .bind(&post_id)
-        .execute(&state.db_pool)
+        .bind(post_id)
+        .execute(db_pool)
         .await;
     }
-
-    Json(json!({"success": true, "message": "processed"}))
 }
