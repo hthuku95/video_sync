@@ -649,7 +649,7 @@ async fn campaign_settle(
              VALUES ($1, $2, 0.40) RETURNING id",
         )
         .bind(referrer_uid)
-        .bind(price_cents)
+        .bind(price_cents as i32)
         .fetch_one(&state.db_pool)
         .await;
 
