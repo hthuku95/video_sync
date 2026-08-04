@@ -2019,12 +2019,23 @@ where
                 let assistant_tool_calls: Vec<serde_json::Value> = tool_calls
                     .iter()
                     .map(|tc| {
+                        // Ollama's native /api/chat REQUIRES arguments to be a parsed
+                        // JSON object (not a stringified blob). Replaying a string
+                        // makes Ollama's parser fail on the next turn with:
+                        //   "Value looks like object, but can't find closing '}' symbol"
+                        let args: serde_json::Value = match &tc.arguments {
+                            serde_json::Value::String(s) => {
+                                serde_json::from_str::<serde_json::Value>(s)
+                                    .unwrap_or_else(|_| tc.arguments.clone())
+                            }
+                            other => other.clone(),
+                        };
                         serde_json::json!({
                             "id": tc.id,
                             "type": "function",
                             "function": {
                                 "name": tc.name,
-                                "arguments": tc.arguments.to_string(),
+                                "arguments": args,
                             }
                         })
                     })
@@ -2040,11 +2051,24 @@ where
                     send_progress(&format!("🔧 Ollama calling: {}", tc.name));
                     tracing::info!("🎬 Ollama tool call: {}", tc.name);
 
-                    let args_map: std::collections::HashMap<String, serde_json::Value> = tc
+                    let args_map: std::collections::HashMap<String, serde_json::Value> = match &tc
                         .arguments
-                        .as_object()
-                        .map(|o| o.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
-                        .unwrap_or_default();
+                    {
+                        serde_json::Value::String(s) => {
+                            // If the server delivered arguments as a string, parse it.
+                            serde_json::from_str::<serde_json::Value>(s)
+                                .ok()
+                                .and_then(|v| {
+                                    v.as_object()
+                                        .map(|o| o.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+                                })
+                                .unwrap_or_default()
+                        }
+                        ref other => other
+                            .as_object()
+                            .map(|o| o.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+                            .unwrap_or_default(),
+                    };
 
                     let result = crate::agent::tool_executor::execute_tool_gemini_with_context(
                         &tc.name,
@@ -2055,9 +2079,11 @@ where
 
                     send_progress(&format!("✅ {} done", tc.name));
 
+                    // Ollama native /api/chat associates a tool result via `tool_name`,
+                    // not OpenAI's `tool_call_id`.
                     messages.push(serde_json::json!({
                         "role": "tool",
-                        "tool_call_id": tc.id,
+                        "tool_name": tc.name,
                         "content": result,
                     }));
                 }
