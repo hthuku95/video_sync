@@ -612,7 +612,7 @@ async fn schedule_via_zernio(
         return;
     };
 
-    let targets: Vec<PlatformTarget> = match platforms_json {
+    let mut targets: Vec<PlatformTarget> = match platforms_json {
         serde_json::Value::Array(arr) => arr
             .iter()
             .filter_map(|v| {
@@ -623,8 +623,24 @@ async fn schedule_via_zernio(
                 })
             })
             .collect(),
-        _ => return,
+        _ => Vec::new(),
     };
+
+    // If the campaign has no explicit account targets but a Zernio profile is set,
+    // schedule to every connected active account on that profile. This ensures posts
+    // actually go out even when the frontend never populated `platforms`.
+    if targets.is_empty() {
+        if let Ok(resp) = zernio.list_accounts(Some(profile_id)).await {
+            for acct in resp.accounts {
+                if acct.is_active {
+                    targets.push(PlatformTarget {
+                        platform: acct.platform.clone(),
+                        accountId: acct.id.clone(),
+                    });
+                }
+            }
+        }
+    }
 
     if targets.is_empty() {
         return;

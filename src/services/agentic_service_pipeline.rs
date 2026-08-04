@@ -192,6 +192,17 @@ impl AgenticServicePipeline {
             })
             .await?;
 
+        // Link the workflow to the source delivery so the startup recovery loop
+        // (main.rs: reset_orphaned_workflows / orphaned pending delivery re-trigger)
+        // can find and re-trigger this job if the server restarts mid-render.
+        if let Some(delivery_id) = input.delivery_id {
+            let _ = sqlx::query("UPDATE deliveries SET workflow_id = $1 WHERE id = $2")
+                .bind(workflow_id)
+                .bind(delivery_id)
+                .execute(&state.db_pool)
+                .await;
+        }
+
         spawn_agentic_pipeline_run(
             state.clone(),
             workflow_id,

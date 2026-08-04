@@ -1177,6 +1177,7 @@ async fn main() {
         let recovery_state = shared_state.clone();
         tokio::spawn(async move {
             tracing::info!("🔁 Checking for orphaned pending deliveries...");
+            // 1. Deliveries with a workflow_id that were left pending (never completed).
             let pending = sqlx::query_as::<_, (uuid::Uuid,)>(
                 "SELECT id FROM deliveries WHERE status = 'pending' AND workflow_id IS NOT NULL",
             )
@@ -1193,6 +1194,36 @@ async fn main() {
                 }
                 Ok(_) => tracing::info!("✅ No orphaned deliveries found"),
                 Err(e) => tracing::warn!("⚠️ Failed to check for orphaned deliveries: {e}"),
+            }
+
+            // 2. Deliveries with a workflow_id that is NULL but whose app_workflow
+            //    (linked via source_record_id) was orphaned/failed by a restart.
+            //    These are agentic-pipeline deliveries that never got workflow_id
+            //    stamped before this fix, so they'd otherwise be lost forever.
+            let orphaned = sqlx::query_as::<_, (uuid::Uuid,)>(
+                "SELECT d.id FROM deliveries d \
+                 JOIN app_workflows w ON w.source_record_id = d.id \
+                 WHERE d.status = 'pending' \
+                   AND (w.status = 'failed' OR w.status = 'cancelled') \
+                   AND w.error_message ILIKE '%orphaned%' \
+                   AND d.completed_at IS NULL",
+            )
+            .fetch_all(&recovery_state.db_pool)
+            .await;
+
+            match orphaned {
+                Ok(rows) if !rows.is_empty() => {
+                    tracing::info!(
+                        "🔁 Re-triggering {} deliveries whose workflow was orphaned on restart",
+                        rows.len()
+                    );
+                    for (delivery_id,) in rows {
+                        tracing::info!("🔁 Re-triggering orphaned delivery {delivery_id}");
+                        handlers::admin::run_delivery_job(delivery_id, recovery_state.clone()).await;
+                    }
+                }
+                Ok(_) => tracing::info!("✅ No orphaned-workflow deliveries found"),
+                Err(e) => tracing::warn!("⚠️ Failed to check for orphaned-workflow deliveries: {e}"),
             }
         });
     }
