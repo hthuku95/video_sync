@@ -46,7 +46,8 @@ impl StatefulClaudeAgent {
         let control_tools = Self::create_control_tools();
 
         // Initialize ConversationManager to retrieve and save conversation history
-        let conversation_manager = ConversationManager::new(app_state.db_pool.clone());
+        let conversation_manager =
+            ConversationManager::with_user(app_state.db_pool.clone(), _user_id);
 
         // Ensure schema exists
         if let Err(e) = conversation_manager.initialize_schema().await {
@@ -662,7 +663,7 @@ impl StatefulGeminiAgent {
         );
 
         // Initialize ConversationManager to retrieve and save conversation history
-        let conversation_manager = ConversationManager::new(app_state.db_pool.clone());
+        let conversation_manager = ConversationManager::with_user(app_state.db_pool.clone(), user_id);
 
         // Ensure schema exists
         if let Err(e) = conversation_manager.initialize_schema().await {

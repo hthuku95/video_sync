@@ -165,11 +165,21 @@ impl ConversationMessage {
 /// Manages conversation history following LangChain/LangGraph patterns
 pub struct ConversationManager {
     db_pool: PgPool,
+    /// Owner of any chat session auto-created by this manager. System/batch
+    /// runs (no authenticated user) fall back to the system user (id = -1).
+    user_id: Option<i32>,
 }
 
 impl ConversationManager {
     pub fn new(db_pool: PgPool) -> Self {
-        Self { db_pool }
+        Self {
+            db_pool,
+            user_id: None,
+        }
+    }
+
+    pub fn with_user(db_pool: PgPool, user_id: Option<i32>) -> Self {
+        Self { db_pool, user_id }
     }
 
     /// Create the new conversation messages table schema
@@ -331,9 +341,13 @@ impl ConversationManager {
         }
 
         // Auto-create session if it doesn't exist
+        // chat_sessions.user_id is NOT NULL — batch/system runs have no
+        // authenticated user, so fall back to the system user (id = -1).
+        let owner = self.user_id.unwrap_or(-1);
         let inserted = sqlx::query_as::<_, (i32,)>(
-            "INSERT INTO chat_sessions (session_uuid) VALUES ($1) RETURNING id",
+            "INSERT INTO chat_sessions (user_id, session_uuid) VALUES ($1, $2) RETURNING id",
         )
+        .bind(owner)
         .bind(session_uuid)
         .fetch_one(&self.db_pool)
         .await?;

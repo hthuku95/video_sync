@@ -48,6 +48,13 @@ pub async fn execute_clipping_job(job_id: i32, app_state: Arc<AppState>) -> Resu
     let job = fetch_job_details(job_id, &app_state.db_pool).await?;
     let video_url = format!("https://youtube.com/watch?v={}", job.source_video_id);
 
+    // Resolve the job's true owner from its linkage so the session/delivery is
+    // attributed to the real user, not a system account.
+    let job_user_id = fetch_linkage(job.linkage_id, &app_state.db_pool)
+        .await
+        .map(|linkage| linkage.user_id)
+        .unwrap_or(-1);
+
     // Create a delivery to track this in the unified pipeline
     let delivery_id = uuid::Uuid::new_v4();
     let _ = sqlx::query(
@@ -83,7 +90,7 @@ pub async fn execute_clipping_job(job_id: i32, app_state: Arc<AppState>) -> Resu
             delivery_id,
             prospect_id: None,
             session_uuid: None,
-            user_id: None,
+            user_id: Some(job_user_id),
             source_table: Some("deliveries".to_string()),
             source_record_id: Some(delivery_id),
             idempotency_key: Some(format!("agentic-clipping-job:{}", job_id)),
