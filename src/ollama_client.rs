@@ -2,6 +2,11 @@
 /// Default model: gemma4:12b (encoder-free multimodal, vision+audio, ~7.6GB).
 /// Configurable via OLLAMA_BASE_URL and OLLAMA_MODEL env vars.
 ///
+/// Dual-pool failover: `OLLAMA_BASE_URL_FALLBACK` (comma-separated) lists
+/// secondary base URLs tried in order when the primary is unreachable (e.g.
+/// AWS GPU ASG primary + GCP GPU MIG backup). Connection failures and 5xx
+/// responses trigger failover; 4xx errors are returned immediately.
+///
 /// Vision support: uses OpenAI-compatible content parts array with
 /// `image_url` parts (base64-encoded JPEG) for multimodal analysis.
 use base64::prelude::*;
@@ -34,13 +39,88 @@ pub enum OllamaResponse {
 pub struct OllamaClient {
     client: Client,
     base_url: String,
+    /// Secondary Ollama base URLs tried in order when the primary is unreachable.
+    /// Configured via OLLAMA_BASE_URL_FALLBACK (comma-separated). Supports a
+    /// dual GPU pool (e.g. AWS ASG primary + GCP MIG backup).
+    fallback_base_urls: Vec<String>,
     model: String,
+}
+
+/// Parse the OLLAMA_BASE_URL_FALLBACK env var into a list of base URLs,
+/// deduplicated against the primary and trimmed of trailing slashes.
+fn parse_fallback_urls(primary: &str) -> Vec<String> {
+    std::env::var("OLLAMA_BASE_URL_FALLBACK")
+        .unwrap_or_default()
+        .split(',')
+        .map(|s| s.trim().trim_end_matches('/').to_string())
+        .filter(|s| !s.is_empty() && s != primary.trim_end_matches('/'))
+        .collect()
 }
 
 impl OllamaClient {
     /// Return the configured model ID.
     pub fn model_id(&self) -> &str {
         &self.model
+    }
+
+    /// Ordered base URLs to try: primary first, then each configured fallback.
+    fn base_urls(&self) -> Vec<&str> {
+        let mut urls = vec![self.base_url.as_str()];
+        urls.extend(self.fallback_base_urls.iter().map(|s| s.as_str()));
+        urls
+    }
+
+    /// POST a JSON body to `/api/chat`, trying the primary base URL then each
+    /// configured fallback in order. Falls through on connection failures and
+    /// 5xx responses (server unreachable / no backends behind an NLB). A 4xx
+    /// from any base is returned immediately — the server is reachable and the
+    /// request itself is invalid.
+    async fn post_chat(
+        &self,
+        body: &serde_json::Value,
+    ) -> Result<reqwest::Response, Box<dyn std::error::Error + Send + Sync>> {
+        let urls = self.base_urls();
+        let mut last_err: Option<String> = None;
+
+        for (idx, base) in urls.iter().enumerate() {
+            if idx > 0 {
+                tracing::warn!(
+                    "Ollama primary ({}) unreachable — falling back to {}",
+                    urls[0],
+                    base
+                );
+            }
+            match self
+                .client
+                .post(format!("{}/api/chat", base))
+                .header("Content-Type", "application/json")
+                .json(body)
+                .send()
+                .await
+            {
+                Ok(resp) if resp.status().is_success() => return Ok(resp),
+                Ok(resp) if resp.status().is_server_error() => {
+                    let err_body = resp.text().await.unwrap_or_default();
+                    last_err =
+                        Some(format!("Ollama {} error {}: {}", base, resp.status(), err_body));
+                    continue;
+                }
+                Ok(resp) => {
+                    let err_body = resp.text().await.unwrap_or_default();
+                    return Err(
+                        format!("Ollama {} error {}: {}", base, resp.status(), err_body).into(),
+                    );
+                }
+                Err(e) => {
+                    last_err = Some(format!("Ollama request to {} failed: {}", base, e));
+                    continue;
+                }
+            }
+        }
+
+        Err(last_err
+            .unwrap_or_else(|| "Ollama: no base URL reachable".to_string())
+            .into())
     }
 
     /// Send a raw JSON body to Ollama's native `/api/chat` endpoint.
@@ -50,20 +130,7 @@ impl OllamaClient {
         &self,
         body: serde_json::Value,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        let resp = self
-            .client
-            .post(format!("{}/api/chat", self.base_url))
-            .header("Content-Type", "application/json")
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| format!("Ollama native chat request failed: {}", e))?;
-
-        let status = resp.status();
-        if !status.is_success() {
-            let err_body = resp.text().await.unwrap_or_default();
-            return Err(format!("Ollama native chat error {}: {}", status, err_body).into());
-        }
+        let resp = self.post_chat(&body).await?;
 
         let json: serde_json::Value = resp.json().await
             .map_err(|e| format!("Ollama native chat parse error: {}", e))?;
@@ -79,6 +146,7 @@ impl OllamaClient {
             .unwrap_or_else(|_| OLLAMA_DEFAULT_URL.to_string());
         let model = std::env::var("OLLAMA_MODEL")
             .unwrap_or_else(|_| OLLAMA_DEFAULT_MODEL.to_string());
+        let fallback_base_urls = parse_fallback_urls(&base_url);
         Self {
             client: Client::builder()
                 .timeout(std::time::Duration::from_secs(900))
@@ -87,6 +155,7 @@ impl OllamaClient {
                 .build()
                 .unwrap_or_default(),
             base_url,
+            fallback_base_urls,
             model,
         }
     }
@@ -94,6 +163,7 @@ impl OllamaClient {
     pub fn new_with_model(model: &str) -> Self {
         let base_url = std::env::var("OLLAMA_BASE_URL")
             .unwrap_or_else(|_| OLLAMA_DEFAULT_URL.to_string());
+        let fallback_base_urls = parse_fallback_urls(&base_url);
         Self {
             client: Client::builder()
                 .timeout(std::time::Duration::from_secs(900))
@@ -102,6 +172,7 @@ impl OllamaClient {
                 .build()
                 .unwrap_or_default(),
             base_url,
+            fallback_base_urls,
             model: model.to_string(),
         }
     }
@@ -120,11 +191,7 @@ impl OllamaClient {
         });
         match tokio::time::timeout(
             std::time::Duration::from_secs(180),
-            self.client
-                .post(format!("{}/api/chat", self.base_url))
-                .header("Content-Type", "application/json")
-                .json(&body)
-                .send(),
+            self.post_chat(&body),
         )
         .await
         {
@@ -163,19 +230,7 @@ impl OllamaClient {
             "stream": false,
         });
 
-        let resp = self
-            .client
-            .post(format!("{}/api/chat", self.base_url))
-            .header("Content-Type", "application/json")
-            .json(&body)
-            .send()
-            .await?;
-
-        let status = resp.status();
-        if !status.is_success() {
-            let err = resp.text().await.unwrap_or_default();
-            return Err(format!("Ollama error {}: {}", status, err).into());
-        }
+        let resp = self.post_chat(&body).await?;
 
         let json: serde_json::Value = resp.json().await?;
         let text = json["message"]["content"]
@@ -227,19 +282,7 @@ impl OllamaClient {
             "stream": false,
         });
 
-        let resp = self
-            .client
-            .post(format!("{}/api/chat", self.base_url))
-            .header("Content-Type", "application/json")
-            .json(&body)
-            .send()
-            .await?;
-
-        let status = resp.status();
-        if !status.is_success() {
-            let err = resp.text().await.unwrap_or_default();
-            return Err(format!("Ollama vision error {}: {}", status, err).into());
-        }
+        let resp = self.post_chat(&body).await?;
 
         let json: serde_json::Value = resp.json().await?;
         let text = json["message"]["content"]
@@ -309,19 +352,7 @@ impl OllamaClient {
             },
         });
 
-        let resp = self
-            .client
-            .post(format!("{}/api/chat", self.base_url))
-            .header("Content-Type", "application/json")
-            .json(&body)
-            .send()
-            .await?;
-
-        let status = resp.status();
-        if !status.is_success() {
-            let err = resp.text().await.unwrap_or_default();
-            return Err(format!("Ollama API error {}: {}", status, err).into());
-        }
+        let resp = self.post_chat(&body).await?;
 
         let json: serde_json::Value = resp.json().await?;
         let msg = &json["message"];
@@ -465,19 +496,9 @@ Provide ONLY the JSON object, no markdown, no code blocks, no other text."#,
         });
 
         let resp = self
-            .client
-            .post(format!("{}/api/chat", self.base_url))
-            .header("Content-Type", "application/json")
-            .json(&body)
-            .send()
+            .post_chat(&body)
             .await
             .map_err(|e| format!("Ollama video analysis request failed: {}", e))?;
-
-        let status = resp.status();
-        if !status.is_success() {
-            let err_body = resp.text().await.unwrap_or_default();
-            return Err(format!("Ollama video analysis error {}: {}", status, err_body).into());
-        }
 
         let json: serde_json::Value = resp.json().await
             .map_err(|e| format!("Ollama video analysis parse error: {}", e))?;
