@@ -100,16 +100,15 @@ impl OllamaClient {
             {
                 Ok(resp) if resp.status().is_success() => return Ok(resp),
                 Ok(resp) if resp.status().is_server_error() => {
+                    let status = resp.status();
                     let err_body = resp.text().await.unwrap_or_default();
-                    last_err =
-                        Some(format!("Ollama {} error {}: {}", base, resp.status(), err_body));
+                    last_err = Some(format!("Ollama {} error {}: {}", base, status, err_body));
                     continue;
                 }
                 Ok(resp) => {
+                    let status = resp.status();
                     let err_body = resp.text().await.unwrap_or_default();
-                    return Err(
-                        format!("Ollama {} error {}: {}", base, resp.status(), err_body).into(),
-                    );
+                    return Err(format!("Ollama {} error {}: {}", base, status, err_body).into());
                 }
                 Err(e) => {
                     last_err = Some(format!("Ollama request to {} failed: {}", base, e));
