@@ -35,6 +35,18 @@ pub(crate) struct PayPalOffer {
 
 pub(crate) const PAYPAL_OFFERS: &[PayPalOffer] = &[
     PayPalOffer {
+        id: "website-video-10",
+        name: "Website Video Starter (10 videos)",
+        amount: "50.00",
+        description: "10 AI-generated videos from your website URL.",
+    },
+    PayPalOffer {
+        id: "website-video-30",
+        name: "Website Video Pro (up to 30 videos)",
+        amount: "100.00",
+        description: "Up to 30 AI-generated videos from your website URL.",
+    },
+    PayPalOffer {
         id: "saas-demo-starter",
         name: "SaaS/App Demo Starter",
         amount: "399.00",

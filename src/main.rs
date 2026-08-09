@@ -915,6 +915,7 @@ async fn main() {
         .merge(handlers::subscribe::subscribe_routes()) // 💳 Regular-user $15/mo paywall
         .merge(handlers::paypal::paypal_routes()) // 💳 PayPal/card checkout for service packs
         .merge(handlers::crypto_payments::crypto_routes()) // 💳 USDC on Base checkout for service packs
+        .merge(handlers::website_video::website_video_routes()) // 🌐 Website-URL→Video credits service
         .merge(handlers::social_publish::social_routes()) // 📱 Multi-platform social publishing via Zernio
         .merge(handlers::campaigns::campaign_routes()) // 📅 Content campaign engine
         .merge(handlers::auth::clipper_invite_routes()) // 🎫 Clipper invites
