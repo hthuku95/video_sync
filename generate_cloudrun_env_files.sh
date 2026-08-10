@@ -30,7 +30,7 @@ def get(key: str, default: str = "") -> str:
     return env.get(key, default)
 
 ytdlp_lines = [
-    'ALLOWED_ORIGINS: "https://videosync.video,https://cmachine.devthuku.io"',
+    'ALLOWED_ORIGINS: "https://videosync.video,https://content-machine-pbjp.vercel.app"',
     'FILE_TTL_SECONDS: "300"',
     'DOWNLOADS_DIR: "/tmp/downloads"',
     'CLEANUP_INTERVAL_SECONDS: "60"',
