@@ -48,6 +48,50 @@ pub async fn execute_clipping_job(job_id: i32, app_state: Arc<AppState>) -> Resu
     let job = fetch_job_details(job_id, &app_state.db_pool).await?;
     let video_url = format!("https://youtube.com/watch?v={}", job.source_video_id);
 
+    // Pre-check: skip genuinely private/removed/deleted videos before spending a
+    // download attempt (and an agentic pipeline) on them. Uses the public
+    // videos.list API — no OAuth, ~1 quota unit. This distinguishes real
+    // "Video is private" failures (Permanent, skip) from bot-detection
+    // false-positives that only surface inside yt-dlp.
+    if let Some(yt_client) = app_state.youtube_client.as_ref() {
+        match yt_client
+            .check_video_publicly_available(&job.source_video_id)
+            .await
+        {
+            Ok(true) => {} // publicly downloadable, proceed
+            Ok(false) => {
+                tracing::warn!(
+                    "🚫 Video {} is not publicly available (private/removed/deleted). Skipping job {}.",
+                    job.source_video_id,
+                    job_id
+                );
+                let _ = sqlx::query(
+                    "UPDATE clipping_jobs SET status = 'failed', error_message = $1, updated_at = NOW()
+                     WHERE id = $2",
+                )
+                .bind(format!(
+                    "Video is private or no longer publicly available (pre-check via YouTube Data API)"
+                ))
+                .bind(job_id)
+                .execute(&app_state.db_pool)
+                .await;
+                return Ok(format!(
+                    "Skipped job {}: video {} is private/removed/deleted",
+                    job_id, job.source_video_id
+                ));
+            }
+            Err(e) => {
+                // Quota/network error: proceed optimistically — the download
+                // itself will surface a definitive error if the video is gone.
+                tracing::warn!(
+                    "⚠️ Video availability pre-check failed for {} (continuing optimistically): {}",
+                    job.source_video_id,
+                    e
+                );
+            }
+        }
+    }
+
     // Resolve the job's true owner from its linkage so the session/delivery is
     // attributed to the real user, not a system account.
     let job_user_id = fetch_linkage(job.linkage_id, &app_state.db_pool)

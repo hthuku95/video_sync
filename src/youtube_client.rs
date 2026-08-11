@@ -1060,6 +1060,66 @@ impl YouTubeClient {
         })
     }
 
+    /// Check whether a video is publicly downloadable before spending a
+    /// download attempt on it.
+    ///
+    /// Uses `videos.list?part=status,contentDetails` with the public API key
+    /// (not OAuth). Returns:
+    /// - `Ok(true)` if the video exists and is publicly viewable.
+    /// - `Ok(false)` if the video is private, removed, deleted, or the lookup
+    ///   returned no items (YouTube hides non-public videos from the public API).
+    /// - `Err(...)` only on quota/network failures (caller decides whether to
+    ///   proceed optimistically or fail).
+    pub async fn check_video_publicly_available(
+        &self,
+        video_id: &str,
+    ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+        let url = "https://www.googleapis.com/youtube/v3/videos";
+
+        let response = self
+            .client
+            .get(url)
+            .query(&[
+                ("part", "status"),
+                ("id", video_id),
+                ("key", &self.api_key),
+            ])
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let error_text = response.text().await?;
+            // Quota (403/429) is the common error here; surface it as a hard
+            // error so callers can skip the check rather than misclassify.
+            if status.as_u16() == 403 || status.as_u16() == 429 {
+                return Err(
+                    format!("YouTube quota error checking video {}: {}", video_id, error_text).into(),
+                );
+            }
+            return Err(format!("Failed to check video {}: {}", video_id, error_text).into());
+        }
+
+        let body: serde_json::Value = response.json().await?;
+        let items = body["items"].as_array().cloned().unwrap_or_default();
+
+        // No items = video not found or not public (YouTube omits private/removed videos).
+        let Some(item) = items.first() else {
+            return Ok(false);
+        };
+
+        let privacy = item["status"]["privacyStatus"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        let upload_status = item["status"]["uploadStatus"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+
+        Ok(privacy == "public" && upload_status != "rejected")
+    }
+
     /// Get real-time statistics for a video (uses Data API, not Analytics API)
     pub async fn get_video_realtime_stats(
         &self,
