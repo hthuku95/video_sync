@@ -623,9 +623,12 @@ pub async fn get_my_social_accounts(
                     json!({
                         "id": id,
                         "platform": platform,
-                        "account_name": display_name.or(username).unwrap_or_else(|| platform.clone()),
+                        "account_name": display_name.clone().or(username.clone()).unwrap_or_else(|| platform.clone()),
+                        "display_name": display_name,
+                        "username": username,
                         "avatar_url": profile_picture,
                         "status": if is_active { "active" } else { "inactive" },
+                        "is_active": is_active,
                         "created_at": synced_at.map(|t| t.to_rfc3339()),
                     })
                 })

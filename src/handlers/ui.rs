@@ -1108,7 +1108,7 @@ async function loadZernioAccounts() {{
                 if (a.isActive || a.is_active) {{
                     const label = document.createElement('label');
                     label.style.cssText = 'display:flex;align-items:center;gap:0.5rem;font-weight:400;';
-                    label.innerHTML = '<input type="checkbox" name="platform_account" value=\'' + JSON.stringify({{platform: a.platform, accountId: a.id}}) + '\'> ' + a.platform + ' (@' + (a.display_name || a.username || 'connected') + ')';
+                    label.innerHTML = '<input type="checkbox" name="platform_account" value=\'' + JSON.stringify({{platform: a.platform, account_id: a.id}}) + '\'> ' + a.platform + ' (@' + (a.display_name || a.username || 'connected') + ')';
                     container.appendChild(label);
                 }}
             }});
