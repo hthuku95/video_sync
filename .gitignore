@@ -359,6 +359,8 @@ VideoSyncIntegrations
 "Webshare 10 proxies (1).txt"
 Webshare*.txt
 cookies.txt
+cookies_for_youtube.txt
+kick_cookies.txt
 *.Zone.Identifier
 *:Zone.Identifier
 
