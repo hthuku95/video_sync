@@ -6,7 +6,7 @@ const SES_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Default sender address. Must be verified in AWS SES.
 /// Override with `SES_FROM_EMAIL` env var.
-const DEFAULT_FROM: &str = "VideoSync <noreply@videosync.video>";
+const DEFAULT_FROM: &str = "VideoSync <noreply@videosync.ink>";
 
 fn from_address() -> String {
     std::env::var("SES_FROM_EMAIL").unwrap_or_else(|_| DEFAULT_FROM.to_string())
