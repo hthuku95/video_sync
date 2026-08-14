@@ -737,7 +737,7 @@ async fn sqs_enqueue_clipping_job(job_id: i32) -> Result<(), String> {
     };
     let config = aws_config::defaults(BehaviorVersion::latest())
         .region(aws_config::Region::new(
-            &std::env::var("AWS_REGION").unwrap_or_else(|_| "us-east-1".to_string()),
+            std::env::var("AWS_REGION").unwrap_or_else(|_| "us-east-1".to_string()),
         ))
         .load()
         .await;

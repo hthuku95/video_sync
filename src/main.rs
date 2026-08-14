@@ -815,7 +815,7 @@ async fn main() {
 
         let config = aws_config::defaults(aws_config::BehaviorVersion::latest())
             .region(aws_config::Region::new(
-                &std::env::var("AWS_REGION").unwrap_or_else(|_| "us-east-1".to_string()),
+                std::env::var("AWS_REGION").unwrap_or_else(|_| "us-east-1".to_string()),
             ))
             .load()
             .await;

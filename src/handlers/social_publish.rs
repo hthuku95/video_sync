@@ -830,7 +830,7 @@ pub async fn sync_my_social_accounts(
                 continue;
             }
         };
-        for acc in &accounts {
+        for acc in accounts {
             let _ = sqlx::query(
                 "INSERT INTO user_zernio_accounts \
                  (user_id, zernio_account_id, platform, username, display_name, profile_picture, is_active, zernio_profile_id) \
@@ -848,7 +848,7 @@ pub async fn sync_my_social_accounts(
             .bind(profile_id)
             .execute(&state.db_pool)
             .await;
-            all_accounts.push(acc.clone());
+            all_accounts.push(acc);
         }
     }
     info!("Synced {} Zernio accounts across {} profiles for user {}", all_accounts.len(), profiles.len(), user_id);
