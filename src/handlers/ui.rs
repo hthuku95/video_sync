@@ -1085,35 +1085,55 @@ document.getElementById('startDate').value = new Date().toISOString().split('T')
 const endDate = new Date(); endDate.setMonth(endDate.getMonth() + 1);
 document.getElementById('endDate').value = endDate.toISOString().split('T')[0];
 
-// Load connected social accounts
+// Load connected social accounts, grouped by Zernio profile
+let userProfiles = [];
 async function loadZernioAccounts() {{
     try {{
-        // Get user's auto-created Zernio profile
-        const profileResp = await fetch('/api/social/my-profile', {{ method: 'POST' }});
-        const profileData = await profileResp.json();
-        if (profileData.success && profileData.profile_id) {{
+        // Get all of the user's Zernio profiles
+        const profilesResp = await fetch('/api/social/my-profiles');
+        const profilesData = await profilesResp.json();
+        if (profilesData.success && profilesData.profiles) {{
+            userProfiles = profilesData.profiles;
             const sel = document.getElementById('zernioProfile');
-            const opt = document.createElement('option');
-            opt.value = profileData.profile_id;
-            opt.textContent = 'My Profile';
-            sel.appendChild(opt);
-        }}
-        // Get connected accounts
-        const resp = await fetch('/api/social/my-accounts');
-        const data = await resp.json();
-        if (data.success && data.accounts) {{
-            const container = document.getElementById('platformAccounts');
-            container.innerHTML = '';
-            data.accounts.forEach(a => {{
-                if (a.isActive || a.is_active) {{
-                    const label = document.createElement('label');
-                    label.style.cssText = 'display:flex;align-items:center;gap:0.5rem;font-weight:400;';
-                    label.innerHTML = '<input type="checkbox" name="platform_account" value=\'' + JSON.stringify({{platform: a.platform, account_id: a.id}}) + '\'> ' + a.platform + ' (@' + (a.display_name || a.username || 'connected') + ')';
-                    container.appendChild(label);
-                }}
+            sel.innerHTML = '';
+            const emptyOpt = document.createElement('option');
+            emptyOpt.value = '';
+            emptyOpt.textContent = 'Select a profile...';
+            sel.appendChild(emptyOpt);
+            userProfiles.forEach(p => {{
+                const opt = document.createElement('option');
+                opt.value = p.id;
+                opt.textContent = p.name || ('Profile (' + p.id.slice(0,8) + ') ');
+                sel.appendChild(opt);
             }});
+            if (userProfiles.length > 0) {{
+                sel.value = userProfiles[0].id;
+                renderPlatformAccounts();
+            }}
+            sel.addEventListener('change', renderPlatformAccounts);
         }}
     }} catch(e) {{ console.log('Account load skipped', e); }}
+}}
+
+function renderPlatformAccounts() {{
+    const sel = document.getElementById('zernioProfile');
+    const profileId = sel.value;
+    const container = document.getElementById('platformAccounts');
+    container.innerHTML = '';
+    const profile = userProfiles.find(p => p.id === profileId);
+    const accounts = profile ? (profile.accounts || []) : [];
+    if (accounts.length === 0) {{
+        container.innerHTML = '<p class="hint">No accounts in this profile yet. '+'Connect accounts in <a href="/account/social" style="color:#93c5fd;">Account Settings</a> first.</p>';
+        return;
+    }}
+    accounts.forEach(a => {{
+        if (a.isActive || a.is_active) {{
+            const label = document.createElement('label');
+            label.style.cssText = 'display:flex;align-items:center;gap:0.5rem;font-weight:400;';
+            label.innerHTML = '<input type="checkbox" name="platform_account" value=\'' + JSON.stringify({{platform: a.platform, account_id: a.id}}) + '\'> ' + a.platform + ' (@' + (a.display_name || a.username || 'connected') + ')';
+            container.appendChild(label);
+        }}
+    }});
 }}
 loadZernioAccounts();
 
@@ -1548,28 +1568,21 @@ function toast(msg, type) {{
 }}
 
 async function init() {{
-    // 1. Ensure user has a Zernio profile
-    const profileResp = await fetch('/api/social/my-profile', {{ method: 'POST' }});
-    const profileData = await profileResp.json();
-    if (!profileData.success) {{
-        document.getElementById('platformsGrid').innerHTML = '<p style="color:#ef4444">Failed to setup: ' + profileData.error + '</p>';
-        return;
-    }}
-    const profileId = profileData.profile_id;
-
-    // 2. Sync accounts from Zernio
+    // 1. Sync accounts from Zernio (across all the user's profiles)
     await fetch('/api/social/sync-accounts', {{ method: 'POST' }});
 
-    // 3. Get connected accounts from DB
+    // 2. Get connected accounts from DB
     const accountsResp = await fetch('/api/social/my-accounts');
     const accountsData = await accountsResp.json();
-    const connectedPlatforms = accountsData.success ? accountsData.accounts.map(a => a.platform) : [];
+    const accounts = accountsData.success ? accountsData.accounts : [];
+    const connectedPlatforms = accounts.map(a => a.platform);
 
-    // 4. Render platform grid
+    // 3. Render platform grid. Profiles are auto-created in the background on
+    //    connect — no manual profile setup required here.
     let html = '';
     ALL_PLATFORMS.forEach(p => {{
         const isConnected = connectedPlatforms.includes(p.id);
-        html += '<a href="#" class="platform-btn' + (isConnected ? ' connected' : '') + '" data-platform="' + p.id + '" data-profileid="' + profileId + '">' +
+        html += '<a href="#" class="platform-btn' + (isConnected ? ' connected' : '') + '" data-platform="' + p.id + '">' +
             p.icon +
             '<span class="label">' + p.name + '</span>' +
             '<span class="status ' + (isConnected ? 'connected' : 'disconnected') + '">' + (isConnected ? 'Connected' : 'Connect') + '</span>' +
@@ -1579,21 +1592,29 @@ async function init() {{
     // Attach click handlers via data attributes to avoid inline onclick escaping
     document.querySelectorAll('.platform-btn').forEach(btn => {{
         btn.addEventListener('click', function(e) {{
-            connectPlatform(e, this.dataset.platform, this.dataset.profileid);
+            connectPlatform(e, this.dataset.platform);
         }});
     }});
 
-    // 5. Render connected accounts list
-    if (accountsData.success && accountsData.accounts.length > 0) {{
+    // 4. Render connected accounts, grouped by Zernio profile
+    if (accounts.length > 0) {{
         let listHtml = '';
-        accountsData.accounts.forEach(a => {{
-            const platform = ALL_PLATFORMS.find(p => p.id === a.platform);
-            const icon = platform ? platform.icon : '';
-            listHtml += '<div class="account-item">' +
-                icon +
-                '<span class="username">' + (a.display_name || a.username || a.platform) + '</span>' +
-                '<span class="platform-name">' + a.platform + '</span>' +
-            '</div>';
+        const byProfile = {{}};
+        accounts.forEach(a => {{
+            const key = a.profile_id || 'primary';
+            (byProfile[key] = byProfile[key] || []).push(a);
+        }});
+        Object.keys(byProfile).forEach(pid => {{
+            listHtml += '<div style="font-size:13px;font-weight:700;color:#e0e0e0;margin:1rem 0 0.5rem;">Profile ' + (pid === 'primary' ? '(primary)' : pid) + '</div>';
+            byProfile[pid].forEach(a => {{
+                const platform = ALL_PLATFORMS.find(p => p.id === a.platform);
+                const icon = platform ? platform.icon : '';
+                listHtml += '<div class="account-item">' +
+                    icon +
+                    '<span class="username">' + (a.display_name || a.username || a.platform) + '</span>' +
+                    '<span class="platform-name">' + a.platform + '</span>' +
+                '</div>';
+            }});
         }});
         document.getElementById('connectedAccounts').innerHTML = listHtml;
     }} else {{
@@ -1601,12 +1622,16 @@ async function init() {{
     }}
 }}
 
-async function connectPlatform(e, platform, profileId) {{
+async function connectPlatform(e, platform) {{
     e.preventDefault();
     const btn = e.currentTarget;
     btn.innerHTML = '<div class="spinner"></div>';
     try {{
-        const resp = await fetch('/api/social/connect-url?platform=' + encodeURIComponent(platform) + '&profile_id=' + encodeURIComponent(profileId) + '&redirect_url=' + encodeURIComponent(window.location.href));
+        const resp = await fetch('/api/social/my-connect-url', {{
+            method: 'POST',
+            headers: {{'Content-Type':'application/json'}},
+            body: JSON.stringify({{platform: platform, redirect_url: window.location.href}})
+        }});
         const data = await resp.json();
         if (data.success && data.authUrl) {{
             // Store redirect target in sessionStorage so we come back here after OAuth

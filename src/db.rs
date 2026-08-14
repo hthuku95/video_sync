@@ -74,7 +74,10 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     // sqlx::migrate!() is a proc macro — Cargo only re-runs it when THIS file
     // changes. Touching this file forces the macro to re-scan ./migrations and
     // embed all current migration files.
-    // Last touched: 2026-08-06 to force sqlx::migrate!() to re-embed the
+    // Last touched: 2026-08-14 to force sqlx::migrate!() to re-embed the
+    // current migration set, including:
+    //   20260814000000 — multiple_zernio_profiles (drop UNIQUE(user_id), name, zernio_profile_id)
+    // Previous touch: 2026-08-06 to force sqlx::migrate!() to re-embed the
     // current migration set, including:
     //   20260806000000 — website_video_bundles (credits bundles) + deliveries.user_id
     // Previous touch: 2026-07-19 to force sqlx::migrate!() to re-embed the
