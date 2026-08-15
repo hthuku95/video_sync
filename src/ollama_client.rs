@@ -17,10 +17,13 @@ const OLLAMA_DEFAULT_MODEL: &str = "gemma4:12b";
 
 /// Context window size for Ollama/Gemma4.
 /// Gemma 4 12B natively supports up to 262,144 tokens.
-/// g4dn.xlarge (Tesla T4 16GB VRAM): ~10GB for weights + KV cache at 32K.
-/// 32768 context leaves ~6GB VRAM headroom. 65536 would use ~14GB.
-/// For 222 tool schemas (~22K tokens) + conversation history, 32768 is ample.
-pub const MODEL_NUM_CTX: u32 = 32768;
+/// g4dn.xlarge (Tesla T4 16GB VRAM): ~8.4GB weights + KV cache.
+/// 65536 context uses ~14GB of 15GB usable — the practical ceiling.
+/// Production agent prompts run 43-45K tokens (tool schemas ~22K + history);
+/// at 32K, Ollama truncates overflowing prompts to ~16K (contextShiftPromptLimit),
+/// cutting out the tool definitions → "No usable output from 5 attempts".
+/// 65536 lets the full prompt fit.
+pub const MODEL_NUM_CTX: u32 = 65536;
 
 #[derive(Debug, Clone)]
 pub struct OllamaToolCall {
