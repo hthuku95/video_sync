@@ -1986,6 +1986,243 @@ IMPORTANT: For fetching website content, use `browserbase_crawl_website(url)` �
     }
 }
 
+// ─── Context compaction for long tool loops ────────────────────────────────────
+//
+// Ollama trims overflowing prompts from the FRONT (oldest non-system messages),
+// which silently destroys early tool results mid-task. Instead of relying on that,
+// we proactively compact complete old turns into an LLM summary once the working
+// context passes ~70% of the 64K window, keeping the system anchor + last turns.
+// Compacted turns are ALSO written to Qdrant (best-effort) so they stay recoverable
+// via semantic search (CALMem-style intra-session retrieval).
+
+/// Compaction trigger: fire at 70% of the effective context window. Research
+/// (Anthropic context-engineering, MLflow, Microsoft Agent Framework) agrees
+/// quality degrades well before 100%; the summarizer itself is also impaired once
+/// context is exhausted, so we compact at 70%.
+const COMPACTION_TRIGGER_RATIO: f64 = 0.70;
+/// Always keep the most recent whole turns intact for conversational coherence.
+const COMPACTION_KEEP_LAST_TURNS: usize = 2;
+/// Hard cap on the transcript fed to the summarizer (chars) — stops a pathological
+/// long task from re-allocating the whole window just to summarize it.
+const COMPACTION_MAX_TRANSCRIPT_CHARS: usize = 40_000;
+/// Cap on each individual message in the transcript so one giant tool result
+/// cannot dominate or overflow the summarizer input.
+const COMPACTION_MAX_MSG_CHARS: usize = 2_000;
+
+/// Rough token estimate for the whole message array. JSON serialized bytes / 4 is a
+/// conservative approximation (JSON keys/quotes overcount slightly — safe direction;
+/// compaction happens marginally earlier than strictly necessary).
+fn estimate_messages_tokens(msgs: &[serde_json::Value]) -> usize {
+    let mut chars = 0usize;
+    for m in msgs {
+        chars += serde_json::to_string(m).map(|s| s.len()).unwrap_or(0);
+    }
+    chars / 4
+}
+
+/// Serialize a message for the summarizer transcript.
+fn message_to_transcript_line(msg: &serde_json::Value, cap_chars: usize) -> String {
+    let role = msg["role"].as_str().unwrap_or("?");
+    let mut out = format!("[role: {}]", role);
+    if let Some(c) = msg["content"].as_str() {
+        if !c.is_empty() {
+            out.push(' ');
+            out.push_str(c);
+        }
+    }
+    if let Some(tcs) = msg["tool_calls"].as_array() {
+        for tc in tcs {
+            let fname = tc["function"]["name"].as_str().unwrap_or("?");
+            out.push_str(&format!(" TOOL_CALL: {fname}"));
+            let args = tc["function"]["arguments"].as_str().unwrap_or("");
+            let args_trunc: String = args.chars().take(500).collect();
+            out.push_str(&format!(" args={args_trunc}"));
+        }
+    }
+    if let Some(tn) = msg["tool_name"].as_str() {
+        out.push_str(&format!(" [result of {tn}]"));
+    }
+    if out.chars().count() > cap_chars {
+        out = out.chars().take(cap_chars).collect::<String>();
+        out.push_str("…[truncated]");
+    }
+    out.push('\n');
+    out
+}
+
+/// Compaction prompt — preserves what the agent still needs, discards verbose
+/// re-fetchable raw tool output. Follows the industry-standard "anchored
+/// summarization" guidance: keep task goal, active constraints, artifacts,
+/// decisions, unresolved items, next steps.
+fn compaction_prompt(transcript: &str) -> String {
+    format!(
+        r#"You are a context compaction summarizer for a video-editing AI agent that uses tools.
+
+Compress the tool-call history below into a high-fidelity summary (under 600 tokens) that lets the agent CONTINUE the same task without re-running tool calls.
+
+MUST preserve:
+- The task goal and the original user request
+- Active constraints, decisions made, and their outcomes
+- Exact artifacts produced: output file paths, R2 URLs, IDs, clip names
+- Resources/tools already used and their results (which clips downloaded, which renders succeeded/failed)
+- Unresolved issues, errors, dead-ends
+- Obvious next steps
+
+MUST discard:
+- Verbose raw tool output that can be re-fetched by calling the tool again
+- Repeated status/loading strings
+- Redundant reasoning
+
+History:
+------
+{transcript}
+------
+
+Write ONLY the summary now."#
+    )
+}
+
+/// Try to compact old complete turns into a summary.
+/// Returns Ok(true) if messages were rewritten, Ok(false) if nothing to do.
+async fn maybe_compact_tool_history(
+    ollama_client: &crate::ollama_client::OllamaClient,
+    messages: &mut Vec<serde_json::Value>,
+    exec_context: &crate::agent::tool_executor::ToolExecutionContext,
+) -> Result<bool, String> {
+    const MODEL_CTX: usize = crate::ollama_client::MODEL_NUM_CTX as usize;
+    let trigger = (MODEL_CTX as f64 * COMPACTION_TRIGGER_RATIO) as usize;
+
+    if messages.len() < 6 {
+        return Ok(false);
+    }
+
+    let est = estimate_messages_tokens(messages);
+    if est < trigger {
+        return Ok(false);
+    }
+
+    // Turn boundaries: each "assistant" message starts a turn; the "tool" results
+    // after it belong to that turn. Never split an assistant+tool pair.
+    let assistant_idxs: Vec<usize> = messages
+        .iter()
+        .enumerate()
+        .filter(|(i, m)| {
+            *i > 1 && m["role"].as_str() == Some("assistant")
+        })
+        .map(|(i, _)| i)
+        .collect();
+
+    // Need at least keep-last + 1 turns to have something to compact.
+    if assistant_idxs.len() <= COMPACTION_KEEP_LAST_TURNS {
+        return Ok(false);
+    }
+
+    // Preserve messages[0..=1] (system anchor + first user request) and the last
+    // COMPACTION_KEEP_LAST_TURNS turns. Compacted range = [2, preserved_start).
+    let preserved_start = assistant_idxs[assistant_idxs.len() - COMPACTION_KEEP_LAST_TURNS];
+    if preserved_start <= 2 {
+        return Ok(false);
+    }
+
+    // Build the transcript of the turns we're about to compact.
+    let mut transcript = String::new();
+    for m in &messages[2..preserved_start] {
+        transcript.push_str(&message_to_transcript_line(m, COMPACTION_MAX_MSG_CHARS));
+        if transcript.chars().count() > COMPACTION_MAX_TRANSCRIPT_CHARS {
+            transcript.push_str("\n…[transcript truncated]");
+            break;
+        }
+    }
+
+    let summary = match timeout(
+        Duration::from_secs(180),
+        crate::llm_utils::generate_text_fast(
+            Some(ollama_client),
+            exec_context.app_state.deepseek_client.as_ref(),
+            exec_context.app_state.gemini_client.as_ref(),
+            &compaction_prompt(&transcript),
+        ),
+    )
+    .await
+    {
+        Ok(Ok(s)) => s.trim().to_string(),
+        Ok(Err(e)) => {
+            tracing::warn!("⚠️ Compaction summarizer failed: {}", e);
+            return Ok(false);
+        }
+        Err(_) => {
+            tracing::warn!("⚠️ Compaction summarizer timed out");
+            return Ok(false);
+        }
+    };
+
+    if summary.is_empty() {
+        tracing::warn!("⚠️ Compaction summarizer returned empty summary");
+        return Ok(false);
+    }
+
+    // Best-effort vector backup BEFORE destroying the turns, so the detail stays
+    // recoverable via semantic search in the same session (CALMem pattern).
+    if let (Some(qd), Some(gem)) = (
+        &exec_context.app_state.qdrant_client,
+        &exec_context.app_state.gemini_client,
+    ) {
+        let top_content: String = messages
+            .get(1)
+            .and_then(|m| m["content"].as_str())
+            .unwrap_or("")
+            .chars()
+            .take(800)
+            .collect();
+        let mut ctx: HashMap<String, serde_json::Value> = HashMap::new();
+        ctx.insert(
+            "source".into(),
+            serde_json::json!("ollama_tool_compaction"),
+        );
+        ctx.insert("summary".into(), serde_json::json!(summary.clone()));
+        if let Err(e) = qd
+            .store_chat_memory_with_gemini2(
+                &exec_context.session_id,
+                exec_context.user_id.map(|u| u.to_string()).as_deref(),
+                if top_content.is_empty() {
+                    "[agent tool-loop segment]"
+                } else {
+                    &top_content
+                },
+                &transcript,
+                vec![],
+                ctx,
+                gem,
+                Some("ollama_compaction"),
+            )
+            .await
+        {
+            tracing::warn!("⚠️ Compaction vector backup failed: {}", e);
+        }
+    } else {
+        tracing::debug!("Qdrant/Gemini unavailable — skipping compaction vector backup");
+    }
+
+    // Rewrite: drop compacted range, insert the summary as a system message.
+    let summary_msg = json!({
+        "role": "system",
+        "content": format!(
+            "[SUMMARY OF EARLIER STEPS IN THIS TASK — read this instead of the compacted tool history]\n{}",
+            summary
+        )
+    });
+    messages.drain(2..preserved_start);
+    messages.insert(2, summary_msg);
+
+    tracing::info!(
+        "🧠 Compacted {} messages (est {} tokens) down to a summary (est {} tokens)",
+        preserved_start - 2,
+        est,
+        summary.len() / 4
+    );
+    Ok(true)
+}
+
 // ── Gemma 4 / NVIDIA NIM tool calling loop ────────────────────────────────────
 //
 // Runs the same multi-turn tool loop as the Gemini agent but using NVIDIA NIM's
@@ -2005,6 +2242,12 @@ where
     const MAX_TURNS: usize = 10;
 
     for turn in 0..MAX_TURNS {
+        // Compact old turns once the window fills past ~70% so Ollama never
+        // silently front-trims critical history/tool schemas mid-task.
+        let _ = maybe_compact_tool_history(ollama_client, messages, exec_context)
+            .await
+            .map_err(|e| tracing::warn!("⚠️ Compaction skipped: {}", e));
+
         let response = timeout(Duration::from_secs(300), ollama_client.generate_single(messages, tools))
             .await
             .map_err(|_| "Ollama timeout after 300s".to_string())?
