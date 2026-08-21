@@ -1073,7 +1073,7 @@ IMPORTANT: For fetching website content, use `browserbase_crawl_website(url)` â€
                 .map(|arc| arc.as_ref())
                 .or_else(|| app_state.ollama_client.as_ref());
             if let Some(ollama) = ollama_client {
-                let mut oa_messages = build_messages(system_instruction);
+                let mut oa_messages = build_messages(&system_instruction);
                 // Durable resume: pick up from the last completed turn if a
                 // checkpoint exists for this workflow (crash/timeout recovery).
                 if let Some(wid) = workflow_id {
@@ -1116,7 +1116,7 @@ IMPORTANT: For fetching website content, use `browserbase_crawl_website(url)` â€
 
             // 2. Try NVIDIA NIM (cloud fallback, 40 RPM free tier)
             if let Some(ref nim) = self.nvidia_nim_client {
-                let mut nim_messages = build_messages(system_instruction);
+                let mut nim_messages = build_messages(&system_instruction);
                 match run_nvidia_tool_loop(
                     nim,
                     &mut nim_messages,
@@ -1150,7 +1150,7 @@ IMPORTANT: For fetching website content, use `browserbase_crawl_website(url)` â€
                 Ok(r) => r,
                 Err(gemini_err) => {
                     tracing::warn!("âš ï¸ Gemini failed, trying DeepSeek fallback: {}", gemini_err);
-                    let mut ds_messages = build_messages(system_instruction);
+                    let mut ds_messages = build_messages(&system_instruction);
 
                     if let Some(ref ds_client) = app_state.deepseek_client {
                         send_progress("ğŸ¤– Processing your request...");
