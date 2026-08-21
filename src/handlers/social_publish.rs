@@ -1086,7 +1086,7 @@ pub async fn my_publish_post(
             platforms: targets,
             profileId: Some(profile_id.clone()),
             media_items: if media_items.is_empty() { None } else { Some(media_items) },
-            scheduledFor: Some(scheduled_iso),
+            scheduledFor: Some(scheduled_iso.clone()),
             publishNow: false,
         };
         match z.create_post(&req).await {
