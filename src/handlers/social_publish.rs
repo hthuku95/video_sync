@@ -44,6 +44,7 @@ pub fn social_routes() -> Router {
         .route("/api/social/my-connect-url", post(get_my_connect_url))
         .route("/api/social/my-accounts", get(get_my_social_accounts))
         .route("/api/social/sync-accounts", post(sync_my_social_accounts))
+        .route("/api/social/my-publish", post(my_publish_post))
         .layer(axum::middleware::from_fn(crate::middleware::auth::auth_middleware));
     public.merge(user_routes)
 }
@@ -982,5 +983,146 @@ async fn update_platform_results(
         .bind(post_id)
         .execute(db_pool)
         .await;
+    }
+}
+
+// ── Tier-1 user publish/schedule ───────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct MyPublishTarget {
+    pub platform: String,
+    pub account_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct MyPublishPayload {
+    pub text: String,
+    #[serde(default)]
+    pub media_urls: Vec<String>,
+    pub targets: Vec<MyPublishTarget>,
+    /// Optional ISO 8601 timestamp — when present the post is scheduled
+    /// instead of published immediately.
+    pub scheduled_for: Option<String>,
+}
+
+/// POST /api/social/my-publish — Publish (or schedule) text + media to the
+/// authenticated user's own connected social accounts. Every target account is
+/// verified against `user_zernio_accounts` for this user before publishing.
+pub async fn my_publish_post(
+    Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
+    Json(payload): Json<MyPublishPayload>,
+) -> Json<serde_json::Value> {
+    let user_id: i32 = match claims.sub.parse() {
+        Ok(id) => id,
+        Err(_) => return Json(json!({"success": false, "error": "Invalid user ID in token"})),
+    };
+    let Some(z) = state.zernio_client.clone() else {
+        return Json(json!({"success": false, "error": "Zernio not configured"}));
+    };
+    if payload.targets.is_empty() {
+        return Json(json!({"success": false, "error": "No target accounts selected"}));
+    }
+    if payload.text.trim().is_empty() && payload.media_urls.is_empty() {
+        return Json(json!({"success": false, "error": "Post needs text or media"}));
+    }
+
+    // Verify ownership of every target account and collect its profile.
+    let account_ids: Vec<String> = payload.targets.iter().map(|t| t.account_id.clone()).collect();
+    let owned = sqlx::query(
+        "SELECT zernio_account_id, zernio_profile_id FROM user_zernio_accounts \
+         WHERE user_id = $1 AND zernio_account_id = ANY($2) AND is_active",
+    )
+    .bind(user_id)
+    .bind(&account_ids)
+    .fetch_all(&state.db_pool)
+    .await;
+    let owned_rows = match owned {
+        Ok(rows) => rows,
+        Err(e) => return Json(json!({"success": false, "error": format!("DB error: {e}")})),
+    };
+    if owned_rows.len() != payload.targets.len() {
+        return Json(json!({
+            "success": false,
+            "error": "One or more selected accounts are not connected to your profile"
+        }));
+    }
+    let Some(profile_id) = owned_rows
+        .iter()
+        .filter_map(|r| r.try_get::<Option<String>, _>(1).ok().flatten())
+        .next()
+    else {
+        return Json(json!({"success": false, "error": "No Zernio profile found for these accounts"}));
+    };
+
+    let targets: Vec<PlatformTarget> = payload
+        .targets
+        .iter()
+        .map(|t| PlatformTarget {
+            platform: t.platform.clone(),
+            accountId: t.account_id.clone(),
+        })
+        .collect();
+
+    // Scheduled path → create_post with scheduledFor; immediate path → publish.
+    if let Some(ref when) = payload.scheduled_for {
+        let parsed = chrono::DateTime::parse_from_rfc3339(when);
+        let scheduled_iso = match parsed {
+            Ok(dt) => dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            Err(_) => {
+                return Json(json!({"success": false, "error": "scheduled_for must be ISO 8601"}))
+            }
+        };
+        let media_items: Vec<crate::zernio_client::MediaItem> = payload
+            .media_urls
+            .iter()
+            .map(|u| crate::zernio_client::MediaItem {
+                r#type: "video".to_string(),
+                url: u.clone(),
+            })
+            .collect();
+        let req = crate::zernio_client::CreatePostRequest {
+            content: Some(payload.text.clone()),
+            platforms: targets,
+            profileId: Some(profile_id.clone()),
+            media_items: if media_items.is_empty() { None } else { Some(media_items) },
+            scheduledFor: Some(scheduled_iso),
+            publishNow: false,
+        };
+        match z.create_post(&req).await {
+            Ok(resp) => {
+                info!("User {} scheduled post {} for {}", user_id, resp.post.id, scheduled_iso);
+                Json(json!({
+                    "success": true,
+                    "scheduled": true,
+                    "scheduled_for": scheduled_iso,
+                    "post_id": resp.post.id,
+                    "status": resp.post.status,
+                }))
+            }
+            Err(e) => {
+                warn!("User {} schedule failed: {}", user_id, e);
+                Json(json!({"success": false, "error": e.to_string()}))
+            }
+        }
+    } else {
+        match z
+            .publish_to_accounts(&profile_id, &payload.text, targets, payload.media_urls)
+            .await
+        {
+            Ok(resp) => {
+                info!("User {} published post {} immediately", user_id, resp.post.id);
+                Json(json!({
+                    "success": true,
+                    "scheduled": false,
+                    "post_id": resp.post.id,
+                    "status": resp.post.status,
+                }))
+            }
+            Err(e) => {
+                warn!("User {} publish failed: {}", user_id, e);
+                Json(json!({"success": false, "error": e.to_string()}))
+            }
+        }
     }
 }

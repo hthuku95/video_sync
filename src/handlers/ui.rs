@@ -1501,6 +1501,16 @@ pub async fn account_social_page(
     .account-item .platform-name{{color:#94a3b8;font-size:0.8rem;margin-left:0.25rem}}
     .disconnect-btn{{margin-left:auto;padding:0.3rem 0.6rem;border:none;border-radius:4px;background:rgba(239,68,68,0.15);color:#ef4444;font-size:0.75rem;cursor:pointer}}
     .disconnect-btn:hover{{background:rgba(239,68,68,0.25)}}
+    .publish-input{{width:100%;padding:0.7rem 0.9rem;border-radius:8px;border:1px solid rgba(59,130,246,0.2);background:rgba(30,41,59,0.5);color:#e5eefb;font-size:0.9rem;margin-bottom:0.75rem;font-family:inherit}}
+    .publish-input:focus{{outline:none;border-color:#3b82f6}}
+    textarea.publish-input{{resize:vertical}}
+    .acct-check{{display:flex;align-items:center;gap:0.5rem;padding:0.6rem 0.8rem;border-radius:8px;border:1px solid rgba(59,130,246,0.2);background:rgba(30,41,59,0.4);font-size:0.85rem;cursor:pointer;color:#e2e8f0}}
+    .acct-check:hover{{border-color:#3b82f6}}
+    .acct-check input{{accent-color:#3b82f6;margin:0}}
+    .btn-main{{padding:0.7rem 1.3rem;border:none;border-radius:8px;background:linear-gradient(135deg,#3b82f6,#2563eb);color:white;font-weight:700;cursor:pointer;font-size:0.9rem;transition:transform 0.2s}}
+    .btn-main:hover{{transform:translateY(-1px)}}
+    .btn-main:disabled,.btn-sched:disabled{{opacity:0.6;cursor:not-allowed;transform:none}}
+    .btn-sched{{padding:0.7rem 1.3rem;border:1px solid rgba(59,130,246,0.35);border-radius:8px;background:rgba(30,41,59,0.6);color:#dbeafe;font-weight:600;cursor:pointer;font-size:0.9rem}}
 </style>
 </head>
 <body>
@@ -1525,6 +1535,21 @@ pub async fn account_social_page(
         <h2>Connected Accounts</h2>
         <div id="connectedAccounts">
             <p style="color:#94a3b8;text-align:center;padding:1rem;">Loading...</p>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>Post to Your Accounts</h2>
+        <p class="subtitle" style="margin-bottom:1rem;">Share a video or image with a caption — publish now or schedule it.</p>
+        <textarea id="postText" class="publish-input" rows="3" placeholder="Caption / post text..."></textarea>
+        <input type="url" id="mediaUrl" class="publish-input" placeholder="Media URL (video or image, e.g. https://…/clip.mp4)">
+        <p class="hint" style="color:#94a3b8;font-size:0.8rem;margin-bottom:0.5rem;">Select accounts:</p>
+        <div id="publishAccounts" class="platform-grid"></div>
+        <div style="display:flex;gap:0.75rem;align-items:center;flex-wrap:wrap;margin-top:1rem;">
+            <button type="button" class="btn-main" id="publishNowBtn">Publish Now</button>
+            <span style="color:#94a3b8;font-size:0.85rem;">or</span>
+            <input type="datetime-local" id="scheduleAt" class="publish-input" style="width:auto;margin-bottom:0;">
+            <button type="button" class="btn-sched" id="scheduleBtn">Schedule</button>
         </div>
     </div>
 </div>
@@ -1620,7 +1645,75 @@ async function init() {{
     }} else {{
         document.getElementById('connectedAccounts').innerHTML = '<p style="color:#94a3b8;text-align:center;padding:1rem;">No accounts connected yet. Click a platform above to connect.</p>';
     }}
+
+    // 5. Render publish-target checkboxes (active accounts only)
+    const activeAccounts = accounts.filter(a => a.is_active !== false);
+    const pubGrid = document.getElementById('publishAccounts');
+    if (pubGrid) {{
+        if (activeAccounts.length > 0) {{
+            let checkHtml = '';
+            activeAccounts.forEach(a => {{
+                const platform = ALL_PLATFORMS.find(p => p.id === a.platform);
+                const icon = platform ? platform.icon : '';
+                const label = (a.display_name || a.username || a.platform);
+                checkHtml += '<label class="acct-check"><input type="checkbox" value="' + a.id + '" data-platform="' + a.platform + '">' + icon + '<span>' + label + ' (' + a.platform + ')</span></label>';
+            }});
+            pubGrid.innerHTML = checkHtml;
+        }} else {{
+            pubGrid.innerHTML = '<p class="hint" style="color:#94a3b8;font-size:0.85rem;">Connect an account above to start posting.</p>';
+        }}
+    }}
 }}
+
+function selectedPublishTargets() {{
+    return Array.from(document.querySelectorAll('#publishAccounts input[type=checkbox]:checked')).map(cb => ({{
+        platform: cb.dataset.platform,
+        account_id: cb.value
+    }}));
+}}
+
+async function doSocialPublish(scheduled) {{
+    const text = document.getElementById('postText').value.trim();
+    const mediaUrl = document.getElementById('mediaUrl').value.trim();
+    const targets = selectedPublishTargets();
+    if (!targets.length) {{ toast('Select at least one account', 'error'); return; }}
+    if (!text && !mediaUrl) {{ toast('Add a caption or media URL', 'error'); return; }}
+    let scheduled_for = null;
+    if (scheduled) {{
+        const v = document.getElementById('scheduleAt').value;
+        if (!v) {{ toast('Pick a date and time first', 'error'); return; }}
+        scheduled_for = new Date(v).toISOString();
+    }}
+    const nowBtn = document.getElementById('publishNowBtn');
+    const schedBtn = document.getElementById('scheduleBtn');
+    nowBtn.disabled = true; schedBtn.disabled = true;
+    try {{
+        const resp = await fetch('/api/social/my-publish', {{
+            method: 'POST',
+            headers: {{'Content-Type':'application/json'}},
+            body: JSON.stringify({{text: text, media_urls: mediaUrl ? [mediaUrl] : [], targets: targets, scheduled_for: scheduled_for}})
+        }});
+        const data = await resp.json();
+        if (data.success) {{
+            toast(scheduled ? 'Post scheduled!' : 'Published!', 'success');
+            document.getElementById('postText').value = '';
+            document.getElementById('mediaUrl').value = '';
+        }} else {{
+            toast(data.error || 'Failed to post', 'error');
+        }}
+    }} catch(err) {{
+        toast('Network error: ' + err.message, 'error');
+    }} finally {{
+        nowBtn.disabled = false; schedBtn.disabled = false;
+    }}
+}}
+
+document.addEventListener('DOMContentLoaded', function() {{
+    const nb = document.getElementById('publishNowBtn');
+    const sb = document.getElementById('scheduleBtn');
+    if (nb) nb.addEventListener('click', () => doSocialPublish(false));
+    if (sb) sb.addEventListener('click', () => doSocialPublish(true));
+}});
 
 async function connectPlatform(e, platform) {{
     e.preventDefault();
@@ -3303,6 +3396,7 @@ fn build_modern_landing_page_html() -> &'static str {
             --blue: #60a5fa;
             --blue-strong: #3b82f6;
             --green: #22c55e;
+            --accent-secondary: #f59e0b;
             --shadow: 0 24px 70px rgba(2, 6, 23, 0.45);
         }
 
@@ -3724,6 +3818,11 @@ fn build_modern_landing_page_html() -> &'static str {
             text-transform: uppercase;
         }
 
+        .featured-badge.tier2-badge {
+            background: linear-gradient(135deg, #f59e0b, #d97706);
+            box-shadow: 0 8px 22px rgba(245, 158, 11, 0.3);
+        }
+
         .pricing-list,
         .tool-list {
             list-style: none;
@@ -3902,6 +4001,62 @@ fn build_modern_landing_page_html() -> &'static str {
             color: rgba(148, 163, 184, 0.35);
         }
 
+        .nav-toggle {
+            display: none;
+            flex-direction: column;
+            justify-content: center;
+            gap: 5px;
+            width: 44px;
+            height: 44px;
+            padding: 11px 10px;
+            border-radius: 12px;
+            border: 1px solid rgba(96, 165, 250, 0.22);
+            background: rgba(15, 23, 42, 0.7);
+            cursor: pointer;
+        }
+
+        .nav-toggle span {
+            display: block;
+            height: 2px;
+            width: 100%;
+            border-radius: 2px;
+            background: #dbeafe;
+            transition: transform 0.25s ease, opacity 0.25s ease;
+        }
+
+        .nav-toggle.open span:nth-child(1) {
+            transform: translateY(7px) rotate(45deg);
+        }
+
+        .nav-toggle.open span:nth-child(2) {
+            opacity: 0;
+        }
+
+        .nav-toggle.open span:nth-child(3) {
+            transform: translateY(-7px) rotate(-45deg);
+        }
+
+        .mobile-nav {
+            display: none;
+            flex-direction: column;
+            gap: 0.35rem;
+            padding: 0.35rem 0 1rem;
+        }
+
+        .mobile-nav a {
+            text-decoration: none;
+            color: #dbeafe;
+            font-weight: 600;
+            padding: 0.75rem 0.95rem;
+            border-radius: 12px;
+            background: rgba(15, 23, 42, 0.6);
+            border: 1px solid rgba(148, 163, 184, 0.14);
+        }
+
+        .mobile-nav.open {
+            display: flex;
+        }
+
         @keyframes fadeInUp {
             from {
                 opacity: 0;
@@ -3933,13 +4088,25 @@ fn build_modern_landing_page_html() -> &'static str {
         }
 
         @media (max-width: 768px) {
+            .nav {
+                flex-wrap: wrap;
+            }
+
             .nav-links {
                 display: none;
             }
 
+            .nav-toggle {
+                display: inline-flex;
+            }
+
             .auth-buttons {
-                flex-direction: column;
                 gap: 0.55rem;
+            }
+
+            .auth-buttons .btn {
+                padding: 0.6rem 1rem;
+                font-size: 0.9rem;
             }
 
             .hero {
@@ -3987,11 +4154,23 @@ fn build_modern_landing_page_html() -> &'static str {
                     <a href="#features">Features</a>
                     <a href="#tools">Toolkit</a>
                 </div>
-                <div class="auth-buttons" id="homepageAuthButtons">
-                    <a href="/login" class="btn btn-secondary">Login</a>
-                    <a href="/signup" class="btn btn-primary">Sign Up</a>
+                <div style="display:flex;align-items:center;gap:0.75rem">
+                    <div class="auth-buttons" id="homepageAuthButtons">
+                        <a href="/login" class="btn btn-secondary">Login</a>
+                        <a href="/signup" class="btn btn-primary">Sign Up</a>
+                    </div>
+                    <button class="nav-toggle" id="navToggle" aria-label="Toggle navigation" aria-expanded="false">
+                        <span></span><span></span><span></span>
+                    </button>
                 </div>
             </nav>
+            <div class="mobile-nav" id="mobileNav">
+                <a href="#workflow">Workflow</a>
+                <a href="#pricing">Plans</a>
+                <a href="/services">Services</a>
+                <a href="#features">Features</a>
+                <a href="#tools">Toolkit</a>
+            </div>
         </div>
     </header>
 
@@ -4004,8 +4183,8 @@ fn build_modern_landing_page_html() -> &'static str {
                 </svg>
                 <span>Agent-driven video editing and production from natural language</span>
             </div>
-            <h1>Generate and Edit Videos of Any Length With AI</h1>
-            <p class="hero-copy">VideoSync is an <strong>AI-powered video editing and generation workspace</strong>. Tell the agent what you want in natural language: edit clips, create thumbnails, generate short promos, build long-form videos, add voice, render animations, and package the result for download or delivery.</p>
+            <h1>Edit videos with natural language — generate, publish, and grow with AI</h1>
+            <p class="hero-copy">VideoSync is an <strong>AI agent workspace for video</strong>. Describe what you want and the agent edits your footage, generates new scenes, adds voice and music, and packages the result. Connect your social accounts to post or schedule what you create — or hand the whole job to a managed campaign that creates and posts daily for you.</p>
             <div class="hero-buttons" id="homepageHeroButtons">
                 <a href="/subscribe" class="btn btn-primary btn-large">Start 7-day trial</a>
                 <a href="#pricing" class="btn btn-secondary btn-large">See plans</a>
@@ -4014,15 +4193,15 @@ fn build_modern_landing_page_html() -> &'static str {
                 <div class="hero-slider">
                     <article class="hero-slide">
                         <div>
-                            <span class="hero-slide-tag">Core Workspace</span>
-                            <h3>The $15/month plan covers the AI editor and generator</h3>
-                            <p>Natural-language editing, video generation, thumbnails, voice, stock footage, animated 3D/2D scenes, animated math/science visuals, and delivery/download workflows in one creator workspace.</p>
+                            <span class="hero-slide-tag">Tier 1 — AI Workspace</span>
+                            <h3>The $15/month plan covers editing, generation, and posting</h3>
+                            <p>Natural-language editing, video generation, thumbnails, voice, stock footage, and animated 3D/2D scenes. Connect your social accounts and post or schedule your videos without leaving VideoSync.</p>
                         </div>
                         <div class="hero-slide-points">
-                            <span>Full editing capabilities</span>
-                            <span>Pexels footage</span>
-                            <span>ElevenLabs voice</span>
-                            <span>Animated 3D/2D scenes</span>
+                            <span>Editing + generation</span>
+                            <span>Any length</span>
+                            <span>Connect socials</span>
+                            <span>Post &amp; schedule</span>
                         </div>
                     </article>
                     <article class="hero-slide">
@@ -4053,30 +4232,30 @@ fn build_modern_landing_page_html() -> &'static str {
                     </article>
                     <article class="hero-slide">
                         <div>
-                            <span class="hero-slide-tag">Services Page</span>
-                            <h3>Client packages live separately from the core product</h3>
-                            <p>SaaS packs, mockups, education videos, clip packs, voice/audio work, and agency bundles are productized on the Services page so the homepage stays simple.</p>
+                            <span class="hero-slide-tag">Tier 2 — Managed Campaigns</span>
+                            <h3>Twelve managed services that create and post daily</h3>
+                            <p>Clipping, Kick auto-clipping, landing page videos, education explainers, whiteboard animation, investor pitches, and more. Each service pairs media generation with social campaigns that post to your connected accounts on schedule.</p>
                         </div>
                         <div class="hero-slide-points">
-                            <span>SaaS packs</span>
-                            <span>Mockups</span>
-                            <span>Education</span>
-                            <span>Agency bundles</span>
+                            <span>12 services</span>
+                            <span>Daily content</span>
+                            <span>Auto-posted</span>
+                            <span>From $149/mo</span>
                         </div>
                     </article>
                 </div>
                 <aside class="hero-summary">
                     <div class="hero-summary-label">Two ways to work with us</div>
-                    <h3>Subscribe to the AI workspace or order a managed campaign.</h3>
-                    <p>Use the $15/mo workspace to edit and generate yourself, or let our AI agent run a custom video campaign for you — delivered in hours, priced at a fraction of agency cost.</p>
+                    <h3>Create it yourself in the workspace, or let a managed campaign run it.</h3>
+                    <p>Tier 1 is the full AI workspace: edit and generate videos, connect your social accounts, and post or schedule straight from VideoSync. Tier 2 adds managed campaigns — pick one of 12 services and the agent generates fresh content daily, posting to your connected accounts on schedule.</p>
                     <div class="hero-metrics">
                         <div class="hero-metric">
                             <strong>$15/mo</strong>
-                            <span>AI Video Workspace — do it yourself</span>
+                            <span>AI workspace — editing, generation, social posting</span>
                         </div>
                         <div class="hero-metric">
-                            <strong>$149-$2,500</strong>
-                            <span>Managed Campaign — we run it for you</span>
+                            <strong>$149–$297/mo</strong>
+                            <span>Managed campaigns across 12 services</span>
                         </div>
                     </div>
                 </aside>
@@ -4087,38 +4266,38 @@ fn build_modern_landing_page_html() -> &'static str {
     <section id="pricing" class="section">
         <div class="container">
             <div class="section-intro">
-                <div class="section-kicker">Two Tiers, No Confusion</div>
-                <h2>DIY Workspace or Managed Campaigns</h2>
-                <p>Choose the <strong>$15/month workspace</strong> to edit and generate yourself, or order a <strong>managed campaign</strong> starting at $149 — our AI agent does the work and delivers in hours, not weeks.</p>
+                <div class="section-kicker">Two Ways To Work With Us</div>
+                <h2>One workspace to create. Twelve services to scale.</h2>
+                <p>The <strong>$15/month workspace</strong> gives you AI editing, video generation, and social posting under your control. The <strong>managed services</strong> add campaigns: the agent generates and posts content daily to your connected accounts, starting at $149/mo.</p>
             </div>
             <div class="pricing-grid">
                 <article class="pricing-card featured">
-                    <div class="featured-badge">Tier 1 — DIY</div>
-                    <div class="eyebrow">AI Video Workspace</div>
+                    <div class="featured-badge">Tier 1 — AI Workspace</div>
+                    <div class="eyebrow">Create &amp; Publish</div>
                     <h3>$15<span style="font-size:0.5em;color:#94a3b8;margin-left:0.35rem">/month</span></h3>
-                    <p>7-day free trial. Natural-language editing, video generation, animated 3D/2D scenes, animated explainers, voice, thumbnails, and delivery pages — all from one workspace. Videos of any length supported — no 60-second cap.</p>
+                    <p>7-day free trial. The complete AI video workspace: edit any footage, generate videos of any length, and publish to your audience — all from one place.</p>
                     <ul class="pricing-list">
-                        <li>AI editing, generation, and creator growth assets</li>
-                        <li>Animated 3D/2D scenes, animated explainers, UI mockups, and title cards</li>
-                        <li>Professional video trims, exports, and delivery handoff</li>
-                        <li>Pexels footage, ElevenLabs voice, previews, and delivery pages</li>
-                        <li>Best entry point for recurring revenue</li>
+                        <li>Natural-language editing and video generation — any length, no 60-second cap</li>
+                        <li>Animated 3D/2D scenes, explainers, thumbnails, voiceover, and stock footage</li>
+                        <li>Connect your social media accounts once</li>
+                        <li>Post or schedule your videos to those accounts from VideoSync</li>
+                        <li>Pexels footage, ElevenLabs voice, previews, and shareable delivery pages</li>
                     </ul>
                     <a href="/subscribe" class="btn btn-primary" style="margin-top:1rem">Start 7-day trial</a>
                 </article>
                 <article class="pricing-card">
-                    <div class="featured-badge" style="background:var(--accent-secondary,#f59e0b)">Tier 2 — Managed Campaigns</div>
-                    <div class="eyebrow">Managed Production</div>
-                    <h3>$149<span style="font-size:0.5em;color:#94a3b8;margin-left:0.35rem">to $2,500</span></h3>
-                    <p>One-off project pricing. SaaS hero videos, product demos, 3D mockups, animated scenes, explainers, audiograms, clip packs, and white-label production — priced at a fraction of agency cost because our AI agent does the heavy lifting.</p>
+                    <div class="featured-badge tier2-badge">Tier 2 — Managed Campaigns</div>
+                    <div class="eyebrow">Generate &amp; Grow On Autopilot</div>
+                    <h3>$149–$297<span style="font-size:0.5em;color:#94a3b8;margin-left:0.35rem">/month</span></h3>
+                    <p>Twelve managed services, each pairing AI media generation with social campaigns. Pick a service, connect your accounts, and the agent creates fresh content daily and posts it on schedule.</p>
                     <ul class="pricing-list">
-                        <li>SaaS hero videos and website demos from a live URL</li>
-                        <li>3D product mockups, cinematic loops, and launch visuals</li>
-                        <li>Clip packs, thumbnails, audiograms, and short-form cutdowns</li>
-                        <li>Full animated 3D/2D scenes and animated explainer videos</li>
-                        <li>White-label delivery pages with preview links you can sell</li>
+                        <li>Clipping &amp; Kick auto-clipping — daily clips from your streams or channels</li>
+                        <li>Landing page videos, education explainers, whiteboard &amp; kinetic animation</li>
+                        <li>Infographics, algorithm visualizations, investor pitches, year-in-reviews</li>
+                        <li>Campaigns generate unique variations every day — no repeats</li>
+                        <li>Auto-posted to your connected social accounts on your schedule</li>
                     </ul>
-                    <a href="/services" class="btn btn-secondary" style="margin-top:1rem">See All Services & Prices</a>
+                    <a href="/services" class="btn btn-secondary" style="margin-top:1rem">See All Services &amp; Prices</a>
                 </article>
             </div>
         </div>
@@ -4128,70 +4307,58 @@ fn build_modern_landing_page_html() -> &'static str {
         <div class="container">
             <div class="section-intro">
                 <div class="section-kicker">Platform Strengths</div>
-                <h2>AI video editing stays central to the whole business</h2>
-                <p>The premium offers matter, but they work because the core platform can already edit, generate, package, and deliver a wide range of outputs from one agentic workflow.</p>
+                <h2>Fast, affordable, and built to stay up</h2>
+                <p>Everything runs on one agentic pipeline — the same strengths that make a single video fast make hundreds of daily campaign posts possible.</p>
             </div>
             <div class="features-grid">
-                <article class="feature-card">
-                    <div class="feature-icon">
-                        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                            <rect x="7" y="4" width="10" height="13" rx="3"></rect>
-                            <path d="M10 2v2M14 2v2M9 11h6M12 8v6M9 20h6"></path>
-                        </svg>
-                    </div>
-                    <h3>AI-Powered Assistant</h3>
-                    <p>Chat with the agent to edit footage, generate scenes, produce voice, build animations, and ship exports without learning a complex editor first.</p>
-                </article>
                 <article class="feature-card">
                     <div class="feature-icon">
                         <svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
                             <path d="M13 2 4 14h6l-1 8 9-12h-6l1-8Z"></path>
                         </svg>
                     </div>
-                    <h3>Fast Iteration</h3>
-                    <p>Previews, delivery pages, and repeatable recipes make it easier to move from concept to monetizable output quickly.</p>
+                    <h3>Speed</h3>
+                    <p>Describe the edit and the agent starts immediately. Renders kick off in seconds, previews follow as scenes finish, and delivery pages go live without waiting days for an editor.</p>
                 </article>
                 <article class="feature-card">
                     <div class="feature-icon">
                         <svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                            <circle cx="12" cy="12" r="8"></circle>
-                            <circle cx="12" cy="12" r="4"></circle>
-                            <path d="M12 8v8M8 12h8"></path>
+                            <circle cx="12" cy="12" r="9"></circle>
+                            <path d="M12 7v5l3 3"></path>
                         </svg>
                     </div>
-                    <h3>Professional Quality</h3>
-                    <p>Blend professional editing with animated motion design, animated explainers, and polished handoff for outputs that feel client-ready.</p>
+                    <h3>Cost</h3>
+                    <p>A $15/mo workspace replaces hours of manual editing, and managed campaigns start at $149/mo — a fraction of what agencies charge for the same output.</p>
                 </article>
                 <article class="feature-card">
                     <div class="feature-icon">
                         <svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                            <rect x="3" y="6" width="15" height="12" rx="2"></rect>
-                            <path d="m18 10 3-2v8l-3-2"></path>
+                            <path d="m9 11 3 3 8-8"></path>
+                            <path d="M20 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9"></path>
                         </svg>
                     </div>
-                    <h3>YouTube Integration</h3>
-                    <p>Upload directly to YouTube, manage videos, track analytics, optimize metadata, and moderate comments from the same system.</p>
+                    <h3>Quality</h3>
+                    <p>Professional editing tools, real animation engines, and a review loop that checks every render before it reaches you or your audience.</p>
                 </article>
                 <article class="feature-card">
                     <div class="feature-icon">
                         <svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                            <rect x="5" y="11" width="14" height="10" rx="2"></rect>
-                            <path d="M8 11V8a4 4 0 1 1 8 0v3"></path>
+                            <path d="M12 3l7 4v10l-7 4-7-4V7l7-4Z"></path>
+                            <path d="m8.5 12 2.2 2.2 4.8-4.8"></path>
                         </svg>
                     </div>
-                    <h3>Secure and Private</h3>
-                    <p>Your videos, previews, and delivery workflows are processed with access control and production-minded backend handling.</p>
+                    <h3>Reliability</h3>
+                    <p>Every AI call and render runs through fallback chains across multiple providers. If one system is down, the work continues — no single point of failure.</p>
                 </article>
                 <article class="feature-card">
                     <div class="feature-icon">
                         <svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M4 12h16M12 4v16"></path>
-                            <circle cx="12" cy="12" r="10"></circle>
-                            <path d="M8 8 6 6M16 8l2-2M8 16l-2 2M16 16l2 2"></path>
+                            <path d="M4 19h16"></path>
+                            <path d="M7 16V9M12 16V5M17 16v-3"></path>
                         </svg>
                     </div>
-                    <h3>Cross-Platform Publishing</h3>
-                    <p>Schedule and auto-publish clips, videos, and campaigns across YouTube, TikTok, Instagram, and X from one dashboard. Connect your accounts once — our Campaign Engine posts daily on your behalf.</p>
+                    <h3>Scale</h3>
+                    <p>An auto-scaling render fleet behind every job. One video tonight or hundreds of scheduled posts a day — the pipeline grows with your audience.</p>
                 </article>
             </div>
         </div>
@@ -4273,30 +4440,30 @@ fn build_modern_landing_page_html() -> &'static str {
         <div class="container">
             <div class="section-intro">
                 <div class="section-kicker">Built To Compound</div>
-                <h2>One platform, multiple monetization layers</h2>
-                <p>The same orchestration layer can edit creator videos, generate new motion scenes, package productized offers, and hand off polished deliverables through previews and wallet-based unlocks.</p>
+                <h2>One platform that compounds</h2>
+                <p>The same orchestration layer edits your footage, generates new scenes, publishes to your social accounts, and powers managed campaigns — every improvement to the agent makes all of it better.</p>
             </div>
             <div class="about-grid">
                 <article class="about-card">
-                    <h3>Long-term recurring revenue</h3>
-                    <p>The core business stays the creator and team subscription: a dependable workspace for AI editing, generation, export, and delivery that people can use every month.</p>
-                    <h3>Short-term premium revenue</h3>
-                    <p>When needed, the same system produces higher-ticket outputs like SaaS hero videos, website-driven animations, 3D mockups, and launch packs without introducing a second production stack.</p>
+                    <h3>Your workspace grows with you</h3>
+                    <p>Start by editing and generating in the $15/mo workspace. When you want content on autopilot, connect your accounts and switch on a managed campaign — no new tools, no migration, same agent.</p>
+                    <h3>Campaigns that never miss a day</h3>
+                    <p>Managed services generate unique variations daily from your brief or source channel and post them on schedule. Your accounts stay active even when you don't touch them.</p>
                     <h3>Agent-ready architecture</h3>
-                    <p>Because professional editing, animated 3D/2D scenes, animated explainers, voice, stock footage, and delivery all sit behind one orchestration layer, improving the agents improves every offer at once.</p>
+                    <p>Professional editing, animated 3D/2D scenes, voice, stock footage, publishing, and campaigns all sit behind one orchestration layer — improving the agents improves everything at once.</p>
                 </article>
                 <div class="stat-stack">
                     <div class="stat-item">
                         <strong>$15</strong>
-                        <span>Recurring creator plan that should stay the headline offer</span>
+                        <span>Full AI workspace with editing, generation, and social posting</span>
                     </div>
                     <div class="stat-item">
                         <strong>Any Length</strong>
                         <span>No 60-second cap — generate videos of any duration</span>
                     </div>
                     <div class="stat-item">
-                        <strong>3D/2D Animation</strong>
-                        <span>Professional animated scenes, mockups, title cards — generate videos of any length</span>
+                        <strong>12 Services</strong>
+                        <span>Managed campaigns from $149/mo, auto-posted daily</span>
                     </div>
                 </div>
             </div>
@@ -4306,9 +4473,9 @@ fn build_modern_landing_page_html() -> &'static str {
     <section class="section section-dark">
         <div class="container">
             <div class="cta-card">
-                <h2>Start with the editor, then expand into premium offers</h2>
-                <p>Use the recurring AI editing workflow as the stable foundation, then close higher-ticket launch packs, creator assets, or agency production from the same backend.</p>
-                <a href="/signup" class="btn btn-primary btn-large">Start using VideoSync</a>
+                <h2>Start creating</h2>
+                <p>Edit your first video with natural language in minutes — then connect your socials and let VideoSync handle posting, or hand it all to a managed campaign.</p>
+                <a href="/signup" class="btn btn-primary btn-large">Start creating</a>
             </div>
         </div>
     </section>
@@ -4390,6 +4557,24 @@ fn build_modern_landing_page_html() -> &'static str {
         new DynamicBackgroundManager();
     </script>
 <script>
+(function() {
+    var toggle = document.getElementById('navToggle');
+    var mobileNav = document.getElementById('mobileNav');
+    if (toggle && mobileNav) {
+        toggle.addEventListener('click', function() {
+            var open = mobileNav.classList.toggle('open');
+            toggle.classList.toggle('open', open);
+            toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+        });
+        mobileNav.querySelectorAll('a').forEach(function(link) {
+            link.addEventListener('click', function() {
+                mobileNav.classList.remove('open');
+                toggle.classList.remove('open');
+                toggle.setAttribute('aria-expanded', 'false');
+            });
+        });
+    }
+})();
 function getStoredHomepageToken() {
     return localStorage.getItem('auth_token')
         || localStorage.getItem('authToken')
@@ -5841,6 +6026,10 @@ pub async fn dashboard_page() -> Html<String> {
                 <a href="/api/campaigns" class="action-card">
                     <h3><span class="action-icon"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="6" height="6" rx="1"></rect><rect x="15" y="3" width="6" height="6" rx="1"></rect><rect x="3" y="15" width="6" height="6" rx="1"></rect><rect x="15" y="15" width="6" height="6" rx="1"></rect></svg></span>Campaigns</h3>
                     <p>Set up automated daily content generation and cross-platform posting campaigns</p>
+                </a>
+                <a href="/account/social" class="action-card">
+                    <h3><span class="action-icon"><svg viewBox="0 0 24 24"><path d="M12 3a4 4 0 1 1 0 8 4 4 0 0 1 0-8Z"></path><path d="M5 21a7 7 0 0 1 14 0"></path></svg></span>Social Accounts</h3>
+                    <p>Connect your social media accounts, then post or schedule your videos straight from VideoSync</p>
                 </a>
                 <a href="/help" class="action-card">
                     <h3><span class="action-icon"><svg viewBox="0 0 24 24"><path d="M5 4h11a3 3 0 0 1 3 3v13H8a3 3 0 0 0-3 3Z"></path><path d="M8 4v16a3 3 0 0 0-3 3V7a3 3 0 0 1 3-3Z"></path><path d="M11 9h4"></path><path d="M11 13h4"></path></svg></span>Help & Guide</h3>
