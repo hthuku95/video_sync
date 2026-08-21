@@ -863,6 +863,13 @@ pub async fn execute_tool_gemini_with_context(
     args: &HashMap<String, Value>,
     ctx: &ToolExecutionContext,
 ) -> String {
+    // Safety net for the search_tools meta-tool on paths that don't do dynamic
+    // toolset expansion (Gemini-native fallback, other agents): still return the
+    // catalog matches so the model gets a useful result. The OpenAI-format loops
+    // intercept search_tools earlier via execute_tool_call_in_loop (with expansion).
+    if name == "search_tools" {
+        return crate::ai_tool_selector::execute_search_tools(args).0;
+    }
     let node_start = start_tool_execution_node(name, serde_json::json!(args), ctx).await;
     if let Some(cached_result) = node_start
         .as_ref()

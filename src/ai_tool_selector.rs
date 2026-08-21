@@ -223,3 +223,272 @@ fn build_tool_list(
 
     ensure_essential_tools(result)
 }
+
+// ─── Service-scoped toolbelts + search_tools discovery ────────────────────────
+//
+// Sending all ~223 tool schemas on every turn of every request inflates each
+// Ollama prompt to ~40K tokens (schemas alone ~22K), which wedges the GPU
+// cluster (minutes-long prefill per turn, 5-minute client timeouts, queue
+// collapse). Industry pattern (Anthropic Tool Search Tool, RAG-MCP): advertise
+// a small service-scoped set plus a `search_tools` meta-tool; the agent pulls
+// additional tools into its active set only when it actually needs them.
+//
+// Kill switch: AGENT_TOOL_DISCOVERY=off reverts to the full toolbelt.
+
+/// True unless explicitly disabled via env. Default ON.
+pub fn tool_discovery_enabled() -> bool {
+    !matches!(
+        std::env::var("AGENT_TOOL_DISCOVERY")
+            .ok()
+            .map(|v| v.trim().to_ascii_lowercase()),
+        Some(v) if v == "off" || v == "false" || v == "0"
+    )
+}
+
+/// Mandatory tool names per service scope, mirroring each service prompt's
+/// mandatory tool sequence in agentic_service_pipeline.rs. Control tools
+/// (set_chat_title / submit_final_answer) and search_tools are added separately.
+fn service_tool_names(scope: &str) -> Option<Vec<&'static str>> {
+    let normalized = scope.trim().to_ascii_lowercase();
+    let names: Vec<&'static str> = match normalized.as_str() {
+        "clipping" | "kick_auto_clipper" => vec![
+            "generate_clip_compilation",
+            "download_asset",
+            "analyze_video",
+            "trim_video",
+            "split_video",
+            "add_subtitles",
+            "merge_videos",
+            "review_video",
+            "export_video",
+        ],
+        "landing_page" => vec![
+            "blender_generate_scene_type",
+            "manim_execute_script",
+            "merge_videos",
+            "review_video",
+            "export_video",
+        ],
+        "education" => vec![
+            "manim_execute_script",
+            "blender_generate_scene_type",
+            "merge_videos",
+            "generate_text_to_speech",
+            "review_video",
+            "export_video",
+        ],
+        "manim_explainer"
+        | "whiteboard_animation"
+        | "kinetic_typography"
+        | "animated_infographic"
+        | "algorithm_viz"
+        | "investor_pitch"
+        | "year_in_review"
+        | "isometric_explainer" => vec![
+            "manim_execute_script",
+            "merge_videos",
+            "generate_text_to_speech",
+            "review_video",
+            "export_video",
+        ],
+        "product_mockup" => vec![
+            "blender_generate_scene_type",
+            "view_image",
+            "review_video",
+            "export_video",
+        ],
+        "thumbnails" => vec!["generate_image", "view_image"],
+        "business_explainer" => vec![
+            "blender_generate_scene_type",
+            "manim_execute_script",
+            "merge_videos",
+            "generate_text_to_speech",
+            "review_video",
+            "export_video",
+        ],
+        "voice_audio" => vec!["generate_text_to_speech", "generate_music"],
+        _ => return None,
+    };
+    Some(names)
+}
+
+/// The `search_tools` meta-tool declaration. When scoped mode is active this is
+/// always advertised; executing it returns matching tools from the FULL catalog
+/// and dynamically expands the active toolset for subsequent turns.
+pub fn search_tools_declaration() -> FunctionDeclaration {
+    FunctionDeclaration {
+        name: "search_tools".to_string(),
+        description: (
+            "Search the FULL tool catalog (~200 tools) by keyword when you need a \
+             capability that is not in your current active toolset. Returns the top \
+             matching tools with their names and descriptions; matched tools are \
+             automatically added to your active toolset and become callable on your \
+             next turn. Use this INSTEAD of guessing a tool name that was not given \
+             to you."
+        )
+        .to_string(),
+        parameters: crate::gemini_client::Parameters {
+            param_type: "object".to_string(),
+            properties: {
+                let mut props = std::collections::HashMap::new();
+                props.insert(
+                    "query".to_string(),
+                    crate::gemini_client::PropertyDefinition {
+                        prop_type: "string".to_string(),
+                        description: (
+                            "Space-separated keywords describing the capability needed, \
+                             e.g. 'audio fade volume', 'crop resize video', 'stock footage search'"
+                        )
+                        .to_string(),
+                        items: None,
+                    },
+                );
+                props.insert(
+                    "limit".to_string(),
+                    crate::gemini_client::PropertyDefinition {
+                        prop_type: "integer".to_string(),
+                        description: "Max tools to return (default 5, max 12)".to_string(),
+                        items: None,
+                    },
+                );
+                props
+            },
+            required: vec!["query".to_string()],
+        },
+    }
+}
+
+/// Lightweight keyword scoring over the full catalog (BM25-lite: term overlap
+/// weighted by name-hit bonus). Pure Rust, no external index — fast enough at
+/// ~223 entries that no caching is needed.
+pub fn search_catalog(query: &str, limit: usize) -> Vec<(String, String)> {
+    let terms: Vec<String> = query
+        .split(|c: char| c.is_whitespace() || c == ',')
+        .map(|t| t.trim().to_ascii_lowercase())
+        .filter(|t| t.len() >= 3)
+        .collect();
+    if terms.is_empty() {
+        return vec![];
+    }
+
+    let catalog = crate::tool_registry::ToolRegistry::gemini_tools_for_profile(
+        crate::tool_registry::AgentExecutionProfile::FullProduction,
+    );
+
+    let mut scored: Vec<(f64, &FunctionDeclaration)> = catalog
+        .iter()
+        .map(|tool| {
+            let name_lower = tool.name.to_ascii_lowercase();
+            let desc_lower = tool.description.to_ascii_lowercase();
+            let mut score = 0.0f64;
+            for term in &terms {
+                if name_lower.contains(term.as_str()) {
+                    score += 3.0;
+                    if name_lower.starts_with(term.as_str()) || name_lower.split('_').any(|p| p == term) {
+                        score += 2.0;
+                    }
+                }
+                // Count occurrences in description (capped to avoid spam weighting)
+                let occurrences = desc_lower.matches(term.as_str()).count().min(3);
+                score += occurrences as f64 * 1.0;
+            }
+            (score, tool)
+        })
+        .filter(|(score, _)| *score > 0.0)
+        .collect();
+
+    scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+
+    scored
+        .into_iter()
+        .take(limit.clamp(1, 12))
+        .map(|(_, tool)| {
+            let short_desc = tool
+                .description
+                .split(". ")
+                .next()
+                .unwrap_or(&tool.description)
+                .trim_end_matches('.')
+                .to_string();
+            (tool.name.clone(), short_desc)
+        })
+        .collect()
+}
+
+/// Execute a search_tools call: returns the JSON result text AND the names of
+/// matched tools so the caller can expand the active toolset.
+pub fn execute_search_tools(args: &std::collections::HashMap<String, serde_json::Value>) -> (String, Vec<String>) {
+    let query = args
+        .get("query")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let limit = args
+        .get("limit")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(5) as usize;
+
+    if query.trim().is_empty() {
+        return (
+            r#"{"error": "query is required"}"#.to_string(),
+            vec![],
+        );
+    }
+
+    let matches = search_catalog(query, limit);
+    if matches.is_empty() {
+        return (
+            serde_json::json!({
+                "matches": [],
+                "note": "No tools matched. Try different keywords."
+            })
+            .to_string(),
+            vec![],
+        );
+    }
+
+    let names: Vec<String> = matches.iter().map(|(n, _)| n.clone()).collect();
+    let matches_json: Vec<serde_json::Value> = matches
+        .iter()
+        .map(|(name, desc)| {
+            serde_json::json!({ "name": name, "description": desc })
+        })
+        .collect();
+    let text = serde_json::json!({
+        "matches": matches_json,
+        "note": "These tools are NOW ACTIVE in your toolset — call them directly on your next turn."
+    })
+    .to_string();
+    (text, names)
+}
+
+/// Build the service-scoped toolbelt: mandatory sequence + search_tools.
+/// Falls back to the full belt when the scope is unknown or discovery is off.
+pub fn service_scoped_tools(scope: &str) -> Vec<FunctionDeclaration> {
+    if !tool_discovery_enabled() {
+        return all_video_tools_with_essentials();
+    }
+    match service_tool_names(scope) {
+        Some(names) => {
+            let name_strings: Vec<String> = names.iter().map(|s| s.to_string()).collect();
+            let mut tools =
+                crate::tool_registry::ToolRegistry::filter_gemini_tools_for_profile(
+                    crate::tool_registry::AgentExecutionProfile::FullProduction,
+                    &name_strings,
+                );
+            tracing::info!(
+                "🎯 Service-scoped toolbelt for '{}': {} tools (+search_tools)",
+                scope,
+                tools.len()
+            );
+            tools.push(search_tools_declaration());
+            tools
+        }
+        None => {
+            tracing::info!(
+                "🎯 No scoped toolbelt for '{}' — falling back to full toolbelt",
+                scope
+            );
+            all_video_tools_with_essentials()
+        }
+    }
+}

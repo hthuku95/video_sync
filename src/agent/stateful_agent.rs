@@ -592,6 +592,11 @@ pub struct StatefulGeminiAgent {
     bedrock_client: Option<Arc<crate::bedrock_client::BedrockClient>>,
     nvidia_nim_client: Option<Arc<crate::nvidia_nim_client::NvidiaNimClient>>,
     ollama_client: Option<Arc<crate::ollama_client::OllamaClient>>,
+    /// Optional service scope: when set, the agent's PRE-LOADED toolbelt is the
+    /// service's mandatory tool sequence (+search_tools) instead of all ~223
+    /// schemas. The full catalog stays reachable at runtime via search_tools;
+    /// AGENT_TOOL_DISCOVERY=off reverts to the full belt entirely.
+    tool_scope: Option<String>,
 }
 
 impl StatefulGeminiAgent {
@@ -601,6 +606,7 @@ impl StatefulGeminiAgent {
             bedrock_client: None,
             nvidia_nim_client: None,
             ollama_client: None,
+            tool_scope: None,
         }
     }
 
@@ -615,7 +621,15 @@ impl StatefulGeminiAgent {
             bedrock_client,
             nvidia_nim_client,
             ollama_client,
+            tool_scope: None,
         }
+    }
+
+    /// Scope the pre-loaded toolbelt to a service's mandatory tool sequence.
+    /// Full catalog remains reachable via the search_tools meta-tool.
+    pub fn with_tool_scope(mut self, scope: Option<String>) -> Self {
+        self.tool_scope = scope;
+        self
     }
 
     pub async fn chat(
@@ -640,19 +654,31 @@ impl StatefulGeminiAgent {
 
         let mut last_tool_result_with_output: Option<String> = None;
 
-        send_progress("🧠 Loading the full production toolbelt for your request...");
-        // Full-toolbelt mode: agents receive the full allowed video tool catalog by
-        // default and choose the right tools themselves at runtime.
-        let selected_video_tools = crate::ai_tool_selector::select_tools_for_request(
-            user_input,
-            app_state.ollama_client.as_ref(),
-            app_state.nvidia_nim_client.as_ref(),
-            app_state
-                .video_gemini_client
-                .as_ref()
-                .or(app_state.gemini_client.as_ref()),
-        )
-        .await;
+        // Toolbelt selection: service-scoped (mandatory sequence + search_tools)
+        // when a scope is set and discovery is enabled; full belt otherwise.
+        let scoped_mode =
+            self.tool_scope.is_some() && crate::ai_tool_selector::tool_discovery_enabled();
+        let selected_video_tools = if let Some(scope) = self.tool_scope.as_deref().filter(|_| scoped_mode) {
+            send_progress(&format!(
+                "🎯 Loading the {} toolbelt for this task...",
+                scope
+            ));
+            crate::ai_tool_selector::service_scoped_tools(scope)
+        } else {
+            send_progress("🧠 Loading the full production toolbelt for your request...");
+            // Full-toolbelt mode: agents receive the full allowed video tool catalog by
+            // default and choose the right tools themselves at runtime.
+            crate::ai_tool_selector::select_tools_for_request(
+                user_input,
+                app_state.ollama_client.as_ref(),
+                app_state.nvidia_nim_client.as_ref(),
+                app_state
+                    .video_gemini_client
+                    .as_ref()
+                    .or(app_state.gemini_client.as_ref()),
+            )
+            .await
+        };
         // Prepend the 3 control tools (always needed for agent self-management)
         let mut all_tools = Self::create_control_tools_gemini();
         all_tools.extend(selected_video_tools);
@@ -768,6 +794,16 @@ Your tool catalog includes: image generation, video generation, audio generation
 You MUST only call tools that are explicitly listed in the `tools` array of this request. Do NOT call tools like `imagen`, `imagen_generate`, `remove_background`, `expand_image`, `search_web`, `google_search`, `web_search`, `read_website`, `extract_content`, or `fetch_url` — these tools do NOT exist in this system. If a tool name isn't in the catalog, don't guess — pick the closest declared tool instead.
 
 IMPORTANT: For fetching website content, use `browserbase_crawl_website(url)` — it crawls the entire site via BrowserBase, extracts CSS design tokens (colors, fonts), fetches all subpages, and returns a feature_tag. Then use `vectorize_crawled_content(feature_tag, pages)` to store pages in Qdrant. Use `search_crawled_content(query, feature_tag)` to semantically search. Do NOT use browserbase_fetch_url or read_website_content — they are deprecated."#;
+
+        // Scoped mode: tell the agent how to reach the rest of the catalog.
+        let system_instruction = if scoped_mode {
+            format!(
+                "{}\n\n## Active Toolset & Tool Discovery\nYour `tools` array contains the MANDATORY tool sequence for THIS task plus `search_tools`. This is your starting toolset — it covers everything this task should need.\nIf you genuinely need a capability outside this set, call `search_tools(query=\"keywords\")` — matching tools from the full catalog are returned AND added to your active toolset, callable on your next turn.\nNever invent or guess tool names that are not in your tools array or returned by search_tools.",
+                system_instruction
+            )
+        } else {
+            system_instruction.to_string()
+        };
 
         // Build contents array with conversation history
         let mut contents = Vec::new();
@@ -1038,11 +1074,25 @@ IMPORTANT: For fetching website content, use `browserbase_crawl_website(url)` �
                 .or_else(|| app_state.ollama_client.as_ref());
             if let Some(ollama) = ollama_client {
                 let mut oa_messages = build_messages(system_instruction);
+                // Durable resume: pick up from the last completed turn if a
+                // checkpoint exists for this workflow (crash/timeout recovery).
+                if let Some(wid) = workflow_id {
+                    if checkpoints_enabled() {
+                        if let Some(saved) = load_agent_checkpoint(&app_state.db_pool, wid).await {
+                            tracing::info!(
+                                "♻️ Resuming agent run from checkpoint ({} messages)",
+                                saved.len()
+                            );
+                            send_progress("♻️ Resuming from previous progress...");
+                            oa_messages = saved;
+                        }
+                    }
+                }
                 send_progress("🤖 Processing your request...");
                 match run_ollama_tool_loop(
                     ollama,
                     &mut oa_messages,
-                    &all_tools,
+                    &mut all_tools,
                     &exec_context,
                     &send_progress,
                 )
@@ -1070,7 +1120,7 @@ IMPORTANT: For fetching website content, use `browserbase_crawl_website(url)` �
                 match run_nvidia_tool_loop(
                     nim,
                     &mut nim_messages,
-                    &all_tools,
+                    &mut all_tools,
                     &exec_context,
                     &send_progress,
                 )
@@ -1107,7 +1157,7 @@ IMPORTANT: For fetching website content, use `browserbase_crawl_website(url)` �
                         match run_deepseek_tool_loop(
                             ds_client,
                             &mut ds_messages,
-                            &all_tools,
+                            &mut all_tools,
                             &exec_context,
                             &send_progress,
                         )
@@ -1995,11 +2045,12 @@ IMPORTANT: For fetching website content, use `browserbase_crawl_website(url)` �
 // Compacted turns are ALSO written to Qdrant (best-effort) so they stay recoverable
 // via semantic search (CALMem-style intra-session retrieval).
 
-/// Compaction trigger: fire at 70% of the effective context window. Research
-/// (Anthropic context-engineering, MLflow, Microsoft Agent Framework) agrees
-/// quality degrades well before 100%; the summarizer itself is also impaired once
-/// context is exhausted, so we compact at 70%.
-const COMPACTION_TRIGGER_RATIO: f64 = 0.70;
+/// Compaction trigger: fire at 45% of the effective context window. The token
+/// estimate covers messages only — the tools array (up to ~22K tokens unscoped)
+/// rides on top of every request, so a messages-only estimate at 70% let real
+/// prompts reach ~45K tokens and wedge the GPU. 45% keeps total prompt size
+/// (messages + schemas) safely inside the window.
+const COMPACTION_TRIGGER_RATIO: f64 = 0.45;
 /// Always keep the most recent whole turns intact for conversational coherence.
 const COMPACTION_KEEP_LAST_TURNS: usize = 2;
 /// Hard cap on the transcript fed to the summarizer (chars) — stops a pathological
@@ -2223,16 +2274,184 @@ async fn maybe_compact_tool_history(
     Ok(true)
 }
 
+// ─── Tool-result truncation & search_tools dispatch (shared by all loops) ─────
+
+/// Cap a tool result before it enters the message history. Tool results are
+/// pushed verbatim today; a single verbose result (e.g. a full yt-dlp probe or
+/// render log) can add thousands of tokens and starve the context window.
+/// Keeps head (status/paths) + tail (URLs/IDs usually at the end).
+fn truncate_tool_result_for_context(tool_name: &str, result: &str) -> String {
+    const DEFAULT_MAX: usize = 4_000;
+    let max = std::env::var("AGENT_TOOL_RESULT_MAX_CHARS")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|&v| v >= 500)
+        .unwrap_or(DEFAULT_MAX);
+
+    let total = result.chars().count();
+    if total <= max {
+        return result.to_string();
+    }
+    let head: String = result.chars().take(max * 3 / 4).collect();
+    let tail: String = result.chars().skip(total - max / 4).collect();
+    tracing::info!(
+        "✂️ Truncated {} tool result: {} → {} chars",
+        tool_name,
+        total,
+        head.len() + tail.len()
+    );
+    format!(
+        "{}\n…[output truncated, {} chars total]…\n{}",
+        head, total, tail
+    )
+}
+
+/// Execute one tool call inside an OpenAI-format tool loop.
+/// Intercepts `search_tools`: runs the keyword search over the FULL catalog,
+/// returns matches as the tool result, and expands the active toolset so the
+/// matched tools are advertised to the model on subsequent turns.
+async fn execute_tool_call_in_loop(
+    tool_name: &str,
+    args_map: &std::collections::HashMap<String, serde_json::Value>,
+    exec_context: &crate::agent::tool_executor::ToolExecutionContext,
+    tools: &mut Vec<crate::gemini_client::FunctionDeclaration>,
+) -> String {
+    if tool_name == "search_tools" {
+        let (text, matched_names) = crate::ai_tool_selector::execute_search_tools(args_map);
+        if !matched_names.is_empty() {
+            let catalog = crate::tool_registry::ToolRegistry::gemini_tools_for_profile(
+                crate::tool_registry::AgentExecutionProfile::FullProduction,
+            );
+            let mut added = 0usize;
+            for name in &matched_names {
+                if !tools.iter().any(|t| t.name == *name) {
+                    if let Some(decl) = catalog.iter().find(|t| t.name == *name) {
+                        tools.push(decl.clone());
+                        added += 1;
+                    }
+                }
+            }
+            if added > 0 {
+                tracing::info!(
+                    "🔍 search_tools expanded active toolset by {} tools (now {})",
+                    added,
+                    tools.len()
+                );
+            }
+        }
+        return text;
+    }
+
+    crate::agent::tool_executor::execute_tool_gemini_with_context(
+        tool_name,
+        args_map,
+        exec_context,
+    )
+    .await
+}
+
+// ─── Durable agent checkpoints (turn-boundary persistence) ────────────────────
+//
+// After every completed model+tool exchange the ollama loop serializes its full
+// message array into app_workflows.agent_checkpoint. If the process crashes /
+// the Fargate task recycles / the provider times out mid-run, the next attempt
+// resumes from the last good turn instead of restarting from zero. Cleared on
+// successful completion; kept on failure so pipeline retries resume.
+// Kill switch: AGENT_CHECKPOINTS=off.
+
+const CHECKPOINT_STALE_SECS: i64 = 6 * 3600;
+
+fn checkpoints_enabled() -> bool {
+    !matches!(
+        std::env::var("AGENT_CHECKPOINTS")
+            .ok()
+            .map(|v| v.trim().to_ascii_lowercase()),
+        Some(v) if v == "off" || v == "false" || v == "0"
+    )
+}
+
+fn unix_now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+async fn save_agent_checkpoint(
+    pool: &sqlx::PgPool,
+    workflow_id: uuid::Uuid,
+    turn: usize,
+    messages: &[serde_json::Value],
+) {
+    let payload = serde_json::json!({
+        "v": 1,
+        "turn": turn,
+        "saved_at": unix_now_secs(),
+        "messages": messages,
+    });
+    if let Err(e) = sqlx::query("UPDATE app_workflows SET agent_checkpoint = $1 WHERE id = $2")
+        .bind(&payload)
+        .bind(workflow_id)
+        .execute(pool)
+        .await
+    {
+        tracing::warn!("⚠️ Agent checkpoint save failed: {}", e);
+    }
+}
+
+async fn load_agent_checkpoint(
+    pool: &sqlx::PgPool,
+    workflow_id: uuid::Uuid,
+) -> Option<Vec<serde_json::Value>> {
+    let row: Option<(serde_json::Value,)> =
+        sqlx::query_as("SELECT agent_checkpoint FROM app_workflows WHERE id = $1")
+            .bind(workflow_id)
+            .fetch_optional(pool)
+            .await
+            .ok()?;
+    let cp = row?.0;
+    if cp.is_null() {
+        return None;
+    }
+
+    // Staleness guard: never resume into an ancient context.
+    let saved_at = cp.get("saved_at").and_then(|v| v.as_i64()).unwrap_or(0);
+    if unix_now_secs() - saved_at > CHECKPOINT_STALE_SECS {
+        tracing::info!("♻️ Agent checkpoint stale (>6h) — starting fresh");
+        clear_agent_checkpoint(pool, workflow_id).await;
+        return None;
+    }
+
+    let messages = cp.get("messages")?.as_array()?.clone();
+    if messages.len() < 2 {
+        return None;
+    }
+    Some(messages)
+}
+
+async fn clear_agent_checkpoint(pool: &sqlx::PgPool, workflow_id: uuid::Uuid) {
+    if let Err(e) =
+        sqlx::query("UPDATE app_workflows SET agent_checkpoint = NULL WHERE id = $1")
+            .bind(workflow_id)
+            .execute(pool)
+            .await
+    {
+        tracing::warn!("⚠️ Agent checkpoint clear failed: {}", e);
+    }
+}
+
 // ── Gemma 4 / NVIDIA NIM tool calling loop ────────────────────────────────────
 //
 // Runs the same multi-turn tool loop as the Gemini agent but using NVIDIA NIM's
 /// Multi-turn tool loop for Ollama (self-hosted Gemma 4).
 /// Same contract as `run_deepseek_tool_loop` — feeds tool results back to the model
 /// and keeps calling until a text answer is returned (or MAX_TURNS exhausted).
+/// Durable: saves a turn-boundary checkpoint after every completed exchange and
+/// clears it on success (resume handled by the caller before the first turn).
 async fn run_ollama_tool_loop<F>(
     ollama_client: &crate::ollama_client::OllamaClient,
     messages: &mut Vec<serde_json::Value>,
-    tools: &[crate::gemini_client::FunctionDeclaration],
+    tools: &mut Vec<crate::gemini_client::FunctionDeclaration>,
     exec_context: &crate::agent::tool_executor::ToolExecutionContext,
     send_progress: &F,
 ) -> Result<String, String>
@@ -2242,7 +2461,7 @@ where
     const MAX_TURNS: usize = 10;
 
     for turn in 0..MAX_TURNS {
-        // Compact old turns once the window fills past ~70% so Ollama never
+        // Compact old turns once the window fills so Ollama never
         // silently front-trims critical history/tool schemas mid-task.
         let _ = maybe_compact_tool_history(ollama_client, messages, exec_context)
             .await
@@ -2256,6 +2475,11 @@ where
         match response {
             crate::ollama_client::OllamaResponse::Text(text) => {
                 tracing::info!("✅ Ollama final answer after {} turns", turn + 1);
+                if let Some(wid) = exec_context.workflow_id {
+                    if checkpoints_enabled() {
+                        clear_agent_checkpoint(&exec_context.app_state.db_pool, wid).await;
+                    }
+                }
                 return Ok(text);
             }
 
@@ -2314,12 +2538,9 @@ where
                             .unwrap_or_default(),
                     };
 
-                    let result = crate::agent::tool_executor::execute_tool_gemini_with_context(
-                        &tc.name,
-                        &args_map,
-                        exec_context,
-                    )
-                    .await;
+                    let result =
+                        execute_tool_call_in_loop(&tc.name, &args_map, exec_context, tools)
+                            .await;
 
                     send_progress(&format!("✅ {} done", tc.name));
 
@@ -2328,8 +2549,21 @@ where
                     messages.push(serde_json::json!({
                         "role": "tool",
                         "tool_name": tc.name,
-                        "content": result,
+                        "content": truncate_tool_result_for_context(&tc.name, &result),
                     }));
+                }
+
+                // Turn boundary reached — persist for durable resume.
+                if let Some(wid) = exec_context.workflow_id {
+                    if checkpoints_enabled() {
+                        save_agent_checkpoint(
+                            &exec_context.app_state.db_pool,
+                            wid,
+                            turn + 1,
+                            messages,
+                        )
+                        .await;
+                    }
                 }
             }
         }
@@ -2351,7 +2585,7 @@ where
 async fn run_deepseek_tool_loop<F>(
     ds_client: &crate::deepseek_client::DeepSeekClient,
     messages: &mut Vec<serde_json::Value>,
-    tools: &[crate::gemini_client::FunctionDeclaration],
+    tools: &mut Vec<crate::gemini_client::FunctionDeclaration>,
     exec_context: &crate::agent::tool_executor::ToolExecutionContext,
     send_progress: &F,
 ) -> Result<String, String>
@@ -2403,19 +2637,16 @@ where
                         .map(|o| o.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
                         .unwrap_or_default();
 
-                    let result = crate::agent::tool_executor::execute_tool_gemini_with_context(
-                        &tc.name,
-                        &args_map,
-                        exec_context,
-                    )
-                    .await;
+                    let result =
+                        execute_tool_call_in_loop(&tc.name, &args_map, exec_context, tools)
+                            .await;
 
                     send_progress(&format!("✅ {} done", tc.name));
 
                     messages.push(serde_json::json!({
                         "role": "tool",
                         "tool_call_id": tc.id,
-                        "content": result,
+                        "content": truncate_tool_result_for_context(&tc.name, &result),
                     }));
                 }
             }
@@ -2430,7 +2661,7 @@ where
 async fn run_nvidia_tool_loop<F>(
     nim_client: &crate::nvidia_nim_client::NvidiaNimClient,
     messages: &mut Vec<serde_json::Value>,
-    tools: &[crate::gemini_client::FunctionDeclaration],
+    tools: &mut Vec<crate::gemini_client::FunctionDeclaration>,
     exec_context: &crate::agent::tool_executor::ToolExecutionContext,
     send_progress: &F,
 ) -> Result<String, String>
@@ -2482,19 +2713,16 @@ where
                         .map(|o| o.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
                         .unwrap_or_default();
 
-                    let result = crate::agent::tool_executor::execute_tool_gemini_with_context(
-                        &tc.name,
-                        &args_map,
-                        exec_context,
-                    )
-                    .await;
+                    let result =
+                        execute_tool_call_in_loop(&tc.name, &args_map, exec_context, tools)
+                            .await;
 
                     send_progress(&format!("✅ {} done", tc.name));
 
                     messages.push(serde_json::json!({
                         "role": "tool",
                         "tool_call_id": tc.id,
-                        "content": result,
+                        "content": truncate_tool_result_for_context(&tc.name, &result),
                     }));
                 }
             }

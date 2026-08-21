@@ -274,7 +274,8 @@ impl AgenticServicePipeline {
                 state.bedrock_client.clone(),
                 state.nvidia_nim_client.clone().map(Arc::new),
                 ollama_client.clone(),
-            );
+            )
+            .with_tool_scope(Some(service_type.as_str().to_string()));
 
             // ── PROGRESS BRIDGE ──
             // Connect agent's progress_tx to the workflow_events table so callers
