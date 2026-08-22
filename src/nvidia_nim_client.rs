@@ -25,8 +25,70 @@ use base64::Engine as _;
 use reqwest::Client;
 
 const NVIDIA_NIM_ENDPOINT: &str = "https://integrate.api.nvidia.com/v1/chat/completions";
+const NVIDIA_FLUX_IMAGE_ENDPOINT: &str =
+    "https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux.1-dev";
 const NVIDIA_DEFAULT_MODEL: &str = "meta/llama-3.3-70b-instruct";
 const NVIDIA_DEFAULT_VISION_MODEL: &str = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning";
+
+/// Generate an image with FLUX.1-dev via NVIDIA's hosted NIM API (free tier).
+/// Returns decoded image bytes (JPEG, 1024x1024). Verified working Aug 22 2026
+/// (~6s per image). Used as the PRIMARY background-image provider so UI backgrounds
+/// don't depend on Gemini prepaid credits; Gemini remains a fallback.
+pub async fn generate_image_flux(api_key: &str, prompt: &str) -> Result<Vec<u8>, String> {
+    if api_key.trim().is_empty() {
+        return Err("NVIDIA_API_KEY not configured".to_string());
+    }
+
+    let client = Client::builder()
+        .timeout(std::time::Duration::from_secs(90))
+        .build()
+        .map_err(|e| format!("HTTP client build failed: {}", e))?;
+
+    let body = serde_json::json!({
+        "prompt": prompt,
+        "mode": "base",
+        "seed": 0,
+        "steps": 30,
+    });
+
+    let resp = client
+        .post(NVIDIA_FLUX_IMAGE_ENDPOINT)
+        .header("Authorization", format!("Bearer {}", api_key))
+        .header("Accept", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("NIM image request failed: {}", e))?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        let err_text = resp.text().await.unwrap_or_default();
+        return Err(format!("NIM image generation {} : {}", status, err_text));
+    }
+
+    let payload: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("NIM image response parse failed: {}", e))?;
+
+    let b64 = payload
+        .get("artifacts")
+        .and_then(|a| a.get(0))
+        .and_then(|a| a.get("base64"))
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "NIM image response missing artifacts[0].base64".to_string())?;
+
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(b64)
+        .map_err(|e| format!("NIM image base64 decode failed: {}", e))?;
+
+    if bytes.len() < 100 {
+        return Err("NIM generated image too small".to_string());
+    }
+
+    Ok(bytes)
+}
+
 
 // ─── Model capabilities ─────────────────────────────────────────────────────
 

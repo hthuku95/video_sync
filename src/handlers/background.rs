@@ -47,7 +47,7 @@ async fn read_expired_cache() -> Option<BackgroundCache> {
     cache_guard.as_ref().cloned()
 }
 
-pub async fn get_background_image(gemini_client: Arc<GeminiClient>) -> Response {
+pub async fn get_background_image(gemini_client: Option<Arc<GeminiClient>>) -> Response {
     // Fast path: return fresh cache (<5 min) without acquiring write lock
     {
         let cache_guard = BACKGROUND_CACHE.read().await;
@@ -64,71 +64,100 @@ pub async fn get_background_image(gemini_client: Arc<GeminiClient>) -> Response 
         }
     }
 
-    // Try to generate a new background
-    match generate_new_background(&gemini_client).await {
-        Ok(image_data) => {
-            let new_cache = BackgroundCache {
-                image_data: image_data.clone(),
-                generated_at: Utc::now(),
-                theme: "dynamic".to_string(),
-            };
+    // Provider chain: NVIDIA NIM (free) → Gemini (prepaid credits required) →
+    // stale cache → CSS gradient.
+    let prompt = GeminiClient::create_background_image_prompt("dynamic");
 
-            {
-                let mut cache_guard = BACKGROUND_CACHE.write().await;
-                *cache_guard = Some(new_cache);
+    let mut generated: Option<(Vec<u8>, &'static str)> = None;
+
+    match generate_nim_background(&prompt).await {
+        Ok(image_data) => generated = Some((image_data, "nvidia-flux.1-dev")),
+        Err(nim_err) => {
+            tracing::warn!("NIM background generation failed: {} — trying Gemini fallback", nim_err);
+            if let Some(client) = gemini_client.as_ref() {
+                match generate_new_background(client, &prompt).await {
+                    Ok(image_data) => generated = Some((image_data, "gemini-nano-banana-2-lite")),
+                    Err(e) => tracing::error!(
+                        "Gemini background generation also failed: {} — falling back to stale cache/gradient",
+                        e
+                    ),
+                }
             }
-
-            (
-                StatusCode::OK,
-                [(header::CONTENT_TYPE, detect_content_type(&image_data))],
-                image_data,
-            )
-                .into_response()
-        }
-        Err(e) => {
-            tracing::error!("Failed to generate background image: {}", e);
-
-            // Stale-cache fallback: serve the last good image even if expired
-            if let Some(stale) = read_expired_cache().await {
-                tracing::warn!(
-                    "Serving expired cache (age: {}s) — generation failed",
-                    Utc::now()
-                        .signed_duration_since(stale.generated_at)
-                        .num_seconds()
-                );
-                return (
-                    StatusCode::OK,
-                    [(header::CONTENT_TYPE, detect_content_type(&stale.image_data))],
-                    stale.image_data,
-                )
-                    .into_response();
-            }
-
-            // Last resort: CSS gradient
-            (
-                StatusCode::OK,
-                [(header::CONTENT_TYPE, "application/json")],
-                Json(json!({
-                    "fallback": true,
-                    "gradient": "linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f1419 100%)"
-                })),
-            )
-                .into_response()
         }
     }
+
+    if let Some((image_data, provider)) = generated {
+        tracing::info!("Background image generated via {}", provider);
+
+        let new_cache = BackgroundCache {
+            image_data: image_data.clone(),
+            generated_at: Utc::now(),
+            theme: format!("dynamic:{}", provider),
+        };
+
+        {
+            let mut cache_guard = BACKGROUND_CACHE.write().await;
+            *cache_guard = Some(new_cache);
+        }
+
+        return (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, detect_content_type(&image_data))],
+            image_data,
+        )
+            .into_response();
+    }
+
+    // Stale-cache fallback: serve the last good image even if expired
+    if let Some(stale) = read_expired_cache().await {
+        tracing::warn!(
+            "Serving expired cache (age: {}s) — generation failed",
+            Utc::now()
+                .signed_duration_since(stale.generated_at)
+                .num_seconds()
+        );
+        return (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, detect_content_type(&stale.image_data))],
+            stale.image_data,
+        )
+            .into_response();
+    }
+
+    // Last resort: CSS gradient
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "application/json")],
+        Json(json!({
+            "fallback": true,
+            "gradient": "linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f1419 100%)"
+        })),
+    )
+        .into_response()
+}
+
+/// Generate a background via NVIDIA FLUX.1-dev (free tier). Primary provider.
+async fn generate_nim_background(
+    prompt: &str,
+) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
+    let api_key = std::env::var("NVIDIA_API_KEY").unwrap_or_default();
+    crate::nvidia_nim_client::generate_image_flux(api_key.trim(), prompt)
+        .await
+        .map_err(Into::into)
 }
 
 async fn generate_new_background(
     gemini_client: &GeminiClient,
+    prompt: &str,
 ) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
-    let prompt = GeminiClient::create_background_image_prompt("dynamic");
-
     tracing::info!("Generating new background image with prompt: {}", prompt);
 
     // Use 16:9 aspect ratio for widescreen displays (better for UI backgrounds)
     // Use 2K resolution for good quality without being too large
+    // Model: Nano Banana 2 Lite (gemini-3.1-flash-lite-image) — fastest/cheapest of the
+    // nano banana family (~4s/image, ~$0.025-0.033), fine quality for UI backgrounds.
     let image_data = gemini_client
-        .generate_image(&prompt, Some("16:9"), Some("2K"), Some("fast"))
+        .generate_image(prompt, Some("16:9"), Some("2K"), Some("gemini-3.1-flash-lite-image"))
         .await?;
 
     // Validate that we got actual image data

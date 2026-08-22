@@ -13,27 +13,25 @@ pub fn background_routes() -> Router {
 async fn background_image_handler(
     Extension(state): Extension<Arc<AppState>>,
 ) -> axum::response::Response {
-    match state
-        .video_gemini_client
-        .as_ref()
-        .or(state.gemini_client.as_ref())
-    {
-        Some(gemini_client) => get_background_image(Arc::new(gemini_client.clone())).await,
-        None => {
-            use axum::response::Json;
-            use serde_json::json;
+    // Generation chain (see CLAUDE.md §35.3): NVIDIA NIM FLUX.1-dev is the PRIMARY
+    // provider (free tier). A dedicated Gemini key (GEMINI_BACKGROUND_API_KEY) acts
+    // as fallback for when NIM fails; shared client as last Gemini option.
+    let gemini_client: Option<std::sync::Arc<crate::gemini_client::GeminiClient>> =
+        if let Ok(bg_key) = std::env::var("GEMINI_BACKGROUND_API_KEY") {
+            if !bg_key.trim().is_empty() {
+                Some(std::sync::Arc::new(
+                    crate::gemini_client::GeminiClient::new(bg_key.trim().to_string()),
+                ))
+            } else {
+                None
+            }
+        } else {
+            state
+                .video_gemini_client
+                .as_ref()
+                .or(state.gemini_client.as_ref())
+                .map(|c| std::sync::Arc::new(c.clone()))
+        };
 
-            // Return fallback gradient when Gemini is not configured
-            (
-                axum::http::StatusCode::OK,
-                [(axum::http::header::CONTENT_TYPE, "application/json")],
-                Json(json!({
-                    "fallback": true,
-                    "gradient": "linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f1419 100%)",
-                    "message": "Gemini client not configured, using fallback gradient"
-                })),
-            )
-                .into_response()
-        }
-    }
+    get_background_image(gemini_client).await
 }
