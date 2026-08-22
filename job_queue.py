@@ -47,10 +47,10 @@ from tools.progress_store import record_job_progress
 
 SQS_QUEUE_URL = os.getenv(
     "SQS_QUEUE_URL",
-    "https://sqs.us-east-1.amazonaws.com/405837966164/blender-mcp-jobs",
+    "https://sqs.eu-north-1.amazonaws.com/960066381428/blender-mcp-jobs",
 )
 DYNAMODB_TABLE = os.getenv("DYNAMODB_TABLE", "blender-mcp-jobs")
-AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
+AWS_REGION = os.getenv("AWS_REGION", "eu-north-1")
 
 
 # ---------------------------------------------------------------------------
