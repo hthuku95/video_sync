@@ -52,6 +52,7 @@ pub fn ui_routes() -> Router {
             Router::new()
                 .route("/campaigns", get(campaigns_list_page))
                 .route("/campaigns/new", get(campaigns_new_page))
+                .route("/campaigns/chat", get(campaign_assistant_page))
                 .route("/campaigns/:id", get(campaigns_detail_page))
                 .route("/account/social", get(account_social_page))
                 .layer(axum::middleware::from_fn(optional_auth_middleware)),
@@ -819,7 +820,7 @@ pub async fn campaigns_list_page(
         <a class="brand" href="/">VideoSync</a>
         <div class="nav-links">
             <a href="/campaigns/new">+ New Campaign</a>
-            <a href="/chat">Chat</a>
+            <a href="/campaigns/chat">Campaign Assistant</a>
             <a href="/services">Services</a>
         </div>
     </div>
@@ -828,6 +829,151 @@ pub async fn campaigns_list_page(
 </div>
 </body>
 </html>"#
+    ))
+}
+
+/// Shared URL-slug → service_type map for campaign pages (?service=...).
+pub fn campaign_slug_to_service(slug: &str) -> Option<&'static str> {
+    Some(match slug {
+        "saas-launch-pack" => "landing_page",
+        "clipping-pack" => "clipping",
+        "kick-auto-clipper" => "kick_auto_clipper",
+        "education-explainer-pack" => "education",
+        "manim-explainer" => "manim_explainer",
+        "whiteboard-animation" => "whiteboard_animation",
+        "kinetic-typography" => "kinetic_typography",
+        "animated-infographic" => "animated_infographic",
+        "algorithm-viz" => "algorithm_viz",
+        "investor-pitch" => "investor_pitch",
+        "year-in-review" => "year_in_review",
+        "isometric-explainer" => "isometric_explainer",
+        _ => return None,
+    })
+}
+
+/// GET /campaigns/chat?service={slug} — PRE-SALES Campaign Assistant page.
+/// Login required (no subscription gate — it's the sales conversation surface).
+/// Same agent as POST /api/campaigns/assistant; funnels to /campaigns/new?service=X.
+pub async fn campaign_assistant_page(
+    uri: Uri,
+    Query(query): Query<std::collections::HashMap<String, String>>,
+    claims: Option<Extension<Claims>>,
+) -> Html<String> {
+    if claims.is_none() {
+        let redirect = uri.path_and_query().map(|pq| pq.as_str()).unwrap_or("/campaigns/chat");
+        return Html(login_required_page(redirect));
+    }
+
+    let raw_slug = query.get("service").cloned().unwrap_or_default();
+    let service_type = campaign_slug_to_service(&raw_slug).unwrap_or("");
+    let service_badge = if service_type.is_empty() {
+        "Pick a service with your assistant".to_string()
+    } else {
+        service_type.replace('_', " ")
+    };
+    let start_url = if service_type.is_empty() {
+        "/campaigns/new".to_string()
+    } else {
+        format!("/campaigns/new?service={}", raw_slug)
+    };
+
+    Html(format!(
+        r#"<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Campaign Assistant — VideoSync</title>
+<style>
+    :root {{ --bg:#07111d; --panel:rgba(9,18,31,0.84); --line:rgba(148,163,184,0.16); --text:#e5eefb; --muted:#a8b8d3; --blue:#3b82f6; }}
+    * {{ box-sizing:border-box; }}
+    body {{ margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:var(--bg); color:var(--text); }}
+    .shell {{ max-width:760px; margin:0 auto; padding:32px 20px 96px; display:flex; flex-direction:column; min-height:90vh; }}
+    .topbar {{ display:flex; justify-content:space-between; align-items:center; margin-bottom:24px; flex-wrap:wrap; gap:0.8rem; }}
+    .brand {{ color:#fff; text-decoration:none; font-weight:800; font-size:1.3rem; }}
+    .nav-links a {{ color:#c7d8f6; text-decoration:none; padding:0.55rem 0.9rem; border:1px solid rgba(148,163,184,0.2); border-radius:999px; background:rgba(8,15,28,0.75); margin-left:0.4rem; font-size:0.88rem; }}
+    h1 {{ margin:0 0 0.4rem; font-size:1.5rem; }}
+    .badge {{ display:inline-block; background:rgba(59,130,246,0.14); border:1px solid rgba(59,130,246,0.35); color:#93c5fd; padding:0.25rem 0.8rem; border-radius:999px; font-size:0.82rem; text-transform:capitalize; }}
+    .sub {{ color:#a8b8d3; margin:0.7rem 0 1.2rem; font-size:0.92rem; line-height:1.5; }}
+    #chat-messages {{ flex:1; overflow-y:auto; min-height:300px; max-height:52vh; background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:0.9rem; }}
+    .msg {{ padding:0.55rem 0.85rem; border-radius:10px; margin-bottom:0.55rem; max-width:88%; font-size:0.93rem; line-height:1.45; white-space:pre-wrap; word-wrap:break-word; }}
+    .user {{ background:rgba(59,130,246,0.16); border:1px solid rgba(59,130,246,0.3); margin-left:auto; text-align:right; }}
+    .bot {{ background:rgba(15,23,42,0.75); border:1px solid var(--line); }}
+    .err {{ color:#ef4444; }}
+    .composer {{ display:flex; gap:0.6rem; margin-top:0.9rem; }}
+    #chat-input {{ flex:1; padding:0.75rem 0.9rem; border-radius:10px; border:1px solid var(--line); background:rgba(15,23,42,0.8); color:#fff; font-size:0.95rem; }}
+    #chat-input:focus {{ outline:none; border-color:var(--blue); }}
+    .btn {{ padding:0.75rem 1.15rem; border-radius:8px; font-weight:700; cursor:pointer; border:0; font-size:0.95rem; text-decoration:none; display:inline-block; }}
+    .btn-primary {{ background:linear-gradient(135deg,var(--blue),#2563eb); color:#fff; }}
+    .btn-cta-bar {{ margin-top:1rem; text-align:center; }}
+</style>
+</head>
+<body>
+<div class="shell">
+    <div class="topbar">
+        <a class="brand" href="/">VideoSync</a>
+        <div class="nav-links">
+            <a href="/campaigns">My Campaigns</a>
+            <a href="/services">Services</a>
+            <a class="btn btn-primary" style="padding:0.55rem 0.9rem;" href="{start_url_attr}">Start your campaign</a>
+        </div>
+    </div>
+    <h1>Campaign Assistant</h1>
+    <div><span class="badge">{service_badge}</span></div>
+    <p class="sub">Ask anything before you commit — how the service works, what to put in your brief, best posting schedule, which platforms fit your content. When you're ready, hit “Start your campaign”.</p>
+    <div id="chat-messages"></div>
+    <div class="composer">
+        <input id="chat-input" type="text" placeholder="e.g., What should I put in my brief?" onkeydown="if(event.key==='Enter')sendAssistantMsg()">
+        <button class="btn btn-primary" onclick="sendAssistantMsg()">Send</button>
+    </div>
+    <div class="btn-cta-bar"><a class="btn btn-primary" href="{start_url_attr}">Start your campaign →</a></div>
+</div>
+<script>
+const ASSISTANT_SERVICE = '{service_js}';
+function escapeHtml(text) {{
+    const d = document.createElement('div');
+    d.textContent = text;
+    return d.innerHTML;
+}}
+async function sendAssistantMsg() {{
+    const input = document.getElementById('chat-input');
+    const msgs = document.getElementById('chat-messages');
+    const msg = input.value.trim();
+    if (!msg) return;
+    input.value = '';
+    msgs.innerHTML += `<div class="msg user">${{escapeHtml(msg)}}</div>`;
+    msgs.innerHTML += `<div class="msg bot" id="assistant-thinking">Thinking...</div>`;
+    msgs.scrollTop = msgs.scrollHeight;
+    try {{
+        const authToken = localStorage.getItem('authToken')||localStorage.getItem('admin_token')||localStorage.getItem('auth_token')||'';
+        const resp = await fetch('/api/campaigns/assistant', {{
+            method: 'POST',
+            headers: {{ 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + authToken }},
+            body: JSON.stringify({{ message: msg, service: ASSISTANT_SERVICE || null }}),
+        }});
+        document.getElementById('assistant-thinking')?.remove();
+        if (!resp.ok) {{
+            msgs.innerHTML += `<div class="msg bot err">${{resp.status===401?'Session expired — please <a href="/login">log in</a> again.':'Error '+resp.status+' talking to the assistant.'}}</div>`;
+            return;
+        }}
+        const ct = (resp.headers.get('content-type')||'');
+        if (!ct.includes('application/json')) throw new Error('Unexpected server response');
+        const data = await resp.json();
+        if (data.success) {{
+            msgs.innerHTML += `<div class="msg bot">${{escapeHtml(data.response||'')}}${{data.start_url?` <a href="${{data.start_url}}" style="color:#93c5fd">Start your campaign →</a>`:''}}</div>`;
+        }} else {{
+            msgs.innerHTML += `<div class="msg bot err">Error: ${{escapeHtml(data.error||'Unknown')}}</div>`;
+        }}
+    }} catch(e) {{
+        document.getElementById('assistant-thinking')?.remove();
+        msgs.innerHTML += `<div class="msg bot err">Network error: ${{escapeHtml(e.message)}}</div>`;
+    }}
+    msgs.scrollTop = msgs.scrollHeight;
+}}
+</script>
+</body>
+</html>"#,
+        start_url_attr = start_url,
+        service_badge = service_badge,
+        service_js = service_type,
     ))
 }
 
@@ -875,23 +1021,11 @@ pub async fn campaigns_new_page(
         ));
     }
 
-    // Map URL slugs to service_type values
-    let slug_to_service: std::collections::HashMap<&str, &str> = [
-        ("saas-launch-pack", "landing_page"),
-        ("clipping-pack", "clipping"),
-        ("kick-auto-clipper", "kick_auto_clipper"),
-        ("education-explainer-pack", "education"),
-        ("manim-explainer", "manim_explainer"),
-        ("whiteboard-animation", "whiteboard_animation"),
-        ("kinetic-typography", "kinetic_typography"),
-        ("animated-infographic", "animated_infographic"),
-        ("algorithm-viz", "algorithm_viz"),
-        ("investor-pitch", "investor_pitch"),
-        ("year-in-review", "year_in_review"),
-        ("isometric-explainer", "isometric_explainer"),
-    ].into_iter().collect();
+    // Map URL slugs to service_type values (shared with /campaigns/chat)
     let raw_slug = query.get("service").cloned().unwrap_or_default();
-    let preselect_service = slug_to_service.get(raw_slug.as_str()).copied().unwrap_or("").to_string();
+    let preselect_service = crate::handlers::ui::campaign_slug_to_service(&raw_slug)
+        .unwrap_or("")
+        .to_string();
     let service_options = [
         ("landing_page", "SaaS Demo Video"),
         ("clipping", "Social Clipping"),
@@ -948,7 +1082,7 @@ pub async fn campaigns_new_page(
         <a class="brand" href="/">VideoSync</a>
         <div class="nav-links">
             <a href="/campaigns">My Campaigns</a>
-            <a href="/chat">Chat</a>
+            <a href="/campaigns/chat?service={raw_slug}">Campaign Assistant</a>
         </div>
     </div>
     <h1>Create Campaign</h1>
@@ -1319,7 +1453,7 @@ pub async fn campaigns_detail_page(
         <a class="brand" href="/">VideoSync</a>
         <div class="nav-links">
             <a href="/campaigns">My Campaigns</a>
-            <a href="/chat">Chat</a>
+            <a href="/campaigns/chat">Campaign Assistant</a>
         </div>
     </div>
 
@@ -1400,11 +1534,21 @@ async function sendChat() {{
     msgs.innerHTML += `<div style="color:var(--muted);padding:0.5rem 0;text-align:center;font-size:0.85rem">Thinking...</div>`;
     msgs.scrollTop = msgs.scrollHeight;
     try {{
+        const authToken = localStorage.getItem('authToken')||localStorage.getItem('admin_token')||localStorage.getItem('auth_token')||'';
         const resp = await fetch('/api/campaigns/{id}/chat', {{
             method: 'POST',
-            headers: {{ 'Content-Type': 'application/json' }},
+            headers: {{ 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + authToken }},
             body: JSON.stringify({{ message: msg }}),
         }});
+        if (!resp.ok) {{
+            msgs.querySelector('div:last-child').remove();
+            msgs.innerHTML += `<div style="color:#ef4444;padding:0.5rem 0">${{resp.status===401?'Session expired — please <a href="/login">log in</a> again.':'Error '+resp.status+' talking to the assistant.'}}</div>`;
+            return;
+        }}
+        const ct = (resp.headers.get('content-type')||'');
+        if (!ct.includes('application/json')) {{
+            throw new Error('Unexpected server response');
+        }}
         const data = await resp.json();
         msgs.querySelector('div:last-child').remove();
         if (data.success) {{
@@ -2162,7 +2306,7 @@ fn build_service_offer_page_html(
         <p class="summary">{audience_desc}</p>
         <div class="cta-row">
           <a class="btn btn-cta" href="/campaigns/new?service={service_slug}">Start Campaign</a>
-          <a class="btn btn-secondary" href="/chat">Try in Chat</a>
+          <a class="btn btn-secondary" href="/campaigns/chat?service={service_slug}">Try in Chat</a>
         </div>
       </div>
       <aside class="hero-panel visual-stage">
@@ -2203,7 +2347,7 @@ fn build_service_offer_page_html(
       <p style="max-width:600px;margin:0 auto 1rem;">Create a campaign, set your brief, choose your platforms, and let the engine generate and post daily content for you.</p>
       <div class="cta-row" style="justify-content:center;">
         <a class="btn btn-cta" href="/campaigns/new?service={service_slug}">Start Campaign</a>
-        <a class="btn btn-secondary" href="/chat">Chat with us first</a>
+        <a class="btn btn-secondary" href="/campaigns/chat?service={service_slug}">Chat with us first</a>
       </div>
     </section>
   </div>

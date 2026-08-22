@@ -40,6 +40,7 @@ pub fn campaign_routes() -> Router {
         .route("/api/campaigns/:id/pay-spec", get(campaign_pay_spec))
         .route("/api/campaigns/:id/settle", post(campaign_settle))
         .route("/api/campaigns/:id/chat", post(campaign_chat))
+        .route("/api/campaigns/assistant", post(campaign_assistant_chat))
         .layer(axum::middleware::from_fn(crate::middleware::auth::auth_middleware))
 }
 
@@ -813,6 +814,111 @@ async fn delete_campaign_file(
 #[derive(Deserialize)]
 pub struct CampaignChatRequest {
     pub message: String,
+}
+
+#[derive(Deserialize)]
+pub struct CampaignAssistantRequest {
+    pub message: String,
+    pub service: Option<String>,
+}
+
+/// Service catalog for the pre-sales assistant (mirrors the 12 Managed Campaign services).
+fn service_catalog_context(service: &str) -> String {
+    match service {
+        "clipping" => "Social Clipping ($297/mo): AI extracts daily highlights from your streams/VODs (Twitch, YouTube, Kick), adds captions/hooks/thumbnails, and auto-posts to TikTok, Shorts, Reels, X.".to_string(),
+        "kick_auto_clipper" => "Kick.com Clipping ($297/mo): automated Kick clip generation with Kick-compliant branding (logo, karaoke captions, 9:16 vertical, outro) posted daily to your social accounts.".to_string(),
+        "landing_page" => "SaaS Demo Video / Landing Page Hero ($149/mo): animated homepage hero loops and narrated product demos generated from your website URL.".to_string(),
+        "education" => "Education Explainer ($199/mo): Manim/LaTeX animated lessons of any duration for courses and edu channels.".to_string(),
+        "manim_explainer" => "Manim Explainer ($149/mo): general Manim-animated explainer campaign.".to_string(),
+        "whiteboard_animation" => "Whiteboard Animation ($149/mo): whiteboard-style explainer campaign.".to_string(),
+        "kinetic_typography" => "Kinetic Typography ($149/mo): animated text/lyric-style campaign.".to_string(),
+        "animated_infographic" => "Animated Infographic ($149/mo): data-driven animated infographic campaign.".to_string(),
+        "algorithm_viz" => "Algorithm Visualization ($149/mo): step-by-step algorithm/code visualizations for ed-tech audiences.".to_string(),
+        "investor_pitch" => "Investor Pitch ($149/mo): animated pitch-deck video campaign for fundraising.".to_string(),
+        "year_in_review" => "Year in Review ($149/mo): seasonal recap/recap-stats animated campaign.".to_string(),
+        "isometric_explainer" => "Isometric Explainer ($149/mo): isometric 3D-style process explainer campaign.".to_string(),
+        "" => "No service selected yet — help the visitor choose from: clipping, kick_auto_clipper, landing_page, education, manim_explainer, whiteboard_animation, kinetic_typography, animated_infographic, algorithm_viz, investor_pitch, year_in_review, isometric_explainer.".to_string(),
+        other => format!("Service: {other}."),
+    }
+}
+
+/// POST /api/campaigns/assistant — PRE-SALES campaign assistant chat.
+/// Same agent machinery as campaign_chat but scoped to a service type instead of an
+/// existing campaign. Lets a logged-in user explore/design a campaign before creating one;
+/// the assistant funnels them to /campaigns/new?service=X when ready.
+async fn campaign_assistant_chat(
+    Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<crate::models::auth::Claims>,
+    Json(req): Json<CampaignAssistantRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let user_id: i32 = claims.sub.parse().unwrap_or(0);
+    let service = req.service.clone().unwrap_or_default();
+
+    // Skills are already stored per-service scope — reuse them here (campaign_id = None).
+    let skills = crate::services::skills::get_relevant_skills(
+        &state.db_pool,
+        if service.is_empty() { None } else { Some(service.as_str()) },
+        None,
+        Some(user_id),
+        5,
+    )
+    .await
+    .unwrap_or_default();
+    let skills_context = crate::services::skills::format_skills_context(&skills);
+
+    let context = format!(
+        "## ROLE\nYou are the VideoSync Campaign Assistant helping a prospective client BEFORE \
+         they create a campaign. Explain how the service works, recommend brief/schedule/platform \
+         setups, and answer questions. When they are ready, tell them to click \
+         'Start your campaign' which goes to /campaigns/new?service={service_slug}.\n\n\
+         ## SELECTED SERVICE\n{service_ctx}\n\n\
+         {skills_context}\
+         ## USER QUESTION\n{user_message}",
+        service_slug = service.as_str(),
+        service_ctx = service_catalog_context(&service),
+        skills_context = skills_context,
+        user_message = req.message,
+    );
+
+    let session_uuid = if service.is_empty() {
+        format!("campaign-assistant-{}", user_id)
+    } else {
+        format!("campaign-assistant-{}-{}", user_id, service)
+    };
+    let _ = crate::handlers::upload::get_or_create_session(&state, &session_uuid, Some(user_id)).await;
+
+    let gemini_client = match state.video_gemini_client.as_ref().or(state.gemini_client.as_ref()) {
+        Some(c) => Arc::new(c.clone()),
+        None => return Err((StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": "AI service unavailable"})))),
+    };
+
+    let ollama_client = state.ollama_client.clone().map(Arc::new);
+
+    let agent = crate::agent::stateful_agent::StatefulGeminiAgent::new_with_nvidia(
+        gemini_client,
+        state.bedrock_client.clone(),
+        state.nvidia_nim_client.clone().map(Arc::new),
+        ollama_client,
+    );
+
+    let agent_result = agent.chat(
+        &req.message,
+        &session_uuid,
+        context,
+        state.clone(),
+        state.job_manager.clone(),
+        None,
+        None,
+        None,
+        Some(user_id),
+    ).await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))))?;
+
+    Ok(Json(json!({
+        "success": true,
+        "session_id": session_uuid,
+        "response": agent_result,
+        "start_url": if service.is_empty() { "/campaigns/new".to_string() } else { format!("/campaigns/new?service={}", service) },
+    })))
 }
 
 /// POST /api/campaigns/:id/chat — Chat with the AI about a specific campaign.
