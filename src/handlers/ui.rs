@@ -15,6 +15,35 @@ use serde::Deserialize;
 use serde_json::json;
 use std::sync::Arc;
 
+/// Shared dynamic-background JS. Fetches /api/background/image (NVIDIA FLUX primary,
+/// Gemini Nano Banana 2 Lite fallback, 5-min server cache) and paints it as a fixed
+/// full-screen layer behind page content. Include via `<script>{bg_js}</script>`.
+pub fn dynamic_bg_script() -> &'static str {
+    r#"(async function(){
+  try {
+    const r = await fetch('/api/background/image');
+    const ct = r.headers.get('content-type') || '';
+    if (ct.includes('image/')) {
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const el = document.getElementById('dyn-bg');
+      if (el) el.remove();
+      const bg = document.createElement('div');
+      bg.id = 'dyn-bg';
+      bg.style.cssText = 'position:fixed;inset:0;z-index:-3;background-size:cover;background-position:center;opacity:0;transition:opacity 1.2s ease;';
+      bg.style.backgroundImage = 'url(' + url + ')';
+      document.body.prepend(bg);
+      requestAnimationFrame(() => bg.style.opacity = '0.5');
+    } else {
+      const data = await r.json();
+      if (data.fallback && data.gradient) {
+        document.body.style.background = data.gradient;
+      }
+    }
+  } catch(e) { console.warn('Bg fetch:', e); }
+})();"#
+}
+
 pub fn ui_routes() -> Router {
     Router::new()
         .route("/", get(landing_page))
@@ -827,8 +856,10 @@ pub async fn campaigns_list_page(
     <h1>My Campaigns</h1>
     <div class="campaigns-grid">{campaigns_html}</div>
 </div>
+<script>{bg_js}</script>
 </body>
-</html>"#
+</html>"#,
+        bg_js = dynamic_bg_script(),
     ))
 }
 
@@ -899,6 +930,10 @@ pub async fn campaign_assistant_page(
     .bot {{ background:rgba(15,23,42,0.75); border:1px solid var(--line); }}
     .err {{ color:#ef4444; }}
     .composer {{ display:flex; gap:0.6rem; margin-top:0.9rem; }}
+    @media (max-width:520px) {{
+      .shell {{ padding:20px 12px 80px; }}
+      .msg {{ max-width:95%; }}
+    }}
     #chat-input {{ flex:1; padding:0.75rem 0.9rem; border-radius:10px; border:1px solid var(--line); background:rgba(15,23,42,0.8); color:#fff; font-size:0.95rem; }}
     #chat-input:focus {{ outline:none; border-color:var(--blue); }}
     .btn {{ padding:0.75rem 1.15rem; border-radius:8px; font-weight:700; cursor:pointer; border:0; font-size:0.95rem; text-decoration:none; display:inline-block; }}
@@ -969,11 +1004,13 @@ async function sendAssistantMsg() {{
     msgs.scrollTop = msgs.scrollHeight;
 }}
 </script>
+<script>{bg_js}</script>
 </body>
 </html>"#,
         start_url_attr = start_url,
         service_badge = service_badge,
         service_js = service_type,
+        bg_js = dynamic_bg_script(),
     ))
 }
 
@@ -1016,8 +1053,10 @@ pub async fn campaigns_new_page(
     <a class="btn" href="/subscribe">Subscribe — $15/mo</a>
     <p style="margin-top:1rem;font-size:0.85rem;">Already subscribed? <a href="/login" style="color:#93c5fd;">Log in</a></p>
 </div>
+<script>{bg_js}</script>
 </body>
-</html>"#
+</html>"#,
+        bg_js = dynamic_bg_script(),
         ));
     }
 
@@ -1066,6 +1105,12 @@ pub async fn campaigns_new_page(
     input:focus, select:focus, textarea:focus {{ outline:none; border-color:var(--blue); }}
     textarea {{ min-height:100px; resize:vertical; }}
     .form-row {{ display:grid; grid-template-columns:1fr 1fr; gap:1rem; }}
+    @media (max-width:640px) {{
+      .form-row {{ grid-template-columns:1fr; }}
+      .schedule-entry {{ flex-wrap:wrap; }}
+      .topbar {{ flex-direction:column; align-items:flex-start; }}
+      .shell {{ padding:20px 14px 72px; }}
+    }}
     .btn {{ padding:0.8rem 1.2rem; border-radius:5px; font-weight:700; cursor:pointer; border:0; font-size:1rem; }}
     .btn-primary {{ background:linear-gradient(135deg,var(--blue),#2563eb); color:#fff; }}
     .btn-secondary {{ background:rgba(15,23,42,0.7); border:1px solid var(--line); color:#dbeafe; text-decoration:none; text-align:center; }}
@@ -1310,8 +1355,10 @@ document.getElementById('campaignForm').addEventListener('submit', async (e) => 
     }} catch(e) {{ alert('Network error: ' + e); }}
 }});
 </script>
+<script>{bg_js}</script>
 </body>
-</html>"#
+</html>"#,
+        bg_js = dynamic_bg_script(),
     ))
 }
 
@@ -2133,8 +2180,10 @@ fn build_services_overview_page_html() -> String {
   }}catch(e){{}}
 }})();
 </script>
+<script>{bg_js}</script>
 </body>
-</html>"#
+</html>"#,
+        bg_js = dynamic_bg_script(),
     )
 }
 

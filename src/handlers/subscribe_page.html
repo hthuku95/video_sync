@@ -489,5 +489,30 @@ async function executePay() {
   }
 })();
 </script>
+<script>
+(async function(){
+  try {
+    const r = await fetch('/api/background/image');
+    const ct = r.headers.get('content-type') || '';
+    if (ct.includes('image/')) {
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const el = document.getElementById('dyn-bg');
+      if (el) el.remove();
+      const bg = document.createElement('div');
+      bg.id = 'dyn-bg';
+      bg.style.cssText = 'position:fixed;inset:0;z-index:-3;background-size:cover;background-position:center;opacity:0;transition:opacity 1.2s ease;';
+      bg.style.backgroundImage = 'url(' + url + ')';
+      document.body.prepend(bg);
+      requestAnimationFrame(() => bg.style.opacity = '0.5');
+    } else {
+      const data = await r.json();
+      if (data.fallback && data.gradient) {
+        document.body.style.background = data.gradient;
+      }
+    }
+  } catch(e) { console.warn('Bg fetch:', e); }
+})();
+</script>
 </body>
 </html>
