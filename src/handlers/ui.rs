@@ -1939,8 +1939,11 @@ if (sessionStorage.getItem('social_oauth_return')) {{
 
 init();
 </script>
+{bg_js}
 </body>
-</html>"###);
+</html>"###,
+        bg_js = dynamic_bg_script(),
+    );
     Html(html)
 }
 
@@ -6180,7 +6183,6 @@ pub async fn dashboard_page() -> Html<String> {
 
         <div style="display:flex;flex-wrap:wrap;gap:10px;margin:0 0 24px;">
             <a href="/services" style="text-decoration:none;padding:10px 14px;border-radius:999px;background:rgba(59,130,246,0.18);border:1px solid rgba(96,165,250,0.28);color:#dbeafe;font-weight:600;">All Services</a>
-            <a href="/services/saas-launch-pack" style="text-decoration:none;padding:10px 14px;border-radius:999px;background:rgba(15,23,42,0.72);border:1px solid rgba(148,163,184,0.18);color:#dbeafe;">SaaS Launch Pack</a>
 
         </div>
 
@@ -6191,11 +6193,11 @@ pub async fn dashboard_page() -> Html<String> {
                     <h3><span class="action-icon"><svg viewBox="0 0 24 24"><path d="M7 10h10"></path><path d="M7 14h6"></path><path d="M5 19V6a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H9l-4 3Z"></path></svg></span>Start New Chat</h3>
                     <p>Begin a new video editing session with our AI assistant</p>
                 </a>
-                <a href="/youtube/manage" class="action-card">
+                <a href="/youtube/manage" class="action-card" id="connect-youtube-action-card" style="display: none;">
                     <h3><span class="action-icon"><svg viewBox="0 0 24 24"><path d="M3 7.5a2.5 2.5 0 0 1 2.5-2.5h9A2.5 2.5 0 0 1 17 7.5v9a2.5 2.5 0 0 1-2.5 2.5h-9A2.5 2.5 0 0 1 3 16.5Z"></path><path d="m10 9 4 3-4 3Z"></path><path d="M17 10.5 21 8v8l-4-2.5"></path></svg></span>Connect YouTube Channels</h3>
                     <p>Connect and manage your YouTube channels for seamless publishing</p>
                 </a>
-                <a href="/analytics" class="action-card">
+                <a href="/analytics" class="action-card" id="analytics-action-card" style="display: none;">
                     <h3><span class="action-icon"><svg viewBox="0 0 24 24"><path d="M4 19h16"></path><path d="M7 16V9"></path><path d="M12 16V5"></path><path d="M17 16v-4"></path></svg></span>Analytics Dashboard</h3>
                     <p>View YouTube channel performance and video analytics</p>
                 </a>
@@ -6204,19 +6206,11 @@ pub async fn dashboard_page() -> Html<String> {
                     <h3><span class="action-icon"><svg viewBox="0 0 24 24"><circle cx="6" cy="6" r="2"></circle><circle cx="6" cy="18" r="2"></circle><path d="M8 7.5 19 4"></path><path d="M8 16.5 19 20"></path><path d="M14 12h7"></path></svg></span>YouTube Clipping</h3>
                     <p>Auto-generate viral clips from popular channels and post to your channel</p>
                 </a>
-                <a href="/video-tools" class="action-card">
-                    <h3><span class="action-icon"><svg viewBox="0 0 24 24"><path d="m14.7 6.3 3 3"></path><path d="M4 20l4.5-1 9.2-9.2a2.1 2.1 0 1 0-3-3L5.5 16 4 20Z"></path><path d="M13 8 16 11"></path></svg></span>Video Tools</h3>
-                    <p>Stabilize, convert formats, visualize audio, and run workflow recipes directly</p>
-                </a>
-                <a href="/gig-templates" class="action-card" id="gig-templates-action-card" style="display: none;">
-                    <h3><span class="action-icon"><svg viewBox="0 0 24 24"><path d="M4 8h16v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2Z"></path><path d="M9 8V6a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"></path><path d="M4 12h16"></path></svg></span>Gig Templates</h3>
-                    <p>Fiverr & PPH gig info with pricing tiers, copy-paste descriptions, and AI sample video generation</p>
-                </a>
-                <a href="/manual-clipping" class="action-card">
+                <a href="/manual-clipping" class="action-card" id="manual-clipping-action-card" style="display: none;">
                     <h3><span class="action-icon"><svg viewBox="0 0 24 24"><circle cx="6" cy="6" r="2"></circle><circle cx="6" cy="18" r="2"></circle><path d="M8 7.5 19 4"></path><path d="M8 16.5 19 20"></path><path d="M14 12h7"></path></svg></span>Manual Clipping</h3>
                     <p>Paste any YouTube or Twitch URL to extract viral clips with download links — no destination channel needed</p>
                 </a>
-                <a href="/api/campaigns" class="action-card">
+                <a href="/campaigns" class="action-card">
                     <h3><span class="action-icon"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="6" height="6" rx="1"></rect><rect x="15" y="3" width="6" height="6" rx="1"></rect><rect x="3" y="15" width="6" height="6" rx="1"></rect><rect x="15" y="15" width="6" height="6" rx="1"></rect></svg></span>Campaigns</h3>
                     <p>Set up automated daily content generation and cross-platform posting campaigns</p>
                 </a>
@@ -6291,8 +6285,10 @@ pub async fn dashboard_page() -> Html<String> {
         // Show/hide YouTube clipping card based on permissions
         // Check access via API to include whitelisted users
         const clippingCard = document.getElementById('clipping-action-card');
-        const gigTemplatesCard = document.getElementById('gig-templates-action-card');
-        if (clippingCard || gigTemplatesCard) {
+        const connectYoutubeCard = document.getElementById('connect-youtube-action-card');
+        const analyticsCard = document.getElementById('analytics-action-card');
+        const manualClippingCard = document.getElementById('manual-clipping-action-card');
+        if (clippingCard || connectYoutubeCard || analyticsCard || manualClippingCard) {
             const authToken = localStorage.getItem('authToken') || localStorage.getItem('admin_token') || localStorage.getItem('auth_token');
             if (authToken) {
                 fetch('/api/clipping/access-check', {
@@ -6301,7 +6297,9 @@ pub async fn dashboard_page() -> Html<String> {
                 .then(response => {
                     if (response.ok) {
                         if (clippingCard) clippingCard.style.display = 'block';
-                        if (gigTemplatesCard) gigTemplatesCard.style.display = 'block';
+                        if (connectYoutubeCard) connectYoutubeCard.style.display = 'block';
+                        if (analyticsCard) analyticsCard.style.display = 'block';
+                        if (manualClippingCard) manualClippingCard.style.display = 'block';
                     }
                 })
                 .catch(err => console.debug('Clipping access check failed:', err));
