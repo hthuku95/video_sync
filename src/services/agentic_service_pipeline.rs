@@ -306,7 +306,38 @@ impl AgenticServicePipeline {
         let output_dir = format!("outputs/agentic_{}", input.delivery_id);
         std::fs::create_dir_all(&output_dir).map_err(|e| format!("Failed to create output dir: {e}"))?;
 
-        let agent_prompt = Self::build_agent_prompt(service_type, &input, &output_dir);
+        // ── PLAN-THEN-EXECUTE (§36.9 rec #1) ──
+        // One cheap pre-flight LLM call emits an explicit stage plan that is
+        // injected into every attempt's context. Regular workflow classes
+        // benefit from synthesize-once/execute-deterministically: the agent
+        // stops improvising detours mid-render and operators get an inspectable
+        // plan artifact (app_workflow_events / trace endpoint). Bounded cost:
+        // exactly one extra fast-chain call per RUN (not per attempt).
+        let execution_plan = generate_execution_plan(&state, service_type, &input).await;
+        let mut agent_prompt = Self::build_agent_prompt(service_type, &input, &output_dir);
+        match &execution_plan {
+            Ok(plan) if !plan.trim().is_empty() => {
+                let _ = runtime
+                    .append_event(
+                        workflow_id,
+                        "execution_plan",
+                        None,
+                        "Execution plan generated",
+                        json!({ "plan": plan }),
+                    )
+                    .await;
+                tracing::info!(workflow_id = %workflow_id, "🗺️ execution plan generated");
+                agent_prompt = format!(
+                    "## YOUR PRE-COMMITTED EXECUTION PLAN\n\
+                     A planner reviewed this brief and produced the following step plan.\n\
+                     Follow it sequentially. If a step fails, fix it and continue — do NOT\n\
+                     skip steps or invent replacements. Mark progress as you go.\n\n{plan}\n\n\
+                     ──────────── FULL PIPELINE INSTRUCTIONS ────────────\n\n{agent_prompt}"
+                );
+            }
+            Ok(_) => tracing::warn!(workflow_id = %workflow_id, "execution plan empty — continuing without"),
+            Err(e) => tracing::warn!(workflow_id = %workflow_id, "execution plan generation failed (non-fatal): {e}"),
+        }
 
         let mut current_prompt = agent_prompt.clone();
         let mut best_output_path: Option<String> = None;
@@ -486,13 +517,45 @@ impl AgenticServicePipeline {
                     .retry_hint
                     .clone()
                     .unwrap_or_else(|| review.feedback.clone());
-                current_prompt = format!(
-                    "PREVIOUS ATTEMPT FAILED QA REVIEW (score {}/10).\n\
-                     Feedback: {}\n\
-                     Retry hint: {}\n\n\
-                     Apply the feedback above, then run the full pipeline below:\n\n{}",
-                    review.score, review.feedback, hint, agent_prompt,
-                );
+
+                // ── TARGETED REPAIR (§36.9 rec: repair beats regenerate) ──
+                // One fast call decides whether the QA failure can be fixed by
+                // redoing ONLY the flagged aspect while reusing surviving
+                // artifacts, instead of burning GPU on a full rebuild.
+                let artifacts = list_local_artifacts(&output_dir);
+                let repair =
+                    plan_repair_scope(&state, &review.feedback, &artifacts).await;
+                current_prompt = match repair {
+                    RepairScope::Partial { instructions } => {
+                        tracing::info!(
+                            workflow_id = %workflow_id,
+                            "🔧 targeted repair on attempt {} (artifacts: {})",
+                            attempt + 2,
+                            artifacts.len()
+                        );
+                        format!(
+                            "PARTIAL REPAIR REQUIRED — DO NOT REBUILD FROM SCRATCH.\n\
+                             Previous attempt produced artifacts that are STILL VALID:\n{artifacts}\n\n\
+                             QA review (score {score}/10) flagged ONE issue:\nFeedback: {feedback}\n\n\
+                             YOUR REPAIR SCOPE — do exactly this and nothing more:\n{instructions}\n\n\
+                             Reuse the existing artifacts wherever possible; re-render only the\n\
+                             failing segment/aspect, then merge with the survivors and produce the\n\
+                             final output again. Then run the full pipeline reference below:\n\n{agent_prompt}",
+                            artifacts = artifacts.join("\n"),
+                            score = review.score,
+                            feedback = review.feedback,
+                            instructions = instructions,
+                            agent_prompt = agent_prompt,
+                        )
+                    }
+                    RepairScope::Full => format!(
+                        "PREVIOUS ATTEMPT FAILED QA REVIEW (score {}/10).\n\
+                         Feedback: {}\n\
+                         Retry hint: {}\n\n\
+                         Apply the feedback above, then run the full pipeline below:\n\n{}",
+                        review.score, review.feedback, hint, agent_prompt,
+                    ),
+                };
             }
         }
 
@@ -1354,6 +1417,137 @@ Use ONLY manim_execute_script for ALL visual content — every render call uploa
 // NOTE: the fire-and-forget spawn path was removed (Aug 2026).
 // AgenticServicePipeline::start() now only enqueues (status='queued'), and
 // src/services/pipeline_worker.rs owns execution via durable lease claims.
+
+/// Plan-then-execute pre-flight: one fast-chain LLM call that converts the
+/// brief + service profile into an explicit numbered stage plan. Non-fatal on
+/// failure — the reactive loop still works without a plan.
+async fn generate_execution_plan(
+    state: &Arc<AppState>,
+    service_type: ServiceType,
+    input: &ServiceInput,
+) -> Result<String, String> {
+    let source_hint = match input.source_url.as_deref() {
+        Some(url) if !url.is_empty() => format!("\nSource video/website: {url}"),
+        _ => String::new(),
+    };
+    let tool_hints = match service_type {
+        ServiceType::Clipping => "generate_clip_compilation (downloads + extracts + captions clips), kick_post_processing happens automatically; final artifacts are clip URLs",
+        _ => "generate_video_script, blender_generate_scene_type, manim_execute_script, merge_videos, add_voiceover_to_video, review_video, submit_final_answer",
+    };
+
+    let prompt = format!(
+        "You are a render-pipeline planner for the '{service}' Managed Campaign service.\n\
+         Title: {title}\nBrief: {brief}\nTarget duration: {duration}s\nStyle: {style}{source}\n\n\
+         Available pipeline tools: {tools}\n\n\
+         Write a concise numbered execution plan (5-9 steps) to produce this video.\n\
+         Each step must be ONE line in exactly this format:\n\
+         STEP <n>: <tool_name>(<key args>) -> <expected artifact>\n\n\
+         Rules:\n\
+         - The FINAL step must yield outputs/agentic_{delivery_id}/output.mp4 (or clip URLs for clipping)\n\
+         - Include a review_video QA step before submit_final_answer\n\
+         - No prose, no markdown headers — ONLY the STEP lines\n",
+        service = service_type.as_str(),
+        title = input.title,
+        brief = input.brief.chars().take(1200).collect::<String>(),
+        duration = input.duration_seconds as i32,
+        style = input.style,
+        source = source_hint,
+        tools = tool_hints,
+        delivery_id = input.delivery_id,
+    );
+
+    crate::llm_utils::generate_text_fast(
+        state.ollama_client.as_ref(),
+        state.deepseek_client.as_ref(),
+        state.gemini_client.as_ref(),
+        &prompt,
+    )
+    .await
+    .map(|t| {
+        t.lines()
+            .filter(|l| l.trim_start().to_uppercase().starts_with("STEP"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    })
+}
+
+// ── Targeted repair scope (QA-failure triage) ────────────────────────────────
+
+enum RepairScope {
+    /// Nothing reusable — full pipeline re-run (previous behavior).
+    Full,
+    /// Re-render only the flagged aspect; reuse surviving artifacts.
+    Partial { instructions: String },
+}
+
+/// Local files the previous attempt left in its output dir — candidates for
+/// reuse during partial repair. Cloud-only outputs (clipping) return empty.
+fn list_local_artifacts(output_dir: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(output_dir) {
+        for e in entries.flatten() {
+            if let Ok(name) = e.file_name().into_string() {
+                if name.ends_with(".mp4") || name.ends_with(".png") || name.ends_with(".wav") {
+                    out.push(format!("{output_dir}/{name}"));
+                }
+            }
+        }
+    }
+    out.truncate(20);
+    out
+}
+
+/// One fast-chain call: given QA feedback + surviving artifacts, decide
+/// full-rebuild vs targeted repair with concrete instructions.
+/// Defaults to Full on any ambiguity — correctness over cost.
+async fn plan_repair_scope(
+    state: &Arc<AppState>,
+    feedback: &str,
+    artifacts: &[String],
+) -> RepairScope {
+    if artifacts.is_empty() {
+        return RepairScope::Full;
+    }
+    let prompt = format!(
+        "A video render failed QA review.\nFeedback: {}\n\n\
+         Surviving artifacts from the attempt:\n{}\n\n\
+         Can this be fixed by re-rendering ONLY part of the video and merging with\n\
+         the survivors, or does it require a full rebuild?\n\
+         Respond with ONLY JSON:\n\
+         {{\"strategy\": \"partial\" or \"full\", \"instructions\": \"if partial: exactly what to re-render and how to merge; else empty\"}}\n",
+        feedback.chars().take(800).collect::<String>(),
+        artifacts.join("\n"),
+    );
+    match crate::llm_utils::generate_text_fast(
+        state.ollama_client.as_ref(),
+        state.deepseek_client.as_ref(),
+        state.gemini_client.as_ref(),
+        &prompt,
+    )
+    .await
+    {
+        Ok(text) => {
+            // Lenient JSON extraction (same pattern as skill extraction).
+            let json_text = text.trim();
+            let parsed: serde_json::Value = serde_json::from_str(json_text)
+                .or_else(|_| {
+                    let re = regex::Regex::new(r"\{[^{}]*\}").ok()?;
+                    re.find(json_text).and_then(|m| serde_json::from_str(m.as_str()).ok())
+                })
+                .unwrap_or(serde_json::json!({}));
+            match parsed["strategy"].as_str() {
+                Some("partial") => RepairScope::Partial {
+                    instructions: parsed["instructions"]
+                        .as_str()
+                        .unwrap_or("Re-render only the flagged segment and merge.")
+                        .to_string(),
+                },
+                _ => RepairScope::Full,
+            }
+        }
+        Err(_) => RepairScope::Full,
+    }
+}
 
 struct LocatedOutput {
     /// The canonical output path — may be a cloud URL or a local path.

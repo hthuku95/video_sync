@@ -2623,6 +2623,98 @@ impl RunLedger {
 }
 
 
+// ─── Parallel read-only tool fan-out ─────────────────────────────────────────
+//
+// Independent lookups (stock/media search, crawled-content retrieval, site
+// crawls) run concurrently — median latency for multi-lookup turns drops
+// ~4x and total token spend falls (fewer filler turns). Writes and renders
+// stay strictly serial. Cap 4 keeps GPU/CPU contention bounded.
+
+const PARALLEL_READ_ONLY_TOOLS: &[&str] = &[
+    "pexels_search",
+    "sketchfab_search",
+    "search_crawled_content",
+    "browserbase_crawl_website",
+];
+
+fn to_args_map(args: &serde_json::Value) -> std::collections::HashMap<String, serde_json::Value> {
+    match args {
+        serde_json::Value::String(s) => serde_json::from_str::<serde_json::Value>(s)
+            .ok()
+            .and_then(|v| {
+                v.as_object()
+                    .map(|o| o.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+            })
+            .unwrap_or_default(),
+        other => other
+            .as_object()
+            .map(|o| o.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+            .unwrap_or_default(),
+    }
+}
+
+/// Execute independent read-only calls concurrently (chunks of 4).
+/// Returns idx → truncated result, ready to drop into the sequential path.
+async fn execute_read_only_batch(
+    batch: Vec<(usize, String, serde_json::Value)>,
+    exec_context: &crate::agent::tool_executor::ToolExecutionContext,
+    ledger: &mut RunLedger,
+) -> std::collections::HashMap<usize, String> {
+    use tokio::task::JoinSet;
+
+    const MAX_PARALLEL: usize = 4;
+    let mut results = std::collections::HashMap::new();
+    let runtime = crate::services::workflow_runtime::WorkflowRuntime::new(
+        exec_context.app_state.db_pool.clone(),
+    );
+
+    for chunk in batch.chunks(MAX_PARALLEL) {
+        let mut joinset: JoinSet<(usize, String, String, u64)> = JoinSet::new();
+        for (idx, name, args) in chunk {
+            let ctx = exec_context.clone();
+            let idx = *idx;
+            let name = name.clone();
+            let args = args.clone();
+            joinset.spawn(async move {
+                let started = std::time::Instant::now();
+                let args_map = to_args_map(&args);
+                let result = crate::agent::tool_executor::execute_tool_gemini_with_context(
+                    &name, &args_map, &ctx,
+                )
+                .await;
+                (idx, name, result, started.elapsed().as_millis() as u64)
+            });
+        }
+        while let Some(joined) = joinset.join_next().await {
+            let Ok((idx, name, result, latency_ms)) = joined else {
+                continue; // panic in child — sequential retry not warranted; result stays missing
+            };
+            ledger.tool_calls += 1;
+            if let Some(wid) = exec_context.workflow_id {
+                let _ = runtime
+                    .append_event(
+                        wid,
+                        "tool_trace",
+                        Some(name.as_str()),
+                        &format!("tool {name} finished in {latency_ms} ms (parallel)"),
+                        serde_json::json!({
+                            "tool": name,
+                            "latency_ms": latency_ms,
+                            "result_chars": result.chars().count(),
+                            "parallel": true,
+                            "llm_calls_so_far": ledger.llm_calls,
+                            "tool_calls_so_far": ledger.tool_calls,
+                        }),
+                    )
+                    .await;
+            }
+            tracing::info!("⚡ parallel read-only tool {name} done in {latency_ms} ms");
+            results.insert(idx, truncate_tool_result_for_context(&name, &result));
+        }
+    }
+    results
+}
+
 async fn save_agent_checkpoint(
     pool: &sqlx::PgPool,
     workflow_id: uuid::Uuid,
@@ -2775,32 +2867,36 @@ where
                     "tool_calls": assistant_tool_calls,
                 }));
 
-                for tc in &tool_calls {
+                // Parallel read-only fan-out: independent lookups run concurrently
+                // before the sequential path executes writes/renders.
+                let mut prefetched: std::collections::HashMap<usize, String> =
+                    std::collections::HashMap::new();
+                {
+                    let batch: Vec<(usize, String, serde_json::Value)> = tool_calls
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, tc)| PARALLEL_READ_ONLY_TOOLS.contains(&tc.name.as_str()))
+                        .map(|(i, tc)| (i, tc.name.clone(), tc.arguments.clone()))
+                        .collect();
+                    if batch.len() > 1 {
+                        send_progress(&format!("⚡ Running {} lookups in parallel…", batch.len()));
+                        prefetched = execute_read_only_batch(batch, exec_context, ledger).await;
+                    }
+                }
+
+                for (call_idx, tc) in tool_calls.iter().enumerate() {
                     send_progress(&format!("🔧 Ollama calling: {}", tc.name));
                     tracing::info!("🎬 Ollama tool call: {}", tc.name);
 
-                    let args_map: std::collections::HashMap<String, serde_json::Value> = match &tc
-                        .arguments
-                    {
-                        serde_json::Value::String(s) => {
-                            // If the server delivered arguments as a string, parse it.
-                            serde_json::from_str::<serde_json::Value>(s)
-                                .ok()
-                                .and_then(|v| {
-                                    v.as_object()
-                                        .map(|o| o.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
-                                })
-                                .unwrap_or_default()
-                        }
-                        ref other => other
-                            .as_object()
-                            .map(|o| o.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
-                            .unwrap_or_default(),
+                    let result = if let Some(cached) = prefetched.remove(&call_idx) {
+                        cached
+                    } else {
+                        let args_map = to_args_map(&tc.arguments);
+                        execute_tool_call_in_loop(
+                            &tc.name, &args_map, exec_context, tools, ledger,
+                        )
+                        .await
                     };
-
-                    let result =
-                        execute_tool_call_in_loop(&tc.name, &args_map, exec_context, tools, ledger)
-                            .await;
 
                     send_progress(&format!("✅ {} done", tc.name));
 
@@ -2899,19 +2995,39 @@ where
                     "tool_calls": assistant_tool_calls,
                 }));
 
-                for tc in &tool_calls {
+                // Parallel read-only fan-out (see ollama arm for rationale).
+                let mut prefetched: std::collections::HashMap<usize, String> =
+                    std::collections::HashMap::new();
+                {
+                    let batch: Vec<(usize, String, serde_json::Value)> = tool_calls
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, tc)| PARALLEL_READ_ONLY_TOOLS.contains(&tc.name.as_str()))
+                        .map(|(i, tc)| (i, tc.name.clone(), tc.arguments.clone()))
+                        .collect();
+                    if batch.len() > 1 {
+                        send_progress(&format!("⚡ Running {} lookups in parallel…", batch.len()));
+                        prefetched = execute_read_only_batch(batch, exec_context, ledger).await;
+                    }
+                }
+
+                for (call_idx, tc) in tool_calls.iter().enumerate() {
                     send_progress(&format!("🔧 DeepSeek calling: {}", tc.name));
                     tracing::info!("🎬 DeepSeek V4 tool call: {}", tc.name);
 
-                    let args_map: std::collections::HashMap<String, serde_json::Value> = tc
-                        .arguments
-                        .as_object()
-                        .map(|o| o.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
-                        .unwrap_or_default();
-
-                    let result =
-                        execute_tool_call_in_loop(&tc.name, &args_map, exec_context, tools, ledger)
-                            .await;
+                    let result = if let Some(cached) = prefetched.remove(&call_idx) {
+                        cached
+                    } else {
+                        let args_map: std::collections::HashMap<String, serde_json::Value> = tc
+                            .arguments
+                            .as_object()
+                            .map(|o| o.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+                            .unwrap_or_default();
+                        execute_tool_call_in_loop(
+                            &tc.name, &args_map, exec_context, tools, ledger,
+                        )
+                        .await
+                    };
 
                     send_progress(&format!("✅ {} done", tc.name));
 
@@ -2987,19 +3103,39 @@ where
                     "tool_calls": assistant_tool_calls,
                 }));
 
-                for tc in &tool_calls {
+                // Parallel read-only fan-out (see ollama arm for rationale).
+                let mut prefetched: std::collections::HashMap<usize, String> =
+                    std::collections::HashMap::new();
+                {
+                    let batch: Vec<(usize, String, serde_json::Value)> = tool_calls
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, tc)| PARALLEL_READ_ONLY_TOOLS.contains(&tc.name.as_str()))
+                        .map(|(i, tc)| (i, tc.name.clone(), tc.arguments.clone()))
+                        .collect();
+                    if batch.len() > 1 {
+                        send_progress(&format!("⚡ Running {} lookups in parallel…", batch.len()));
+                        prefetched = execute_read_only_batch(batch, exec_context, ledger).await;
+                    }
+                }
+
+                for (call_idx, tc) in tool_calls.iter().enumerate() {
                     send_progress(&format!("🔧 NVIDIA NIM calling: {}", tc.name));
                     tracing::info!("🎬 NVIDIA NIM tool call: {}", tc.name);
 
-                    let args_map: std::collections::HashMap<String, serde_json::Value> = tc
-                        .arguments
-                        .as_object()
-                        .map(|o| o.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
-                        .unwrap_or_default();
-
-                    let result =
-                        execute_tool_call_in_loop(&tc.name, &args_map, exec_context, tools, ledger)
-                            .await;
+                    let result = if let Some(cached) = prefetched.remove(&call_idx) {
+                        cached
+                    } else {
+                        let args_map: std::collections::HashMap<String, serde_json::Value> = tc
+                            .arguments
+                            .as_object()
+                            .map(|o| o.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+                            .unwrap_or_default();
+                        execute_tool_call_in_loop(
+                            &tc.name, &args_map, exec_context, tools, ledger,
+                        )
+                        .await
+                    };
 
                     send_progress(&format!("✅ {} done", tc.name));
 

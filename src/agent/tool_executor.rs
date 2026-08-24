@@ -65,6 +65,7 @@ fn ensure_outputs_directory(file_path: &str) -> String {
 }
 
 /// Context needed for tool execution to save outputs to DB and vectorize them
+#[derive(Clone)]
 pub struct ToolExecutionContext {
     pub session_id: String,
     pub user_id: Option<i32>,
