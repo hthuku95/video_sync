@@ -1068,6 +1068,9 @@ IMPORTANT: For fetching website content, use `browserbase_crawl_website(url)` �
                 workflow_id,
             };
 
+            // Per-run budget & cost ledger (enforced at turn boundaries).
+            let mut ledger = RunLedger::default();
+
             // 1. Try Ollama (self-hosted, FREE, GPU cluster via NLB) — DEFAULT FIRST ATTEMPT
             let ollama_client = self.ollama_client.as_ref()
                 .map(|arc| arc.as_ref())
@@ -1095,6 +1098,7 @@ IMPORTANT: For fetching website content, use `browserbase_crawl_website(url)` �
                     &mut all_tools,
                     &exec_context,
                     &send_progress,
+                    &mut ledger,
                 )
                 .await
                 {
@@ -1123,6 +1127,7 @@ IMPORTANT: For fetching website content, use `browserbase_crawl_website(url)` �
                     &mut all_tools,
                     &exec_context,
                     &send_progress,
+                    &mut ledger,
                 )
                 .await
                 {
@@ -1160,6 +1165,7 @@ IMPORTANT: For fetching website content, use `browserbase_crawl_website(url)` �
                             &mut all_tools,
                             &exec_context,
                             &send_progress,
+                            &mut ledger,
                         )
                         .await
                         {
@@ -1190,6 +1196,19 @@ IMPORTANT: For fetching website content, use `browserbase_crawl_website(url)` �
 
             let mut has_function_calls = false;
             let mut function_results: Vec<(String, serde_json::Value, Option<String>)> = Vec::new(); // (name, result, thought_signature)
+
+            // Gemini usage → ledger (cloud = billable quota).
+            if let Some(um) = response.usage_metadata.as_ref() {
+                ledger.record(
+                    "gemini",
+                    &crate::usage::UsageInfo {
+                        prompt_tokens: um.prompt_token_count as u64,
+                        completion_tokens: um.candidates_token_count as u64,
+                    },
+                    true,
+                );
+                ledger.flush(&exec_context).await;
+            }
 
             if let Some(candidate) = response.candidates.first() {
                 // Handle optional content field (may be None if blocked by safety filters)
@@ -1232,11 +1251,31 @@ IMPORTANT: For fetching website content, use `browserbase_crawl_website(url)` �
                                             workflow_id,
                                         };
 
+                                    let tool_started = std::time::Instant::now();
                                     let tool_result = crate::agent::tool_executor::execute_tool_gemini_with_context(
                                         &function_name,
                                         &function_call.args,
                                         &exec_context
                                     ).await;
+                                    let tool_ms = tool_started.elapsed().as_millis() as u64;
+                                    ledger.tool_calls += 1;
+                                    if let Some(wid) = workflow_id {
+                                        let rt = crate::services::workflow_runtime::WorkflowRuntime::new(app_state.db_pool.clone());
+                                        let _ = rt.append_event(
+                                            wid,
+                                            "tool_trace",
+                                            Some(function_name.as_str()),
+                                            &format!("tool {function_name} finished in {tool_ms} ms"),
+                                            serde_json::json!({
+                                                "tool": function_name,
+                                                "latency_ms": tool_ms,
+                                                "result_chars": tool_result.chars().count(),
+                                                "llm_calls_so_far": ledger.llm_calls,
+                                                "tool_calls_so_far": ledger.tool_calls,
+                                            }),
+                                        ).await;
+                                        ledger.flush(&exec_context).await;
+                                    }
 
                                     send_progress(&format!("✅ {} completed", function_name));
 
@@ -2354,6 +2393,7 @@ async fn execute_tool_call_in_loop(
     args_map: &std::collections::HashMap<String, serde_json::Value>,
     exec_context: &crate::agent::tool_executor::ToolExecutionContext,
     tools: &mut Vec<crate::gemini_client::FunctionDeclaration>,
+    ledger: &mut RunLedger,
 ) -> String {
     if tool_name == "search_tools" {
         let (text, matched_names) = crate::ai_tool_selector::execute_search_tools(args_map);
@@ -2381,12 +2421,39 @@ async fn execute_tool_call_in_loop(
         return text;
     }
 
-    crate::agent::tool_executor::execute_tool_gemini_with_context(
+    // Structured trace + budget counting for every real tool execution.
+    let started = std::time::Instant::now();
+    let result = crate::agent::tool_executor::execute_tool_gemini_with_context(
         tool_name,
         args_map,
         exec_context,
     )
-    .await
+    .await;
+    let elapsed_ms = started.elapsed().as_millis() as u64;
+
+    ledger.tool_calls += 1;
+
+    if let Some(wid) = exec_context.workflow_id {
+        let runtime =
+            crate::services::workflow_runtime::WorkflowRuntime::new(exec_context.app_state.db_pool.clone());
+        let _ = runtime
+            .append_event(
+                wid,
+                "tool_trace",
+                Some(tool_name),
+                &format!("tool {tool_name} finished in {elapsed_ms} ms"),
+                serde_json::json!({
+                    "tool": tool_name,
+                    "latency_ms": elapsed_ms,
+                    "result_chars": result.chars().count(),
+                    "llm_calls_so_far": ledger.llm_calls,
+                    "tool_calls_so_far": ledger.tool_calls,
+                }),
+            )
+            .await;
+    }
+
+    result
 }
 
 // ─── Durable agent checkpoints (turn-boundary persistence) ────────────────────
@@ -2431,6 +2498,130 @@ async fn workflow_cancel_requested(
         .await
         .unwrap_or(false)
 }
+
+// ─── Per-run budget & cost accounting ─────────────────────────────────────────
+//
+// Every LLM call and tool execution inside an agentic run accumulates into a
+// RunLedger. The ledger is:
+//   1. ENFORCED — turn boundaries hard-stop runs that exceed configured caps
+//      ("monitoring ≠ enforcement": a dashboard alert is a postmortem).
+//   2. DURABLE — flushed to app_workflows.usage (JSONB merge) every turn so
+//     accounting survives task replacement like all other pipeline state.
+//   3. SURFACED — admin trace endpoint reads the rollup; operators can sort
+//      expensive failures vs cheap ones and price services by real GPU time.
+
+#[derive(Default)]
+struct RunLedger {
+    llm_calls: u64,
+    cloud_llm_calls: u64,
+    tool_calls: u64,
+    prompt_tokens: u64,
+    completion_tokens: u64,
+    /// provider → (calls, prompt_tokens, completion_tokens)
+    per_provider: std::collections::BTreeMap<String, [u64; 3]>,
+    flushed_once: bool,
+}
+
+fn budget_env_u64(name: &str, default: u64) -> u64 {
+    std::env::var(name)
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|&v| v > 0)
+        .unwrap_or(default)
+}
+
+impl RunLedger {
+    fn max_llm_calls() -> u64 {
+        budget_env_u64("AGENTIC_MAX_LLM_CALLS_PER_RUN", 300)
+    }
+    fn max_tool_calls() -> u64 {
+        budget_env_u64("AGENTIC_MAX_TOOL_CALLS_PER_RUN", 250)
+    }
+    fn max_total_tokens() -> u64 {
+        // Generous ceiling for pathological loops only (context ≈16K tokens/
+        // call ⇒ ~200 calls). NOT a cost optimizer — an escape hatch.
+        budget_env_u64("AGENTIC_MAX_TOTAL_TOKENS", 6_000_000)
+    }
+
+    fn record(&mut self, provider: &str, usage: &crate::usage::UsageInfo, is_cloud: bool) {
+        self.llm_calls += 1;
+        if is_cloud {
+            self.cloud_llm_calls += 1;
+        }
+        self.prompt_tokens = self.prompt_tokens.saturating_add(usage.prompt_tokens);
+        self.completion_tokens = self.completion_tokens.saturating_add(usage.completion_tokens);
+        let slot = self.per_provider.entry(provider.to_string()).or_default();
+        slot[0] += 1;
+        slot[1] = slot[1].saturating_add(usage.prompt_tokens);
+        slot[2] = slot[2].saturating_add(usage.completion_tokens);
+    }
+
+    /// Enforcement point. Returns Some(reason) when a cap was exceeded —
+    /// callers must abort with WORKFLOW_BUDGET_EXCEEDED before the next call.
+    fn budget_exceeded(&self) -> Option<String> {
+        if self.llm_calls >= Self::max_llm_calls() {
+            return Some(format!(
+                "llm_calls {} ≥ cap {}",
+                self.llm_calls,
+                Self::max_llm_calls()
+            ));
+        }
+        if self.tool_calls >= Self::max_tool_calls() {
+            return Some(format!(
+                "tool_calls {} ≥ cap {}",
+                self.tool_calls,
+                Self::max_tool_calls()
+            ));
+        }
+        let total = self.prompt_tokens.saturating_add(self.completion_tokens);
+        if total >= Self::max_total_tokens() {
+            return Some(format!(
+                "tokens {total} ≥ cap {}",
+                Self::max_total_tokens()
+            ));
+        }
+        None
+    }
+
+    fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "llm_calls": self.llm_calls,
+            "cloud_llm_calls": self.cloud_llm_calls,
+            "tool_calls": self.tool_calls,
+            "prompt_tokens": self.prompt_tokens,
+            "completion_tokens": self.completion_tokens,
+            "total_tokens": self.prompt_tokens.saturating_add(self.completion_tokens),
+            "per_provider": self.per_provider.iter().map(|(p, s)| serde_json::json!({
+                "provider": p, "calls": s[0], "prompt_tokens": s[1], "completion_tokens": s[2],
+            })).collect::<Vec<_>>(),
+        })
+    }
+
+    /// Durable flush — overwrite-merge into app_workflows.usage. Cheap enough
+    /// to call every turn; survives process death mid-run.
+    async fn flush(&self, exec_context: &crate::agent::tool_executor::ToolExecutionContext) {
+        let Some(wid) = exec_context.workflow_id else {
+            return;
+        };
+        if self.llm_calls == 0 && !self.flushed_once {
+            return; // nothing to record yet
+        }
+        let payload = serde_json::json!({ "usage": self.to_json() });
+        if let Err(e) = sqlx::query(
+            "UPDATE app_workflows \
+             SET usage = COALESCE(usage,'{}'::jsonb) || $1::jsonb \
+             WHERE id = $2",
+        )
+        .bind(&payload)
+        .bind(wid)
+        .execute(&exec_context.app_state.db_pool)
+        .await
+        {
+            tracing::debug!("usage flush skipped for workflow {wid}: {e}");
+        }
+    }
+}
+
 
 async fn save_agent_checkpoint(
     pool: &sqlx::PgPool,
@@ -2509,6 +2700,7 @@ async fn run_ollama_tool_loop<F>(
     tools: &mut Vec<crate::gemini_client::FunctionDeclaration>,
     exec_context: &crate::agent::tool_executor::ToolExecutionContext,
     send_progress: &F,
+    ledger: &mut RunLedger,
 ) -> Result<String, String>
 where
     F: Fn(&str),
@@ -2520,6 +2712,11 @@ where
         if workflow_cancel_requested(exec_context).await {
             return Err("WORKFLOW_CANCELLED: cancellation requested".to_string());
         }
+        // Budget enforcement BEFORE the next call (monitoring ≠ enforcement).
+        if let Some(reason) = ledger.budget_exceeded() {
+            ledger.flush(exec_context).await;
+            return Err(format!("WORKFLOW_BUDGET_EXCEEDED: {reason}"));
+        }
         // Compact old turns once the window fills so Ollama never
         // silently front-trims critical history/tool schemas mid-task.
         let _ = maybe_compact_tool_history(ollama_client, messages, exec_context)
@@ -2530,6 +2727,10 @@ where
             .await
             .map_err(|_| "Ollama timeout after 300s".to_string())?
             .map_err(|e| format!("Ollama API error: {}", e))?;
+
+        let (response, usage) = response;
+        ledger.record("ollama", &usage, false);
+        ledger.flush(exec_context).await;
 
         match response {
             crate::ollama_client::OllamaResponse::Text(text) => {
@@ -2598,7 +2799,7 @@ where
                     };
 
                     let result =
-                        execute_tool_call_in_loop(&tc.name, &args_map, exec_context, tools)
+                        execute_tool_call_in_loop(&tc.name, &args_map, exec_context, tools, ledger)
                             .await;
 
                     send_progress(&format!("✅ {} done", tc.name));
@@ -2647,6 +2848,7 @@ async fn run_deepseek_tool_loop<F>(
     tools: &mut Vec<crate::gemini_client::FunctionDeclaration>,
     exec_context: &crate::agent::tool_executor::ToolExecutionContext,
     send_progress: &F,
+    ledger: &mut RunLedger,
 ) -> Result<String, String>
 where
     F: Fn(&str),
@@ -2657,10 +2859,18 @@ where
         if workflow_cancel_requested(exec_context).await {
             return Err("WORKFLOW_CANCELLED: cancellation requested".to_string());
         }
+        if let Some(reason) = ledger.budget_exceeded() {
+            ledger.flush(exec_context).await;
+            return Err(format!("WORKFLOW_BUDGET_EXCEEDED: {reason}"));
+        }
         let response = timeout(Duration::from_secs(300), ds_client.generate_single(messages, tools))
             .await
             .map_err(|_| "DeepSeek timeout after 300s".to_string())?
             .map_err(|e| format!("DeepSeek API error: {}", e))?;
+
+        let (response, usage) = response;
+        ledger.record("deepseek", &usage, true);
+        ledger.flush(exec_context).await;
 
         match response {
             crate::deepseek_client::DeepSeekResponse::Text(text) => {
@@ -2700,7 +2910,7 @@ where
                         .unwrap_or_default();
 
                     let result =
-                        execute_tool_call_in_loop(&tc.name, &args_map, exec_context, tools)
+                        execute_tool_call_in_loop(&tc.name, &args_map, exec_context, tools, ledger)
                             .await;
 
                     send_progress(&format!("✅ {} done", tc.name));
@@ -2726,6 +2936,7 @@ async fn run_nvidia_tool_loop<F>(
     tools: &mut Vec<crate::gemini_client::FunctionDeclaration>,
     exec_context: &crate::agent::tool_executor::ToolExecutionContext,
     send_progress: &F,
+    ledger: &mut RunLedger,
 ) -> Result<String, String>
 where
     F: Fn(&str),
@@ -2736,10 +2947,18 @@ where
         if workflow_cancel_requested(exec_context).await {
             return Err("WORKFLOW_CANCELLED: cancellation requested".to_string());
         }
+        if let Some(reason) = ledger.budget_exceeded() {
+            ledger.flush(exec_context).await;
+            return Err(format!("WORKFLOW_BUDGET_EXCEEDED: {reason}"));
+        }
         let response = timeout(Duration::from_secs(300), nim_client.generate_single(messages, tools))
             .await
             .map_err(|_| "NVIDIA NIM timeout after 300s".to_string())?
             .map_err(|e| format!("NVIDIA NIM API error: {}", e))?;
+
+        let (response, usage) = response;
+        ledger.record("nvidia_nim", &usage, true);
+        ledger.flush(exec_context).await;
 
         match response {
             crate::nvidia_nim_client::NimResponse::Text(text) => {
@@ -2779,7 +2998,7 @@ where
                         .unwrap_or_default();
 
                     let result =
-                        execute_tool_call_in_loop(&tc.name, &args_map, exec_context, tools)
+                        execute_tool_call_in_loop(&tc.name, &args_map, exec_context, tools, ledger)
                             .await;
 
                     send_progress(&format!("✅ {} done", tc.name));

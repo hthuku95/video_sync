@@ -690,7 +690,7 @@ impl WorkflowRuntime {
                 SELECT id FROM app_workflows
                  WHERE status = 'queued'
                    AND workflow_type LIKE 'agentic\_%'
-                 ORDER BY created_at
+                 ORDER BY priority ASC, created_at ASC
                  FOR UPDATE SKIP LOCKED
                  LIMIT 1
               ) candidate

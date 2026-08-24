@@ -730,6 +730,95 @@ pub async fn workflow_cancel(
     }
 }
 
+/// GET /api/workflows/{workflow_id}/trace
+/// Operator-facing observability surface for one workflow: identity/ownership,
+/// usage ledger rollup, durable node timeline, and the last 200 events
+/// (incl. per-tool `tool_trace` latency records).
+pub async fn workflow_trace(
+    Path(workflow_id): Path<String>,
+    Extension(state): Extension<Arc<AppState>>,
+) -> impl IntoResponse {
+    let Ok(workflow_uuid) = uuid::Uuid::parse_str(&workflow_id) else {
+        return (StatusCode::BAD_REQUEST, "Invalid workflow id").into_response();
+    };
+
+    let workflow = sqlx::query_as::<_, sqlx::postgres::PgRow>(
+        "SELECT id, workflow_type, status, current_step, claimed_by, lease_expires_at, \
+                cancel_requested_at, error_message, retry_count, request_summary, \
+                usage, created_at, updated_at, last_heartbeat_at, completed_at \
+         FROM app_workflows WHERE id = $1",
+    )
+    .bind(workflow_uuid)
+    .fetch_optional(&state.db_pool)
+    .await;
+
+    let workflow = match workflow {
+        Ok(Some(row)) => serde_json::json!({
+            "id": row.try_get::<uuid::Uuid, _>("id").ok(),
+            "workflow_type": row.try_get::<String, _>("workflow_type").ok(),
+            "status": row.try_get::<String, _>("status").ok(),
+            "current_step": row.try_get::<Option<String>, _>("current_step").ok(),
+            "claimed_by": row.try_get::<Option<String>, _>("claimed_by").ok(),
+            "lease_expires_at": row.try_get::<Option<chrono::DateTime<chrono::Utc>>, _>("lease_expires_at").ok().map(|d| d.to_rfc3339()),
+            "cancel_requested": row.try_get::<Option<chrono::DateTime<chrono::Utc>>, _>("cancel_requested_at").ok().map(|d| d.to_rfc3339()),
+            "error_message": row.try_get::<Option<String>, _>("error_message").ok(),
+            "retry_count": row.try_get::<Option<i32>, _>("retry_count").ok(),
+            "request_summary": row.try_get::<Option<String>, _>("request_summary").ok(),
+            "usage": row.try_get::<Option<serde_json::Value>, _>("usage").ok(),
+            "created_at": row.try_get::<Option<chrono::DateTime<chrono::Utc>>, _>("created_at").ok().map(|d| d.to_rfc3339()),
+            "updated_at": row.try_get::<Option<chrono::DateTime<chrono::Utc>>, _>("updated_at").ok().map(|d| d.to_rfc3339()),
+            "last_heartbeat_at": row.try_get::<Option<chrono::DateTime<chrono::Utc>>, _>("last_heartbeat_at").ok().map(|d| d.to_rfc3339()),
+            "completed_at": row.try_get::<Option<chrono::DateTime<chrono::Utc>>, _>("completed_at").ok().map(|d| d.to_rfc3339()),
+        }),
+        Ok(None) => return (StatusCode::NOT_FOUND, "Workflow not found").into_response(),
+        Err(e) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, format!("query failed: {e}")).into_response()
+        }
+    };
+
+    let runtime = crate::services::workflow_runtime::WorkflowRuntime::new(state.db_pool.clone());
+    let nodes = runtime
+        .list_nodes(workflow_uuid)
+        .await
+        .unwrap_or_default();
+
+    let events: Vec<serde_json::Value> = sqlx::query_as::<_, (String, Option<String>, String, Option<serde_json::Value>, chrono::DateTime<chrono::Utc>)>(
+        "SELECT event_type, node_name, message, details, created_at \
+         FROM app_workflow_events WHERE workflow_id = $1 ORDER BY created_at DESC LIMIT 200",
+    )
+    .bind(workflow_uuid)
+    .fetch_all(&state.db_pool)
+    .await
+    .unwrap_or_default()
+    .into_iter()
+    .map(|(event_type, node_name, message, details, created_at)| {
+        serde_json::json!({
+            "type": event_type,
+            "node": node_name,
+            "message": message,
+            "details": details,
+            "at": created_at.to_rfc3339(),
+        })
+    })
+    .collect();
+
+    (
+        StatusCode::OK,
+        axum::Json(serde_json::json!({
+            "workflow": workflow,
+            "nodes": nodes.iter().map(|n| serde_json::json!({
+                "key": n.node_key,
+                "type": n.node_type,
+                "status": n.status,
+                "attempts": n.attempt_count,
+                "error": n.error_message,
+            })).collect::<Vec<_>>(),
+            "events": events,
+        })),
+    )
+        .into_response()
+}
+
 /// GET /api/workflows/{workflow_id}/events
 /// Poll progress events from a running or completed workflow.
 pub async fn workflow_events(
@@ -812,6 +901,10 @@ pub fn job_routes() -> Router {
         .route(
             "/api/workflows/:workflow_id/cancel",
             post(workflow_cancel),
+        )
+        .route(
+            "/api/workflows/:workflow_id/trace",
+            get(workflow_trace),
         )
         .route_layer(axum::middleware::from_fn(
             crate::middleware::auth::auth_middleware,

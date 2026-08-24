@@ -482,7 +482,13 @@ impl NvidiaNimClient {
         &self,
         messages: &[serde_json::Value],
         tools: &[crate::gemini_client::FunctionDeclaration],
-    ) -> Result<NimResponse, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<
+        (
+            NimResponse,
+            crate::usage::UsageInfo,
+        ),
+        Box<dyn std::error::Error + Send + Sync>,
+    > {
         let openai_tools = Self::to_openai_tools(tools);
 
         let body = serde_json::json!({
@@ -538,6 +544,7 @@ impl NvidiaNimClient {
                         continue;
                     }
                 };
+                let usage = crate::usage::UsageInfo::from_openai(&json);
                 let choice = &json["choices"][0];
                 let finish_reason = choice["finish_reason"].as_str().unwrap_or("");
 
@@ -555,14 +562,14 @@ impl NvidiaNimClient {
                             Some(NimToolCall { id, name, arguments })
                         })
                         .collect();
-                    return Ok(NimResponse::ToolCalls(tool_calls));
+                    return Ok((NimResponse::ToolCalls(tool_calls), usage));
                 }
 
                 let text = choice["message"]["content"]
                     .as_str()
                     .unwrap_or("")
                     .to_string();
-                return Ok(NimResponse::Text(text));
+                return Ok((NimResponse::Text(text), usage));
             }
 
             let err_body = resp.text().await.unwrap_or_default();

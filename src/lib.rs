@@ -29,6 +29,7 @@ pub mod nvidia_nim_client;
 pub mod ollama_client;
 pub mod pexels_client;
 pub mod phantombuster_client;
+pub mod usage;
 pub mod product_hunt_client;
 pub mod portfolio_samples;
 pub mod qdrant_client;

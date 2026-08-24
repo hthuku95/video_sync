@@ -338,7 +338,13 @@ impl OllamaClient {
         &self,
         messages: &[serde_json::Value],
         tools: &[crate::gemini_client::FunctionDeclaration],
-    ) -> Result<OllamaResponse, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<
+        (
+            OllamaResponse,
+            crate::usage::UsageInfo,
+        ),
+        Box<dyn std::error::Error + Send + Sync>,
+    > {
         let openai_tools = Self::to_openai_tools(tools);
 
         let body = serde_json::json!({
@@ -357,6 +363,7 @@ impl OllamaClient {
         let resp = self.post_chat(&body).await?;
 
         let json: serde_json::Value = resp.json().await?;
+        let usage = crate::usage::UsageInfo::from_ollama(&json);
         let msg = &json["message"];
 
         // Check for tool calls first
@@ -372,7 +379,7 @@ impl OllamaClient {
                     })
                     .collect();
                 if !calls.is_empty() {
-                    return Ok(OllamaResponse::ToolCalls(calls));
+                    return Ok((OllamaResponse::ToolCalls(calls), usage));
                 }
             }
         }
@@ -381,7 +388,7 @@ impl OllamaClient {
             .as_str()
             .unwrap_or("")
             .to_string();
-        Ok(OllamaResponse::Text(text))
+        Ok((OllamaResponse::Text(text), usage))
     }
 
     /// Analyze a video by sending the FULL video bytes to Gemma 4 12B's native

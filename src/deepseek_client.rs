@@ -162,7 +162,13 @@ impl DeepSeekClient {
         &self,
         messages: &[serde_json::Value],
         tools: &[crate::gemini_client::FunctionDeclaration],
-    ) -> Result<DeepSeekResponse, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<
+        (
+            DeepSeekResponse,
+            crate::usage::UsageInfo,
+        ),
+        Box<dyn std::error::Error + Send + Sync>,
+    > {
         let openai_tools = Self::to_openai_tools(tools);
 
         let body = serde_json::json!({
@@ -192,6 +198,7 @@ impl DeepSeekClient {
 
             if status.is_success() {
                 let json: serde_json::Value = resp.json().await?;
+                let usage = crate::usage::UsageInfo::from_openai(&json);
                 let choice = &json["choices"][0];
                 let finish_reason = choice["finish_reason"].as_str().unwrap_or("");
 
@@ -213,14 +220,14 @@ impl DeepSeekClient {
                             })
                         })
                         .collect();
-                    return Ok(DeepSeekResponse::ToolCalls(tool_calls));
+                    return Ok((DeepSeekResponse::ToolCalls(tool_calls), usage));
                 }
 
                 let text = choice["message"]["content"]
                     .as_str()
                     .unwrap_or("")
                     .to_string();
-                return Ok(DeepSeekResponse::Text(text));
+                return Ok((DeepSeekResponse::Text(text), usage));
             }
 
             let err_body = resp.text().await.unwrap_or_default();

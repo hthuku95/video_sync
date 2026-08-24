@@ -210,6 +210,20 @@ impl AgenticServicePipeline {
             .execute(&state.db_pool)
             .await;
 
+        // Queue priority band: time-sensitive renders (scheduled campaign
+        // posts, admin/clipping deliveries) claim before bulk/backfillable
+        // sample generation. See migrations/20260824000002_queue_priority.sql.
+        let priority: i16 = match input.source_table.as_deref() {
+            Some("deliveries") if input.prospect_id.is_none() => 50,
+            Some("service_portfolio_samples") | Some("app_workflows") | Some("gig_sample_videos") => 200,
+            _ => 100,
+        };
+        let _ = sqlx::query("UPDATE app_workflows SET priority = $1 WHERE id = $2")
+            .bind(priority)
+            .bind(workflow_id)
+            .execute(&state.db_pool)
+            .await;
+
         tracing::info!(
             workflow_id = %workflow_id,
             service = %service_type.as_str(),
