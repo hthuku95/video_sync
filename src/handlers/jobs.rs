@@ -742,7 +742,7 @@ pub async fn workflow_trace(
         return (StatusCode::BAD_REQUEST, "Invalid workflow id").into_response();
     };
 
-    let workflow = sqlx::query_as::<_, sqlx::postgres::PgRow>(
+    let workflow = sqlx::query(
         "SELECT id, workflow_type, status, current_step, claimed_by, lease_expires_at, \
                 cancel_requested_at, error_message, retry_count, request_summary, \
                 usage, created_at, updated_at, last_heartbeat_at, completed_at \
