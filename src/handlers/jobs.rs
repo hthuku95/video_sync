@@ -659,17 +659,37 @@ pub async fn workflow_feedback(
 }
 
 /// POST /api/workflows/{workflow_id}/cancel
-/// Cancel a running agent mid-task.
+/// Cancel a queued or running workflow.
+///
+/// Two delivery mechanisms, both best-effort + complementary:
+/// 1. DURABLE FLAG (`app_workflows.cancel_requested_at`) — honored by the
+///    pipeline_worker runner: queued rows are skipped at claim time; running
+///    renders abort at the next agent turn boundary. Works across Fargate
+///    tasks and survives restarts.
+/// 2. REDIS pub/sub `__CANCEL__` — reaches interactively-attached agents
+///    (chat sessions) mid-tool-call.
+///
+/// Status is flipped to 'cancelled' for any non-terminal workflow so queue
+/// claims, lease renewal, and the campaign watchdog all observe it.
 pub async fn workflow_cancel(
     Path(workflow_id): Path<String>,
     Extension(state): Extension<Arc<AppState>>,
 ) -> impl IntoResponse {
-    let session_id = match uuid::Uuid::parse_str(&workflow_id) {
-        Ok(_) => workflow_id,
-        Err(_) => return (StatusCode::BAD_REQUEST, "Invalid workflow id").into_response(),
+    let Ok(session_id) = uuid::Uuid::parse_str(&workflow_id) else {
+        return (StatusCode::BAD_REQUEST, "Invalid workflow id").into_response();
     };
 
-    // Publish cancel signal to Redis pub/sub channel
+    // 1. Durable cancellation flag (pipeline runner honors this).
+    let runtime = crate::services::workflow_runtime::WorkflowRuntime::new(state.db_pool.clone());
+    let flagged = match runtime.request_cancel(session_id).await {
+        Ok(f) => f,
+        Err(e) => {
+            tracing::warn!("cancel flag set failed for {}: {}", session_id, e);
+            false
+        }
+    };
+
+    // 2. Redis signal for interactively-attached agents (best-effort).
     let published = if let Some(ref bus) = state.pubsub_bus {
         let channel = format!("feedback:{}", session_id);
         match bus.publish(&channel, "__CANCEL__").await {
@@ -677,29 +697,36 @@ pub async fn workflow_cancel(
                 tracing::info!("🛑 Cancel signal sent to workflow {} via Redis", session_id);
                 true
             }
-            Ok(_) => false,
-            Err(e) => {
-                tracing::warn!("Redis publish failed for cancel: {}", e);
-                false
-            }
+            _ => false,
         }
     } else {
         false
     };
 
-    if published {
-        // Also mark the workflow as cancelled in the DB
-        let _ = sqlx::query(
-            "UPDATE app_workflows SET status = 'cancelled', current_step = 'cancelled_by_user',
-             completed_at = NOW() WHERE id = $1 AND status NOT IN ('completed', 'failed', 'cancelled')",
-        )
-        .bind(session_id)
-        .execute(&state.db_pool)
-        .await;
+    // Flip status for anything non-terminal (queued rows leave the claim
+    // pool instantly; running rows make the runner's ownership probes fail
+    // so its terminal writes are discarded).
+    let status_flipped = sqlx::query(
+        "UPDATE app_workflows SET status = 'cancelled', current_step = 'cancelled_by_user', \
+         completed_at = NOW(), updated_at = NOW() \
+         WHERE id = $1 AND status NOT IN ('completed', 'failed', 'cancelled')",
+    )
+    .bind(session_id)
+    .execute(&state.db_pool)
+    .await
+    .map(|r| r.rows_affected() > 0)
+    .unwrap_or(false);
 
-        (StatusCode::OK, "Cancel signal sent").into_response()
+    tracing::info!(
+        workflow = %session_id,
+        flagged, published, status_flipped,
+        "🛑 cancellation requested"
+    );
+
+    if flagged || published || status_flipped {
+        (StatusCode::OK, "Cancellation requested").into_response()
     } else {
-        (StatusCode::NOT_FOUND, "No active agent found for this workflow").into_response()
+        (StatusCode::NOT_FOUND, "Workflow not found or already finished").into_response()
     }
 }
 

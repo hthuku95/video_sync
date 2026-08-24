@@ -52,6 +52,16 @@ pub struct WorkflowRuntime {
     pool: PgPool,
 }
 
+/// A workflow claimed from the queue, with everything the runner needs.
+#[derive(Debug, Clone)]
+pub struct ClaimedWorkflow {
+    pub id: Uuid,
+    pub workflow_type: String,
+    pub source_table: Option<String>,
+    pub source_record_id: Option<Uuid>,
+    pub metadata: Value,
+}
+
 #[derive(Debug, Clone)]
 pub struct WorkflowNode {
     pub node_key: String,
@@ -648,6 +658,206 @@ impl WorkflowRuntime {
             details,
         )
         .await
+    }
+
+    // ── Durable queue primitives (pipeline_worker) ──────────────────────────
+    //
+    // Agentic workflows are owned via lease claims instead of in-process
+    // tokio::spawn. A worker atomically claims one queued row (SKIP LOCKED so
+    // concurrent Fargate tasks never double-claim), holds a renewing lease for
+    // the duration of the run, and a supervisor sweep requeues rows whose
+    // lease expired — i.e. whose owning process died.
+
+    /// Atomically claim the oldest queued agentic workflow.
+    ///
+    /// `FOR UPDATE SKIP LOCKED` guarantees that two Fargate tasks polling at
+    /// the same instant claim *different* rows — no duplicate execution.
+    pub async fn claim_next_agentic_workflow(
+        &self,
+        claimed_by: &str,
+        lease_minutes: i32,
+    ) -> Result<Option<ClaimedWorkflow>, String> {
+        let row = sqlx::query_as::<_, (Uuid, String, Option<String>, Option<Uuid>, Value)>(
+            r#"
+            UPDATE app_workflows w
+               SET status = 'running',
+                   current_step = 'claimed',
+                   claimed_by = $1,
+                   lease_expires_at = NOW() + make_interval(mins => $2::int),
+                   last_heartbeat_at = NOW(),
+                   updated_at = NOW()
+              FROM (
+                SELECT id FROM app_workflows
+                 WHERE status = 'queued'
+                   AND workflow_type LIKE 'agentic\_%'
+                 ORDER BY created_at
+                 FOR UPDATE SKIP LOCKED
+                 LIMIT 1
+              ) candidate
+             WHERE w.id = candidate.id
+            RETURNING w.id, w.workflow_type, w.source_table, w.source_record_id, w.metadata
+            "#,
+        )
+        .bind(claimed_by)
+        .bind(lease_minutes)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| format!("Failed to claim workflow: {}", e))?;
+
+        Ok(row.map(
+            |(id, workflow_type, source_table, source_record_id, metadata)| ClaimedWorkflow {
+                id,
+                workflow_type,
+                source_table,
+                source_record_id,
+                metadata,
+            },
+        ))
+    }
+
+    /// Renew this instance's lease on a running workflow.
+    ///
+    /// Returns `false` when ownership was lost (supervisor requeued the row —
+    /// e.g. after our process was replaced). Callers MUST abort the run when
+    /// this returns false to avoid zombie double-execution.
+    pub async fn renew_lease(
+        &self,
+        workflow_id: Uuid,
+        claimed_by: &str,
+        lease_minutes: i32,
+    ) -> Result<bool, String> {
+        let result = sqlx::query_scalar::<_, i64>(
+            r#"
+            WITH renewed AS (
+                UPDATE app_workflows
+                   SET lease_expires_at = NOW() + make_interval(mins => $3::int),
+                       last_heartbeat_at = NOW()
+                 WHERE id = $1
+                   AND claimed_by = $2
+                   AND status = 'running'
+                RETURNING 1
+            )
+            SELECT COUNT(*) FROM renewed
+            "#,
+        )
+        .bind(workflow_id)
+        .bind(claimed_by)
+        .bind(lease_minutes)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| format!("Failed to renew lease: {}", e))?;
+
+        Ok(result > 0)
+    }
+
+    /// Requeue running agentic workflows whose lease expired (owner died).
+    /// Returns the requeued workflow ids for logging.
+    pub async fn requeue_expired_leases(&self) -> Result<Vec<Uuid>, String> {
+        let ids = sqlx::query_scalar::<_, Uuid>(
+            r#"
+            UPDATE app_workflows
+               SET status = 'queued',
+                   current_step = 'requeued_after_lease_expiry',
+                   claimed_by = NULL,
+                   lease_expires_at = NULL,
+                   error_message = NULL,
+                   updated_at = NOW()
+             WHERE status = 'running'
+               AND workflow_type LIKE 'agentic\_%'
+               AND (lease_expires_at IS NULL OR lease_expires_at < NOW())
+            RETURNING id
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| format!("Failed to requeue expired leases: {}", e))?;
+        Ok(ids)
+    }
+
+    /// Count queued agentic workflows (queue-depth metric / logs).
+    pub async fn queued_agentic_count(&self) -> Result<i64, String> {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM app_workflows \
+             WHERE status = 'queued' AND workflow_type LIKE 'agentic\\_%'",
+        )
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| format!("Failed to count queued workflows: {}", e))
+    }
+
+    /// Cooperative cancellation request. The runner checks this flag between
+    /// turns and before each durable tool node; checked work aborts cleanly.
+    pub async fn request_cancel(&self, workflow_id: Uuid) -> Result<bool, String> {
+        let result = sqlx::query_scalar::<_, i64>(
+            r#"
+            WITH cancelled AS (
+                UPDATE app_workflows
+                   SET cancel_requested_at = NOW(),
+                       updated_at = NOW()
+                 WHERE id = $1
+                   AND status IN ('queued', 'running', 'planning', 'retrying')
+                   AND cancel_requested_at IS NULL
+                RETURNING 1
+            )
+            SELECT COUNT(*) FROM cancelled
+            "#,
+        )
+        .bind(workflow_id)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| format!("Failed to request cancellation: {}", e))?;
+        Ok(result > 0)
+    }
+
+    /// Has a cooperative cancellation been requested for this workflow?
+    pub async fn is_cancel_requested(&self, workflow_id: Uuid) -> Result<bool, String> {
+        sqlx::query_scalar::<_, bool>(
+            "SELECT cancel_requested_at IS NOT NULL FROM app_workflows WHERE id = $1",
+        )
+        .bind(workflow_id)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| format!("Failed to read cancellation flag: {}", e))
+    }
+
+    /// Mark completed — but only if we still own the run.
+    ///
+    /// Guards against a replaced (zombie) process writing terminal state over
+    /// a newer attempt that the supervisor already requeued and another
+    /// instance claimed. Returns false when ownership was lost.
+    pub async fn mark_completed_if_owned(
+        &self,
+        workflow_id: Uuid,
+        claimed_by: &str,
+        current_step: Option<&str>,
+        result_summary: &str,
+        artifact_status: Value,
+    ) -> Result<bool, String> {
+        let owned = self.renew_lease(workflow_id, claimed_by, 1).await?; // ownership probe + final renewal
+        if !owned {
+            return Ok(false);
+        }
+        self.mark_completed(workflow_id, current_step, result_summary, artifact_status)
+            .await?;
+        Ok(true)
+    }
+
+    /// Mark failed — only if we still own the run (see mark_completed_if_owned).
+    pub async fn mark_failed_if_owned(
+        &self,
+        workflow_id: Uuid,
+        claimed_by: &str,
+        current_step: Option<&str>,
+        error_message: &str,
+        retry_count: Option<i32>,
+    ) -> Result<bool, String> {
+        let owned = self.renew_lease(workflow_id, claimed_by, 1).await?;
+        if !owned {
+            return Ok(false);
+        }
+        self.mark_failed(workflow_id, current_step, error_message, retry_count)
+            .await?;
+        Ok(true)
     }
 }
 

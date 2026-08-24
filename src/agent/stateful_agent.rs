@@ -2280,6 +2280,37 @@ async fn maybe_compact_tool_history(
 /// pushed verbatim today; a single verbose result (e.g. a full yt-dlp probe or
 /// render log) can add thousands of tokens and starve the context window.
 /// Keeps head (status/paths) + tail (URLs/IDs usually at the end).
+/// Compact structured summary of a large tool result: the semantically dense
+/// items (URLs, artifact paths, status markers) that blind head+tail cutting
+/// would lose from the middle. Prepended to the truncated body so the model
+/// keeps an actionable index of everything the tool produced.
+fn extract_structured_summary(result: &str) -> String {
+    use std::collections::BTreeSet;
+
+    let mut urls: BTreeSet<String> = std::collections::BTreeSet::new();
+    for token in result.split_whitespace() {
+        let t = token.trim_matches(|c| c == '"' || c == '\'' || c == ')' || c == ',');
+        if t.starts_with("https://") || t.starts_with("http://") {
+            // Keep URLs short enough to be worth their context cost.
+            if t.len() <= 300 && urls.insert(t.to_string()) && urls.len() >= 40 {
+                break;
+            }
+        }
+    }
+
+    if urls.is_empty() {
+        return String::new();
+    }
+
+    let mut summary = String::from("── STRUCTURED INDEX (all items extracted before truncation) ──\n");
+    for u in &urls {
+        summary.push_str(u);
+        summary.push('\n');
+    }
+    summary.push_str("── END STRUCTURED INDEX ──\n");
+    summary
+}
+
 fn truncate_tool_result_for_context(tool_name: &str, result: &str) -> String {
     const DEFAULT_MAX: usize = 4_000;
     let max = std::env::var("AGENT_TOOL_RESULT_MAX_CHARS")
@@ -2292,6 +2323,11 @@ fn truncate_tool_result_for_context(tool_name: &str, result: &str) -> String {
     if total <= max {
         return result.to_string();
     }
+
+    // Preserve every URL/artifact reference BEFORE cutting — losing a clip or
+    // render URL mid-list forced the model to re-run expensive tools.
+    let structured = extract_structured_summary(result);
+
     let head: String = result.chars().take(max * 3 / 4).collect();
     let tail: String = result.chars().skip(total - max / 4).collect();
     tracing::info!(
@@ -2301,8 +2337,11 @@ fn truncate_tool_result_for_context(tool_name: &str, result: &str) -> String {
         head.len() + tail.len()
     );
     format!(
-        "{}\n…[output truncated, {} chars total]…\n{}",
-        head, total, tail
+        "{}\n…[output truncated, {} chars total]…\n{}{}",
+        structured,
+        total,
+        head,
+        tail
     )
 }
 
@@ -2375,6 +2414,22 @@ fn unix_now_secs() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
+}
+
+/// Cooperative cancellation probe for the durable pipeline runner.
+/// Checked at each turn boundary of every tool loop; when POST
+/// /api/workflows/:id/cancel has flagged the workflow, the loop aborts with a
+/// WORKFLOW_CANCELLED error which the pipeline worker maps to 'cancelled'.
+async fn workflow_cancel_requested(
+    exec_context: &crate::agent::tool_executor::ToolExecutionContext,
+) -> bool {
+    let Some(wid) = exec_context.workflow_id else {
+        return false;
+    };
+    crate::services::workflow_runtime::WorkflowRuntime::new(exec_context.app_state.db_pool.clone())
+        .is_cancel_requested(wid)
+        .await
+        .unwrap_or(false)
 }
 
 async fn save_agent_checkpoint(
@@ -2461,6 +2516,10 @@ where
     const MAX_TURNS: usize = 10;
 
     for turn in 0..MAX_TURNS {
+        // Cooperative cancellation probe (durable pipeline runner).
+        if workflow_cancel_requested(exec_context).await {
+            return Err("WORKFLOW_CANCELLED: cancellation requested".to_string());
+        }
         // Compact old turns once the window fills so Ollama never
         // silently front-trims critical history/tool schemas mid-task.
         let _ = maybe_compact_tool_history(ollama_client, messages, exec_context)
@@ -2595,6 +2654,9 @@ where
     const MAX_TURNS: usize = 10;
 
     for turn in 0..MAX_TURNS {
+        if workflow_cancel_requested(exec_context).await {
+            return Err("WORKFLOW_CANCELLED: cancellation requested".to_string());
+        }
         let response = timeout(Duration::from_secs(300), ds_client.generate_single(messages, tools))
             .await
             .map_err(|_| "DeepSeek timeout after 300s".to_string())?
@@ -2671,6 +2733,9 @@ where
     const MAX_TURNS: usize = 10;
 
     for turn in 0..MAX_TURNS {
+        if workflow_cancel_requested(exec_context).await {
+            return Err("WORKFLOW_CANCELLED: cancellation requested".to_string());
+        }
         let response = timeout(Duration::from_secs(300), nim_client.generate_single(messages, tools))
             .await
             .map_err(|_| "NVIDIA NIM timeout after 300s".to_string())?
@@ -2748,6 +2813,9 @@ where
     const MAX_TURNS: usize = 10;
 
     for turn in 0..MAX_TURNS {
+        if workflow_cancel_requested(exec_context).await {
+            return Err("WORKFLOW_CANCELLED: cancellation requested".to_string());
+        }
         let response = timeout(Duration::from_secs(300), bedrock_client.generate_single("", messages, tools))
             .await
             .map_err(|_| "Bedrock timeout after 300s".to_string())?

@@ -80,14 +80,17 @@ async fn process_campaign(state: &Arc<AppState>, campaign: CampaignRow) {
         tracing::error!("campaign[{}]: fill_today_slots failed: {e}", campaign.id);
     }
 
-    // Process pending_generation posts → create delivery, kick off rendering
-    match fetch_posts_by_status(state, campaign.id, "pending_generation", 10).await {
+    // Process pending_generation posts → create delivery, kick off rendering.
+    // Posts are atomically CLAIMED (status flips to 'rendering' inside the
+    // same locked statement) so that the two Fargate tasks' campaign workers
+    // can never both pick up the same post and create duplicate renders.
+    match claim_pending_posts(state, campaign.id, 10).await {
         Ok(posts) => {
             for post in &posts {
-                process_pending_post(state, &campaign, post).await;
+                process_pending_post(state, campaign, post).await;
             }
         }
-        Err(e) => tracing::error!("campaign[{}]: fetch pending failed: {e}", campaign.id),
+        Err(e) => tracing::error!("campaign[{}]: claim pending failed: {e}", campaign.id),
     }
 
     // Check rendering posts for completed deliveries
@@ -175,6 +178,47 @@ fn days_since_start(start_date: chrono::DateTime<chrono::Utc>) -> i32 {
 }
 
 // ── Fetch posts by status ──────────────────────────────────────────────────
+
+/// Atomically claim up to `limit` pending_generation posts for a campaign by
+/// flipping them to 'rendering' inside one `FOR UPDATE SKIP LOCKED` statement.
+/// Two Fargate tasks running the campaign worker concurrently therefore claim
+/// disjoint sets — the duplicate-delivery race is impossible by construction.
+async fn claim_pending_posts(
+    state: &Arc<AppState>,
+    campaign_id: Uuid,
+    limit: i32,
+) -> Result<Vec<PostRow>, sqlx::Error> {
+    sqlx::query_as::<_, (Uuid, Uuid, i32, i32, chrono::DateTime<chrono::Utc>, Option<String>, Option<String>, Option<chrono::DateTime<chrono::Utc>>)>(
+        "UPDATE campaign_posts cp SET status = 'rendering', claimed_at = NOW() \
+         FROM ( \
+             SELECT id FROM campaign_posts \
+              WHERE campaign_id = $1 AND status = 'pending_generation' \
+              ORDER BY day_number, slot_index \
+              LIMIT $2 \
+              FOR UPDATE SKIP LOCKED \
+         ) claimed \
+         WHERE cp.id = claimed.id \
+         RETURNING cp.id, cp.campaign_id, cp.day_number, cp.slot_index, cp.scheduled_at, cp.status, cp.zernio_post_id, cp.published_at",
+    )
+    .bind(campaign_id)
+    .bind(limit)
+    .fetch_all(&state.db_pool)
+    .await
+    .map(|rows| {
+        rows.into_iter()
+            .map(|(id, campaign_id, day_number, slot_index, scheduled_at, status, zernio_post_id, published_at)| PostRow {
+                id,
+                campaign_id,
+                day_number,
+                slot_index,
+                scheduled_at,
+                status,
+                zernio_post_id,
+                published_at,
+            })
+            .collect()
+    })
+}
 
 async fn fetch_posts_by_status(
     state: &Arc<AppState>,
@@ -376,6 +420,115 @@ async fn generate_variation(
     .map_err(|e| format!("LLM error: {e}"))
 }
 
+// ── Workflow-aware liveness assessment ─────────────────────────────────────
+
+enum Liveness {
+    /// Render is alive (queued, or running with fresh heartbeat) — leave alone.
+    Alive,
+    /// Render definitively dead — fail the post with this reason.
+    Failed(String),
+}
+
+fn campaign_stale_minutes() -> i64 {
+    std::env::var("CAMPAIGN_STALE_MINUTES")
+        .ok()
+        .and_then(|v| v.trim().parse::<i64>().ok())
+        .filter(|&v| v >= 10 && v <= 24 * 60)
+        .unwrap_or(90)
+}
+
+/// Decide whether an in-flight delivery is still making progress.
+///
+/// Replaces the old naive "pending >1h → failed" rule which killed healthy
+/// renders whenever the agentic pipeline ran longer than an hour under GPU
+/// saturation (the dominant failure mode diagnosed Aug 23 2026).
+///
+/// Semantics:
+/// - Linked workflow `queued`            → alive (waiting in durable queue)
+/// - Linked workflow running-family      → alive while `last_heartbeat_at` is
+///   fresh; the pipeline_worker lease ticker refreshes it every ~60s even
+///   through long silent phases. Stale ⇒ owner process died.
+/// - Workflow terminal failed/cancelled  → dead, with real error surfaced.
+/// - No linked workflow                  → legacy fallback: >1h pending fails.
+///
+/// Note: if a running workflow goes stale, the pipeline_worker supervisor
+/// ALSO requeues it for a checkpoint-resumed retry — but this watchdog no
+/// longer waits forever on posts; a post failed here stays failed (SLA over
+/// silent waiting).
+async fn assess_workflow_liveness(
+    state: &Arc<AppState>,
+    workflow_id: Option<Uuid>,
+    delivery_created_at: Option<chrono::DateTime<chrono::Utc>>,
+) -> Liveness {
+    const ACTIVE_STATUSES: &[&str] = &[
+        "queued",
+        "planning",
+        "running",
+        "retrying",
+        "waiting_for_input",
+        "waiting_for_external_service",
+    ];
+
+    let legacy_rule = || {
+        if let Some(created) = delivery_created_at {
+            if chrono::Utc::now() - created > chrono::Duration::hours(1) {
+                return Liveness::Failed(
+                    "Delivery stalled (>1h pending with no linked workflow)".to_string(),
+                );
+            }
+        }
+        Liveness::Alive
+    };
+
+    let Some(wid) = workflow_id else {
+        return legacy_rule();
+    };
+
+    let row: Option<(Option<String>, Option<chrono::DateTime<chrono::Utc>>, Option<String>)> =
+        sqlx::query_as(
+            "SELECT status, last_heartbeat_at, error_message \
+             FROM app_workflows WHERE id = $1",
+        )
+        .bind(wid)
+        .fetch_optional(&state.db_pool)
+        .await
+        .ok()
+        .flatten();
+
+    let Some((wf_status, last_heartbeat, wf_error)) = row else {
+        return legacy_rule();
+    };
+
+    match wf_status.as_deref() {
+        Some("failed") => Liveness::Failed(format!(
+            "Render workflow failed: {}",
+            wf_error.unwrap_or_else(|| "unknown error".to_string())
+        )),
+        Some("cancelled") => Liveness::Failed("Render workflow was cancelled".to_string()),
+        Some(s) if ACTIVE_STATUSES.contains(&s) => {
+            if s == "running" {
+                if let Some(hb) = last_heartbeat {
+                    let stale_for = (chrono::Utc::now() - hb).num_minutes();
+                    if stale_for > campaign_stale_minutes() {
+                        return Liveness::Failed(format!(
+                            "Render stalled — no progress from worker for {} min (threshold {} min)",
+                            stale_for,
+                            campaign_stale_minutes()
+                        ));
+                    }
+                } else {
+                    // Running but never heartbeated: claimed moments ago by the
+                    // worker; give it one legacy-rule grace window.
+                    return legacy_rule();
+                }
+            }
+            Liveness::Alive
+        }
+        Some("completed") => Liveness::Alive, // delivery row updates imminently
+        _ => Liveness::Alive,
+    }
+}
+
 // ── Check rendering post for completion ────────────────────────────────────
 
 async fn check_rendering_post(state: &Arc<AppState>, campaign: &CampaignRow, post: &PostRow) {
@@ -391,22 +544,49 @@ async fn check_rendering_post(state: &Arc<AppState>, campaign: &CampaignRow, pos
     .flatten();
 
     let Some(delivery_id) = delivery_id else {
+        // Claimed but no delivery yet. Two cases:
+        //  a) another task's worker claimed it moments ago and the delivery
+        //     INSERT is still in flight → grace window, do nothing;
+        //  b) the claiming worker died mid-claim (task replaced) → fail.
+        let claimed_at: Option<chrono::DateTime<chrono::Utc>> = sqlx::query_scalar(
+            "SELECT claimed_at FROM campaign_posts WHERE id = $1",
+        )
+        .bind(post.id)
+        .fetch_optional(&state.db_pool)
+        .await
+        .ok()
+        .flatten()
+        .flatten();
+
+        let stale = claimed_at
+            .map(|t| chrono::Utc::now() - t > chrono::Duration::minutes(10))
+            .unwrap_or(true);
+
+        if stale {
+            mark_post_failed(
+                state,
+                post.id,
+                "Claimed for rendering but delivery was never created (worker lost mid-claim)",
+            )
+            .await;
+        }
         return;
     };
 
     // Check delivery status. NOTE: `deliveries` has NO `updated_at` column —
     // only `created_at` + `completed_at`. Use `created_at` as the staleness
     // baseline so the query doesn't error and stall the campaign.
-    let (status, output_url, error_msg, created_at) = match sqlx::query_as::<_, (String, Option<String>, Option<String>, Option<chrono::DateTime<chrono::Utc>>)>(
-        "SELECT status, output_r2_url, error_message, created_at FROM deliveries WHERE id = $1",
-    )
-    .bind(delivery_id)
-    .fetch_optional(&state.db_pool)
-    .await
-    {
-        Ok(Some(r)) => r,
-        _ => return,
-    };
+    let (status, output_url, error_msg, created_at, workflow_id) =
+        match sqlx::query_as::<_, (String, Option<String>, Option<String>, Option<chrono::DateTime<chrono::Utc>>, Option<Uuid>)>(
+            "SELECT status, output_r2_url, error_message, created_at, workflow_id FROM deliveries WHERE id = $1",
+        )
+        .bind(delivery_id)
+        .fetch_optional(&state.db_pool)
+        .await
+        {
+            Ok(Some(r)) => r,
+            _ => return,
+        };
 
     // Handle failed deliveries
     if status == "failed" {
@@ -415,15 +595,14 @@ async fn check_rendering_post(state: &Arc<AppState>, campaign: &CampaignRow, pos
         return;
     }
 
-    // Handle stale pending deliveries (stuck >1 hour — likely lost on restart)
-    if status == "pending" {
-        if let Some(created) = created_at {
-            if chrono::Utc::now() - created > chrono::Duration::hours(1) {
-                mark_post_failed(state, post.id, "Delivery stalled (pending >1h — pipeline may have been interrupted)").await;
+    if status == "pending" || status == "running" {
+        match assess_workflow_liveness(state, workflow_id, created_at).await {
+            Liveness::Alive => return,
+            Liveness::Failed(err) => {
+                mark_post_failed(state, post.id, &err).await;
                 return;
             }
         }
-        return; // Still within grace period
     }
 
     // Completed — check output URL

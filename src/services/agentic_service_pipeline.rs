@@ -160,11 +160,20 @@ impl ServiceInput {
 pub struct AgenticServicePipeline;
 
 impl AgenticServicePipeline {
+    /// Enqueue a service render. Returns immediately after persisting the
+    /// workflow row — execution is owned by the durable pipeline_worker pool,
+    /// which claims queued rows with a DB lease. Work therefore survives
+    /// Fargate task replacement, OOM kills, and deploys.
     pub async fn start(
         state: Arc<AppState>,
         service_type: ServiceType,
         input: ServiceInput,
     ) -> Result<Uuid, String> {
+        // Full input snapshot so a worker on ANY Fargate task can reconstruct
+        // and execute this job from the DB alone.
+        let input_snapshot = serde_json::to_value(&input)
+            .map_err(|e| format!("Failed to serialize ServiceInput: {e}"))?;
+
         let runtime = WorkflowRuntime::new(state.db_pool.clone());
         let workflow_id = runtime
             .create_or_reuse_workflow(NewWorkflow {
@@ -183,6 +192,7 @@ impl AgenticServicePipeline {
                     "source_url": input.source_url,
                     "style": input.style,
                     "duration": input.duration_seconds,
+                    "input": input_snapshot,
                 }),
                 artifact_requirements: json!({
                     "expects_video": service_type.expects_video(),
@@ -192,23 +202,61 @@ impl AgenticServicePipeline {
             })
             .await?;
 
-        // Link the workflow to the source delivery so the startup recovery loop
-        // (main.rs: reset_orphaned_workflows / orphaned pending delivery re-trigger)
-        // can find and re-trigger this job if the server restarts mid-render.
+        // Link the workflow to the source delivery so admin UI / campaign
+        // watchdog can correlate render state.
         let _ = sqlx::query("UPDATE deliveries SET workflow_id = $1 WHERE id = $2")
             .bind(workflow_id)
             .bind(input.delivery_id)
             .execute(&state.db_pool)
             .await;
 
-        spawn_agentic_pipeline_run(
-            state.clone(),
-            workflow_id,
-            service_type,
-            input,
+        tracing::info!(
+            workflow_id = %workflow_id,
+            service = %service_type.as_str(),
+            delivery = %input.delivery_id,
+            "📥 agentic render enqueued (durable queue)"
         );
 
         Ok(workflow_id)
+    }
+
+    /// Execute a claimed workflow. Called ONLY by pipeline_worker after it
+    /// atomically claimed the row and while its lease-renewal ticker runs.
+    ///
+    /// `claimed_by` is threaded for future ownership probes; terminal failure
+    /// marking stays in the worker (conditional, zombie-safe).
+    pub async fn execute_claimed(
+        state: Arc<AppState>,
+        job: &crate::services::workflow_runtime::ClaimedWorkflow,
+        claimed_by: &str,
+    ) -> Result<(), String> {
+        let workflow_id = job.id;
+
+        let service_type = job
+            .workflow_type
+            .strip_prefix("agentic_")
+            .map(ServiceType::from_normalized)
+            .unwrap_or_else(|| {
+                tracing::warn!(
+                    "workflow {}: unexpected type '{}', defaulting to landing_page",
+                    workflow_id,
+                    job.workflow_type
+                );
+                ServiceType::from_normalized("")
+            });
+
+        let input: ServiceInput = match job.metadata.get("input") {
+            Some(v) => serde_json::from_value(v.clone())
+                .map_err(|e| format!("Failed to deserialize ServiceInput for {workflow_id}: {e}"))?,
+            None => {
+                return Err(format!(
+                    "Workflow {} has no serialized input snapshot — cannot execute",
+                    workflow_id
+                ));
+            }
+        };
+
+        Self::run(state, workflow_id, service_type, input, Some(claimed_by)).await
     }
 
     async fn run(
@@ -216,6 +264,7 @@ impl AgenticServicePipeline {
         workflow_id: Uuid,
         service_type: ServiceType,
         input: ServiceInput,
+        claimed_by: Option<&str>,
     ) -> Result<(), String> {
         let runtime = WorkflowRuntime::new(state.db_pool.clone());
 
@@ -252,6 +301,12 @@ impl AgenticServicePipeline {
         let mut retries_used: i32 = 0;
 
         for attempt in 0..AGENT_MAX_RETRIES {
+            // Cooperative cancellation probe — checked between every attempt
+            // so a cancelled workflow stops burning GPU immediately.
+            if runtime.is_cancel_requested(workflow_id).await.unwrap_or(false) {
+                return Err("WORKFLOW_CANCELLED: cancellation requested".to_string());
+            }
+
             let session_id = format!(
                 "{}-{}-try{}",
                 service_type.as_str(),
@@ -448,23 +503,54 @@ impl AgenticServicePipeline {
         // Clean up local files — all media lives in R2 now
         let _ = std::fs::remove_dir_all(&output_dir);
 
-        runtime
-            .mark_completed(
-                workflow_id,
-                Some("completed"),
-                &format!(
-                    "Agentic {} workflow completed with score {}/10",
-                    service_type.as_str(),
-                    best_score
-                ),
-                json!({
-                    "output_path": output_path,
-                    "delivery_id": input.delivery_id,
-                    "qa_score": best_score,
-                    "retries_used": retries_used + 1,
-                }),
-            )
-            .await;
+        // Terminal completion — ownership-aware when running under the
+        // durable queue: if our lease was lost (process replaced, supervisor
+        // requeued, newer attempt claimed), discard rather than clobber.
+        match claimed_by {
+            Some(owner) => {
+                let owned = runtime
+                    .mark_completed_if_owned(
+                        workflow_id,
+                        owner,
+                        Some("completed"),
+                        &format!(
+                            "Agentic {} workflow completed with score {}/10",
+                            service_type.as_str(),
+                            best_score
+                        ),
+                        json!({
+                            "output_path": output_path,
+                            "delivery_id": input.delivery_id,
+                            "qa_score": best_score,
+                            "retries_used": retries_used + 1,
+                        }),
+                    )
+                    .await
+                    .unwrap_or(false);
+                if !owned {
+                    return Err("WORKFLOW_LEASE_LOST: ownership lost before completion — discarding result".to_string());
+                }
+            }
+            None => {
+                runtime
+                    .mark_completed(
+                        workflow_id,
+                        Some("completed"),
+                        &format!(
+                            "Agentic {} workflow completed with score {}/10",
+                            service_type.as_str(),
+                            best_score
+                        ),
+                        json!({
+                            "output_path": output_path,
+                            "delivery_id": input.delivery_id,
+                            "qa_score": best_score,
+                            "retries_used": retries_used + 1,
+                        }),
+                    )
+                    .await?;
+            }
+        }
 
         Ok(())
     }
@@ -1251,50 +1337,9 @@ Use ONLY manim_execute_script for ALL visual content — every render call uploa
     }
 }
 
-fn spawn_agentic_pipeline_run(
-    state: Arc<AppState>,
-    workflow_id: Uuid,
-    service_type: ServiceType,
-    input: ServiceInput,
-) {
-    let delivery_id = input.delivery_id;
-    let error_state = state.clone();
-    let panic_state = state.clone();
-    let handle = tokio::spawn(async move {
-        if let Err(error) = AgenticServicePipeline::run(state, workflow_id, service_type, input).await {
-            tracing::error!("Agentic workflow {} failed: {}", workflow_id, error);
-            let runtime = WorkflowRuntime::new(error_state.db_pool.clone());
-            let _ = runtime
-                .mark_failed(workflow_id, Some("agentic_workflow"), &error, None)
-                .await;
-            let _ = sqlx::query(
-                "UPDATE deliveries SET status = 'failed', error_message = $1 WHERE id = $2",
-            )
-            .bind(&error)
-            .bind(delivery_id)
-            .execute(&error_state.db_pool)
-            .await;
-        }
-    });
-
-    tokio::spawn(async move {
-        if let Err(join_error) = handle.await {
-            let msg = format!("Agentic workflow {} panicked: {}", workflow_id, join_error);
-            tracing::error!("{}", msg);
-            let runtime = WorkflowRuntime::new(panic_state.db_pool.clone());
-            let _ = runtime
-                .mark_failed(workflow_id, Some("agentic_workflow"), &msg, None)
-                .await;
-            let _ = sqlx::query(
-                "UPDATE deliveries SET status = 'failed', error_message = $1 WHERE id = $2",
-            )
-            .bind(&msg)
-            .bind(delivery_id)
-            .execute(&panic_state.db_pool)
-            .await;
-        }
-    });
-}
+// NOTE: the fire-and-forget spawn path was removed (Aug 2026).
+// AgenticServicePipeline::start() now only enqueues (status='queued'), and
+// src/services/pipeline_worker.rs owns execution via durable lease claims.
 
 struct LocatedOutput {
     /// The canonical output path — may be a cloud URL or a local path.
