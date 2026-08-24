@@ -1463,6 +1463,7 @@ async fn generate_execution_plan(
         &prompt,
     )
     .await
+    .map_err(|e| e.to_string())
     .map(|t| {
         t.lines()
             .filter(|l| l.trim_start().to_uppercase().starts_with("STEP"))
@@ -1529,12 +1530,14 @@ async fn plan_repair_scope(
         Ok(text) => {
             // Lenient JSON extraction (same pattern as skill extraction).
             let json_text = text.trim();
-            let parsed: serde_json::Value = serde_json::from_str(json_text)
-                .or_else(|_| {
-                    let re = regex::Regex::new(r"\{[^{}]*\}").ok()?;
-                    re.find(json_text).and_then(|m| serde_json::from_str(m.as_str()).ok())
-                })
-                .unwrap_or(serde_json::json!({}));
+            let parsed: serde_json::Value =
+                serde_json::from_str(json_text).unwrap_or_else(|_| {
+                    regex::Regex::new(r"\{[^{}]*\}")
+                        .ok()
+                        .and_then(|re| re.find(json_text))
+                        .and_then(|m| serde_json::from_str(m.as_str()).ok())
+                        .unwrap_or(serde_json::json!({}))
+                });
             match parsed["strategy"].as_str() {
                 Some("partial") => RepairScope::Partial {
                     instructions: parsed["instructions"]
