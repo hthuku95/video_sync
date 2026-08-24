@@ -87,7 +87,7 @@ async fn process_campaign(state: &Arc<AppState>, campaign: CampaignRow) {
     match claim_pending_posts(state, campaign.id, 10).await {
         Ok(posts) => {
             for post in &posts {
-                process_pending_post(state, campaign, post).await;
+                process_pending_post(state, &campaign, post).await;
             }
         }
         Err(e) => tracing::error!("campaign[{}]: claim pending failed: {e}", campaign.id),
