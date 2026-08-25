@@ -1980,7 +1980,10 @@ async fn execute_download_from_cloud_gemini(args: &HashMap<String, Value>) -> St
 
 // Helper function to download file from URL
 async fn download_file_from_url(url: &str, output_path: &str) -> Result<(), String> {
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(300)) // hard cap: hung calls previously wedged pipeline workers
+        .build()
+        .unwrap_or_default();
 
     let response = client
         .get(url)
@@ -2782,7 +2785,10 @@ async fn execute_generate_text_to_speech_claude(args: &Value) -> String {
         }
     });
 
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(300)) // hard cap: hung calls previously wedged pipeline workers
+        .build()
+        .unwrap_or_default();
     let url = format!("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key={}", api_key);
 
     match client
@@ -3978,7 +3984,10 @@ async fn execute_generate_text_to_speech_gemini(args: &HashMap<String, Value>) -
         }
     });
 
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(300)) // hard cap: hung calls previously wedged pipeline workers
+        .build()
+        .unwrap_or_default();
     let url = format!("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key={}", api_key);
 
     match client

@@ -234,11 +234,29 @@ async fn execute_claimed(
         });
     }
 
-    // Run the pipeline. Ownership loss mid-run surfaces as an Err from deep
-    // in the agent loops (cancellation/lease probes) or as an ignored terminal
-    // write here; either way we never fight a newer attempt for state.
-    let result =
-        AgenticServicePipeline::execute_claimed(state.clone(), &job, instance_id()).await;
+    // Run the pipeline INSIDE an isolated inner task:
+    //  - a PANIC aborts only this execution (JoinError), not the worker loop;
+    //  - a HUNG future (e.g. HTTP call without timeout) is dropped at the hard
+    //    cap via tokio::time::timeout — the worker always returns to claiming.
+    // Both failure modes previously wedged workers for ~21h while the
+    // supervisor kept requeueing their abandoned rows (Aug 25 incident).
+    let max_run = Duration::from_secs(max_run_hours() * 3600);
+    let exec_state = state.clone();
+    let exec_job = job.clone();
+    let handle = tokio::spawn(async move {
+        AgenticServicePipeline::execute_claimed(exec_state, &exec_job, instance_id()).await
+    });
+
+    let result = match tokio::time::timeout(max_run, handle).await {
+        Ok(joined) => match joined {
+            Ok(r) => r,
+            Err(join_err) => Err(format!("pipeline task panicked: {join_err}")),
+        },
+        Err(_) => Err(format!(
+            "WORKFLOW_HARD_TIMEOUT: exceeded AGENTIC_MAX_RUN_HOURS={} — hung execution aborted",
+            max_run_hours()
+        )),
+    };
 
     stop_ticker.store(true, Ordering::Relaxed);
 

@@ -1616,8 +1616,10 @@ function escapeHtml(text) {{
     return d.innerHTML;
 }}
 </script>
+<script>{bg_js}</script>
 </body>
-</html>"#
+</html>"#,
+        bg_js = dynamic_bg_script(),
     ))
 }
 
@@ -1939,7 +1941,7 @@ if (sessionStorage.getItem('social_oauth_return')) {{
 
 init();
 </script>
-{bg_js}
+<script>{bg_js}</script>
 </body>
 </html>"###,
         bg_js = dynamic_bg_script(),

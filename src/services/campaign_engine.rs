@@ -17,7 +17,7 @@ pub async fn process_campaigns(state: &Arc<AppState>) {
     };
 
     for campaign in active {
-        process_campaign(state, campaign).await;
+        process_campaign(state, &campaign).await;
     }
 }
 
@@ -74,9 +74,99 @@ async fn fetch_active_campaigns(state: &Arc<AppState>) -> Result<Vec<CampaignRow
 
 // ── Step 2: Process a single campaign ───────────────────────────────────────
 
-async fn process_campaign(state: &Arc<AppState>, campaign: CampaignRow) {
+/// Owner-facing "test now" trigger: creates ONE immediate test slot for today
+/// (scheduled this instant, unless one is already pending) and then runs a
+/// full processing cycle inline — variation generation, delivery creation,
+/// durable-queue enqueue. Lets an owner verify posting works in minutes
+/// instead of waiting for tomorrow's scheduled slots.
+pub async fn run_campaign_cycle_now(
+    state: &Arc<AppState>,
+    campaign_id: Uuid,
+    user_id: i32,
+) -> Result<Vec<(Uuid, i32, i32, String, Option<String>)>, String> {
+    let row = sqlx::query_as::<_, (Uuid, i32, String, String, String, String, f64, serde_json::Value, serde_json::Value, i32, chrono::DateTime<chrono::Utc>, Option<String>, Option<String>)>(
+        "SELECT id, user_id, name, service_type, brief, style, duration, schedule, platforms, \
+                posts_per_day, start_date, zernio_profile_id, source_url \
+         FROM campaigns WHERE id = $1 AND user_id = $2 AND status = 'active' \
+           AND paid_until IS NOT NULL AND paid_until > NOW()",
+    )
+    .bind(campaign_id)
+    .bind(user_id)
+    .fetch_optional(state.db_pool.as_ref())
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let Some((id, uid, name, service_type, brief, style, duration, schedule, platforms, posts_per_day, start_date, zernio_profile_id, source_url)) = row else {
+        return Err("Campaign not found, not active, or not paid".to_string());
+    };
+    let _ = (posts_per_day, schedule, platforms);
+    let campaign = CampaignRow {
+        id, user_id: uid, name, service_type, brief, style, duration,
+        schedule: serde_json::Value::Null, platforms: serde_json::Value::Null,
+        posts_per_day: 0, start_date, zernio_profile_id, source_url,
+    };
+
+    // Create the immediate test slot unless one is already open today.
+    let day = days_since_start(campaign.start_date);
+    let open_today: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM campaign_posts \
+         WHERE campaign_id=$1 AND day_number=$2 AND status IN ('pending_generation','rendering')",
+    )
+    .bind(campaign.id)
+    .bind(day)
+    .fetch_one(&state.db_pool)
+    .await
+    .unwrap_or(0);
+
+    let mut created_test_slot = false;
+    if open_today == 0 {
+        let next_slot: i32 = sqlx::query_scalar(
+            "SELECT COALESCE(MAX(slot_index)+1, 0) FROM campaign_posts \
+             WHERE campaign_id=$1 AND day_number=$2",
+        )
+        .bind(campaign.id)
+        .bind(day)
+        .fetch_one(&state.db_pool)
+        .await
+        .unwrap_or(0);
+        sqlx::query(
+            "INSERT INTO campaign_posts (campaign_id, day_number, slot_index, scheduled_at, status) \
+             VALUES ($1,$2,$3,NOW(),'pending_generation') \
+             ON CONFLICT (campaign_id, day_number, slot_index) DO NOTHING",
+        )
+        .bind(campaign.id)
+        .bind(day)
+        .bind(next_slot)
+        .execute(&state.db_pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        created_test_slot = true;
+    }
+
+    // Run one full cycle inline (claims pending posts, kicks renders off).
+    process_campaign(state, &campaign).await;
+
+    let posts = sqlx::query_as::<_, (Uuid, i32, i32, String, Option<String>)>(
+        "SELECT id, day_number, slot_index, status, error_message \
+         FROM campaign_posts WHERE campaign_id=$1 AND day_number=$2 ORDER BY slot_index",
+    )
+    .bind(campaign.id)
+    .bind(day)
+    .fetch_all(&state.db_pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    tracing::info!(
+        campaign = %campaign.id,
+        created_test_slot,
+        "⚡ process-now cycle completed"
+    );
+    Ok(posts)
+}
+
+async fn process_campaign(state: &Arc<AppState>, campaign: &CampaignRow) {
     // Fill today's unfilled slots
-    if let Err(e) = fill_today_slots(state, &campaign).await {
+    if let Err(e) = fill_today_slots(state, campaign).await {
         tracing::error!("campaign[{}]: fill_today_slots failed: {e}", campaign.id);
     }
 
@@ -87,7 +177,7 @@ async fn process_campaign(state: &Arc<AppState>, campaign: CampaignRow) {
     match claim_pending_posts(state, campaign.id, 10).await {
         Ok(posts) => {
             for post in &posts {
-                process_pending_post(state, &campaign, post).await;
+                process_pending_post(state, campaign, post).await;
             }
         }
         Err(e) => tracing::error!("campaign[{}]: claim pending failed: {e}", campaign.id),
@@ -97,7 +187,7 @@ async fn process_campaign(state: &Arc<AppState>, campaign: CampaignRow) {
     match fetch_posts_by_status(state, campaign.id, "rendering", 50).await {
         Ok(posts) => {
             for post in &posts {
-                check_rendering_post(state, &campaign, post).await;
+                check_rendering_post(state, campaign, post).await;
             }
         }
         Err(e) => tracing::error!("campaign[{}]: fetch rendering failed: {e}", campaign.id),
@@ -108,7 +198,7 @@ async fn process_campaign(state: &Arc<AppState>, campaign: CampaignRow) {
         match fetch_scheduled_posts(state, campaign.id, 50).await {
             Ok(posts) => {
                 for post in &posts {
-                    check_zernio_post_status(state, &campaign, post.clone()).await;
+                    check_zernio_post_status(state, campaign, post.clone()).await;
                 }
             }
             Err(e) => tracing::error!("campaign[{}]: fetch scheduled failed: {e}", campaign.id),

@@ -40,6 +40,7 @@ pub fn campaign_routes() -> Router {
         .route("/api/campaigns/:id/pay-spec", get(campaign_pay_spec))
         .route("/api/campaigns/:id/settle", post(campaign_settle))
         .route("/api/campaigns/:id/chat", post(campaign_chat))
+        .route("/api/campaigns/:id/process-now", post(client_process_now))
         .route("/api/campaigns/assistant", post(campaign_assistant_chat))
         .layer(axum::middleware::from_fn(crate::middleware::auth::auth_middleware))
 }
@@ -309,6 +310,30 @@ async fn set_campaign_status(
 }
 
 // ── Client: Pause / Resume / Cancel (scoped to user) ─────────────────────────
+
+/// POST /api/campaigns/:id/process-now
+///
+/// Immediate test trigger for campaign owners: creates one test slot
+/// scheduled NOW (when no post is already open today) and runs a full
+/// processing cycle inline — so the first render starts within seconds and
+/// the owner can verify the pipeline end-to-end without waiting a day.
+async fn client_process_now(
+    Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<crate::models::auth::Claims>,
+    Path(id): Path<Uuid>,
+) -> Json<serde_json::Value> {
+    let user_id: i32 = claims.sub.parse().unwrap_or(0);
+    match crate::services::campaign_engine::run_campaign_cycle_now(&state, id, user_id).await {
+        Ok(posts) => Json(json!({
+            "success": true,
+            "message": "Cycle executed — renders were enqueued. Watch this page; posts move rendering → scheduled/published as workers finish.",
+            "posts": posts.into_iter().map(|(pid, day, slot, status, err)| json!({
+                "id": pid, "day": day, "slot": slot, "status": status, "error": err
+            })).collect::<Vec<_>>(),
+        })),
+        Err(e) => Json(json!({"success": false, "error": e})),
+    }
+}
 
 async fn client_pause_campaign(
     Extension(state): Extension<Arc<AppState>>,
@@ -846,6 +871,64 @@ fn service_catalog_context(service: &str) -> String {
 /// Same agent machinery as campaign_chat but scoped to a service type instead of an
 /// existing campaign. Lets a logged-in user explore/design a campaign before creating one;
 /// the assistant funnels them to /campaigns/new?service=X when ready.
+/// Bounded single-turn assistant reply.
+///
+/// Both chat endpoints previously ran FULL multi-turn agent loops inside the
+/// HTTP request; Ollama turns pushed total latency past Cloudflare's ~100s
+/// proxy timeout → live 504s (Aug 25). Pre-sales/campaign Q&A needs no tools,
+/// so this does ONE fast-chain LLM call with conversation history appended,
+/// persists the exchange, and returns within seconds-to-~1min worst case.
+async fn bounded_chat_reply(
+    state: &Arc<AppState>,
+    session_uuid: &str,
+    context: &str,
+    user_message: &str,
+) -> Result<String, String> {
+    // Recent history (last 4 exchanges) from persisted sessions.
+    let hist = sqlx::query_as::<_, (String, String)>(
+        "SELECT user_message, ai_message FROM chat_messages \
+         WHERE session_id = (SELECT id FROM chat_sessions WHERE session_uuid = $1) \
+         ORDER BY created_at DESC LIMIT 4",
+    )
+    .bind(session_uuid)
+    .fetch_all(&state.db_pool)
+    .await
+    .unwrap_or_default();
+    let history = hist
+        .iter()
+        .rev()
+        .map(|(u, a)| format!("User: {u}\nAssistant: {a}"))
+        .collect::<Vec<_>>()
+        .join("\n\n");
+
+    let prompt = format!(
+        "{context}\n\n## RECENT CONVERSATION\n{history}\n\n\
+         ## INSTRUCTIONS\nAnswer the user's latest question directly and concisely \
+         (under 180 words). Plain text only.\n\nUser: {user_message}\nAssistant:"
+    );
+
+    let reply = crate::llm_utils::generate_text_fast(
+        state.ollama_client.as_ref(),
+        state.deepseek_client.as_ref(),
+        state.gemini_client.as_ref(),
+        &prompt,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let _ = sqlx::query(
+        "INSERT INTO chat_messages (session_id, user_message, ai_message) \
+         VALUES ((SELECT id FROM chat_sessions WHERE session_uuid = $1), $2, $3)",
+    )
+    .bind(session_uuid)
+    .bind(user_message)
+    .bind(&reply)
+    .execute(&state.db_pool)
+    .await;
+
+    Ok(reply)
+}
+
 async fn campaign_assistant_chat(
     Extension(state): Extension<Arc<AppState>>,
     Extension(claims): Extension<crate::models::auth::Claims>,
@@ -887,36 +970,14 @@ async fn campaign_assistant_chat(
     };
     let _ = crate::handlers::upload::get_or_create_session(&state, &session_uuid, Some(user_id)).await;
 
-    let gemini_client = match state.video_gemini_client.as_ref().or(state.gemini_client.as_ref()) {
-        Some(c) => Arc::new(c.clone()),
-        None => return Err((StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": "AI service unavailable"})))),
-    };
-
-    let ollama_client = state.ollama_client.clone().map(Arc::new);
-
-    let agent = crate::agent::stateful_agent::StatefulGeminiAgent::new_with_nvidia(
-        gemini_client,
-        state.bedrock_client.clone(),
-        state.nvidia_nim_client.clone().map(Arc::new),
-        ollama_client,
-    );
-
-    let agent_result = agent.chat(
-        &req.message,
-        &session_uuid,
-        context,
-        state.clone(),
-        state.job_manager.clone(),
-        None,
-        None,
-        None,
-        Some(user_id),
-    ).await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))))?;
+    let response = bounded_chat_reply(&state, &session_uuid, &context, &req.message)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))))?;
 
     Ok(Json(json!({
         "success": true,
         "session_id": session_uuid,
-        "response": agent_result,
+        "response": response,
         "start_url": if service.is_empty() { "/campaigns/new".to_string() } else { format!("/campaigns/new?service={}", service) },
     })))
 }
@@ -1036,33 +1097,11 @@ async fn campaign_chat(
     let session_uuid = format!("campaign-chat-{}", campaign_id);
     let _ = crate::handlers::upload::get_or_create_session(&state, &session_uuid, Some(user_id)).await;
 
-    let gemini_client = match state.video_gemini_client.as_ref().or(state.gemini_client.as_ref()) {
-        Some(c) => Arc::new(c.clone()),
-        None => return Err((StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": "AI service unavailable"})))),
-    };
-
-    let gemini_client_for_corrections = gemini_client.clone();
-
-    let ollama_client = state.ollama_client.clone().map(Arc::new);
-
-    let agent = crate::agent::stateful_agent::StatefulGeminiAgent::new_with_nvidia(
-        gemini_client,
-        state.bedrock_client.clone(),
-        state.nvidia_nim_client.clone().map(Arc::new),
-        ollama_client,
-    );
-
-    let agent_result = agent.chat(
-        &req.message,
-        &session_uuid,
-        context,
-        state.clone(),
-        state.job_manager.clone(),
-        None,
-        None,
-        None,
-        Some(user_id),
-    ).await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))))?;
+    // Bounded single-turn reply (see bounded_chat_reply): full agent loops
+    // exceeded Cloudflare's proxy timeout → 504s.
+    let agent_result = bounded_chat_reply(&state, &session_uuid, &context, &req.message)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))))?;
 
     // Background skill detection from corrections
     let user_message = req.message.clone();
@@ -1072,7 +1111,7 @@ async fn campaign_chat(
         crate::services::skills::detect_and_store_correction(
             state_for_corrections.db_pool.clone(),
             state_for_corrections.qdrant_client.clone(),
-            Some(gemini_client_for_corrections),
+            None,
             state_for_corrections.ollama_client.as_ref(),
             state_for_corrections.deepseek_client.as_ref(),
             state_for_corrections.gemini_client.as_ref(),
