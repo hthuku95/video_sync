@@ -776,6 +776,14 @@ The tool `generate_long_form_video` delegates to another agent and will NOT prod
 If a source URL is provided, call `browserbase_crawl_website(url="{url}")` to crawl the full website. From the response, get the `feature_tag` and `pages`, then call `vectorize_crawled_content(feature_tag="<tag>", pages=<array>)` to store in Qdrant. Use `search_crawled_content(query="design and features", feature_tag="<tag>")` to get specific product details. Use the extracted content to understand the product's features, design, and brand style.
 
 ## MANDATORY TOOL SEQUENCE
+0. (If the product/scene benefits from realistic pre-made geometry — devices,
+   packaging, furniture, appliances) fetch real 3D assets:
+   sketchfab_search(query="<product>") → pick a downloadable CC model →
+   sketchfab_download(uid) → returns an R2 URL. Inside your bpy script, load it
+   with the load_model_from_url() helper (provided in your system instructions),
+   then position/light/animate the imported root like any Blender object.
+   Normalize scale from its printed dimensions. Prefer this over primitive
+   shapes whenever a real-world object is central to the scene.
 1. generate_video_script(topic, duration, style, tone) — plan the content
 2. Render the product mockup using blender_generate_scene_type(prompt, params) — for device mockups, 3D product animations, UI mockups, text reveals, and animated backgrounds
 3. add_voiceover_to_video(video_path, script) or generate_text_to_speech(text, voice) — narrate if it improves the result
