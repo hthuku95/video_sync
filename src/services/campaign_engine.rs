@@ -92,7 +92,7 @@ pub async fn run_campaign_cycle_now(
     )
     .bind(campaign_id)
     .bind(user_id)
-    .fetch_optional(state.db_pool.as_ref())
+    .fetch_optional(&state.db_pool)
     .await
     .map_err(|e| e.to_string())?;
 
