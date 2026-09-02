@@ -753,6 +753,51 @@ impl WorkflowRuntime {
     /// Requeue running agentic workflows whose lease expired (owner died).
     /// Returns the requeued workflow ids for logging.
     pub async fn requeue_expired_leases(&self) -> Result<Vec<Uuid>, String> {
+        // ── AGE CAP (§CRIT, Sep 2 2026) ──
+        // Runs older than AGENTIC_MAX_RUN_HOURS are FAILED, not requeued.
+        // Without this, ancient zombie workflows (e.g. LLM-starvation loops
+        // from a starved GPU pool) get requeued forever, re-claimed
+        // oldest-first, and starve the live queue (observed: 4 cancels +
+        // mass-cancel needed to free 2 worker slots for the Kaysan campaign).
+        let max_run_hours: i64 = std::env::var("AGENTIC_MAX_RUN_HOURS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(6);
+
+        // 1. Expire the zombie cohort: runs whose age exceeds the cap.
+        let expired_zombies: Vec<Uuid> = sqlx::query_scalar::<_, Uuid>(
+            r#"
+            UPDATE app_workflows
+               SET status = 'failed',
+                   error_message = format(
+                       'RUN_MAX_HOURS_EXCEEDED: run was %s hours old when its lease expired (max %s) — the worker never made progress within the budget. Cancelling stale run.',
+                       GREATEST(0, EXTRACT(EPOCH FROM (NOW() - created_at)) / 3600)::int,
+                       $1
+                   ),
+                   completed_at = NOW(),
+                   claimed_by = NULL,
+                   lease_expires_at = NULL,
+                   updated_at = NOW()
+             WHERE status = 'running'
+               AND workflow_type LIKE 'agentic\_%'
+               AND (lease_expires_at IS NULL OR lease_expires_at < NOW())
+               AND created_at < NOW() - ($1::text || ' hours')::interval
+            RETURNING id
+            "#,
+        )
+        .bind(max_run_hours)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| format!("Failed to expire over-age workflows: {}", e))?;
+        if !expired_zombies.is_empty() {
+            tracing::warn!(
+                "supervisor: failed {} over-age zombie workflows (>{}h)",
+                expired_zombies.len(),
+                max_run_hours
+            );
+        }
+
+        // 2. Requeue the rest (young runs whose worker died).
         let ids = sqlx::query_scalar::<_, Uuid>(
             r#"
             UPDATE app_workflows

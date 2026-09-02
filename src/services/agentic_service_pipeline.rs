@@ -653,6 +653,30 @@ impl AgenticServicePipeline {
                 .as_ref()
                 .ok_or("R2 not configured for publishing")?;
 
+            // ── LAST-LINE BACKSTOP (§CRIT, Sep 2 2026) ──
+            // Never upload a provably-empty/corrupt artifact. The 0-byte
+            // incident published 4 empty MP4s to paying campaign slots.
+            // Videos smaller than this are garbage by construction.
+            let ext = output_path.rsplit('.').next().unwrap_or("").to_lowercase();
+            if matches!(ext.as_str(), "mp4" | "mov" | "mkv" | "webm" | "avi") {
+                let min_bytes: u64 = std::env::var("ARTIFACT_MIN_BYTES")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(50_000);
+                let size = tokio::fs::metadata(output_path)
+                    .await
+                    .map(|m| m.len())
+                    .map_err(|e| format!("ARTIFACT_INVALID: cannot stat {}: {e}", output_path))?;
+                if size < min_bytes {
+                    let msg = format!(
+                        "ARTIFACT_INVALID: refusing to publish {}-byte video (minimum {}) — {}",
+                        size, min_bytes, output_path
+                    );
+                    tracing::error!("publish_output: {}", msg);
+                    return Err(msg);
+                }
+            }
+
             let url = r2
                 .upload_file(output_path, &output_key)
                 .await

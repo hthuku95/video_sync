@@ -38,6 +38,118 @@ const GEMINI_DAILY_LIMIT: u32 = 18;
 /// review prompt scores 1-10; 6+ means "buyer-quality", 5- means "redo".
 const PASS_THRESHOLD: i32 = 6;
 
+/// Deterministic artifact floor (Sep 2 2026, §CRIT): a video artifact smaller
+/// than this is corrupt/empty — no reviewer needed to know it's garbage.
+/// Catches the 0-byte publish incident (empty MP4s uploaded and "review
+/// passed at score 0" because every reviewer failure path was fail-open).
+const ARTIFACT_MIN_BYTES: u64 = 50_000;
+/// Local video artifacts shorter than this are truncated/corrupt.
+const ARTIFACT_MIN_DURATION_SECS: f64 = 1.0;
+
+/// Deterministic pre-review validation for VIDEO artifacts. Returns
+/// Some(reason) when the artifact is provably invalid — no LLM involved.
+/// Images/thumbnails are skipped (no duration, often legitimately small).
+/// Network HEAD failures return None (don't block on infra noise).
+async fn validate_video_artifact(output_url: &str) -> Option<String> {
+    let ext = output_url
+        .rsplit('.')
+        .next()
+        .unwrap_or("")
+        .split('?')
+        .next()
+        .unwrap_or("")
+        .to_lowercase();
+    if !matches!(ext.as_str(), "mp4" | "mov" | "mkv" | "webm" | "avi") {
+        return None;
+    }
+
+    if output_url.starts_with("http://") || output_url.starts_with("https://") {
+        // Remote: ranged GET (HEAD would break GET-presigned SigV4 URLs).
+        // Parse total size from Content-Range: "bytes 0-0/12345678".
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(20))
+            .build()
+            .ok()?;
+        let resp = client
+            .get(output_url)
+            .header("Range", "bytes=0-0")
+            .send()
+            .await
+            .ok()?;
+        let total = resp
+            .headers()
+            .get("content-range")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.rsplit('/').next().and_then(|t| t.parse::<u64>().ok()));
+        match total {
+            Some(size) if size < ARTIFACT_MIN_BYTES => {
+                return Some(format!(
+                    "ARTIFACT_INVALID: remote video is only {} bytes (minimum {})",
+                    size, ARTIFACT_MIN_BYTES
+                ));
+            }
+            Some(_) => return None,
+            // No Content-Range (server ignored Range): check content-length.
+            None => {
+                if let Some(len) = resp.content_length() {
+                    if len > 1 && len < ARTIFACT_MIN_BYTES {
+                        return Some(format!(
+                            "ARTIFACT_INVALID: remote video is only {} bytes (minimum {})",
+                            len, ARTIFACT_MIN_BYTES
+                        ));
+                    }
+                }
+                return None;
+            }
+        }
+    }
+
+    // Local path: size + ffprobe duration.
+    let meta = match tokio::fs::metadata(output_url).await {
+        Ok(m) if m.is_file() => m,
+        _ => {
+            return Some(format!(
+                "ARTIFACT_INVALID: video artifact does not exist at '{}'",
+                output_url
+            ));
+        }
+    };
+    if meta.len() < ARTIFACT_MIN_BYTES {
+        return Some(format!(
+            "ARTIFACT_INVALID: video artifact is only {} bytes (minimum {})",
+            meta.len(),
+            ARTIFACT_MIN_BYTES
+        ));
+    }
+
+    // Best-effort duration check via ffprobe; skip silently if ffprobe is
+    // unavailable (exit code NotFound) so review still runs.
+    let probe = tokio::process::Command::new("ffprobe")
+        .args([
+            "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            output_url,
+        ])
+        .output()
+        .await;
+    if let Ok(out) = probe {
+        if out.status.success() {
+            let dur: f64 = String::from_utf8_lossy(&out.stdout)
+                .trim()
+                .parse()
+                .unwrap_or(0.0);
+            if dur < ARTIFACT_MIN_DURATION_SECS {
+                return Some(format!(
+                    "ARTIFACT_INVALID: video duration is {:.2}s (minimum {}s) — likely truncated",
+                    dur, ARTIFACT_MIN_DURATION_SECS
+                ));
+            }
+        }
+    }
+    None
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReviewResult {
     pub pass: bool,
@@ -59,6 +171,40 @@ pub async fn review_render(
     delivery_id: Option<uuid::Uuid>,
 ) -> ReviewResult {
     let prompt = review_prompt(original_prompt, tool_name, output_url);
+
+    // ── DETERMINISTIC GATE (§CRIT, Sep 2 2026) ──
+    // Before spending any reviewer calls: reject provably-invalid video
+    // artifacts (0-byte / truncated). This is the boundary that failed during
+    // the empty-MP4 incident — every reviewer failure path used to fail OPEN
+    // (pass:true, score:0), so garbage got published silently.
+    if let Some(reason) = validate_video_artifact(output_url).await {
+        tracing::warn!("render_review artifact gate rejected '{}': {}", output_url, reason);
+        persist_review(
+            state,
+            tool_name,
+            &ReviewResult {
+                pass: false,
+                score: 0,
+                feedback: reason.clone(),
+                retry_hint: Some(
+                    "Re-render the output; the previous artifact was empty or corrupt."
+                        .to_string(),
+                ),
+            },
+            delivery_id,
+            output_url,
+        )
+        .await;
+        return ReviewResult {
+            pass: false,
+            score: 0,
+            feedback: reason,
+            retry_hint: Some(
+                "Re-render the output; the previous artifact was empty or corrupt."
+                    .to_string(),
+            ),
+        };
+    }
 
     // 1. Try NVIDIA NIM vision model (images/audio only, skip video)
     let ext = output_url.rsplit('.').next().unwrap_or("").to_lowercase();
@@ -100,7 +246,7 @@ pub async fn review_render(
         Some(g) => g,
         None => {
             return ReviewResult {
-                pass: true,
+                pass: false,
                 score: 0,
                 feedback: "No reviewer (NIM, Bedrock, Ollama, or Gemini) configured — QA review skipped".to_string(),
                 retry_hint: None,
@@ -123,7 +269,7 @@ async fn run_review_via_nim(
         Ok(r) => r,
         Err(e) => {
             return ReviewResult {
-                pass: true,
+                pass: false,
                 score: 0,
                 feedback: format!("NIM review call failed: {}", e),
                 retry_hint: None,
@@ -142,7 +288,7 @@ async fn run_review_via_bedrock(
 ) -> ReviewResult {
     if is_video {
         return ReviewResult {
-            pass: true,
+            pass: false,
             score: 0,
             feedback: "Bedrock (Llama 4) does not natively support video input through Converse API — skipped".to_string(),
             retry_hint: None,
@@ -152,7 +298,7 @@ async fn run_review_via_bedrock(
         Ok(r) => r,
         Err(e) => {
             return ReviewResult {
-                pass: true,
+                pass: false,
                 score: 0,
                 feedback: format!("Bedrock review call failed: {}", e),
                 retry_hint: None,
@@ -172,7 +318,7 @@ async fn run_review_via_ollama(
         Ok(r) => r,
         Err(e) => {
             return ReviewResult {
-                pass: true,
+                pass: false,
                 score: 0,
                 feedback: format!("Ollama review call failed: {}", e),
                 retry_hint: None,
@@ -191,7 +337,7 @@ async fn run_review_via_gemini(
     let calls = GEMINI_VIDEO_CALLS.fetch_add(1, Ordering::Relaxed) + 1;
     if calls > GEMINI_DAILY_LIMIT {
         return ReviewResult {
-            pass: true,
+            pass: false,
             score: 0,
             feedback: format!(
                 "Gemini daily quota reached ({}/20 calls this session) — QA skipped. \
@@ -220,7 +366,7 @@ async fn run_review_via_gemini(
                         Ok(r) => return parse_review_response(&r),
                         Err(retry_err) => {
                             return ReviewResult {
-                                pass: true,
+                                pass: false,
                                 score: 0,
                                 feedback: format!(
                                     "Gemini review failed on retry (call #{}/20): {}",
@@ -234,7 +380,7 @@ async fn run_review_via_gemini(
             }
 
             return ReviewResult {
-                pass: true,
+                pass: false,
                 score: 0,
                 feedback: format!("Gemini review call failed (call #{}/20): {}", calls, err_text),
                 retry_hint: None,
@@ -272,7 +418,7 @@ fn parse_review_response(response: &str) -> ReviewResult {
         Ok(v) => v,
         Err(_) => {
             return ReviewResult {
-                pass: true,
+                pass: false,
                 score: 0,
                 feedback: format!(
                     "Unparseable review response: {}",
