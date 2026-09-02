@@ -210,13 +210,36 @@ impl AgenticServicePipeline {
             .execute(&state.db_pool)
             .await;
 
-        // Queue priority band: time-sensitive renders (scheduled campaign
-        // posts, admin/clipping deliveries) claim before bulk/backfillable
-        // sample generation. See migrations/20260824000002_queue_priority.sql.
-        let priority: i16 = match input.source_table.as_deref() {
-            Some("deliveries") if input.prospect_id.is_none() => 50,
-            Some("service_portfolio_samples") | Some("app_workflows") | Some("gig_sample_videos") => 200,
-            _ => 100,
+        // Queue priority band (owner directive Sep 2 2026 — business order):
+        //   50  = campaign-sourced renders (Kick auto-clipper campaigns FIRST,
+        //         then all 12 managed campaign services)
+        //   100 = other deliveries (admin, app services)
+        //   150 = NON-campaign clipping renders = YouTube auto-clipping
+        //         (content_machine whitelisted users) — explicitly
+        //         deprioritized: it starved the Kaysan Kick campaign queue
+        //         (4 zombie YouTube runs held both worker slots for hours)
+        //   200 = bulk/backfillable (portfolio samples, test runs)
+        let is_campaign_sourced: bool = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(SELECT 1 FROM campaign_posts WHERE delivery_id = $1)",
+        )
+        .bind(input.delivery_id)
+        .fetch_one(&state.db_pool)
+        .await
+        .unwrap_or(false);
+        let priority: i16 = if is_campaign_sourced {
+            50
+        } else {
+            match input.source_table.as_deref() {
+                Some("deliveries") if input.prospect_id.is_none() => {
+                    if service_type == ServiceType::Clipping {
+                        150
+                    } else {
+                        50
+                    }
+                }
+                Some("service_portfolio_samples") | Some("app_workflows") | Some("gig_sample_videos") => 200,
+                _ => 100,
+            }
         };
         let _ = sqlx::query("UPDATE app_workflows SET priority = $1 WHERE id = $2")
             .bind(priority)

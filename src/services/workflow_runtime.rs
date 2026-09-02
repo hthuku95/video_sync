@@ -764,14 +764,18 @@ impl WorkflowRuntime {
             .and_then(|v| v.parse().ok())
             .unwrap_or(6);
 
-        // 1. Expire the zombie cohort: runs whose age exceeds the cap.
+        // 1. Expire the zombie cohort: runs whose EXECUTION age exceeds the cap.
+        // Age is measured from started_at (first claim), NOT created_at — a
+        // workflow queued for hours behind a backlog hasn't "run" yet (the
+        // original created_at-based cap killed Kaysan renders that merely
+        // waited in a 17-deep queue, Sep 2).
         let expired_zombies: Vec<Uuid> = sqlx::query_scalar::<_, Uuid>(
             r#"
             UPDATE app_workflows
                SET status = 'failed',
                    error_message = format(
-                       'RUN_MAX_HOURS_EXCEEDED: run was %s hours old when its lease expired (max %s) — the worker never made progress within the budget. Cancelling stale run.',
-                       GREATEST(0, EXTRACT(EPOCH FROM (NOW() - created_at)) / 3600)::int,
+                       'RUN_MAX_HOURS_EXCEEDED: run was executing for %s hours when its lease expired (max %s) — the worker never made progress within the budget. Cancelling stale run.',
+                       GREATEST(0, EXTRACT(EPOCH FROM (NOW() - COALESCE(started_at, created_at))) / 3600)::int,
                        $1
                    ),
                    completed_at = NOW(),
@@ -781,7 +785,7 @@ impl WorkflowRuntime {
              WHERE status = 'running'
                AND workflow_type LIKE 'agentic\_%'
                AND (lease_expires_at IS NULL OR lease_expires_at < NOW())
-               AND created_at < NOW() - ($1::text || ' hours')::interval
+               AND COALESCE(started_at, created_at) < NOW() - ($1::text || ' hours')::interval
             RETURNING id
             "#,
         )
