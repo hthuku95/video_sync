@@ -683,6 +683,7 @@ impl WorkflowRuntime {
                SET status = 'running',
                    current_step = 'claimed',
                    claimed_by = $1,
+                   started_at = COALESCE(w.started_at, NOW()),
                    lease_expires_at = NOW() + make_interval(mins => $2::int),
                    last_heartbeat_at = NOW(),
                    updated_at = NOW()
