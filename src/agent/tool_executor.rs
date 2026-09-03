@@ -4934,6 +4934,61 @@ async fn execute_clip_compilation_value(
         Some(url) => url,
         None => return r#"{"error":"source_url is required"}"#.to_string(),
     };
+
+    // ── SOURCE BINDING (Fix 1, Sep 3 2026) ──
+    // For campaign clipping workflows the source is the CAMPAIGN's source_url
+    // (e.g. kick.com/kaysan) — the agent may not substitute its own. The
+    // Rickroll incident: the LLM couldn't fetch Kick content and silently
+    // downloaded youtube.com/watch?v=dQw4w9WgXcQ instead. Deterministic
+    // rule: if the session belongs to a campaign-linked clipping workflow,
+    // an agent-supplied source_url from a different host is REJECTED.
+    let bound_source = match ctx.workflow_id {
+        Some(wid) => {
+            let bound: Option<Option<String>> = sqlx::query_scalar(
+                r#"
+                SELECT c.source_url
+                FROM app_workflows w
+                JOIN deliveries d ON d.workflow_id = w.id
+                JOIN campaign_posts cp ON cp.delivery_id = d.id
+                JOIN campaigns c ON c.id = cp.campaign_id
+                WHERE w.id = $1
+                LIMIT 1
+                "#,
+            )
+            .bind(wid)
+            .fetch_optional(&ctx.app_state.db_pool)
+            .await
+            .ok()
+            .flatten();
+            match bound {
+                Some(Some(campaign_url)) if !campaign_url.trim().is_empty() => Some(campaign_url),
+                _ => None,
+            }
+        }
+        None => None,
+    };
+    let source_url = match &bound_source {
+        Some(campaign_url) => {
+            let host_matches = |u: &str| {
+                let host = url::Url::parse(u).ok().and_then(|p| p.host_str().map(String::from));
+                let bound_host = url::Url::parse(campaign_url).ok().and_then(|p| p.host_str().map(String::from));
+                match (host, bound_host) {
+                    (Some(a), Some(b)) => a.eq_ignore_ascii_case(&b),
+                    _ => false,
+                }
+            };
+            if host_matches(&source_url) {
+                source_url
+            } else {
+                tracing::warn!(
+                    "🚫 SOURCE BINDING: agent supplied '{}' but campaign binds '{}'. Overriding.",
+                    source_url, campaign_url
+                );
+                campaign_url.clone()
+            }
+        }
+        None => source_url,
+    };
     let clip_duration = number_arg(args, &["clip_duration_seconds", "duration_seconds", "duration"])
         .unwrap_or(15.0)
         .max(5.0)
@@ -4944,9 +4999,33 @@ async fn execute_clip_compilation_value(
         .min(10.0) as usize;
     let include_captions = bool_arg(args, &["include_captions", "captions", "subtitles"])
         .unwrap_or(true);
-    let kick_style = bool_arg(args, &["kick_style"]).unwrap_or(false);
-    let logo_url = string_arg(args, &["logo_url"]);
-    let streamer_name = string_arg(args, &["streamer_name"]);
+    // ── KICK SPEC ENFORCEMENT (Fix 3, Sep 3 2026) ──
+    // For campaign clipping workflows bound to a Kick source, the §25 spec
+    // (logo, lower-third caption, vertical) is MANDATORY — not an agent
+    // choice. Force kick_style=true and prefill branding from the campaign;
+    // the agent can still pass explicit values for name/logo.
+    let is_campaign_kick = bound_source
+        .as_deref()
+        .map(|u| u.contains("kick.com"))
+        .unwrap_or(false);
+    let (kick_style, logo_url, streamer_name) = if is_campaign_kick {
+        let logo = string_arg(args, &["logo_url"]).or_else(|| {
+            std::env::var("KICK_DEFAULT_LOGO_URL").ok().filter(|s| !s.is_empty())
+        });
+        let name = string_arg(args, &["streamer_name"]).or_else(|| {
+            url::Url::parse(bound_source.as_deref().unwrap_or(""))
+                .ok()
+                .and_then(|p| p.path_segments().and_then(|mut s| s.next().map(String::from)))
+                .filter(|s| !s.is_empty())
+        });
+        (true, logo, name)
+    } else {
+        (
+            bool_arg(args, &["kick_style"]).unwrap_or(false),
+            string_arg(args, &["logo_url"]),
+            string_arg(args, &["streamer_name"]),
+        )
+    };
 
     // Parse new params
     let explicit_clip_times: Option<Vec<f64>> = args.get("clip_times")

@@ -700,6 +700,42 @@ async fn check_rendering_post(state: &Arc<AppState>, campaign: &CampaignRow, pos
         return;
     };
 
+    // ── SOCIAL PUBLISH QA GATE (Fix 2, Sep 3 2026) ──
+    // A deliverable that FAILED QA must never be auto-published to the
+    // client's public social accounts. The Rickroll incident: QA scored the
+    // artifact 1/10 ("Rick Astley music video...") and the pipeline published
+    // it to YouTube anyway via this path. Deterministic rule: only
+    // final_qa_score >= PUBLISH_QA_THRESHOLD goes public; everything else
+    // fails the post honestly (owner can regenerate manually).
+    const PUBLISH_QA_THRESHOLD: i32 = 6;
+    let qa_score: Option<i32> = sqlx::query_scalar(
+        "SELECT final_qa_score FROM deliveries WHERE id = $1",
+    )
+    .bind(delivery_id)
+    .fetch_optional(&state.db_pool)
+    .await
+    .ok()
+    .flatten();
+
+    if let Some(score) = qa_score {
+        if score < PUBLISH_QA_THRESHOLD {
+            mark_post_failed(
+                state,
+                post.id,
+                &format!(
+                    "PUBLISH_QA_REJECTED: delivery {} scored {}/10 in QA review (minimum {} for social publishing) — artifact NOT published. Regenerate this slot.",
+                    delivery_id, score, PUBLISH_QA_THRESHOLD
+                ),
+            )
+            .await;
+            tracing::warn!(
+                "🚫 PUBLISH_QA_REJECTED: post {} blocked (score {} < {})",
+                post.id, score, PUBLISH_QA_THRESHOLD
+            );
+            return;
+        }
+    }
+
     // Store the media URL on the post
     let _ = sqlx::query(
         "UPDATE campaign_posts SET media_r2_url = $1 WHERE id = $2",
