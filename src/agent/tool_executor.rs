@@ -4926,6 +4926,51 @@ async fn kick_post_process_clip(
     Ok(())
 }
 
+/// Resolve a Kick channel URL to its latest COMPLETED VOD page URL via the
+/// ytdlp service's /api/v1/resolve endpoint (kick.com/api/v2 JSON; live
+/// streams excluded — see the endpoint on the service side).
+async fn resolve_kick_latest_vod(channel_url: &str) -> Result<String, String> {
+    let base = std::env::var("YTDLP_API_URL")
+        .map_err(|_| "YTDLP_API_URL not set — cannot resolve Kick channel".to_string())?;
+    let base = base.trim_end_matches('/');
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .map_err(|e| format!("http client: {e}"))?;
+    let resp = client
+        .post(format!("{base}/api/v1/resolve"))
+        .json(&serde_json::json!({
+            "channel_url": channel_url,
+            "count": 3
+        }))
+        .send()
+        .await
+        .map_err(|e| format!("resolve request failed: {e}"))?;
+
+    let status = resp.status();
+    let body: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("resolve response parse failed: {e}"))?;
+
+    if !status.is_success() {
+        let detail = body
+            .get("detail")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown resolve error");
+        return Err(format!("resolve HTTP {status}: {detail}"));
+    }
+
+    let url = body
+        .get("urls")
+        .and_then(|u| u.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|u| u.as_str())
+        .ok_or_else(|| "resolve returned no urls".to_string())?;
+
+    Ok(url.to_string())
+}
+
 async fn execute_clip_compilation_value(
     args: &Value,
     ctx: &ToolExecutionContext,
@@ -5048,89 +5093,28 @@ async fn execute_clip_compilation_value(
     let r2_key = format!("downloads/clip_compilation/{}/{}/source.mp4", ctx.session_id, uuid);
 
     let download_result = if is_kick {
-        let r2_client = match ctx.app_state.r2_client.as_ref() {
-            Some(c) => c,
-            None => return format!(r#"{{"error":"R2 client not configured for Kick streaming"}}"#),
-        };
-
-        // Step 1: Get metadata (title, duration) via dry-run --print
-        let ytdlp_bin = if std::path::Path::new("/usr/local/bin/yt-dlp").exists() {
-            "/usr/local/bin/yt-dlp"
-        } else if std::path::Path::new("/usr/bin/yt-dlp").exists() {
-            "/usr/bin/yt-dlp"
-        } else {
-            "yt-dlp"
-        };
-
-        let meta_output = tokio::process::Command::new(ytdlp_bin)
-            .arg("--print").arg("title")
-            .arg("--print").arg("duration")
-            .arg("--no-download")
-            .arg(&source_url)
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .output().await;
-
-        let (title, duration_raw) = match meta_output {
-            Ok(out) if out.status.success() => {
-                let stdout = String::from_utf8_lossy(&out.stdout);
-                let lines: Vec<&str> = stdout.lines().collect();
-                let t = lines.first().unwrap_or(&"Kick Stream").to_string();
-                let d: f64 = lines.get(1).and_then(|s| s.parse().ok()).unwrap_or(0.0);
-                (t, d)
+        // ── KICK VIA YTDLP SERVICE (Sep 4 2026) ──
+        // Fargate-local yt-dlp against kick.com hangs on Cloudflare, and
+        // yt-dlp's flat-playlist cannot enumerate Kick VODs (only sees the
+        // live stream). The ytdlp service node CAN reach Kick: it exposes
+        // POST /api/v1/resolve (kick.com/api/v2 JSON — completed VODs only,
+        // live excluded). Resolve channel -> latest completed VOD, then use
+        // the GENERIC service download path (same as non-Kick).
+        let resolved = resolve_kick_latest_vod(&source_url).await;
+        match resolved {
+            Ok(vod_url) => {
+                tracing::info!("🎬 Kick resolved to latest completed VOD: {}", vod_url);
+                let tmp_path = format!("/tmp/ytdlp_api_dl_{}", uuid);
+                let result = crate::clipping::ytdlp_api_client::YtdlpApiClient::download_video(
+                    &vod_url, &tmp_path, Some(r2_key.clone()),
+                ).await;
+                let _ = tokio::fs::remove_file(&tmp_path).await;
+                result
             }
-            _ => ("Kick Stream".to_string(), 0.0)
-        };
-
-        // Step 2: Spawn yt-dlp to stdout, pipe directly to R2 multipart upload
-        let mut child = match tokio::process::Command::new(ytdlp_bin)
-            .arg("--format").arg("bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best")
-            .arg("--merge-output-format").arg("mp4")
-            .arg("-o").arg("-")
-            .arg("--no-playlist")
-            .arg("--user-agent")
-            .arg("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-            .arg("--no-check-certificates")
-            .arg(&source_url)
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-        {
-            Ok(c) => c,
-            Err(e) => return format!(r#"{{"error":"yt-dlp spawn failed: {}"}}"#, e),
-        };
-
-        let mut stdout = match child.stdout.take() {
-            Some(s) => s,
-            None => return format!(r#"{{"error":"yt-dlp: no stdout"}}"#),
-        };
-
-        // Stream yt-dlp stdout directly to R2 (multipart upload, no local disk)
-        let r2_result = r2_client.upload_stream(&r2_key, &mut stdout).await;
-
-        // Wait for yt-dlp to finish
-        let _exit_status = child.wait().await;
-
-        match r2_result {
-            Ok(()) => {
-                let r2_url = match r2_client.presign_get(&r2_key, 7 * 24 * 3600).await {
-                    Ok(u) => u,
-                    Err(e) => return format!(r#"{{"error":"R2 presign failed: {}"}}"#, e),
-                };
-                let actual_duration = crate::core::analyze_video(&r2_url)
-                    .ok().map(|m| m.duration_seconds).unwrap_or(duration_raw);
-                if actual_duration < 1.0 {
-                    return format!(r#"{{"error":"Downloaded video invalid (0s)"}}"#);
-                }
-                Ok(crate::clipping::ytdlp_api_client::VideoDownloadResult {
-                    file_path: r2_url.clone(),
-                    title,
-                    duration_seconds: actual_duration,
-                    width: None, height: None,
-                    r2_url: Some(r2_url),
-                })
-            }
-            Err(e) => Err(e)
+            Err(e) => Err(format!(
+                "Kick VOD resolution failed ({}). Campaign source must have a completed VOD.",
+                e
+            )),
         }
     } else {
         tracing::info!("🎬 Clip compilation: streaming {} via ytdlp api (r2_key={})", source_url, r2_key);
