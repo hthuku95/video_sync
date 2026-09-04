@@ -5104,9 +5104,24 @@ async fn execute_clip_compilation_value(
         match resolved {
             Ok(vod_url) => {
                 tracing::info!("🎬 Kick resolved to latest completed VOD: {}", vod_url);
+                // The service's 30 strategies are YouTube-focused and cannot
+                // download kick.com pages — but they DO handle direct m3u8
+                // URLs (proven live). Extract the HLS stream from the VOD
+                // page first; extract_stream_url rides the BrowserBase ->
+                // Scrapling fallback chain.
+                let stream_url = match crate::kick_vod_scraper::extract_stream_url(&vod_url).await {
+                    Ok(hls) => {
+                        tracing::info!("🎬 Kick VOD → HLS: {}", &hls[..hls.len().min(80)]);
+                        hls
+                    }
+                    Err(e) => {
+                        tracing::warn!("Kick HLS extraction failed ({}), trying VOD page URL directly", e);
+                        vod_url.clone()
+                    }
+                };
                 let tmp_path = format!("/tmp/ytdlp_api_dl_{}", uuid);
                 let result = crate::clipping::ytdlp_api_client::YtdlpApiClient::download_video(
-                    &vod_url, &tmp_path, Some(r2_key.clone()),
+                    &stream_url, &tmp_path, Some(r2_key.clone()),
                 ).await;
                 let _ = tokio::fs::remove_file(&tmp_path).await;
                 result
