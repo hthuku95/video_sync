@@ -145,7 +145,15 @@ pub async fn fetch_url_raw(url: &str) -> Result<Option<String>, String> {
             .or_else(|| data.get("error"))
             .and_then(|v| v.as_str())
             .unwrap_or("unknown error");
-        return Err(format!("BrowserBase raw fetch failed (HTTP {status}): {msg}"));
+        let bb_err = format!("BrowserBase raw fetch failed (HTTP {status}): {msg}");
+        // ── SCRAPLING FALLBACK (Sep 4 2026) ──
+        // BrowserBase 402 (credits exhausted) silently broke Kick VOD
+        // resolution and cascaded into publishing a wrong video. Fall back
+        // to our self-hosted Scrapling service (ytdlp node) on ANY failure.
+        tracing::warn!("{bb_err} — trying Scrapling fallback");
+        return scrapling_fetch_raw(url)
+            .await
+            .map_err(|e| format!("{bb_err}; Scrapling fallback also failed: {e}"));
     }
 
     let content = data
@@ -155,10 +163,66 @@ pub async fn fetch_url_raw(url: &str) -> Result<Option<String>, String> {
         .to_string();
 
     if content.is_empty() {
-        return Err(format!("BrowserBase returned empty raw content for: {url}"));
+        let bb_err = format!("BrowserBase returned empty raw content for: {url}");
+        tracing::warn!("{bb_err} — trying Scrapling fallback");
+        return scrapling_fetch_raw(url)
+            .await
+            .map_err(|e| format!("{bb_err}; Scrapling fallback also failed: {e}"));
     }
 
     Ok(Some(content))
+}
+
+/// Self-hosted Scrapling fetch fallback (ytdlp node, Option B — served
+/// through the same YTDLP_API_URL service as the downloader). Returns raw
+/// HTML with the same contract as fetch_url_raw.
+async fn scrapling_fetch_raw(url: &str) -> Result<Option<String>, String> {
+    let base = std::env::var("YTDLP_API_URL")
+        .map_err(|_| "YTDLP_API_URL not set — Scrapling fallback unavailable".to_string())?;
+    let base = base.trim_end_matches('/');
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(180))
+        .build()
+        .map_err(|e| format!("http client: {e}"))?;
+
+    let resp = client
+        .post(format!("{base}/api/v1/fetch"))
+        .json(&serde_json::json!({ "url": url }))
+        .send()
+        .await
+        .map_err(|e| format!("Scrapling request failed: {e}"))?;
+
+    let status = resp.status();
+    let data: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("Scrapling response parse failed: {e}"))?;
+
+    if !status.is_success() || data.get("success") != Some(&serde_json::Value::Bool(true)) {
+        let detail = data
+            .get("detail")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown error");
+        return Err(format!("Scrapling fetch failed (HTTP {status}): {detail}"));
+    }
+
+    let html = data
+        .get("html")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    if html.is_empty() {
+        return Err(format!("Scrapling returned empty html for: {url}"));
+    }
+
+    tracing::info!(
+        "✅ Scrapling fallback fetched {} ({} bytes, mode={})",
+        url,
+        html.len(),
+        data.get("mode").and_then(|m| m.as_str()).unwrap_or("?")
+    );
+    Ok(Some(html))
 }
 
 /// Check if BrowserBase is configured (API key is set).
