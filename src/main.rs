@@ -16,6 +16,7 @@ mod clipping; // 📹 YouTube clipping feature
 mod cloud_storage;
 mod db;
 mod deepseek_client;
+mod qwen_client;
 mod email;
 mod ffmpeg_mcp_client;
 mod elevenlabs_client; // 🎙️ Eleven Labs TTS, Sound Effects, Music
@@ -79,6 +80,7 @@ pub struct AppState {
     pub nvidia_nim_client: Option<nvidia_nim_client::NvidiaNimClient>, // NVIDIA NIM (text + tools, 40 RPM)
     pub nvidia_nim_vision_client: Option<nvidia_nim_client::NvidiaNimClient>, // NVIDIA NIM (vision + tools, Gemini fallback)
     pub deepseek_client: Option<deepseek_client::DeepSeekClient>, // DeepSeek V4 (OpenAI-compatible, tool calling)
+    pub qwen_client: Option<qwen_client::QwenClient>, // Qwen via DashScope (multimodal text+image+video, embeddings)
     pub ollama_client: Option<ollama_client::OllamaClient>, // Self-hosted Gemma 4 12B via Ollama (free, multimodal, GPU auto-scaled)
     pub claude_client: Option<claude_client::ClaudeClient>,
     pub vertex_multimodal_embeddings: Option<vertex_multimodal_embeddings::VertexMultimodalEmbeddingsClient>,
@@ -434,6 +436,14 @@ async fn main() {
         deepseek_client::DeepSeekClient::new(k)
     });
 
+    // Qwen via Alibaba DashScope — multimodal (text+image+video), tool calling,
+    // and qwen3-vl multimodal embeddings (1536d, DashScope REST).
+    let qwen_client = std::env::var("DASHSCOPE_API_KEY").ok().map(|k| {
+        tracing::info!("Initializing Qwen/DashScope client (model: {})...",
+            std::env::var("QWEN_MODEL").unwrap_or_else(|_| "qwen3.7-plus".to_string()));
+        qwen_client::QwenClient::new(k)
+    });
+
     // Ollama — self-hosted Gemma 4B (multimodal, free, on separate t3.xlarge).
     // Used as the primary text generation provider before NVIDIA NIM.
     let ollama_client = {
@@ -691,6 +701,7 @@ async fn main() {
         nvidia_nim_client,
         nvidia_nim_vision_client,
         deepseek_client,
+        qwen_client,
         ollama_client,
         claude_client,
         vertex_multimodal_embeddings,

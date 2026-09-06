@@ -402,6 +402,7 @@ IMPORTANT: For fetching website content, use `browserbase_crawl_website(url)` â€
                                         session_id,
                                         app_state.voyage_embeddings.as_ref(),
                                         app_state.video_gemini_client.as_ref().or(app_state.gemini_client.as_ref()),
+                                        app_state.qwen_client.as_ref(),
                                     )
                                     .await
                                 {
@@ -1514,6 +1515,7 @@ IMPORTANT: For fetching website content, use `browserbase_crawl_website(url)` â€
                                                 session_id,
                                                 app_state.voyage_embeddings.as_ref(),
                                                 app_state.video_gemini_client.as_ref().or(app_state.gemini_client.as_ref()),
+                                                app_state.qwen_client.as_ref(),
                                             )
                                             .await
                                         {

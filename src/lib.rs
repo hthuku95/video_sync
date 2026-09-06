@@ -15,6 +15,7 @@ pub mod clipping;
 pub mod cloud_storage;
 pub mod db;
 pub mod deepseek_client;
+pub mod qwen_client;
 pub mod email;
 pub mod elevenlabs_client;
 pub mod gemini_client;
@@ -87,6 +88,7 @@ pub struct AppState {
     pub nvidia_nim_client: Option<nvidia_nim_client::NvidiaNimClient>,
     pub nvidia_nim_vision_client: Option<nvidia_nim_client::NvidiaNimClient>,
     pub deepseek_client: Option<deepseek_client::DeepSeekClient>,
+    pub qwen_client: Option<qwen_client::QwenClient>,
     pub ollama_client: Option<ollama_client::OllamaClient>,
     pub claude_client: Option<claude_client::ClaudeClient>,
     pub vertex_multimodal_embeddings:

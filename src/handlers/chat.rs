@@ -462,6 +462,7 @@ async fn websocket(
                     &session_id,
                     state.voyage_embeddings.as_ref(),
                     state.video_gemini_client.as_ref().or(state.gemini_client.as_ref()),
+                    state.qwen_client.as_ref(),
                 ).await {
                     Ok(Some(ctx)) => {
                         tracing::debug!("Built context from Qdrant: {} chars", ctx.len());
@@ -750,6 +751,7 @@ async fn websocket(
                                 context_data.clone(),
                                 state.voyage_embeddings.as_ref(),
                                 state.video_gemini_client.as_ref().or(state.gemini_client.as_ref()),
+                                state.qwen_client.as_ref(),
                                 Some("general"),
                             ).await {
                                 tracing::warn!("Failed to store in Qdrant: {}", e);

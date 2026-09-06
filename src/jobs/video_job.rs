@@ -649,6 +649,7 @@ impl VideoEditingJob {
                             context_data,
                             self.app_state.voyage_embeddings.as_ref(),
                             self.app_state.video_gemini_client.as_ref().or(self.app_state.gemini_client.as_ref()),
+                            self.app_state.qwen_client.as_ref(),
                             Some("video_editing"),
                         )
                         .await
