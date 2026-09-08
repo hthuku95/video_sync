@@ -671,7 +671,7 @@ impl StatefulGeminiAgent {
             // default and choose the right tools themselves at runtime.
             crate::ai_tool_selector::select_tools_for_request(
                 user_input,
-                app_state.ollama_client.as_ref(),
+                app_state.qwen_client.as_ref(),
                 app_state.nvidia_nim_client.as_ref(),
                 app_state
                     .video_gemini_client
@@ -2177,7 +2177,7 @@ Write ONLY the summary now."#
 /// Try to compact old complete turns into a summary.
 /// Returns Ok(true) if messages were rewritten, Ok(false) if nothing to do.
 async fn maybe_compact_tool_history(
-    ollama_client: &crate::ollama_client::OllamaClient,
+    qwen_client: Option<&crate::qwen_client::QwenClient>,
     messages: &mut Vec<serde_json::Value>,
     exec_context: &crate::agent::tool_executor::ToolExecutionContext,
 ) -> Result<bool, String> {
@@ -2229,7 +2229,7 @@ async fn maybe_compact_tool_history(
     let summary = match timeout(
         Duration::from_secs(180),
         crate::llm_utils::generate_text_fast(
-            Some(ollama_client),
+            qwen_client,
             exec_context.app_state.deepseek_client.as_ref(),
             exec_context.app_state.gemini_client.as_ref(),
             &compaction_prompt(&transcript),
@@ -2813,9 +2813,13 @@ where
         }
         // Compact old turns once the window fills so Ollama never
         // silently front-trims critical history/tool schemas mid-task.
-        let _ = maybe_compact_tool_history(ollama_client, messages, exec_context)
-            .await
-            .map_err(|e| tracing::warn!("⚠️ Compaction skipped: {}", e));
+        let _ = maybe_compact_tool_history(
+            exec_context.app_state.qwen_client.as_ref(),
+            messages,
+            exec_context,
+        )
+        .await
+        .map_err(|e| tracing::warn!("⚠️ Compaction skipped: {}", e));
 
         let response = timeout(Duration::from_secs(300), ollama_client.generate_single(messages, tools))
             .await

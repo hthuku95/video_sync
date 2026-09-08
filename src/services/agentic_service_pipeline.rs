@@ -1512,7 +1512,7 @@ async fn generate_execution_plan(
     );
 
     crate::llm_utils::generate_text_fast(
-        state.ollama_client.as_ref(),
+        state.qwen_client.as_ref(),
         state.deepseek_client.as_ref(),
         state.gemini_client.as_ref(),
         &prompt,
@@ -1575,7 +1575,7 @@ async fn plan_repair_scope(
         artifacts.join("\n"),
     );
     match crate::llm_utils::generate_text_fast(
-        state.ollama_client.as_ref(),
+        state.qwen_client.as_ref(),
         state.deepseek_client.as_ref(),
         state.gemini_client.as_ref(),
         &prompt,

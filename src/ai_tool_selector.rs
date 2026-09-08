@@ -12,7 +12,6 @@
 /// `AI_TOOL_PRESELECTION_MODE=enabled` for experiments, but it is no longer the
 /// primary path anywhere in the app.
 use crate::gemini_client::FunctionDeclaration;
-use crate::ollama_client::OllamaClient;
 
 const ESSENTIAL_VIDEO_TOOL_NAMES: &[&str] = &["set_chat_title", "submit_final_answer"];
 
@@ -45,7 +44,7 @@ fn all_video_tools_with_essentials() -> Vec<FunctionDeclaration> {
 /// `AI_TOOL_PRESELECTION_MODE=enabled`.
 pub async fn select_tools_for_request(
     user_request: &str,
-    ollama_client: Option<&OllamaClient>,
+    qwen_client: Option<&crate::qwen_client::QwenClient>,
     nvidia_nim_client: Option<&crate::nvidia_nim_client::NvidiaNimClient>,
     gemini_client: Option<&crate::gemini_client::GeminiClient>,
 ) -> Vec<FunctionDeclaration> {
@@ -98,12 +97,12 @@ Return ONLY a valid JSON array of tool names. No explanation, no markdown, no co
         catalog = catalog,
     );
 
-    // Try Ollama first (self-hosted, free, GPU auto-scaled), then NIM, then Gemini
-    let selected_names = if let Some(ollama) = ollama_client {
-        match ollama.generate_text(&selection_prompt).await {
+    // Try Qwen first (default model, multimodal, DashScope), then NIM, then Gemini
+    let selected_names = if let Some(qwen) = qwen_client {
+        match qwen.generate_text(&selection_prompt).await {
             Ok(text) => parse_tool_names(&text),
             Err(e) => {
-                tracing::warn!("AI tool selection via Ollama failed: {} — trying NIM", e);
+                tracing::warn!("AI tool selection via Qwen failed: {} — trying NIM", e);
                 try_nim_selection(nvidia_nim_client, gemini_client, &selection_prompt).await
             }
         }

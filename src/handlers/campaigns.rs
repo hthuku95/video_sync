@@ -908,7 +908,7 @@ async fn bounded_chat_reply(
     );
 
     let reply = crate::llm_utils::generate_text_fast(
-        state.ollama_client.as_ref(),
+        state.qwen_client.as_ref(),
         state.deepseek_client.as_ref(),
         state.gemini_client.as_ref(),
         &prompt,
@@ -1112,7 +1112,7 @@ async fn campaign_chat(
             state_for_corrections.db_pool.clone(),
             state_for_corrections.qdrant_client.clone(),
             None,
-            state_for_corrections.ollama_client.as_ref(),
+            state_for_corrections.qwen_client.as_ref(),
             state_for_corrections.deepseek_client.as_ref(),
             state_for_corrections.gemini_client.as_ref(),
             Some(user_id),

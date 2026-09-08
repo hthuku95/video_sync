@@ -2265,7 +2265,7 @@ User:
     );
 
     let raw = crate::llm_utils::generate_text_fast(
-        state.ollama_client.as_ref(),
+        state.qwen_client.as_ref(),
         state.deepseek_client.as_ref(),
         state.gemini_client.as_ref(),
         &prompt,
@@ -2491,7 +2491,7 @@ async fn run_agent_background(
                     _state_for_correction.db_pool.clone(),
                     _state_for_correction.qdrant_client.clone(),
                     _state_for_correction.gemini_client.clone().map(std::sync::Arc::new),
-                    _state_for_correction.ollama_client.as_ref(),
+                    _state_for_correction.qwen_client.as_ref(),
                     _state_for_correction.deepseek_client.as_ref(),
                     _state_for_correction.gemini_client.as_ref(),
                     _uid_for_correction,

@@ -194,7 +194,7 @@ pub async fn detect_and_store_correction(
     pool: sqlx::PgPool,
     qdrant: Option<crate::qdrant_client::QdrantClient>,
     gemini_for_embedding: Option<std::sync::Arc<crate::gemini_client::GeminiClient>>,
-    ollama: Option<&crate::ollama_client::OllamaClient>,
+    qwen: Option<&crate::qwen_client::QwenClient>,
     deepseek: Option<&crate::deepseek_client::DeepSeekClient>,
     gemini_for_llm: Option<&crate::gemini_client::GeminiClient>,
     user_id: Option<i32>,
@@ -231,7 +231,7 @@ pub async fn detect_and_store_correction(
     );
 
     let extraction_result = crate::llm_utils::generate_text_fast(
-        ollama,
+        qwen,
         deepseek,
         gemini_for_llm,
         &prompt,

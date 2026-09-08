@@ -28,7 +28,7 @@ Rules:
     );
 
     let guessed_slug = crate::llm_utils::generate_text_fast(
-        state.ollama_client.as_ref(),
+        state.qwen_client.as_ref(),
         state.deepseek_client.as_ref(),
         state.video_gemini_client.as_ref().or(state.gemini_client.as_ref()),
         &prompt,

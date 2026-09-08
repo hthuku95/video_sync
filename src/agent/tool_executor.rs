@@ -5879,7 +5879,7 @@ async fn execute_auto_generate_video_hybrid_gemini(
     let mut used_ids: std::collections::HashSet<i64> = std::collections::HashSet::new();
     let search_queries = generate_search_queries_ai(
         topic, num_clips,
-        ctx.app_state.ollama_client.as_ref(),
+        ctx.app_state.qwen_client.as_ref(),
         ctx.app_state.deepseek_client.as_ref(),
         ctx.app_state.gemini_client.as_ref(),
     ).await;
@@ -7377,12 +7377,12 @@ fn run_final_qa(output_file: &str) -> String {
     qa
 }
 
-/// AI-powered search query generation using the fallback chain (Ollama first).
+/// AI-powered search query generation using the fallback chain (Qwen first).
 /// Pass `None` for all clients to skip AI and use heuristic fallback.
 async fn generate_search_queries_ai(
     topic: &str,
     num_queries: usize,
-    ollama: Option<&crate::ollama_client::OllamaClient>,
+    qwen: Option<&crate::qwen_client::QwenClient>,
     deepseek: Option<&crate::deepseek_client::DeepSeekClient>,
     gemini: Option<&crate::gemini_client::GeminiClient>,
 ) -> Vec<String> {
@@ -7395,7 +7395,7 @@ async fn generate_search_queries_ai(
          - Output ONLY the queries, one per line, no numbering, no extra text."
     );
     match crate::llm_utils::generate_text_fast(
-        ollama,
+        qwen,
         deepseek,
         gemini,
         &prompt,
@@ -9073,7 +9073,7 @@ async fn execute_optimize_youtube_metadata_with_state_claude(
     );
 
     let metadata = match crate::llm_utils::generate_text_fast(
-        ctx.app_state.ollama_client.as_ref(),
+        ctx.app_state.qwen_client.as_ref(),
         ctx.app_state.deepseek_client.as_ref(),
         ctx.app_state.gemini_client.as_ref(),
         &prompt,

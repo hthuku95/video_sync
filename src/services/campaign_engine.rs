@@ -501,7 +501,7 @@ async fn generate_variation(
     );
 
     crate::llm_utils::generate_text_fast(
-        state.ollama_client.as_ref(),
+        state.qwen_client.as_ref(),
         state.deepseek_client.as_ref(),
         state.gemini_client.as_ref(),
         &prompt,
@@ -847,7 +847,7 @@ async fn create_skill_from_workflow(
     );
 
     let text = match crate::llm_utils::generate_text_fast(
-        state.ollama_client.as_ref(),
+        state.qwen_client.as_ref(),
         state.deepseek_client.as_ref(),
         state.gemini_client.as_ref(),
         &prompt,
@@ -1179,7 +1179,7 @@ async fn check_zernio_post_status(state: &Arc<AppState>, campaign: &CampaignRow,
         );
 
         let skill_text = crate::llm_utils::generate_text_fast(
-            state.ollama_client.as_ref(),
+            state.qwen_client.as_ref(),
             state.deepseek_client.as_ref(),
             state.gemini_client.as_ref(),
             &skill_prompt,

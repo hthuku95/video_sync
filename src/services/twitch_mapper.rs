@@ -34,7 +34,7 @@ pub async fn auto_map_youtube_to_twitch(
     );
 
     let response = crate::llm_utils::generate_text_fast(
-        state.ollama_client.as_ref(),
+        state.qwen_client.as_ref(),
         state.deepseek_client.as_ref(),
         state.gemini_client.as_ref(),
         &prompt,
