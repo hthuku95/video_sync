@@ -3,11 +3,13 @@
 //! produces a file we hand back to a user or paying client.
 //!
 //! Runs after render, before return. Flow:
-//!   render_complete(url, prompt, tool) → fallback chain:
-//!     1. NVIDIA NIM (images/audio only — skip video, no native support)
-//!     2. AWS Bedrock (Llama 4 Maverick — images/audio, text)
-//!     3. Ollama/Gemma 4 12B (full video native)
-//!     4. Gemini 2.5 Flash (full video inlineData)
+//!   render_complete(url, prompt, tool) → fallback chain (Qwen-first, §52):
+//!     1. Qwen (qwen3.7-plus — FULL video native incl. audio, via DashScope
+//!        multimodal content parts; the DEFAULT multimodal reviewer)
+//!     2. NVIDIA NIM (images/audio only — skip video, no native support)
+//!     3. AWS Bedrock (Llama 4 Maverick — images/audio, text)
+//!     4. Gemini 2.5 Flash (full video inlineData — last resort, quota-limited)
+//!   Ollama was retired permanently (Sep 2026) — no Ollama leg.
 //!   returns `{pass: bool, score, feedback, retry_hint}` → if pass, caller
 //!   hands the URL to the user; if fail + first attempt, caller retries with
 //!   the hint appended to the prompt; if fail after retry, caller still
@@ -18,7 +20,7 @@
 
 use crate::gemini_client::GeminiClient;
 use crate::nvidia_nim_client::NvidiaNimClient;
-use crate::ollama_client::OllamaClient;
+use crate::qwen_client::QwenClient;
 use crate::AppState;
 use base64::engine::general_purpose::STANDARD as BASE64_ENGINE;
 use base64::Engine;
@@ -158,11 +160,12 @@ pub struct ReviewResult {
     pub retry_hint: Option<String>,
 }
 
-/// Review a rendered output using the four-provider fallback chain:
-///   1. NVIDIA NIM (images/audio only, skip video)
-///   2. AWS Bedrock (images/audio/text)
-///   3. Ollama/Gemma 4 12B (full video native, images, audio)
-///   4. Gemini 2.5 Flash (full video inlineData, images, audio)
+/// Review a rendered output using the unified Qwen-first fallback chain (§52):
+///   1. Qwen (qwen3.7-plus — FULL video native, images, audio; the default
+///      multimodal reviewer. First in the §6 fallback order, replacing Ollama.)
+///   2. NVIDIA NIM (images/audio only, skip video)
+///   3. AWS Bedrock (images/audio/text)
+///   4. Gemini 2.5 Flash (full video inlineData, images, audio — last resort)
 pub async fn review_render(
     state: &Arc<AppState>,
     output_url: &str,
@@ -206,7 +209,17 @@ pub async fn review_render(
         };
     }
 
-    // 1. Try NVIDIA NIM vision model (images/audio only, skip video)
+    // 1. Try Qwen (qwen3.7-plus) — FULL video native (DashScope multimodal
+    //    content parts). First in the unified §6 fallback chain (§52 GAP C+D).
+    if let Some(qwen) = state.qwen_client.as_ref() {
+        let review = run_review_via_qwen(qwen, output_url, &prompt).await;
+        if review.score > 0 {
+            persist_review(state, tool_name, &review, delivery_id, output_url).await;
+            return review;
+        }
+    }
+
+    // 2. Try NVIDIA NIM vision model (images/audio only, skip video)
     let ext = output_url.rsplit('.').next().unwrap_or("").to_lowercase();
     let is_video = matches!(ext.as_str(), "mp4" | "mov" | "mkv" | "webm" | "avi");
     if !is_video {
@@ -219,18 +232,9 @@ pub async fn review_render(
         }
     }
 
-    // 2. Try Bedrock (images/audio/text)
+    // 3. Try Bedrock (images/audio/text)
     if let Some(bedrock) = state.bedrock_client.as_ref() {
         let review = run_review_via_bedrock(bedrock, output_url, &prompt, is_video).await;
-        if review.score > 0 {
-            persist_review(state, tool_name, &review, delivery_id, output_url).await;
-            return review;
-        }
-    }
-
-    // 3. Try Ollama/Gemma 4 12B (full video native, images, audio)
-    if let Some(ollama) = state.ollama_client.as_ref() {
-        let review = run_review_via_ollama(ollama, output_url, &prompt).await;
         if review.score > 0 {
             persist_review(state, tool_name, &review, delivery_id, output_url).await;
             return review;
@@ -248,7 +252,7 @@ pub async fn review_render(
             return ReviewResult {
                 pass: false,
                 score: 0,
-                feedback: "No reviewer (NIM, Bedrock, Ollama, or Gemini) configured — QA review skipped".to_string(),
+                feedback: "No reviewer (Qwen, NIM, Bedrock, or Gemini) configured — QA review skipped".to_string(),
                 retry_hint: None,
             };
         }
@@ -257,6 +261,26 @@ pub async fn review_render(
     let review = run_review_via_gemini(gemini, output_url, &prompt).await;
     persist_review(state, tool_name, &review, delivery_id, output_url).await;
     review
+}
+
+/// Run review via Qwen (qwen3.7-plus — full video native, images, audio).
+async fn run_review_via_qwen(
+    qwen: &QwenClient,
+    output_url: &str,
+    prompt: &str,
+) -> ReviewResult {
+    let response = match multimodal_review_via_qwen(qwen, output_url, prompt).await {
+        Ok(r) => r,
+        Err(e) => {
+            return ReviewResult {
+                pass: false,
+                score: 0,
+                feedback: format!("Qwen review call failed: {}", e),
+                retry_hint: None,
+            };
+        }
+    };
+    parse_review_response(&response)
 }
 
 /// Run review via NVIDIA NIM vision model (images/audio only).
@@ -301,26 +325,6 @@ async fn run_review_via_bedrock(
                 pass: false,
                 score: 0,
                 feedback: format!("Bedrock review call failed: {}", e),
-                retry_hint: None,
-            };
-        }
-    };
-    parse_review_response(&response)
-}
-
-/// Run review via Ollama/Gemma 4 12B (full video native, images, audio).
-async fn run_review_via_ollama(
-    ollama: &OllamaClient,
-    output_url: &str,
-    prompt: &str,
-) -> ReviewResult {
-    let response = match multimodal_review_via_ollama(ollama, output_url, prompt).await {
-        Ok(r) => r,
-        Err(e) => {
-            return ReviewResult {
-                pass: false,
-                score: 0,
-                feedback: format!("Ollama review call failed: {}", e),
                 retry_hint: None,
             };
         }
@@ -550,22 +554,33 @@ async fn multimodal_review_via_nim(
     result
 }
 
-/// Analyze media via Ollama/Gemma 4 12B (full video native, images, audio).
-async fn multimodal_review_via_ollama(
-    ollama: &OllamaClient,
+/// Analyze media via Qwen (qwen3.7-plus — full video native incl. audio).
+/// Uses DashScope OpenAI-compatible multimodal content parts:
+///   video → {"type":"video_url",...,"fps":2}
+///   image → {"type":"image_url","image_url":{"url":...}}
+///   audio → {"type":"input_audio","input_audio":{"data":...,"format":...}}
+/// DashScope base64 data-URIs are limited to ~7MB per file; larger renders
+/// (long videos) are passed as the original HTTP(S) output URL and fetched
+/// server-side.
+async fn multimodal_review_via_qwen(
+    qwen: &QwenClient,
     output_url: &str,
     prompt: &str,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    // DashScope rejects base64 payloads above ~7MB — route big files through
+    // a server-side fetch of the original HTTP(S) URL instead.
+    const B64_MEDIA_MAX_BYTES: u64 = 7 * 1024 * 1024;
+    let is_remote_url = output_url.starts_with("http://") || output_url.starts_with("https://");
+
     let _downloaded = download_to_temp(output_url).await?;
-    let (local_path_buf, local_url_owned) = match _downloaded.as_ref() {
-        Some((path, _)) => (Some(path.clone()), Some(path.to_string_lossy().to_string())),
-        None => (None, None),
+    let (local_path_buf, _) = match _downloaded.as_ref() {
+        Some((path, _)) => (Some(path.clone()), ()),
+        None => (None, ()),
     };
     let local_path: &Path = local_path_buf.as_deref().unwrap_or_else(|| Path::new(output_url));
-    let local_url: &str = local_url_owned.as_deref().unwrap_or(output_url);
 
     if !local_path.exists() {
-        return ollama.generate_text(prompt).await.map_err(Into::into);
+        return qwen.generate_text(prompt).await.map_err(Into::into);
     }
 
     let ext = local_path
@@ -575,33 +590,59 @@ async fn multimodal_review_via_ollama(
         .unwrap_or_default();
 
     let result = if is_video_extension(&ext) {
-        // Read full video and send to Ollama native API (Gemma 4 natively understands video)
-        let video_bytes = tokio::fs::read(local_path).await?;
-        let b64 = BASE64_ENGINE.encode(&video_bytes);
-        let body = serde_json::json!({
-            "model": ollama.model_id(),
-            "messages": [{"role": "user", "content": prompt, "images": [b64]}],
-            "stream": false,
-            "options": {"num_predict": 2048, "temperature": 0.3}
-        });
-        let resp = ollama.chat_native(body).await?;
-        Ok(resp)
+        let bytes = std::fs::read(local_path)?;
+        let part = if is_remote_url && (bytes.len() as u64) > B64_MEDIA_MAX_BYTES {
+            serde_json::json!({
+                "type": "video_url",
+                "video_url": { "url": output_url },
+                "fps": 2,
+            })
+        } else {
+            let b64 = BASE64_ENGINE.encode(&bytes);
+            serde_json::json!({
+                "type": "video_url",
+                "video_url": { "url": format!("data:video/{};base64,{}", ext, b64) },
+                "fps": 2,
+            })
+        };
+        qwen
+            .generate_multimodal(prompt, &[part], 2048)
+            .await
+            .map_err(Into::into)
     } else if is_image_extension(&ext) {
         let bytes = std::fs::read(local_path)?;
-        ollama.generate_text_with_images(prompt, vec![("".to_string(), bytes)]).await.map_err(Into::into)
-    } else if let Some(_mime_type) = audio_mime_type(&ext) {
+        let part = if is_remote_url && (bytes.len() as u64) > B64_MEDIA_MAX_BYTES {
+            serde_json::json!({
+                "type": "image_url",
+                "image_url": { "url": output_url },
+            })
+        } else {
+            let b64 = BASE64_ENGINE.encode(&bytes);
+            serde_json::json!({
+                "type": "image_url",
+                "image_url": { "url": format!("data:image/{};base64,{}", ext, b64) },
+            })
+        };
+        qwen
+            .generate_multimodal(prompt, &[part], 2048)
+            .await
+            .map_err(Into::into)
+    } else if let Some(mime_type) = audio_mime_type(&ext) {
         let bytes = std::fs::read(local_path)?;
         let b64 = BASE64_ENGINE.encode(&bytes);
-        let body = serde_json::json!({
-            "model": ollama.model_id(),
-            "messages": [{"role": "user", "content": prompt, "images": [b64]}],
-            "stream": false,
-            "options": {"num_predict": 2048, "temperature": 0.3}
+        let part = serde_json::json!({
+            "type": "input_audio",
+            "input_audio": {
+                "data": format!("data:{};base64,{}", mime_type, b64),
+                "format": ext,
+            },
         });
-        let resp = ollama.chat_native(body).await?;
-        Ok(resp)
+        qwen
+            .generate_multimodal(prompt, &[part], 2048)
+            .await
+            .map_err(Into::into)
     } else {
-        ollama.generate_text(prompt).await.map_err(Into::into)
+        qwen.generate_text(prompt).await.map_err(Into::into)
     };
 
     if let Some((temp_path, _)) = _downloaded {
@@ -613,7 +654,7 @@ async fn multimodal_review_via_ollama(
 
 /// Analyze media via Bedrock (text only — Llama 4 Maverick Converse API supports
 /// image/video content blocks, but the SDK image/video support needs builder
-/// imports not yet exposed from bedrock_client.rs. For images/video, NIM/Ollama
+/// imports not yet exposed from bedrock_client.rs. For images/video, Qwen/NIM
 /// handle those before Bedrock in the chain.
 async fn multimodal_review_via_bedrock(
     bedrock: &Arc<crate::bedrock_client::BedrockClient>,

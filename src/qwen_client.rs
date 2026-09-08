@@ -141,6 +141,90 @@ impl QwenClient {
         Err(last_err)
     }
 
+    /// Multimodal content-part generation via DashScope OpenAI-compatible
+    /// `chat/completions`. `media_parts` is an array of content parts:
+    ///   - `{"type": "text", "text": "..."}`
+    ///   - `{"type": "image_url", "image_url": {"url": "<https or data URI>"}}`
+    ///   - `{"type": "video_url", "video_url": {"url": "<https or data URI>"}, "fps": 2}`
+    ///   - `{"type": "input_audio", "input_audio": {"data": "<url or data URI>", "format": "mp3"}}`
+    /// The `prompt` text is prepended as the first content part.
+    pub async fn generate_multimodal(
+        &self,
+        prompt: &str,
+        media_parts: &[serde_json::Value],
+        max_tokens: u32,
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        let mut content: Vec<serde_json::Value> = Vec::with_capacity(media_parts.len() + 1);
+        content.push(serde_json::json!({ "type": "text", "text": prompt }));
+        content.extend_from_slice(media_parts);
+
+        let body = serde_json::json!({
+            "model": self.model,
+            "messages": [{"role": "user", "content": content}],
+            "max_tokens": max_tokens,
+            "temperature": 0.1,
+        });
+
+        let max_attempts = 3u32;
+        let mut last_err: Box<dyn std::error::Error + Send + Sync> =
+            "Qwen: no multimodal attempts made".into();
+
+        for attempt in 0..max_attempts {
+            let resp = self
+                .client
+                .post(format!("{}/chat/completions", qwen_base_url()))
+                .header("Authorization", format!("Bearer {}", self.api_key))
+                .header("Content-Type", "application/json")
+                .json(&body)
+                .send()
+                .await?;
+
+            let status = resp.status();
+
+            if status.is_success() {
+                let json: serde_json::Value = resp.json().await?;
+                let text = json["choices"][0]["message"]["content"]
+                    .as_str()
+                    .ok_or("Qwen: no content in response")?
+                    .to_string();
+                return Ok(text);
+            }
+
+            let err_body = resp.text().await.unwrap_or_default();
+
+            // Non-retryable: auth / insufficient balance / invalid model
+            if status.as_u16() == 401
+                || status.as_u16() == 402
+                || status.as_u16() == 400
+            {
+                return Err(format!("Qwen {}: {}", status.as_u16(), err_body).into());
+            }
+
+            if (status.as_u16() == 429 || status.as_u16() == 503)
+                && attempt < max_attempts - 1
+            {
+                let wait = 10u64 * 2u64.pow(attempt);
+                tracing::warn!(
+                    "⏳ Qwen multimodal {} (attempt {}/{}). Waiting {}s…",
+                    status.as_u16(),
+                    attempt + 1,
+                    max_attempts,
+                    wait
+                );
+                tokio::time::sleep(tokio::time::Duration::from_secs(wait.min(60))).await;
+                last_err = format!("Qwen {}: {}", status.as_u16(), err_body).into();
+                continue;
+            }
+
+            last_err = format!("Qwen error {}: {}", status, err_body).into();
+            if attempt < max_attempts - 1 {
+                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+            }
+        }
+
+        Err(last_err)
+    }
+
     // ─── Tool calling ─────────────────────────────────────────────────────────
 
     fn to_openai_tools(decls: &[crate::gemini_client::FunctionDeclaration]) -> serde_json::Value {
