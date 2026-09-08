@@ -24,6 +24,7 @@ pub mod jobs;
 pub mod kick_client;
 pub mod kick_vod_scraper;
 pub mod llm_utils;
+pub mod mns_client;
 pub mod middleware;
 pub mod models;
 pub mod nvidia_nim_client;

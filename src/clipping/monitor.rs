@@ -147,7 +147,7 @@ async fn enqueue_clipping_job(
                 .await;
                 tokio::spawn(async move {
                     if let Err(e) = sqs_enqueue_clipping_job(job_id).await {
-                        tracing::warn!("SQS enqueue failed (non-fatal): {}", e);
+                        tracing::warn!("Queue enqueue failed (non-fatal): {}", e);
                     }
                 });
                 Ok((job_id, true))
@@ -728,9 +728,20 @@ impl ChannelMonitor {
     }
 }
 
-/// Fire-and-forget SQS enqueue for clipping jobs.
-/// Reads CLIPPING_SQS_QUEUE_URL env var; no-ops if unset.
+/// Fire-and-forget queue enqueue for clipping jobs.
+/// Dispatch order: MNS (when MNS_ENDPOINT+MNS_QUEUE_NAME set) → SQS
+/// (CLIPPING_SQS_QUEUE_URL) → no-op.
 async fn sqs_enqueue_clipping_job(job_id: i32) -> Result<(), String> {
+    if crate::mns_client::MnsClient::is_configured() {
+        if let Some(mns) = crate::mns_client::MnsClient::from_env() {
+            let body = serde_json::json!({"job_id": job_id}).to_string();
+            return mns
+                .send_message(&body)
+                .await
+                .map(|_| ())
+                .map_err(|e| format!("MNS enqueue failed: {}", e));
+        }
+    }
     let queue_url = match std::env::var("CLIPPING_SQS_QUEUE_URL") {
         Ok(url) if !url.is_empty() => url,
         _ => return Ok(()),

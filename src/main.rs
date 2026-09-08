@@ -26,6 +26,7 @@ mod jobs; // 🆕 Background job system for video editing
 mod kick_client; // 📺 Kick.com API client
 mod kick_vod_scraper; // 🎥 Kick VOD video list + HLS stream URL extraction (via BrowserBase)
 mod llm_utils;
+mod mns_client; // MNS — Alibaba Cloud Message Service (cloud SQS-equivalent) for clipping dispatch
 mod middleware;
 mod models;
 mod nvidia_nim_client;
@@ -819,9 +820,60 @@ async fn main() {
     }
     // ── End WORKER_MODE ─────────────────────────────────────────────────
 
-    // ── BATCH_MODE: process one SQS message and exit ────────────────────
+    // ── BATCH_MODE: process one queue message and exit ──────────────────
     if std::env::var("BATCH_MODE").as_deref() == Ok("true") {
-        tracing::info!("🧵 BATCH_MODE enabled — processing one SQS message then exiting");
+        tracing::info!("🧵 BATCH_MODE enabled — processing one queue message then exiting");
+
+        // ── MNS first (Alibaba Cloud Message Service) ────────────────────
+        if crate::mns_client::MnsClient::is_configured() {
+            if let Some(mns) = crate::mns_client::MnsClient::from_env() {
+                let receive_result = mns.receive_message(1, 20).await;
+                match receive_result {
+                    Ok(msgs) if !msgs.is_empty() => {
+                        let msg = &msgs[0];
+                        match serde_json::from_str::<serde_json::Value>(&msg.body) {
+                            Ok(payload) => {
+                                let job_id = payload["job_id"].as_i64().unwrap_or(0) as i32;
+                                if job_id == 0 {
+                                    tracing::error!("💥 Invalid job_id in MNS message: {}", msg.body);
+                                    std::process::exit(1);
+                                }
+                                tracing::info!("🎬 Batch processing job {}", job_id);
+                                match jobs::clipping_worker::execute_claimed_job(
+                                    shared_state.clone(),
+                                    job_id,
+                                )
+                                .await
+                                {
+                                    Ok(_) => {
+                                        let _ = mns.delete_message(&msg.receipt_handle).await;
+                                        tracing::info!("✅ Batch job {} completed, message deleted", job_id);
+                                        std::process::exit(0);
+                                    }
+                                    Err(e) => {
+                                        tracing::error!("💥 Batch job {} failed: {}", job_id, e);
+                                        // Don't delete — MNS visibility timeout will retry
+                                        std::process::exit(1);
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                tracing::error!("💥 Failed to parse MNS message: {}", e);
+                                std::process::exit(1);
+                            }
+                        }
+                    }
+                    Ok(_) => {
+                        tracing::info!("No messages in queue — exiting");
+                        std::process::exit(0);
+                    }
+                    Err(e) => {
+                        tracing::error!("💥 MNS receive_message failed: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+            }
+        }
 
         let queue_url = std::env::var("CLIPPING_SQS_QUEUE_URL")
             .unwrap_or_default();

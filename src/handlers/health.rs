@@ -87,6 +87,18 @@ async fn health_check(
             .unwrap_or(0);
 
     // Determine overall status
+    let queue_backend = if crate::mns_client::MnsClient::is_configured() {
+        "mns"
+    } else if std::env::var("CLIPPING_SQS_QUEUE_URL")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .is_some()
+    {
+        "sqs"
+    } else {
+        "postgres"
+    };
+
     let db_status = if db_ok { "pass" } else { "fail" };
     let worker_status = if worker_alive { "pass" } else { "warn" };
     let queue_status = if pending_old > 0 { "warn" } else { "pass" };
@@ -122,6 +134,7 @@ async fn health_check(
             }],
             "queue": [{
                 "status": queue_status,
+                "backend": queue_backend,
                 "pendingJobs": pending_total,
                 "pendingOlderThan15Min": pending_old,
                 "failedJobs": failed_jobs,

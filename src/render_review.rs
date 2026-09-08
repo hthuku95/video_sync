@@ -5,7 +5,10 @@
 //! Runs after render, before return. Flow:
 //!   render_complete(url, prompt, tool) → fallback chain (Qwen-first, §52):
 //!     1. Qwen (qwen3.7-plus — FULL video native incl. audio, via DashScope
-//!        multimodal content parts; the DEFAULT multimodal reviewer)
+//!        multimodal content parts; the DEFAULT multimodal reviewer).
+//!        AGENTIC reviewer (§52 GAP A): multi-turn ReAct loop with two tools —
+//!        `probe_media` (deterministic ffprobe evidence) and `finish_review`
+//!        (the verdict). Falls back to single-shot on loop failure.
 //!     2. NVIDIA NIM (images/audio only — skip video, no native support)
 //!     3. AWS Bedrock (Llama 4 Maverick — images/audio, text)
 //!     4. Gemini 2.5 Flash (full video inlineData — last resort, quota-limited)
@@ -18,13 +21,14 @@
 //! Also writes one row per review to `blender_render_reviews` so the
 //! admin dashboard can see pass/fail rate per tool over time.
 
-use crate::gemini_client::GeminiClient;
+use crate::gemini_client::{FunctionDeclaration, GeminiClient, Parameters, PropertyDefinition};
 use crate::nvidia_nim_client::NvidiaNimClient;
-use crate::qwen_client::QwenClient;
+use crate::qwen_client::{QwenClient, QwenResponse, QwenToolCall};
 use crate::AppState;
 use base64::engine::general_purpose::STANDARD as BASE64_ENGINE;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
@@ -39,6 +43,12 @@ const GEMINI_DAILY_LIMIT: u32 = 18;
 /// Minimum acceptable score to pass the render. Chosen at 6 because our
 /// review prompt scores 1-10; 6+ means "buyer-quality", 5- means "redo".
 const PASS_THRESHOLD: i32 = 6;
+
+/// Agentic reviewer bounds (§52 GAP A): the Qwen reviewer runs a bounded
+/// ReAct tool loop (probe_media → finish_review). Max turns + per-call
+/// timeout keep a single review from hanging the render pipeline.
+const REVIEWER_MAX_TURNS: usize = 5;
+const REVIEWER_CALL_TIMEOUT_SECS: u64 = 300;
 
 /// Deterministic artifact floor (Sep 2 2026, §CRIT): a video artifact smaller
 /// than this is corrupt/empty — no reviewer needed to know it's garbage.
@@ -264,11 +274,27 @@ pub async fn review_render(
 }
 
 /// Run review via Qwen (qwen3.7-plus — full video native, images, audio).
+///
+/// §52 GAP A: this is an AGENTIC reviewer — Qwen runs a bounded ReAct tool
+/// loop (`probe_media` to gather deterministic evidence, `finish_review` to
+/// submit its verdict) instead of a single-shot prompt. If the tool loop
+/// itself hard-fails (model error, timeout, turn exhaustion) we fall back to
+/// the single-shot `multimodal_review_via_qwen` rather than failing closed.
 async fn run_review_via_qwen(
     qwen: &QwenClient,
     output_url: &str,
     prompt: &str,
 ) -> ReviewResult {
+    let agentic = agentic_review_via_qwen(qwen, output_url, prompt).await;
+    // A real verdict (score 1-10) means the loop succeeded. If the loop failed
+    // (score 0 + "Agentic Qwen review failed/..."), degrade to single-shot.
+    let loop_failed = agentic.score == 0
+        && (agentic.feedback.contains("tool loop failed")
+            || agentic.feedback.contains("turns without a verdict"));
+    if !loop_failed {
+        return agentic;
+    }
+
     let response = match multimodal_review_via_qwen(qwen, output_url, prompt).await {
         Ok(r) => r,
         Err(e) => {
@@ -281,6 +307,421 @@ async fn run_review_via_qwen(
         }
     };
     parse_review_response(&response)
+}
+
+/// Build the two tools the agentic reviewer may call:
+///  - `probe_media` — deterministic technical evidence (duration, resolution,
+///    audio stream, codecs) gathered via ffprobe. Lets the model VERIFY
+///    against the brief instead of guessing.
+///  - `finish_review` — submit the final structured verdict. The loop ends
+///    (and the verdict is returned) as soon as this is called.
+fn reviewer_tools() -> Vec<FunctionDeclaration> {
+    vec![
+        FunctionDeclaration {
+            name: "probe_media".to_string(),
+            description: "Gather deterministic technical metadata about the rendered artifact (duration, resolution, fps, audio streams, size, codecs). Call this when the brief has technical expectations or when you need evidence before scoring. Returns a plain-text JSON summary.".to_string(),
+            parameters: Parameters {
+                param_type: "object".to_string(),
+                properties: HashMap::new(),
+                required: vec![],
+            },
+        },
+        FunctionDeclaration {
+            name: "finish_review".to_string(),
+            description: "Submit the final verdict. score is 1-10 (>=6 ships, <=5 re-render). feedback is a short evidence-based justification. retry_hint is a one-sentence concrete fix to prepend to the render prompt when score <=5 (omit/null when shipping).".to_string(),
+            parameters: Parameters {
+                param_type: "object".to_string(),
+                properties: {
+                    let mut p: HashMap<String, PropertyDefinition> = HashMap::new();
+                    p.insert(
+                        "score".to_string(),
+                        PropertyDefinition {
+                            prop_type: "integer".to_string(),
+                            description: "QA verdict 1-10; >=6 = buyer-quality".to_string(),
+                            items: None,
+                        },
+                    );
+                    p.insert(
+                        "feedback".to_string(),
+                        PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Short evidence-based justification".to_string(),
+                            items: None,
+                        },
+                    );
+                    p.insert(
+                        "retry_hint".to_string(),
+                        PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Optional one-sentence fix when score <=5".to_string(),
+                            items: None,
+                        },
+                    );
+                    p
+                },
+                required: vec!["score".to_string(), "feedback".to_string()],
+            },
+        },
+    ]
+}
+
+/// System instruction that makes the Qwen reviewer an agent (decide → observe
+/// → judge) rather than a single-turn prompt. Explicitly forbids prose answers:
+/// every turn must either probe or finish.
+fn reviewer_system_prompt() -> String {
+    "You are an agentic QA reviewer for an AI video production studio. A paying \
+     client will receive this output — verify it rigorously against the brief.
+
+You have exactly two tools:
+1. probe_media — gather deterministic technical evidence about the artifact \
+     (duration, resolution, fps, audio, size, codecs). Use it whenever the \
+     brief specifies technical requirements or when in doubt.
+2. finish_review — submit your verdict. You must end with this tool: \
+     {\"score\": 1-10, \"feedback\": \"...\", \"retry_hint\": \"...\"}.
+
+Work like an inspector: inspect the attached media, probe for evidence, THEN \
+finish. Do not answer in prose — call a tool on every single turn. A score of \
+6+ is buyer-quality; 5 or below means the caller will re-render using your \
+retry_hint."
+        .to_string()
+}
+
+/// Extract the media the reviewer should look at (video / image / audio, native
+/// DashScope parts) from the artifact. Local temp download is used for base64
+/// embedding of small files; larger files pass the remote URL to DashScope.
+async fn build_media_content_parts(output_url: &str) -> Vec<serde_json::Value> {
+    const B64_MEDIA_MAX_BYTES: u64 = 7 * 1024 * 1024;
+    let is_remote_url = output_url.starts_with("http://") || output_url.starts_with("https://");
+
+    let local = match download_to_temp(output_url).await {
+        Ok(Some((path, _))) => Some(path),
+        _ => None,
+    };
+    let local_path: &Path = local.as_deref().unwrap_or_else(|| Path::new(output_url));
+    if !local_path.exists() {
+        return Vec::new();
+    }
+
+    let ext = local_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .unwrap_or_default();
+
+    let parts = if is_video_extension(&ext) {
+        let bytes = std::fs::read(local_path).unwrap_or_default();
+        let part = if is_remote_url && (bytes.len() as u64) > B64_MEDIA_MAX_BYTES {
+            serde_json::json!({ "type": "video_url", "video_url": { "url": output_url }, "fps": 2 })
+        } else {
+            serde_json::json!({
+                "type": "video_url",
+                "video_url": { "url": format!("data:video/{};base64,{}", ext, BASE64_ENGINE.encode(&bytes)) },
+                "fps": 2,
+            })
+        };
+        vec![part]
+    } else if is_image_extension(&ext) {
+        let bytes = std::fs::read(local_path).unwrap_or_default();
+        let part = if is_remote_url && (bytes.len() as u64) > B64_MEDIA_MAX_BYTES {
+            serde_json::json!({ "type": "image_url", "image_url": { "url": output_url } })
+        } else {
+            serde_json::json!({
+                "type": "image_url",
+                "image_url": { "url": format!("data:image/{};base64,{}", ext, BASE64_ENGINE.encode(&bytes)) },
+            })
+        };
+        vec![part]
+    } else if let Some(mime_type) = audio_mime_type(&ext) {
+        let bytes = std::fs::read(local_path).unwrap_or_default();
+        vec![serde_json::json!({
+            "type": "input_audio",
+            "input_audio": { "data": format!("data:{};base64,{}", mime_type, BASE64_ENGINE.encode(&bytes)), "format": ext },
+        })]
+    } else {
+        Vec::new()
+    };
+
+    if let Some(p) = local {
+        let _ = std::fs::remove_file(&p);
+    }
+    parts
+}
+
+/// Agentic QA review via Qwen: multi-turn ReAct loop where the model decides
+/// which of `probe_media` / `finish_review` to call. Every turn is a full
+/// model round-trip; the loop ends when the model calls `finish_review` (its
+/// arguments are parsed into a `ReviewResult`) or after `REVIEWER_MAX_TURNS`.
+///
+/// The media is attached natively in the first user message so the model can
+/// visually/aurally inspect the artifact — not just read a filename (§5).
+async fn agentic_review_via_qwen(
+    qwen: &QwenClient,
+    output_url: &str,
+    prompt: &str,
+) -> ReviewResult {
+    let tools = reviewer_tools();
+    let mut messages: Vec<serde_json::Value> = vec![
+        serde_json::json!({ "role": "system", "content": reviewer_system_prompt() }),
+    ];
+
+    let mut user_content: Vec<serde_json::Value> = vec![
+        serde_json::json!({ "type": "text", "text": prompt }),
+    ];
+    user_content.extend(build_media_content_parts(output_url).await);
+    messages.push(serde_json::json!({ "role": "user", "content": user_content }));
+
+    for _turn in 0..REVIEWER_MAX_TURNS {
+        let (response, _usage) = match tokio::time::timeout(
+            Duration::from_secs(REVIEWER_CALL_TIMEOUT_SECS),
+            qwen.generate_single(&messages, &tools),
+        )
+        .await
+        {
+            Ok(Ok(r)) => r,
+            Ok(Err(e)) => {
+                return ReviewResult {
+                    pass: false,
+                    score: 0,
+                    feedback: format!("Agentic Qwen review tool loop failed: {}", e),
+                    retry_hint: None,
+                };
+            }
+            Err(_) => {
+                return ReviewResult {
+                    pass: false,
+                    score: 0,
+                    feedback: format!(
+                        "Agentic Qwen review tool loop failed: call exceeded {}s",
+                        REVIEWER_CALL_TIMEOUT_SECS
+                    ),
+                    retry_hint: None,
+                };
+            }
+        };
+
+        match response {
+            QwenResponse::ToolCalls(tool_calls) => {
+                // Replay assistant tool-call block so the next round-trip is a
+                // complete OpenAI-compatible conversation.
+                let assistant_block: Vec<serde_json::Value> = tool_calls
+                    .iter()
+                    .map(|tc| {
+                        serde_json::json!({
+                            "id": tc.id,
+                            "type": "function",
+                            "function": { "name": tc.name, "arguments": reviewer_args_object(&tc.arguments) },
+                        })
+                    })
+                    .collect();
+                messages.push(serde_json::json!({
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": assistant_block,
+                }));
+
+                for tc in &tool_calls {
+                    match tc.name.as_str() {
+                        "probe_media" => {
+                            let evidence = probe_media_artifact(output_url).await;
+                            messages.push(serde_json::json!({
+                                "role": "tool",
+                                "tool_call_id": tc.id,
+                                "content": truncate_evidence(&evidence),
+                            }));
+                        }
+                        "finish_review" => {
+                            if let Some(review) = parse_finish_review(&tc.arguments) {
+                                return review;
+                            }
+                            messages.push(serde_json::json!({
+                                "role": "tool",
+                                "tool_call_id": tc.id,
+                                "content": "Could not parse your finish_review arguments. Call finish_review with { \"score\": <int 1-10>, \"feedback\": \"...\", \"retry_hint\": \"...\" }.",
+                            }));
+                        }
+                        other => {
+                            messages.push(serde_json::json!({
+                                "role": "tool",
+                                "tool_call_id": tc.id,
+                                "content": format!("Unknown reviewer tool '{}'.", other),
+                            }));
+                        }
+                    }
+                }
+            }
+            QwenResponse::Text(text) => {
+                // Model answered in prose instead of calling a tool — parse out
+                // a verdict if one is embedded, otherwise steer it back.
+                if let Some(review) = parse_text_verdict(&text) {
+                    return review;
+                }
+                messages.push(serde_json::json!({ "role": "assistant", "content": text }));
+                messages.push(serde_json::json!({
+                    "role": "user",
+                    "content": "You answered in prose. Call a tool: probe_media for evidence, then finish_review to submit your verdict. Never answer in prose.",
+                }));
+            }
+        }
+    }
+
+    ReviewResult {
+        pass: false,
+        score: 0,
+        feedback: format!(
+            "Agentic Qwen review tool loop failed: {} turns without a verdict",
+            REVIEWER_MAX_TURNS
+        ),
+        retry_hint: None,
+    }
+}
+
+/// Parse an embedded `{score, feedback, retry_hint}` JSON verdict from a prose
+/// response (a graceful rescue when the model answers in text rather than a
+/// tool call).
+fn parse_text_verdict(text: &str) -> Option<ReviewResult> {
+    let start = text.find('{');
+    let end = text.rfind('}');
+    let (start, end) = (start?, end?);
+    if end <= start {
+        return None;
+    }
+    let candidate = &text[start..=end];
+    let json: serde_json::Value = serde_json::from_str(candidate).ok()?;
+    parse_finish_review(&json)
+}
+
+/// Normalize a Qwen tool-call `arguments` payload into a JSON object for
+/// replayed assistant messages (DashScope accepts an object or a string).
+fn reviewer_args_object(args: &serde_json::Value) -> serde_json::Value {
+    match args {
+        serde_json::Value::String(s) => serde_json::from_str::<serde_json::Value>(s)
+            .unwrap_or_else(|_| args.clone()),
+        other => other.clone(),
+    }
+}
+
+/// Parse a `finish_review` tool-call argument object into a `ReviewResult`.
+fn parse_finish_review(args: &serde_json::Value) -> Option<ReviewResult> {
+    let score = args
+        .get("score")
+        .and_then(|s| {
+            s.as_i64()
+                .map(|v| v as i32)
+                .or_else(|| s.as_f64().map(|v| v.round() as i32))
+        })
+        .unwrap_or(0);
+    let feedback = args
+        .get("feedback")
+        .and_then(|f| f.as_str())
+        .unwrap_or("")
+        .to_string();
+    let retry_hint = args
+        .get("retry_hint")
+        .and_then(|h| h.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+    Some(ReviewResult {
+        pass: score >= PASS_THRESHOLD,
+        score,
+        feedback,
+        retry_hint,
+    })
+}
+
+/// Deterministic technical probe of a rendered artifact via ffprobe. Gives the
+/// agentic reviewer evidence (duration, resolution, fps, audio, codecs, size)
+/// it can reason over without guessing.
+async fn probe_media_artifact(output_url: &str) -> String {
+    let local = match download_to_temp(output_url).await {
+        Ok(Some((path, _))) => Some(path),
+        _ => None,
+    };
+    let target: &Path = local.as_deref().unwrap_or_else(|| Path::new(output_url));
+    if !target.exists() {
+        return "probe_media: artifact not found locally and remote download failed".to_string();
+    }
+
+    let probe = tokio::process::Command::new("ffprobe")
+        .args([
+            "-v",
+            "error",
+            "-print_format",
+            "json",
+            "-show_format",
+            "-show_streams",
+        ])
+        .arg(target)
+        .output()
+        .await;
+
+    if let Some(p) = local {
+        let _ = std::fs::remove_file(&p);
+    }
+
+    match probe {
+        Ok(out) if out.status.success() => {
+            let raw = String::from_utf8_lossy(&out.stdout).to_string();
+            match serde_json::from_str::<serde_json::Value>(&raw) {
+                Ok(json) => summarize_probe(&json),
+                Err(_) => format!(
+                    "probe_media: ffprobe output unparseable: {}",
+                    raw.chars().take(500).collect::<String>()
+                ),
+            }
+        }
+        Ok(out) => format!(
+            "probe_media: ffprobe failed ({}): {}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr).chars().take(300).collect::<String>()
+        ),
+        Err(e) => format!("probe_media: ffprobe error: {}", e),
+    }
+}
+
+/// Compact ffprobe JSON into a short evidence line the reviewer can consume.
+fn summarize_probe(json: &serde_json::Value) -> String {
+    let fmt = &json["format"];
+    let mut s = format!(
+        "format={} duration_secs={} size_bytes={}",
+        fmt["format_name"].as_str().unwrap_or("?"),
+        fmt["duration"].as_f64().unwrap_or(0.0),
+        fmt["size"].as_u64().unwrap_or(0),
+    );
+    if let Some(streams) = json["streams"].as_array() {
+        for st in streams.iter().take(4) {
+            match st["codec_type"].as_str() {
+                Some("video") => s.push_str(&format!(
+                    " | video: codec={} {}x{} fps={} pix={}",
+                    st["codec_name"].as_str().unwrap_or("?"),
+                    st["width"].as_u64().unwrap_or(0),
+                    st["height"].as_u64().unwrap_or(0),
+                    st["r_frame_rate"].as_str().unwrap_or("?"),
+                    st["pix_fmt"].as_str().unwrap_or("?"),
+                )),
+                Some("audio") => s.push_str(&format!(
+                    " | audio: codec={} channels={} sample_rate={}",
+                    st["codec_name"].as_str().unwrap_or("?"),
+                    st["channels"].as_u64().unwrap_or(0),
+                    st["sample_rate"].as_str().unwrap_or("?"),
+                )),
+                _ => {}
+            }
+        }
+    }
+    s
+}
+
+/// Cap tool-result evidence fed back to the reviewer so a giant probe output
+/// can't overflow the context window on repeated probing.
+fn truncate_evidence(text: &str) -> String {
+    const MAX: usize = 1500;
+    if text.len() <= MAX {
+        text.to_string()
+    } else {
+        let mut t = text[..MAX].to_string();
+        t.push_str("…[truncated]");
+        t
+    }
 }
 
 /// Run review via NVIDIA NIM vision model (images/audio only).

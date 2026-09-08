@@ -1035,10 +1035,11 @@ IMPORTANT: For fetching website content, use `browserbase_crawl_website(url)` �
                 system_instruction: Some(system_instruction_content.clone()),
             };
 
-            // ── Provider Fallback Chain ──
-            // Per spec: Ollama (self-hosted, FREE, GPU) is the DEFAULT FIRST ATTEMPT for every LLM call.
-            // Cloud providers (NVIDIA NIM, Gemini, DeepSeek) are billable fallbacks only.
-            // Order: Ollama → NVIDIA NIM → Gemini → DeepSeek
+            // ── Provider Fallback Chain (§52.2) ──
+            // Ollama was retired permanently (Sep 2026). Qwen (qwen3.7-plus via
+            // DashScope) is the DEFAULT FIRST ATTEMPT for every LLM call.
+            // Billable cloud providers are fallbacks only, in this order:
+            // Qwen → NVIDIA NIM → Gemini → DeepSeek
 
             // Helper to build OpenAI-format messages for OpenAI-compatible APIs (NVIDIA, Ollama, DeepSeek)
             let build_messages = |sys_inst: &str| -> Vec<serde_json::Value> {
@@ -1072,12 +1073,10 @@ IMPORTANT: For fetching website content, use `browserbase_crawl_website(url)` �
             // Per-run budget & cost ledger (enforced at turn boundaries).
             let mut ledger = RunLedger::default();
 
-            // 1. Try Ollama (self-hosted, FREE, GPU cluster via NLB) — DEFAULT FIRST ATTEMPT
-            let ollama_client = self.ollama_client.as_ref()
-                .map(|arc| arc.as_ref())
-                .or_else(|| app_state.ollama_client.as_ref());
-            if let Some(ollama) = ollama_client {
-                let mut oa_messages = build_messages(&system_instruction);
+            // 1. Try Qwen (qwen3.7-plus via DashScope) — DEFAULT FIRST ATTEMPT
+            //    Ollama is retired (Sep 2026); Qwen replaces it as the primary path.
+            if let Some(qwen) = app_state.qwen_client.as_ref() {
+                let mut qa_messages = build_messages(&system_instruction);
                 // Durable resume: pick up from the last completed turn if a
                 // checkpoint exists for this workflow (crash/timeout recovery).
                 if let Some(wid) = workflow_id {
@@ -1088,14 +1087,14 @@ IMPORTANT: For fetching website content, use `browserbase_crawl_website(url)` �
                                 saved.len()
                             );
                             send_progress("♻️ Resuming from previous progress...");
-                            oa_messages = saved;
+                            qa_messages = saved;
                         }
                     }
                 }
                 send_progress("🤖 Processing your request...");
-                match run_ollama_tool_loop(
-                    ollama,
-                    &mut oa_messages,
+                match run_qwen_tool_loop(
+                    qwen,
+                    &mut qa_messages,
                     &mut all_tools,
                     &exec_context,
                     &send_progress,
@@ -1110,11 +1109,11 @@ IMPORTANT: For fetching website content, use `browserbase_crawl_website(url)` �
                             clean.clone(),
                         );
                         let _ = conversation_manager.save_message(&msg).await;
-                        tracing::info!("✅ Ollama completed task for session {}", session_id);
+                        tracing::info!("✅ Qwen completed task for session {}", session_id);
                         return Ok(clean);
                     }
-                    Err(ollama_err) => {
-                        tracing::warn!("⚠️ Ollama failed, trying NVIDIA NIM: {}", ollama_err);
+                    Err(qwen_err) => {
+                        tracing::warn!("⚠️ Qwen failed, trying NVIDIA NIM: {}", qwen_err);
                     }
                 }
             }
@@ -2932,6 +2931,152 @@ where
     }
 
     Err(format!("Ollama exceeded max turns ({})", MAX_TURNS))
+}
+
+/// Multi-turn tool loop for Qwen (qwen3.7-plus via DashScope, OpenAI-compatible).
+/// THE DEFAULT FIRST ATTEMPT for every agent call since Ollama was retired
+/// (Sep 2026, §52.2). Same contract as `run_deepseek_tool_loop` — feeds tool
+/// results back as `{role:"tool", tool_call_id}` messages and keeps calling
+/// until a text answer is returned (or MAX_TURNS exhausted). Duplicates the
+/// Ollama loop's durable-turn checkpoint + compaction, because Qwen is now the
+/// primary path and must survive crashes/timeouts like Ollama did.
+async fn run_qwen_tool_loop<F>(
+    qwen_client: &crate::qwen_client::QwenClient,
+    messages: &mut Vec<serde_json::Value>,
+    tools: &mut Vec<crate::gemini_client::FunctionDeclaration>,
+    exec_context: &crate::agent::tool_executor::ToolExecutionContext,
+    send_progress: &F,
+    ledger: &mut RunLedger,
+) -> Result<String, String>
+where
+    F: Fn(&str),
+{
+    const MAX_TURNS: usize = 10;
+
+    for turn in 0..MAX_TURNS {
+        // Cooperative cancellation probe (durable pipeline runner).
+        if workflow_cancel_requested(exec_context).await {
+            return Err("WORKFLOW_CANCELLED: cancellation requested".to_string());
+        }
+        // Budget enforcement BEFORE the next call (monitoring ≠ enforcement).
+        if let Some(reason) = ledger.budget_exceeded() {
+            ledger.flush(exec_context).await;
+            return Err(format!("WORKFLOW_BUDGET_EXCEEDED: {reason}"));
+        }
+        // Compact old turns once the window fills so Qwen never silently
+        // front-trims critical history/tool schemas mid-task (compaction itself
+        // runs on Qwen via qwen_client).
+        let _ = maybe_compact_tool_history(
+            exec_context.app_state.qwen_client.as_ref(),
+            messages,
+            exec_context,
+        )
+        .await
+        .map_err(|e| tracing::warn!("⚠️ Compaction skipped: {}", e));
+
+        let response =
+            timeout(Duration::from_secs(300), qwen_client.generate_single(messages, tools))
+                .await
+                .map_err(|_| "Qwen timeout after 300s".to_string())?
+                .map_err(|e| format!("Qwen API error: {}", e))?;
+
+        let (response, usage) = response;
+        ledger.record("qwen", &usage, true);
+        ledger.flush(exec_context).await;
+
+        match response {
+            crate::qwen_client::QwenResponse::Text(text) => {
+                tracing::info!("✅ Qwen final answer after {} turns", turn + 1);
+                if let Some(wid) = exec_context.workflow_id {
+                    if checkpoints_enabled() {
+                        clear_agent_checkpoint(&exec_context.app_state.db_pool, wid).await;
+                    }
+                }
+                return Ok(text);
+            }
+
+            crate::qwen_client::QwenResponse::ToolCalls(tool_calls) => {
+                let assistant_tool_calls: Vec<serde_json::Value> = tool_calls
+                    .iter()
+                    .map(|tc| {
+                        serde_json::json!({
+                            "id": tc.id,
+                            "type": "function",
+                            "function": {
+                                "name": tc.name,
+                                "arguments": tc.arguments.to_string(),
+                            }
+                        })
+                    })
+                    .collect();
+
+                messages.push(serde_json::json!({
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": assistant_tool_calls,
+                }));
+
+                // Parallel read-only fan-out (see ollama arm for rationale).
+                let mut prefetched: std::collections::HashMap<usize, String> =
+                    std::collections::HashMap::new();
+                {
+                    let batch: Vec<(usize, String, serde_json::Value)> = tool_calls
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, tc)| PARALLEL_READ_ONLY_TOOLS.contains(&tc.name.as_str()))
+                        .map(|(i, tc)| (i, tc.name.clone(), tc.arguments.clone()))
+                        .collect();
+                    if batch.len() > 1 {
+                        send_progress(&format!("⚡ Running {} lookups in parallel…", batch.len()));
+                        prefetched = execute_read_only_batch(batch, exec_context, ledger).await;
+                    }
+                }
+
+                for (call_idx, tc) in tool_calls.iter().enumerate() {
+                    send_progress(&format!("🔧 Qwen calling: {}", tc.name));
+                    tracing::info!("🎬 Qwen tool call: {}", tc.name);
+
+                    let result = if let Some(cached) = prefetched.remove(&call_idx) {
+                        cached
+                    } else {
+                        let args_map: std::collections::HashMap<String, serde_json::Value> = tc
+                            .arguments
+                            .as_object()
+                            .map(|o| o.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+                            .unwrap_or_default();
+                        execute_tool_call_in_loop(
+                            &tc.name, &args_map, exec_context, tools, ledger,
+                        )
+                        .await
+                    };
+
+                    send_progress(&format!("✅ {} done", tc.name));
+
+                    // OpenAI-compatible: associate tool result via tool_call_id.
+                    messages.push(serde_json::json!({
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": truncate_tool_result_for_context(&tc.name, &result),
+                    }));
+                }
+
+                // Turn boundary reached — persist for durable resume.
+                if let Some(wid) = exec_context.workflow_id {
+                    if checkpoints_enabled() {
+                        save_agent_checkpoint(
+                            &exec_context.app_state.db_pool,
+                            wid,
+                            turn + 1,
+                            messages,
+                        )
+                        .await;
+                    }
+                }
+            }
+        }
+    }
+
+    Err(format!("Qwen exceeded max turns ({})", MAX_TURNS))
 }
 
 // OpenAI-compatible API. Gemma 4 has NATIVE function calling (special tokens,
