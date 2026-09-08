@@ -76,6 +76,11 @@ lettre = { version = "0.11", default-features = false, features = ["builder", "s
 # collision with sqlx (which has default-features = false, no sqlite driver).
 grammers-client = "0.10"
 grammers-session = { version = "0.10", default-features = false, features = ["sqlite-storage"] }
+# Pin glass_pumpkin to 2.0.0-rc0: grammers-crypto 0.10 calls
+# safe_prime::check() expecting `bool`, but rc1 changed it to return
+# `Result<bool>` (num-bigint 0.4/0.5 conflict) → build breaks. Cargo.lock
+# is gitignored, so without this pin a fresh clone silently resolves to rc1.
+glass_pumpkin = "=2.0.0-rc0"
 
 [profile.release]
 lto = false
