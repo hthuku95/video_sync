@@ -100,6 +100,7 @@ pub struct AppState {
     pub twitch_client: Option<Arc<twitch_client::TwitchClient>>, // 📺 Twitch Helix API
     pub download_semaphore: Arc<Semaphore>, // 🔒 Limits concurrent downloads to 2
     pub delivery_render_semaphore: Arc<Semaphore>, // 🎬 Limits concurrent delivery renders to avoid OOM
+    pub chat_agent_semaphore: Arc<Semaphore>, // 🤖 Limits concurrent in-process chat agents (§53.12)
     pub phantombuster_client: Option<phantombuster_client::PhantomBusterClient>, // 🎯 LinkedIn scraping
     pub pubsub_bus: Option<crate::services::redis_pubsub::PubSubBus>, // Redis pub/sub for cross-instance channels
     pub kick_client: Option<kick_client::KickClient>, // 📺 Kick.com API client
@@ -197,6 +198,7 @@ async fn reset_orphaned_workflows(db_pool: &sqlx::PgPool) {
              updated_at = NOW()
          WHERE status IN ('queued', 'running')
          AND workflow_type NOT LIKE 'agentic\\_%'
+         AND workflow_type NOT IN ('background_agent_generation', 'service_sample_generation')
          AND updated_at < NOW() - INTERVAL '1 hour'"
     )
     .execute(db_pool)
@@ -738,6 +740,12 @@ async fn main() {
                 .and_then(|v| v.parse::<usize>().ok())
                 .unwrap_or(1), // default to 1 active delivery render to reduce memory spikes
         )),
+        chat_agent_semaphore: Arc::new(Semaphore::new(
+            std::env::var("AGENT_CHAT_WORKERS")
+                .ok()
+                .and_then(|v| v.parse::<usize>().ok())
+                .unwrap_or(2), // §53.12: bounded in-process chat agents default to 2
+        )),
         pubsub_bus,
         kick_client: {
             let id = std::env::var("KICK_CLIENT_ID").unwrap_or_default();
@@ -1120,6 +1128,17 @@ async fn main() {
     {
         let pw_state = shared_state.clone();
         crate::services::pipeline_worker::start_pipeline_infrastructure(pw_state);
+    }
+
+    // ── Chat agent workers + supervisor (§53.12) ──────────────────────────────
+    // Durable reclaim of orphaned/in-flight agent_background_jobs. In-process WS
+    // spawns are the fast path (claim-then-spawn in handlers/chat.rs); this pool
+    // picks up jobs whose owner died (lease expired) and resumes them from their
+    // agent_checkpoint, and fails runs that exceed their attempt budget. See
+    // src/services/chat_agent_worker.rs.
+    {
+        let caw_state = shared_state.clone();
+        crate::services::chat_agent_worker::start_chat_agent_workers(caw_state);
     }
 
     // ── Campaign engine — generates + schedules daily content ────────────────

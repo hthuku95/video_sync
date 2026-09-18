@@ -74,8 +74,12 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     // sqlx::migrate!() is a proc macro — Cargo only re-runs it when THIS file
     // changes. Touching this file forces the macro to re-scan ./migrations and
     // embed all current migration files.
-    // Last touched: 2026-08-24 (3rd) to force sqlx::migrate!() to re-embed the
+    // Last touched: 2026-09-13 to force sqlx::migrate!() to re-embed the
     // current migration set, including:
+    //   20260913000000 — chat_agent_worker_queue (agent_background_jobs
+    //                    claimed_by, lease_expires_at, attempts, started_at,
+    //                    cancel_requested_at + claimable index) §53.12
+    // Prior touch: 2026-08-24 (3rd) for:
     //   20260824000002 — queue_priority (app_workflows.priority SMALLINT)
     //   20260824000001 — add_workflow_usage (app_workflows.usage JSONB ledger)
     //   20260824000000 — pipeline_worker_queue (app_workflows.claimed_by,

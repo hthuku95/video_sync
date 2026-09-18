@@ -655,23 +655,47 @@ async fn websocket(
                 Some(rx)
             };
 
-            // Drop the session_id_clone variable — feedback channel cleanup
-            // is automatic when the receiver is dropped inside run_agent_background.
-            tokio::spawn(async move {
-                run_agent_background(
-                    state_bg,
-                    session_id_bg,
-                    text_bg,
-                    enhanced_query_bg,
-                    use_claude,
-                    job_id,
-                    job_manager_bg,
-                    agent_tx_bg,
-                    feedback_rx,
-                    user_id_bg,
-                )
-                .await;
-            });
+            // 🔒 BOUNDED CONCURRENCY + DURABLE OWNERSHIP (see §53.12).
+            // A global semaphore caps in-process chat agents. Without a permit the
+            // job row stays unclaimed and the reclaim worker
+            // (services/chat_agent_worker.rs) picks it up on its next sweep — the
+            // work is durable either way (DB lease + checkpoint resume). The row is
+            // claimed BEFORE spawning so a concurrent sweep can never double-run.
+            let permit = state.chat_agent_semaphore.clone().try_acquire_owned();
+            let mut live_claimed = false;
+            if let Ok(permit) = permit {
+                if let Some(jid) = job_id {
+                    live_claimed =
+                        crate::services::chat_agent_worker::claim_chat_job_live(&state.db_pool, jid)
+                            .await;
+                }
+                if live_claimed || job_id.is_none() {
+                    // Spawn when we own the job row (claimed) OR when there is no
+                    // row to protect (job_id None — nothing for the supervisor to
+                    // reclaim, so in-process is the only correct behavior).
+                    tokio::spawn(async move {
+                        let _permit = permit; // held until the run completes
+                        run_agent_background(
+                            state_bg,
+                            session_id_bg,
+                            text_bg,
+                            enhanced_query_bg,
+                            use_claude,
+                            job_id,
+                            job_manager_bg,
+                            Some(agent_tx_bg),
+                            feedback_rx,
+                            user_id_bg,
+                        )
+                        .await;
+                    });
+                }
+            } else {
+                tracing::info!(
+                    "🤖 Chat agent slots full; job {} queued for the background worker",
+                    job_id.map(|j| j.to_string()).unwrap_or_default()
+                );
+            }
 
             // Send immediate ACK so the user knows the agent has started
             let ack = serde_json::json!({
@@ -2345,9 +2369,10 @@ fn workflow_status_payload(
 
 /// Core background function: runs the agent and routes the result back via job_manager
 /// so it's delivered to whichever WebSocket connection is open for this session.
+/// pub(crate) so the reclaim worker (services/chat_agent_worker.rs) can run it headless.
 #[allow(unused_imports)]
 use crate::agent::stateful_agent::{StatefulClaudeAgent, StatefulGeminiAgent};
-async fn run_agent_background(
+pub(crate) async fn run_agent_background(
     state: Arc<AppState>,
     session_id: String,
     text: String,
@@ -2355,7 +2380,7 @@ async fn run_agent_background(
     use_claude: bool,
     job_id: Option<uuid::Uuid>,
     job_manager: std::sync::Arc<crate::jobs::JobManager>,
-    agent_progress_tx: tokio::sync::mpsc::UnboundedSender<String>,
+    agent_progress_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
     user_message_rx: Option<tokio::sync::mpsc::UnboundedReceiver<String>>,
     user_id: Option<i32>,
 ) {
@@ -2372,7 +2397,9 @@ async fn run_agent_background(
     tokio::spawn(async move {
         while let Some(msg) = proxy_rx.recv().await {
             // Forward to WebSocket (best-effort — may fail if WS is closed)
-            let _ = agent_progress_tx.send(msg.clone());
+            if let Some(tx) = &agent_progress_tx {
+                let _ = tx.send(msg.clone());
+            }
             // Persist to DB
             if let Some(jid) = job_id_prog {
                 append_job_progress(&state_prog, jid, &msg).await;
@@ -2401,12 +2428,65 @@ async fn run_agent_background(
             .await;
     }
 
+    // 🔒 DURABLE LEASE (see §53.12): the agent_background_jobs row owns this run.
+    // A ticker renews lease_expires_at every 60s so a crashed/superseded process is
+    // detectable and its job reclaimable by services/chat_agent_worker.rs, which
+    // resumes it from its checkpoint. The ticker self-stops after AGENT_CHAT_MAX_HOURS
+    // so a pathologically hung run lapses, is reclaimed, and after AGENT_CHAT_MAX_ATTEMPTS
+    // is failed as a runaway. Per-turn provider timeouts (300s) and the RunLedger
+    // budgets inside chat() already bound individual turns.
+    let (lease_stop_tx, mut lease_stop_rx) = tokio::sync::mpsc::channel::<()>(1);
+    {
+        let pool = state.db_pool.clone();
+        let lease_minutes = crate::services::chat_agent_worker::lease_minutes();
+        let max_hours = crate::services::chat_agent_worker::max_run_hours();
+        let tracked_job = job_id; // Option<Uuid>; None => renewal is a no-op
+        // Always owns lease_stop_rx (even when job_id is None) so there is no
+        // unused-variable lint and the ticker can always honor the stop signal.
+        tokio::spawn(async move {
+            let started = std::time::Instant::now();
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+            interval.tick().await; // skip immediate first tick
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {
+                        if started.elapsed().as_secs() >= max_hours * 3600 {
+                            if let Some(jid) = tracked_job {
+                                tracing::warn!(
+                                    %jid,
+                                    "stopping chat agent lease renewal after {max_hours}h (supervisor will reclaim)"
+                                );
+                            }
+                            return;
+                        }
+                        if let Some(jid) = tracked_job {
+                            let _ = sqlx::query(
+                                "UPDATE agent_background_jobs
+                                 SET lease_expires_at = NOW() + make_interval(mins => $2::int),
+                                     updated_at = NOW()
+                                 WHERE id = $1",
+                            )
+                            .bind(jid)
+                            .bind(lease_minutes)
+                            .execute(&pool)
+                            .await;
+                        }
+                    }
+                    _ = lease_stop_rx.recv() => return,
+                }
+            }
+        });
+    }
+
     let timeout_secs = std::env::var("AGENT_BACKGROUND_TIMEOUT_SECONDS")
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(1800);
+        .unwrap_or(0);
 
-    let response = tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), async {
+    // No wall-clock kill by default: job liveness is owned by the DB lease, so a
+    // legitimately long render is never cut off at an arbitrary boundary. Operators
+    // can still set AGENT_BACKGROUND_TIMEOUT_SECONDS > 0 as a hard backstop.
+    let run_agent = async {
         if use_claude {
             if let Some(ref claude_client) = state.claude_client {
                 let agent = StatefulClaudeAgent::new(Arc::new(claude_client.clone()));
@@ -2448,8 +2528,14 @@ async fn run_agent_background(
         } else {
             Err("Gemini client not configured".to_string())
         }
-    })
-    .await;
+    };
+
+    let response: Result<Result<String, String>, tokio::time::error::Elapsed> =
+        if timeout_secs > 0 {
+            tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), run_agent).await
+        } else {
+            Ok(run_agent.await)
+        };
 
     match response {
         Ok(Ok(response)) => {
@@ -2478,6 +2564,7 @@ async fn run_agent_background(
                     },
                 );
                 job_manager.send_progress(&session_id, update).await;
+                let _ = lease_stop_tx.send(());
                 return;
             }
 
@@ -2567,6 +2654,9 @@ async fn run_agent_background(
             job_manager.send_progress(&session_id, update).await;
         }
     }
+
+    // Stop the lease-renewal ticker (previously spawned only when the row was live)
+    let _ = lease_stop_tx.send(());
 }
 
 /// REST endpoint: list all agent background jobs for a session (for frontend polling)

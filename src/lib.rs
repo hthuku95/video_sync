@@ -109,6 +109,7 @@ pub struct AppState {
     pub twitch_client: Option<Arc<twitch_client::TwitchClient>>,
     pub download_semaphore: Arc<Semaphore>,
     pub delivery_render_semaphore: Arc<Semaphore>,
+    pub chat_agent_semaphore: Arc<Semaphore>, // §53.12: bounded in-process chat agents
     pub phantombuster_client: Option<phantombuster_client::PhantomBusterClient>,
     pub pubsub_bus: Option<crate::services::redis_pubsub::PubSubBus>,
     pub kick_client: Option<kick_client::KickClient>,
