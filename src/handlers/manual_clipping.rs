@@ -79,6 +79,20 @@ async fn create_job(
     Extension(claims): Extension<Claims>,
     Json(payload): Json<CreateJobRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    // Service switch (owner directive Sep 2026): legacy manual clipping is OFF.
+    // Reads (list/get/delete) keep working for history; only new renders stop.
+    if !crate::services::service_flags::service_enabled(&state.db_pool, "legacy_youtube_clipping")
+        .await
+    {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ErrorResponse {
+                success: false,
+                message: "Manual clipping is currently disabled (service_flags)."
+                    .to_string(),
+            }),
+        ));
+    }
     if payload.video_url.trim().is_empty() {
         return Err((
             StatusCode::BAD_REQUEST,

@@ -935,6 +935,14 @@ async fn campaign_assistant_chat(
     Json(req): Json<CampaignAssistantRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let user_id: i32 = claims.sub.parse().unwrap_or(0);
+    // Service switch (owner directive Sep 2026): campaign chats OFF.
+    if !crate::services::service_flags::service_enabled(&state.db_pool, "chat_agents").await
+    {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"success": false, "error": "Campaign chat is currently disabled (service_flags)."})),
+        ));
+    }
     let service = req.service.clone().unwrap_or_default();
 
     // Skills are already stored per-service scope — reuse them here (campaign_id = None).
@@ -991,6 +999,14 @@ async fn campaign_chat(
     Json(req): Json<CampaignChatRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let user_id: i32 = claims.sub.parse().unwrap_or(0);
+    // Service switch (owner directive Sep 2026): campaign chats OFF.
+    if !crate::services::service_flags::service_enabled(&state.db_pool, "chat_agents").await
+    {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"success": false, "error": "Campaign chat is currently disabled (service_flags)."})),
+        ));
+    }
 
     let campaign_row = sqlx::query_as::<_, (
         Uuid, String, String, String, String, f64, serde_json::Value, serde_json::Value,

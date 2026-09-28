@@ -169,6 +169,22 @@ impl AgenticServicePipeline {
         service_type: ServiceType,
         input: ServiceInput,
     ) -> Result<Uuid, String> {
+        // Service switch (owner directive Sep 2026): only enabled services may
+        // enqueue renders. In-run calls (QA, embeddings, skills) inherit this
+        // verdict — there is intentionally no second flag to misconfigure.
+        // NOTE: kick_auto_clipper normalizes to ServiceType::Clipping, and both
+        // are enabled, so the shared clipping core keeps serving both businesses.
+        if !crate::services::service_flags::service_enabled(
+            &state.db_pool,
+            service_type.as_str(),
+        )
+        .await
+        {
+            return Err(format!(
+                "Service '{}' is currently disabled (service_flags).",
+                service_type.as_str()
+            ));
+        }
         // Full input snapshot so a worker on ANY Fargate task can reconstruct
         // and execute this job from the DB alone.
         let input_snapshot = serde_json::to_value(&input)

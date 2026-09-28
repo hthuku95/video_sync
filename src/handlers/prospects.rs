@@ -150,6 +150,10 @@ pub fn instagram_routes() -> Router {
             "/api/instagram/leads/kick-auto-discover",
             post(instagram_kick_auto_discover),
         )
+        .route(
+            "/api/instagram/leads/kick-method-b",
+            post(instagram_kick_method_b),
+        )
         .route("/api/instagram/leads/top", get(instagram_top_leads))
         .route("/api/instagram/leads", get(instagram_list_leads).delete(instagram_clear_leads))
         .route(
@@ -334,6 +338,19 @@ async fn search_prospects(
     Extension(claims): Extension<Claims>,
     Json(payload): Json<SearchRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    // Service switch (owner directive Sep 2026): prospect discovery runs only
+    // while the prospecting group is on. Relevance to the two clipping
+    // businesses is enforced downstream by the constrained scoring menu.
+    if !crate::services::service_flags::service_enabled(&state.db_pool, "prospecting").await
+    {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ErrorResponse {
+                success: false,
+                message: "Prospect discovery is currently disabled (service_flags).".to_string(),
+            }),
+        ));
+    }
     let limit = payload.limit.unwrap_or(20).min(50);
     let mut found = 0usize;
     let user_id = claims.sub.parse::<i32>().ok();
@@ -1725,7 +1742,57 @@ fn extract_best_twitter_handle(description: &str) -> Option<String> {
 
 fn extract_best_instagram_handle(description: &str) -> Option<String> {
     extract_instagram_handle(description)
-        .or_else(|| extract_labeled_handle(description, &[r"instagram", r"insta", r"ig"]))
+        .or_else(|| extract_labeled_handle(description, &["instagram", "insta", "ig"]))
+        .or_else(|| extract_bare_mention_handle(description))
+}
+
+/// Bare @mentions ("follow @foo for clips") with no label keyword nearby.
+/// The preceding-character guard skips emails (contact@mail.com has an
+/// alphanumeric before @) and URLs. Trailing dots are trimmed.
+fn extract_bare_mention_handle(description: &str) -> Option<String> {
+    let regex = Regex::new(r"(?i)(?:^|[^a-z0-9_.])@([a-z0-9_.]{2,30})").ok()?;
+    let capture = regex.captures(description)?;
+    let handle = capture
+        .get(1)?
+        .as_str()
+        .trim_matches('.')
+        .trim_end_matches('_');
+    if handle.len() < 2 || handle.contains("..") {
+        return None;
+    }
+    Some(format!("@{handle}"))
+}
+
+/// Hard Kick-clipping signals in bio/caption text. Returns evidence strings
+/// (e.g. "links kick.com/neon"). Used to force kick_clipper categorization
+/// without spending an LLM call, and as evidence inside scoring prompts.
+/// bio fields already carry recent post captions (see scoring prompts), so one
+/// scan covers both.
+pub(crate) fn kick_caption_signals(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let lower = text.to_lowercase();
+    let link_re = Regex::new(r"(?i)kick\.com/([a-z0-9_]{2,25})").ok();
+    if let Some(re) = link_re {
+        for cap in re.captures_iter(text) {
+            if let Some(slug) = cap.get(1) {
+                out.push(format!("links kick.com/{}", slug.as_str().to_lowercase()));
+            }
+        }
+    }
+    let mentions_kick = lower.contains("kick.com")
+        || lower.contains("kick stream")
+        || lower.contains("kick clip")
+        || lower.contains("kick highlight")
+        || lower.contains("kick vod")
+        || lower.contains("kick.com");
+    let mentions_clips = lower.contains("clip")
+        || lower.contains("highlight")
+        || lower.contains("stream moment")
+        || lower.contains("best moment");
+    if mentions_kick && mentions_clips {
+        out.push("mentions Kick + clips/highlights in text".to_string());
+    }
+    out
 }
 
 fn extract_best_business_email(description: &str) -> Option<String> {
@@ -2027,6 +2094,11 @@ async fn score_prospect_with_ai(
         );
     }
 
+    // Service menu is built from enabled flags (owner directive Sep 2026):
+    // prospecting only funnels the services that are switched on.
+    let (service_menu, must_line) =
+        crate::services::service_flags::scoring_menu(&state.db_pool).await;
+
     // Same service-menu pattern as IG leads — AI picks the strongest-fit
     // service for THIS creator and writes a DM locked to that service.
     let prompt = format!(
@@ -2039,17 +2111,7 @@ Description: {description}
 Prospect type (already tagged by us): {prospect_type}
 
 The studio offers these services — pick the ONE that fits best:
-- **clipping**             — turn long-form videos, podcasts, or streams into short-form clips with captions and thumbnails. Best fit: podcasters, long-form YouTubers, Twitch streamers. $297-$899/mo.
-- **education**            — AI-driven animated explainer scenes, data visualizations, and motion graphics. Best fit: educators, finance/crypto creators, technical YouTubers. $75-$400 per asset.
-- **landing_page**         — homepage hero videos, narrated product demos, launch cutdowns from your website or app. Best fit: indie founders, SaaS teams, launch marketers. $299-$1,500+.
-- **kick_auto_clipper**    — automated Kick clip generation from VODs: branding, lower thirds, outro, watermark, with daily auto-posting. Best fit: clipping channels, Kick highlight reposters, stream compilations. $297-$899/mo.
-- **manim_explainer**      — narrated Manim animated explainers with clean motion graphics, math/technical diagrams. Best fit: educators, course creators, math/finance channels. $75-$300 per asset.
-- **whiteboard_animation** — narrated whiteboard-style hand-drawn sketch explainer videos. Best fit: explainer channels, SaaS/startup explainers, how-to content. $75-$300 per asset.
-- **kinetic_typography**   — dynamic kinetic typography text animations with word-by-word reveals and bold visuals. Best fit: lyric videos, quote channels, brand taglines. $75-$250 per asset.
-- **animated_infographic** — animated data infographics with charts, counters, and data-driven visuals. Best fit: data journalism, finance channels, analytics dashboards. $75-$250 per asset.
-- **algorithm_viz**        — algorithm/technology visualizations with animated data structures and step-by-step execution. Best fit: coding channels, CS educators, tech docs. $150-$500 per asset.
-- **investor_pitch**       — professional investor pitch deck videos with clean title cards, data charts, and motion graphics. Best fit: startups raising capital, demo day prep. $150-$500 per asset.
-- **isometric_explainer**  — isometric 3D perspective explainer videos with geometric shapes and modern motion graphics. Best fit: product explainers, architectural concepts, tech demos. $100-$400 per asset.
+{service_menu}
 
 Prospect-type guidance:
 - If `prospect_type` is `clipper`, favor people or teams already selling clip editing, short-form growth, or creator post-production. Score higher if they would clearly benefit from tooling, faster fulfillment, or premium add-on renders.
@@ -2075,8 +2137,10 @@ Return ONLY valid JSON (no markdown):
   "dm_clipper": "<alt DM treating them as a clipper looking for tooling — 2-3 sentences>"
 }}
 
-`service` MUST be one of: clipping, education, landing_page, kick_auto_clipper, manim_explainer, whiteboard_animation, kinetic_typography, animated_infographic, algorithm_viz, investor_pitch, isometric_explainer, year_in_review. No other values are valid."#,
+{must_line}"#,
         name = name,
+        service_menu = service_menu,
+        must_line = must_line,
         audience = audience_size,
         category_word = if audience_size > 0 {
             "subs/viewers"
@@ -2126,19 +2190,39 @@ Return ONLY valid JSON (no markdown):
                         .as_str()
                         .unwrap_or(&default_dm_clipper(name))
                         .to_string();
-                    // Coerce service to one of the 12 valid values.
+                    // Coerce service into the enabled set (owner directive Sep 2026):
+                    // the menu already constrains the LLM, this is the backstop.
                     let service_raw = v["service"].as_str().unwrap_or("clipping").to_lowercase();
                     let service = if is_valid_revenue_service(&service_raw) {
                         normalize_revenue_service(&service_raw).to_string()
                     } else {
                         default_service_for_prospect(category, prospect_type)
                     };
-                    // Post-process: override LLM's choice for known prospect types
+                    let clipper_like = matches!(
+                        prospect_type,
+                        "clipper" | "clipping_channel" | "compilation" | "kick_clipper"
+                    ) || category.to_ascii_lowercase().contains("clip")
+                        || category.to_ascii_lowercase().contains("kick");
+                    let service = crate::services::service_flags::constrain_service(
+                        &state.db_pool,
+                        &service,
+                        clipper_like,
+                    )
+                    .await;
+                    // Post-process: override LLM's choice for known prospect types,
+                    // but only toward enabled services.
                     let service = match prospect_type {
                         "educator" => {
-                            if service != "education" {
+                            if crate::services::service_flags::service_enabled(
+                                &state.db_pool,
+                                "education",
+                            )
+                            .await
+                            {
                                 "education".to_string()
-                            } else { service }
+                            } else {
+                                service
+                            }
                         }
                         _ => service,
                     };
@@ -2592,6 +2676,17 @@ async fn regenerate_dm_script(
     Extension(state): Extension<Arc<AppState>>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    // Service switch (owner directive Sep 2026).
+    if !crate::services::service_flags::service_enabled(&state.db_pool, "outreach").await {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ErrorResponse {
+                success: false,
+                message: "Outreach generation is currently disabled (service_flags)."
+                    .to_string(),
+            }),
+        ));
+    }
     let row = sqlx::query(
         "SELECT display_name, subscriber_count, avg_viewer_count, content_category, channel_description, prospect_type
          FROM prospects WHERE id=$1"
@@ -2672,9 +2767,22 @@ async fn generate_outreach_message(
     Path(id): Path<Uuid>,
     Json(payload): Json<GenerateOutreachRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    // Service switch (owner directive Sep 2026): outreach generation runs only
+    // while the outreach group is on. Sending stored scripts needs no flag.
+    if !crate::services::service_flags::service_enabled(&state.db_pool, "outreach").await {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ErrorResponse {
+                success: false,
+                message: "Outreach generation is currently disabled (service_flags)."
+                    .to_string(),
+            }),
+        ));
+    }
     let row = sqlx::query(
         "SELECT display_name, subscriber_count, avg_viewer_count, content_category,
-                prospect_type, dm_script_creator, service_type, x_dm_script, email_script
+                prospect_type, dm_script_creator, service_type, x_dm_script, email_script,
+                instagram_handle, twitter_handle
          FROM prospects WHERE id=$1",
     )
     .bind(id)
@@ -2744,10 +2852,30 @@ async fn generate_outreach_message(
     };
 
     let pitch_focus = service_offer_line(&service);
+    // Social handles for multi-channel outreach (X DM + email + manual IG DM).
+    let ig_handle: Option<String> = row.get("instagram_handle");
+    let _tw_handle: Option<String> = row.get("twitter_handle");
+    let ig_line = ig_handle
+        .as_deref()
+        .filter(|h| !h.is_empty())
+        .map(|h| {
+            let bare = h.trim_start_matches('@');
+            format!(
+                "Their Instagram: @{bare} (https://instagram.com/{bare}) — the sender will ALSO DM them on Instagram, so keep the X DM and email complementary, not duplicated."
+            )
+        })
+        .unwrap_or_default();
+    let ig_profile_url = ig_handle.as_deref().filter(|h| !h.is_empty()).map(|h| {
+        format!(
+            "https://instagram.com/{}",
+            h.trim_start_matches('@')
+        )
+    });
     let prompt = format!(
         r#"Write a personalized X DM and email from VideoSync to {name}, a {category} {pt} with {audience} audience.
 The subject already has a free sample ready at this link: {delivery_url}
 Include the delivery link naturally in both the DM and email — do NOT ask for permission to send it.
+{ig_line}
 
 Offer: {pitch_focus}
 
@@ -2767,6 +2895,7 @@ Legacy DM tone: {existing_dm}"#,
         audience = audience_label,
         pitch_focus = pitch_focus,
         delivery_url = payload.delivery_url,
+        ig_line = ig_line,
         existing_x_dm = existing_x_dm.chars().take(220).collect::<String>(),
         existing_email = existing_email.chars().take(300).collect::<String>(),
         existing_dm = if existing_dm.is_empty() {
@@ -2837,6 +2966,7 @@ Legacy DM tone: {existing_dm}"#,
         "outreach_message": x_dm,
         "x_dm": x_dm,
         "email_script": email_script,
+        "ig_profile_url": ig_profile_url,
     })))
 }
 
@@ -2901,6 +3031,20 @@ async fn generate_prospect_sample_pack(
         .or_else(|| row.get::<Option<String>, _>("service_type"))
         .unwrap_or_else(|| "landing_page".to_string());
     let service = normalize_revenue_service(&service).to_string();
+    // Service switch (owner directive Sep 2026): sample packs render only for
+    // enabled services. Scoring/discovery stay untouched — only the expensive
+    // render is gated.
+    if !crate::services::service_flags::service_enabled(&state.db_pool, &service).await {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ErrorResponse {
+                success: false,
+                message: format!(
+                    "Sample packs for service '{service}' are currently disabled (service_flags)."
+                ),
+            }),
+        ));
+    }
     let product_name = request.product_name.unwrap_or_else(|| display_name.clone());
 
     // For kick_auto_clipper, use detected source creators' Kick channel as the source
@@ -4599,6 +4743,15 @@ async fn linkedin_launch_search(
     Extension(state): Extension<Arc<AppState>>,
     Json(req): Json<LinkedInLaunchRequest>,
 ) -> Json<serde_json::Value> {
+    // Service switch (owner directive Sep 2026): LinkedIn discovery feeds B2B
+    // SaaS prospects (landing_page business, currently OFF). Clipper/creator
+    // prospecting (YouTube/Twitch/Kick/IG/Telegram) is unaffected.
+    if !crate::services::service_flags::service_enabled(&state.db_pool, "landing_page").await
+    {
+        return Json(
+            json!({"success": false, "error": "LinkedIn discovery is currently disabled (landing_page off in service_flags)."}),
+        );
+    }
     let Some(pb) = state.phantombuster_client.as_ref() else {
         return Json(json!({"success": false, "error": "PhantomBuster not configured"}));
     };
@@ -4883,6 +5036,13 @@ async fn linkedin_smart_search(
     Extension(state): Extension<Arc<AppState>>,
     Json(req): Json<SmartSearchRequest>,
 ) -> Json<serde_json::Value> {
+    // Service switch (owner directive Sep 2026): see linkedin_launch_search.
+    if !crate::services::service_flags::service_enabled(&state.db_pool, "landing_page").await
+    {
+        return Json(
+            json!({"success": false, "error": "LinkedIn discovery is currently disabled (landing_page off in service_flags)."}),
+        );
+    }
     let Some(pb) = state.phantombuster_client.as_ref() else {
         return Json(
             json!({"success": false, "error": "PhantomBuster not configured (PHANTOMBUSTER_API_KEY missing)"}),
@@ -5561,6 +5721,10 @@ async fn instagram_generate_dm(
     Path(id): Path<uuid::Uuid>,
     Json(req): Json<Option<InstagramDmRequest>>,
 ) -> Json<serde_json::Value> {
+    // Service switch (owner directive Sep 2026).
+    if !crate::services::service_flags::service_enabled(&state.db_pool, "outreach").await {
+        return Json(json!({"success": false, "error": "Outreach generation is currently disabled (service_flags)."}));
+    }
     let user_id: i32 = claims.sub.parse().unwrap_or(0);
 
     // Fetch the lead — scoped to the caller so one user can't DM another
@@ -6403,6 +6567,144 @@ Return ONLY a JSON array of strings. No explanation. Example: ["kickclips", "kic
     }))
 }
 
+/// POST /api/instagram/leads/kick-method-b
+///
+/// Method B for Instagram: start from verified top Kick streamers (OAuth API,
+/// free, no Cloudflare) and search Instagram for each streamer's clippers,
+/// instead of guessing hashtags. Per streamer launches deterministic tag
+/// searches ({slug}, {slug}clips, {slug}highlights) with a methodb prefix
+/// carrying the slug, so the poller presets detected_source_creators with
+/// zero LLM detection cost. Mirrors kick Method B (YouTube) for Instagram.
+async fn instagram_kick_method_b(
+    Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
+    Json(req): Json<Option<AutoDiscoverRequest>>,
+) -> Json<serde_json::Value> {
+    let user_id: i32 = claims.sub.parse().unwrap_or(0);
+    if user_id == 0 {
+        return Json(json!({"success": false, "error": "Invalid user id in JWT"}));
+    }
+    // Service switch: Method B feeds the kick_auto_clipper business.
+    if !crate::services::service_flags::service_enabled(&state.db_pool, "kick_auto_clipper")
+        .await
+    {
+        return Json(
+            json!({"success": false, "error": "kick_auto_clipper is currently disabled (service_flags)."}),
+        );
+    }
+
+    let req = req.unwrap_or(AutoDiscoverRequest {
+        niche: None,
+        max_posts_per_hashtag: None,
+        hashtag_count: None,
+    });
+    let category = req.niche.as_deref().unwrap_or("gaming");
+    let max_posts = req.max_posts_per_hashtag.unwrap_or(30).min(100);
+
+    let Some(pb) = state.phantombuster_client.as_ref() else {
+        return Json(json!({"success": false, "error": "PhantomBuster not configured"}));
+    };
+
+    let session_cookie = match std::env::var("INSTAGRAM_SESSION_COOKIE") {
+        Ok(c) if !c.is_empty() => c,
+        _ => return Json(json!({"success": false, "error": "INSTAGRAM_SESSION_COOKIE not set"})),
+    };
+
+    let agent = match pb.find_instagram_hashtag_agent().await {
+        Ok(Some(a)) => a,
+        Ok(None) => {
+            return Json(
+                json!({"success": false, "error": "No Instagram Hashtag phantom found in PhantomBuster. Add 'Instagram Hashtag Search Export' from the Phantom Store."}),
+            )
+        }
+        Err(e) => {
+            return Json(json!({"success": false, "error": format!("Agent lookup failed: {}", e)}))
+        }
+    };
+
+    let Some(kick) = &state.kick_client else {
+        return Json(json!({"success": false, "error": "Kick client not configured"}));
+    };
+
+    // 1. Top live Kick streamers in this category (free Kick API).
+    let livestreams = match kick.search_livestreams_by_category_name(category).await {
+        Ok(streams) => streams,
+        Err(e) => {
+            return Json(json!({"success": false, "error": format!("Kick API failed: {}", e)}))
+        }
+    };
+    let mut sorted: Vec<_> = livestreams
+        .into_iter()
+        .filter_map(|s| {
+            let viewers = s.viewer_count.unwrap_or(0);
+            if viewers < 10 {
+                return None;
+            }
+            Some((viewers, s))
+        })
+        .collect();
+    sorted.sort_by(|a, b| b.0.cmp(&a.0));
+    let top_streamers: Vec<_> = sorted.into_iter().take(10).collect();
+    if top_streamers.is_empty() {
+        return Json(json!({"success": false, "error": format!("No live Kick streams in category '{}'", category)}));
+    }
+
+    // 2. Per streamer: deterministic clipper-handle tags. Account names like
+    // {slug}clips / {slug}highlights are where clippers live; the tag search
+    // surfaces the accounts and the scorer (username-weighted + caption
+    // signals) confirms them.
+    let mut launched_jobs = Vec::new();
+    let mut errors = Vec::new();
+    let mut streamers = Vec::new();
+    for (viewers, streamer) in &top_streamers {
+        let slug = streamer.slug.to_lowercase();
+        streamers.push(json!({"slug": slug.clone(), "viewers": viewers}));
+        let prefix = format!("instagram:methodb:{slug}:#");
+        for tag in [
+            slug.clone(),
+            format!("{slug}clips"),
+            format!("{slug}highlights"),
+        ] {
+            match try_launch_or_queue_ig_hashtag_job_with_prefix(
+                &state,
+                pb,
+                &agent,
+                &session_cookie,
+                &tag,
+                max_posts,
+                user_id,
+                &prefix,
+            )
+            .await
+            {
+                Ok((job_id, status, container_id)) => {
+                    launched_jobs.push(json!({
+                        "job_id": job_id.to_string(),
+                        "container_id": container_id,
+                        "hashtag": tag,
+                        "streamer": slug,
+                        "status": status,
+                    }));
+                }
+                Err(e) => errors.push(format!("#{tag} ({slug}): {e}")),
+            }
+            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+        }
+    }
+
+    Json(json!({
+        "success": !launched_jobs.is_empty(),
+        "category": category,
+        "streamers": streamers,
+        "jobs": launched_jobs,
+        "errors": errors,
+        "message": format!(
+            "Method B launched {} IG searches across {} top Kick streamers. Results auto-import in ~5–10 minutes with detected creators pre-attached.",
+            launched_jobs.len(), streamers.len()
+        )
+    }))
+}
+
 /// GET /api/instagram/leads/top
 /// Returns the highest-scored leads (score >= 60), ready for outreach.
 async fn instagram_top_leads(
@@ -6504,15 +6806,31 @@ pub async fn poll_instagram_jobs(state: &Arc<AppState>) {
         let search_url: String = row.get("search_url");
         let job_user_id: Option<i32> = row.try_get("user_id").ok().flatten();
 
-        // Extract hashtag from search_url ("instagram:#contentcreator" or "instagram:kick:#contentcreator")
-        let is_kick_clipper = search_url.contains(":kick:");
-        let hashtag_source = search_url
-            .trim_start_matches("instagram:kick:#")
-            .trim_start_matches("instagram:kick:")
-            .trim_start_matches("instagram:#")
-            .trim_start_matches("instagram:")
-            .trim_start_matches('#')
-            .to_string();
+        // Extract hashtag from search_url ("instagram:#contentcreator",
+        // "instagram:kick:#contentcreator", or "instagram:methodb:{slug}:#tag"
+        // for Method-B runs where the streamer slug is pre-known).
+        let is_kick_clipper = search_url.contains(":kick:") || search_url.contains(":methodb:");
+        let (hashtag_source, methodb_slug): (String, Option<String>) =
+            if let Some(rest) = search_url.strip_prefix("instagram:methodb:") {
+                match rest.split_once(":#") {
+                    Some((slug, tag)) => (
+                        tag.trim_start_matches('#').to_string(),
+                        Some(slug.to_lowercase()),
+                    ),
+                    None => (rest.trim_start_matches('#').to_string(), None),
+                }
+            } else {
+                (
+                    search_url
+                        .trim_start_matches("instagram:kick:#")
+                        .trim_start_matches("instagram:kick:")
+                        .trim_start_matches("instagram:#")
+                        .trim_start_matches("instagram:")
+                        .trim_start_matches('#')
+                        .to_string(),
+                    None,
+                )
+            };
 
         // Fetch PB output
         let rows = match pb.fetch_output(&agent_id).await {
@@ -6578,17 +6896,27 @@ pub async fn poll_instagram_jobs(state: &Arc<AppState>) {
             } else {
                 hashtag_source.clone()
             };
+            // Method-B preset: the streamer is KNOWN (came from the search
+            // prefix), so attach it with zero LLM cost. The scorer skips paid
+            // detection when creators are already present.
+            let preset_enrichment = methodb_slug.as_deref().map(|slug| {
+                serde_json::json!({
+                    "detected_source_creators": [slug],
+                    "method": "method_b",
+                })
+            });
 
             let result = sqlx::query(
                 "INSERT INTO instagram_leads
                     (username, full_name, bio, followers_count, following_count, posts_count,
                      profile_url, profile_pic_url, is_private, is_verified, external_url, email,
-                     category, hashtag_source, contact_status, user_id)
-                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'new',$15)
+                     category, hashtag_source, contact_enrichment, contact_status, user_id)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'new',$16)
                  ON CONFLICT (user_id, username) DO UPDATE
                    SET followers_count = EXCLUDED.followers_count,
                        bio = COALESCE(EXCLUDED.bio, instagram_leads.bio),
                        category = COALESCE(EXCLUDED.category, instagram_leads.category),
+                       contact_enrichment = CASE WHEN (instagram_leads.contact_enrichment IS NULL OR instagram_leads.contact_enrichment = '{}') THEN EXCLUDED.contact_enrichment ELSE instagram_leads.contact_enrichment END,
                        updated_at = NOW()",
             )
             .bind(&lead.username)
@@ -6605,6 +6933,7 @@ pub async fn poll_instagram_jobs(state: &Arc<AppState>) {
             .bind(&lead.email)
             .bind(&category_value)
             .bind(&hashtag_source)
+            .bind(preset_enrichment.as_ref().unwrap_or(&serde_json::json!({})))
             .bind(job_user_id)
             .execute(&state.db_pool)
             .await;
@@ -6945,7 +7274,8 @@ async fn score_instagram_leads(state: &Arc<AppState>, hashtag: &str, user_id: i3
     // is unknown. Scoped to one user's leads so we don't pay to re-score
     // the same lead for multiple users.
     let unscored = match sqlx::query(
-        "SELECT id, username, full_name, bio, followers_count, external_url, category
+        "SELECT id, username, full_name, bio, followers_count, external_url, category,
+                contact_enrichment
          FROM instagram_leads
          WHERE score IS NULL
            AND hashtag_source = $1
@@ -6975,33 +7305,46 @@ async fn score_instagram_leads(state: &Arc<AppState>, hashtag: &str, user_id: i3
             .get::<Option<String>, _>("category")
             .unwrap_or_default();
         let is_kick_lead = category == "kick_clipper";
+        // Hard Kick signals in bio/captions (no LLM cost): links to kick.com,
+        // kick+clip/highlight mentions. Forces kick treatment + evidence.
+        let caption_signals = kick_caption_signals(&bio);
+        let kick_evident = is_kick_lead || !caption_signals.is_empty();
+        // Method-B preset (workspace endpoint flow): creators already known,
+        // skip the paid detection call below.
+        let preset_creators: Vec<String> = row
+            .get::<Option<serde_json::Value>, _>("contact_enrichment")
+            .as_ref()
+            .and_then(|e| e.get("detected_source_creators"))
+            .and_then(|c| c.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str())
+                    .map(|s| s.trim().trim_start_matches('@').to_lowercase())
+                    .filter(|s| !s.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default();
 
         let followers_str = match followers {
             Some(n) if n > 0 => n.to_string(),
             _ => "unknown (came from hashtag search — judge by bio + handle)".to_string(),
         };
 
+        // Service menu from enabled flags (owner directive Sep 2026).
+        let (service_menu, must_line) =
+            crate::services::service_flags::scoring_menu(&state.db_pool).await;
+
         let prompt = format!(
             r#"Score this Instagram creator as a potential client for a video production studio (0–100), and also pick the best service to pitch.
 
 The studio offers:
-- **clipping**       — long-form → Shorts/Reels. Best fit: podcasters, long-form YouTubers, Twitch streamers.
-- **education**      — animated explainer scenes, data visualizations, and motion graphics. Best fit: educators, finance/crypto channels, news/data accounts.
-- **landing_page**   — animated SaaS hero mockup (we can scrape their existing site URL). Best fit: SaaS/startup founders, no-code builders.
-- **kick_auto_clipper** — auto-generated Kick clips from VODs with branding and captions. Best fit: clipping channels, Kick highlight reposters.
-- **manim_explainer** — narrated Manim animated explainers with clean motion graphics and math/technical diagrams. Best fit: educators, course creators, math/finance channels.
-- **whiteboard_animation** — narrated whiteboard-style hand-drawn sketch explainer videos. Best fit: explainer channels, SaaS/startup explainers, how-to content.
-- **kinetic_typography** — dynamic kinetic typography text animations with word-by-word reveals. Best fit: lyric videos, quote channels, brand taglines.
-- **animated_infographic** — animated data infographics with charts, counters, and data-driven visuals. Best fit: data journalism, finance channels, analytics dashboards.
-- **algorithm_viz** — algorithm/technology visualizations with animated data structures. Best fit: coding channels, CS educators, tech docs.
-- **investor_pitch** — professional investor pitch deck videos with clean title cards and motion graphics. Best fit: startups raising capital, demo day prep.
-- **isometric_explainer** — isometric 3D perspective explainer videos with geometric shapes and modern motion graphics. Best fit: product explainers, architectural concepts, tech demos.
+{service_menu}
 
 Creator profile:
-- Username: @{username}
+- Username: @{username} (clipper-pattern names like Xclips/clipsofX/Xhighlights are a POSITIVE clipper signal — judge together with bio)
 - Followers: {followers}
 - Bio / recent post caption: {bio}
-- Link in bio: {ext_url}
+{kick_evidence}- Link in bio: {ext_url}
 
 Score guidelines:
 - 80–100: Clear paying client. Active creator/founder, monetised, has content the studio can act on right now.
@@ -7012,11 +7355,21 @@ Score guidelines:
 Return ONLY valid JSON (no markdown, no code fence):
 {{"score": 75, "service": "clipping", "reason": "podcaster with podcast link in bio, posts long-form clips"}}
 
-`service` MUST be one of: clipping, education, landing_page, kick_auto_clipper, manim_explainer, whiteboard_animation, kinetic_typography, animated_infographic, algorithm_viz, investor_pitch, isometric_explainer, year_in_review."#,
+{must_line}"#,
             username = username,
+            service_menu = service_menu,
+            must_line = must_line,
             followers = followers_str,
             bio = bio,
             ext_url = ext_url,
+            kick_evidence = if caption_signals.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "- Hard Kick signals in text (no LLM needed): {}\n",
+                    caption_signals.join("; ")
+                )
+            },
         );
 
         let result = generate_text_best_effort(
@@ -7044,16 +7397,27 @@ Return ONLY valid JSON (no markdown, no code fence):
                     .and_then(|r| r.as_str())
                     .unwrap_or("")
                     .to_string();
-                // Service tag — coerced to one of the 5 known values; anything
-                // else gets stored as NULL so the DM generator falls back to
-                // "all services, AI picks one inline".
+                // Service tag — coerced into the enabled set (owner directive
+                // Sep 2026); anything else gets stored as NULL so the DM
+                // generator falls back to "all services, AI picks one inline".
                 let service_raw = v
                     .get("service")
                     .and_then(|s| s.as_str())
                     .unwrap_or("")
                     .to_lowercase();
                 let service = if is_valid_revenue_service(&service_raw) {
-                    Some(normalize_revenue_service(&service_raw).to_string())
+                    let normalized = normalize_revenue_service(&service_raw).to_string();
+                    let clipper_like = kick_evident
+                        || bio.to_ascii_lowercase().contains("clip")
+                        || bio.to_ascii_lowercase().contains("kick");
+                    Some(
+                        crate::services::service_flags::constrain_service(
+                            &state.db_pool,
+                            &normalized,
+                            clipper_like,
+                        )
+                        .await,
+                    )
                 } else {
                     None
                 };
@@ -7073,7 +7437,9 @@ Return ONLY valid JSON (no markdown, no code fence):
         }
 
         // ── Kick clipper: detect which Kick creators they clip ──────
-        if is_kick_lead && !bio.is_empty() {
+        // Method-B preset (workspace flow) already knows the creators — skip
+        // the paid detection call. Otherwise detect from bio/captions.
+        if kick_evident && !bio.is_empty() && preset_creators.is_empty() {
             let creator_prompt = format!(
                 "This Instagram account reposts clips from Kick.com streamers. \
                  Based on their bio and post captions below, identify which \
@@ -7642,22 +8008,14 @@ async fn score_telegram_opportunity(
     channel: &str,
     message: &str,
 ) -> (i32, String, Option<String>) {
+    // Service menu from enabled flags (owner directive Sep 2026).
+    let (service_menu, must_line) =
+        crate::services::service_flags::scoring_menu(&state.db_pool).await;
     let prompt = format!(
         r#"A message was posted in Telegram channel @{channel}. Decide whether it's a REAL paid gig opportunity for a video production studio and which service to pitch.
 
 The studio offers (pick ONE):
-- clipping       — long-form → Shorts/Reels. Best fit: podcasts, streams, long YouTubers. $297–$899/mo.
-- education      — animated explainer scenes, data visualizations, motion graphics. Best fit: educators, crypto/finance, news/data. $75–$400.
-- landing_page   — animated SaaS landing hero (can scrape their live URL). Best fit: SaaS / indie founders / pre-launch. $299–$1,500+.
-- kick_auto_clipper — auto-generated Kick clips from VODs with branding and captions. Best fit: clipping channels, Kick highlight reposters. $297–$899/mo.
-- manim_explainer — narrated Manim animated explainers with math/technical diagrams. $75–$300.
-- whiteboard_animation — narrated sketch-style whiteboard explainer. $75–$300.
-- kinetic_typography — dynamic text animation / lyric / quote videos. $75–$250.
-- animated_infographic — data infographics with charts and counters. $75–$250.
-- algorithm_viz — algorithm / data structure visualizations. $150–$500.
-- investor_pitch — investor pitch deck videos with motion graphics. $150–$500.
-- isometric_explainer — isometric 3D perspective explainer videos. $100–$400.
-- year_in_review — personalized year-in-review wrapped-style recap. $100–$400.
+{service_menu}
 
 Message:
 """
@@ -7673,9 +8031,11 @@ Score guidelines:
 Return ONLY valid JSON (no markdown):
 {{"score": 75, "service": "clipping", "reason": "Podcaster says 'need someone to cut my 2hr episodes into TikToks, DM for budget'"}}
 
-`service` MUST be one of: clipping, education, landing_page, kick_auto_clipper, manim_explainer, whiteboard_animation, kinetic_typography, animated_infographic, algorithm_viz, investor_pitch, isometric_explainer, year_in_review — or null if score < 40."#,
+{must_line} — or null if score < 40."#,
         channel = channel,
         message = message,
+        service_menu = service_menu,
+        must_line = must_line,
     );
 
     let response = match crate::llm_utils::generate_text_best_effort(
@@ -7713,13 +8073,24 @@ Return ONLY valid JSON (no markdown):
         .get("service")
         .and_then(|s| s.as_str())
         .map(|s| s.to_lowercase());
-    let service = svc.and_then(|s| {
-        if is_valid_revenue_service(&s) {
-            Some(normalize_revenue_service(&s).to_string())
-        } else {
-            None
+    // Constrain into the enabled set (owner directive Sep 2026); Telegram gig
+    // leads default to clipping when the AI picks a disabled service.
+    let service = match svc {
+        Some(s) if is_valid_revenue_service(&s) => {
+            let normalized = normalize_revenue_service(&s).to_string();
+            let clipper_like = message.to_ascii_lowercase().contains("clip")
+                || message.to_ascii_lowercase().contains("kick");
+            Some(
+                crate::services::service_flags::constrain_service(
+                    &state.db_pool,
+                    &normalized,
+                    clipper_like,
+                )
+                .await,
+            )
         }
-    });
+        _ => None,
+    };
     (score, reason, service)
 }
 

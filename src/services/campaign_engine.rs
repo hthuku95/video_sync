@@ -347,6 +347,17 @@ async fn fetch_posts_by_status(
 // ── Process pending post: generate variation + kick off rendering ──────────
 
 async fn process_pending_post(state: &Arc<AppState>, campaign: &CampaignRow, post: &PostRow) {
+    // Service switch (owner directive Sep 2026): only enabled services render.
+    // Disabled-service slots stay pending (NOT failed) so they resume cleanly
+    // if the service is re-enabled — and cost zero LLM calls while off.
+    if !crate::services::service_flags::service_enabled(&state.db_pool, &campaign.service_type).await
+    {
+        tracing::info!(
+            "campaign[{}] post[{}]: service '{}' disabled, slot skipped (stays pending)",
+            campaign.id, post.id, campaign.service_type
+        );
+        return;
+    }
     // 1. Generate variation from brief
     let variation = generate_variation(state, &campaign.brief, post.day_number, post.slot_index).await;
     let variation_text = match variation {

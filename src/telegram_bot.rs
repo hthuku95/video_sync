@@ -236,6 +236,19 @@ async fn handle_dm(
         notify_admin(&admin_blurb).await;
     });
 
+    // Service switch (owner directive Sep 2026): sales-bot AI replies OFF.
+    // The admin ping above already fired, so inbound interest is never missed.
+    if !crate::services::service_flags::service_enabled(&state.db_pool, "chat_agents").await
+    {
+        send_text_reply(
+            chat_id,
+            reply_to,
+            "Thanks for reaching out! Our team will reply personally shortly.",
+        )
+        .await;
+        return;
+    }
+
     // Generate an AI reply using our LLM stack.
     let prompt = format!(
         "{}\n\nIncoming message from user:\n\"\"\"\n{}\n\"\"\"\n\nYour reply:",

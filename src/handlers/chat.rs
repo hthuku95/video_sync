@@ -623,6 +623,24 @@ async fn websocket(
 
             tracing::info!("🤖 Spawning AI agent as background task for session: {}", session_id);
 
+            // Service switch (owner directive Sep 2026): chat agents OFF.
+            // The socket stays open (history + reconnect replay keep working);
+            // only new agent runs are refused.
+            if !crate::services::service_flags::service_enabled(&state.db_pool, "chat_agents")
+                .await
+            {
+                tracing::info!("⏸️ Chat agent disabled (service_flags) — session {}", session_id);
+                let notice = serde_json::json!({
+                    "type": "message",
+                    "content": "Chat agents are currently disabled. Please use the dashboard for clipping workflows.",
+                    "timestamp": chrono::Utc::now().to_rfc3339(),
+                });
+                if let Ok(json_str) = serde_json::to_string(&notice) {
+                    let _ = sender.send(Message::Text(json_str)).await;
+                }
+                continue;
+            }
+
             // Create a DB record for this job so we can replay it on reconnect
             let job_id =
                 create_agent_job(&state, &session_id, &text, target_workflow_id.clone()).await;

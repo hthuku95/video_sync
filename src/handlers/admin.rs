@@ -119,6 +119,8 @@ pub fn admin_routes() -> Router {
         .route("/admin/email-logs", get(admin_email_logs_page))
         .route("/api/admin/referral-codes", get(api_list_referral_codes).post(api_create_referral_code))
         .route("/api/admin/referral-commissions", get(api_list_referral_commissions))
+        .route("/api/admin/service-flags", get(api_list_service_flags).post(api_set_service_flag))
+        .route("/admin/service-flags", get(admin_service_flags_page))
         .route("/admin/referrals", get(admin_referrals_page))
         .route("/api/admin/revenue-ledger", get(api_revenue_ledger))
         .route("/api/admin/payments", get(api_studio_payments))
@@ -6620,6 +6622,18 @@ pub async fn api_trigger_test_run(
         )
     });
 
+    // Service switch: test runs only make sense when at least one render
+    // service is on (scenarios for disabled services are skipped inside).
+    if !crate::services::service_flags::service_enabled(&state.db_pool, "clipping").await
+        && !crate::services::service_flags::service_enabled(&state.db_pool, "kick_auto_clipper")
+            .await
+    {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": "All render services are currently disabled (service_flags)." })),
+        ));
+    }
+
     match crate::portfolio_tests::PortfolioTestRunner::create_and_spawn(state, name).await {
         Ok(run_id) => Ok(Json(json!({ "run_id": run_id, "status": "running" }))),
         Err(e) => Err((
@@ -6797,6 +6811,11 @@ pub async fn api_test_vectorize_content(
     Extension(state): Extension<Arc<AppState>>,
     Json(body): Json<serde_json::Value>,
 ) -> Json<serde_json::Value> {
+    // Service switch: ad-hoc vectorization tests run only while admin tests on.
+    if !crate::services::service_flags::service_enabled(&state.db_pool, "admin_tests").await
+    {
+        return Json(json!({"success": false, "error": "Admin tests are currently disabled (service_flags)."}));
+    }
     let feature_tag = body.get("feature_tag").and_then(|v| v.as_str()).unwrap_or("");
     let pages: Vec<serde_json::Value> = body.get("pages")
         .and_then(|v| v.as_array())
@@ -6817,6 +6836,11 @@ pub async fn api_test_search_content(
     Extension(state): Extension<Arc<AppState>>,
     Json(body): Json<serde_json::Value>,
 ) -> Json<serde_json::Value> {
+    // Service switch: ad-hoc search tests run only while admin tests on.
+    if !crate::services::service_flags::service_enabled(&state.db_pool, "admin_tests").await
+    {
+        return Json(json!({"success": false, "error": "Admin tests are currently disabled (service_flags)."}));
+    }
     let query = body.get("query").and_then(|v| v.as_str()).unwrap_or("");
     let feature_tag = body.get("feature_tag").and_then(|v| v.as_str()).unwrap_or("");
     let limit = body.get("limit").and_then(|v| v.as_u64()).unwrap_or(5) as usize;
@@ -6909,6 +6933,7 @@ pub async fn admin_test_runs_page() -> Html<String> {
   <a href="/admin/performance">Performance</a>
   <a href="/admin/test-runs" class="active">Portfolio Tests</a>
   <a href="/admin/deliveries">Deliveries</a>
+  <a href="/admin/service-flags">Service Switches</a>
 </div>
 <div class="main">
   <div class="header">
@@ -8154,6 +8179,10 @@ pub async fn api_list_portfolio_samples(
 pub async fn api_generate_crypto_saas_portfolio_samples(
     Extension(state): Extension<Arc<AppState>>,
 ) -> Json<serde_json::Value> {
+    // Service switch: crypto-SaaS samples are landing_page business (OFF).
+    if !crate::services::service_flags::service_enabled(&state.db_pool, "landing_page").await {
+        return Json(json!({"success": false, "error": "landing_page is currently disabled (service_flags)."}));
+    }
     let mut samples = Vec::new();
     let mut queued = 0usize;
 
@@ -8330,6 +8359,15 @@ pub async fn api_generate_dfy_portfolio_samples(
     let mut queued = 0usize;
 
     for service in crate::portfolio_samples::dfy_services() {
+        // Service switch: skip samples for disabled services.
+        if !crate::services::service_flags::service_enabled(&state.db_pool, service.slug).await
+        {
+            tracing::info!(
+                "⏸️ Portfolio sample '{}' skipped (service disabled)",
+                service.slug
+            );
+            continue;
+        }
         let client_ref = crate::portfolio_samples::dfy_client_ref(service.slug);
         let title = format!("Managed Campaign Demo — {}", service.name);
 
@@ -8859,6 +8897,10 @@ pub async fn api_generate_service_portfolio_sample(
     let Some(svc) = service_def else {
         return Json(json!({"success": false, "error": format!("Unknown service: {}", body.service_slug)}));
     };
+    // Service switch (owner directive Sep 2026).
+    if !crate::services::service_flags::service_enabled(&state.db_pool, svc.slug).await {
+        return Json(json!({"success": false, "error": format!("Service '{}' is currently disabled (service_flags).", svc.slug)}));
+    }
 
     let inserted = sqlx::query(
         "INSERT INTO service_portfolio_samples (service_slug, sample_name, brief, status, created_at) \
@@ -9250,6 +9292,7 @@ pub async fn admin_portfolio_samples_page() -> Html<String> {
     <nav>
       <a href="/admin/dashboard">Dashboard</a>
       <a href="/admin/deliveries">Deliveries</a>
+      <a href="/admin/service-flags">Service Switches</a>
       <a href="/admin/portfolio-samples" class="active">Portfolio Samples</a>
       <a href="/admin/prospect-finder">Prospects</a>
       <a href="/admin/revenue-ledger">Revenue Ledger</a>
@@ -12488,6 +12531,135 @@ pub async fn api_list_referral_commissions(
         }
         Err(e) => Json(json!({"success": false, "error": format!("Failed to list commissions: {e}")})),
     }
+}
+
+/// GET /api/admin/service-flags — List all AI service on/off switches.
+pub async fn api_list_service_flags(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    let rows = sqlx::query_as::<_, (String, bool, Option<String>, chrono::DateTime<chrono::Utc>)>(
+        "SELECT service, enabled, updated_by, updated_at FROM service_flags ORDER BY service",
+    )
+    .fetch_all(&state.db_pool)
+    .await;
+
+    match rows {
+        Ok(rows) => {
+            let flags: Vec<serde_json::Value> = rows
+                .into_iter()
+                .map(|(service, enabled, updated_by, updated_at)| {
+                    json!({"service": service, "enabled": enabled,
+                           "updated_by": updated_by, "updated_at": updated_at})
+                })
+                .collect();
+            Json(json!({"success": true, "flags": flags}))
+        }
+        Err(e) => Json(json!({"success": false, "error": format!("Failed to list service flags: {e}")})),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct SetServiceFlagRequest {
+    pub service: String,
+    pub enabled: bool,
+}
+
+/// POST /api/admin/service-flags — Flip one AI service switch.
+/// Body: {"service": "clipping", "enabled": true}. Admin-only via router
+/// middleware. Takes effect immediately (flags are read per check, no restart).
+/// This is also the endpoint the agent uses post-deploy to set launch state.
+pub async fn api_set_service_flag(
+    Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
+    Json(req): Json<SetServiceFlagRequest>,
+) -> Json<serde_json::Value> {
+    let service = req.service.to_ascii_lowercase();
+    if !crate::services::service_flags::is_known_flag(&service) {
+        return Json(json!({"success": false, "error": format!("Unknown service flag: {}", req.service)}));
+    }
+    let who = claims.email.clone();
+    let row = sqlx::query_as::<_, (bool, chrono::DateTime<chrono::Utc>)>(
+        "INSERT INTO service_flags (service, enabled, updated_by, updated_at) \
+         VALUES ($1, $2, $3, NOW()) \
+         ON CONFLICT (service) DO UPDATE SET enabled = EXCLUDED.enabled, updated_by = EXCLUDED.updated_by, updated_at = NOW() \
+         RETURNING enabled, updated_at",
+    )
+    .bind(&service)
+    .bind(req.enabled)
+    .bind(&who)
+    .fetch_one(&state.db_pool)
+    .await;
+
+    match row {
+        Ok((enabled, updated_at)) => {
+            tracing::info!("🔀 service_flags: {service} -> {enabled} by {who}");
+            Json(json!({"success": true, "service": service, "enabled": enabled,
+                        "updated_by": who, "updated_at": updated_at}))
+        }
+        Err(e) => Json(json!({"success": false, "error": format!("Failed to set service flag: {e}")})),
+    }
+}
+
+/// GET /admin/service-flags — Admin page with on/off toggles for AI services.
+pub async fn admin_service_flags_page() -> Html<&'static str> {
+    Html(
+        r###"<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Service Switches — VideoSync Admin</title>
+<style>
+:root { --bg:#07111d; --panel:#0b1626; --line:rgba(148,163,184,0.16); --text:#e5eefb; --muted:#a8b8d3; --blue:#3b82f6; --green:#22c55e; --red:#ef4444; }
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:var(--bg); color:var(--text); padding:2rem; }
+h1 { font-size:1.4rem; margin-bottom:0.4rem; }
+.sub { color:var(--muted); font-size:0.85rem; margin-bottom:1.5rem; }
+table { width:100%; max-width:860px; border-collapse:collapse; background:var(--panel); border:1px solid var(--line); border-radius:12px; overflow:hidden; }
+th, td { padding:0.7rem 1rem; text-align:left; font-size:0.88rem; border-bottom:1px solid var(--line); }
+th { color:var(--muted); font-size:0.72rem; text-transform:uppercase; letter-spacing:0.06em; }
+tr:last-child td { border-bottom:none; }
+.pill { display:inline-block; padding:3px 12px; border-radius:999px; font-size:0.75rem; font-weight:700; }
+.pill.on { background:rgba(34,197,94,0.15); color:var(--green); border:1px solid rgba(34,197,94,0.4); }
+.pill.off { background:rgba(239,68,68,0.12); color:var(--red); border:1px solid rgba(239,68,68,0.4); }
+.toggle { padding:6px 14px; border-radius:8px; border:1px solid var(--line); background:transparent; color:var(--text); cursor:pointer; font-size:0.8rem; font-weight:600; }
+.toggle:hover { border-color:var(--blue); }
+.meta { color:var(--muted); font-size:0.75rem; }
+.nav { margin-bottom:1.5rem; }
+.nav a { color:var(--blue); text-decoration:none; font-size:0.85rem; }
+</style></head>
+<body>
+<div class="nav"><a href="/admin/deliveries">← Admin</a></div>
+<h1>AI Service Switches</h1>
+<p class="sub">Takes effect immediately — no restart. In-flight runs always finish. QA review and embeddings follow each service automatically.</p>
+<table><thead><tr><th>Service</th><th>Status</th><th>Updated</th><th></th></tr></thead>
+<tbody id="rows"><tr><td colspan="4" class="meta">Loading…</td></tr></tbody></table>
+<script>
+const token = localStorage.getItem('auth_token') || localStorage.getItem('authToken');
+async function load() {
+  const res = await fetch('/api/admin/service-flags', {headers:{'Authorization':'Bearer '+token}});
+  const data = await res.json();
+  const tb = document.getElementById('rows');
+  if (!data.success) { tb.innerHTML = '<tr><td colspan="4">Error: '+data.error+'</td></tr>'; return; }
+  tb.innerHTML = data.flags.map(f =>
+    `<tr><td><strong>${f.service}</strong></td>` +
+    `<td><span class="pill ${f.enabled?'on':'off'}">${f.enabled?'ON':'OFF'}</span></td>` +
+    `<td class="meta">${f.updated_by||'seed'} · ${f.updated_at||''}</td>` +
+    `<td><button class="toggle" onclick="flip('${f.service}',${!f.enabled})">Turn ${f.enabled?'OFF':'ON'}</button></td></tr>`
+  ).join('');
+}
+async function flip(service, enabled) {
+  if (!confirm(`Turn ${service} ${enabled?'ON':'OFF'}?`)) return;
+  const res = await fetch('/api/admin/service-flags', {method:'POST',
+    headers:{'Authorization':'Bearer '+token,'Content-Type':'application/json'},
+    body: JSON.stringify({service, enabled})});
+  const data = await res.json();
+  if (!data.success) alert('Failed: '+data.error);
+  load();
+}
+load();
+</script>
+</body></html>
+    "###,
+    )
 }
 
 /// GET /admin/referrals — Admin page for referral management.

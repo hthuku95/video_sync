@@ -87,7 +87,25 @@ impl PortfolioTestRunner {
     }
 
     async fn run_all(&self, run_id: Uuid) {
-        let all = scenarios();
+        // Service switch (owner directive Sep 2026): only run scenarios for
+        // enabled services. Disabled-service scenarios are skipped, not failed.
+        let mut all = Vec::new();
+        for scenario in scenarios() {
+            if crate::services::service_flags::service_enabled(
+                &self.app_state.db_pool,
+                scenario.slug,
+            )
+            .await
+            {
+                all.push(scenario);
+            } else {
+                tracing::info!(
+                    "⏸️ Test run {}: scenario '{}' skipped (service disabled)",
+                    run_id,
+                    scenario.slug
+                );
+            }
+        }
         let total = all.len() as i32;
 
         let _ = sqlx::query("UPDATE test_runs SET total_tests = $1 WHERE id = $2")

@@ -10,6 +10,7 @@ pub mod monetization;
 pub mod output_video;
 pub mod pipeline_worker;
 pub mod redis_pubsub;
+pub mod service_flags;
 pub mod skills;
 pub mod token_pricing;
 pub mod token_usage;
