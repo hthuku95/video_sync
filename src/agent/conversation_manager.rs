@@ -168,6 +168,33 @@ pub struct ConversationManager {
     /// Owner of any chat session auto-created by this manager. System/batch
     /// runs (no authenticated user) fall back to the system user (id = -1).
     user_id: Option<i32>,
+    /// Provenance stamped onto auto-created chat_sessions rows. Explicit
+    /// override wins; otherwise it is derived from the session-UUID convention
+    /// (see [`session_origin`]).
+    origin: Option<String>,
+}
+
+/// Provenance of a chat session, derived from the session-UUID convention.
+///
+/// PRODUCTION RULE: pipeline services MUST generate service-prefixed session UUIDs
+/// (e.g. `clipping-<uuid>-try4`, `education-…`, `campaign-…`). Interactive chats
+/// always use plain UUIDv4 (frontend `crypto.randomUUID`). User-facing lists show
+/// only `origin = 'user'`; anything unrecognised stays visible (fail-visible: a
+/// misclassified user chat is a support ticket, a misclassified system row is
+/// just clutter).
+pub fn session_origin(session_uuid: &str) -> &'static str {
+    // Plain UUIDv4 (any version/variant accepted) => interactive chat.
+    let is_plain_uuid = session_uuid.len() == 36
+        && session_uuid.as_bytes()[8] == b'-'
+        && session_uuid.as_bytes()[13] == b'-'
+        && session_uuid.as_bytes()[18] == b'-'
+        && session_uuid.as_bytes()[23] == b'-'
+        && session_uuid.chars().all(|c| c.is_ascii_hexdigit() || c == '-');
+    if is_plain_uuid {
+        "user"
+    } else {
+        "system"
+    }
 }
 
 impl ConversationManager {
@@ -175,11 +202,24 @@ impl ConversationManager {
         Self {
             db_pool,
             user_id: None,
+            origin: None,
         }
     }
 
     pub fn with_user(db_pool: PgPool, user_id: Option<i32>) -> Self {
-        Self { db_pool, user_id }
+        Self {
+            db_pool,
+            user_id,
+            origin: None,
+        }
+    }
+
+    /// Explicitly stamp auto-created sessions with a provenance. Prefer this at
+    /// pipeline entry points; when unset, [`session_origin`] derives it from the
+    /// session-UUID convention.
+    pub fn with_origin(mut self, origin: &str) -> Self {
+        self.origin = Some(origin.to_string());
+        self
     }
 
     /// Create the new conversation messages table schema
@@ -344,15 +384,27 @@ impl ConversationManager {
         // chat_sessions.user_id is NOT NULL — batch/system runs have no
         // authenticated user, so fall back to the system user (id = -1).
         let owner = self.user_id.unwrap_or(-1);
+        // Provenance: explicit override wins, otherwise derive from the
+        // session-UUID convention. Pipeline runs MUST use service-prefixed
+        // UUIDs so they never appear in user chat lists.
+        let origin = self
+            .origin
+            .as_deref()
+            .unwrap_or_else(|| session_origin(session_uuid));
         let inserted = sqlx::query_as::<_, (i32,)>(
-            "INSERT INTO chat_sessions (user_id, session_uuid) VALUES ($1, $2) RETURNING id",
+            "INSERT INTO chat_sessions (user_id, session_uuid, origin) VALUES ($1, $2, $3) RETURNING id",
         )
         .bind(owner)
         .bind(session_uuid)
+        .bind(origin)
         .fetch_one(&self.db_pool)
         .await?;
 
-        tracing::info!("Auto-created chat_session with uuid={}", session_uuid);
+        tracing::info!(
+            "Auto-created chat_session with uuid={} origin={}",
+            session_uuid,
+            origin
+        );
         Ok(inserted.0)
     }
 }

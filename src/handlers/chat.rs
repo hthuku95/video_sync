@@ -1238,11 +1238,14 @@ async fn get_recent_chats(
     Extension(state): Extension<Arc<AppState>>,
     Extension(claims): Extension<crate::models::auth::Claims>,
 ) -> Result<axum::response::Json<serde_json::Value>, axum::http::StatusCode> {
-    // Get recent chat sessions for the user from the database
+    // Get recent chat sessions for the user from the database.
+    // User-facing feed: user-originated conversations only. System run
+    // sessions are reachable via their delivery/campaign pages and admin trace.
     match sqlx::query_as::<_, (i32, String, String, chrono::DateTime<chrono::Utc>)>(
         "SELECT cs.id, cs.session_uuid, cs.title, cs.created_at
          FROM chat_sessions cs
          WHERE cs.user_id = $1
+           AND cs.origin = 'user'
            AND EXISTS (
              SELECT 1
              FROM conversation_messages cm
@@ -1285,6 +1288,9 @@ async fn get_recent_chats(
 struct AllChatsQuery {
     page: Option<i64>,
     limit: Option<i64>,
+    /// Admin-only debug escape hatch: superusers may pass include_system=true
+    /// to also list machine-generated run sessions. Ignored for non-admins.
+    include_system: Option<bool>,
 }
 
 async fn get_all_chats(
@@ -1297,12 +1303,17 @@ async fn get_all_chats(
     let offset = (page - 1) * limit;
 
     let user_id = claims.sub.parse::<i32>().unwrap_or(0);
+    // Production rule: user-facing lists show only user-originated conversations.
+    // Machine-generated run sessions (origin='system') live behind delivery /
+    // campaign pages and the admin trace view — never in the chat list.
+    let show_system = params.include_system.unwrap_or(false) && claims.is_superuser;
 
     // Get total count
     let total_count: (i64,) = sqlx::query_as(
         "SELECT COUNT(*)
              FROM chat_sessions cs
              WHERE cs.user_id = $1
+               AND ($2 OR cs.origin = 'user')
                AND EXISTS (
                  SELECT 1
                  FROM conversation_messages cm
@@ -1312,6 +1323,7 @@ async fn get_all_chats(
                )",
     )
     .bind(user_id)
+    .bind(show_system)
     .fetch_one(&state.db_pool)
     .await
     .map_err(|e| {
@@ -1324,6 +1336,7 @@ async fn get_all_chats(
         "SELECT cs.id, cs.session_uuid, cs.title, cs.created_at
          FROM chat_sessions cs
          WHERE cs.user_id = $1
+           AND ($4 OR cs.origin = 'user')
            AND EXISTS (
              SELECT 1
              FROM conversation_messages cm
@@ -1337,6 +1350,7 @@ async fn get_all_chats(
     .bind(user_id)
     .bind(limit)
     .bind(offset)
+    .bind(show_system)
     .fetch_all(&state.db_pool)
     .await
     .map_err(|e| {

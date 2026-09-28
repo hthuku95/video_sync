@@ -2782,164 +2782,83 @@ async fn clear_agent_checkpoint(pool: &sqlx::PgPool, workflow_id: uuid::Uuid) {
 // ── Gemma 4 / NVIDIA NIM tool calling loop ────────────────────────────────────
 //
 // Runs the same multi-turn tool loop as the Gemini agent but using NVIDIA NIM's
-/// Multi-turn tool loop for Ollama (self-hosted Gemma 4).
-/// Same contract as `run_deepseek_tool_loop` — feeds tool results back to the model
-/// and keeps calling until a text answer is returned (or MAX_TURNS exhausted).
-/// Durable: saves a turn-boundary checkpoint after every completed exchange and
-/// clears it on success (resume handled by the caller before the first turn).
-async fn run_ollama_tool_loop<F>(
-    ollama_client: &crate::ollama_client::OllamaClient,
-    messages: &mut Vec<serde_json::Value>,
-    tools: &mut Vec<crate::gemini_client::FunctionDeclaration>,
-    exec_context: &crate::agent::tool_executor::ToolExecutionContext,
-    send_progress: &F,
-    ledger: &mut RunLedger,
-) -> Result<String, String>
-where
-    F: Fn(&str),
-{
-    const MAX_TURNS: usize = 10;
+// ── Unified tool-loop policy (all providers) ─────────────────────────────────
+// Production rule: a bare-text model response inside a tool loop is accepted as
+// the final answer ONLY when the run does not require tool-built artifacts.
+// Artifact runs (every AgenticServicePipeline render, clipping job, campaign
+// render, delivery) MUST end with tool calls that produce output artifacts;
+// prose without tools is a failed turn, not a completion. Pure conversational
+// runs (background_agent_generation, ad-hoc contexts) keep the old accept-text
+// behavior untouched.
+//
+// The requirement is read from the workflow's own `artifact_requirements`
+// (set at workflow creation), so policy follows durable truth — no new flags,
+// no per-provider divergence, no signature changes. Single implementation used
+// by every live loop (qwen/nvidia/deepseek).
+const MAX_TOOL_NUDGES: usize = 2;
 
-    for turn in 0..MAX_TURNS {
-        // Cooperative cancellation probe (durable pipeline runner).
-        if workflow_cancel_requested(exec_context).await {
-            return Err("WORKFLOW_CANCELLED: cancellation requested".to_string());
-        }
-        // Budget enforcement BEFORE the next call (monitoring ≠ enforcement).
-        if let Some(reason) = ledger.budget_exceeded() {
-            ledger.flush(exec_context).await;
-            return Err(format!("WORKFLOW_BUDGET_EXCEEDED: {reason}"));
-        }
-        // Compact old turns once the window fills so Ollama never
-        // silently front-trims critical history/tool schemas mid-task.
-        let _ = maybe_compact_tool_history(
-            exec_context.app_state.qwen_client.as_ref(),
-            messages,
-            exec_context,
-        )
-        .await
-        .map_err(|e| tracing::warn!("⚠️ Compaction skipped: {}", e));
+/// Markers that count a prose response as carrying a salvaged usable artifact.
+fn text_contains_artifact_url(text: &str) -> bool {
+    text.contains("https://")
+        && (text.contains(".mp4")
+            || text.contains("r2.cloudflarestorage")
+            || text.contains("/api/outputs/")
+            || text.contains("/delivery/"))
+}
 
-        let response = timeout(Duration::from_secs(300), ollama_client.generate_single(messages, tools))
+/// Whether this run must produce tool-built artifacts. Reads the workflow's own
+/// `artifact_requirements`: pipeline shapes (`{expects_video:true,…}` objects
+/// and non-empty `[{required:true,…}]` arrays) require tools; empty/absent
+/// requirements (pure chat) and ad-hoc contexts (`workflow_id == None`) do not.
+async fn workflow_requires_artifacts(
+    pool: &sqlx::PgPool,
+    workflow_id: Option<uuid::Uuid>,
+) -> bool {
+    let wid = match workflow_id {
+        Some(w) => w,
+        None => return false,
+    };
+    let row: Option<(serde_json::Value,)> =
+        sqlx::query_as("SELECT artifact_requirements FROM app_workflows WHERE id = $1")
+            .bind(wid)
+            .fetch_optional(pool)
             .await
-            .map_err(|_| "Ollama timeout after 300s".to_string())?
-            .map_err(|e| format!("Ollama API error: {}", e))?;
-
-        let (response, usage) = response;
-        ledger.record("ollama", &usage, false);
-        ledger.flush(exec_context).await;
-
-        match response {
-            crate::ollama_client::OllamaResponse::Text(text) => {
-                tracing::info!("✅ Ollama final answer after {} turns", turn + 1);
-                if let Some(wid) = exec_context.workflow_id {
-                    if checkpoints_enabled() {
-                        clear_agent_checkpoint(&exec_context.app_state.db_pool, wid).await;
-                    }
-                }
-                return Ok(text);
-            }
-
-            crate::ollama_client::OllamaResponse::ToolCalls(tool_calls) => {
-                let assistant_tool_calls: Vec<serde_json::Value> = tool_calls
-                    .iter()
-                    .map(|tc| {
-                        // Ollama's native /api/chat REQUIRES arguments to be a parsed
-                        // JSON object (not a stringified blob). Replaying a string
-                        // makes Ollama's parser fail on the next turn with:
-                        //   "Value looks like object, but can't find closing '}' symbol"
-                        let args: serde_json::Value = match &tc.arguments {
-                            serde_json::Value::String(s) => {
-                                serde_json::from_str::<serde_json::Value>(s)
-                                    .unwrap_or_else(|_| tc.arguments.clone())
-                            }
-                            other => other.clone(),
-                        };
-                        serde_json::json!({
-                            "id": tc.id,
-                            "type": "function",
-                            "function": {
-                                "name": tc.name,
-                                "arguments": args,
-                            }
-                        })
-                    })
-                    .collect();
-
-                messages.push(serde_json::json!({
-                    "role": "assistant",
-                    "content": null,
-                    "tool_calls": assistant_tool_calls,
-                }));
-
-                // Parallel read-only fan-out: independent lookups run concurrently
-                // before the sequential path executes writes/renders.
-                let mut prefetched: std::collections::HashMap<usize, String> =
-                    std::collections::HashMap::new();
-                {
-                    let batch: Vec<(usize, String, serde_json::Value)> = tool_calls
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, tc)| PARALLEL_READ_ONLY_TOOLS.contains(&tc.name.as_str()))
-                        .map(|(i, tc)| (i, tc.name.clone(), tc.arguments.clone()))
-                        .collect();
-                    if batch.len() > 1 {
-                        send_progress(&format!("⚡ Running {} lookups in parallel…", batch.len()));
-                        prefetched = execute_read_only_batch(batch, exec_context, ledger).await;
-                    }
-                }
-
-                for (call_idx, tc) in tool_calls.iter().enumerate() {
-                    send_progress(&format!("🔧 Ollama calling: {}", tc.name));
-                    tracing::info!("🎬 Ollama tool call: {}", tc.name);
-
-                    let result = if let Some(cached) = prefetched.remove(&call_idx) {
-                        cached
-                    } else {
-                        let args_map = to_args_map(&tc.arguments);
-                        execute_tool_call_in_loop(
-                            &tc.name, &args_map, exec_context, tools, ledger,
-                        )
-                        .await
-                    };
-
-                    send_progress(&format!("✅ {} done", tc.name));
-
-                    // Ollama native /api/chat associates a tool result via `tool_name`,
-                    // not OpenAI's `tool_call_id`.
-                    messages.push(serde_json::json!({
-                        "role": "tool",
-                        "tool_name": tc.name,
-                        "content": truncate_tool_result_for_context(&tc.name, &result),
-                    }));
-                }
-
-                // Turn boundary reached — persist for durable resume.
-                if let Some(wid) = exec_context.workflow_id {
-                    if checkpoints_enabled() {
-                        save_agent_checkpoint(
-                            &exec_context.app_state.db_pool,
-                            wid,
-                            turn + 1,
-                            messages,
-                        )
-                        .await;
-                    }
-                }
-            }
-        }
+            .unwrap_or(None);
+    match row {
+        None => false,
+        Some((reqs,)) => match &reqs {
+            serde_json::Value::Null => false,
+            serde_json::Value::Array(items) => !items.is_empty(),
+            serde_json::Value::Object(map) => map.values().any(|v| v == &serde_json::Value::Bool(true)),
+            _ => false,
+        },
     }
+}
 
-    Err(format!("Ollama exceeded max turns ({})", MAX_TURNS))
+/// Decide what a bare-text model response means inside a tool loop.
+/// Returns `Some(nudge)` when the loop must mandate tool calls and continue,
+/// `None` when the prose is acceptable as the final answer (chat semantics,
+/// salvaged artifact URLs present, nothing callable, or nudges exhausted).
+fn tool_mandate_nudge(text: &str, tools_empty: bool) -> Option<String> {
+    if tools_empty || text_contains_artifact_url(text) {
+        return None;
+    }
+    Some(
+        "SYSTEM MANDATE: your response contained no tool calls and no output artifact, \
+         but this task requires tool-built output (video clips, renders, or files with \
+         shareable URLs). Do NOT answer in prose. Reply ONLY with one or more tool calls \
+         that advance the task toward a finished artifact."
+            .to_string(),
+    )
 }
 
 /// Multi-turn tool loop for Qwen (qwen3.7-plus via DashScope, OpenAI-compatible).
 /// THE DEFAULT FIRST ATTEMPT for every agent call since Ollama was retired
 /// (Sep 2026, §52.2). Same contract as `run_deepseek_tool_loop` — feeds tool
 /// results back as `{role:"tool", tool_call_id}` messages and keeps calling
-/// until a text answer is returned (or MAX_TURNS exhausted). Duplicates the
-/// Ollama loop's durable-turn checkpoint + compaction, because Qwen is now the
-/// primary path and must survive crashes/timeouts like Ollama did.
+/// until a text answer is returned (or MAX_TURNS exhausted). Carries durable-turn
+/// checkpoint + compaction, because Qwen is now the primary path and must survive
+/// crashes/timeouts.
 async fn run_qwen_tool_loop<F>(
     qwen_client: &crate::qwen_client::QwenClient,
     messages: &mut Vec<serde_json::Value>,
@@ -2952,6 +2871,12 @@ where
     F: Fn(&str),
 {
     const MAX_TURNS: usize = 10;
+    // Unified tool-loop policy state (see header): tracks whether any tool has
+    // run yet, how many prose nudges were spent, and the cached
+    // artifact-requirement verdict for this run.
+    let mut tool_calls_made: usize = 0;
+    let mut nudges_used: usize = 0;
+    let mut artifacts_required: Option<bool> = None;
 
     for turn in 0..MAX_TURNS {
         // Cooperative cancellation probe (durable pipeline runner).
@@ -2986,6 +2911,38 @@ where
 
         match response {
             crate::qwen_client::QwenResponse::Text(text) => {
+                // Unified policy: bare prose with zero tool calls ends the run
+                // ONLY for pure-chat runs. Artifact runs get a bounded tool
+                // mandate instead of a false "final answer".
+                if tool_calls_made == 0 && nudges_used < MAX_TOOL_NUDGES {
+                    let required = match artifacts_required {
+                        Some(v) => v,
+                        None => {
+                            let v = workflow_requires_artifacts(
+                                &exec_context.app_state.db_pool,
+                                exec_context.workflow_id,
+                            )
+                            .await;
+                            artifacts_required = Some(v);
+                            v
+                        }
+                    };
+                    if required {
+                        if let Some(nudge) = tool_mandate_nudge(&text, tools.is_empty()) {
+                            nudges_used += 1;
+                            tracing::warn!(
+                                "⚠️ Qwen answered in prose with zero tool calls (nudge {}/{}); mandating tools and continuing",
+                                nudges_used, MAX_TOOL_NUDGES
+                            );
+                            send_progress("🔧 Directing the model back to tool calls…");
+                            messages.push(serde_json::json!({
+                                "role": "user",
+                                "content": nudge,
+                            }));
+                            continue;
+                        }
+                    }
+                }
                 tracing::info!("✅ Qwen final answer after {} turns", turn + 1);
                 if let Some(wid) = exec_context.workflow_id {
                     if checkpoints_enabled() {
@@ -2996,6 +2953,7 @@ where
             }
 
             crate::qwen_client::QwenResponse::ToolCalls(tool_calls) => {
+                tool_calls_made += tool_calls.len();
                 let assistant_tool_calls: Vec<serde_json::Value> = tool_calls
                     .iter()
                     .map(|tc| {
@@ -3087,7 +3045,7 @@ where
 // Loop exits when `finish_reason` is not "tool_calls".
 
 /// Multi-turn tool loop for DeepSeek V4.
-/// Same contract as `run_nim_tool_loop` — feeds tool results back to the model
+/// Same contract as `run_nvidia_tool_loop` — feeds tool results back to the model
 /// and keeps calling until a text answer is returned (or MAX_TURNS exhausted).
 async fn run_deepseek_tool_loop<F>(
     ds_client: &crate::deepseek_client::DeepSeekClient,
@@ -3101,6 +3059,10 @@ where
     F: Fn(&str),
 {
     const MAX_TURNS: usize = 10;
+    // Unified tool-loop policy state (see header).
+    let mut tool_calls_made: usize = 0;
+    let mut nudges_used: usize = 0;
+    let mut artifacts_required: Option<bool> = None;
 
     for turn in 0..MAX_TURNS {
         if workflow_cancel_requested(exec_context).await {
@@ -3110,6 +3072,16 @@ where
             ledger.flush(exec_context).await;
             return Err(format!("WORKFLOW_BUDGET_EXCEEDED: {reason}"));
         }
+        // Compact old turns once the window fills (same policy as the Qwen arm;
+        // the summarizer runs on Qwen and degrades to skip on failure).
+        let _ = maybe_compact_tool_history(
+            exec_context.app_state.qwen_client.as_ref(),
+            messages,
+            exec_context,
+        )
+        .await
+        .map_err(|e| tracing::warn!("⚠️ Compaction skipped: {}", e));
+
         let response = timeout(Duration::from_secs(300), ds_client.generate_single(messages, tools))
             .await
             .map_err(|_| "DeepSeek timeout after 300s".to_string())?
@@ -3121,11 +3093,49 @@ where
 
         match response {
             crate::deepseek_client::DeepSeekResponse::Text(text) => {
+                // Unified policy: bare prose with zero tool calls ends the run
+                // ONLY for pure-chat runs. Artifact runs get a bounded tool
+                // mandate instead of a false "final answer".
+                if tool_calls_made == 0 && nudges_used < MAX_TOOL_NUDGES {
+                    let required = match artifacts_required {
+                        Some(v) => v,
+                        None => {
+                            let v = workflow_requires_artifacts(
+                                &exec_context.app_state.db_pool,
+                                exec_context.workflow_id,
+                            )
+                            .await;
+                            artifacts_required = Some(v);
+                            v
+                        }
+                    };
+                    if required {
+                        if let Some(nudge) = tool_mandate_nudge(&text, tools.is_empty()) {
+                            nudges_used += 1;
+                            tracing::warn!(
+                                "⚠️ DeepSeek answered in prose with zero tool calls (nudge {}/{}); mandating tools and continuing",
+                                nudges_used, MAX_TOOL_NUDGES
+                            );
+                            send_progress("🔧 Directing the model back to tool calls…");
+                            messages.push(serde_json::json!({
+                                "role": "user",
+                                "content": nudge,
+                            }));
+                            continue;
+                        }
+                    }
+                }
                 tracing::info!("✅ DeepSeek V4 final answer after {} turns", turn + 1);
+                if let Some(wid) = exec_context.workflow_id {
+                    if checkpoints_enabled() {
+                        clear_agent_checkpoint(&exec_context.app_state.db_pool, wid).await;
+                    }
+                }
                 return Ok(text);
             }
 
             crate::deepseek_client::DeepSeekResponse::ToolCalls(tool_calls) => {
+                tool_calls_made += tool_calls.len();
                 let assistant_tool_calls: Vec<serde_json::Value> = tool_calls
                     .iter()
                     .map(|tc| {
@@ -3188,6 +3198,20 @@ where
                         "content": truncate_tool_result_for_context(&tc.name, &result),
                     }));
                 }
+
+                // Turn boundary reached — persist for durable resume (parity
+                // with the Qwen arm).
+                if let Some(wid) = exec_context.workflow_id {
+                    if checkpoints_enabled() {
+                        save_agent_checkpoint(
+                            &exec_context.app_state.db_pool,
+                            wid,
+                            turn + 1,
+                            messages,
+                        )
+                        .await;
+                    }
+                }
             }
         }
     }
@@ -3195,8 +3219,8 @@ where
     Err(format!("DeepSeek V4 exceeded max turns ({})", MAX_TURNS))
 }
 
-/// Multi-turn tool loop for NVIDIA NIM (Gemma 4 31B on GPU).
-/// OpenAI-compatible message format. Same contract as run_ollama_tool_loop.
+/// Multi-turn tool loop for NVIDIA NIM (Nemotron Super 120B via free API).
+/// OpenAI-compatible message format. Same contract as run_qwen_tool_loop.
 async fn run_nvidia_tool_loop<F>(
     nim_client: &crate::nvidia_nim_client::NvidiaNimClient,
     messages: &mut Vec<serde_json::Value>,
@@ -3209,6 +3233,10 @@ where
     F: Fn(&str),
 {
     const MAX_TURNS: usize = 10;
+    // Unified tool-loop policy state (see header).
+    let mut tool_calls_made: usize = 0;
+    let mut nudges_used: usize = 0;
+    let mut artifacts_required: Option<bool> = None;
 
     for turn in 0..MAX_TURNS {
         if workflow_cancel_requested(exec_context).await {
@@ -3218,6 +3246,16 @@ where
             ledger.flush(exec_context).await;
             return Err(format!("WORKFLOW_BUDGET_EXCEEDED: {reason}"));
         }
+        // Compact old turns once the window fills (same policy as the Qwen arm;
+        // the summarizer runs on Qwen and degrades to skip on failure).
+        let _ = maybe_compact_tool_history(
+            exec_context.app_state.qwen_client.as_ref(),
+            messages,
+            exec_context,
+        )
+        .await
+        .map_err(|e| tracing::warn!("⚠️ Compaction skipped: {}", e));
+
         let response = timeout(Duration::from_secs(300), nim_client.generate_single(messages, tools))
             .await
             .map_err(|_| "NVIDIA NIM timeout after 300s".to_string())?
@@ -3229,11 +3267,49 @@ where
 
         match response {
             crate::nvidia_nim_client::NimResponse::Text(text) => {
+                // Unified policy: bare prose with zero tool calls ends the run
+                // ONLY for pure-chat runs. Artifact runs get a bounded tool
+                // mandate instead of a false "final answer".
+                if tool_calls_made == 0 && nudges_used < MAX_TOOL_NUDGES {
+                    let required = match artifacts_required {
+                        Some(v) => v,
+                        None => {
+                            let v = workflow_requires_artifacts(
+                                &exec_context.app_state.db_pool,
+                                exec_context.workflow_id,
+                            )
+                            .await;
+                            artifacts_required = Some(v);
+                            v
+                        }
+                    };
+                    if required {
+                        if let Some(nudge) = tool_mandate_nudge(&text, tools.is_empty()) {
+                            nudges_used += 1;
+                            tracing::warn!(
+                                "⚠️ NVIDIA NIM answered in prose with zero tool calls (nudge {}/{}); mandating tools and continuing",
+                                nudges_used, MAX_TOOL_NUDGES
+                            );
+                            send_progress("🔧 Directing the model back to tool calls…");
+                            messages.push(serde_json::json!({
+                                "role": "user",
+                                "content": nudge,
+                            }));
+                            continue;
+                        }
+                    }
+                }
                 tracing::info!("✅ NVIDIA NIM final answer after {} turns", turn + 1);
+                if let Some(wid) = exec_context.workflow_id {
+                    if checkpoints_enabled() {
+                        clear_agent_checkpoint(&exec_context.app_state.db_pool, wid).await;
+                    }
+                }
                 return Ok(text);
             }
 
             crate::nvidia_nim_client::NimResponse::ToolCalls(tool_calls) => {
+                tool_calls_made += tool_calls.len();
                 let assistant_tool_calls: Vec<serde_json::Value> = tool_calls
                     .iter()
                     .map(|tc| {
@@ -3296,105 +3372,23 @@ where
                         "content": truncate_tool_result_for_context(&tc.name, &result),
                     }));
                 }
+
+                // Turn boundary reached — persist for durable resume (parity
+                // with the Qwen arm).
+                if let Some(wid) = exec_context.workflow_id {
+                    if checkpoints_enabled() {
+                        save_agent_checkpoint(
+                            &exec_context.app_state.db_pool,
+                            wid,
+                            turn + 1,
+                            messages,
+                        )
+                        .await;
+                    }
+                }
             }
         }
     }
 
     Err(format!("NVIDIA NIM exceeded max turns ({})", MAX_TURNS))
-}
-
-#[allow(dead_code)]
-/// Multi-turn tool loop for AWS Bedrock (Meta Llama 4 Maverick 17B).
-/// Uses AWS SDK Message types. Same contract as run_ollama_tool_loop.
-async fn run_bedrock_tool_loop<F>(
-    bedrock_client: &crate::bedrock_client::BedrockClient,
-    messages: &mut Vec<aws_sdk_bedrockruntime::types::Message>,
-    tools: &[crate::gemini_client::FunctionDeclaration],
-    exec_context: &crate::agent::tool_executor::ToolExecutionContext,
-    send_progress: &F,
-) -> Result<String, String>
-where
-    F: Fn(&str),
-{
-    const MAX_TURNS: usize = 10;
-
-    for turn in 0..MAX_TURNS {
-        if workflow_cancel_requested(exec_context).await {
-            return Err("WORKFLOW_CANCELLED: cancellation requested".to_string());
-        }
-        let response = timeout(Duration::from_secs(300), bedrock_client.generate_single("", messages, tools))
-            .await
-            .map_err(|_| "Bedrock timeout after 300s".to_string())?
-            .map_err(|e| format!("Bedrock API error: {}", e))?;
-
-        match response {
-            crate::bedrock_client::BedrockResponse::Text(text) => {
-                tracing::info!("✅ Bedrock final answer after {} turns", turn + 1);
-                return Ok(text);
-            }
-
-            crate::bedrock_client::BedrockResponse::ToolCalls(tool_calls) => {
-                let mut content_blocks = Vec::new();
-                for tc in &tool_calls {
-                    content_blocks.push(
-                        crate::bedrock_client::tool_call_to_content_block(tc),
-                    );
-                }
-                messages.push(
-                    aws_sdk_bedrockruntime::types::Message::builder()
-                        .role(aws_sdk_bedrockruntime::types::ConversationRole::Assistant)
-                        .set_content(Some(content_blocks))
-                        .build()
-                        .map_err(|e| format!("Bedrock build error: {e}"))?,
-                );
-
-                let mut result_blocks = Vec::new();
-                for tc in &tool_calls {
-                    send_progress(&format!("🔧 Bedrock calling: {}", tc.name));
-                    tracing::info!("🎬 Bedrock tool call: {}", tc.name);
-
-                    let args_map: std::collections::HashMap<String, serde_json::Value> = tc
-                        .arguments
-                        .as_object()
-                        .map(|o| o.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
-                        .unwrap_or_default();
-
-                    let result = crate::agent::tool_executor::execute_tool_gemini_with_context(
-                        &tc.name,
-                        &args_map,
-                        exec_context,
-                    )
-                    .await;
-
-                    send_progress(&format!("✅ {} done", tc.name));
-
-                    let result_str = serde_json::to_string(&result).unwrap_or_default();
-                    result_blocks.push(
-                        crate::bedrock_client::tool_result_to_content_block(tc, &result_str),
-                    );
-                }
-                messages.push(
-                    aws_sdk_bedrockruntime::types::Message::builder()
-                        .role(aws_sdk_bedrockruntime::types::ConversationRole::User)
-                        .set_content(Some(result_blocks))
-                        .build()
-                        .map_err(|e| format!("Bedrock build error: {e}"))?,
-                );
-            }
-        }
-    }
-
-    Err(format!("Bedrock exceeded max turns ({})", MAX_TURNS))
-}
-
-#[allow(dead_code)]
-fn bedrock_text_message(
-    role: aws_sdk_bedrockruntime::types::ConversationRole,
-    text: &str,
-) -> Result<aws_sdk_bedrockruntime::types::Message, String> {
-    aws_sdk_bedrockruntime::types::Message::builder()
-        .role(role)
-        .content(aws_sdk_bedrockruntime::types::ContentBlock::Text(text.to_string()))
-        .build()
-        .map_err(|e| format!("Bedrock build message error: {e}"))
 }

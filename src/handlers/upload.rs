@@ -599,12 +599,17 @@ pub async fn get_or_create_session(
     // user_id=1 is the system anonymous user; the NOT NULL constraint is satisfied.
     let resolved_user_id = user_id.unwrap_or(1);
 
+    // Provenance: all callers of this helper are interactive user flows, but
+    // derive it from the UUID convention anyway so a leaked pipeline UUID can
+    // never pollute a user chat list (see session_origin).
+    let origin = crate::agent::conversation_manager::session_origin(session_uuid);
     let new_session = sqlx::query(
-        "INSERT INTO chat_sessions (user_id, session_uuid, title) VALUES ($1, $2, $3) RETURNING id",
+        "INSERT INTO chat_sessions (user_id, session_uuid, title, origin) VALUES ($1, $2, $3, $4) RETURNING id",
     )
     .bind(resolved_user_id)
     .bind(session_uuid)
     .bind("New Chat Session")
+    .bind(origin)
     .fetch_one(&state.db_pool)
     .await?;
 

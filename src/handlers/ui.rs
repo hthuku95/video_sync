@@ -6567,107 +6567,199 @@ pub async fn chat_interface_with_session_id(session_id: Option<String>) -> Html<
             scroll-behavior: smooth;
         }
 
+        :root {
+            --bg: #07111d;
+            --panel: rgba(9,18,31,0.84);
+            --panel-solid: #0b1626;
+            --panel-soft: rgba(15,26,43,0.72);
+            --line: rgba(148,163,184,0.16);
+            --text: #e5eefb;
+            --muted: #a8b8d3;
+            --blue: #3b82f6;
+            --blue-deep: #1d4ed8;
+            --green: #22c55e;
+            --red: #ef4444;
+            --radius: 14px;
+        }
+
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: var(--bg);
             background-size: cover;
             background-position: center;
             background-attachment: fixed;
             transition: background-image 1s ease-in-out;
             height: 100vh;
             overflow: hidden;
+            color: var(--text);
         }
 
         .app-container {
             display: flex;
             height: 100vh;
-            max-width: 1400px;
+            max-width: 1440px;
             margin: 0 auto;
-            background: rgba(255, 255, 255, 0.95);
-            backdrop-filter: blur(10px);
-            box-shadow: 0 0 50px rgba(0,0,0,0.1);
+            background: transparent;
         }
 
-        /* Sidebar */
+        /* Sidebar — conversation list + attachments */
         .sidebar {
-            width: 300px;
-            background: #2c3e50;
-            color: white;
+            width: 280px;
+            flex-shrink: 0;
+            background: var(--panel-solid);
+            color: var(--text);
             display: flex;
             flex-direction: column;
-            border-right: 1px solid #34495e;
+            border-right: 1px solid var(--line);
         }
 
         .sidebar-header {
-            padding: 20px;
-            background: #1a252f;
-            border-bottom: 1px solid #34495e;
+            padding: 18px 16px 14px;
+            border-bottom: 1px solid var(--line);
         }
 
         .sidebar-header h1 {
-            font-size: 1.5rem;
-            margin-bottom: 0.5rem;
+            font-size: 1.05rem;
+            font-weight: 700;
+            letter-spacing: 0.01em;
+            margin-bottom: 0.25rem;
         }
 
         .sidebar-header p {
-            color: #bdc3c7;
-            font-size: 0.9rem;
+            color: var(--muted);
+            font-size: 0.8rem;
+        }
+
+        .new-chat-btn {
+            margin: 14px 14px 4px;
+            padding: 10px 12px;
+            background: var(--blue);
+            color: #fff;
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 0.88rem;
+            transition: background-color 0.15s ease;
+        }
+
+        .new-chat-btn:hover {
+            background: var(--blue-deep);
+        }
+
+        .sidebar-section-title {
+            margin: 14px 16px 8px;
+            color: var(--muted);
+            font-size: 0.72rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+        }
+
+        .chat-list {
+            padding: 0 8px;
+            overflow-y: auto;
+            max-height: 32vh;
+        }
+
+        .chat-list-item {
+            display: block;
+            width: 100%;
+            text-align: left;
+            background: transparent;
+            border: none;
+            color: var(--text);
+            padding: 9px 10px;
+            border-radius: 9px;
+            margin-bottom: 2px;
+            cursor: pointer;
+            font-size: 0.85rem;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            transition: background-color 0.15s ease;
+        }
+
+        .chat-list-item:hover {
+            background: rgba(148,163,184,0.10);
+        }
+
+        .chat-list-item.active {
+            background: rgba(59,130,246,0.16);
+        }
+
+        .chat-list-empty {
+            padding: 4px 10px 10px;
+            color: var(--muted);
+            font-size: 0.82rem;
         }
 
         .file-manager {
             flex: 1;
-            padding: 20px;
+            padding: 6px 14px 14px;
             overflow-y: auto;
+            border-top: 1px solid var(--line);
+            margin-top: 10px;
         }
 
         .file-manager h3 {
-            margin-bottom: 15px;
-            color: #ecf0f1;
-            font-size: 1rem;
+            margin-bottom: 10px;
+            color: var(--text);
+            font-size: 0.85rem;
+            font-weight: 600;
         }
 
         .file-list {
-            space-y: 8px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
         }
 
         .file-item {
-            background: #34495e;
-            padding: 12px;
-            border-radius: 8px;
-            margin-bottom: 8px;
+            background: var(--panel-soft);
+            border: 1px solid var(--line);
+            padding: 10px 12px;
+            border-radius: 10px;
             cursor: pointer;
-            transition: background-color 0.2s;
+            transition: border-color 0.15s ease, background-color 0.15s ease;
         }
 
         .file-item:hover {
-            background: #3b4f61;
+            border-color: rgba(59,130,246,0.45);
+            background: rgba(59,130,246,0.08);
         }
 
         .file-name {
-            font-weight: 500;
-            font-size: 0.9rem;
+            font-weight: 600;
+            font-size: 0.85rem;
             margin-bottom: 4px;
+            color: var(--text);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
 
         .file-meta {
-            font-size: 0.8rem;
-            color: #95a5a6;
+            font-size: 0.75rem;
+            color: var(--muted);
         }
 
         .upload-btn {
-            margin: 20px;
-            padding: 12px;
-            background: #3498db;
-            color: white;
-            border: none;
-            border-radius: 8px;
+            margin: 12px 14px 16px;
+            padding: 10px 12px;
+            background: transparent;
+            color: var(--text);
+            border: 1px dashed rgba(148,163,184,0.35);
+            border-radius: 10px;
             cursor: pointer;
-            font-weight: 500;
-            transition: background-color 0.2s;
+            font-weight: 600;
+            font-size: 0.85rem;
+            transition: border-color 0.15s ease, background-color 0.15s ease;
         }
 
         .upload-btn:hover {
-            background: #2980b9;
+            border-color: var(--blue);
+            background: rgba(59,130,246,0.08);
         }
 
         /* Main Content */
@@ -6675,43 +6767,50 @@ pub async fn chat_interface_with_session_id(session_id: Option<String>) -> Html<
             flex: 1;
             display: flex;
             flex-direction: column;
+            min-width: 0;
         }
 
         .chat-header {
-            padding: 20px;
-            background: #f8f9fa;
-            border-bottom: 1px solid #e9ecef;
+            padding: 14px 22px;
+            background: rgba(7,17,29,0.72);
+            backdrop-filter: blur(8px);
+            border-bottom: 1px solid var(--line);
             display: flex;
             justify-content: space-between;
             align-items: center;
+            gap: 12px;
         }
 
         .chat-title {
-            font-size: 1.2rem;
-            font-weight: 600;
-            color: #2c3e50;
+            font-size: 1rem;
+            font-weight: 700;
+            color: var(--text);
+            letter-spacing: 0.01em;
         }
 
         .status-indicator {
             display: flex;
             align-items: center;
             gap: 8px;
-            font-size: 0.9rem;
-            color: #6c757d;
+            font-size: 0.82rem;
+            color: var(--muted);
+            white-space: nowrap;
         }
 
         .status-dot {
             width: 8px;
             height: 8px;
             border-radius: 50%;
-            background: #28a745;
+            background: var(--green);
+            box-shadow: 0 0 8px rgba(34,197,94,0.7);
         }
 
         .status-dot.disconnected {
-            background: #dc3545;
+            background: var(--red);
+            box-shadow: 0 0 8px rgba(239,68,68,0.7);
         }
 
-        /* Chat Area */
+        /* Chat Area — centered reading column (ChatGPT/Claude standard) */
         .chat-container {
             flex: 1;
             display: flex;
@@ -6722,17 +6821,27 @@ pub async fn chat_interface_with_session_id(session_id: Option<String>) -> Html<
 
         .chat-messages {
             flex: 1;
-            padding: 20px;
+            padding: 28px 20px 20px;
             overflow-y: auto;
-            background: #ffffff;
             scroll-behavior: smooth;
         }
 
+        .chat-messages-inner {
+            max-width: 768px;
+            margin: 0 auto;
+            display: flex;
+            flex-direction: column;
+        }
+
         .message {
-            margin-bottom: 20px;
+            margin-bottom: 22px;
             display: flex;
             align-items: flex-start;
             gap: 12px;
+            width: 100%;
+            max-width: 768px;
+            margin-left: auto;
+            margin-right: auto;
         }
 
         .message.user {
@@ -6740,132 +6849,188 @@ pub async fn chat_interface_with_session_id(session_id: Option<String>) -> Html<
         }
 
         .message-avatar {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            flex-shrink: 0;
+            border-radius: 8px;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-weight: bold;
-            color: white;
-            font-size: 0.9rem;
+            font-weight: 700;
+            color: #fff;
+            font-size: 0.72rem;
+            letter-spacing: 0.02em;
         }
 
         .message.user .message-avatar {
-            background: #3498db;
+            background: var(--blue);
         }
 
         .message.assistant .message-avatar {
-            background: #e74c3c;
+            background: rgba(59,130,246,0.16);
+            border: 1px solid rgba(59,130,246,0.4);
+            color: #bfdbfe;
         }
 
         .message-content {
-            max-width: 70%;
-            padding: 12px 16px;
-            border-radius: 18px;
-            line-height: 1.4;
+            max-width: 100%;
+            padding: 2px 4px;
+            line-height: 1.65;
+            font-size: 0.95rem;
+            color: var(--text);
+            overflow-wrap: anywhere;
         }
 
         .message.user .message-content {
-            background: #3498db;
-            color: white;
-            border-bottom-right-radius: 4px;
+            background: var(--blue);
+            color: #fff;
+            border-radius: 18px;
+            border-bottom-right-radius: 6px;
+            padding: 10px 16px;
+            max-width: 75%;
         }
 
         .message.assistant .message-content {
-            background: #f1f3f4;
-            color: #2c3e50;
-            border-bottom-left-radius: 4px;
+            background: transparent;
         }
 
         .message-time {
-            font-size: 0.8rem;
-            color: #6c757d;
-            margin-top: 4px;
+            font-size: 0.72rem;
+            color: var(--muted);
+            margin-top: 6px;
+            opacity: 0.8;
         }
 
         /* Download and Stream Buttons */
         .download-button, .stream-button, .youtube-button {
             display: inline-block;
-            margin: 10px 5px;
-            padding: 10px 20px;
-            color: white;
+            margin: 10px 6px 4px 0;
+            padding: 9px 18px;
+            color: #fff;
             text-decoration: none;
-            border-radius: 25px;
+            border-radius: 10px;
             font-weight: 600;
-            transition: transform 0.2s, box-shadow 0.2s;
+            font-size: 0.85rem;
+            transition: transform 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease;
             border: none;
             cursor: pointer;
         }
 
         .download-button {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: var(--blue);
         }
 
         .stream-button {
-            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            background: var(--green);
         }
 
         .youtube-button {
-            background: linear-gradient(135deg, #FF0000 0%, #CC0000 100%);
+            background: #e11d2e;
         }
 
         .download-button:hover, .stream-button:hover, .youtube-button:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.4);
+            transform: translateY(-1px);
+            box-shadow: 0 8px 18px rgba(0,0,0,0.35);
         }
 
-        /* Input Area */
+        /* Input Area — floating composer */
         .chat-input-container {
-            padding: 20px;
-            background: #f8f9fa;
-            border-top: 1px solid #e9ecef;
+            padding: 12px 20px 18px;
+            background: transparent;
+        }
+
+        .chat-input-inner {
+            max-width: 768px;
+            margin: 0 auto;
         }
 
         .chat-input-wrapper {
             display: flex;
-            gap: 12px;
+            gap: 10px;
             align-items: flex-end;
+            background: var(--panel-solid);
+            border: 1px solid var(--line);
+            border-radius: 18px;
+            padding: 10px 10px 10px 16px;
+            transition: border-color 0.15s ease;
+        }
+
+        .chat-input-wrapper:focus-within {
+            border-color: rgba(59,130,246,0.55);
         }
 
         .chat-input {
             flex: 1;
-            min-height: 44px;
-            max-height: 120px;
-            padding: 12px 16px;
-            border: 2px solid #e9ecef;
-            border-radius: 22px;
-            font-size: 1rem;
+            min-height: 24px;
+            max-height: 160px;
+            padding: 8px 0;
+            border: none;
+            border-radius: 0;
+            font-size: 0.95rem;
+            line-height: 1.5;
             resize: none;
             outline: none;
-            transition: border-color 0.2s;
+            background: transparent;
+            color: var(--text);
+            font-family: inherit;
         }
 
-        .chat-input:focus {
-            border-color: #3498db;
+        .chat-input::placeholder {
+            color: var(--muted);
+        }
+
+        .attach-btn {
+            width: 36px;
+            height: 36px;
+            flex-shrink: 0;
+            border: 1px solid var(--line);
+            border-radius: 50%;
+            background: transparent;
+            color: var(--muted);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.1rem;
+            transition: color 0.15s ease, border-color 0.15s ease;
+        }
+
+        .attach-btn:hover {
+            color: var(--text);
+            border-color: var(--blue);
         }
 
         .send-btn {
-            width: 44px;
-            height: 44px;
+            width: 36px;
+            height: 36px;
+            flex-shrink: 0;
             border: none;
             border-radius: 50%;
-            background: #3498db;
+            background: var(--blue);
             color: white;
             cursor: pointer;
             display: flex;
             align-items: center;
             justify-content: center;
-            transition: background-color 0.2s;
+            transition: background-color 0.15s ease, opacity 0.15s ease;
         }
 
         .send-btn:hover:not(:disabled) {
-            background: #2980b9;
+            background: var(--blue-deep);
         }
 
         .send-btn:disabled {
-            background: #bdc3c7;
+            background: rgba(148,163,184,0.25);
+            color: var(--muted);
             cursor: not-allowed;
+        }
+
+        .composer-hint {
+            max-width: 768px;
+            margin: 8px auto 0;
+            text-align: center;
+            color: var(--muted);
+            font-size: 0.72rem;
         }
 
         /* Progress Bar */
@@ -6876,10 +7041,11 @@ pub async fn chat_interface_with_session_id(session_id: Option<String>) -> Html<
             transform: translateX(-50%);
             width: 80%; /* Reduced width to prevent touching edges */
             max-width: 500px;
-            background: rgba(26, 26, 46, 0.95);
+            background: rgba(11,22,38,0.96);
+            border: 1px solid var(--line);
             border-radius: 15px;
             padding: 15px;
-            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
             backdrop-filter: blur(10px);
             display: none;
             z-index: 100; /* Lower z-index needed since it's inside container */
@@ -6921,7 +7087,7 @@ pub async fn chat_interface_with_session_id(session_id: Option<String>) -> Html<
         
         .progress-bar-inner {
             height: 100%;
-            background: linear-gradient(90deg, #3498db, #667eea);
+            background: linear-gradient(90deg, var(--blue-deep), var(--blue));
             border-radius: 10px;
             transition: width 0.3s ease;
             position: relative;
@@ -6954,85 +7120,111 @@ pub async fn chat_interface_with_session_id(session_id: Option<String>) -> Html<
         }
         
         .progress-text {
-            color: #95a5a6;
+            color: var(--muted);
             font-size: 14px;
         }
         
         /* Tool Execution Display */
         .tool-execution {
-            background: rgba(52, 152, 219, 0.1);
-            border-left: 4px solid #3498db;
+            background: rgba(59,130,246,0.08);
+            border: 1px solid rgba(59,130,246,0.25);
+            border-left: 4px solid var(--blue);
             padding: 10px 15px;
-            margin: 10px 0;
-            border-radius: 5px;
+            margin: 10px auto;
+            max-width: 768px;
+            border-radius: 10px;
             animation: fadeIn 0.3s ease;
         }
         
         .tool-execution-title {
-            color: #3498db;
+            color: #93c5fd;
             font-weight: 600;
             margin-bottom: 5px;
+            font-size: 0.85rem;
         }
         
         .tool-execution-details {
-            color: #95a5a6;
-            font-size: 14px;
+            color: var(--muted);
+            font-size: 0.8rem;
+            overflow-wrap: anywhere;
         }
         
-        /* Welcome Screen */
+        /* Welcome Screen — centered greeting + suggestion cards */
         .welcome-screen {
             display: flex;
             flex-direction: column;
             align-items: center;
             justify-content: center;
-            height: 100%;
+            min-height: 50vh;
             text-align: center;
-            color: #6c757d;
+            color: var(--muted);
+            max-width: 768px;
+            margin: 0 auto;
+            padding: 24px 12px;
+        }
+
+        .welcome-mark {
+            width: 56px;
+            height: 56px;
+            border-radius: 16px;
+            background: rgba(59,130,246,0.14);
+            border: 1px solid rgba(59,130,246,0.4);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.6rem;
+            margin-bottom: 18px;
         }
 
         .welcome-screen h2 {
-            font-size: 1.5rem;
-            margin-bottom: 1rem;
-            color: #2c3e50;
+            font-size: 1.65rem;
+            font-weight: 700;
+            margin-bottom: 0.6rem;
+            color: var(--text);
+            letter-spacing: -0.01em;
         }
 
         .welcome-screen p {
-            max-width: 400px;
+            max-width: 460px;
             line-height: 1.6;
-            margin-bottom: 2rem;
+            margin-bottom: 1.75rem;
+            font-size: 0.93rem;
         }
 
         .example-prompts {
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 10px;
+            width: 100%;
+            max-width: 640px;
         }
 
         .example-prompt {
-            padding: 8px 16px;
-            background: #f8f9fa;
-            border: 1px solid #e9ecef;
-            border-radius: 20px;
+            padding: 12px 14px;
+            background: var(--panel-soft);
+            border: 1px solid var(--line);
+            border-radius: 12px;
             cursor: pointer;
-            transition: all 0.2s;
-            font-size: 0.9rem;
+            transition: border-color 0.15s ease, background-color 0.15s ease, transform 0.15s ease;
+            font-size: 0.85rem;
+            color: var(--text);
+            text-align: left;
         }
 
         .example-prompt:hover {
-            background: #e9ecef;
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            border-color: rgba(59,130,246,0.5);
+            background: rgba(59,130,246,0.08);
+            transform: translateY(-1px);
         }
 
         /* Loading animation */
         .typing-indicator {
             display: none;
             align-items: center;
-            gap: 8px;
-            padding: 12px 16px;
-            background: #f1f3f4;
-            border-radius: 18px;
-            margin-bottom: 20px;
+            gap: 10px;
+            padding: 4px;
+            margin-bottom: 22px;
+            max-width: 768px;
         }
 
         .typing-indicator.show {
@@ -7048,7 +7240,7 @@ pub async fn chat_interface_with_session_id(session_id: Option<String>) -> Html<
             width: 8px;
             height: 8px;
             border-radius: 50%;
-            background: #6c757d;
+            background: var(--blue);
             animation: typing 1.4s infinite;
         }
 
@@ -7070,19 +7262,68 @@ pub async fn chat_interface_with_session_id(session_id: Option<String>) -> Html<
                 opacity: 1;
             }
         }
+
+        /* Sidebar toggle (mobile) */
+        .sidebar-toggle {
+            display: none;
+            background: transparent;
+            border: 1px solid var(--line);
+            border-radius: 9px;
+            color: var(--text);
+            font-size: 1rem;
+            padding: 6px 10px;
+            cursor: pointer;
+        }
+
+        /* Responsive — collapse sidebar on narrow screens */
+        @media (max-width: 900px) {
+            .sidebar {
+                position: fixed;
+                top: 0;
+                left: 0;
+                bottom: 0;
+                z-index: 200;
+                transform: translateX(-105%);
+                transition: transform 0.22s ease;
+                box-shadow: 0 0 40px rgba(0,0,0,0.5);
+            }
+
+            .sidebar.open {
+                transform: translateX(0);
+            }
+
+            .sidebar-toggle {
+                display: inline-block;
+            }
+
+            .example-prompts {
+                grid-template-columns: 1fr;
+            }
+
+            .chat-input-container {
+                padding: 10px 12px 14px;
+            }
+        }
     </style>
 </head>
 <body>
     <div class="app-container">
         <!-- Sidebar -->
-        <div class="sidebar">
+        <div class="sidebar" id="sidebar">
             <div class="sidebar-header">
-                <h1>🎬 Video Editor</h1>
-                <p>AI-powered video editing</p>
+                <h1>🎬 VideoSync</h1>
+                <p>AI video studio</p>
             </div>
-            
+
+            <button class="new-chat-btn" onclick="window.location.href='/chat'">＋ New chat</button>
+
+            <div class="sidebar-section-title">Conversations</div>
+            <div id="chatList" class="chat-list">
+                <div class="chat-list-empty">Loading…</div>
+            </div>
+
             <div class="file-manager">
-                <h3>📁 Uploaded Files</h3>
+                <div class="sidebar-section-title" style="margin-left:0;">Attachments</div>
                 <div id="fileList" class="file-list">
                     <div class="file-item" style="opacity: 0.5;">
                         <div class="file-name">No files uploaded yet</div>
@@ -7090,21 +7331,23 @@ pub async fn chat_interface_with_session_id(session_id: Option<String>) -> Html<
                     </div>
                 </div>
             </div>
-            
+
             <button class="upload-btn" onclick="uploadFiles()">
-                📤 Upload Files
+                📎 Attach files
             </button>
         </div>
 
         <!-- Main Content -->
         <div class="main-content">
             <div class="chat-header">
-                <div>
-                    <div class="chat-title">Video Editing Assistant</div>
-                    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
-                        <a href="/services" style="text-decoration:none;padding:6px 10px;border-radius:999px;background:rgba(59,130,246,0.18);border:1px solid rgba(96,165,250,0.28);color:#dbeafe;font-size:12px;font-weight:600;">Services</a>
-                        <a href="/services/saas-launch-pack" style="text-decoration:none;padding:6px 10px;border-radius:999px;background:rgba(15,23,42,0.72);border:1px solid rgba(148,163,184,0.18);color:#dbeafe;font-size:12px;">SaaS Launch</a>
-
+                <div style="display:flex;align-items:center;gap:10px;min-width:0;">
+                    <button class="sidebar-toggle" onclick="document.getElementById('sidebar').classList.toggle('open')" aria-label="Toggle sidebar">☰</button>
+                    <div style="min-width:0;">
+                        <div class="chat-title">Video Editing Assistant</div>
+                        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
+                            <a href="/services" style="text-decoration:none;padding:5px 11px;border-radius:999px;background:rgba(59,130,246,0.16);border:1px solid rgba(59,130,246,0.4);color:#dbeafe;font-size:12px;font-weight:600;">Services</a>
+                            <a href="/campaigns/chat" style="text-decoration:none;padding:5px 11px;border-radius:999px;background:var(--panel-soft);border:1px solid var(--line);color:#dbeafe;font-size:12px;">Campaign Assistant</a>
+                        </div>
                     </div>
                 </div>
                 <div style="display: flex; gap: 15px; align-items: center;">
@@ -7118,28 +7361,29 @@ pub async fn chat_interface_with_session_id(session_id: Option<String>) -> Html<
             <div class="chat-container">
                 <div id="chatMessages" class="chat-messages">
                     <div class="welcome-screen">
-                        <h2>Welcome to your AI Video Editor! 🎬</h2>
-                        <p>I can help you edit videos using natural language. Upload your files and tell me what you'd like to do!</p>
-                        
+                        <div class="welcome-mark">🎬</div>
+                        <h2>What will you create today?</h2>
+                        <p>Describe the video you want — trimming, captions, clips, format changes — and I'll handle the edit. Attach a file to work on your own footage.</p>
+
                         <div class="example-prompts">
                             <div class="example-prompt" onclick="sendExamplePrompt('Trim my video from 10 seconds to 30 seconds')">
-                                "Trim my video from 10 seconds to 30 seconds"
+                                ✂️ Trim my video from 10 seconds to 30 seconds
                             </div>
                             <div class="example-prompt" onclick="sendExamplePrompt('Add text overlay saying Hello World')">
-                                "Add text overlay saying 'Hello World'"
+                                🔤 Add text overlay saying 'Hello World'
                             </div>
                             <div class="example-prompt" onclick="sendExamplePrompt('Convert my video to MP4 format')">
-                                "Convert my video to MP4 format"
+                                🔁 Convert my video to MP4 format
                             </div>
                             <div class="example-prompt" onclick="sendExamplePrompt('Analyze my video and tell me its properties')">
-                                "Analyze my video and tell me its properties"
+                                📊 Analyze my video and tell me its properties
                             </div>
                         </div>
                     </div>
                 </div>
 
                 <div class="typing-indicator" id="typingIndicator">
-                    <div class="message-avatar" style="background: #e74c3c;">🤖</div>
+                    <div class="message-avatar">VS</div>
                     <div style="display: flex; align-items: center; gap: 8px;">
                         <span id="thinkingText">AI is thinking</span>
                         <div class="typing-dots">
@@ -7163,18 +7407,22 @@ pub async fn chat_interface_with_session_id(session_id: Option<String>) -> Html<
                 </div>
 
                 <div class="chat-input-container">
-                    <div class="chat-input-wrapper">
-                        <textarea 
-                            id="chatInput" 
-                            class="chat-input" 
-                            placeholder="Ask me to edit your videos... (e.g., 'trim my video from 10s to 30s')"
-                            rows="1"
-                        ></textarea>
-                        <button id="sendBtn" class="send-btn" onclick="sendMessage()">
-                            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-                                <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
-                            </svg>
-                        </button>
+                    <div class="chat-input-inner">
+                        <div class="chat-input-wrapper">
+                            <button class="attach-btn" onclick="uploadFiles()" aria-label="Attach files" title="Attach files">＋</button>
+                            <textarea
+                                id="chatInput"
+                                class="chat-input"
+                                placeholder="Message VideoSync…"
+                                rows="1"
+                            ></textarea>
+                            <button id="sendBtn" class="send-btn" onclick="sendMessage()" aria-label="Send message">
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                                    <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+                                </svg>
+                            </button>
+                        </div>
+                        <div class="composer-hint">VideoSync renders on your workspace GPU pool · progress streams live</div>
                     </div>
                 </div>
             </div>
@@ -7185,15 +7433,15 @@ pub async fn chat_interface_with_session_id(session_id: Option<String>) -> Html<
     <input type="file" id="fileInput" multiple accept="video/*,audio/*,image/*,.pdf,.doc,.docx,.txt" style="display: none;">
 
     <!-- YouTube Upload Modal -->
-    <div id="youtubeModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); z-index: 10000; justify-content: center; align-items: center;">
-        <div style="background: white; border-radius: 15px; padding: 2rem; max-width: 600px; width: 90%; max-height: 80vh; overflow-y: auto;">
+    <div id="youtubeModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(3,7,14,0.72); z-index: 10000; justify-content: center; align-items: center;">
+        <div style="background: #0b1626; border: 1px solid rgba(148,163,184,0.16); border-radius: 15px; padding: 2rem; max-width: 600px; width: 90%; max-height: 80vh; overflow-y: auto;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
-                <h2 style="color: #2c3e50; margin: 0;">📺 Post to YouTube</h2>
-                <button onclick="closeYouTubeModal()" style="background: none; border: none; font-size: 1.5rem; cursor: pointer; color: #6c757d;">×</button>
+                <h2 style="color: #e5eefb; margin: 0;">📺 Post to YouTube</h2>
+                <button onclick="closeYouTubeModal()" style="background: none; border: none; font-size: 1.5rem; cursor: pointer; color: #a8b8d3;">×</button>
             </div>
 
             <div id="youtubeModalContent">
-                <p style="text-align: center; padding: 2rem; color: #6c757d;">Loading your channels...</p>
+                <p style="text-align: center; padding: 2rem; color: #a8b8d3;">Loading your channels...</p>
             </div>
         </div>
     </div>
@@ -7225,6 +7473,7 @@ pub async fn chat_interface_with_session_id(session_id: Option<String>) -> Html<
                 initializeWebSocket();
                 setupEventListeners();
                 loadUploadedFiles();
+                loadConversationList();
                 // Load chat history if we have an existing session
                 if (providedSessionId) {
                     loadChatHistory(providedSessionId);
@@ -7283,6 +7532,44 @@ pub async fn chat_interface_with_session_id(session_id: Option<String>) -> Html<
                 var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
                 return v.toString(16);
             });
+        }
+
+        // Sidebar conversation list — user-originated chats only (the API
+        // excludes machine-generated run sessions; see chat_sessions.origin).
+        async function loadConversationList() {
+            const listEl = document.getElementById('chatList');
+            if (!listEl) return;
+            const authToken = localStorage.getItem('auth_token') || localStorage.getItem('authToken');
+            if (!authToken) {
+                listEl.innerHTML = '<div class="chat-list-empty">Log in to see conversations</div>';
+                return;
+            }
+            try {
+                const res = await fetch('/api/chat/all?limit=30', {
+                    headers: { 'Authorization': 'Bearer ' + authToken }
+                });
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                const data = await res.json();
+                const chats = data.chats || [];
+                if (!chats.length) {
+                    listEl.innerHTML = '<div class="chat-list-empty">No conversations yet</div>';
+                    return;
+                }
+                listEl.innerHTML = '';
+                chats.forEach(c => {
+                    const sid = c.session_id || c.session_uuid || c.id;
+                    if (!sid) return;
+                    const btn = document.createElement('button');
+                    btn.className = 'chat-list-item' + (sid === sessionUuid ? ' active' : '');
+                    btn.textContent = c.title || 'Untitled chat';
+                    btn.title = c.title || sid;
+                    btn.onclick = () => { window.location.href = '/chat/' + sid; };
+                    listEl.appendChild(btn);
+                });
+            } catch (e) {
+                console.warn('Conversation list unavailable:', e);
+                listEl.innerHTML = '<div class="chat-list-empty">Conversations unavailable</div>';
+            }
         }
 
         function initializeSession() {
@@ -7636,7 +7923,7 @@ pub async fn chat_interface_with_session_id(session_id: Option<String>) -> Html<
             
             messageDiv.innerHTML = `
                 <div class="message-avatar">
-                    ${sender === 'user' ? '👤' : '🤖'}
+                    ${sender === 'user' ? 'YOU' : 'VS'}
                 </div>
                 <div class="message-content">
                     ${processedContent}
@@ -7722,14 +8009,14 @@ pub async fn chat_interface_with_session_id(session_id: Option<String>) -> Html<
             const content = document.getElementById('youtubeModalContent');
 
             modal.style.display = 'flex';
-            content.innerHTML = '<p style="text-align: center; padding: 2rem; color: #6c757d;">Loading your channels...</p>';
+            content.innerHTML = '<p style="text-align: center; padding: 2rem; color: #a8b8d3;">Loading your channels...</p>';
 
             try {
                 const authToken = localStorage.getItem('auth_token') || localStorage.getItem('authToken');
                 if (!authToken) {
                     content.innerHTML = `
                         <div style="text-align: center; padding: 2rem;">
-                            <p style="color: #dc3545; margin-bottom: 1rem;">Please log in to upload to YouTube</p>
+                            <p style="color: #ef4444; margin-bottom: 1rem;">Please log in to upload to YouTube</p>
                             <button onclick="window.location.href='/login'" class="btn">Go to Login</button>
                         </div>
                     `;
@@ -7744,20 +8031,20 @@ pub async fn chat_interface_with_session_id(session_id: Option<String>) -> Html<
                 if (data.success && data.channels.length > 0) {
                     content.innerHTML = `
                         <div style="margin-bottom: 1.5rem;">
-                            <h3 style="color: #2c3e50; margin-bottom: 1rem;">Select a channel:</h3>
+                            <h3 style="color: #e5eefb; margin-bottom: 1rem;">Select a channel:</h3>
                             <div id="channelList" style="display: flex; flex-direction: column; gap: 1rem;">
                                 ${data.channels.map(channel => `
                                     <div onclick="selectYouTubeChannel(${channel.id}, '${channel.channel_name}')"
-                                         style="display: flex; align-items: center; gap: 1rem; padding: 1rem; border: 2px solid #e9ecef; border-radius: 10px; cursor: pointer; transition: all 0.2s;"
-                                         onmouseover="this.style.borderColor='#3b82f6'; this.style.background='#f8f9fa'"
-                                         onmouseout="this.style.borderColor='#e9ecef'; this.style.background='white'">
+                                         style="display: flex; align-items: center; gap: 1rem; padding: 1rem; border: 2px solid rgba(148,163,184,0.16); border-radius: 10px; cursor: pointer; transition: all 0.2s; background: rgba(15,26,43,0.72);"
+                                         onmouseover="this.style.borderColor='#3b82f6'; this.style.background='rgba(59,130,246,0.08)'"
+                                         onmouseout="this.style.borderColor='rgba(148,163,184,0.16)'; this.style.background='rgba(15,26,43,0.72)'">
                                         ${channel.channel_thumbnail_url ?
                                             `<img src="${channel.channel_thumbnail_url}" style="width: 40px; height: 40px; border-radius: 50%;" alt="${channel.channel_name}">` :
                                             '<div style="width: 40px; height: 40px; border-radius: 50%; background: linear-gradient(135deg, #FF0000, #CC0000); display: flex; align-items: center; justify-content: center; color: white; font-size: 1.2rem;">📺</div>'
                                         }
                                         <div style="flex: 1;">
-                                            <div style="font-weight: 600; color: #2c3e50;">${channel.channel_name}</div>
-                                            <div style="font-size: 0.85rem; color: #6c757d;">
+                                            <div style="font-weight: 600; color: #e5eefb;">${channel.channel_name}</div>
+                                            <div style="font-size: 0.85rem; color: #a8b8d3;">
                                                 ${channel.subscriber_count !== null ? channel.subscriber_count.toLocaleString() + ' subscribers' : ''}
                                             </div>
                                         </div>
@@ -7765,7 +8052,7 @@ pub async fn chat_interface_with_session_id(session_id: Option<String>) -> Html<
                                 `).join('')}
                             </div>
                         </div>
-                        <div style="text-align: center; padding-top: 1rem; border-top: 1px solid #e9ecef;">
+                        <div style="text-align: center; padding-top: 1rem; border-top: 1px solid rgba(148,163,184,0.16);">
                             <a href="/youtube/manage" style="color: #3b82f6; text-decoration: none; font-weight: 500;">Manage Channels</a>
                         </div>
                     `;
@@ -7773,8 +8060,8 @@ pub async fn chat_interface_with_session_id(session_id: Option<String>) -> Html<
                     content.innerHTML = `
                         <div style="text-align: center; padding: 2rem;">
                             <div style="font-size: 3rem; margin-bottom: 1rem;">📺</div>
-                            <h3 style="color: #2c3e50; margin-bottom: 1rem;">No YouTube Channels Connected</h3>
-                            <p style="color: #6c757d; margin-bottom: 1.5rem;">Connect your YouTube channel to start uploading videos directly</p>
+                            <h3 style="color: #e5eefb; margin-bottom: 1rem;">No YouTube Channels Connected</h3>
+                            <p style="color: #a8b8d3; margin-bottom: 1.5rem;">Connect your YouTube channel to start uploading videos directly</p>
                             <button onclick="connectYouTubeChannel()" class="btn">Connect YouTube Channel</button>
                         </div>
                     `;
@@ -7783,8 +8070,8 @@ pub async fn chat_interface_with_session_id(session_id: Option<String>) -> Html<
                 console.error('Error loading channels:', error);
                 content.innerHTML = `
                     <div style="text-align: center; padding: 2rem;">
-                        <p style="color: #dc3545; margin-bottom: 1rem;">❌ Error loading channels</p>
-                        <p style="color: #6c757d;">${error.message}</p>
+                        <p style="color: #ef4444; margin-bottom: 1rem;">❌ Error loading channels</p>
+                        <p style="color: #a8b8d3;">${error.message}</p>
                     </div>
                 `;
             }
@@ -7848,8 +8135,8 @@ pub async fn chat_interface_with_session_id(session_id: Option<String>) -> Html<
             modal.innerHTML = `
                 <div style="text-align: center; padding: 2rem;">
                     <div style="font-size: 3rem; margin-bottom: 1rem;">📤</div>
-                    <p style="color: #2c3e50; font-weight: 600; margin-bottom: 0.5rem;">Uploading to YouTube...</p>
-                    <p style="color: #6c757d;">This may take a few moments</p>
+                    <p style="color: #e5eefb; font-weight: 600; margin-bottom: 0.5rem;">Uploading to YouTube...</p>
+                    <p style="color: #a8b8d3;">This may take a few moments</p>
                 </div>
             `;
 
@@ -7878,19 +8165,19 @@ pub async fn chat_interface_with_session_id(session_id: Option<String>) -> Html<
                     modal.innerHTML = `
                         <div style="text-align: center; padding: 2rem;">
                             <div style="font-size: 3rem; margin-bottom: 1rem;">✅</div>
-                            <h3 style="color: #28a745; margin-bottom: 1rem;">Upload Successful!</h3>
-                            <p style="color: #2c3e50; margin-bottom: 1.5rem;">Your video has been uploaded to <strong>${channelName}</strong></p>
+                            <h3 style="color: #22c55e; margin-bottom: 1rem;">Upload Successful!</h3>
+                            <p style="color: #e5eefb; margin-bottom: 1.5rem;">Your video has been uploaded to <strong>${channelName}</strong></p>
                             <a href="${data.upload.youtube_url}" target="_blank" style="display: inline-block; padding: 0.75rem 1.5rem; background: #FF0000; color: white; text-decoration: none; border-radius: 10px; font-weight: 600; margin-bottom: 1rem;">🎬 View on YouTube</a>
                             <br>
-                            <button onclick="closeYouTubeModal()" style="padding: 0.5rem 1.5rem; background: #6c757d; color: white; border: none; border-radius: 10px; cursor: pointer;">Close</button>
+                            <button onclick="closeYouTubeModal()" style="padding: 0.5rem 1.5rem; background: rgba(148,163,184,0.16); color: #e5eefb; border: 1px solid rgba(148,163,184,0.25); border-radius: 10px; cursor: pointer;">Close</button>
                         </div>
                     `;
                 } else {
                     modal.innerHTML = `
                         <div style="text-align: center; padding: 2rem;">
                             <div style="font-size: 3rem; margin-bottom: 1rem;">❌</div>
-                            <h3 style="color: #dc3545; margin-bottom: 1rem;">Upload Failed</h3>
-                            <p style="color: #6c757d; margin-bottom: 1.5rem;">${data.message}</p>
+                            <h3 style="color: #ef4444; margin-bottom: 1rem;">Upload Failed</h3>
+                            <p style="color: #a8b8d3; margin-bottom: 1.5rem;">${data.message}</p>
                             <button onclick="closeYouTubeModal()" style="padding: 0.75rem 1.5rem; background: #3b82f6; color: white; border: none; border-radius: 10px; cursor: pointer;">Close</button>
                         </div>
                     `;
@@ -7900,8 +8187,8 @@ pub async fn chat_interface_with_session_id(session_id: Option<String>) -> Html<
                 modal.innerHTML = `
                     <div style="text-align: center; padding: 2rem;">
                         <div style="font-size: 3rem; margin-bottom: 1rem;">❌</div>
-                        <h3 style="color: #dc3545; margin-bottom: 1rem;">Upload Error</h3>
-                        <p style="color: #6c757d; margin-bottom: 1.5rem;">${error.message}</p>
+                            <h3 style="color: #ef4444; margin-bottom: 1rem;">Upload Error</h3>
+                            <p style="color: #a8b8d3; margin-bottom: 1.5rem;">${error.message}</p>
                         <button onclick="closeYouTubeModal()" style="padding: 0.75rem 1.5rem; background: #3b82f6; color: white; border: none; border-radius: 10px; cursor: pointer;">Close</button>
                     </div>
                 `;
