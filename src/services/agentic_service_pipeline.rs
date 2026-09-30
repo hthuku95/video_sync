@@ -167,7 +167,7 @@ impl AgenticServicePipeline {
     pub async fn start(
         state: Arc<AppState>,
         service_type: ServiceType,
-        input: ServiceInput,
+        mut input: ServiceInput,
     ) -> Result<Uuid, String> {
         // Service switch (owner directive Sep 2026): only enabled services may
         // enqueue renders. In-run calls (QA, embeddings, skills) inherit this
@@ -184,6 +184,40 @@ impl AgenticServicePipeline {
                 "Service '{}' is currently disabled (service_flags).",
                 service_type.as_str()
             ));
+        }
+        // Channel-URL resolution (Sep 2026): direct deliveries carrying channel
+        // URLs (kick.com/{slug}, twitch.tv/{channel}, YouTube channel/handle)
+        // resolve to an actual VOD/video URL before enqueue — the same step
+        // campaign posts get. Without it the agent receives a channel page it
+        // cannot clip from and misroutes (E2E-F). Fail-open: on any error the
+        // raw URL is kept and the pipeline tries it as before. Scoped to
+        // Clipping (the only service whose sources are channels); R2/presigned
+        // artifacts are never touched.
+        if service_type == ServiceType::Clipping {
+            if let Some(url) = input.source_url.clone() {
+                if !url.contains("r2.cloudflarestorage") {
+                    match crate::services::campaign_engine::resolve_latest_video_url(
+                        &state, &url,
+                    )
+                    .await
+                    {
+                        Ok(resolved) => {
+                            if resolved != url {
+                                tracing::info!(
+                                    "Resolved clipping source {} -> {}",
+                                    url,
+                                    resolved
+                                );
+                                input.source_url = Some(resolved);
+                            }
+                        }
+                        Err(e) => tracing::warn!(
+                            "Source resolve failed for {}: {e} (keeping raw URL)",
+                            url
+                        ),
+                    }
+                }
+            }
         }
         // Full input snapshot so a worker on ANY Fargate task can reconstruct
         // and execute this job from the DB alone.

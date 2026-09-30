@@ -1249,8 +1249,7 @@ async fn update_campaign_counts(state: &Arc<AppState>, campaign_id: Uuid) {
 /// - Twitch channels → fetches most recent VOD via Helix API
 /// - Kick streamers → returns as-is (yt-dlp resolves latest broadcast natively)
 /// - Direct video URLs → returned unchanged
-async fn resolve_latest_video_url(state: &Arc<AppState>, url: &str) -> Result<String, String> {
-    let trimmed = url.trim();
+pub(crate) async fn resolve_latest_video_url(state: &Arc<AppState>, url: &str) -> Result<String, String> {    let trimmed = url.trim();
 
     // Direct video URLs — pass through (already a specific video)
     if is_direct_video_url(trimmed) {
