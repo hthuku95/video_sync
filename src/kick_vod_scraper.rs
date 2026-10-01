@@ -1,5 +1,41 @@
 use regex::Regex;
 
+/// Resolve a Kick channel slug to its latest VOD's direct HLS URL via the
+/// free, unauthenticated Kick v2 API (`/api/v2/channels/{slug}/videos`).
+/// No BrowserBase, no yt-dlp, no OAuth, no cookies. Returns the `source`
+/// master-m3u8 URL FFmpeg downloads directly.
+///
+/// Why this exists (Sep 2026): yt-dlp routes ALL kick.com URLs — including
+/// `/videos/{numeric-id}` pages — to the `kick:live` extractor ("channel is
+/// not currently live"), because its VOD regex only accepts UUID slugs.
+/// The v2 API response carries the playable `source` HLS URL, bypassing
+/// extraction entirely. Returns None when the channel has no VODs with a
+/// source URL or the API is unreachable (caller falls through).
+pub async fn resolve_kick_vod_direct_api(slug: &str) -> Option<String> {
+    let url = format!("https://kick.com/api/v2/channels/{slug}/videos?sort=date&limit=5");
+    let resp = reqwest::Client::new()
+        .get(&url)
+        .header("User-Agent", "Mozilla/5.0")
+        .send()
+        .await
+        .ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let videos: Vec<serde_json::Value> = resp.json().await.ok()?;
+    videos.into_iter().find_map(|v| {
+        if v.get("is_live") == Some(&serde_json::Value::Bool(true)) {
+            return None;
+        }
+        let src = v.get("source")?.as_str()?;
+        if src.contains(".m3u8") {
+            Some(src.to_string())
+        } else {
+            None
+        }
+    })
+}
+
 /// Resolve any Kick URL (channel or VOD) to an HLS stream URL.
 ///
 /// Takes a URL like:
@@ -33,12 +69,18 @@ pub async fn resolve_url_to_hls(url: &str) -> String {
         }
     }
 
-    // Channel URL — resolve latest VOD, then extract HLS
+    // Channel URL — FAST PATH (Sep 2026): free Kick v2 API yields the latest
+    // VOD's direct HLS URL with no auth, browser, or yt-dlp. Falls through to
+    // the legacy BrowserBase/yt-dlp chain only when the API has nothing.
     let slug = url
         .trim_end_matches('/')
         .rsplit('/')
         .next()
         .unwrap_or("");
+    if let Some(hls) = resolve_kick_vod_direct_api(slug).await {
+        tracing::info!("Kick channel {} → latest VOD HLS (direct API)", slug);
+        return hls;
+    }
 
     match resolve_latest_stream(slug).await {
         Ok((_vod_url, hls_url)) => {
