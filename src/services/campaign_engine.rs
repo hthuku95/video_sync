@@ -1258,12 +1258,20 @@ pub(crate) async fn resolve_latest_video_url(state: &Arc<AppState>, url: &str) -
 
     // Kick: https://kick.com/{slug} or https://kick.com/{slug}/videos/{uuid}
     if let Some(slug) = parse_kick_slug(trimmed) {
-        // Verify the streamer exists via Kick API
+        // Best-effort streamer check: a transport/parse hiccup must NOT abort
+        // resolution (Sep 2026: an OAuth parse failure stranded agents with
+        // unresolvable channel URLs). Only a CONFIRMED absence fails fast —
+        // a doomed render is cheaper to reject here than after 5 attempts.
+        // Either way the direct-API and BrowserBase paths below still run.
         if let Some(ref client) = state.kick_client {
             match client.get_channel_by_slug(&slug).await {
                 Ok(Some(_)) => {} // streamer confirmed
                 Ok(None) => return Err(format!("Kick streamer '{}' not found", slug)),
-                Err(e) => return Err(format!("Kick API error: {}", e)),
+                Err(e) => tracing::warn!(
+                    "Kick API verify failed for '{}': {}; continuing to HLS resolution anyway",
+                    slug,
+                    e
+                ),
             }
         }
 
