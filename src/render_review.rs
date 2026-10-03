@@ -641,25 +641,27 @@ async fn probe_media_artifact(output_url: &str) -> String {
         return "probe_media: artifact not found locally and remote download failed".to_string();
     }
 
-    let probe = tokio::process::Command::new("ffprobe")
-        .args([
-            "-v",
-            "error",
-            "-print_format",
-            "json",
-            "-show_format",
-            "-show_streams",
-        ])
-        .arg(target)
-        .output()
-        .await;
-
+    let probe = tokio::time::timeout(
+        std::time::Duration::from_secs(60),
+        tokio::process::Command::new("ffprobe")
+            .args([
+                "-v",
+                "error",
+                "-print_format",
+                "json",
+                "-show_format",
+                "-show_streams",
+            ])
+            .arg(target)
+            .output(),
+    )
+    .await;
     if let Some(p) = local {
         let _ = std::fs::remove_file(&p);
     }
 
     match probe {
-        Ok(out) if out.status.success() => {
+        Ok(Ok(out)) if out.status.success() => {
             let raw = String::from_utf8_lossy(&out.stdout).to_string();
             match serde_json::from_str::<serde_json::Value>(&raw) {
                 Ok(json) => summarize_probe(&json),
@@ -669,12 +671,14 @@ async fn probe_media_artifact(output_url: &str) -> String {
                 ),
             }
         }
-        Ok(out) => format!(
+        Ok(Ok(out)) => format!(
             "probe_media: ffprobe failed ({}): {}",
             out.status,
             String::from_utf8_lossy(&out.stderr).chars().take(300).collect::<String>()
         ),
-        Err(e) => format!("probe_media: ffprobe error: {}", e),
+        Ok(Err(e)) => format!("probe_media: ffprobe error: {}", e),
+        Err(_) => "probe_media: ffprobe timed out after 60s (treating artifact as unprobed)"
+            .to_string(),
     }
 }
 
@@ -936,7 +940,22 @@ async fn download_to_temp(output_url: &str) -> Result<Option<(PathBuf, Vec<u8>)>
     if !output_url.starts_with("http://") && !output_url.starts_with("https://") {
         return Ok(None);
     }
-    let response = reqwest::get(output_url).await?;
+    // Bounded: an unbounded GET wedged QA review for 35+ minutes (E2E-I) with a
+    // live heartbeat and zero trace events. On timeout the review degrades to
+    // reduced evidence instead of hanging the whole attempt.
+    let response = match tokio::time::timeout(
+        std::time::Duration::from_secs(120),
+        reqwest::get(output_url),
+    )
+    .await
+    {
+        Ok(Ok(resp)) => resp,
+        Ok(Err(e)) => return Err(e.into()),
+        Err(_) => {
+            tracing::warn!("QA download timed out after 120s: {}", output_url);
+            return Ok(None);
+        }
+    };
     let bytes = response.bytes().await.unwrap_or_default().to_vec();
     if bytes.is_empty() {
         return Ok(None);
