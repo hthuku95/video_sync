@@ -103,6 +103,9 @@ impl NimCapabilities {
     const fn text_tools() -> Self {
         Self { tool_calling: true, vision: false, audio: false }
     }
+    const fn text_vision() -> Self {
+        Self { tool_calling: true, vision: true, audio: false }
+    }
     const fn omni() -> Self {
         Self { tool_calling: true, vision: true, audio: true }
     }
@@ -126,7 +129,8 @@ pub const NIM_MODELS: &[NimModelInfo] = &[
     NimModelInfo { id: "minimaxai/minimax-m2.7", name: "MiniMax M2.7", capabilities: NimCapabilities::text_tools() },
     NimModelInfo { id: "moonshotai/kimi-k2.5", name: "Kimi K2.5", capabilities: NimCapabilities::text_tools() },
     NimModelInfo { id: "z-ai/glm-5.1", name: "GLM 5.1", capabilities: NimCapabilities::text_tools() },
-    // Vision + tool-calling models (Gemini multimodal fallback)
+    // Vision + tool-calling models (multimodal review + agentic loops)
+    NimModelInfo { id: "meta/muse-glimmer-30b", name: "Muse Glimmer 30B", capabilities: NimCapabilities::text_vision() },
     NimModelInfo { id: "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning", name: "Nemotron Omni 30B", capabilities: NimCapabilities::omni() },
 ];
 

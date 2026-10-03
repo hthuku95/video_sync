@@ -2090,7 +2090,6 @@ IMPORTANT: For fetching website content, use `browserbase_crawl_website(url)` �
 /// rides on top of every request, so a messages-only estimate at 70% let real
 /// prompts reach ~45K tokens and wedge the GPU. 45% keeps total prompt size
 /// (messages + schemas) safely inside the window.
-const COMPACTION_TRIGGER_RATIO: f64 = 0.45;
 /// Always keep the most recent whole turns intact for conversational coherence.
 const COMPACTION_KEEP_LAST_TURNS: usize = 2;
 /// Hard cap on the transcript fed to the summarizer (chars) — stops a pathological
@@ -2180,8 +2179,15 @@ async fn maybe_compact_tool_history(
     messages: &mut Vec<serde_json::Value>,
     exec_context: &crate::agent::tool_executor::ToolExecutionContext,
 ) -> Result<bool, String> {
-    const MODEL_CTX: usize = crate::ollama_client::MODEL_NUM_CTX as usize;
-    let trigger = (MODEL_CTX as f64 * COMPACTION_TRIGGER_RATIO) as usize;
+    // Compaction trigger, env-overridable. Default 90K suits 131K-class models
+    // (Glimmer) with margin; the old 0.45×64K Ollama calibration compacted at
+    // ~29K — destroying history 4× too early on modern windows. Floor 10K so a
+    // typo can never disable compaction entirely (unbounded growth → 400s).
+    let trigger: usize = std::env::var("AGENT_COMPACTION_TOKENS")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|&v| v >= 10_000)
+        .unwrap_or(90_000);
 
     if messages.len() < 6 {
         return Ok(false);
