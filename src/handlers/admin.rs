@@ -121,6 +121,7 @@ pub fn admin_routes() -> Router {
         .route("/api/admin/referral-commissions", get(api_list_referral_commissions))
         .route("/api/admin/service-flags", get(api_list_service_flags).post(api_set_service_flag))
         .route("/admin/service-flags", get(admin_service_flags_page))
+        .route("/api/admin/ytdlp/cookies", get(api_cookie_health).post(api_cookie_rotated))
         .route("/admin/referrals", get(admin_referrals_page))
         .route("/api/admin/revenue-ledger", get(api_revenue_ledger))
         .route("/api/admin/payments", get(api_studio_payments))
@@ -6654,6 +6655,16 @@ pub async fn api_trigger_manual_clipping_test(
         )
     });
 
+    // Service switch: legacy manual-clipping tests are Type-3 (OFF).
+    if !crate::services::service_flags::service_enabled(&state.db_pool, "legacy_youtube_clipping")
+        .await
+    {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": "Legacy manual clipping tests are currently disabled (service_flags)." })),
+        ));
+    }
+
     match crate::manual_clipping_tests::ManualClippingTestRunner::create_and_spawn(state, name)
         .await
     {
@@ -12598,6 +12609,52 @@ pub async fn api_set_service_flag(
         }
         Err(e) => Json(json!({"success": false, "error": format!("Failed to set service flag: {e}")})),
     }
+}
+
+/// GET /api/admin/ytdlp/cookies — Cookie health status (age, failures).
+pub async fn api_cookie_health(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    let row: Option<(Option<chrono::DateTime<chrono::Utc>>, Option<String>, i32, Option<chrono::DateTime<chrono::Utc>>)> =
+        sqlx::query_as(
+            "SELECT last_deployed_at, deployed_by, consecutive_failures, last_reminded_at \
+             FROM ytdlp_cookie_health WHERE id = 1",
+        )
+        .fetch_optional(&state.db_pool)
+        .await
+        .ok()
+        .flatten();
+    match row {
+        Some((deployed, by, failures, reminded)) => Json(json!({
+            "success": true,
+            "last_deployed_at": deployed,
+            "deployed_by": by,
+            "consecutive_failures": failures,
+            "last_reminded_at": reminded,
+        })),
+        None => Json(json!({"success": false, "error": "cookie health not initialized (migration pending?)"})),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct CookieRotatedRequest {
+    pub deployed_by: Option<String>,
+}
+
+/// POST /api/admin/ytdlp/cookies — Stamp a rotation after pushing fresh
+/// cookies to S3 + refreshing the fleet. Body: {"deployed_by": "admin@x"}.
+/// Resets failure streak and age clock. Agent-callable post-rotation.
+pub async fn api_cookie_rotated(
+    Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
+    Json(req): Json<CookieRotatedRequest>,
+) -> Json<serde_json::Value> {
+    let by = req
+        .deployed_by
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| claims.email.clone());
+    let ok = crate::services::cookie_health::record_rotation(&state.db_pool, &by).await;
+    Json(json!({"success": ok, "deployed_by": by}))
 }
 
 /// GET /admin/service-flags — Admin page with on/off toggles for AI services.

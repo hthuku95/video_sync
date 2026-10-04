@@ -74,6 +74,9 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     // sqlx::migrate!() is a proc macro — Cargo only re-runs it when THIS file
     // changes. Touching this file forces the macro to re-scan ./migrations and
     // embed all current migration files.
+    // Last touched: 2026-10-04 to force sqlx::migrate!() to re-embed the
+    // current migration set, including:
+    //   20261004000000 — ytdlp_cookie_health (cookie rotation reminders)
     // Last touched: 2026-09-28 to force sqlx::migrate!() to re-embed the
     // current migration set, including:
     //   20260928000000 — service_flags (service TEXT PK, enabled switch +

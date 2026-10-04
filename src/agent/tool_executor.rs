@@ -5148,6 +5148,11 @@ async fn execute_clip_compilation_value(
             match r2_url {
                 Some(url) if !url.is_empty() => {
                     tracing::info!("✅ R2 source available: {}", url);
+                    // Cookie health: a good download clears the failure streak.
+                    crate::services::cookie_health::note_download_success(
+                        &ctx.app_state.db_pool,
+                    )
+                    .await;
                     (url.to_string(), dur, Some(url.to_string()))
                 }
                 _ => {
@@ -5157,7 +5162,15 @@ async fn execute_clip_compilation_value(
             }
         }
         Err(e) => {
-            return format!(r#"{{"error":"Failed to download video: {}"}}"#, e.replace('"', "'"));
+            // Cookie health: track consecutive download failures so the admin
+            // gets emailed before renders pile up (see cookie_health module).
+            let err_text = e.replace('"', "'");
+            crate::services::cookie_health::note_download_failure(
+                &ctx.app_state.db_pool,
+                &err_text,
+            )
+            .await;
+            return format!(r#"{{"error":"Failed to download video: {}"}}"#, err_text);
         }
     };
 

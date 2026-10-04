@@ -3,6 +3,7 @@ pub mod agentic_service_pipeline;
 pub mod artifact_verifier;
 pub mod campaign_engine;
 pub mod chat_agent_worker;
+pub mod cookie_health;
 pub mod email_service;
 pub mod generated_artifacts;
 pub mod media_review;

@@ -370,3 +370,11 @@ images_for_claude/# Cloud Run env files with secrets
 *.cloudrun.env.local.yaml
 ytdlp.cloudrun.env.yaml
 CLAUDE.md
+
+# AWS GPU quota appeal text (copy from here for case reopen)
+AWS_GPU_QUOTA_APPEAL.md
+
+# YouTube auth cookies (owner-provided, NEVER commit)
+www.youtube.com_cookies_recent.txt
+www.youtube.com_cookies_full.txt
+www.youtube.com_cookies_acct2.txt

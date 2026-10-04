@@ -106,6 +106,21 @@ async fn enqueue_clipping_job(
     source_video_id: &str,
     source_video_title: &str,
 ) -> Result<(i32, bool), String> {
+    // Service switch (owner directive Sep 2026): the legacy YouTube
+    // auto-clipping producer is OFF. Refuse at creation so the backlog stops
+    // growing — the consumer (worker/BATCH) is already gated, and the
+    // pipeline worker only claims agentic_* workflows, so nothing downstream
+    // can pick these up either way. Kick/Twitch clipping businesses run
+    // through the campaign pipeline, not this monitor.
+    if !crate::services::service_flags::service_enabled(pool, "legacy_youtube_clipping").await
+    {
+        tracing::debug!(
+            "⏸️ Legacy auto-clip skipped for linkage {} video {} (service disabled)",
+            linkage.id,
+            source_video_id
+        );
+        return Err("Legacy YouTube clipping is currently disabled (service_flags).".to_string());
+    }
     if let Some(existing_job_id) =
         find_active_clipping_job(pool, linkage.id, source_video_id).await?
     {

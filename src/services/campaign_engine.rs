@@ -8,6 +8,9 @@ use uuid::Uuid;
 
 /// Run one cycle of campaign processing. Should be called every ~10-15 minutes.
 pub async fn process_campaigns(state: &Arc<AppState>) {
+    // Cookie age check (owner directive Oct 2026): periodic, race-safe
+    // (single DB-elected sender), cheap. Independent of campaign services.
+    crate::services::cookie_health::check_cookie_age(&state.db_pool).await;
     let active = match fetch_active_campaigns(state).await {
         Ok(c) => c,
         Err(e) => {
