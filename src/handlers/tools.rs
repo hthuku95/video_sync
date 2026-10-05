@@ -311,7 +311,7 @@ pub async fn start_long_form_video(
 
     match crate::services::AgenticServicePipeline::start(
         state,
-        crate::services::normalize_to_service_type("landing_page"),
+        "landing_page",
         req,
     )
     .await

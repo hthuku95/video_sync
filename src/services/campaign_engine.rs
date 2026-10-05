@@ -470,7 +470,7 @@ async fn process_pending_post(state: &Arc<AppState>, campaign: &CampaignRow, pos
         reference_images: get_campaign_file_urls(state, campaign.id).await,
     };
 
-    match AgenticServicePipeline::start(state.clone(), service_type, input).await {
+    match AgenticServicePipeline::start(state.clone(), campaign.service_type.clone(), input).await {
         Ok(_) => tracing::info!(
             "campaign[{}] post[{}] delivery[{}]: rendering started",
             campaign.id, post.id, delivery_id

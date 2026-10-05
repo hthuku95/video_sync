@@ -383,8 +383,32 @@ async fn search_prospects(
     .await;
 
     let search_result = if payload.platform == "youtube" {
+        // Service switch (owner directive Oct 2026): YouTube discovery spends
+        // scoring LLM per prospect — refuse while youtube_clipping is off.
+        if !crate::services::service_flags::service_enabled(&state.db_pool, "youtube_clipping").await
+        {
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ErrorResponse {
+                    success: false,
+                    message: "YouTube prospect discovery is currently disabled (youtube_clipping off in service_flags).".to_string(),
+                }),
+            ));
+        }
         search_youtube_prospects(&state, &payload, limit).await
     } else if payload.platform == "twitch" {
+        // Service switch (owner directive Oct 2026): Twitch discovery is the
+        // launch-business finder — it runs only while twitch_clipping is on.
+        if !crate::services::service_flags::service_enabled(&state.db_pool, "twitch_clipping").await
+        {
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ErrorResponse {
+                    success: false,
+                    message: "Twitch prospect discovery is currently disabled (twitch_clipping off in service_flags).".to_string(),
+                }),
+            ));
+        }
         search_twitch_prospects(&state, &payload, limit).await
     } else if payload.platform == "kick" {
         search_kick_prospects(&state, &payload, limit).await
@@ -620,6 +644,7 @@ async fn search_youtube_prospects(
                 &scoring_description,
                 &category,
                 &payload.prospect_type,
+                "youtube",
             )
             .await;
 
@@ -904,6 +929,7 @@ async fn search_twitch_prospects(
                 &scoring_description,
                 &category,
                 &payload.prospect_type,
+                "twitch",
             )
             .await;
 
@@ -1034,6 +1060,7 @@ async fn search_kick_prospects(
                     .clone()
                     .unwrap_or_else(|| "general".to_string()),
                 &payload.prospect_type,
+                "kick",
             )
             .await;
 
@@ -1266,7 +1293,7 @@ async fn search_kick_clipper_prospects(
         // 10. AI scoring — force clipper prospect type for kick_auto_clipper evaluation
         let (score, reasoning, _service, dm_creator, dm_clipper, x_dm, email_script) =
             score_prospect_with_ai(state, &display_name, sub_count,
-                &scoring_desc, &base_category, "clipper").await;
+                &scoring_desc, &base_category, "clipper", "kick").await;
 
         if score < 0.3 { continue; }
 
@@ -1531,7 +1558,7 @@ async fn search_kick_clipper_prospects_top_streamers(
             // Score with LLM
             let (score, reasoning, _service, dm_creator, dm_clipper, x_dm, email_script) =
                 score_prospect_with_ai(state, &display_name, sub_count,
-                    &scoring_desc, &base_category, "clipper").await;
+                    &scoring_desc, &base_category, "clipper", "kick").await;
 
             if score < 0.3 { continue; }
 
@@ -2075,12 +2102,13 @@ async fn score_prospect_with_ai(
     description: &str,
     category: &str,
     prospect_type: &str,
+    platform: &str,
 ) -> (f64, String, String, String, String, String, String) {
     if state.nvidia_nim_client.is_none()
         && state.gemma_client.is_none()
         && state.gemini_client.is_none()
     {
-        let service = default_service_for_prospect(category, prospect_type);
+        let service = default_service_for_prospect(category, prospect_type, platform);
         let x_dm = default_x_dm(name, &service);
         let email_script = default_email_script(name, &service);
         return (
@@ -2130,7 +2158,7 @@ Return ONLY valid JSON (no markdown):
 {{
   "score": 0.75,
   "reasoning": "<1-2 sentences explaining the score + why this service>",
-  "service": "clipping",
+  "service": "twitch_clipping",
   "dm": "<legacy short DM locked to the chosen service>",
   "x_dm": "<X/Twitter DM: short, casual, 280 chars max, mention I am verified so I can DM directly, name the concrete offer, end with a yes/no ask>",
   "email_script": "<cold email: subject line + 4-6 sentence body, concrete offer, price range, asks permission to send a sample pack>",
@@ -2196,7 +2224,7 @@ Return ONLY valid JSON (no markdown):
                     let service = if is_valid_revenue_service(&service_raw) {
                         normalize_revenue_service(&service_raw).to_string()
                     } else {
-                        default_service_for_prospect(category, prospect_type)
+                        default_service_for_prospect(category, prospect_type, platform)
                     };
                     let clipper_like = matches!(
                         prospect_type,
@@ -2207,6 +2235,7 @@ Return ONLY valid JSON (no markdown):
                         &state.db_pool,
                         &service,
                         clipper_like,
+                        platform,
                     )
                     .await;
                     // Post-process: override LLM's choice for known prospect types,
@@ -2239,13 +2268,13 @@ Return ONLY valid JSON (no markdown):
                 Err(_) => (
                     0.5,
                     "Parse error".to_string(),
-                    default_service_for_prospect(category, prospect_type),
-                    default_x_dm(name, &default_service_for_prospect(category, prospect_type)),
+                    default_service_for_prospect(category, prospect_type, platform),
+                    default_x_dm(name, &default_service_for_prospect(category, prospect_type, platform)),
                     default_dm_clipper(name),
-                    default_x_dm(name, &default_service_for_prospect(category, prospect_type)),
+                    default_x_dm(name, &default_service_for_prospect(category, prospect_type, platform)),
                     default_email_script(
                         name,
-                        &default_service_for_prospect(category, prospect_type),
+                        &default_service_for_prospect(category, prospect_type, platform),
                     ),
                 ),
             }
@@ -2253,11 +2282,11 @@ Return ONLY valid JSON (no markdown):
         Err(_) => (
             0.5,
             "AI unavailable".to_string(),
-            default_service_for_prospect(category, prospect_type),
-            default_x_dm(name, &default_service_for_prospect(category, prospect_type)),
+            default_service_for_prospect(category, prospect_type, platform),
+            default_x_dm(name, &default_service_for_prospect(category, prospect_type, platform)),
             default_dm_clipper(name),
-            default_x_dm(name, &default_service_for_prospect(category, prospect_type)),
-            default_email_script(name, &default_service_for_prospect(category, prospect_type)),
+            default_x_dm(name, &default_service_for_prospect(category, prospect_type, platform)),
+            default_email_script(name, &default_service_for_prospect(category, prospect_type, platform)),
         ),
     }
 }
@@ -2270,8 +2299,8 @@ fn default_dm_clipper(name: &str) -> String {
     format!("Hey {}! I built an AI clipping + rendering platform that processes YouTube and Twitch videos 10x faster — short-form clips, animations, and thumbnails in one pipeline. Want free access to try it?", name)
 }
 
-fn default_service_for_prospect(category: &str, prospect_type: &str) -> String {
-    let combined = format!("{} {}", category, prospect_type).to_lowercase();
+fn default_service_for_prospect(category: &str, prospect_type: &str, platform: &str) -> String {
+    let combined = format!("{} {} {}", category, prospect_type, platform).to_lowercase();
     if combined.contains("education")
         || combined.contains("educator")
         || combined.contains("course")
@@ -2331,8 +2360,10 @@ fn default_service_for_prospect(category: &str, prospect_type: &str) -> String {
         || combined.contains("architectural")
     {
         "isometric_explainer".to_string()
-    } else if combined.contains("stream") || combined.contains("creator") {
-        "clipping".to_string()
+    } else if combined.contains("twitch") {
+        "twitch_clipping".to_string()
+    } else if combined.contains("youtube") || combined.contains("podcast") || combined.contains("stream") || combined.contains("creator") {
+        "youtube_clipping".to_string()
     } else if combined.contains("clip") || combined.contains("highlight") || combined.contains("best.of") || combined.contains("kick") {
         "kick_auto_clipper".to_string()
     } else {
@@ -2343,6 +2374,9 @@ fn default_service_for_prospect(category: &str, prospect_type: &str) -> String {
 fn normalize_revenue_service(service: &str) -> &str {
     match service {
         "kick_auto_clipper" | "kick_clipper" | "auto_clipper" => "kick_auto_clipper",
+        // Platform split (Oct 2026): youtube/twitch clipping share the clipping core.
+        "youtube_clipping" | "youtube_clips" | "yt_clipping" => "youtube_clipping",
+        "twitch_clipping" | "twitch_clips" => "twitch_clipping",
         "manim" | "manim_explainer" => "manim_explainer",
         "whiteboard" | "whiteboard_animation" | "hand_drawn" | "sketch" => "whiteboard_animation",
         "kinetic_type" | "kinetic_typography" | "type_motion" | "text_animation" => "kinetic_typography",
@@ -2359,6 +2393,8 @@ fn is_valid_revenue_service(service: &str) -> bool {
     matches!(
         normalize_revenue_service(service),
         "clipping"
+            | "youtube_clipping"
+            | "twitch_clipping"
             | "landing_page"
             | "education"
             | "kick_auto_clipper"
@@ -2376,6 +2412,8 @@ fn is_valid_revenue_service(service: &str) -> bool {
 fn service_offer_line(service: &str) -> &'static str {
     match normalize_revenue_service(service) {
         "clipping" => "automated clip generation from your streams and VODs — posted to your social accounts daily",
+        "youtube_clipping" => "automated clip generation from your YouTube videos and podcasts — posted to your social accounts daily",
+        "twitch_clipping" => "automated clip generation from your Twitch streams and VODs — posted to your social accounts daily",
         "education" => "animated educational videos with narration and motion graphics — generated and posted to your social accounts daily",
         "landing_page" => "videos generated from your website URL — posted to your social accounts as marketing content daily",
         "kick_auto_clipper" => "automated Kick VOD clipping from your favorite streamers — posted to your social accounts daily",
@@ -2393,7 +2431,7 @@ fn service_offer_line(service: &str) -> &'static str {
 
 fn service_price_line(service: &str) -> &'static str {
     match normalize_revenue_service(service) {
-        "clipping" | "kick_auto_clipper" => "$297/mo",
+        "clipping" | "kick_auto_clipper" | "youtube_clipping" | "twitch_clipping" => "$297/mo",
         "education" => "$199/mo",
         "landing_page" => "$149/mo",
         "manim_explainer" | "whiteboard_animation" | "kinetic_typography"
@@ -2407,6 +2445,8 @@ fn service_target_duration_seconds(service: &str) -> f64 {
     match normalize_revenue_service(service) {
         "education" => 90.0,
         "clipping" => 60.0,
+        "youtube_clipping" => 60.0,
+        "twitch_clipping" => 60.0,
         "kick_auto_clipper" => 60.0,
         "manim_explainer" | "whiteboard_animation" | "kinetic_typography" => 60.0,
         "animated_infographic" | "algorithm_viz" => 75.0,
@@ -2420,6 +2460,8 @@ fn service_target_duration_seconds(service: &str) -> f64 {
 fn service_long_form_style(service: &str) -> &'static str {
     match normalize_revenue_service(service) {
         "clipping" => "high-retention creator clip pack presentation, fast hooks, captions, motion graphics, YouTube Shorts energy",
+        "youtube_clipping" => "high-retention YouTube clip pack presentation, fast hooks, captions, motion graphics, Shorts energy",
+        "twitch_clipping" => "high-retention Twitch clip pack presentation, fast hooks, captions, motion graphics, stream-highlight energy",
         "education" => "clear narrated educational explainer, animated diagrams, structured lesson pacing",
         "kick_auto_clipper" => "automated Kick clip generation from VODs, branded lower thirds, outro, and watermark, TikTok/Shorts native",
         "manim_explainer" => "narrated Manim animated explainer, clean motion graphics, math/technical diagrams, professional educational tone",
@@ -2437,6 +2479,8 @@ fn service_long_form_style(service: &str) -> &'static str {
 fn service_long_form_offer_type(service: &str) -> String {
     match normalize_revenue_service(service) {
         "clipping" => "clip_pack".to_string(),
+        "youtube_clipping" => "clip_pack".to_string(),
+        "twitch_clipping" => "clip_pack".to_string(),
         "education" => "education_explainer_pack".to_string(),
         "kick_auto_clipper" => "kick_auto_clipper_pack".to_string(),
         "manim_explainer" => "manim_pack".to_string(),
@@ -2454,6 +2498,10 @@ fn service_long_form_offer_type(service: &str) -> String {
 fn service_page_for_revenue_service(service: &str) -> &'static str {
     match normalize_revenue_service(service) {
         "clipping" => "/services/clipper-enhancement-pack",
+        // Platform split (Oct 2026): dedicated pages are out of scope — both
+        // point at the generic clipping page until they get their own.
+        "youtube_clipping" => "/services/clipper-enhancement-pack",
+        "twitch_clipping" => "/services/clipper-enhancement-pack",
         "education" => "/services/education-explainer-pack",
         "kick_auto_clipper" => "/services/kick-auto-clipper",
         _ => "/services/saas-launch-pack",
@@ -2465,6 +2513,8 @@ fn should_use_long_form_for_revenue_sample(service: &str, has_reference_url: boo
         normalize_revenue_service(service),
         "landing_page"
             | "clipping"
+            | "youtube_clipping"
+            | "twitch_clipping"
             | "education"
             | "kick_auto_clipper"
             | "manim_explainer"
@@ -2541,7 +2591,7 @@ async fn list_prospects(
          (CASE \
             WHEN service_type IN ('landing_page','investor_pitch') THEN 30 \
             WHEN service_type IN ('education','manim_explainer','whiteboard_animation','animated_infographic','algorithm_viz') THEN 25 \
-            WHEN service_type IN ('clipping','kick_auto_clipper','kinetic_typography','year_in_review','isometric_explainer') THEN 15 \
+            WHEN service_type IN ('clipping','youtube_clipping','twitch_clipping','kick_auto_clipper','kinetic_typography','year_in_review','isometric_explainer') THEN 15 \
             ELSE 0 \
           END) + \
                     COALESCE((ai_score * 100)::int, 0)) AS revenue_priority \
@@ -2710,7 +2760,7 @@ async fn regenerate_dm_script(
 
     let audience = subs.or(viewers).unwrap_or(0);
     let (score, reasoning, service, dm_creator, dm_clipper, x_dm, email_script) =
-        score_prospect_with_ai(&state, &name, audience, &description, &category, &pt).await;
+        score_prospect_with_ai(&state, &name, audience, &description, &category, &pt, "").await;
 
     sqlx::query(
         "UPDATE prospects
@@ -2782,7 +2832,7 @@ async fn generate_outreach_message(
     let row = sqlx::query(
         "SELECT display_name, subscriber_count, avg_viewer_count, content_category,
                 prospect_type, dm_script_creator, service_type, x_dm_script, email_script,
-                instagram_handle, twitter_handle
+                instagram_handle, twitter_handle, platform
          FROM prospects WHERE id=$1",
     )
     .bind(id)
@@ -2814,12 +2864,15 @@ async fn generate_outreach_message(
         .get::<Option<String>, _>("content_category")
         .unwrap_or_else(|| "content".to_string());
     let pt: String = row.get("prospect_type");
+    let platform: String = row
+        .get::<Option<String>, _>("platform")
+        .unwrap_or_default();
     let existing_dm: String = row
         .get::<Option<String>, _>("dm_script_creator")
         .unwrap_or_default();
     let service: String = row
         .get::<Option<String>, _>("service_type")
-        .unwrap_or_else(|| default_service_for_prospect(&category, &pt));
+        .unwrap_or_else(|| default_service_for_prospect(&category, &pt, &platform));
     let existing_x_dm: String = row
         .get::<Option<String>, _>("x_dm_script")
         .unwrap_or_else(|| default_x_dm(&name, &service));
@@ -3202,7 +3255,7 @@ async fn generate_prospect_sample_pack(
     let delivery_id_clone = delivery_id;
     let workflow_id = crate::services::AgenticServicePipeline::start(
         state.clone(),
-        service_type,
+        service.clone(),
         crate::services::ServiceInput {
             title: format!("Revenue sample pack for {}", display_name),
             brief: format!(
@@ -6138,7 +6191,7 @@ async fn instagram_generate_sample(
         };
         match crate::services::AgenticServicePipeline::start(
             state.clone(),
-            service_type,
+            service_key.clone(),
             agentic_input,
         )
         .await
@@ -7415,6 +7468,7 @@ Return ONLY valid JSON (no markdown, no code fence):
                             &state.db_pool,
                             &normalized,
                             clipper_like,
+                            "instagram",
                         )
                         .await,
                     )
@@ -7742,6 +7796,7 @@ async fn ai_score_linkedin_leads(state: &Arc<AppState>, job_id: uuid::Uuid) {
                 &enriched_desc,
                 &category,
                 "linkedin_lead",
+                "linkedin",
             )
             .await;
 
@@ -8085,6 +8140,7 @@ Return ONLY valid JSON (no markdown):
                     &state.db_pool,
                     &normalized,
                     clipper_like,
+                    "telegram",
                 )
                 .await,
             )
@@ -8712,8 +8768,8 @@ struct UpdateServiceTypeRequest {
 /// default_service_for_prospect logic. Runs at startup.
 pub async fn backfill_null_service_types(db_pool: &sqlx::PgPool) {
     tracing::info!("🔄 Backfilling prospects with null service_type...");
-    match sqlx::query_as::<_, (uuid::Uuid, String, String)>(
-        "SELECT id, content_category, prospect_type FROM prospects WHERE service_type IS NULL"
+    match sqlx::query_as::<_, (uuid::Uuid, String, String, Option<String>)>(
+        "SELECT id, content_category, prospect_type, platform FROM prospects WHERE service_type IS NULL"
     )
     .fetch_all(db_pool)
     .await
@@ -8724,8 +8780,8 @@ pub async fn backfill_null_service_types(db_pool: &sqlx::PgPool) {
                 return;
             }
             let mut updated = 0u64;
-            for (id, category, prospect_type) in &rows {
-                let service = default_service_for_prospect(category, prospect_type);
+            for (id, category, prospect_type, platform) in &rows {
+                let service = default_service_for_prospect(category, prospect_type, platform.as_deref().unwrap_or(""));
                 match sqlx::query("UPDATE prospects SET service_type = $1, updated_at = NOW() WHERE id = $2")
                     .bind(&service)
                     .bind(id)
@@ -8907,6 +8963,7 @@ async fn telegram_discover_channels(
             &description,
             category,
             "business_owner",
+            "telegram",
         )
         .await;
         let score_i = (score * 100.0).round() as i32;

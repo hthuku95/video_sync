@@ -6628,6 +6628,10 @@ pub async fn api_trigger_test_run(
     if !crate::services::service_flags::service_enabled(&state.db_pool, "clipping").await
         && !crate::services::service_flags::service_enabled(&state.db_pool, "kick_auto_clipper")
             .await
+        && !crate::services::service_flags::service_enabled(&state.db_pool, "youtube_clipping")
+            .await
+        && !crate::services::service_flags::service_enabled(&state.db_pool, "twitch_clipping")
+            .await
     {
         return Err((
             StatusCode::SERVICE_UNAVAILABLE,
@@ -8017,7 +8021,7 @@ pub async fn api_create_delivery(
     };
     let workflow_id = match crate::services::AgenticServicePipeline::start(
         state.clone(),
-        service_type,
+        req.gig_type.clone(),
         agentic_input,
     )
     .await
@@ -8465,7 +8469,7 @@ pub async fn api_generate_dfy_portfolio_samples(
         let slug = service.slug;
 
         tokio::spawn(async move {
-            match crate::services::AgenticServicePipeline::start(spawn_state.clone(), service_type, svc_input).await {
+            match crate::services::AgenticServicePipeline::start(spawn_state.clone(), slug.clone(), svc_input).await {
                 Ok(wf_id) => {
                     let _ = sqlx::query("UPDATE deliveries SET workflow_id = $1 WHERE id = $2")
                         .bind(wf_id)
@@ -8953,7 +8957,7 @@ pub async fn api_generate_service_portfolio_sample(
                     reference_images: vec![],
                 };
 
-                match crate::services::AgenticServicePipeline::start(gen_state.clone(), service_type, input).await {
+                match crate::services::AgenticServicePipeline::start(gen_state.clone(), slug.clone(), input).await {
                     Ok(wf_id) => {
                         let _ = sqlx::query("UPDATE service_portfolio_samples SET workflow_id = $1, status = 'running' WHERE id = $2")
                             .bind(wf_id)
@@ -10514,7 +10518,9 @@ pub async fn admin_deliveries_page() -> Html<String> {
         <label>Service / Gig Type *</label>
         <select id="gig_type" onchange="onGigTypeChange()">
           <optgroup label="Managed Campaign Services (AgenticPipeline)">
-            <option value="clipping">Clip Distribution ($297/mo)</option>
+            <option value="clipping">Clip Distribution — legacy, parked ($297/mo)</option>
+            <option value="youtube_clipping">YouTube Clipping ($297/mo)</option>
+            <option value="twitch_clipping">Twitch Clipping ($297/mo)</option>
             <option value="kick_auto_clipper">Kick Auto-Clipper ($297/mo)</option>
             <option value="landing_page">Landing Page Video ($149/mo)</option>
             <option value="education">Educational Explainer ($199/mo)</option>
@@ -11998,7 +12004,9 @@ tr:hover{background:#f8f9fa}
       <div class="form-group">
         <label>Service Type</label>
         <select id="formService">
-  <option value="clipping">Clipping</option>
+  <option value="clipping">Clipping (legacy, parked)</option>
+  <option value="youtube_clipping">YouTube Clipping</option>
+  <option value="twitch_clipping">Twitch Clipping</option>
   <option value="kick_auto_clipper">Kick Auto-Clipper</option>
   <option value="education">Education</option>
   <option value="landing_page">Landing Page</option>

@@ -266,7 +266,7 @@ impl PortfolioTestRunner {
 
         let workflow_id = crate::services::AgenticServicePipeline::start(
             self.app_state.clone(),
-            service_type,
+            scenario.slug.clone(),
             svc_input,
         )
         .await

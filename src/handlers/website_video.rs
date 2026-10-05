@@ -822,7 +822,7 @@ async fn generate(
 
     let workflow_result = crate::services::AgenticServicePipeline::start(
         state.clone(),
-        crate::services::ServiceType::LandingPage,
+        "landing_page",
         crate::services::ServiceInput {
             title: format!("Website Video for {}", product_name),
             brief: format!("{prompt}\n\nGenerate a buyer-facing landing page video for {product_name}. Include concise narration and end with a clear CTA.{scraped_context}"),

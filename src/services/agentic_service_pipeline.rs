@@ -36,6 +36,9 @@ impl ServiceType {
             "thumbnails" | "thumbnail" | "thumbnail_hero_pack" => Self::Thumbnails,
             "education" | "course_lesson" | "explainer" | "tutorial" | "education_explainer_pack" => Self::Education,
             "clipping" | "clip" | "short" | "clip_pack" | "kick_auto_clipper" | "kick" => Self::Clipping,
+            // Platform split (Oct 2026): youtube/twitch clipping share the clipping core.
+            "youtube_clipping" | "youtube_clips" | "yt_clipping" => Self::Clipping,
+            "twitch_clipping" | "twitch_clips" | "twitch" => Self::Clipping,
             "business_explainer" | "business" | "business_case_study" | "saas_explainer" | "business_explainer_pack" => Self::BusinessExplainer,
             "voice_audio" | "voice" | "voice_audio_pack" | "narration" | "podcast" => Self::VoiceAudio,
             "full_stack" | "agency_bundle" | "agency" | "fullstack" | "full_stack_production_pack" | "agency_bundle_pack" => Self::FullStack,
@@ -166,23 +169,26 @@ impl AgenticServicePipeline {
     /// Fargate task replacement, OOM kills, and deploys.
     pub async fn start(
         state: Arc<AppState>,
-        service_type: ServiceType,
+        service_slug: impl Into<String>,
         mut input: ServiceInput,
     ) -> Result<Uuid, String> {
+        // Raw slug (pre-normalization): the pipeline core is shared by all three
+        // Zernio clipping services, but the ON/OFF switch is per slug — a single
+        // normalized "clipping" gate could not tell youtube_clipping (OFF) from
+        // twitch_clipping (ON). Every caller passes the slug it already gated on.
+        let service_slug = service_slug.into();
+        let service_type = ServiceType::from_normalized(&service_slug);
         // Service switch (owner directive Sep 2026): only enabled services may
         // enqueue renders. In-run calls (QA, embeddings, skills) inherit this
         // verdict — there is intentionally no second flag to misconfigure.
-        // NOTE: kick_auto_clipper normalizes to ServiceType::Clipping, and both
-        // are enabled, so the shared clipping core keeps serving both businesses.
         if !crate::services::service_flags::service_enabled(
             &state.db_pool,
-            service_type.as_str(),
+            &service_slug,
         )
         .await
         {
             return Err(format!(
-                "Service '{}' is currently disabled (service_flags).",
-                service_type.as_str()
+                "Service '{service_slug}' is currently disabled (service_flags)."
             ));
         }
         // Channel-URL resolution (Sep 2026): direct deliveries carrying channel
@@ -238,6 +244,7 @@ impl AgenticServicePipeline {
                 current_step: Some("queued".to_string()),
                 metadata: json!({
                     "service_type": service_type.as_str(),
+                    "service_slug": service_slug,
                     "delivery_id": input.delivery_id,
                     "source_url": input.source_url,
                     "style": input.style,
@@ -262,7 +269,7 @@ impl AgenticServicePipeline {
 
         // Queue priority band (owner directive Sep 2 2026 — business order):
         //   50  = campaign-sourced renders (Kick auto-clipper campaigns FIRST,
-        //         then all 12 managed campaign services)
+        //         then all 13 managed campaign services)
         //   100 = other deliveries (admin, app services)
         //   150 = NON-campaign clipping renders = YouTube auto-clipping
         //         (content_machine whitelisted users) — explicitly
@@ -1807,6 +1814,9 @@ mod tests {
         assert_eq!(ServiceType::from_normalized("education"), ServiceType::Education);
         assert_eq!(ServiceType::from_normalized("clipping"), ServiceType::Clipping);
         assert_eq!(ServiceType::from_normalized("clip"), ServiceType::Clipping);
+        assert_eq!(ServiceType::from_normalized("youtube_clipping"), ServiceType::Clipping);
+        assert_eq!(ServiceType::from_normalized("twitch_clipping"), ServiceType::Clipping);
+        assert_eq!(ServiceType::from_normalized("kick_auto_clipper"), ServiceType::Clipping);
         assert_eq!(ServiceType::from_normalized("voice_audio"), ServiceType::VoiceAudio);
         assert_eq!(ServiceType::from_normalized("voice"), ServiceType::VoiceAudio);
         assert_eq!(ServiceType::from_normalized("podcast"), ServiceType::VoiceAudio);

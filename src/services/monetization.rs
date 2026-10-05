@@ -11,13 +11,27 @@ pub struct ServiceOffer {
     pub best_fit: &'static str,
 }
 
-pub const SERVICE_OFFERS: [ServiceOffer; 12] = [
+pub const SERVICE_OFFERS: [ServiceOffer; 14] = [
     ServiceOffer {
         key: "clipping",
-        title: "SHORT-FORM CLIPPING",
-        what_you_offer: "automated daily clip generation from long-form videos, podcasts, or streams — posted to your connected social accounts.",
+        title: "SHORT-FORM CLIPPING (LEGACY — PARKED)",
+        what_you_offer: "legacy combined clip service, superseded by YouTube/Twitch clipping — not offered to new clients.",
+        pricing_tiers: "$297/mo (parked).",
+        best_fit: "existing legacy campaigns only.",
+    },
+    ServiceOffer {
+        key: "youtube_clipping",
+        title: "YOUTUBE CLIPPING",
+        what_you_offer: "automated daily clips from long-form YouTube videos and podcasts — captioned, thumbnailed, posted to your connected social accounts.",
         pricing_tiers: "$297/mo for a daily campaign with up to 3 posts/day across your connected platforms.",
-        best_fit: "podcasters, streamers, and YouTubers with regular source content who want a daily short-form presence.",
+        best_fit: "podcasters and long-form YouTubers with regular source content who want a daily short-form presence.",
+    },
+    ServiceOffer {
+        key: "twitch_clipping",
+        title: "TWITCH CLIPPING",
+        what_you_offer: "automated daily clips from Twitch streams and VODs — captioned, thumbnailed, posted to your connected social accounts.",
+        pricing_tiers: "$297/mo for a daily campaign with up to 3 posts/day across your connected platforms.",
+        best_fit: "Twitch streamers and their clip channels who want every stream turned into daily short-form content.",
     },
     ServiceOffer {
         key: "kick_auto_clipper",

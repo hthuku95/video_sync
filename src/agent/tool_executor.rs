@@ -4801,7 +4801,7 @@ async fn execute_generate_long_form_video_value(
 
     match crate::services::AgenticServicePipeline::start(
         ctx.app_state.clone(),
-        service_type,
+        offer_type.clone(),
         crate::services::ServiceInput {
             title: title.clone(),
             brief,

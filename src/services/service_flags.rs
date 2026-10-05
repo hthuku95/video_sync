@@ -8,13 +8,17 @@
 //! Rows live in the `service_flags` table (see migration
 //! `20260928000000_service_flags.sql`) and flip at runtime via the admin UI or
 //! `POST /api/admin/service-flags` — no redeploy. Unknown services default to
-//! enabled (fail-open for unlisted legacy gig types; the 12 managed services
+//! enabled (fail-open for unlisted legacy gig types; the 13 managed services
 //! and system groups all have explicit rows).
 
-/// The 12 managed campaign services plus system groups. Kept in sync with the
-/// `service_flags` seed migration.
+/// The 13 managed campaign services plus system groups. Kept in sync with the
+/// `service_flags` seed migrations (`20260928000000` + `20261005000000`).
+/// `clipping` is the legacy pre-split key (YouTube-dominant, parked OFF);
+/// `youtube_clipping` / `twitch_clipping` are its platform-specific successors.
 pub const MANAGED_SERVICES: &[&str] = &[
     "clipping",
+    "youtube_clipping",
+    "twitch_clipping",
     "kick_auto_clipper",
     "landing_page",
     "education",
@@ -28,9 +32,10 @@ pub const MANAGED_SERVICES: &[&str] = &[
     "isometric_explainer",
 ];
 
-/// Services that must stay on for the two Zernio-powered clipping businesses.
+/// Services that must stay on for the three Zernio-powered clipping businesses.
+/// Order is the constrain-fallback order (Kick first, then Twitch, then YouTube).
 pub fn clipping_services() -> &'static [&'static str] {
-    &["clipping", "kick_auto_clipper"]
+    &["kick_auto_clipper", "twitch_clipping", "youtube_clipping"]
 }
 
 /// System groups beyond the 12 managed services.
@@ -93,7 +98,13 @@ pub async fn enabled_services(pool: &sqlx::PgPool) -> Vec<String> {
 pub fn service_menu_line(service: &str) -> Option<&'static str> {
     match service {
         "clipping" => Some(
-            "- **clipping** — turn long-form videos, podcasts, or streams into short-form clips with captions and thumbnails. Best fit: podcasters, long-form YouTubers, Twitch streamers. $297-$899/mo.",
+            "- **clipping** — legacy combined clip service (superseded by youtube_clipping/twitch_clipping; do not pick for new prospects).",
+        ),
+        "youtube_clipping" => Some(
+            "- **youtube_clipping** — turn long-form YouTube videos and podcasts into short-form clips with captions and thumbnails. Best fit: podcasters, long-form YouTubers. $297/mo.",
+        ),
+        "twitch_clipping" => Some(
+            "- **twitch_clipping** — turn Twitch streams and VODs into short-form clips with captions and thumbnails, auto-posted daily. Best fit: Twitch streamers and their clip channels. $297/mo.",
         ),
         "kick_auto_clipper" => Some(
             "- **kick_auto_clipper** — automated Kick clip generation from VODs: branding, lower thirds, outro, watermark, with daily auto-posting. Best fit: clipping channels, Kick highlight reposters, stream compilations. $297-$899/mo.",
@@ -153,16 +164,38 @@ pub async fn scoring_menu(pool: &sqlx::PgPool) -> (String, String) {
 }
 
 /// Coerce an AI-chosen service into the enabled set. Anything disabled (or
-/// unknown) falls back by prospect shape: clipper-like → kick_auto_clipper,
-/// everything else → clipping.
-pub async fn constrain_service(pool: &sqlx::PgPool, service: &str, clipper_like: bool) -> String {
+/// unknown) falls back by prospect shape — and NEVER returns a disabled
+/// service: clipper-like → kick_auto_clipper, Twitch platform → twitch_clipping,
+/// YouTube platform → youtube_clipping, else the first enabled clipping service.
+/// Last resort is the original value (downstream gates 503 it at zero cost)
+/// so prospects are parked honestly instead of misrouted.
+pub async fn constrain_service(
+    pool: &sqlx::PgPool,
+    service: &str,
+    clipper_like: bool,
+    platform: &str,
+) -> String {
     let s = service.to_ascii_lowercase();
     if service_enabled(pool, &s).await {
         return s;
     }
-    if clipper_like {
-        "kick_auto_clipper".to_string()
-    } else {
-        "clipping".to_string()
+    let p = platform.to_ascii_lowercase();
+    let twitch_shaped = p == "twitch" || p.contains("twitch") || s.contains("twitch");
+    let youtube_shaped =
+        p == "youtube" || p.contains("youtube") || s.contains("youtube") || s == "clipping";
+    if clipper_like && service_enabled(pool, "kick_auto_clipper").await {
+        return "kick_auto_clipper".to_string();
     }
+    if twitch_shaped && service_enabled(pool, "twitch_clipping").await {
+        return "twitch_clipping".to_string();
+    }
+    if youtube_shaped && service_enabled(pool, "youtube_clipping").await {
+        return "youtube_clipping".to_string();
+    }
+    for candidate in clipping_services() {
+        if service_enabled(pool, candidate).await {
+            return candidate.to_string();
+        }
+    }
+    s
 }

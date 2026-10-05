@@ -868,6 +868,8 @@ pub fn campaign_slug_to_service(slug: &str) -> Option<&'static str> {
     Some(match slug {
         "saas-launch-pack" => "landing_page",
         "clipping-pack" => "clipping",
+        "youtube-clipping" => "youtube_clipping",
+        "twitch-clipping" => "twitch_clipping",
         "kick-auto-clipper" => "kick_auto_clipper",
         "education-explainer-pack" => "education",
         "manim-explainer" => "manim_explainer",
@@ -1067,7 +1069,9 @@ pub async fn campaigns_new_page(
         .to_string();
     let service_options = [
         ("landing_page", "SaaS Demo Video"),
-        ("clipping", "Social Clipping"),
+        ("clipping", "Social Clipping (legacy)"),
+        ("youtube_clipping", "YouTube Clipping"),
+        ("twitch_clipping", "Twitch Clipping"),
         ("kick_auto_clipper", "Kick.com Clipping"),
         ("education", "Education Explainer"),
         ("manim_explainer", "Manim Explainer"),

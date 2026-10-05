@@ -15,7 +15,8 @@ use uuid::Uuid;
 
 fn campaign_price_cents(service_type: &str) -> u64 {
     match service_type {
-        "clipping" | "kick_auto_clipper" => 29700,
+        // Three Zernio-powered clipping services share the $297/mo tier.
+        "clipping" | "kick_auto_clipper" | "youtube_clipping" | "twitch_clipping" => 29700,
         "education" => 19900,
         "landing_page" => 14900,
         "manim_explainer" | "whiteboard_animation" | "kinetic_typography"
@@ -401,8 +402,14 @@ async fn client_create_campaign(
         return Err((StatusCode::BAD_REQUEST, Json(json!({"error": "end_date must be after start_date"}))));
     }
 
-    if !matches!(req.service_type.as_str(), "clipping" | "education" | "landing_page" | "kick_auto_clipper" | "manim_explainer" | "whiteboard_animation" | "kinetic_typography" | "animated_infographic" | "algorithm_viz" | "investor_pitch" | "year_in_review" | "isometric_explainer") {
-        return Err((StatusCode::BAD_REQUEST, Json(json!({"error": "service_type must be one of: clipping, education, landing_page, kick_auto_clipper, manim_explainer, whiteboard_animation, kinetic_typography, animated_infographic, algorithm_viz, investor_pitch, year_in_review, isometric_explainer"}))));
+    if !matches!(req.service_type.as_str(), "clipping" | "education" | "landing_page" | "kick_auto_clipper" | "manim_explainer" | "whiteboard_animation" | "kinetic_typography" | "animated_infographic" | "algorithm_viz" | "investor_pitch" | "year_in_review" | "isometric_explainer" | "youtube_clipping" | "twitch_clipping") {
+        return Err((StatusCode::BAD_REQUEST, Json(json!({"error": "service_type must be one of: clipping, education, landing_page, kick_auto_clipper, manim_explainer, whiteboard_animation, kinetic_typography, animated_infographic, algorithm_viz, investor_pitch, year_in_review, isometric_explainer, youtube_clipping, twitch_clipping"}))));
+    }
+
+    // Service switch (owner directive Oct 2026): campaigns cannot be created for
+    // disabled services — they would sit pending forever and burn no value.
+    if !crate::services::service_flags::service_enabled(&state.db_pool, &req.service_type).await {
+        return Err((StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": format!("Service '{}' is currently disabled and cannot take new campaigns.", req.service_type)}))));
     }
 
     // Staff, superusers, and whitelisted users bypass payment — campaign is active immediately.
