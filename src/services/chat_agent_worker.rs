@@ -144,8 +144,8 @@ async fn claim_next_chat_job(pool: &sqlx::PgPool) -> Option<ChatClaimedJob> {
     let claimed_by = reclaim_instance_id().to_string();
     match sqlx::query_as::<_, ChatClaimedJob>(
         "UPDATE agent_background_jobs AS j
-         SET claimed_by = $2,
-             lease_expires_at = NOW() + make_interval(mins => $3::int),
+         SET claimed_by = $1,
+             lease_expires_at = NOW() + make_interval(mins => $2::int),
              attempts = attempts + 1,
              started_at = COALESCE(started_at, NOW()),
              updated_at = NOW()
