@@ -5797,6 +5797,7 @@ async fn instagram_search_leads(
             )
             .await
         }
+    };
     let (job_id, status, container_id) = match launch_result {
         Ok(t) => t,
         Err(e) => return Json(json!({"success": false, "error": e})),
