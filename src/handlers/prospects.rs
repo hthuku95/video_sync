@@ -5768,7 +5768,7 @@ async fn instagram_search_leads(
         }
     };
 
-    let (job_id, status, container_id) = match forced_service.as_deref() {
+    let launch_result = match forced_service.as_deref() {
         // Prefix convention (like instagram:kick:#): the poller parses
         // instagram:svc:{service}:#tag back into a forced scope — no schema change.
         Some(svc) => {
@@ -5797,8 +5797,7 @@ async fn instagram_search_leads(
             )
             .await
         }
-    }
-    {
+    let (job_id, status, container_id) = match launch_result {
         Ok(t) => t,
         Err(e) => return Json(json!({"success": false, "error": e})),
     };
@@ -6514,6 +6513,7 @@ async fn instagram_auto_discover(
         niche: None,
         max_posts_per_hashtag: None,
         hashtag_count: None,
+        service: None,
     });
     let niche = req.niche.as_deref().unwrap_or("content creator");
     let max_posts = req.max_posts_per_hashtag.unwrap_or(30).min(100);
@@ -6708,6 +6708,7 @@ async fn instagram_kick_auto_discover(
         niche: None,
         max_posts_per_hashtag: None,
         hashtag_count: None,
+        service: None,
     });
     let category = req.niche.as_deref().unwrap_or("gaming");
     let max_posts = req.max_posts_per_hashtag.unwrap_or(30).min(100);
@@ -6876,6 +6877,7 @@ async fn instagram_kick_method_b(
         niche: None,
         max_posts_per_hashtag: None,
         hashtag_count: None,
+        service: None,
     });
     let category = req.niche.as_deref().unwrap_or("gaming");
     let max_posts = req.max_posts_per_hashtag.unwrap_or(30).min(100);
