@@ -411,11 +411,37 @@ async fn search_prospects(
         }
         search_twitch_prospects(&state, &payload, limit).await
     } else if payload.platform == "kick" {
+        // Service switch (owner directive Oct 2026): Kick discovery feeds the
+        // launch business — it runs only while kick_auto_clipper is on.
+        if !crate::services::service_flags::service_enabled(&state.db_pool, "kick_auto_clipper").await
+        {
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ErrorResponse {
+                    success: false,
+                    message: "Kick prospect discovery is currently disabled (kick_auto_clipper off in service_flags).".to_string(),
+                }),
+            ));
+        }
         search_kick_prospects(&state, &payload, limit).await
-    } else if payload.platform == "kick_clipper" {
-        search_kick_clipper_prospects(&state, &payload, limit).await
-    } else if payload.platform == "kick_clipper_top" {
-        search_kick_clipper_prospects_top_streamers(&state, &payload, limit).await
+    } else if payload.platform == "kick_clipper" || payload.platform == "kick_clipper_top" {
+        // Service switch (owner directive Oct 2026): both Kick clipper methods
+        // feed kick_auto_clipper — refuse while it is off.
+        if !crate::services::service_flags::service_enabled(&state.db_pool, "kick_auto_clipper").await
+        {
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ErrorResponse {
+                    success: false,
+                    message: "Kick clipper prospect discovery is currently disabled (kick_auto_clipper off in service_flags).".to_string(),
+                }),
+            ));
+        }
+        if payload.platform == "kick_clipper" {
+            search_kick_clipper_prospects(&state, &payload, limit).await
+        } else {
+            search_kick_clipper_prospects_top_streamers(&state, &payload, limit).await
+        }
     } else {
         complete_prospect_agent_run(
             &state,
@@ -6004,8 +6030,13 @@ async fn instagram_generate_sample(
     // For clipping the lead, we'd need their actual video URL. Tell the
     // frontend so it can ask the user for one. Don't burn a render slot on
     // a placeholder for clipping — the value is in clipping THEIR content.
-    if matches!(service.as_deref(), Some("clipping" | "kick_auto_clipper")) && !has_reference_url {
-        let service_label = if service.as_deref() == Some("kick_auto_clipper") { "Kick auto-clipper" } else { "Clipping" };
+    if matches!(service.as_deref(), Some("clipping" | "kick_auto_clipper" | "youtube_clipping" | "twitch_clipping")) && !has_reference_url {
+        let service_label = match service.as_deref() {
+            Some("kick_auto_clipper") => "Kick auto-clipper",
+            Some("youtube_clipping") => "YouTube clipping",
+            Some("twitch_clipping") => "Twitch clipping",
+            _ => "Clipping",
+        };
         return Json(json!({
             "success":              false,
             "requires_source_url":  true,
@@ -7406,7 +7437,7 @@ Score guidelines:
 - 0–39: Bad fit. Fan page, brand parody, private/spammy account, OR another freelance editor (competitor, not client).
 
 Return ONLY valid JSON (no markdown, no code fence):
-{{"score": 75, "service": "clipping", "reason": "podcaster with podcast link in bio, posts long-form clips"}}
+{{"score": 75, "service": "twitch_clipping", "reason": "streamer with VOD link in bio, posts stream highlights"}}
 
 {must_line}"#,
             username = username,
@@ -8084,7 +8115,7 @@ Score guidelines:
 - 0–39: not a gig (news, spam, announcement, cold pitch from someone ELSE offering similar services = competitor).
 
 Return ONLY valid JSON (no markdown):
-{{"score": 75, "service": "clipping", "reason": "Podcaster says 'need someone to cut my 2hr episodes into TikToks, DM for budget'"}}
+{{"score": 75, "service": "twitch_clipping", "reason": "Streamer says 'need someone to cut my 6hr broadcasts into TikToks, DM for budget'"}}
 
 {must_line} — or null if score < 40."#,
         channel = channel,
@@ -8817,7 +8848,7 @@ async fn instagram_update_service_type(
             } else {
                 return Json(json!({
                     "success": false,
-                    "error":   format!("service_type must be one of: clipping, education, landing_page, kick_auto_clipper, manim_explainer, whiteboard_animation, kinetic_typography, animated_infographic, algorithm_viz, investor_pitch, year_in_review, isometric_explainer (got: {})", s),
+                    "error":   format!("service_type must be one of: clipping, education, landing_page, kick_auto_clipper, manim_explainer, whiteboard_animation, kinetic_typography, animated_infographic, algorithm_viz, investor_pitch, year_in_review, isometric_explainer, youtube_clipping, twitch_clipping (got: {})", s),
                 }));
             }
         }
