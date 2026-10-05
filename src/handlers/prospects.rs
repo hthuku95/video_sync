@@ -185,6 +185,10 @@ struct SearchRequest {
     max_viewers: Option<i64>,
     limit: Option<usize>,
     sourced_by: Option<i32>, // User ID of the whitelisted content machine user who sourced this
+    /// Forced service scope (owner directive Oct 2026): when set, EVERY scored
+    /// prospect is tagged with this service only — the search returns prospects
+    /// OF that service. Must be enabled and consistent with the platform.
+    service: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -213,6 +217,9 @@ struct ListQuery {
     contact_status: Option<String>,
     platform: Option<String>,
     sourced_by: Option<i32>,
+    /// Show prospects of disabled services too (admin debugging). Default:
+    /// only prospects of ON services (plus unscored NULL-service rows).
+    include_disabled: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -352,6 +359,49 @@ async fn search_prospects(
         ));
     }
     let limit = payload.limit.unwrap_or(20).min(50);
+    // Forced-service scope (owner directive Oct 2026): searching FOR a service
+    // returns prospects OF that service only. The requested service must be a
+    // known revenue service, switched ON, and consistent with the platform
+    // (youtube→youtube_clipping, twitch→twitch_clipping, kick*→kick_auto_clipper).
+    if let Some(ref wanted) = payload.service {
+        let normalized = normalize_revenue_service(&wanted.to_ascii_lowercase()).to_string();
+        if !is_valid_revenue_service(&normalized) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    success: false,
+                    message: format!("Unknown service '{wanted}'."),
+                }),
+            ));
+        }
+        if !crate::services::service_flags::service_enabled(&state.db_pool, &normalized).await {
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ErrorResponse {
+                    success: false,
+                    message: format!("Service '{normalized}' is currently disabled (service_flags)."),
+                }),
+            ));
+        }
+        let expected = match payload.platform.as_str() {
+            "youtube" => "youtube_clipping",
+            "twitch" => "twitch_clipping",
+            "kick" | "kick_clipper" | "kick_clipper_top" => "kick_auto_clipper",
+            _ => "",
+        };
+        if !expected.is_empty() && normalized != expected {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    success: false,
+                    message: format!(
+                        "Service '{normalized}' does not match platform '{}' (expected '{expected}').",
+                        payload.platform
+                    ),
+                }),
+            ));
+        }
+    }
     let mut found = 0usize;
     let user_id = claims.sub.parse::<i32>().ok();
     let run_input = json!({
@@ -671,6 +721,7 @@ async fn search_youtube_prospects(
                 &category,
                 &payload.prospect_type,
                 "youtube",
+                payload.service.as_deref(),
             )
             .await;
 
@@ -956,6 +1007,7 @@ async fn search_twitch_prospects(
                 &category,
                 &payload.prospect_type,
                 "twitch",
+                payload.service.as_deref(),
             )
             .await;
 
@@ -1087,6 +1139,7 @@ async fn search_kick_prospects(
                     .unwrap_or_else(|| "general".to_string()),
                 &payload.prospect_type,
                 "kick",
+                payload.service.as_deref(),
             )
             .await;
 
@@ -1319,7 +1372,7 @@ async fn search_kick_clipper_prospects(
         // 10. AI scoring — force clipper prospect type for kick_auto_clipper evaluation
         let (score, reasoning, _service, dm_creator, dm_clipper, x_dm, email_script) =
             score_prospect_with_ai(state, &display_name, sub_count,
-                &scoring_desc, &base_category, "clipper", "kick").await;
+                &scoring_desc, &base_category, "clipper", "kick", payload.service.as_deref()).await;
 
         if score < 0.3 { continue; }
 
@@ -1584,7 +1637,7 @@ async fn search_kick_clipper_prospects_top_streamers(
             // Score with LLM
             let (score, reasoning, _service, dm_creator, dm_clipper, x_dm, email_script) =
                 score_prospect_with_ai(state, &display_name, sub_count,
-                    &scoring_desc, &base_category, "clipper", "kick").await;
+                    &scoring_desc, &base_category, "clipper", "kick", payload.service.as_deref()).await;
 
             if score < 0.3 { continue; }
 
@@ -2129,12 +2182,19 @@ async fn score_prospect_with_ai(
     category: &str,
     prospect_type: &str,
     platform: &str,
+    forced_service: Option<&str>,
 ) -> (f64, String, String, String, String, String, String) {
+    // Forced-service scope (owner directive Oct 2026): the caller validated
+    // this service (known + enabled). Every prospect from this search is tagged
+    // with it — the AI still scores fit 0-1, but the service is fixed.
+    let forced = forced_service
+        .map(|s| normalize_revenue_service(&s.to_ascii_lowercase()).to_string())
+        .filter(|s| !s.is_empty());
     if state.nvidia_nim_client.is_none()
         && state.gemma_client.is_none()
         && state.gemini_client.is_none()
     {
-        let service = default_service_for_prospect(category, prospect_type, platform);
+        let service = forced.clone().unwrap_or_else(|| default_service_for_prospect(category, prospect_type, platform));
         let x_dm = default_x_dm(name, &service);
         let email_script = default_email_script(name, &service);
         return (
@@ -2149,9 +2209,19 @@ async fn score_prospect_with_ai(
     }
 
     // Service menu is built from enabled flags (owner directive Sep 2026):
-    // prospecting only funnels the services that are switched on.
-    let (service_menu, must_line) =
-        crate::services::service_flags::scoring_menu(&state.db_pool).await;
+    // prospecting only funnels the services that are switched on. A forced
+    // service narrows the menu to that service alone (Oct 2026 scoping).
+    let (service_menu, must_line) = match forced.as_deref() {
+        Some(f) => (
+            crate::services::service_flags::service_menu_line(f)
+                .unwrap_or("Pick the forced service.")
+                .to_string(),
+            format!("`service` MUST be exactly: {f}. No other values are valid."),
+        ),
+        None => {
+            crate::services::service_flags::scoring_menu(&state.db_pool).await
+        }
+    };
 
     // Same service-menu pattern as IG leads — AI picks the strongest-fit
     // service for THIS creator and writes a DM locked to that service.
@@ -2281,6 +2351,9 @@ Return ONLY valid JSON (no markdown):
                         }
                         _ => service,
                     };
+                    // Forced-service scope: the tag is fixed regardless of the
+                    // AI pick or the post-process overrides above.
+                    let service = forced.clone().unwrap_or(service);
                     (
                         score,
                         reasoning,
@@ -2294,7 +2367,7 @@ Return ONLY valid JSON (no markdown):
                 Err(_) => (
                     0.5,
                     "Parse error".to_string(),
-                    default_service_for_prospect(category, prospect_type, platform),
+                    forced.clone().unwrap_or_else(|| default_service_for_prospect(category, prospect_type, platform)),
                     default_x_dm(name, &default_service_for_prospect(category, prospect_type, platform)),
                     default_dm_clipper(name),
                     default_x_dm(name, &default_service_for_prospect(category, prospect_type, platform)),
@@ -2308,7 +2381,7 @@ Return ONLY valid JSON (no markdown):
         Err(_) => (
             0.5,
             "AI unavailable".to_string(),
-            default_service_for_prospect(category, prospect_type, platform),
+            forced.clone().unwrap_or_else(|| default_service_for_prospect(category, prospect_type, platform)),
             default_x_dm(name, &default_service_for_prospect(category, prospect_type, platform)),
             default_dm_clipper(name),
             default_x_dm(name, &default_service_for_prospect(category, prospect_type, platform)),
@@ -2627,6 +2700,21 @@ async fn list_prospects(
     for (i, col) in conditions.iter().enumerate() {
         sql.push_str(&format!(" AND {} = ${}", col, i + 1));
     }
+    // Service visibility (owner directive Oct 2026): UIs display only prospects
+    // of ON services. Unscored rows (service_type IS NULL) always show — they
+    // are candidates, not assignments. Admins can pass include_disabled=true.
+    let show_all = q.include_disabled.unwrap_or(false) && is_admin;
+    let enabled_services: Vec<String> = if show_all {
+        vec![]
+    } else {
+        crate::services::service_flags::enabled_services(&state.db_pool).await
+    };
+    if !show_all {
+        sql.push_str(&format!(
+            " AND (service_type IS NULL OR service_type = ANY(${}))",
+            conditions.len() + 1
+        ));
+    }
     sql.push_str(
         " ORDER BY revenue_priority DESC, ai_score DESC NULLS LAST, created_at DESC LIMIT 200",
     );
@@ -2648,6 +2736,9 @@ async fn list_prospects(
         // Auto-filter to user's sourced prospects
         let user_id: i32 = claims.sub.parse().unwrap_or(0);
         query = query.bind(user_id);
+    }
+    if !show_all {
+        query = query.bind(enabled_services);
     }
 
     let rows = query.fetch_all(&state.db_pool).await.map_err(|e| {
@@ -2786,7 +2877,7 @@ async fn regenerate_dm_script(
 
     let audience = subs.or(viewers).unwrap_or(0);
     let (score, reasoning, service, dm_creator, dm_clipper, x_dm, email_script) =
-        score_prospect_with_ai(&state, &name, audience, &description, &category, &pt, "").await;
+        score_prospect_with_ai(&state, &name, audience, &description, &category, &pt, "", None).await;
 
     sqlx::query(
         "UPDATE prospects
@@ -3762,6 +3853,15 @@ tr:hover td{background:rgba(92,84,112,0.12)}
         </select>
       </div>
       <div>
+        <label>Service scope (optional)</label>
+        <select id="service">
+          <option value="">AI picks (all ON services)</option>
+          <option value="twitch_clipping">💜 Twitch Clipping</option>
+          <option value="kick_auto_clipper">⚡ Kick Auto-Clipper</option>
+          <option value="youtube_clipping">📺 YouTube Clipping</option>
+        </select>
+      </div>
+      <div>
         <label>Prospect Type</label>
         <select id="prospect_type">
           <option value="content_creator">Content Creator</option>
@@ -4479,6 +4579,7 @@ async function runSearch(){
     min_viewers: parseInt(document.getElementById('min_viewers').value)||undefined,
     max_viewers: parseInt(document.getElementById('max_viewers').value)||undefined,
     limit: parseInt(document.getElementById('limit').value)||20,
+    service: document.getElementById('service').value||undefined,
   };
   const status = document.getElementById('search-status');
   status.textContent = 'Searching…';
@@ -5316,6 +5417,9 @@ struct InstagramSearchRequest {
     hashtag: String,          // e.g. "contentcreator" or "#videographer"
     max_posts: Option<u32>,   // default 50, max 200
     category: Option<String>, // label for this search (stored on leads)
+    /// Forced service scope (owner directive Oct 2026): when set, scored leads
+    /// from this search are tagged with this service only. Must be enabled.
+    service: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -5344,6 +5448,9 @@ struct InstagramListQuery {
     min_followers: Option<i64>,
     limit: Option<i64>,
     offset: Option<i64>,
+    /// Show leads of disabled services too. Default: only ON-service leads
+    /// (plus unscored NULL-service rows).
+    include_disabled: Option<bool>,
 }
 
 /// POST /api/admin/prospects/saas/search
@@ -5644,16 +5751,53 @@ async fn instagram_search_leads(
     let hashtag = req.hashtag.trim_start_matches('#').to_string();
     let category = req.category.clone().unwrap_or_else(|| hashtag.clone());
 
-    let (job_id, status, container_id) = match try_launch_or_queue_ig_hashtag_job(
-        &state,
-        pb,
-        &agent,
-        &session_cookie,
-        &hashtag,
-        max_posts,
-        user_id,
-    )
-    .await
+    // Forced-service scope (owner directive Oct 2026): validate up front so a
+    // disabled/unknown service fails fast instead of burning PB runs.
+    let forced_service: Option<String> = match req.service.as_deref() {
+        None | Some("") => None,
+        Some(wanted) => {
+            let normalized =
+                normalize_revenue_service(&wanted.to_ascii_lowercase()).to_string();
+            if !is_valid_revenue_service(&normalized) {
+                return Json(json!({"success": false, "error": format!("Unknown service '{wanted}'.")}));
+            }
+            if !crate::services::service_flags::service_enabled(&state.db_pool, &normalized).await {
+                return Json(json!({"success": false, "error": format!("Service '{normalized}' is currently disabled (service_flags).")}));
+            }
+            Some(normalized)
+        }
+    };
+
+    let (job_id, status, container_id) = match forced_service.as_deref() {
+        // Prefix convention (like instagram:kick:#): the poller parses
+        // instagram:svc:{service}:#tag back into a forced scope — no schema change.
+        Some(svc) => {
+            let prefix = format!("instagram:svc:{svc}:#");
+            try_launch_or_queue_ig_hashtag_job_with_prefix(
+                &state,
+                pb,
+                &agent,
+                &session_cookie,
+                &hashtag,
+                max_posts,
+                user_id,
+                &prefix,
+            )
+            .await
+        }
+        None => {
+            try_launch_or_queue_ig_hashtag_job(
+                &state,
+                pb,
+                &agent,
+                &session_cookie,
+                &hashtag,
+                max_posts,
+                user_id,
+            )
+            .await
+        }
+    }
     {
         Ok(t) => t,
         Err(e) => return Json(json!({"success": false, "error": e})),
@@ -5724,6 +5868,17 @@ async fn instagram_list_leads(
             binds.len() + 1
         ));
     }
+    // Service visibility (owner directive Oct 2026): UIs display only leads of
+    // ON services; unscored rows (service_type IS NULL) always show.
+    let show_all_ig = q.include_disabled.unwrap_or(false);
+    let mut enabled_ig: Vec<String> = vec![];
+    if !show_all_ig {
+        enabled_ig = crate::services::service_flags::enabled_services(&state.db_pool).await;
+        sql.push_str(&format!(
+            " AND (service_type IS NULL OR service_type = ANY(${}))",
+            binds.len() + 2
+        ));
+    }
     sql.push_str(" ORDER BY followers_count DESC NULLS LAST");
     sql.push_str(&format!(" LIMIT {} OFFSET {}", limit, offset));
 
@@ -5731,6 +5886,9 @@ async fn instagram_list_leads(
     let mut query = sqlx::query(&sql).bind(user_id);
     for b in &binds {
         query = query.bind(b);
+    }
+    if !show_all_ig {
+        query = query.bind(enabled_ig);
     }
 
     let rows = match query.fetch_all(&state.db_pool).await {
@@ -6332,6 +6490,9 @@ struct AutoDiscoverRequest {
     max_posts_per_hashtag: Option<u32>,
     /// How many hashtags to search (default 3, max 6)
     hashtag_count: Option<usize>,
+    /// Forced service scope (owner directive Oct 2026): scored leads from
+    /// these searches are tagged with this service only. Must be enabled.
+    service: Option<String>,
 }
 
 /// POST /api/instagram/leads/auto-discover
@@ -6454,19 +6615,53 @@ Return ONLY a JSON array of strings. No explanation. Example: ["youtuber", "cont
     // Only the first hashtag will actually launch — the rest queue because
     // PhantomBuster caps parallel runs per workspace. The dispatcher below
     // promotes queued jobs one at a time as slots free up.
+    // Forced-service scope (owner directive Oct 2026): validated once here,
+    // encoded per-job via the instagram:svc: prefix convention.
+    let forced_service: Option<String> = match req.service.as_deref() {
+        None | Some("") => None,
+        Some(wanted) => {
+            let normalized =
+                normalize_revenue_service(&wanted.to_ascii_lowercase()).to_string();
+            if !is_valid_revenue_service(&normalized) {
+                return Json(json!({"success": false, "error": format!("Unknown service '{wanted}'.")}));
+            }
+            if !crate::services::service_flags::service_enabled(&state.db_pool, &normalized).await {
+                return Json(json!({"success": false, "error": format!("Service '{normalized}' is currently disabled (service_flags).")}));
+            }
+            Some(normalized)
+        }
+    };
     for hashtag in &hashtags {
         let tag = hashtag.trim_start_matches('#').to_string();
-        match try_launch_or_queue_ig_hashtag_job(
-            &state,
-            pb,
-            &agent,
-            &session_cookie,
-            &tag,
-            max_posts,
-            user_id,
-        )
-        .await
-        {
+        let launch = match forced_service.as_deref() {
+            Some(svc) => {
+                let prefix = format!("instagram:svc:{svc}:#");
+                try_launch_or_queue_ig_hashtag_job_with_prefix(
+                    &state,
+                    pb,
+                    &agent,
+                    &session_cookie,
+                    &tag,
+                    max_posts,
+                    user_id,
+                    &prefix,
+                )
+                .await
+            }
+            None => {
+                try_launch_or_queue_ig_hashtag_job(
+                    &state,
+                    pb,
+                    &agent,
+                    &session_cookie,
+                    &tag,
+                    max_posts,
+                    user_id,
+                )
+                .await
+            }
+        };
+        match launch {
             Ok((job_id, status, container_id)) => {
                 launched_jobs.push(json!({
                     "job_id":       job_id.to_string(),
@@ -6894,14 +7089,27 @@ pub async fn poll_instagram_jobs(state: &Arc<AppState>) {
         // "instagram:kick:#contentcreator", or "instagram:methodb:{slug}:#tag"
         // for Method-B runs where the streamer slug is pre-known).
         let is_kick_clipper = search_url.contains(":kick:") || search_url.contains(":methodb:");
-        let (hashtag_source, methodb_slug): (String, Option<String>) =
+        let (hashtag_source, methodb_slug, forced_service): (String, Option<String>, Option<String>) =
             if let Some(rest) = search_url.strip_prefix("instagram:methodb:") {
                 match rest.split_once(":#") {
                     Some((slug, tag)) => (
                         tag.trim_start_matches('#').to_string(),
                         Some(slug.to_lowercase()),
+                        // Method-B is kick-clipper-only by construction.
+                        Some("kick_auto_clipper".to_string()),
                     ),
-                    None => (rest.trim_start_matches('#').to_string(), None),
+                    None => (rest.trim_start_matches('#').to_string(), None, None),
+                }
+            } else if let Some(rest) = search_url.strip_prefix("instagram:svc:") {
+                // Forced-service scope (owner directive Oct 2026):
+                // instagram:svc:{service}:#tag → all scored leads tagged so.
+                match rest.split_once(":#") {
+                    Some((svc, tag)) => (
+                        tag.trim_start_matches('#').to_string(),
+                        None,
+                        Some(svc.trim().to_lowercase()),
+                    ),
+                    None => (rest.trim_start_matches('#').to_string(), None, None),
                 }
             } else {
                 (
@@ -6913,6 +7121,12 @@ pub async fn poll_instagram_jobs(state: &Arc<AppState>) {
                         .trim_start_matches('#')
                         .to_string(),
                     None,
+                    // Legacy kick prefix implies kick_auto_clipper.
+                    if search_url.contains(":kick:") {
+                        Some("kick_auto_clipper".to_string())
+                    } else {
+                        None
+                    },
                 )
             };
 
@@ -7048,7 +7262,7 @@ pub async fn poll_instagram_jobs(state: &Arc<AppState>) {
         // Per-user scope so one user doesn't trigger another user's scoring.
         if state.gemini_client.is_some() || state.nvidia_nim_client.is_some() {
             if let Some(uid) = job_user_id {
-                score_instagram_leads(state, &hashtag_source, uid).await;
+                score_instagram_leads(state, &hashtag_source, uid, forced_service.as_deref()).await;
             }
         }
     }
@@ -7350,7 +7564,13 @@ pub async fn dispatch_queued_pb_jobs(state: &Arc<AppState>) {
 }
 
 /// Score unscored Instagram leads for a given hashtag using AI.
-async fn score_instagram_leads(state: &Arc<AppState>, hashtag: &str, user_id: i32) {
+async fn score_instagram_leads(state: &Arc<AppState>, hashtag: &str, user_id: i32, forced_service: Option<&str>) {
+    // Forced-service scope (owner directive Oct 2026): validated + enabled at
+    // search time; re-check here (flags may have flipped since) and skip the
+    // lead (leave unscored) rather than mis-tagging it.
+    let forced: Option<String> = forced_service
+        .map(|s| normalize_revenue_service(&s.to_ascii_lowercase()).to_string())
+        .filter(|s| is_valid_revenue_service(s));
     // No `followers_count >= 1000` filter — hashtag-mode leads come from the
     // post schema and have NULL follower counts. Filtering on them dropped
     // every lead and the UI showed `—` for every score. Score what we have;
@@ -7414,9 +7634,19 @@ async fn score_instagram_leads(state: &Arc<AppState>, hashtag: &str, user_id: i3
             _ => "unknown (came from hashtag search — judge by bio + handle)".to_string(),
         };
 
-        // Service menu from enabled flags (owner directive Sep 2026).
-        let (service_menu, must_line) =
-            crate::services::service_flags::scoring_menu(&state.db_pool).await;
+        // Service menu from enabled flags (owner directive Sep 2026). Forced
+        // scope narrows it to the one service (Oct 2026).
+        let (service_menu, must_line) = match forced.as_deref() {
+            Some(f) => (
+                crate::services::service_flags::service_menu_line(f)
+                    .unwrap_or("Pick the forced service.")
+                    .to_string(),
+                format!("`service` MUST be exactly: {f}. No other values are valid."),
+            ),
+            None => {
+                crate::services::service_flags::scoring_menu(&state.db_pool).await
+            }
+        };
 
         let prompt = format!(
             r#"Score this Instagram creator as a potential client for a video production studio (0–100), and also pick the best service to pitch.
@@ -7481,30 +7711,46 @@ Return ONLY valid JSON (no markdown, no code fence):
                     .and_then(|r| r.as_str())
                     .unwrap_or("")
                     .to_string();
-                // Service tag — coerced into the enabled set (owner directive
-                // Sep 2026); anything else gets stored as NULL so the DM
-                // generator falls back to "all services, AI picks one inline".
-                let service_raw = v
-                    .get("service")
-                    .and_then(|s| s.as_str())
-                    .unwrap_or("")
-                    .to_lowercase();
-                let service = if is_valid_revenue_service(&service_raw) {
-                    let normalized = normalize_revenue_service(&service_raw).to_string();
-                    let clipper_like = kick_evident
-                        || bio.to_ascii_lowercase().contains("clip")
-                        || bio.to_ascii_lowercase().contains("kick");
-                    Some(
-                        crate::services::service_flags::constrain_service(
+                // Service tag — forced scope wins outright (already validated +
+                // enabled-checked at search time; re-check here, skip on flip).
+                // Otherwise coerced into the enabled set (owner directive Sep
+                // 2026); anything else stored as NULL so the DM generator falls
+                // back to "all services, AI picks one inline".
+                let service = match forced.as_deref() {
+                    Some(f)
+                        if crate::services::service_flags::service_enabled(
                             &state.db_pool,
-                            &normalized,
-                            clipper_like,
-                            "instagram",
+                            f,
                         )
-                        .await,
-                    )
-                } else {
-                    None
+                        .await =>
+                    {
+                        Some(f.to_string())
+                    }
+                    Some(_) => None,
+                    None => {
+                        let service_raw = v
+                            .get("service")
+                            .and_then(|s| s.as_str())
+                            .unwrap_or("")
+                            .to_lowercase();
+                        if is_valid_revenue_service(&service_raw) {
+                            let normalized = normalize_revenue_service(&service_raw).to_string();
+                            let clipper_like = kick_evident
+                                || bio.to_ascii_lowercase().contains("clip")
+                                || bio.to_ascii_lowercase().contains("kick");
+                            Some(
+                                crate::services::service_flags::constrain_service(
+                                    &state.db_pool,
+                                    &normalized,
+                                    clipper_like,
+                                    "instagram",
+                                )
+                                .await,
+                            )
+                        } else {
+                            None
+                        }
+                    }
                 };
 
                 let _ = sqlx::query(
@@ -7828,6 +8074,7 @@ async fn ai_score_linkedin_leads(state: &Arc<AppState>, job_id: uuid::Uuid) {
                 &category,
                 "linkedin_lead",
                 "linkedin",
+                None,
             )
             .await;
 
@@ -8995,6 +9242,7 @@ async fn telegram_discover_channels(
             category,
             "business_owner",
             "telegram",
+            None,
         )
         .await;
         let score_i = (score * 100.0).round() as i32;
