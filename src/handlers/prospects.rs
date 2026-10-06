@@ -657,8 +657,8 @@ async fn search_youtube_prospects(
              subscriber_count, content_category, channel_description, prospect_type,
              ai_score, ai_reasoning, dm_script_creator, dm_script_clipper, twitter_handle,
              instagram_handle, business_email, external_url, service_type, x_dm_script,
-             email_script, contact_enrichment)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+             email_script, contact_enrichment, sourced_by)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
              ON CONFLICT (platform, channel_id) DO UPDATE SET
                ai_score = EXCLUDED.ai_score,
                ai_reasoning = EXCLUDED.ai_reasoning,
@@ -694,6 +694,7 @@ async fn search_youtube_prospects(
         .bind(&x_dm)
         .bind(&email_script)
         .bind(&contact_enrichment)
+        .bind(payload.sourced_by)
         .execute(&state.db_pool)
         .await
         .ok();
@@ -943,8 +944,8 @@ async fn search_twitch_prospects(
              avg_viewer_count, content_category, prospect_type,
              ai_score, ai_reasoning, dm_script_creator, dm_script_clipper,
              twitter_handle, instagram_handle, business_email, external_url, service_type,
-             x_dm_script, email_script, contact_enrichment)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+             x_dm_script, email_script, contact_enrichment, sourced_by)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
              ON CONFLICT (platform, channel_id) DO UPDATE SET
                avg_viewer_count = EXCLUDED.avg_viewer_count,
                ai_score = EXCLUDED.ai_score,
@@ -980,6 +981,7 @@ async fn search_twitch_prospects(
         .bind(&x_dm)
         .bind(&email_script)
         .bind(&contact_enrichment)
+        .bind(payload.sourced_by)
         .execute(&state.db_pool)
         .await
         .ok();
@@ -1375,8 +1377,8 @@ async fn search_kick_clipper_prospects(
               content_category, channel_description, prospect_type, \
               ai_score, ai_reasoning, dm_script_creator, dm_script_clipper, \
               twitter_handle, instagram_handle, business_email, external_url, \
-              service_type, x_dm_script, email_script, contact_enrichment) \
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) \
+              service_type, x_dm_script, email_script, contact_enrichment, sourced_by) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21) \
              ON CONFLICT (platform, channel_id) DO UPDATE SET \
              ai_score = EXCLUDED.ai_score, ai_reasoning = EXCLUDED.ai_reasoning, \
              dm_script_creator = EXCLUDED.dm_script_creator, dm_script_clipper = EXCLUDED.dm_script_clipper, \
@@ -1408,6 +1410,7 @@ async fn search_kick_clipper_prospects(
         .bind(&x_dm)
         .bind(&email_script)
         .bind(&contact_enrichment)
+        .bind(payload.sourced_by)
         .execute(&state.db_pool)
         .await
         .ok();
@@ -1611,8 +1614,8 @@ async fn search_kick_clipper_prospects_top_streamers(
                   content_category, channel_description, prospect_type, \
                   ai_score, ai_reasoning, dm_script_creator, dm_script_clipper, \
                   twitter_handle, instagram_handle, business_email, external_url, \
-                  service_type, x_dm_script, email_script, contact_enrichment) \
-                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) \
+                  service_type, x_dm_script, email_script, contact_enrichment, sourced_by) \
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21) \
                  ON CONFLICT (platform, channel_id) DO UPDATE SET \
                  ai_score = EXCLUDED.ai_score, ai_reasoning = EXCLUDED.ai_reasoning, \
                  dm_script_creator = EXCLUDED.dm_script_creator, dm_script_clipper = EXCLUDED.dm_script_clipper, \
@@ -1644,6 +1647,7 @@ async fn search_kick_clipper_prospects_top_streamers(
             .bind(&x_dm)
             .bind(&email_script)
             .bind(&contact_enrichment)
+            .bind(payload.sourced_by)
             .execute(&state.db_pool)
             .await
             .ok();
@@ -1867,8 +1871,8 @@ async fn search_twitch_clipper_prospects_top_streamers(
                   content_category, channel_description, prospect_type, \
                   ai_score, ai_reasoning, dm_script_creator, dm_script_clipper, \
                   twitter_handle, instagram_handle, business_email, external_url, \
-                  service_type, x_dm_script, email_script, contact_enrichment) \
-                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) \
+                  service_type, x_dm_script, email_script, contact_enrichment, sourced_by) \
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21) \
                  ON CONFLICT (platform, channel_id) DO UPDATE SET \
                  ai_score = EXCLUDED.ai_score, ai_reasoning = EXCLUDED.ai_reasoning, \
                  dm_script_creator = EXCLUDED.dm_script_creator, dm_script_clipper = EXCLUDED.dm_script_clipper, \
@@ -1900,6 +1904,7 @@ async fn search_twitch_clipper_prospects_top_streamers(
             .bind(&x_dm)
             .bind(&email_script)
             .bind(&contact_enrichment)
+            .bind(payload.sourced_by)
             .execute(&state.db_pool)
             .await
             .ok();
@@ -3623,8 +3628,21 @@ async fn generate_prospect_sample_pack(
 
 async fn send_prospect_email_handler(
     Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<crate::models::auth::Claims>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    // Owner directive Oct 2026: emails are admin-only. Whitelisted helpers do
+    // IG DMs; only staff/superusers may send email (route middleware admits
+    // whitelisted users, so enforce here).
+    if !(claims.is_superuser || claims.is_staff) {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(ErrorResponse {
+                success: false,
+                message: "Email sending is restricted to admin users.".to_string(),
+            }),
+        ));
+    }
     let row = sqlx::query(
         "SELECT display_name, business_email, email_script
          FROM prospects WHERE id=$1",
