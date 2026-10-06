@@ -32,6 +32,8 @@ pub fn prospect_routes() -> Router {
     // Admin-only API routes (staff/superuser only — search, LinkedIn, Telegram, etc.)
     let admin_only = Router::new()
         .route("/api/admin/prospects/search", post(search_prospects))
+        .route("/api/admin/prospects/hunt", post(hunt_prospects))
+        .route("/api/admin/prospects/redistribute", post(redistribute_prospects))
         .route("/api/admin/prospects/runs/:id", get(prospect_run_status))
         .route(
             "/api/admin/prospects/linkedin/agents",
@@ -346,8 +348,21 @@ async fn complete_prospect_agent_run(
 async fn search_prospects(
     Extension(state): Extension<Arc<AppState>>,
     Extension(claims): Extension<Claims>,
-    Json(payload): Json<SearchRequest>,
+    Json(mut payload): Json<SearchRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    // Owner attribution (owner directive Oct 2026): every find carries an
+    // owner so sourced_by is never NULL. Explicit param wins; helpers default
+    // to themselves; admin hunts auto-balance to the lightest pool user.
+    if payload.sourced_by.is_none() {
+        let is_admin = claims.is_superuser || claims.is_staff;
+        if is_admin {
+            if let Some(uid) = lightest_distribution_user(&state.db_pool).await {
+                payload.sourced_by = Some(uid);
+            }
+        } else if let Ok(uid) = claims.sub.parse::<i32>() {
+            payload.sourced_by = Some(uid);
+        }
+    }
     // Service switch (owner directive Sep 2026): prospect discovery runs only
     // while the prospecting group is on. Relevance to the two clipping
     // businesses is enforced downstream by the constrained scoring menu.
@@ -450,6 +465,108 @@ async fn search_prospects(
         "agent_run_id": run_id.map(|id| id.to_string()),
         "message": "Prospect search running in background — poll run status for completion."
     })))
+}
+
+/// Owner-alt account IDs excluded from prospect auto-distribution (owner's own
+/// addresses — only harryomollo95@gmail.com id=1 participates alongside helpers).
+const DISTRIBUTION_EXCLUDE_IDS: [i32; 6] = [2, 3, 10, 16, 17, 18];
+
+/// Lightest-loaded distribution user (owner directive Oct 2026): whitelisted
+/// users with accounts, minus owner alts, ordered by fewest sourced prospects.
+/// Keeps team supply balanced without any manual bookkeeping.
+async fn lightest_distribution_user(pool: &sqlx::PgPool) -> Option<i32> {
+    sqlx::query_scalar::<_, i32>(
+        "SELECT u.id FROM users u JOIN whitelist_emails w ON w.email = u.email \
+         WHERE NOT (u.id = ANY($1)) \
+         ORDER BY (SELECT COUNT(*) FROM prospects p WHERE p.sourced_by = u.id) ASC, u.id ASC \
+         LIMIT 1",
+    )
+    .bind(&DISTRIBUTION_EXCLUDE_IDS[..])
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()
+}
+
+/// POST /api/admin/prospects/hunt — fire-and-distribute prospect hunt (owner
+/// directive Oct 2026). Same validation/gates/background as search; results
+/// always carry an owner (explicit sourced_by, else lightest pool user) so the
+/// sourced_by field is never NULL. Dashboard calls this for launch hunts.
+#[derive(Debug, Deserialize)]
+struct HuntRequest {
+    platform: String,
+    prospect_type: String,
+    category: Option<String>,
+    min_viewers: Option<i64>,
+    max_viewers: Option<i64>,
+    limit: Option<usize>,
+    service: Option<String>,
+    sourced_by: Option<i32>,
+}
+
+async fn hunt_prospects(
+    Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
+    Json(req): Json<HuntRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    let payload = SearchRequest {
+        platform: req.platform,
+        prospect_type: req.prospect_type,
+        category: req.category,
+        min_viewers: req.min_viewers,
+        max_viewers: req.max_viewers,
+        limit: req.limit,
+        sourced_by: req.sourced_by,
+        service: req.service,
+    };
+    search_prospects(Extension(state), Extension(claims), Json(payload)).await
+}
+
+/// POST /api/admin/prospects/redistribute — round-robin all unowned
+/// (sourced_by IS NULL) prospects across the distribution pool. For tests,
+/// repairs, and rebalancing. Returns counts.
+async fn redistribute_prospects(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    let pool: Vec<i32> = sqlx::query_scalar::<_, i32>(
+        "SELECT u.id FROM users u JOIN whitelist_emails w ON w.email = u.email \
+         WHERE NOT (u.id = ANY($1)) ORDER BY u.id ASC",
+    )
+    .bind(&DISTRIBUTION_EXCLUDE_IDS[..])
+    .fetch_all(&state.db_pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse { success: false, message: e.to_string() }),
+        )
+    })?;
+    if pool.is_empty() {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ErrorResponse { success: false, message: "Distribution pool is empty.".to_string() }),
+        ));
+    }
+    let ids: Vec<Uuid> = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM prospects WHERE sourced_by IS NULL ORDER BY created_at ASC",
+    )
+    .fetch_all(&state.db_pool)
+    .await
+    .unwrap_or_default();
+    let mut assigned = 0usize;
+    for (k, id) in ids.iter().enumerate() {
+        let uid = pool[k % pool.len()];
+        let ok = sqlx::query("UPDATE prospects SET sourced_by = $1, updated_at = NOW() WHERE id = $2")
+            .bind(uid)
+            .bind(id)
+            .execute(&state.db_pool)
+            .await
+            .is_ok();
+        if ok {
+            assigned += 1;
+        }
+    }
+    Ok(Json(json!({"success": true, "redistributed": assigned, "pool_size": pool.len()})))
 }
 
 /// GET /api/admin/prospects/runs/:id — poll a background search run.
@@ -4114,6 +4231,8 @@ tr:hover td{background:rgba(92,84,112,0.12)}
       </div>
     </div>
     <button class="btn btn-primary" onclick="runSearch()">🔍 Find &amp; Score Prospects</button>
+    <button class="btn btn-copy" style="margin-left:8px" onclick="runHunt()" title="Fire a hunt and auto-distribute results across the team (sourced_by never NULL)">🎯 Hunt &amp; Distribute</button>
+    <button class="btn btn-copy" style="margin-left:8px" onclick="runRedistribute()" title="Round-robin all unowned prospects across the team">🔀 Redistribute Unowned</button>
     <span id="search-status" style="margin-left:12px;color:var(--dim);font-size:0.85rem"></span>
   </div>
 
@@ -4868,6 +4987,45 @@ async function pollSearchRun(runId, tries){
     }
   }catch(e){ /* transient — keep polling */ }
   setTimeout(() => pollSearchRun(runId, tries + 1), 8000);
+}
+
+async function huntPayload(){
+  return {
+    platform: document.getElementById('platform').value,
+    prospect_type: document.getElementById('prospect_type').value,
+    category: document.getElementById('category').value||undefined,
+    min_viewers: parseInt(document.getElementById('min_viewers').value)||undefined,
+    max_viewers: parseInt(document.getElementById('max_viewers').value)||undefined,
+    limit: parseInt(document.getElementById('limit').value)||20,
+    service: document.getElementById('service').value||undefined,
+  };
+}
+
+async function runHunt(){
+  const status = document.getElementById('search-status');
+  status.textContent = 'Hunting…';
+  const res = await fetch('/api/admin/prospects/hunt', {
+    method:'POST', headers:{'Authorization':'Bearer '+token,'Content-Type':'application/json'},
+    body: JSON.stringify(await huntPayload())
+  });
+  const data = await res.json();
+  if(data.success && data.accepted && data.agent_run_id){ pollSearchRun(data.agent_run_id, 0); return; }
+  if(data.success){ showMsg(data.message); loadProspects(); }
+  else showMsg(data.message||data.error||'Hunt failed', false);
+  status.textContent = '';
+}
+
+async function runRedistribute(){
+  const status = document.getElementById('search-status');
+  status.textContent = 'Redistributing…';
+  const res = await fetch('/api/admin/prospects/redistribute', {
+    method:'POST', headers:{'Authorization':'Bearer '+token,'Content-Type':'application/json'},
+    body: '{}'
+  });
+  const data = await res.json();
+  status.textContent = '';
+  showMsg(data.success ? `Redistributed ${data.redistributed} prospects across ${data.pool_size} team members` : (data.message||data.error||'Failed'), !!data.success);
+  loadProspects();
 }
 
 async function runKickInstagramSearch(){
