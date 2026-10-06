@@ -385,7 +385,7 @@ async fn search_prospects(
         }
         let expected = match payload.platform.as_str() {
             "youtube" => "youtube_clipping",
-            "twitch" => "twitch_clipping",
+            "twitch" | "twitch_clipper" => "twitch_clipping",
             "kick" | "kick_clipper" | "kick_clipper_top" => "kick_auto_clipper",
             _ => "",
         };
@@ -460,6 +460,20 @@ async fn search_prospects(
             ));
         }
         search_twitch_prospects(&state, &payload, limit).await
+    } else if payload.platform == "twitch_clipper" {
+        // Service switch (owner directive Oct 2026): Twitch-clipper discovery
+        // (Top Streamers → YouTube) feeds twitch_clipping — runs only while on.
+        if !crate::services::service_flags::service_enabled(&state.db_pool, "twitch_clipping").await
+        {
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ErrorResponse {
+                    success: false,
+                    message: "Twitch clipper discovery is currently disabled (twitch_clipping off in service_flags).".to_string(),
+                }),
+            ));
+        }
+        search_twitch_clipper_prospects_top_streamers(&state, &payload, limit).await
     } else if payload.platform == "kick" {
         // Service switch (owner directive Oct 2026): Kick discovery feeds the
         // launch business — it runs only while kick_auto_clipper is on.
@@ -1732,6 +1746,262 @@ async fn search_kick_clipper_prospects_top_streamers(
     Ok(found)
 }
 
+/// Search for twitch_clipping prospects by starting from Twitch itself:
+/// 1. Find top live streamers via the Helix API (free, same creds as search)
+/// 2. For each top streamer, search YouTube for channels posting their clips
+/// 3. Score and store those channels as twitch_clipping prospects with
+///    prospect_type "twitch_clipper" (vs the big creators found by the plain
+///    "twitch" platform search). Mirrors kick Method B.
+async fn search_twitch_clipper_prospects_top_streamers(
+    state: &Arc<AppState>,
+    payload: &SearchRequest,
+    limit: usize,
+) -> Result<usize, (StatusCode, Json<ErrorResponse>)> {
+    let yt_key = std::env::var("YOUTUBE_API_KEY").unwrap_or_default();
+    if yt_key.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, Json(ErrorResponse {
+            success: false, message: "YouTube API key not configured".to_string()
+        })));
+    }
+    let client_id = std::env::var("TWITCH_TV_CLIENT_ID").unwrap_or_default();
+    let client_secret = std::env::var("TWITCH_TV_CLIENT_SECRET").unwrap_or_default();
+    if client_id.is_empty() {
+        return Err((StatusCode::SERVICE_UNAVAILABLE, Json(ErrorResponse {
+            success: false, message: "TWITCH_CLIENT_ID not configured".to_string()
+        })));
+    }
+
+    let http = reqwest::Client::new();
+    let limit = limit.min(20);
+    let base_category = payload.category.clone().unwrap_or_else(|| "Just Chatting".to_string());
+
+    // 1. App access token, then top live streams (Helix returns viewers desc).
+    let token_resp: serde_json::Value = http
+        .post("https://id.twitch.tv/oauth2/token")
+        .form(&[
+            ("client_id", client_id.as_str()),
+            ("client_secret", client_secret.as_str()),
+            ("grant_type", "client_credentials"),
+        ])
+        .send()
+        .await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, Json(ErrorResponse { success: false, message: e.to_string() })))?
+        .json()
+        .await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, Json(ErrorResponse { success: false, message: e.to_string() })))?;
+    let access_token = token_resp["access_token"].as_str().unwrap_or("").to_string();
+
+    let streams_resp: serde_json::Value = http
+        .get("https://api.twitch.tv/helix/streams?first=20")
+        .header("Client-Id", &client_id)
+        .header("Authorization", format!("Bearer {}", access_token))
+        .send()
+        .await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, Json(ErrorResponse { success: false, message: e.to_string() })))?
+        .json()
+        .await
+        .unwrap_or_default();
+
+    let mut top: Vec<(i64, String, String)> = streams_resp["data"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|s| {
+                    let viewers = s["viewer_count"].as_i64().unwrap_or(0);
+                    if viewers < 50 {
+                        return None;
+                    }
+                    Some((
+                        viewers,
+                        s["user_login"].as_str().unwrap_or("").to_string(),
+                        s["title"].as_str().unwrap_or("").to_string(),
+                    ))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    top.sort_by(|a, b| b.0.cmp(&a.0));
+    top.truncate(10);
+
+    if top.is_empty() {
+        tracing::info!("twitch_top_streamers: no live streams found");
+        return Ok(0);
+    }
+    tracing::info!("🎯 Twitch top streamers: processing top {}", top.len());
+
+    // Forced service for this finder (dispatch validated it when requested).
+    let forced = payload.service.as_deref();
+
+    // 2. For each top Twitch streamer, search YouTube for clipping channels.
+    let mut found = 0usize;
+    for (viewers, login, stream_title) in &top {
+        if login.is_empty() {
+            continue;
+        }
+        let query_prompt = format!(
+            "A Twitch streamer named '{}' ('{}') streams '{}'. \
+             Find YouTube CHANNELS that clip and repost this streamer's content. \
+             Generate ONE concise YouTube search query (5-10 words) to find these clipping channels. \
+             Return ONLY the raw search query.",
+            login, stream_title, base_category
+        );
+        let search_query = match crate::llm_utils::generate_text_fast(
+            state.qwen_client.as_ref(),
+            state.deepseek_client.as_ref(),
+            state.gemini_client.as_ref(),
+            &query_prompt,
+        ).await {
+            Ok(q) => q.trim().trim_matches('"').to_string(),
+            Err(_) => format!("{} twitch stream highlights clips", login),
+        };
+
+        tracing::info!("  Searching YouTube for clippers of '{}': \"{}\"", login, search_query);
+
+        let search_url = format!(
+            "https://www.googleapis.com/youtube/v3/search?part=snippet&type=channel&q={}&maxResults=5&order=relevance&key={}",
+            urlencoding::encode(&search_query), yt_key
+        );
+        let search_resp: serde_json::Value = match http.get(&search_url).send().await {
+            Ok(r) => r.json().await.unwrap_or_default(),
+            Err(_) => continue,
+        };
+        let channel_ids: Vec<String> = search_resp["items"].as_array()
+            .map(|a| a.iter().filter_map(|item| item["id"]["channelId"].as_str().map(String::from)).collect())
+            .unwrap_or_default();
+        if channel_ids.is_empty() { continue; }
+
+        let stats_url = format!(
+            "https://www.googleapis.com/youtube/v3/channels?part=snippet,statistics&id={}&key={}",
+            channel_ids.join(","), yt_key
+        );
+        let stats_resp: serde_json::Value = match http.get(&stats_url).send().await {
+            Ok(r) => r.json().await.unwrap_or_default(),
+            Err(_) => continue,
+        };
+        let channels_data = stats_resp["items"].as_array().map(|a| a.to_vec()).unwrap_or_default();
+
+        for channel in &channels_data {
+            let channel_id = channel["id"].as_str().unwrap_or("").to_string();
+            let display_name = channel["snippet"]["title"].as_str().unwrap_or("Unknown").to_string();
+            let description = channel["snippet"]["description"].as_str().unwrap_or("").to_string();
+            let sub_count = channel["statistics"]["subscriberCount"].as_str()
+                .and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
+            let video_count = channel["statistics"]["videoCount"].as_str()
+                .and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
+            let platform_url = format!("https://youtube.com/channel/{}", channel_id);
+
+            if let Some(min) = payload.min_viewers { if sub_count < min { continue; } }
+            if let Some(max) = payload.max_viewers { if sub_count > max { continue; } }
+
+            let videos_url = format!(
+                "https://www.googleapis.com/youtube/v3/search?part=snippet&channelId={}&maxResults=3&order=date&type=video&key={}",
+                channel_id, yt_key
+            );
+            let videos_resp: serde_json::Value = match http.get(&videos_url).send().await {
+                Ok(r) => r.json().await.unwrap_or_default(),
+                Err(_) => serde_json::Value::Null,
+            };
+            let video_titles: Vec<String> = videos_resp["items"].as_array()
+                .map(|a| a.iter().filter_map(|v| v["snippet"]["title"].as_str().map(String::from)).collect())
+                .unwrap_or_default();
+
+            let scoring_desc = format!(
+                "YouTube channel: {}. Subscribers: {}. Total videos: {}. \
+                 Recent video titles: {:?}. \
+                 This channel clips content from Twitch streamer '{login}' ({viewers} live viewers, '{base_category}'). \
+                 Assessment: This channel reposts {login}'s Twitch content on YouTube.",
+                display_name, sub_count, video_count, video_titles,
+            );
+
+            let (score, reasoning, _service, dm_creator, dm_clipper, x_dm, email_script) =
+                score_prospect_with_ai(state, &display_name, sub_count,
+                    &scoring_desc, &base_category, "twitch_clipper", "twitch", forced).await;
+
+            if score < 0.3 { continue; }
+
+            let detected_source_creators = vec![login.clone()];
+
+            let mut twitter_handle = extract_best_twitter_handle(&description);
+            let mut instagram_handle = extract_best_instagram_handle(&description);
+            let mut business_email = extract_best_business_email(&description);
+            let mut external_url = extract_best_external_url(&description);
+
+            let enrichment_url = Some(platform_url.as_str());
+            let mut contact_enrichment = enrich_public_contact_fields(
+                enrichment_url,
+                &mut twitter_handle, &mut instagram_handle,
+                &mut business_email, &mut external_url,
+            ).await;
+
+            if !detected_source_creators.is_empty() {
+                if let Some(obj) = contact_enrichment.as_object_mut() {
+                    obj.insert("detected_source_creators".to_string(), json!(detected_source_creators));
+                }
+            }
+
+            let channel_desc = format!(
+                "{} | Clips {} from Twitch ({} viewers) | {} videos",
+                description, login, viewers, video_count
+            );
+            let reasoning_with_signals = format!(
+                "{} | Clips Twitch streamer={} viewers={}",
+                reasoning, login, viewers
+            );
+
+            let _ = sqlx::query(
+                "INSERT INTO prospects \
+                 (platform, channel_id, display_name, platform_url, subscriber_count, \
+                  content_category, channel_description, prospect_type, \
+                  ai_score, ai_reasoning, dm_script_creator, dm_script_clipper, \
+                  twitter_handle, instagram_handle, business_email, external_url, \
+                  service_type, x_dm_script, email_script, contact_enrichment) \
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) \
+                 ON CONFLICT (platform, channel_id) DO UPDATE SET \
+                 ai_score = EXCLUDED.ai_score, ai_reasoning = EXCLUDED.ai_reasoning, \
+                 dm_script_creator = EXCLUDED.dm_script_creator, dm_script_clipper = EXCLUDED.dm_script_clipper, \
+                 x_dm_script = EXCLUDED.x_dm_script, email_script = EXCLUDED.email_script, \
+                 twitter_handle = COALESCE(EXCLUDED.twitter_handle, prospects.twitter_handle), \
+                 instagram_handle = COALESCE(EXCLUDED.instagram_handle, prospects.instagram_handle), \
+                 business_email = COALESCE(EXCLUDED.business_email, prospects.business_email), \
+                 external_url = COALESCE(EXCLUDED.external_url, prospects.external_url), \
+                 contact_enrichment = COALESCE(NULLIF(EXCLUDED.contact_enrichment, '{}'::jsonb), prospects.contact_enrichment), \
+                 service_type = EXCLUDED.service_type, updated_at = NOW()"
+            )
+            .bind("youtube")
+            .bind(&channel_id)
+            .bind(&display_name)
+            .bind(&platform_url)
+            .bind(sub_count)
+            .bind(&base_category)
+            .bind(&channel_desc)
+            .bind("twitch_clipper")
+            .bind(score)
+            .bind(&reasoning_with_signals)
+            .bind(&dm_creator)
+            .bind(&dm_clipper)
+            .bind(&twitter_handle)
+            .bind(&instagram_handle)
+            .bind(&business_email)
+            .bind(&external_url)
+            .bind("twitch_clipping")
+            .bind(&x_dm)
+            .bind(&email_script)
+            .bind(&contact_enrichment)
+            .execute(&state.db_pool)
+            .await
+            .ok();
+
+            found += 1;
+            if found >= limit { break; }
+        }
+
+        if found >= limit { break; }
+    }
+
+    tracing::info!("🎯 Twitch top-streamer method: found {} prospects", found);
+    Ok(found)
+}
+
 /// Extract a Twitter/X handle from a channel description using simple pattern matching.
 fn extract_twitter_handle(description: &str) -> Option<String> {
     // Look for twitter.com/handle or x.com/handle patterns
@@ -2324,7 +2594,7 @@ Return ONLY valid JSON (no markdown):
                     };
                     let clipper_like = matches!(
                         prospect_type,
-                        "clipper" | "clipping_channel" | "compilation" | "kick_clipper"
+                        "clipper" | "clipping_channel" | "compilation" | "kick_clipper" | "twitch_clipper"
                     ) || category.to_ascii_lowercase().contains("clip")
                         || category.to_ascii_lowercase().contains("kick");
                     let service = crate::services::service_flags::constrain_service(
@@ -3217,9 +3487,11 @@ async fn generate_prospect_sample_pack(
     }
     let product_name = request.product_name.unwrap_or_else(|| display_name.clone());
 
-    // For kick_auto_clipper, use detected source creators' Kick channel as the source
+    // For kick_auto_clipper, use detected source creators' Kick channel as the source.
+    // For twitch_clipping CLIPPER prospects, use the clipped Twitch streamer's
+    // channel (detected_source_creators[0]) — creator prospects use their own URL.
     let contact_enrich: Option<serde_json::Value> = row.get("contact_enrichment");
-    let kick_source_url: Option<String> = if service == "kick_auto_clipper" {
+    let clipper_source_url: Option<String> = if service == "kick_auto_clipper" {
         contact_enrich.as_ref().and_then(|e| {
             e.get("detected_source_creators")
                 .and_then(|c| c.as_array())
@@ -3227,13 +3499,21 @@ async fn generate_prospect_sample_pack(
                 .and_then(|c| c.as_str())
                 .map(|slug| format!("https://kick.com/{}", slug.trim()))
         })
+    } else if service == "twitch_clipping" {
+        contact_enrich.as_ref().and_then(|e| {
+            e.get("detected_source_creators")
+                .and_then(|c| c.as_array())
+                .and_then(|arr| arr.first())
+                .and_then(|c| c.as_str())
+                .map(|login| format!("https://twitch.tv/{}", login.trim().trim_start_matches('@').to_lowercase()))
+        })
     } else {
         None
     };
 
     let source_url = request
         .source_url
-        .or(kick_source_url)
+        .or(clipper_source_url)
         .or_else(|| row.get::<Option<String>, _>("external_url"))
         .unwrap_or_else(|| platform_url.clone());
     let has_product_url = source_url.starts_with("http://") || source_url.starts_with("https://");
@@ -3847,7 +4127,8 @@ tr:hover td{background:rgba(92,84,112,0.12)}
         <label>Platform</label>
         <select id="platform">
           <option value="youtube">YouTube</option>
-          <option value="twitch">Twitch</option>
+          <option value="twitch">Twitch (big creators)</option>
+          <option value="twitch_clipper">🎯 Twitch Clipper (Top Streamers → YouTube)</option>
           <option value="kick_clipper">🎯 Kick Clipper (via YouTube)</option>
           <option value="kick_clipper_top">🎯 Kick Clipper (Top Streamers → YouTube)</option>
         </select>
@@ -4402,10 +4683,12 @@ function formatNum(n){
 function contactTier(p){
   const hasEmail = !!(p.business_email||'').trim();
   const hasX = !!(p.twitter_handle||'').trim();
+  const hasIg = !!(p.instagram_handle||'').trim();
   const hasUrl = !!(p.external_url||'').trim();
   if(hasEmail && hasX) return {rank: 4, label: 'X + email', cls: 'score-high', guidance: 'Best lead: DM first, email follow-up, attach sample pack.'};
   if(hasEmail) return {rank: 3, label: 'Email only', cls: 'score-mid', guidance: 'Send email with a concrete sample-pack CTA.'};
   if(hasX) return {rank: 2, label: 'X only', cls: 'score-mid', guidance: 'Short verified-account DM; ask permission to send sample.'};
+  if(hasIg) return {rank: 2, label: 'IG only', cls: 'score-mid', guidance: 'DM on Instagram; ask permission to send sample.'};
   if(hasUrl) return {rank: 1, label: 'Site only', cls: 'score-low', guidance: 'Open site and enrich public contact/social links.'};
   return {rank: 0, label: 'Needs enrichment', cls: 'score-low', guidance: 'No public contact found yet; refresh/enrich before outreach.'};
 }
@@ -4419,15 +4702,17 @@ function renderProspectContactSummary(prospects){
     if(tier.rank === 4) acc.best++;
     if((p.business_email||'').trim()) acc.email++;
     if((p.twitter_handle||'').trim()) acc.x++;
+    if((p.instagram_handle||'').trim()) acc.ig++;
     if((p.sample_delivery_id||'').trim()) acc.samples++;
     if(Number(p.revenue_priority||0) >= 120) acc.hot++;
     return acc;
-  }, {total:0,best:0,email:0,x:0,samples:0,hot:0});
+  }, {total:0,best:0,email:0,x:0,ig:0,samples:0,hot:0});
   root.innerHTML = [
     ['Total leads', stats.total],
     ['X + email ready', stats.best],
     ['Email contacts', stats.email],
     ['X handles', stats.x],
+    ['IG accounts', stats.ig],
     ['Sample packs', stats.samples],
     ['High-priority', stats.hot],
   ].map(([label,value])=>`<div class="stat-card"><div class="stat-val">${value}</div><div class="stat-label">${label}</div></div>`).join('');
@@ -4450,6 +4735,7 @@ function renderContactQueue(prospects){
     const tier = contactTier(p);
     const email = (p.business_email||'').trim();
     const x = (p.twitter_handle||'').trim();
+    const igHandle = (p.instagram_handle||'').trim();
     const url = (p.external_url||p.platform_url||'').trim();
     const sampleUrl = p.sample_delivery_url ? `${window.location.origin}${p.sample_delivery_url}` : '';
     const service = p.service_type || 'landing_page';
@@ -4462,6 +4748,7 @@ function renderContactQueue(prospects){
       <span style="font-size:0.82rem;color:var(--muted);line-height:1.5">
         ${email?`Email: <a href="mailto:${email}" style="color:#86efac">${email}</a><br>`:''}
         ${x?`X: <a href="https://x.com/${x.replace('@','')}" target="_blank" style="color:#93c5fd">${x}</a><br>`:''}
+        ${igHandle?`IG: <a href="https://instagram.com/${igHandle.replace('@','')}" target="_blank" style="color:#f9a8d4">${igHandle}</a><br>`:''}
         ${url?`URL: <a href="${url}" target="_blank" style="color:#c4b5fd">open</a><br>`:''}
         <em>${tier.guidance}</em>
       </span>
@@ -4509,10 +4796,12 @@ async function loadProspects(){
     const sampleUrl = p.sample_delivery_url ? `${window.location.origin}${p.sample_delivery_url}` : '';
     const typeBadge = p.prospect_type ? `<span class="badge" style="background:rgba(59,130,246,0.15);color:#93c5fd;padding:2px 8px;border-radius:999px;font-size:0.72rem;margin-right:6px">${(p.prospect_type||'').replaceAll('_',' ')}</span>` : '';
     const svcBadge = p.service_type ? `<span class="badge" style="background:rgba(122,76,255,0.15);color:var(--purple);padding:2px 8px;border-radius:999px;font-size:0.72rem">${p.service_type}</span>` : '';
+    const creators = (((p.contact_enrichment||{}).detected_source_creators)||[]).filter(Boolean);
+    const clipperBadge = creators.length ? `<span class="badge" style="background:rgba(74,222,128,0.13);color:#86efac;padding:2px 8px;border-radius:999px;font-size:0.72rem;margin-left:6px">✂ Clipper of @${creators[0]}${creators.length>1?` +${creators.length-1}`:''}</span>` : '';
     const priorityBadge = p.revenue_priority ? `<span class="badge" style="background:rgba(34,197,94,0.13);color:#86efac;padding:2px 8px;border-radius:999px;font-size:0.72rem;margin-left:6px">rev ${p.revenue_priority}</span>` : '';
     html += `<tr id="row-${p.id}">
       <td><a href="${p.platform_url}" target="_blank" style="color:#dbd8e3;font-weight:500">${p.display_name}</a>
-        ${(typeBadge || svcBadge || priorityBadge) ? `<div style="margin-top:6px">${typeBadge}${svcBadge}${priorityBadge}</div>` : ''}
+        ${(typeBadge || svcBadge || clipperBadge || priorityBadge) ? `<div style="margin-top:6px">${typeBadge}${svcBadge}${clipperBadge}${priorityBadge}</div>` : ''}
         ${p.ai_reasoning?`<div style="font-size:0.75rem;color:#9ca3af;margin-top:2px">${p.ai_reasoning}</div>`:''}
       </td>
       <td>${platformIcon(p.platform)}</td>
