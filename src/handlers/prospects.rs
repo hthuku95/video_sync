@@ -221,6 +221,8 @@ struct ListQuery {
     /// Show prospects of disabled services too (admin debugging). Default:
     /// only prospects of ON services (plus unscored NULL-service rows).
     include_disabled: Option<bool>,
+    /// Only prospects created in the last N days (launch freshness).
+    fresh_days: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2871,7 +2873,7 @@ async fn list_prospects(
                    ai_score, ai_reasoning, dm_script_creator, dm_script_clipper, \
                    x_dm_script, email_script, contact_status, notes, twitter_handle, instagram_handle, \
                    business_email, external_url, service_type, sample_delivery_id, contact_enrichment, \
-                   referred_by, sourced_by, created_at, \
+                   referred_by, sourced_by, u.email AS sourced_by_email, created_at, \
                    ((CASE WHEN business_email IS NOT NULL AND business_email <> '' THEN 60 ELSE 0 END) + \
                     (CASE WHEN twitter_handle IS NOT NULL AND twitter_handle <> '' THEN 50 ELSE 0 END) + \
                     (CASE WHEN external_url IS NOT NULL AND external_url <> '' THEN 25 ELSE 0 END) + \
@@ -2882,7 +2884,7 @@ async fn list_prospects(
             ELSE 0 \
           END) + \
                     COALESCE((ai_score * 100)::int, 0)) AS revenue_priority \
-                   FROM prospects WHERE 1=1"
+                   FROM prospects LEFT JOIN users u ON u.id = prospects.sourced_by WHERE 1=1"
         .to_string();
 
     for (i, col) in conditions.iter().enumerate() {
@@ -2902,6 +2904,12 @@ async fn list_prospects(
             " AND (service_type IS NULL OR service_type = ANY(${}))",
             conditions.len() + 1
         ));
+    }
+    // Launch freshness (owner directive Oct 2026): optional created-in-last-N-days.
+    let fresh_days: Option<i64> = q.fresh_days.filter(|d| *d > 0);
+    if fresh_days.is_some() {
+        let n = conditions.len() + if show_all { 1 } else { 2 };
+        sql.push_str(&format!(" AND prospects.created_at > NOW() - ((${}::text) || ' days')::interval", n));
     }
     sql.push_str(
         " ORDER BY revenue_priority DESC, ai_score DESC NULLS LAST, created_at DESC LIMIT 200",
@@ -2927,6 +2935,9 @@ async fn list_prospects(
     }
     if !show_all {
         query = query.bind(enabled_services);
+    }
+    if let Some(days) = fresh_days {
+        query = query.bind(days);
     }
 
     let rows = query.fetch_all(&state.db_pool).await.map_err(|e| {
@@ -2972,6 +2983,7 @@ async fn list_prospects(
                 "revenue_priority": r.get::<i32, _>("revenue_priority"),
                 "referred_by": r.get::<Option<String>, _>("referred_by"),
                 "sourced_by": r.get::<Option<i32>, _>("sourced_by"),
+                "sourced_by_email": r.get::<Option<String>, _>("sourced_by_email"),
                 "created_at": r.get::<chrono::DateTime<chrono::Utc>, _>("created_at"),
             })
         })
@@ -4252,6 +4264,7 @@ tr:hover td{background:rgba(92,84,112,0.12)}
       <div class="tab" onclick="setFilter('contacted',this)">Contacted</div>
       <div class="tab" onclick="setFilter('replied',this)">Replied</div>
       <div class="tab" onclick="setFilter('converted',this)">Converted</div>
+      <label class="tab" style="cursor:pointer"><input type="checkbox" checked onchange="toggleFresh(this)" style="margin-right:6px">New only (14d)</label>
     </div>
     <div class="table-wrap">
       <div id="table-area"><div class="loading">Loading prospects…</div></div>
@@ -4698,6 +4711,7 @@ async function loadProspects(){
   let url = '/api/admin/prospects';
   const params = [];
   if(currentFilter!=='all') params.push(`contact_status=${currentFilter}`);
+  if(freshOnly) params.push('fresh_days=14');
   if(params.length) url += '?' + params.join('&');
 
   const res = await fetch(url, {headers:{'Authorization':'Bearer '+token}});
@@ -4712,6 +4726,7 @@ async function loadProspects(){
   let html = `<table>
     <thead><tr>
       <th>Channel</th><th>Platform</th><th>Audience</th><th>Category</th>
+      <th>Owner</th><th>Added</th>
       <th>Contacts</th><th>AI Score</th><th>DM Scripts</th><th>Status</th><th>Actions</th>
     </tr></thead><tbody>`;
 
@@ -4738,6 +4753,8 @@ async function loadProspects(){
       <td>${platformIcon(p.platform)}</td>
       <td>${formatNum(p.subscriber_count||p.avg_viewer_count)}</td>
       <td style="color:#9ca3af">${p.content_category||'—'}</td>
+      <td style="color:#9ca3af;font-size:0.78rem">${p.sourced_by_email||'—'}</td>
+      <td style="color:#9ca3af;font-size:0.78rem;white-space:nowrap">${timeAgo(p.created_at)}</td>
       <td style="min-width:220px">
         <div class="contact-stack">
           ${email?`<div><a href="mailto:${email}" style="color:#86efac">${email}</a><button class="btn btn-sm btn-copy" style="margin-left:4px" onclick="copyText('${encodeURIComponent(email)}')">📋</button></div>`:''}
@@ -4789,6 +4806,23 @@ function setFilter(f, el){
   document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
   el.classList.add('active');
   loadProspects();
+}
+
+let freshOnly = true;
+function toggleFresh(el){
+  freshOnly = el.checked;
+  loadProspects();
+}
+
+function timeAgo(iso){
+  if(!iso) return '—';
+  const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+  if(s < 0) return 'just now';
+  if(s < 3600) return Math.max(1, Math.floor(s / 60)) + 'm ago';
+  if(s < 86400) return Math.floor(s / 3600) + 'h ago';
+  const d = Math.floor(s / 86400);
+  if(d > 30) return Math.floor(d / 30) + 'mo ago';
+  return d === 1 ? 'yesterday' : d + 'd ago';
 }
 
 async function runSearch(){
@@ -5694,6 +5728,12 @@ struct InstagramListQuery {
     /// Show leads of disabled services too. Default: only ON-service leads
     /// (plus unscored NULL-service rows).
     include_disabled: Option<bool>,
+    /// Admin oversight (owner directive Oct 2026): staff/superusers may pass a
+    /// user_id to inspect that helper's pipeline, or omit it to see everyone.
+    /// Non-admins always see only their own leads.
+    user_id: Option<i32>,
+    /// Only leads created in the last N days (launch freshness).
+    fresh_days: Option<i64>,
 }
 
 /// POST /api/admin/prospects/saas/search
@@ -6081,34 +6121,53 @@ async fn instagram_list_leads(
     if user_id == 0 {
         return Json(json!({"success": false, "error": "Invalid user id in JWT"}));
     }
+    let is_admin = claims.is_superuser || claims.is_staff;
 
     let limit = q.limit.unwrap_or(50).min(200);
     let offset = q.offset.unwrap_or(0);
 
-    // Scope to the caller's own leads. The first bind is always user_id;
-    // subsequent optional filters start at $2.
+    // Scope to the caller's own leads — unless staff/superuser, who may scope
+    // to one helper (user_id param) or see the whole team (param omitted).
+    // The first bind is always the scope user_id; subsequent optional filters
+    // start at $2. scope_all needs no user bind at all.
+    let scope_all = is_admin && q.user_id.is_none();
+    let scope_uid: Option<i32> = if is_admin { q.user_id.or(Some(user_id)) } else { Some(user_id) };
+    // Placeholder base: $1 is the scope user_id unless scope_all (team view).
+    let base: usize = if scope_all { 0 } else { 1 };
     let mut sql = String::from(
         "SELECT id, username, full_name, bio, followers_count, following_count, posts_count,
                 profile_url, profile_pic_url, is_private, is_verified, category,
                 hashtag_source, email, external_url, dm_script, contact_status,
-                pb_job_id, score, score_reason, service_type, created_at
-         FROM instagram_leads WHERE user_id = $1",
+                pb_job_id, score, score_reason, service_type, created_at, user_id
+         FROM instagram_leads",
     );
+    if !scope_all {
+        sql.push_str(" WHERE user_id = $1");
+    } else {
+        sql.push_str(" WHERE 1=1");
+    }
     let mut binds: Vec<String> = Vec::new();
 
     if let Some(ref ht) = q.hashtag {
         binds.push(ht.trim_start_matches('#').to_string());
-        sql.push_str(&format!(" AND hashtag_source = ${}", binds.len() + 1));
+        sql.push_str(&format!(" AND hashtag_source = ${}", binds.len() + base));
     }
     if let Some(ref cs) = q.contact_status {
         binds.push(cs.clone());
-        sql.push_str(&format!(" AND contact_status = ${}", binds.len() + 1));
+        sql.push_str(&format!(" AND contact_status = ${}", binds.len() + base));
     }
     if let Some(mf) = q.min_followers {
         binds.push(mf.to_string());
         sql.push_str(&format!(
             " AND followers_count >= ${}::bigint",
-            binds.len() + 1
+            binds.len() + base
+        ));
+    }
+    if let Some(days) = q.fresh_days {
+        binds.push(days.max(1).to_string());
+        sql.push_str(&format!(
+            " AND created_at > NOW() - (({}::text) || ' days')::interval",
+            binds.len() + base
         ));
     }
     // Service visibility (owner directive Oct 2026): UIs display only leads of
@@ -6119,14 +6178,17 @@ async fn instagram_list_leads(
         enabled_ig = crate::services::service_flags::enabled_services(&state.db_pool).await;
         sql.push_str(&format!(
             " AND (service_type IS NULL OR service_type = ANY(${}))",
-            binds.len() + 2
+            binds.len() + base + 1
         ));
     }
     sql.push_str(" ORDER BY followers_count DESC NULLS LAST");
     sql.push_str(&format!(" LIMIT {} OFFSET {}", limit, offset));
 
     // Build and execute dynamically — use raw query for variable bind count
-    let mut query = sqlx::query(&sql).bind(user_id);
+    let mut query = sqlx::query(&sql);
+    if !scope_all {
+        query = query.bind(scope_uid);
+    }
     for b in &binds {
         query = query.bind(b);
     }
@@ -6162,6 +6224,7 @@ async fn instagram_list_leads(
                 "score":           r.get::<Option<i32>, _>("score"),
                 "score_reason":    r.get::<Option<String>, _>("score_reason"),
                 "service_type":    r.get::<Option<String>, _>("service_type"),
+                "user_id":         r.get::<Option<i32>, _>("user_id"),
             })
         })
         .collect();
