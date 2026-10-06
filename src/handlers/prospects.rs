@@ -32,6 +32,7 @@ pub fn prospect_routes() -> Router {
     // Admin-only API routes (staff/superuser only — search, LinkedIn, Telegram, etc.)
     let admin_only = Router::new()
         .route("/api/admin/prospects/search", post(search_prospects))
+        .route("/api/admin/prospects/runs/:id", get(prospect_run_status))
         .route(
             "/api/admin/prospects/linkedin/agents",
             get(linkedin_list_agents),
@@ -402,7 +403,6 @@ async fn search_prospects(
             ));
         }
     }
-    let mut found = 0usize;
     let user_id = claims.sub.parse::<i32>().ok();
     let run_input = json!({
         "platform": payload.platform.clone(),
@@ -432,136 +432,49 @@ async fn search_prospects(
     )
     .await;
 
-    let search_result = if payload.platform == "youtube" {
-        // Service switch (owner directive Oct 2026): YouTube discovery spends
-        // scoring LLM per prospect — refuse while youtube_clipping is off.
-        if !crate::services::service_flags::service_enabled(&state.db_pool, "youtube_clipping").await
-        {
-            return Err((
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(ErrorResponse {
-                    success: false,
-                    message: "YouTube prospect discovery is currently disabled (youtube_clipping off in service_flags).".to_string(),
-                }),
-            ));
-        }
-        search_youtube_prospects(&state, &payload, limit).await
-    } else if payload.platform == "twitch" {
-        // Service switch (owner directive Oct 2026): Twitch discovery is the
-        // launch-business finder — it runs only while twitch_clipping is on.
-        if !crate::services::service_flags::service_enabled(&state.db_pool, "twitch_clipping").await
-        {
-            return Err((
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(ErrorResponse {
-                    success: false,
-                    message: "Twitch prospect discovery is currently disabled (twitch_clipping off in service_flags).".to_string(),
-                }),
-            ));
-        }
-        search_twitch_prospects(&state, &payload, limit).await
-    } else if payload.platform == "twitch_clipper" {
-        // Service switch (owner directive Oct 2026): Twitch-clipper discovery
-        // (Top Streamers → YouTube) feeds twitch_clipping — runs only while on.
-        if !crate::services::service_flags::service_enabled(&state.db_pool, "twitch_clipping").await
-        {
-            return Err((
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(ErrorResponse {
-                    success: false,
-                    message: "Twitch clipper discovery is currently disabled (twitch_clipping off in service_flags).".to_string(),
-                }),
-            ));
-        }
-        search_twitch_clipper_prospects_top_streamers(&state, &payload, limit).await
-    } else if payload.platform == "kick" {
-        // Service switch (owner directive Oct 2026): Kick discovery feeds the
-        // launch business — it runs only while kick_auto_clipper is on.
-        if !crate::services::service_flags::service_enabled(&state.db_pool, "kick_auto_clipper").await
-        {
-            return Err((
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(ErrorResponse {
-                    success: false,
-                    message: "Kick prospect discovery is currently disabled (kick_auto_clipper off in service_flags).".to_string(),
-                }),
-            ));
-        }
-        search_kick_prospects(&state, &payload, limit).await
-    } else if payload.platform == "kick_clipper" || payload.platform == "kick_clipper_top" {
-        // Service switch (owner directive Oct 2026): both Kick clipper methods
-        // feed kick_auto_clipper — refuse while it is off.
-        if !crate::services::service_flags::service_enabled(&state.db_pool, "kick_auto_clipper").await
-        {
-            return Err((
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(ErrorResponse {
-                    success: false,
-                    message: "Kick clipper prospect discovery is currently disabled (kick_auto_clipper off in service_flags).".to_string(),
-                }),
-            ));
-        }
-        if payload.platform == "kick_clipper" {
-            search_kick_clipper_prospects(&state, &payload, limit).await
-        } else {
-            search_kick_clipper_prospects_top_streamers(&state, &payload, limit).await
-        }
-    } else {
-        complete_prospect_agent_run(
-            &state,
-            run_id,
-            "failed",
-            json!({"error": "unsupported_platform", "platform": payload.platform}),
-            Some("platform must be 'youtube', 'twitch', 'kick', 'kick_clipper', or 'kick_clipper_top'"),
-        )
-        .await;
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                success: false,
-                message: "platform must be 'youtube', 'twitch', 'kick', 'kick_clipper', or 'kick_clipper_top'".to_string(),
-            }),
-        ));
-    };
 
-    match search_result {
-        Ok(count) => found += count,
-        Err(e) => {
-            complete_prospect_agent_run(
-                &state,
-                run_id,
-                "failed",
-                json!({"error": "platform_search_failed"}),
-                Some("Platform prospect search failed."),
-            )
-            .await;
-            return Err(e);
-        }
-    };
-
-    checkpoint_prospect_agent_run(
-        &state,
-        run_id,
-        "completed",
-        json!({"found": found, "platform": payload.platform.clone(), "prospect_type": payload.prospect_type.clone()}),
-        Some("Prospects persisted with contact enrichment, fit score, and outreach scripts."),
-    )
-    .await;
-    complete_prospect_agent_run(
-        &state,
-        run_id,
-        "completed",
-        json!({"found": found, "platform": payload.platform.clone(), "prospect_type": payload.prospect_type.clone()}),
-        None,
-    )
-    .await;
+    // Background+poll (owner directive Oct 2026): the dispatch above is
+    // validated; execution runs detached so multi-minute searches (Helix +
+    // 10x YouTube + scoring) never hit the ~100s proxy cap. Poll
+    // GET /api/admin/prospects/runs/:id for completion.
+    let spawn_state = state.clone();
+    tokio::spawn(async move {
+        execute_search_dispatch(spawn_state, payload, limit, run_id).await;
+    });
 
     Ok(Json(json!({
         "success": true,
-        "found": found,
+        "accepted": true,
         "agent_run_id": run_id.map(|id| id.to_string()),
-        "message": format!("Found and scored {} prospects", found)
+        "message": "Prospect search running in background — poll run status for completion."
     })))
+}
+
+/// GET /api/admin/prospects/runs/:id — poll a background search run.
+/// Returns {success, status, current_step, found, error}. Terminal states:
+/// completed | failed. Used by background+poll prospect discovery (Oct 2026).
+async fn prospect_run_status(
+    Extension(state): Extension<Arc<AppState>>,
+    Path(id): Path<Uuid>,
+) -> Json<serde_json::Value> {
+    let row: Option<(String, String, serde_json::Value, Option<String>)> = sqlx::query_as(
+        "SELECT status, current_step, state, last_error FROM prospect_agent_runs WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(&state.db_pool)
+    .await
+    .ok()
+    .flatten();
+    match row {
+        Some((status, step, st, err)) => Json(json!({
+            "success": true,
+            "status": status,
+            "current_step": step,
+            "found": st.get("found").and_then(|v| v.as_u64()).unwrap_or(0),
+            "error": err,
+        })),
+        None => Json(json!({"success": false, "error": "Run not found"})),
+    }
 }
 
 async fn search_youtube_prospects(
@@ -4877,9 +4790,32 @@ async function runSearch(){
     body: JSON.stringify(payload)
   });
   const data = await res.json();
+  // Background+poll (Oct 2026): searches run detached past the ~100s proxy
+  // cap. Poll the run until terminal, then refresh the table.
+  if(data.success && data.accepted && data.agent_run_id){
+    pollSearchRun(data.agent_run_id, 0);
+    return;
+  }
   if(data.success){ showMsg(data.message); loadProspects(); }
   else showMsg(data.message||'Search failed', false);
   status.textContent = '';
+}
+
+async function pollSearchRun(runId, tries){
+  const status = document.getElementById('search-status');
+  if(tries > 150){ status.textContent = ''; showMsg('Search still running after ~20 min — results so far are in the table.', false); loadProspects(); return; }
+  status.textContent = `Searching… (${Math.round(tries*8)}s elapsed)`;
+  try{
+    const res = await fetch(`/api/admin/prospects/runs/${runId}`, {headers:{'Authorization':'Bearer '+token}});
+    const data = await res.json();
+    if(data.success && (data.status === 'completed' || data.status === 'failed')){
+      status.textContent = '';
+      showMsg(data.status === 'completed' ? `Search complete — ${data.found||0} prospects found` : `Search failed: ${data.error||'unknown'}`, data.status === 'completed');
+      loadProspects();
+      return;
+    }
+  }catch(e){ /* transient — keep polling */ }
+  setTimeout(() => pollSearchRun(runId, tries + 1), 8000);
 }
 
 async function runKickInstagramSearch(){
@@ -9865,4 +9801,121 @@ mod tests {
             assert!(!line.is_empty(), "empty offer line for {}", service);
         }
     }
+}
+
+/// Background worker for prospect discovery (owner directive Oct 2026 —
+/// searches run minutes-long and exceed proxy timeouts, so the HTTP
+/// handler returns 202 immediately and this runs detached; completion
+/// lands in prospect_agent_runs for polling).
+async fn execute_search_dispatch(
+    state: Arc<AppState>,
+    payload: SearchRequest,
+    limit: usize,
+    run_id: Option<Uuid>,
+) {
+    let mut found = 0usize;
+    let search_result = if payload.platform == "youtube" {
+        // Service switch (owner directive Oct 2026): YouTube discovery spends
+        // scoring LLM per prospect — refuse while youtube_clipping is off.
+        if !crate::services::service_flags::service_enabled(&state.db_pool, "youtube_clipping").await
+        {
+            {
+            complete_prospect_agent_run(&state, run_id, "failed", json!({"error": "search_rejected"}), Some("YouTube prospect discovery is currently disabled (youtube_clipping off in service_flags).")).await;
+            return;
+        }
+        }
+        search_youtube_prospects(&state, &payload, limit).await
+    } else if payload.platform == "twitch" {
+        // Service switch (owner directive Oct 2026): Twitch discovery is the
+        // launch-business finder — it runs only while twitch_clipping is on.
+        if !crate::services::service_flags::service_enabled(&state.db_pool, "twitch_clipping").await
+        {
+            {
+            complete_prospect_agent_run(&state, run_id, "failed", json!({"error": "search_rejected"}), Some("Twitch prospect discovery is currently disabled (twitch_clipping off in service_flags).")).await;
+            return;
+        }
+        }
+        search_twitch_prospects(&state, &payload, limit).await
+    } else if payload.platform == "twitch_clipper" {
+        // Service switch (owner directive Oct 2026): Twitch-clipper discovery
+        // (Top Streamers → YouTube) feeds twitch_clipping — runs only while on.
+        if !crate::services::service_flags::service_enabled(&state.db_pool, "twitch_clipping").await
+        {
+            {
+            complete_prospect_agent_run(&state, run_id, "failed", json!({"error": "search_rejected"}), Some("Twitch clipper discovery is currently disabled (twitch_clipping off in service_flags).")).await;
+            return;
+        }
+        }
+        search_twitch_clipper_prospects_top_streamers(&state, &payload, limit).await
+    } else if payload.platform == "kick" {
+        // Service switch (owner directive Oct 2026): Kick discovery feeds the
+        // launch business — it runs only while kick_auto_clipper is on.
+        if !crate::services::service_flags::service_enabled(&state.db_pool, "kick_auto_clipper").await
+        {
+            {
+            complete_prospect_agent_run(&state, run_id, "failed", json!({"error": "search_rejected"}), Some("Kick prospect discovery is currently disabled (kick_auto_clipper off in service_flags).")).await;
+            return;
+        }
+        }
+        search_kick_prospects(&state, &payload, limit).await
+    } else if payload.platform == "kick_clipper" || payload.platform == "kick_clipper_top" {
+        // Service switch (owner directive Oct 2026): both Kick clipper methods
+        // feed kick_auto_clipper — refuse while it is off.
+        if !crate::services::service_flags::service_enabled(&state.db_pool, "kick_auto_clipper").await
+        {
+            {
+            complete_prospect_agent_run(&state, run_id, "failed", json!({"error": "search_rejected"}), Some("Kick clipper prospect discovery is currently disabled (kick_auto_clipper off in service_flags).")).await;
+            return;
+        }
+        }
+        if payload.platform == "kick_clipper" {
+            search_kick_clipper_prospects(&state, &payload, limit).await
+        } else {
+            search_kick_clipper_prospects_top_streamers(&state, &payload, limit).await
+        }
+    } else {
+        complete_prospect_agent_run(
+            &state,
+            run_id,
+            "failed",
+            json!({"error": "unsupported_platform", "platform": payload.platform}),
+            Some("platform must be 'youtube', 'twitch', 'twitch_clipper', 'kick', 'kick_clipper', or 'kick_clipper_top'"),
+        )
+        .await;
+        return;
+    };
+
+    match search_result {
+        Ok(count) => found += count,
+        Err(e) => {
+            complete_prospect_agent_run(
+                &state,
+                run_id,
+                "failed",
+                json!({"error": "platform_search_failed"}),
+                Some(&format!("Platform prospect search failed: {e:?}")),
+            )
+            .await;
+            return;
+        }
+    };
+
+    checkpoint_prospect_agent_run(
+        &state,
+        run_id,
+        "completed",
+        json!({"found": found, "platform": payload.platform.clone(), "prospect_type": payload.prospect_type.clone()}),
+        Some("Prospects persisted with contact enrichment, fit score, and outreach scripts."),
+    )
+    .await;
+    complete_prospect_agent_run(
+        &state,
+        run_id,
+        "completed",
+        json!({"found": found, "platform": payload.platform.clone(), "prospect_type": payload.prospect_type.clone()}),
+        None,
+    )
+    .await;
+
+
 }
