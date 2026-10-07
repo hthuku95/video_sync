@@ -68,6 +68,7 @@ pub fn campaign_routes() -> Router {
         .route("/api/campaigns/:id/pay-spec", get(campaign_pay_spec))
         .route("/api/campaigns/:id/settle", post(campaign_settle))
         .route("/api/campaigns/:id/paypal-activate", post(campaign_paypal_activate))
+        .route("/api/campaigns/:id/paypal-order", post(campaign_paypal_order))
         .route("/api/campaigns/:id/chat", post(campaign_chat))
         .route("/api/campaigns/:id/process-now", post(client_process_now))
         .route("/api/campaigns/assistant", post(campaign_assistant_chat))
@@ -658,6 +659,64 @@ async fn campaign_pay_spec(
     Ok(Json(serde_json::to_value(spec).unwrap_or(json!({"error": "spec serialise failed"}))))
 }
 
+/// POST /api/campaigns/:id/paypal-order — create a PayPal order for the app
+/// subscription (owner directive Oct 2026 §65). The frontend approves via the
+/// PayPal JS SDK, captures client-side, then calls paypal-activate.
+async fn campaign_paypal_order(
+    Path(id): Path<Uuid>,
+    Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<crate::models::auth::Claims>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let user_id: i32 = claims.sub.parse().unwrap_or(0);
+    let row = sqlx::query("SELECT user_id, service_type, status, name FROM campaigns WHERE id = $1")
+        .bind(id)
+        .fetch_optional(&state.db_pool)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?
+        .ok_or_else(|| (StatusCode::NOT_FOUND, Json(json!({"error": "Campaign not found"}))))?;
+    let owner: i32 = row.get("user_id");
+    if owner != user_id && !(claims.is_superuser || claims.is_staff) {
+        return Err((StatusCode::FORBIDDEN, Json(json!({"error": "Not your campaign"}))));
+    }
+    let service_type: String = row.get("service_type");
+    let name: String = row.get("name");
+    let price_cents = campaign_price_cents(&service_type);
+    let app = campaign_app_slug(&service_type);
+
+    let env = crate::handlers::paypal::get_paypal_env(&state).await;
+    let base_url = crate::handlers::paypal::paypal_base_url(&env);
+    let (client_id, client_secret) = crate::handlers::paypal::paypal_credentials(&env);
+    if client_id.is_empty() || client_secret.is_empty() {
+        return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "PayPal not configured"}))));
+    }
+    let token = crate::handlers::paypal::get_paypal_access_token(base_url, &client_id, &client_secret)
+        .await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, Json(json!({"error": e}))))?;
+    let amount = format!("{:.2}", price_cents as f64 / 100.0);
+    let order: serde_json::Value = reqwest::Client::new()
+        .post(format!("{}/v2/checkout/orders", base_url))
+        .bearer_auth(token)
+        .json(&serde_json::json!({
+            "intent": "CAPTURE",
+            "purchase_units": [{
+                "reference_id": id.to_string(),
+                "description": format!("{} subscription — campaign '{}'", campaign_app_name(app), name),
+                "amount": {"currency_code": "USD", "value": amount},
+            }],
+        }))
+        .send()
+        .await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, Json(json!({"error": format!("PayPal order create failed: {e}")}))))?
+        .json()
+        .await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, Json(json!({"error": format!("PayPal order parse failed: {e}")}))))?;
+    let order_id = order.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    if order_id.is_empty() {
+        return Err((StatusCode::BAD_GATEWAY, Json(json!({"error": "PayPal returned no order id"}))));
+    }
+    Ok(Json(json!({"success": true, "paypal_order_id": order_id, "amount_usd": amount})))
+}
+
 /// POST /api/campaigns/:id/paypal-activate — verify a PayPal order capture and
 /// activate the campaign for 30 days (owner directive Oct 2026 §65: launch
 /// payment rail for the 5 campaign apps; mirrors the website_video bundle flow).
@@ -709,7 +768,7 @@ async fn campaign_paypal_activate(
         .map_err(|e| (StatusCode::BAD_GATEWAY, Json(json!({"error": format!("PayPal order lookup failed: {e}")}))))?
         .json()
         .await
-        .map_err(|e| (StatusCode::BAD_GATEWAY, Json(json!({"error": format!("PayPal order parse failed: {e}")})))?;
+        .map_err(|e| (StatusCode::BAD_GATEWAY, Json(json!({"error": format!("PayPal order parse failed: {e}")}))))?;
     let order_status = order.get("status").and_then(|s| s.as_str()).unwrap_or("");
     if order_status != "COMPLETED" && order_status != "APPROVED" {
         return Err((StatusCode::PAYMENT_REQUIRED, Json(json!({"error": format!("PayPal order is {order_status}, not captured")}))));
