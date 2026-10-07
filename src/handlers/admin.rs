@@ -54,6 +54,7 @@ pub fn admin_routes() -> Router {
         .route("/admin/portfolio-samples", get(admin_portfolio_samples_page))
         .route("/admin/monetization-guide", get(admin_monetization_guide_page))
         .route("/admin/revenue-ledger", get(admin_revenue_ledger_page))
+        .route("/admin/payments", get(admin_payments_page))
         .route("/admin/how-it-works", get(admin_how_it_works_page))
         .route("/admin/service-samples", get(admin_service_samples_page))
         .route("/admin/campaigns", get(admin_campaigns_page))
@@ -350,6 +351,7 @@ pub async fn admin_dashboard() -> Html<String> {
             <li><a href="/admin/email-logs">📧 Email Logs</a></li>
             <li><a href="/admin/monetization-guide">💰 Monetization Guide</a></li>
             <li><a href="/admin/revenue-ledger">💸 Revenue Ledger</a></li>
+            <li><a href="/admin/payments">💳 Payments</a></li>
             <li><a href="/admin/zernio">📱 Social</a></li>
             <li><a href="/admin/how-it-works">📘 How We Work</a></li>
             <li><a href="#" onclick="showWhitelist()">🛡️ Whitelist</a></li>
@@ -11357,6 +11359,61 @@ pub async fn api_studio_payments(
     }).collect();
 
     Ok(Json(json!({"success": true, "payments": items, "count": items.len()})))
+}
+
+/// GET /admin/payments — Admin payments dashboard (owner directive Oct 2026):
+/// every payment record (studio bundles/unlocks + campaign subscriptions).
+pub async fn admin_payments_page() -> Html<String> {
+    Html(r#"<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Payments — Admin</title>
+<style>
+body{font-family:Inter,system-ui,sans-serif;background:#07111d;color:#e6edf7;margin:0;padding:24px}
+.wrap{max-width:1200px;margin:0 auto}
+h1{font-size:1.5rem}
+table{width:100%;border-collapse:collapse;margin-top:16px;font-size:0.85rem}
+th,td{text-align:left;padding:8px 10px;border-bottom:1px solid #1c2f47;vertical-align:top}
+th{color:#9fb0c7;font-weight:600}
+.mono{font-family:monospace;font-size:0.78rem;word-break:break-all}
+.badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:0.72rem}
+.paypal{background:rgba(59,130,246,0.15);color:#93c5fd}
+.usdc{background:rgba(74,222,128,0.13);color:#86efac}
+.manual{background:rgba(250,204,21,0.13);color:#fde047}
+.back{color:#9fb0c7}
+.stats{display:flex;gap:16px;margin:12px 0}
+.stat{background:#0d1a2b;border:1px solid #1c2f47;border-radius:10px;padding:12px 18px}
+.stat b{font-size:1.3rem}
+</style></head><body><div class="wrap">
+<a class="back" href="/admin/dashboard">← Admin</a>
+<h1>Payments</h1>
+<div class="stats" id="stats"></div>
+<table><thead><tr>
+<th>When</th><th>Buyer</th><th>What</th><th>Amount</th><th>Method</th><th>Payer / receipt</th>
+</tr></thead><tbody id="rows"><tr><td colspan="6">Loading…</td></tr></tbody></table>
+<script>
+(async function(){
+  const t = localStorage.getItem('authToken') || localStorage.getItem('admin_token') || localStorage.getItem('auth_token');
+  const r = await fetch('/api/admin/payments', {headers:{'Authorization':'Bearer '+t}});
+  const d = await r.json();
+  const rows = document.getElementById('rows');
+  if(!d.success){ rows.innerHTML = '<tr><td colspan="6">Failed to load</td></tr>'; return; }
+  const items = d.payments || [];
+  let total = 0;
+  rows.innerHTML = items.map(p => {
+    total += (p.amount_cents||0);
+    const when = p.completed_at || p.created_at || '';
+    const method = p.payment_method || '';
+    const mcls = method.includes('paypal') ? 'paypal' : method.includes('usdc') ? 'usdc' : 'manual';
+    const receipt = p.tx_hash || p.paypal_order_id || p.paypal_capture_id || '';
+    const payer = p.payer_address || p.buyer_email || '';
+    return `<tr><td style="white-space:nowrap">${when}</td><td>${p.buyer_email||''}<br><span style="color:#9fb0c7">${p.buyer_name||''}</span></td><td>${p.offer_name||p.offer_id||''}</td><td>$${((p.amount_cents||0)/100).toFixed(2)}</td><td><span class="badge ${mcls}">${method}</span></td><td class="mono">${payer}${receipt?'<br>'+receipt:''}</td></tr>`;
+  }).join('') || '<tr><td colspan="6">No payments yet</td></tr>';
+  document.getElementById('stats').innerHTML =
+    `<div class="stat"><b>$${(total/100).toFixed(2)}</b><div>Total revenue</div></div>` +
+    `<div class="stat"><b>${items.length}</b><div>Payments</div></div>`;
+})();
+</script>
+</div></body></html>"#.to_string())
 }
 
 /// GET /api/admin/config — return all app config values.

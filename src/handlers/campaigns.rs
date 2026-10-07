@@ -85,8 +85,7 @@ pub fn admin_campaign_routes() -> Router {
         .route("/api/admin/campaigns/:id/cancel", post(admin_cancel_campaign))
         .route("/api/admin/campaigns/:id/pay-spec", get(campaign_pay_spec))
         .route("/api/admin/campaigns/:id/settle", post(campaign_settle))
-        .route("/api/admin/campaigns/:id/activate", post(admin_activate_campaign))
-        .route("/api/admin/campaigns/:id/files", get(list_campaign_files).post(upload_campaign_file))
+        .route("/api/admin/campaigns/:id/activate", post(admin_activate_campaign))        .route("/api/admin/campaigns/:id/files", get(list_campaign_files).post(upload_campaign_file))
         .route("/api/admin/campaigns/:id/files/:file_id", delete(delete_campaign_file))
         .layer(DefaultBodyLimit::max(100 * 1024 * 1024))
         .layer(axum::middleware::from_fn(crate::middleware::admin::admin_middleware))
@@ -736,7 +735,7 @@ async fn campaign_paypal_activate(
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let user_id: i32 = claims.sub.parse().unwrap_or(0);
     let row = sqlx::query(
-        "SELECT user_id, service_type, status FROM campaigns WHERE id = $1",
+        "SELECT c.user_id, c.service_type, c.status, c.name, u.email AS user_email FROM campaigns c JOIN users u ON u.id = c.user_id WHERE c.id = $1",
     )
     .bind(id)
     .fetch_optional(&state.db_pool)
@@ -752,6 +751,8 @@ async fn campaign_paypal_activate(
         return Ok(Json(json!({"success": true, "already_active": true})));
     }
     let service_type: String = row.get("service_type");
+    let campaign_name: String = row.get("name");
+    let account_email: String = row.get("user_email");
     let price_cents = campaign_price_cents(&service_type);
 
     let env = crate::handlers::paypal::get_paypal_env(&state).await;
@@ -786,12 +787,24 @@ async fn campaign_paypal_activate(
     if paid_cents != price_cents {
         return Err((StatusCode::PAYMENT_REQUIRED, Json(json!({"error": format!("Order amount ${:.2} does not match the {} subscription (${:.2})", paid_cents as f64 / 100.0, campaign_app_name(campaign_app_slug(&service_type)), price_cents as f64 / 100.0)}))));
     }
+    // Payer record (owner directive Oct 2026): email + name from the order.
+    let payer = order.get("payer");
+    let payer_email = payer.and_then(|p| p.get("email_address")).and_then(|v| v.as_str()).map(str::to_string);
+    let payer_name = payer.and_then(|p| p.get("name")).and_then(|n| {
+        let given = n.get("given_name").and_then(|v| v.as_str()).unwrap_or("");
+        let surname = n.get("surname").and_then(|v| v.as_str()).unwrap_or("");
+        let full = format!("{given} {surname}").trim().to_string();
+        if full.is_empty() { None } else { Some(full) }
+    });
 
     let upd = sqlx::query(
-        "UPDATE campaigns SET status = 'active', paid_until = NOW() + INTERVAL '30 days', payment_ref = $2 WHERE id = $1 AND status <> 'active'",
+        "UPDATE campaigns SET status = 'active', paid_until = NOW() + INTERVAL '30 days', payment_ref = $2, payer_email = $3, payer_name = $4, payment_method = 'paypal', paid_amount_cents = $5 WHERE id = $1 AND status <> 'active'",
     )
     .bind(id)
     .bind(req.order_id.trim())
+    .bind(&payer_email)
+    .bind(&payer_name)
+    .bind(price_cents as i32)
     .execute(&state.db_pool)
     .await
     .map_err(|e| {
@@ -805,7 +818,48 @@ async fn campaign_paypal_activate(
     if upd.rows_affected() == 0 {
         return Ok(Json(json!({"success": true, "already_active": true})));
     }
+    record_campaign_ledger(&state, &account_email, id, &campaign_name, &service_type, price_cents, "paypal", Some(req.order_id.trim()), None, payer_email.as_deref(), payer_email.as_deref(), payer_name.as_deref()).await;
     Ok(Json(json!({"success": true, "status": "active"})))
+}
+
+/// Record a campaign subscription in the unified studio_payments ledger (owner
+/// directive Oct 2026): the existing /api/admin/payments endpoint + dashboard
+/// read this table, so every rail (PayPal / USDC / manual) lands in one place.
+/// Best-effort: ledger failure never blocks activation (campaigns.* columns
+/// are the per-campaign receipt of record).
+async fn record_campaign_ledger(
+    state: &Arc<AppState>,
+    user_email: &str,
+    campaign_id: Uuid,
+    campaign_name: &str,
+    service_type: &str,
+    price_cents: u64,
+    method: &str,
+    paypal_order_id: Option<&str>,
+    tx_hash: Option<&str>,
+    payer_address: Option<&str>,
+    payer_email: Option<&str>,
+    payer_name: Option<&str>,
+) {
+    let app = campaign_app_slug(service_type);
+    let _ = sqlx::query(
+        "INSERT INTO studio_payments \
+         (offer_id, offer_name, amount_cents, currency, payment_method, status, \
+          paypal_order_id, tx_hash, payer_address, buyer_email, buyer_name, raw_meta, completed_at) \
+         VALUES ($1, $2, $3, 'USD', $4, 'completed', $5, $6, $7, $8, $9, $10, NOW())",
+    )
+    .bind(format!("campaign-sub-{app}"))
+    .bind(format!("{} subscription — campaign '{}'", campaign_app_name(app), campaign_name))
+    .bind(price_cents as i32)
+    .bind(method)
+    .bind(paypal_order_id)
+    .bind(tx_hash)
+    .bind(payer_address)
+    .bind(user_email)
+    .bind(payer_name.or(payer_email))
+    .bind(serde_json::json!({"campaign_id": campaign_id, "service_type": service_type, "app": app}))
+    .execute(&state.db_pool)
+    .await;
 }
 
 /// POST /api/admin/campaigns/:id/activate — manual activation (owner directive
@@ -817,11 +871,13 @@ async fn admin_activate_campaign(
     Json(req): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let payment_ref = req.get("payment_ref").and_then(|v| v.as_str()).map(str::to_string);
+    let payment_method = req.get("payment_method").and_then(|v| v.as_str()).unwrap_or("manual").to_string();
     let upd = sqlx::query(
-        "UPDATE campaigns SET status = 'active', paid_until = NOW() + INTERVAL '30 days', payment_ref = COALESCE($2, payment_ref) WHERE id = $1",
+        "UPDATE campaigns SET status = 'active', paid_until = NOW() + INTERVAL '30 days', payment_ref = COALESCE($2, payment_ref), payment_method = $3 WHERE id = $1",
     )
     .bind(id)
     .bind(payment_ref)
+    .bind(payment_method)
     .execute(&state.db_pool)
     .await
     .map_err(|e| {
@@ -835,6 +891,19 @@ async fn admin_activate_campaign(
     if upd.rows_affected() == 0 {
         return Err((StatusCode::NOT_FOUND, Json(json!({"error": "Campaign not found"}))));
     }
+    // Ledger entry for manual activations (method recorded as given/manual).
+    let info: Option<(String, String, String)> = sqlx::query_as(
+        "SELECT c.name, c.service_type, u.email FROM campaigns c JOIN users u ON u.id = c.user_id WHERE c.id = $1",
+    )
+    .bind(id)
+    .fetch_optional(&state.db_pool)
+    .await
+    .ok()
+    .flatten();
+    if let Some((cname, stype, email)) = info {
+        let price = campaign_price_cents(&stype);
+        record_campaign_ledger(&state, &email, id, &cname, &stype, price, &payment_method, None, payment_ref.as_deref(), None, None, None).await;
+    }
     Ok(Json(json!({"success": true, "status": "active"})))
 }
 
@@ -845,7 +914,7 @@ async fn campaign_settle(
     Extension(state): Extension<Arc<AppState>>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let row = sqlx::query(
-        "SELECT user_id, service_type, status FROM campaigns WHERE id = $1",
+        "SELECT c.user_id, c.service_type, c.status, c.name, u.email AS user_email FROM campaigns c JOIN users u ON u.id = c.user_id WHERE c.id = $1",
     )
     .bind(id)
     .fetch_optional(&state.db_pool)
@@ -860,6 +929,8 @@ async fn campaign_settle(
 
     let service_type: String = row.get("service_type");
     let user_id: i32 = row.get("user_id");
+    let campaign_name: String = row.get("name");
+    let account_email: String = row.get("user_email");
     let price_cents = campaign_price_cents(&service_type);
 
     let x_payment = headers.get("X-Payment").and_then(|h| h.to_str().ok())
@@ -878,14 +949,34 @@ async fn campaign_settle(
     let tx_hash = crate::x402::settle_or_reject(x_payment, &req).await
         .map_err(|e| (StatusCode::PAYMENT_REQUIRED, Json(json!({"error": e}))))?;
 
-    // Activate campaign for 30 days
+    // Activate campaign for 30 days (owner directive Oct 2026: USDC payer =
+    // wallet from the signed authorization; decode locally — no extra call).
+    let payer_wallet: Option<String> = {
+        use base64::Engine;
+        base64::engine::general_purpose::STANDARD
+            .decode(x_payment)
+            .ok()
+            .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+            .and_then(|v| {
+                v.get("payload")
+                    .and_then(|p| p.get("authorization"))
+                    .and_then(|a| a.get("from"))
+                    .and_then(|f| f.as_str())
+                    .map(str::to_string)
+            })
+    };
     sqlx::query(
-        "UPDATE campaigns SET status = 'active', paid_until = NOW() + INTERVAL '30 days' WHERE id = $1",
+        "UPDATE campaigns SET status = 'active', paid_until = NOW() + INTERVAL '30 days', \
+         payment_ref = $2, payer_wallet = $3, payment_method = 'usdc', paid_amount_cents = $4 WHERE id = $1",
     )
     .bind(id)
+    .bind(&tx_hash)
+    .bind(&payer_wallet)
+    .bind(price_cents as i32)
     .execute(&state.db_pool)
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+    record_campaign_ledger(&state, &account_email, id, &campaign_name, &service_type, price_cents, "usdc", None, Some(&tx_hash), payer_wallet.as_deref(), None, None).await;
 
     // Auto-create referral commission if this user was referred
     let referrer_id: Option<i32> = sqlx::query_scalar(
