@@ -7,7 +7,7 @@ use crate::{
 use axum::{
     extract::{Extension, Path, Query},
     http::Uri,
-    response::Html,
+    response::{Html, Redirect},
     routing::{get, post},
     Json, Router,
 };
@@ -47,19 +47,21 @@ pub fn dynamic_bg_script() -> &'static str {
 pub fn ui_routes() -> Router {
     Router::new()
         .route("/", get(landing_page))
-        .route("/services", get(services_overview_page))
-        .route("/services/saas-launch-pack", get(saas_launch_pack_page))
-        .route("/services/clipping-pack", get(clipping_pack_page))
-        .route("/services/kick-auto-clipper", get(kick_auto_clipper_page))
-        .route("/services/education-explainer-pack", get(education_explainer_pack_page))
-        .route("/services/manim-explainer", get(manim_explainer_page))
-        .route("/services/whiteboard-animation", get(whiteboard_animation_page))
-        .route("/services/kinetic-typography", get(kinetic_typography_page))
-        .route("/services/animated-infographic", get(animated_infographic_page))
-        .route("/services/algorithm-viz", get(algorithm_viz_page))
-        .route("/services/investor-pitch", get(investor_pitch_page))
-        .route("/services/year-in-review", get(year_in_review_page))
-        .route("/services/isometric-explainer", get(isometric_explainer_page))
+        // Campaign storefront moved to the 5 apps (owner directive Oct 2026 §65):
+        // /services + /campaigns render the apps directory; deep links 302 out.
+        .route("/services", get(apps_directory_page))
+        .route("/services/saas-launch-pack", get(|| async { Redirect::to("https://app.videosync.ink/") }))
+        .route("/services/clipping-pack", get(|| async { Redirect::to("https://shorts.videosync.ink/") }))
+        .route("/services/kick-auto-clipper", get(|| async { Redirect::to("https://clips.videosync.ink/") }))
+        .route("/services/education-explainer-pack", get(|| async { Redirect::to("https://learn.videosync.ink/") }))
+        .route("/services/manim-explainer", get(|| async { Redirect::to("https://motion.videosync.ink/") }))
+        .route("/services/whiteboard-animation", get(|| async { Redirect::to("https://motion.videosync.ink/") }))
+        .route("/services/kinetic-typography", get(|| async { Redirect::to("https://motion.videosync.ink/") }))
+        .route("/services/animated-infographic", get(|| async { Redirect::to("https://motion.videosync.ink/") }))
+        .route("/services/algorithm-viz", get(|| async { Redirect::to("https://motion.videosync.ink/") }))
+        .route("/services/investor-pitch", get(|| async { Redirect::to("https://motion.videosync.ink/") }))
+        .route("/services/year-in-review", get(|| async { Redirect::to("https://motion.videosync.ink/") }))
+        .route("/services/isometric-explainer", get(|| async { Redirect::to("https://motion.videosync.ink/") }))
         .route("/login", get(login_page))
         .route("/signup", get(signup_page))
         .route("/dashboard", get(dashboard_page))
@@ -79,10 +81,10 @@ pub fn ui_routes() -> Router {
         // Handlers use Option<Extension<Claims>> to show login prompt when unauthenticated.
         .merge(
             Router::new()
-                .route("/campaigns", get(campaigns_list_page))
-                .route("/campaigns/new", get(campaigns_new_page))
-                .route("/campaigns/chat", get(campaign_assistant_page))
-                .route("/campaigns/:id", get(campaigns_detail_page))
+                .route("/campaigns", get(apps_directory_page))
+                .route("/campaigns/new", get(|| async { Redirect::to("https://clips.videosync.ink/campaigns/new") }))
+                .route("/campaigns/chat", get(|| async { Redirect::to("https://clips.videosync.ink/") }))
+                .route("/campaigns/:id", get(|| async { Redirect::to("https://clips.videosync.ink/") }))
                 .route("/account/social", get(account_social_page))
                 .layer(axum::middleware::from_fn(optional_auth_middleware)),
         )
@@ -861,6 +863,39 @@ pub async fn campaigns_list_page(
 </html>"#,
         bg_js = dynamic_bg_script(),
     ))
+}
+
+/// GET /services + /campaigns — apps directory (owner directive Oct 2026 §65).
+/// Campaign storefront moved out of the main app (now DIY $15/mo chat editing
+/// only); each campaign family lives in its own app with one subscription.
+pub async fn apps_directory_page() -> Html<String> {
+    Html(r#"<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Campaign Apps — VideoSync</title>
+<style>
+body{font-family:Inter,system-ui,sans-serif;background:#07111d;color:#e6edf7;margin:0;padding:40px 20px}
+.wrap{max-width:900px;margin:0 auto}
+h1{font-size:2rem;margin-bottom:8px}
+.sub{color:#9fb0c7;margin-bottom:28px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px}
+.card{background:#0d1a2b;border:1px solid #1c2f47;border-radius:12px;padding:22px;text-decoration:none;color:inherit;display:block}
+.card:hover{border-color:#3b82f6}
+.card h2{font-size:1.15rem;margin:0 0 6px}
+.card p{color:#9fb0c7;font-size:0.9rem;margin:0 0 12px}
+.price{color:#3b82f6;font-weight:700}
+.back{display:inline-block;margin-top:28px;color:#9fb0c7}
+</style></head><body><div class="wrap">
+<h1>VideoSync Campaign Apps</h1>
+<p class="sub">Daily content campaigns, each with its own subscription. This site is now DIY video editing only.</p>
+<div class="grid">
+<a class="card" href="https://clips.videosync.ink/"><h2>VideoSync Clips</h2><p>Kick + Twitch daily clip campaigns</p><span class="price">$199/mo</span></a>
+<a class="card" href="https://shorts.videosync.ink/"><h2>VideoSync Shorts</h2><p>YouTube daily clip campaigns</p><span class="price">$297/mo</span></a>
+<a class="card" href="https://app.videosync.ink/"><h2>Website Video</h2><p>Videos from your website URL + landing campaigns</p><span class="price">$50+ / $149/mo</span></a>
+<a class="card" href="https://learn.videosync.ink/"><h2>VideoSync Learn</h2><p>Animated explainer lesson campaigns</p><span class="price">$199/mo</span></a>
+<a class="card" href="https://motion.videosync.ink/"><h2>VideoSync Motion</h2><p>All 8 Manim motion-graphics campaigns</p><span class="price">$149/mo</span></a>
+</div>
+<a class="back" href="/">← Back to VideoSync ($15/mo DIY editing)</a>
+</div></body></html>"#.to_string())
 }
 
 /// Shared URL-slug → service_type map for campaign pages (?service=...).
@@ -3376,6 +3411,17 @@ fn build_landing_page_html() -> &'static str {
                     <span class="separator">|</span>
                     <a href="/help">Help & Support</a>
                 </div>
+<div class="footer-links" style="margin-top:8px">
+                    <a href="https://clips.videosync.ink/">VideoSync Clips</a>
+                    <span>|</span>
+                    <a href="https://shorts.videosync.ink/">VideoSync Shorts</a>
+                    <span>|</span>
+                    <a href="https://app.videosync.ink/">Website Video</a>
+                    <span>|</span>
+                    <a href="https://learn.videosync.ink/">VideoSync Learn</a>
+                    <span>|</span>
+                    <a href="https://motion.videosync.ink/">VideoSync Motion</a>
+                </div>
             </div>
         </div>
     </footer>
@@ -4693,6 +4739,17 @@ fn build_modern_landing_page_html() -> &'static str {
                     <span>|</span>
                     <a href="/help">Help Center</a>
                 </div>
+<div class="footer-links" style="margin-top:8px">
+                    <a href="https://clips.videosync.ink/">VideoSync Clips</a>
+                    <span>|</span>
+                    <a href="https://shorts.videosync.ink/">VideoSync Shorts</a>
+                    <span>|</span>
+                    <a href="https://app.videosync.ink/">Website Video</a>
+                    <span>|</span>
+                    <a href="https://learn.videosync.ink/">VideoSync Learn</a>
+                    <span>|</span>
+                    <a href="https://motion.videosync.ink/">VideoSync Motion</a>
+                </div>
             </div>
         </div>
     </footer>
@@ -4902,6 +4959,7 @@ body {{ font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; colo
 <div class="container">
 <p>VideoSync Studio — AI-agent video production. Produce more content for less. No studio, no crew, no waiting.</p>
 <p style="margin-top:8px;"><a href="/terms" style="color:var(--muted);">Terms</a> · <a href="/privacy" style="color:var(--muted);">Privacy</a></p>
+<p style="margin-top:8px;"><a href="https://clips.videosync.ink/" style="color:var(--muted);">VideoSync Clips</a> · <a href="https://shorts.videosync.ink/" style="color:var(--muted);">VideoSync Shorts</a> · <a href="https://app.videosync.ink/" style="color:var(--muted);">Website Video</a> · <a href="https://learn.videosync.ink/" style="color:var(--muted);">VideoSync Learn</a> · <a href="https://motion.videosync.ink/" style="color:var(--muted);">VideoSync Motion</a></p>
 </div>
 </div>
 <script>
