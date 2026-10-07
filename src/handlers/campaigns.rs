@@ -67,6 +67,7 @@ pub fn campaign_routes() -> Router {
         .route("/api/campaigns/:id/cancel", post(client_cancel_campaign))
         .route("/api/campaigns/:id/pay-spec", get(campaign_pay_spec))
         .route("/api/campaigns/:id/settle", post(campaign_settle))
+        .route("/api/campaigns/:id/paypal-activate", post(campaign_paypal_activate))
         .route("/api/campaigns/:id/chat", post(campaign_chat))
         .route("/api/campaigns/:id/process-now", post(client_process_now))
         .route("/api/campaigns/assistant", post(campaign_assistant_chat))
@@ -83,6 +84,7 @@ pub fn admin_campaign_routes() -> Router {
         .route("/api/admin/campaigns/:id/cancel", post(admin_cancel_campaign))
         .route("/api/admin/campaigns/:id/pay-spec", get(campaign_pay_spec))
         .route("/api/admin/campaigns/:id/settle", post(campaign_settle))
+        .route("/api/admin/campaigns/:id/activate", post(admin_activate_campaign))
         .route("/api/admin/campaigns/:id/files", get(list_campaign_files).post(upload_campaign_file))
         .route("/api/admin/campaigns/:id/files/:file_id", delete(delete_campaign_file))
         .layer(DefaultBodyLimit::max(100 * 1024 * 1024))
@@ -654,6 +656,127 @@ async fn campaign_pay_spec(
 
     let spec = crate::x402::build_payment_required(price_cents, &recipient, &resource_url, &description);
     Ok(Json(serde_json::to_value(spec).unwrap_or(json!({"error": "spec serialise failed"}))))
+}
+
+/// POST /api/campaigns/:id/paypal-activate — verify a PayPal order capture and
+/// activate the campaign for 30 days (owner directive Oct 2026 §65: launch
+/// payment rail for the 5 campaign apps; mirrors the website_video bundle flow).
+/// Body: {"order_id": "..."} (captured client-side via PayPal JS SDK).
+/// The order amount must equal the app subscription price; each order id can
+/// activate exactly one campaign (uq_campaigns_payment_ref).
+#[derive(serde::Deserialize)]
+struct PaypalActivateRequest {
+    order_id: String,
+}
+
+async fn campaign_paypal_activate(
+    Path(id): Path<Uuid>,
+    Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<crate::models::auth::Claims>,
+    Json(req): Json<PaypalActivateRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let user_id: i32 = claims.sub.parse().unwrap_or(0);
+    let row = sqlx::query(
+        "SELECT user_id, service_type, status FROM campaigns WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(&state.db_pool)
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?
+    .ok_or_else(|| (StatusCode::NOT_FOUND, Json(json!({"error": "Campaign not found"}))))?;
+    let owner: i32 = row.get("user_id");
+    if owner != user_id && !(claims.is_superuser || claims.is_staff) {
+        return Err((StatusCode::FORBIDDEN, Json(json!({"error": "Not your campaign"}))));
+    }
+    let status: String = row.get("status");
+    if status == "active" {
+        return Ok(Json(json!({"success": true, "already_active": true})));
+    }
+    let service_type: String = row.get("service_type");
+    let price_cents = campaign_price_cents(&service_type);
+
+    let env = crate::handlers::paypal::get_paypal_env(&state).await;
+    let base_url = crate::handlers::paypal::paypal_base_url(&env);
+    let (client_id, client_secret) = crate::handlers::paypal::paypal_credentials(&env);
+    let token = crate::handlers::paypal::get_paypal_access_token(base_url, &client_id, &client_secret)
+        .await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, Json(json!({"error": e}))))?;
+    let order: serde_json::Value = reqwest::Client::new()
+        .get(format!("{}/v2/checkout/orders/{}", base_url, req.order_id.trim()))
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, Json(json!({"error": format!("PayPal order lookup failed: {e}")}))))?
+        .json()
+        .await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, Json(json!({"error": format!("PayPal order parse failed: {e}")})))?;
+    let order_status = order.get("status").and_then(|s| s.as_str()).unwrap_or("");
+    if order_status != "COMPLETED" && order_status != "APPROVED" {
+        return Err((StatusCode::PAYMENT_REQUIRED, Json(json!({"error": format!("PayPal order is {order_status}, not captured")}))));
+    }
+    let paid_cents = order
+        .get("purchase_units")
+        .and_then(|u| u.as_array())
+        .and_then(|a| a.first())
+        .and_then(|pu| pu.get("amount"))
+        .and_then(|a| a.get("value"))
+        .and_then(|v| v.as_str())
+        .and_then(|v| v.parse::<f64>().ok())
+        .map(|v| (v * 100.0).round() as u64)
+        .unwrap_or(0);
+    if paid_cents != price_cents {
+        return Err((StatusCode::PAYMENT_REQUIRED, Json(json!({"error": format!("Order amount ${:.2} does not match the {} subscription (${:.2})", paid_cents as f64 / 100.0, campaign_app_name(campaign_app_slug(&service_type)), price_cents as f64 / 100.0)}))));
+    }
+
+    let upd = sqlx::query(
+        "UPDATE campaigns SET status = 'active', paid_until = NOW() + INTERVAL '30 days', payment_ref = $2 WHERE id = $1 AND status <> 'active'",
+    )
+    .bind(id)
+    .bind(req.order_id.trim())
+    .execute(&state.db_pool)
+    .await
+    .map_err(|e| {
+        let msg = e.to_string();
+        if msg.contains("uq_campaigns_payment_ref") || msg.contains("duplicate key") {
+            (StatusCode::CONFLICT, Json(json!({"error": "This PayPal order was already used to activate a campaign"})))
+        } else {
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": msg})))
+        }
+    })?;
+    if upd.rows_affected() == 0 {
+        return Ok(Json(json!({"success": true, "already_active": true})));
+    }
+    Ok(Json(json!({"success": true, "status": "active"})))
+}
+
+/// POST /api/admin/campaigns/:id/activate — manual activation (owner directive
+/// Oct 2026 §65): staff activates a campaign for 30 days after off-app payment
+/// (launch-week manual closing). Records payment_ref when supplied.
+async fn admin_activate_campaign(
+    Path(id): Path<Uuid>,
+    Extension(state): Extension<Arc<AppState>>,
+    Json(req): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let payment_ref = req.get("payment_ref").and_then(|v| v.as_str()).map(str::to_string);
+    let upd = sqlx::query(
+        "UPDATE campaigns SET status = 'active', paid_until = NOW() + INTERVAL '30 days', payment_ref = COALESCE($2, payment_ref) WHERE id = $1",
+    )
+    .bind(id)
+    .bind(payment_ref)
+    .execute(&state.db_pool)
+    .await
+    .map_err(|e| {
+        let msg = e.to_string();
+        if msg.contains("uq_campaigns_payment_ref") || msg.contains("duplicate key") {
+            (StatusCode::CONFLICT, Json(json!({"error": "This payment reference was already used"})))
+        } else {
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": msg})))
+        }
+    })?;
+    if upd.rows_affected() == 0 {
+        return Err((StatusCode::NOT_FOUND, Json(json!({"error": "Campaign not found"}))));
+    }
+    Ok(Json(json!({"success": true, "status": "active"})))
 }
 
 /// POST /api/campaigns/:id/settle — accepts X-Payment header, activates campaign for 30 days
