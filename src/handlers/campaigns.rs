@@ -13,17 +13,44 @@ use tokio::fs;
 use tracing::info;
 use uuid::Uuid;
 
-fn campaign_price_cents(service_type: &str) -> u64 {
+/// Five campaign apps (owner directive Oct 2026 §65): each owns a set of
+/// services and sells ONE monthly subscription for all of them.
+/// App subdomains: clips / shorts / app / learn / motion (.videosync.ink).
+pub fn campaign_app_slug(service_type: &str) -> &'static str {
     match service_type {
-        // Three Zernio-powered clipping services share the $297/mo tier.
-        "clipping" | "kick_auto_clipper" | "youtube_clipping" | "twitch_clipping" => 29700,
-        "education" => 19900,
-        "landing_page" => 14900,
-        "manim_explainer" | "whiteboard_animation" | "kinetic_typography"
-        | "animated_infographic" | "algorithm_viz" | "investor_pitch"
-        | "year_in_review" | "isometric_explainer" => 14900,
-        _ => 14900,
+        "kick_auto_clipper" | "twitch_clipping" => "clips",
+        "youtube_clipping" | "clipping" => "shorts",
+        "landing_page" => "app",
+        "education" => "learn",
+        _ => "motion",
     }
+}
+
+/// Display name per app (VideoSync X branding).
+pub fn campaign_app_name(app: &str) -> &'static str {
+    match app {
+        "clips" => "VideoSync Clips",
+        "shorts" => "VideoSync Shorts",
+        "app" => "Website Video",
+        "learn" => "VideoSync Learn",
+        "motion" => "VideoSync Motion",
+        _ => "VideoSync",
+    }
+}
+
+/// One subscription price per app (owner-confirmed Oct 7 2026).
+pub fn campaign_app_price_cents(app: &str) -> u64 {
+    match app {
+        "clips" => 19900,   // kick + twitch
+        "shorts" => 29700,  // youtube
+        "app" => 14900,     // landing-page campaigns (bundles separate)
+        "learn" => 19900,   // education
+        _ => 14900,         // motion (all 8 manim services)
+    }
+}
+
+fn campaign_price_cents(service_type: &str) -> u64 {
+    campaign_app_price_cents(campaign_app_slug(service_type))
 }
 
 fn base_url() -> String {
@@ -388,9 +415,20 @@ async fn client_set_campaign_status(
 async fn client_create_campaign(
     Extension(state): Extension<Arc<AppState>>,
     Extension(claims): Extension<crate::models::auth::Claims>,
+    headers: axum::http::HeaderMap,
     Json(req): Json<CreateCampaignRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let user_id: i32 = claims.sub.parse().unwrap_or(0);
+    // App scoping (owner directive Oct 2026 §65): the calling campaign app
+    // identifies itself via X-App; the service must belong to that app.
+    // Header is optional during transition — pricing always follows the app map.
+    if let Some(app) = headers.get("X-App").and_then(|h| h.to_str().ok()) {
+        let app = app.to_ascii_lowercase();
+        let expected = campaign_app_slug(&req.service_type);
+        if app != expected {
+            return Err((StatusCode::BAD_REQUEST, Json(json!({"error": format!("Service '{}' does not belong to app '{app}' (expected '{expected}').", req.service_type)}))));
+        }
+    }
     let start_date = chrono::DateTime::parse_from_rfc3339(&req.start_date)
         .map_err(|e| (StatusCode::BAD_REQUEST, Json(json!({"error": format!("Invalid start_date: {e}")}))))?
         .with_timezone(&chrono::Utc);
@@ -606,12 +644,13 @@ async fn campaign_pay_spec(
     let service_type: String = row.get("service_type");
     let name: String = row.get("name");
     let price_cents = campaign_price_cents(&service_type);
+    let app = campaign_app_slug(&service_type);
 
     let recipient = std::env::var("X402_RECIPIENT_ADDRESS")
         .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "X402_RECIPIENT_ADDRESS not configured"}))))?;
 
     let resource_url = format!("{}/api/campaigns/{}/settle", base_url(), id);
-    let description = format!("Activate campaign '{}' — ${:.2} month", name, price_cents as f64 / 100.0);
+    let description = format!("Activate campaign '{}' on {} — ${:.2}/month (covers all {} services)", name, campaign_app_name(app), price_cents as f64 / 100.0, app);
 
     let spec = crate::x402::build_payment_required(price_cents, &recipient, &resource_url, &description);
     Ok(Json(serde_json::to_value(spec).unwrap_or(json!({"error": "spec serialise failed"}))))

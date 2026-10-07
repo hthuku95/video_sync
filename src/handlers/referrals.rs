@@ -13,8 +13,36 @@ use crate::AppState;
 pub fn referral_routes() -> Router {
     Router::new()
         .route("/api/referrals/my-code", get(api_get_my_referral_code).post(api_create_my_referral_code))
+        .route("/api/referrals/my-codes", get(api_list_my_referral_codes))
         .route("/api/referrals/my-commissions", get(api_get_my_commissions))
         .layer(axum::middleware::from_fn(auth_middleware))
+}
+
+/// The five campaign apps (owner directive Oct 2026 §65).
+pub const REFERRAL_APPS: &[(&str, &str)] = &[
+    ("clips", "VideoSync Clips"),
+    ("shorts", "VideoSync Shorts"),
+    ("app", "Website Video"),
+    ("learn", "VideoSync Learn"),
+    ("motion", "VideoSync Motion"),
+];
+
+pub fn referral_app_host(app: &str) -> Option<&'static str> {
+    match app {
+        "clips" => Some("https://clips.videosync.ink"),
+        "shorts" => Some("https://shorts.videosync.ink"),
+        "app" => Some("https://app.videosync.ink"),
+        "learn" => Some("https://learn.videosync.ink"),
+        "motion" => Some("https://motion.videosync.ink"),
+        _ => None,
+    }
+}
+
+fn ref_url_for(app: Option<&str>, code: &str) -> String {
+    match app {
+        Some(a) => format!("/ref/{a}/{code}"),
+        None => format!("/ref/{code}"),
+    }
 }
 
 async fn check_whitelisted(state: &Arc<AppState>, email: &str) -> bool {
@@ -26,6 +54,62 @@ async fn check_whitelisted(state: &Arc<AppState>, email: &str) -> bool {
     .await
     .unwrap_or(false);
     in_whitelist
+}
+
+/// GET /api/referrals/my-codes — all five app links for the current user.
+/// Missing apps are auto-created so the dashboard always shows 5 copyable links.
+async fn api_list_my_referral_codes(
+    Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
+) -> Json<serde_json::Value> {
+    if !claims.is_superuser && !claims.is_staff && !check_whitelisted(&state, &claims.email).await {
+        return Json(serde_json::json!({"success": false, "error": "Access restricted. Email not whitelisted."}));
+    }
+    let user_id: i32 = match claims.sub.parse() {
+        Ok(id) => id,
+        Err(_) => return Json(serde_json::json!({"success": false, "error": "Invalid user ID in token"})),
+    };
+    let mut out = Vec::new();
+    for (app, name) in REFERRAL_APPS {
+        let row = sqlx::query(
+            "INSERT INTO referral_codes (user_id, code, app_slug) \
+             VALUES ($1, $2, $3) \
+             ON CONFLICT (user_id, app_slug) WHERE app_slug IS NOT NULL \
+             DO UPDATE SET code = referral_codes.code \
+             RETURNING code",
+        )
+        .bind(user_id)
+        .bind(format!("ref-{app}-{}", &Uuid::new_v4().to_string()[..6]))
+        .bind(*app)
+        .fetch_optional(&state.db_pool)
+        .await
+        .ok()
+        .flatten();
+        // Fallback: read existing (e.g. legacy row won the race — then create fresh below).
+        let code: Option<String> = match row {
+            Some(r) => Some(r.get("code")),
+            None => sqlx::query_scalar::<_, String>(
+                "SELECT code FROM referral_codes WHERE user_id = $1 AND app_slug = $2",
+            )
+            .bind(user_id)
+            .bind(*app)
+            .fetch_optional(&state.db_pool)
+            .await
+            .ok()
+            .flatten(),
+        };
+        if let Some(code) = code {
+            let host = referral_app_host(app).unwrap_or("https://videosync.ink");
+            out.push(serde_json::json!({
+                "app": app,
+                "app_name": name,
+                "code": code,
+                "ref_url": ref_url_for(Some(app), &code),
+                "landing_url": format!("{host}/?ref={code}"),
+            }));
+        }
+    }
+    Json(serde_json::json!({"success": true, "codes": out}))
 }
 
 /// GET /api/referrals/my-code
@@ -75,6 +159,8 @@ async fn api_get_my_referral_code(
 #[derive(Deserialize)]
 struct CreateMyReferralCodeRequest {
     code: Option<String>,
+    /// App slug (clips|shorts|app|learn|motion). Omitted = legacy all-link.
+    app_slug: Option<String>,
 }
 
 async fn api_create_my_referral_code(
@@ -95,12 +181,21 @@ async fn api_create_my_referral_code(
         let suffix = &Uuid::new_v4().to_string()[..8];
         format!("ref-{suffix}")
     });
+    let app_slug: Option<String> = req.app_slug.and_then(|a| {
+        let a = a.to_ascii_lowercase();
+        if referral_app_host(&a).is_some() {
+            Some(a)
+        } else {
+            None
+        }
+    });
 
     let result = sqlx::query(
-        "INSERT INTO referral_codes (user_id, code) VALUES ($1, $2) ON CONFLICT (code) DO NOTHING RETURNING id, code",
+        "INSERT INTO referral_codes (user_id, code, app_slug) VALUES ($1, $2, $3) ON CONFLICT (code) DO NOTHING RETURNING id, code",
     )
     .bind(user_id)
     .bind(&code)
+    .bind(&app_slug)
     .fetch_optional(&state.db_pool)
     .await;
 
@@ -113,7 +208,7 @@ async fn api_create_my_referral_code(
                 "code": {
                     "id": id,
                     "code": code,
-                    "ref_url": format!("/ref/{code}"),
+                    "ref_url": ref_url_for(app_slug.as_deref(), &code),
                 }
             }))
         }

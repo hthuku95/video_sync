@@ -36,7 +36,8 @@ pub fn admin_routes() -> Router {
         .route("/delivery/:id/stream", get(delivery_stream))
         .route("/api/portfolio-samples", get(api_list_portfolio_samples))
         // Referral link redirects
-        .route("/ref/:code", get(referral_redirect));
+        .route("/ref/:code", get(referral_redirect))
+        .route("/ref/:app/:code", get(referral_app_redirect));
 
     // Admin HTML pages — now behind auth + admin middleware
     // Merged into protected_admin BEFORE the .layer() calls so middleware wraps them too.
@@ -12466,11 +12467,25 @@ pub async fn referral_redirect(
     axum::response::Redirect::to(&format!("/?ref={code}"))
 }
 
+/// GET /ref/{app}/{code} — Per-app referral links (owner directive Oct 2026
+/// §65): 302s to the campaign app's subdomain with the ref tag. Unknown apps
+/// fall back to the main landing page (never a dead link).
+pub async fn referral_app_redirect(
+    Path((app, code)): Path<(String, String)>,
+) -> axum::response::Redirect {
+    match crate::handlers::referrals::referral_app_host(&app.to_ascii_lowercase()) {
+        Some(host) => axum::response::Redirect::to(&format!("{host}/?ref={code}")),
+        None => axum::response::Redirect::to(&format!("/?ref={code}")),
+    }
+}
+
 /// POST /api/admin/referral-codes — Create a referral code for a user.
 #[derive(Deserialize)]
 struct CreateReferralCodeRequest {
     user_id: i32,
     code: Option<String>,
+    /// Optional app slug (clips|shorts|app|learn|motion) for per-app links.
+    app_slug: Option<String>,
 }
 
 pub async fn api_create_referral_code(
@@ -12483,10 +12498,11 @@ pub async fn api_create_referral_code(
     });
 
     let result = sqlx::query(
-        "INSERT INTO referral_codes (user_id, code) VALUES ($1, $2) RETURNING id, code",
+        "INSERT INTO referral_codes (user_id, code, app_slug) VALUES ($1, $2, $3) RETURNING id, code",
     )
     .bind(req.user_id)
     .bind(&code)
+    .bind(req.app_slug)
     .fetch_one(&state.db_pool)
     .await;
 
@@ -12504,8 +12520,8 @@ pub async fn api_create_referral_code(
 pub async fn api_list_referral_codes(
     Extension(state): Extension<Arc<AppState>>,
 ) -> Json<serde_json::Value> {
-    let rows = sqlx::query_as::<_, (Uuid, i32, String, chrono::DateTime<chrono::Utc>)>(
-        "SELECT rc.id, rc.user_id, rc.code, rc.created_at \
+    let rows = sqlx::query_as::<_, (Uuid, i32, String, Option<String>, chrono::DateTime<chrono::Utc>)>(
+        "SELECT rc.id, rc.user_id, rc.code, rc.app_slug, rc.created_at \
          FROM referral_codes rc ORDER BY rc.created_at DESC",
     )
     .fetch_all(&state.db_pool)
@@ -12515,8 +12531,12 @@ pub async fn api_list_referral_codes(
         Ok(rows) => {
             let codes: Vec<serde_json::Value> = rows
                 .into_iter()
-                .map(|(id, user_id, code, created_at)| {
-                    json!({"id": id, "user_id": user_id, "code": code, "ref_url": format!("/ref/{code}"), "created_at": created_at})
+                .map(|(id, user_id, code, app_slug, created_at)| {
+                    let ref_url = match app_slug.as_deref() {
+                        Some(a) => format!("/ref/{a}/{code}"),
+                        None => format!("/ref/{code}"),
+                    };
+                    json!({"id": id, "user_id": user_id, "code": code, "app_slug": app_slug, "ref_url": ref_url, "created_at": created_at})
                 })
                 .collect();
             Json(json!({"success": true, "codes": codes}))
