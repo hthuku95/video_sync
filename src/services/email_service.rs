@@ -16,10 +16,12 @@ fn from_address() -> String {
 /// multiple @videosync.ink addresses; SES is verified for the whole domain).
 /// Prospect-facing mail uses support@ so replies land in the monitored inbox.
 pub const SUPPORT_FROM: &str = "VideoSync <support@videosync.ink>";
+pub const HARRY_FROM: &str = "Harry Thuku <harry@videosync.ink>";
 
 pub fn sender_for(profile: &str) -> String {
     match profile {
         "support" => SUPPORT_FROM.to_string(),
+        "harry" => HARRY_FROM.to_string(),
         _ => from_address(),
     }
 }
