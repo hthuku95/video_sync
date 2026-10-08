@@ -7891,7 +7891,6 @@ async fn delivery_stream(
 
     stream_r2_key_response(&state, &headers, &key).await
 }
-}
 
 /// Stream one clip from a delivery's clip gallery (owner directive Oct 2026 —
 /// same Django-style rule: clients see /delivery/N/clip/M, never R2 URLs).
