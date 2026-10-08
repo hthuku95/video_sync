@@ -876,8 +876,8 @@ async fn admin_activate_campaign(
         "UPDATE campaigns SET status = 'active', paid_until = NOW() + INTERVAL '30 days', payment_ref = COALESCE($2, payment_ref), payment_method = $3 WHERE id = $1",
     )
     .bind(id)
-    .bind(payment_ref)
-    .bind(payment_method)
+    .bind(payment_ref.clone())
+    .bind(payment_method.clone())
     .execute(&state.db_pool)
     .await
     .map_err(|e| {
