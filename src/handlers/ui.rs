@@ -1442,7 +1442,7 @@ pub async fn campaigns_detail_page(
     .await
     .unwrap_or_default();
 
-    let posts_html: String = posts.iter().map(|(_pid, day, slot, scheduled_at, media_url, caption, post_status, zernio_id)| {
+    let posts_html: String = posts.iter().map(|(pid, day, slot, scheduled_at, media_url, caption, post_status, zernio_id)| {
         let status_icon = match post_status.as_str() {
             "pending_generation" => "⏳",
             "rendering" => "🔄",
@@ -1452,7 +1452,7 @@ pub async fn campaigns_detail_page(
             _ => "⬜",
         };
         let media_link = match media_url {
-            Some(url) => format!(r#"<a href="{url}" target="_blank" style="color:#93c5fd;">View</a>"#),
+            Some(_) => format!(r#"<a href="/api/campaign-posts/{pid}/stream" target="_blank" style="color:#93c5fd;">View</a>"#),
             None => "—".to_string(),
         };
         let zernio_link = match zernio_id {

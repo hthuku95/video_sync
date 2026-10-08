@@ -69,6 +69,7 @@ pub fn campaign_routes() -> Router {
         .route("/api/campaigns/:id/settle", post(campaign_settle))
         .route("/api/campaigns/:id/paypal-activate", post(campaign_paypal_activate))
         .route("/api/campaigns/:id/paypal-order", post(campaign_paypal_order))
+        .route("/api/campaign-posts/:id/stream", get(campaign_post_stream))
         .route("/api/campaigns/:id/chat", post(campaign_chat))
         .route("/api/campaigns/:id/process-now", post(client_process_now))
         .route("/api/campaigns/assistant", post(campaign_assistant_chat))
@@ -253,6 +254,7 @@ async fn admin_get_campaign(
             "variation_prompt": variation,
             "caption": caption,
             "media_r2_url": media_url,
+            "media_url": media_url.as_ref().map(|_| format!("/api/campaign-posts/{}/stream", post_id)),
             "status": post_status,
             "zernio_post_id": zernio_id,
         })
@@ -595,6 +597,7 @@ async fn client_get_campaign(
             "slot_index": slot,
             "scheduled_at": scheduled_at.to_rfc3339(),
             "media_r2_url": media_url,
+            "media_url": media_url.as_ref().map(|_| format!("/api/campaign-posts/{}/stream", post_id)),
             "status": post_status,
             "zernio_post_id": zernio_id,
         })
@@ -714,6 +717,56 @@ async fn campaign_paypal_order(
         return Err((StatusCode::BAD_GATEWAY, Json(json!({"error": "PayPal returned no order id"}))));
     }
     Ok(Json(json!({"success": true, "paypal_order_id": order_id, "amount_usd": amount})))
+}
+
+/// GET /api/campaign-posts/:id/stream — stream a campaign post's media through
+/// the app (owner directive Oct 2026 — same Django-style rule as deliveries:
+/// clients see videosync.ink URLs, never R2). Owner, staff, or superuser only.
+async fn campaign_post_stream(
+    Path(id): Path<Uuid>,
+    headers: axum::http::HeaderMap,
+    Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<crate::models::auth::Claims>,
+) -> Result<axum::response::Response, (StatusCode, Json<serde_json::Value>)> {
+    let row = sqlx::query(
+        "SELECT cp.media_r2_url, c.user_id FROM campaign_posts cp JOIN campaigns c ON c.id = cp.campaign_id WHERE cp.id = $1",
+    )
+    .bind(id)
+    .fetch_optional(&state.db_pool)
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?
+    .ok_or_else(|| (StatusCode::NOT_FOUND, Json(json!({"error": "Post not found"}))))?;
+    let owner: i32 = row.get("user_id");
+    let caller: i32 = claims.sub.parse().unwrap_or(-1);
+    if owner != caller && !(claims.is_superuser || claims.is_staff) {
+        return Err((StatusCode::FORBIDDEN, Json(json!({"error": "Not your campaign"}))));
+    }
+    let media_url: Option<String> = row.get("media_r2_url");
+    let media_url = media_url.ok_or_else(|| {
+        (StatusCode::NOT_FOUND, Json(json!({"error": "Post has no media yet"})))
+    })?;
+    let r2 = state.r2_client.as_ref().ok_or_else(|| {
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "Storage not configured"})))
+    })?;
+    let key = crate::handlers::admin::extract_r2_object_key_from_url(&media_url, &r2.bucket).ok_or_else(|| {
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "Invalid media URL"})))
+    })?;
+    let range = headers.get("range").and_then(|v| v.to_str().ok());
+    let (raw_status, resp_headers, byte_stream) = r2.stream_object(&key, range).await.map_err(|e| {
+        (StatusCode::BAD_GATEWAY, Json(json!({"error": format!("Stream failed: {e}")})))
+    })?;
+    let bytes = byte_stream.collect().await.map_err(|e| {
+        (StatusCode::BAD_GATEWAY, Json(json!({"error": format!("Failed to read R2 stream: {e}")})))
+    })?;
+    let mut response = axum::response::Response::new(axum::body::Body::from(bytes.to_vec()));
+    *response.status_mut() = StatusCode::from_u16(raw_status).unwrap_or(StatusCode::OK);
+    for (k, v) in resp_headers {
+        use std::str::FromStr;
+        if let (Ok(key), Ok(val)) = (axum::http::header::HeaderName::from_str(&k), axum::http::header::HeaderValue::from_str(&v)) {
+            response.headers_mut().insert(key, val);
+        }
+    }
+    Ok(response)
 }
 
 /// POST /api/campaigns/:id/paypal-activate — verify a PayPal order capture and

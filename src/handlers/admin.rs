@@ -34,6 +34,7 @@ pub fn admin_routes() -> Router {
         // Delivery share links — public by design
         .route("/delivery/:id", get(delivery_page))
         .route("/delivery/:id/stream", get(delivery_stream))
+        .route("/delivery/:id/clip/:idx", get(delivery_clip_stream))
         .route("/api/portfolio-samples", get(api_list_portfolio_samples))
         // Referral link redirects
         .route("/ref/:code", get(referral_redirect))
@@ -7537,10 +7538,10 @@ async fn delivery_page(
                 let clips: String = clip_presigned_urls
                     .iter()
                     .enumerate()
-                    .map(|(i, url)| {
+                    .map(|(i, _url)| {
                         let label = if clip_count == 1 { "Clip".to_string() } else { format!("Clip {}", i + 1) };
                         format!(
-                            r#"<div class="clip-item"><video controls preload="metadata"><source src="{url}" type="video/mp4"></video><div class="clip-label">{label}</div></div>"#
+                            r#"<div class="clip-item"><video controls preload="metadata"><source src="/delivery/{id}/clip/{i}" type="video/mp4"></video><div class="clip-label">{label}</div></div>"#
                         )
                     })
                     .collect::<Vec<_>>()
@@ -7886,6 +7887,53 @@ async fn delivery_stream(
 
     let key = extract_r2_object_key_from_url(&r2_url, &r2.bucket).ok_or_else(|| {
         (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Invalid media URL"})))
+    })?;
+
+    stream_r2_key_response(&state, &headers, &key).await
+}
+}
+
+/// Stream one clip from a delivery's clip gallery (owner directive Oct 2026 —
+/// same Django-style rule: clients see /delivery/N/clip/M, never R2 URLs).
+async fn delivery_clip_stream(
+    Path((id, idx)): Path<(String, usize)>,
+    headers: HeaderMap,
+    Extension(state): Extension<Arc<AppState>>,
+) -> Result<Response, (StatusCode, Json<serde_json::Value>)> {
+    let uuid = Uuid::parse_str(&id).map_err(|_| {
+        (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Invalid delivery ID"})))
+    })?;
+    let row = sqlx::query("SELECT extra_args FROM deliveries WHERE id = $1")
+        .bind(uuid)
+        .fetch_optional(&state.db_pool)
+        .await
+        .map_err(|e| {
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("DB error: {e}")})))
+        })?
+        .ok_or_else(|| {
+            (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Delivery not found"})))
+        })?;
+    let key: String = row
+        .try_get::<Option<serde_json::Value>, _>("extra_args")
+        .ok()
+        .flatten()
+        .and_then(|v| v.get("clip_keys").and_then(|k| k.as_array()).and_then(|a| a.get(idx)).and_then(|k| k.as_str()).map(str::to_string))
+        .ok_or_else(|| {
+            (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Clip not found"})))
+        })?;
+    stream_r2_key_response(&state, &headers, &key).await
+}
+
+/// Stream an R2 object through the app so clients only ever see
+/// videosync.ink URLs (owner directive Oct 2026 — Django-style media layer,
+/// no raw R2 links client-side). Supports Range for video seeking.
+async fn stream_r2_key_response(
+    state: &Arc<AppState>,
+    headers: &HeaderMap,
+    key: &str,
+) -> Result<Response, (StatusCode, Json<serde_json::Value>)> {
+    let r2 = state.r2_client.as_ref().ok_or_else(|| {
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Storage not configured"})))
     })?;
 
     let range = headers.get("range").and_then(|v| v.to_str().ok());
@@ -8740,7 +8788,7 @@ async fn refresh_r2_presigned_url_from_existing(
     }
 }
 
-fn extract_r2_object_key_from_url(existing_url: &str, bucket: &str) -> Option<String> {
+pub(crate) fn extract_r2_object_key_from_url(existing_url: &str, bucket: &str) -> Option<String> {
     let parsed = reqwest::Url::parse(existing_url).ok()?;
     let host = parsed.host_str().unwrap_or_default();
     let segments = parsed
