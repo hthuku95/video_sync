@@ -52,7 +52,7 @@ async fn send_cookie_alert(
         tracing::warn!("🍪 cookie alert suppressed: no admin email resolvable");
         return false;
     };
-    match crate::services::email_service::send_email(&to, &subject, &body, Some(pool), None).await
+    match crate::services::email_service::send_email(&to, &subject, &body, Some(pool), None, None).await
     {
         Ok(_) => {
             tracing::info!("🍪 cookie alert emailed to {}", to);

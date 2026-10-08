@@ -12,6 +12,18 @@ fn from_address() -> String {
     std::env::var("SES_FROM_EMAIL").unwrap_or_else(|_| DEFAULT_FROM.to_string())
 }
 
+/// Named sender profiles (owner directive Oct 2026 — the app sends from
+/// multiple @videosync.ink addresses; SES is verified for the whole domain).
+/// Prospect-facing mail uses support@ so replies land in the monitored inbox.
+pub const SUPPORT_FROM: &str = "VideoSync <support@videosync.ink>";
+
+pub fn sender_for(profile: &str) -> String {
+    match profile {
+        "support" => SUPPORT_FROM.to_string(),
+        _ => from_address(),
+    }
+}
+
 /// Build an SESv2 client inline (same pattern as SQS — SDK discovers creds from env).
 async fn ses_client() -> Result<aws_sdk_sesv2::Client, String> {
     let config = aws_config::load_from_env().await;
@@ -25,6 +37,8 @@ async fn ses_client() -> Result<aws_sdk_sesv2::Client, String> {
 /// `body` — plain-text body.
 /// `db` — optional DB pool; if provided, logs the send to `email_log` table.
 /// `prospect_id` — optional prospect FK for the log.
+/// `from` — optional sender profile ("support") or full address; defaults to
+///   `SES_FROM_EMAIL`. Any @videosync.ink address works (domain verified).
 ///
 /// Returns `Ok((message_id, log_id))` on success. `log_id` is None if no DB given.
 pub async fn send_email(
@@ -33,18 +47,25 @@ pub async fn send_email(
     body: &str,
     db: Option<&PgPool>,
     prospect_id: Option<uuid::Uuid>,
+    from: Option<&str>,
 ) -> Result<(String, Option<uuid::Uuid>), String> {
+    let from_addr = match from {
+        Some("support") => SUPPORT_FROM.to_string(),
+        Some(addr) => addr.to_string(),
+        None => from_address(),
+    };
     // Pre-insert log entry if DB is available
     let log_id = if let Some(pool) = db {
         let id = uuid::Uuid::new_v4();
         let result = sqlx::query(
-            "INSERT INTO email_log (id, prospect_id, to_email, subject, status) \
-             VALUES ($1, $2, $3, $4, 'sending')",
+            "INSERT INTO email_log (id, prospect_id, to_email, subject, status, from_email) \
+             VALUES ($1, $2, $3, $4, 'sending', $5)",
         )
         .bind(id)
         .bind(prospect_id)
         .bind(to)
         .bind(subject)
+        .bind(&from_addr)
         .execute(pool)
         .await;
         match result {
@@ -82,7 +103,7 @@ pub async fn send_email(
     match tokio::time::timeout(SES_TIMEOUT, async {
         client
             .send_email()
-            .from_email_address(from_address())
+            .from_email_address(&from_addr)
             .destination(dest)
             .content(EmailContent::builder().simple(msg).build())
             .send()
@@ -149,6 +170,7 @@ pub async fn send_prospect_email(
         &body,
         Some(pool),
         Some(prospect_id),
+        Some("support"),
     )
     .await?;
     Ok((message_id, log_id.unwrap_or_else(uuid::Uuid::new_v4)))
@@ -172,8 +194,8 @@ pub async fn list_email_logs(
     pool: &PgPool,
     limit: i64,
 ) -> Result<Vec<serde_json::Value>, String> {
-    let rows = sqlx::query_as::<_, (uuid::Uuid, Option<uuid::Uuid>, String, String, String, Option<String>, Option<chrono::DateTime<chrono::Utc>>, chrono::DateTime<chrono::Utc>)>(
-        "SELECT id, prospect_id, to_email, subject, status, error_message, opened_at, created_at \
+    let rows = sqlx::query_as::<_, (uuid::Uuid, Option<uuid::Uuid>, String, String, String, Option<String>, Option<chrono::DateTime<chrono::Utc>>, chrono::DateTime<chrono::Utc>, Option<String>)>(
+        "SELECT id, prospect_id, to_email, subject, status, error_message, opened_at, created_at, from_email \
          FROM email_log ORDER BY created_at DESC LIMIT $1",
     )
     .bind(limit)
@@ -184,7 +206,7 @@ pub async fn list_email_logs(
     Ok(rows
         .into_iter()
         .map(
-            |(id, prospect_id, to_email, subject, status, error_message, opened_at, created_at)| {
+            |(id, prospect_id, to_email, subject, status, error_message, opened_at, created_at, from_email)| {
                 serde_json::json!({
                     "id": id,
                     "prospect_id": prospect_id,
@@ -194,6 +216,7 @@ pub async fn list_email_logs(
                     "error_message": error_message,
                     "opened_at": opened_at,
                     "created_at": created_at,
+                    "from_email": from_email,
                 })
             },
         )
