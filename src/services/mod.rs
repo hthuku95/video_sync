@@ -1,5 +1,6 @@
 // src/services/mod.rs
 pub mod agentic_service_pipeline;
+pub mod app_tiers;
 pub mod artifact_verifier;
 pub mod campaign_engine;
 pub mod chat_agent_worker;

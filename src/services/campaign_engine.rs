@@ -761,7 +761,7 @@ async fn check_rendering_post(state: &Arc<AppState>, campaign: &CampaignRow, pos
 
     // Schedule via Zernio if configured
     if let Some(ref profile_id) = campaign.zernio_profile_id {
-        schedule_via_zernio(state, profile_id, post, &url, &campaign.platforms).await;
+        schedule_via_zernio(state, campaign.user_id, profile_id, post, &url, &campaign.platforms).await;
     }
 
     let new_status = if campaign.zernio_profile_id.is_some() {
@@ -922,6 +922,7 @@ async fn create_skill_from_workflow(
 
 async fn schedule_via_zernio(
     state: &Arc<AppState>,
+    user_id: i32,
     profile_id: &str,
     post: &PostRow,
     media_url: &str,
@@ -931,15 +932,34 @@ async fn schedule_via_zernio(
         return;
     };
 
+    // Ownership + platform backstop (owner directive Oct 2026): explicit
+    // targets are re-validated at publish time (rows may predate the guards).
+    // Drops anything not owned by this user or off the allowed platforms.
+    let owned: Vec<String> = sqlx::query_scalar(
+        "SELECT zernio_account_id FROM user_zernio_accounts WHERE user_id = $1",
+    )
+    .bind(user_id)
+    .fetch_all(&state.db_pool)
+    .await
+    .unwrap_or_default();
     let mut targets: Vec<PlatformTarget> = match platforms_json {
         serde_json::Value::Array(arr) => arr
             .iter()
             .filter_map(|v| {
                 let obj = v.as_object()?;
-                Some(PlatformTarget {
-                    platform: obj.get("platform")?.as_str()?.to_string(),
-                    accountId: obj.get("account_id")?.as_str()?.to_string(),
-                })
+                let platform = obj.get("platform")?.as_str()?.to_string();
+                let account_id = obj.get("account_id")?.as_str()?.to_string();
+                if !crate::services::app_tiers::ALLOWED_PLATFORMS
+                    .contains(&platform.to_ascii_lowercase().as_str())
+                {
+                    tracing::warn!("🚫 publish skipped: platform '{platform}' not allowed");
+                    return None;
+                }
+                if !owned.iter().any(|o| o == &account_id) {
+                    tracing::warn!("🚫 publish skipped: account {account_id} not owned by user {user_id}");
+                    return None;
+                }
+                Some(PlatformTarget { platform, accountId: account_id })
             })
             .collect(),
         _ => Vec::new(),
@@ -951,7 +971,10 @@ async fn schedule_via_zernio(
     if targets.is_empty() {
         if let Ok(resp) = zernio.list_accounts(Some(profile_id)).await {
             for acct in resp.accounts {
-                if acct.is_active {
+                if acct.is_active
+                    && crate::services::app_tiers::ALLOWED_PLATFORMS
+                        .contains(&acct.platform.to_ascii_lowercase().as_str())
+                {
                     targets.push(PlatformTarget {
                         platform: acct.platform.clone(),
                         accountId: acct.id.clone(),

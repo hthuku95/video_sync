@@ -16,9 +16,9 @@ use uuid::Uuid;
 use chrono::{DateTime, Utc};
 
 /// How many connected social accounts each user-owned Zernio profile may hold.
-/// Zernio's free tier caps an account at 2 connected accounts; we model this as
-/// a per-profile capacity so a user can span multiple profiles. Raised when a
-/// payment method is added to Zernio (per-account limit increases).
+/// Organizational only (small blast radius per profile) — it does NOT multiply
+/// Zernio's free tier, which bills per connected account under our API key
+/// (owner-verified Oct 2026). Billing exposure is capped user-level via tiers.
 const PROFILE_ACCOUNT_CAPACITY: usize = 2;
 
 pub fn social_routes() -> Router {
@@ -732,6 +732,9 @@ pub async fn get_my_zernio_profiles(
 pub struct MyConnectUrlPayload {
     pub platform: String,
     pub redirect_url: Option<String>,
+    /// App slug for tier-cap accounting (clips|shorts|app|learn|motion).
+    /// Defaults to clips (the launch app) when omitted.
+    pub app: Option<String>,
 }
 
 /// POST /api/social/my-connect-url — Resolve (auto-creating in the background)
@@ -747,6 +750,20 @@ pub async fn get_my_connect_url(
         Ok(id) => id,
         Err(_) => return Json(json!({"success": false, "error": "Invalid user ID in token"})),
     };
+    // Platform allow-list (owner directive Oct 2026): only YouTube, TikTok,
+    // Instagram, Facebook. Pre-existing others keep working but can't grow.
+    // Tier cap: user-level across all profiles (caps can't multiply by campaign).
+    // Checked BEFORE profile resolution so refused attempts create nothing.
+    let platform = payload.platform.to_ascii_lowercase();
+    if !crate::services::app_tiers::ALLOWED_PLATFORMS.contains(&platform.as_str()) {
+        return Json(json!({"success": false, "error": "This platform is not supported — connect YouTube, TikTok, Instagram, or Facebook."}));
+    }
+    let app = payload.app.as_deref().unwrap_or("clips");
+    let (tier, cap) = crate::services::app_tiers::get_user_tier(&state.db_pool, user_id, app).await;
+    let current = crate::services::app_tiers::count_user_accounts(&state, user_id).await;
+    if current >= cap {
+        return Json(json!({"success": false, "error": format!("Account limit reached ({current}/{cap} on {tier} tier). Upgrade to an Agency tier to connect more."), "upgrade_required": true, "tier": tier, "cap": cap}));
+    }
     let (profile_id, created, profile_name) =
         match resolve_profile_for_connect(&state, user_id).await {
             Ok(v) => v,

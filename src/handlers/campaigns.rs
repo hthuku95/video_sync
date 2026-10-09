@@ -70,6 +70,10 @@ pub fn campaign_routes() -> Router {
         .route("/api/campaigns/:id/paypal-activate", post(campaign_paypal_activate))
         .route("/api/campaigns/:id/paypal-order", post(campaign_paypal_order))
         .route("/api/campaign-posts/:id/stream", get(campaign_post_stream))
+        .route("/api/tiers/pay-spec", post(tier_pay_spec))
+        .route("/api/tiers/settle", post(tier_settle))
+        .route("/api/tiers/paypal-order", post(tier_paypal_order))
+        .route("/api/tiers/paypal-activate", post(tier_paypal_activate))
         .route("/api/campaigns/:id/chat", post(campaign_chat))
         .route("/api/campaigns/:id/process-now", post(client_process_now))
         .route("/api/campaigns/assistant", post(campaign_assistant_chat))
@@ -452,6 +456,31 @@ async fn client_create_campaign(
     // disabled services — they would sit pending forever and burn no value.
     if !crate::services::service_flags::service_enabled(&state.db_pool, &req.service_type).await {
         return Err((StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": format!("Service '{}' is currently disabled and cannot take new campaigns.", req.service_type)}))));
+    }
+
+    // Platform + ownership guard (owner directive Oct 2026): targets must be
+    // allowed platforms AND accounts this user connected (cached mapping).
+    // Blocks cross-user publishing by guessed account id.
+    if let Some(arr) = req.platforms.as_array() {
+        if !arr.is_empty() {
+            let owned: Vec<String> = sqlx::query_scalar(
+                "SELECT zernio_account_id FROM user_zernio_accounts WHERE user_id = $1",
+            )
+            .bind(user_id)
+            .fetch_all(&state.db_pool)
+            .await
+            .unwrap_or_default();
+            for t in arr {
+                let plat = t.get("platform").and_then(|v| v.as_str()).unwrap_or("").to_ascii_lowercase();
+                let aid = t.get("account_id").and_then(|v| v.as_str()).unwrap_or("");
+                if !crate::services::app_tiers::ALLOWED_PLATFORMS.contains(&plat.as_str()) {
+                    return Err((StatusCode::BAD_REQUEST, Json(json!({"error": format!("Platform '{plat}' is not supported — use YouTube, TikTok, Instagram, or Facebook.")}))));
+                }
+                if !owned.iter().any(|o| o == aid) {
+                    return Err((StatusCode::FORBIDDEN, Json(json!({"error": "One or more target accounts are not connected to your account."}))));
+                }
+            }
+        }
     }
 
     // Staff, superusers, and whitelisted users bypass payment — campaign is active immediately.
@@ -915,8 +944,222 @@ async fn record_campaign_ledger(
     .await;
 }
 
-/// POST /api/admin/campaigns/:id/activate — manual activation (owner directive
-/// Oct 2026 §65): staff activates a campaign for 30 days after off-app payment
+/// Agency tier purchases (owner directive Oct 2026): base lives inside the app
+/// subscription; agency50 ($499/mo, 50 accounts) and agency150 ($999/mo, 150
+/// accounts) are bought per user per app. Same rails as campaigns (x402 USDC
+/// + PayPal), same ledger. Body: {"app": "clips", "tier": "agency50"}.
+#[derive(serde::Deserialize)]
+struct TierPurchaseRequest {
+    app: String,
+    tier: String,
+}
+
+fn validate_tier_purchase(app: &str, tier: &str) -> Result<(String, u64), String> {
+    let app = app.to_ascii_lowercase();
+    if !["clips", "shorts", "app", "learn", "motion"].contains(&app.as_str()) {
+        return Err(format!("Unknown app '{app}'"));
+    }
+    let tier = tier.to_ascii_lowercase();
+    if !crate::services::app_tiers::is_known_tier(&tier) || tier == "base" {
+        return Err("Tier must be agency50 or agency150 (base is included)".to_string());
+    }
+    let price = crate::services::app_tiers::tier_price_cents(&app, &tier);
+    Ok((app, price))
+}
+
+async fn tier_pay_spec(
+    Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<crate::models::auth::Claims>,
+    Json(req): Json<TierPurchaseRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let (app, price_cents) = validate_tier_purchase(&req.app, &req.tier)
+        .map_err(|e| (StatusCode::BAD_REQUEST, Json(json!({"error": e}))))?;
+    let _ = (&state, &claims);
+    let recipient = std::env::var("X402_RECIPIENT_ADDRESS")
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "X402_RECIPIENT_ADDRESS not configured"}))))?;
+    let resource_url = format!("{}/api/tiers/settle", base_url());
+    let description = format!("{} {} tier (${:.2}/month, {} accounts)", crate::handlers::campaigns::campaign_app_name(&app), req.tier, price_cents as f64 / 100.0, crate::services::app_tiers::tier_cap(&req.tier));
+    let spec = crate::x402::build_payment_required(price_cents, &recipient, &resource_url, &description);
+    Ok(Json(serde_json::to_value(spec).unwrap_or(json!({"error": "spec serialise failed"}))))
+}
+
+async fn activate_tier(
+    state: &Arc<AppState>,
+    user_id: i32,
+    app: &str,
+    tier: &str,
+    price_cents: u64,
+    method: &str,
+    payment_ref: Option<&str>,
+    payer_address: Option<&str>,
+    payer_email: Option<&str>,
+) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    sqlx::query(
+        "INSERT INTO user_app_subscriptions (user_id, app_slug, tier, status, paid_until, payment_ref, updated_at) \
+         VALUES ($1, $2, $3, 'active', NOW() + INTERVAL '30 days', $4, NOW()) \
+         ON CONFLICT (user_id, app_slug) DO UPDATE SET tier = EXCLUDED.tier, status = 'active', \
+         paid_until = NOW() + INTERVAL '30 days', payment_ref = EXCLUDED.payment_ref, updated_at = NOW()",
+    )
+    .bind(user_id)
+    .bind(app)
+    .bind(tier)
+    .bind(payment_ref)
+    .execute(&state.db_pool)
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+    let user_email: String = sqlx::query_scalar("SELECT email FROM users WHERE id = $1")
+        .bind(user_id)
+        .fetch_optional(&state.db_pool)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let _ = sqlx::query(
+        "INSERT INTO studio_payments \
+         (offer_id, offer_name, amount_cents, currency, payment_method, status, \
+          paypal_order_id, tx_hash, payer_address, buyer_email, raw_meta, completed_at) \
+         VALUES ($1, $2, $3, 'USD', $4, 'completed', $5, $6, $7, $8, $9, NOW())",
+    )
+    .bind(format!("agency-tier-{app}-{tier}"))
+    .bind(format!("{} {} tier", campaign_app_name(app), tier))
+    .bind(price_cents as i32)
+    .bind(method)
+    .bind(if method.starts_with("paypal") { payment_ref } else { None })
+    .bind(if method == "usdc" { payment_ref } else { None })
+    .bind(payer_address)
+    .bind(if user_email.is_empty() { None } else { Some(user_email) })
+    .bind(serde_json::json!({"app": app, "tier": tier, "cap": crate::services::app_tiers::tier_cap(tier)}))
+    .execute(&state.db_pool)
+    .await;
+    Ok(())
+}
+
+/// POST /api/tiers/settle — X-Payment for an agency tier.
+async fn tier_settle(
+    headers: axum::http::HeaderMap,
+    Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<crate::models::auth::Claims>,
+    Json(req): Json<TierPurchaseRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let user_id: i32 = claims.sub.parse().unwrap_or(0);
+    let (app, price_cents) = validate_tier_purchase(&req.app, &req.tier)
+        .map_err(|e| (StatusCode::BAD_REQUEST, Json(json!({"error": e}))))?;
+    let x_payment = headers.get("X-Payment").and_then(|h| h.to_str().ok())
+        .ok_or_else(|| (StatusCode::PAYMENT_REQUIRED, Json(json!({"error": "Missing X-Payment header"}))))?;
+    let recipient = std::env::var("X402_RECIPIENT_ADDRESS")
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "X402_RECIPIENT_ADDRESS not configured"}))))?;
+    let resource_url = format!("{}/api/tiers/settle", base_url());
+    let description = format!("{} {} tier", campaign_app_name(&app), req.tier);
+    let spec = crate::x402::build_payment_required(price_cents, &recipient, &resource_url, &description);
+    let preq = spec.accepts.into_iter().next()
+        .ok_or_else(|| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "No payment requirements"}))))?;
+    let tx_hash = crate::x402::settle_or_reject(x_payment, &preq).await
+        .map_err(|e| (StatusCode::PAYMENT_REQUIRED, Json(json!({"error": e}))))?;
+    let payer_wallet: Option<String> = {
+        use base64::Engine;
+        base64::engine::general_purpose::STANDARD
+            .decode(x_payment)
+            .ok()
+            .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+            .and_then(|v| v.get("payload").and_then(|p| p.get("authorization")).and_then(|a| a.get("from")).and_then(|f| f.as_str()).map(str::to_string))
+    };
+    activate_tier(&state, user_id, &app, &req.tier.to_ascii_lowercase(), price_cents, "usdc", Some(&tx_hash), payer_wallet.as_deref(), None).await?;
+    Ok(Json(json!({"success": true, "tier": req.tier, "app": app, "tx_hash": tx_hash})))
+}
+
+/// POST /api/tiers/paypal-order + /api/tiers/paypal-activate — PayPal rail
+/// for agency tiers (mirrors the campaign flow).
+#[derive(serde::Deserialize)]
+struct TierPaypalActivateRequest {
+    app: String,
+    tier: String,
+    order_id: String,
+}
+
+async fn tier_paypal_order(
+    Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<crate::models::auth::Claims>,
+    Json(req): Json<TierPurchaseRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let user_id: i32 = claims.sub.parse().unwrap_or(0);
+    let (app, price_cents) = validate_tier_purchase(&req.app, &req.tier)
+        .map_err(|e| (StatusCode::BAD_REQUEST, Json(json!({"error": e}))))?;
+    let _ = user_id;
+    let env = crate::handlers::paypal::get_paypal_env(&state).await;
+    let base_url = crate::handlers::paypal::paypal_base_url(&env);
+    let (client_id, client_secret) = crate::handlers::paypal::paypal_credentials(&env);
+    if client_id.is_empty() || client_secret.is_empty() {
+        return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "PayPal not configured"}))));
+    }
+    let token = crate::handlers::paypal::get_paypal_access_token(base_url, &client_id, &client_secret)
+        .await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, Json(json!({"error": e}))))?;
+    let amount = format!("{:.2}", price_cents as f64 / 100.0);
+    let order: serde_json::Value = reqwest::Client::new()
+        .post(format!("{}/v2/checkout/orders", base_url))
+        .bearer_auth(token)
+        .json(&serde_json::json!({
+            "intent": "CAPTURE",
+            "purchase_units": [{
+                "reference_id": format!("tier-{app}-{}", req.tier),
+                "description": format!("{} {} tier", campaign_app_name(&app), req.tier),
+                "amount": {"currency_code": "USD", "value": amount},
+            }],
+        }))
+        .send()
+        .await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, Json(json!({"error": format!("PayPal order create failed: {e}")}))))?
+        .json()
+        .await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, Json(json!({"error": format!("PayPal order parse failed: {e}")}))))?;
+    let order_id = order.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    if order_id.is_empty() {
+        return Err((StatusCode::BAD_GATEWAY, Json(json!({"error": "PayPal returned no order id"}))));
+    }
+    Ok(Json(json!({"success": true, "paypal_order_id": order_id, "amount_usd": amount})))
+}
+
+async fn tier_paypal_activate(
+    Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<crate::models::auth::Claims>,
+    Json(req): Json<TierPaypalActivateRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let user_id: i32 = claims.sub.parse().unwrap_or(0);
+    let (app, price_cents) = validate_tier_purchase(&req.app, &req.tier)
+        .map_err(|e| (StatusCode::BAD_REQUEST, Json(json!({"error": e}))))?;
+    let env = crate::handlers::paypal::get_paypal_env(&state).await;
+    let base_url = crate::handlers::paypal::paypal_base_url(&env);
+    let (client_id, client_secret) = crate::handlers::paypal::paypal_credentials(&env);
+    let token = crate::handlers::paypal::get_paypal_access_token(base_url, &client_id, &client_secret)
+        .await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, Json(json!({"error": e}))))?;
+    let order: serde_json::Value = reqwest::Client::new()
+        .get(format!("{}/v2/checkout/orders/{}", base_url, req.order_id.trim()))
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, Json(json!({"error": format!("PayPal order lookup failed: {e}")}))))?
+        .json()
+        .await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, Json(json!({"error": format!("PayPal order parse failed: {e}")}))))?;
+    let order_status = order.get("status").and_then(|s| s.as_str()).unwrap_or("");
+    if order_status != "COMPLETED" && order_status != "APPROVED" {
+        return Err((StatusCode::PAYMENT_REQUIRED, Json(json!({"error": format!("PayPal order is {order_status}, not captured")}))));
+    }
+    let paid_cents = order
+        .get("purchase_units").and_then(|u| u.as_array()).and_then(|a| a.first())
+        .and_then(|pu| pu.get("amount")).and_then(|a| a.get("value")).and_then(|v| v.as_str())
+        .and_then(|v| v.parse::<f64>().ok()).map(|v| (v * 100.0).round() as u64).unwrap_or(0);
+    if paid_cents != price_cents {
+        return Err((StatusCode::PAYMENT_REQUIRED, Json(json!({"error": "Order amount does not match tier price"}))));
+    }
+    let payer = order.get("payer");
+    let payer_email = payer.and_then(|p| p.get("email_address")).and_then(|v| v.as_str()).map(str::to_string);
+    activate_tier(&state, user_id, &app, &req.tier.to_ascii_lowercase(), price_cents, "paypal", Some(req.order_id.trim()), None, payer_email.as_deref()).await?;
+    Ok(Json(json!({"success": true, "tier": req.tier, "app": app})))
+}
+
+/// POST /api/admin/campaigns/:id/activate — manual activation (owner directive/// Oct 2026 §65): staff activates a campaign for 30 days after off-app payment
 /// (launch-week manual closing). Records payment_ref when supplied.
 async fn admin_activate_campaign(
     Path(id): Path<Uuid>,
