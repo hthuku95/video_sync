@@ -20,6 +20,79 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Mint a Coinbase CDP facilitator JWT (owner directive Oct 2026 — the
+/// facilitator rejects the old opaque X402_FACILITATOR_TOKEN with 401; auth is
+/// `Bearer <Ed25519 JWT>`, 120s expiry, per request). Key material comes from
+/// CDP_API_KEY_ID / CDP_API_KEY_SECRET (base64 raw or PEM). Follows the CDP
+/// auth shape: {alg EdDSA, kid, typ JWT, nonce} + {sub, iss cdp, nbf, exp,
+/// uris: ["POST api.cdp.coinbase.com/platform/v2/x402/settle"]}.
+fn cdp_facilitator_jwt() -> Result<String, String> {
+    use base64::Engine;
+    use ed25519_dalek::Signer;
+    let key_id =
+        std::env::var("CDP_API_KEY_ID").map_err(|_| "CDP_API_KEY_ID not configured".to_string())?;
+    let secret_b64 = std::env::var("CDP_API_KEY_SECRET")
+        .map_err(|_| "CDP_API_KEY_SECRET not configured".to_string())?;
+    let secret_b64 = secret_b64.trim();
+    // Accept PEM or raw base64.
+    let der_or_raw = if secret_b64.contains("BEGIN") {
+        let body: String = secret_b64
+            .lines()
+            .filter(|l| !l.starts_with("-----"))
+            .collect();
+        base64::engine::general_purpose::STANDARD
+            .decode(body.trim())
+            .map_err(|e| format!("CDP key base64 invalid: {e}"))?
+    } else {
+        base64::engine::general_purpose::STANDARD
+            .decode(secret_b64)
+            .map_err(|e| format!("CDP key base64 invalid: {e}"))?
+    };
+    // Raw 64-byte (seed+pubkey) or 32-byte seed; PKCS#8 DER unwrapped if present.
+    let key_bytes: Vec<u8> = if der_or_raw.len() == 64 || der_or_raw.len() == 32 {
+        der_or_raw
+    } else {
+        // Try PKCS#8: last 64 bytes are seed+pubkey for Ed25519 OneAsymmetricKey.
+        if der_or_raw.len() >= 64 {
+            der_or_raw[der_or_raw.len() - 64..].to_vec()
+        } else {
+            return Err("CDP key has unexpected length".to_string());
+        }
+    };
+    let signing_key = if key_bytes.len() == 64 {
+        let arr: [u8; 64] = key_bytes.try_into().map_err(|_| "CDP key bad length".to_string())?;
+        ed25519_dalek::SigningKey::from_keypair_bytes(&arr)
+            .map_err(|e| format!("CDP key invalid: {e}"))?
+    } else {
+        let arr: [u8; 32] = key_bytes.try_into().map_err(|_| "CDP key bad length".to_string())?;
+        ed25519_dalek::SigningKey::from_bytes(&arr)
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_secs();
+    let nonce: String = {
+        use rand::RngCore;
+        let mut b = [0u8; 16];
+        rand::thread_rng().fill_bytes(&mut b);
+        hex::encode(b)
+    };
+    let header = serde_json::json!({"alg": "EdDSA", "kid": key_id, "nonce": nonce, "typ": "JWT"});
+    let payload = serde_json::json!({
+        "sub": key_id,
+        "iss": "cdp",
+        "nbf": now,
+        "exp": now + 120,
+        "uris": ["POST api.cdp.coinbase.com/platform/v2/x402/settle"],
+    });
+    let b64u = |v: &serde_json::Value| {
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(serde_json::to_vec(v).unwrap_or_default())
+    };
+    let signing_input = format!("{}.{}", b64u(&header), b64u(&payload));
+    let sig = signing_key.sign(signing_input.as_bytes());
+    Ok(format!("{}.{}", signing_input, base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(sig.to_bytes())))
+}
+
 /// USDC contract address on Base mainnet. Hardcoded because we only support
 /// USDC (the x402 reference asset). To support other assets, switch to a
 /// per-PaymentRequirements `asset` field.
@@ -169,9 +242,14 @@ pub async fn verify_payment(
 
     let facilitator_url = std::env::var("X402_FACILITATOR_URL")
         .unwrap_or_else(|_| "https://x402.org/facilitator".to_string());
-    let facilitator_token = std::env::var("X402_FACILITATOR_TOKEN")
-        .ok()
-        .filter(|value| !value.trim().is_empty());
+    // Auth: CDP Ed25519 JWT (owner directive Oct 2026). Falls back to the
+    // legacy opaque token if CDP keys are absent (preserves old behavior).
+    let bearer: Option<String> = match cdp_facilitator_jwt() {
+        Ok(jwt) => Some(jwt),
+        Err(_) => std::env::var("X402_FACILITATOR_TOKEN")
+            .ok()
+            .filter(|value| !value.trim().is_empty()),
+    };
 
     if facilitator_url == "https://x402.org/facilitator" && requirements.network == "base" {
         return Err(
@@ -195,7 +273,7 @@ pub async fn verify_payment(
     // /settle; for public x402.org, /settle does both in one call. We use
     // /settle so a buyer's payment is final by the time we return 200.
     let mut request = client.post(format!("{}/settle", facilitator_url)).json(&body);
-    if let Some(token) = facilitator_token {
+    if let Some(token) = bearer {
         request = request.bearer_auth(token);
     }
 
