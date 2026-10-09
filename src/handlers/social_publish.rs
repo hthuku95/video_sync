@@ -623,13 +623,30 @@ async fn ensure_user_zernio_profile(
         )
     })?;
 
-    // Search for an existing profile on Zernio before creating a new one
+    // Search for an existing profile on Zernio before creating a new one.
+    // SECURITY (owner directive Oct 2026): match ONLY this user's own naming
+    // prefix ("{username} — VideoSync"). The old substring match ("— VideoSync")
+    // could adopt ANOTHER user's profile (e.g. the owner's) for a brand-new
+    // user, merging their accounts and campaigns.
+    let own_prefix = sqlx::query("SELECT username, email FROM users WHERE id = $1")
+        .bind(user_id)
+        .fetch_optional(&state.db_pool)
+        .await
+        .ok()
+        .flatten()
+        .map(|r| {
+            let username: Option<String> = r.get("username");
+            let email: String = r.get("email");
+            username.unwrap_or_else(|| email.split('@').next().unwrap_or("User").to_string())
+        })
+        .map(|base| format!("{base} — VideoSync"))
+        .unwrap_or_default();
     match z.list_profiles().await {
         Ok(profiles_resp) => {
             for profile in &profiles_resp.profiles {
-                // Check if the profile name matches our naming convention:
-                // "{username} — VideoSync"
-                if profile.name.contains("— VideoSync") {
+                // Check if the profile name matches OUR naming convention AND
+                // belongs to this user (prefix match on their own base name).
+                if !own_prefix.is_empty() && profile.name.starts_with(&own_prefix) {
                     // Found a matching profile — adopt it
                     sqlx::query(
                         "INSERT INTO user_zernio_profiles (user_id, zernio_profile_id, name) VALUES ($1, $2, $3) \
