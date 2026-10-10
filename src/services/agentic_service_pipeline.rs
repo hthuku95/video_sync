@@ -424,6 +424,9 @@ impl AgenticServicePipeline {
         let mut best_score: i32 = -1;
         let mut best_feedback = String::new();
         let mut retries_used: i32 = 0;
+        // Last-attempt evidence for the terminal error (Oct 2026 — "No usable
+        // output" used to carry zero diagnosability; now it names the cause).
+        let mut last_attempt_tail = String::new();
 
         for attempt in 0..AGENT_MAX_RETRIES {
             // Cooperative cancellation probe — checked between every attempt
@@ -512,6 +515,14 @@ impl AgenticServicePipeline {
 
             let produced = locate_output_from_result(&agent_result, &output_dir);
             retries_used = attempt as i32;
+            // Evidence capture for terminal diagnosability.
+            last_attempt_tail = match &agent_result {
+                Err(e) => format!("AGENT_ERROR: {}", e.chars().take(400).collect::<String>()),
+                Ok(text) => {
+                    let tail: String = text.chars().rev().take(400).collect::<String>().chars().rev().collect();
+                    format!("AGENT_OK_TAIL: {}", tail)
+                }
+            };
 
             // Capture all clip URLs from the agent response for gallery view.
             // The generate_clip_compilation tool emits "Cloud URL:" lines.
@@ -641,9 +652,10 @@ impl AgenticServicePipeline {
 
         let Some(output_path) = best_output_path else {
             return Err(format!(
-                "No usable output from {} attempts for delivery {}",
+                "No usable output from {} attempts for delivery {}. Last attempt: {}",
                 retries_used + 1,
-                input.delivery_id
+                input.delivery_id,
+                if last_attempt_tail.is_empty() { "(no agent response recorded)".to_string() } else { last_attempt_tail.clone() },
             ));
         };
 

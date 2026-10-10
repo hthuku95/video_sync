@@ -65,8 +65,7 @@ fn ensure_outputs_directory(file_path: &str) -> String {
 }
 
 /// Context needed for tool execution to save outputs to DB and vectorize them
-#[derive(Clone)]
-pub struct ToolExecutionContext {
+#[derive(Clone)]pub struct ToolExecutionContext {
     pub session_id: String,
     pub user_id: Option<i32>,
     pub app_state: Arc<AppState>,
@@ -76,6 +75,56 @@ pub struct ToolExecutionContext {
 struct ToolExecutionNodeStart {
     node_key: String,
     cached_result: Option<String>,
+}
+
+/// Hard tool deny-list for clipping runs (Oct 2026 — proven live: agents call
+/// `auto_generate_video` inside clipping workflows, which routes to the dead
+/// BlenderMCP URL and hangs until the 6h cap; scoped toolbelts are advisory
+/// only since search_tools re-opens the full catalog). Returns an error JSON
+/// (which the model reads as a tool result and course-corrects) when a banned
+/// generative/3D tool is called inside a clipping-service workflow.
+/// Applies to all clipping slugs incl. legacy_youtube_clipping (which
+/// normalizes to LandingPage, so it needs the explicit check).
+async fn clipping_tool_deny(tool_name: &str, ctx: &ToolExecutionContext) -> Option<String> {
+    const DENIED_EXACT: &[&str] = &[
+        "auto_generate_video",
+        "generate_long_form_video",
+        "blender_generate_scene_type",
+        "manim_execute_script",
+        "run_director",
+    ];
+    let hit = DENIED_EXACT.contains(&tool_name)
+        || tool_name.starts_with("blender_")
+        || tool_name.starts_with("manim_");
+    if !hit {
+        return None;
+    }
+    let wid = ctx.workflow_id?;
+    let row: Option<(Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT metadata->>'service_slug' AS slug, metadata->>'service_type' AS stype \
+         FROM app_workflows WHERE id = $1",
+    )
+    .bind(wid)
+    .fetch_optional(&ctx.app_state.db_pool)
+    .await
+    .ok()
+    .flatten();
+    let (slug, stype) = row?;
+    let s = slug.as_deref().unwrap_or("");
+    let is_clipping = crate::services::agentic_service_pipeline::ServiceType::from_normalized(s)
+        == crate::services::agentic_service_pipeline::ServiceType::Clipping
+        || s == "legacy_youtube_clipping"
+        || stype.as_deref() == Some("clipping");
+    if !is_clipping {
+        return None;
+    }
+    tracing::warn!(
+        "🚫 tool '{}' denied in clipping workflow {} (use generate_clip_compilation)",
+        tool_name, wid
+    );
+    Some(format!(
+        r#"{{"error":"Tool '{tool_name}' is disabled for clipping renders — 3D/animation generation cannot clip source video. Call generate_clip_compilation with the source URL instead."}}"#,
+    ))
 }
 
 async fn start_tool_execution_node(
@@ -678,6 +727,11 @@ async fn execute_tool_claude_with_context_inner(
     args: &Value,
     ctx: &ToolExecutionContext,
 ) -> String {
+    // Hard deny-list for clipping runs (misrouted Blender calls die here in
+    // milliseconds instead of hanging to the 6h workflow cap).
+    if let Some(denied) = clipping_tool_deny(name, ctx).await {
+        return denied;
+    }
     // Handle special tools that need AppState access
     if name == "view_video" {
         return execute_view_video_with_state_claude(args, ctx).await;
@@ -937,6 +991,10 @@ async fn execute_tool_gemini_with_context_inner(
     args: &HashMap<String, Value>,
     ctx: &ToolExecutionContext,
 ) -> String {
+    // Hard deny-list for clipping runs (same guard as the Claude arm).
+    if let Some(denied) = clipping_tool_deny(name, ctx).await {
+        return denied;
+    }
     // Handle special tools that need AppState access
     if name == "view_video" {
         return execute_view_video_with_state_gemini(args, ctx).await;
