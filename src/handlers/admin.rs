@@ -10928,7 +10928,11 @@ async function loadDeliveries() {
         ? `<div class="link-cell">
              <button class="btn btn-copy btn-sm" onclick="navigator.clipboard.writeText('${deliveryUrl}');this.textContent='✓ Copied';setTimeout(()=>this.textContent='Copy Link',2000)">Copy Link</button>
              <a href="${deliveryUrl}" target="_blank" style="font-size:11px;color:#6c5ce7">Open ↗</a>
+             ${r2Url ? `<button class="btn btn-sm" style="background:#1a2a3a;border:1px solid #2a4a6a;color:#60a5fa;" onclick="togglePreview('${d.id}','${streamUrl}')">▶ Preview</button>` : ''}
              ${r2Url ? `<a href="${streamUrl}" download="${fname}" class="btn btn-sm" style="background:#1a2a3a;border:1px solid #2a4a6a;color:#60a5fa;text-decoration:none;">⬇ Download</a>` : ''}
+           </div>
+           <div id="preview-${d.id}" style="display:none;margin-top:8px;max-width:420px">
+             <video controls preload="none" style="width:100%;border-radius:8px;background:#000;"></video>
            </div>`
         : d.status === 'failed'
           ? `<span style="font-size:11px;color:#f87171">${(d.error||'').substring(0,60)}</span>`
@@ -10956,6 +10960,22 @@ onGigTypeChange();
 loadDeliveries();
 // Auto-refresh every 30s to pick up completed renders
 setInterval(loadDeliveries, 30000);
+
+// Inline preview player (owner directive Oct 2026): watch renders without
+// leaving the dashboard. src is set on first open only (preload="none").
+function togglePreview(id, streamUrl){
+  const box = document.getElementById('preview-' + id);
+  if(!box) return;
+  const video = box.querySelector('video');
+  if(box.style.display === 'none'){
+    if(video && !video.src) video.src = streamUrl;
+    box.style.display = 'block';
+    if(video) video.play().catch(()=>{});
+  } else {
+    if(video) video.pause();
+    box.style.display = 'none';
+  }
+}
 </script>
 </body>
 </html>"###;
