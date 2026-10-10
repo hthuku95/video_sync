@@ -181,7 +181,10 @@ async fn admin_create_campaign(
 
     let style = req.style.unwrap_or_else(|| "cinematic".to_string());
     let duration = req.duration.unwrap_or(30.0);
-    let posts_per_day = req.posts_per_day.unwrap_or(3);
+    // Launch tuning (owner directive Oct 2026): clippers want volume — allow
+    // 1-10 posts/day (default 5). Each post is a full render (~10-25 min),
+    // so the ceiling protects shared worker capacity + platform spam limits.
+    let posts_per_day = req.posts_per_day.unwrap_or(5).clamp(1, 10);
 
     let source_url = req.source_url.as_deref().filter(|s| !s.is_empty());
 
@@ -502,7 +505,10 @@ async fn client_create_campaign(
 
     let style = req.style.unwrap_or_else(|| "cinematic".to_string());
     let duration = req.duration.unwrap_or(30.0);
-    let posts_per_day = req.posts_per_day.unwrap_or(3);
+    // Launch tuning (owner directive Oct 2026): clippers want volume — allow
+    // 1-10 posts/day (default 5). Each post is a full render (~10-25 min),
+    // so the ceiling protects shared worker capacity + platform spam limits.
+    let posts_per_day = req.posts_per_day.unwrap_or(5).clamp(1, 10);
     let source_url = req.source_url.as_deref().filter(|s| !s.is_empty());
 
     let id = sqlx::query_scalar::<_, Uuid>(
