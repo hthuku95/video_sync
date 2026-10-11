@@ -36,6 +36,30 @@ struct DownloadRequest {
     r2_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     r2_bucket: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cache_key: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AsyncSubmitResponse {
+    job_id: String,
+    status: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct AsyncStatusResponse {
+    job_id: String,
+    status: String,
+    #[serde(default)]
+    method: Option<String>,
+    #[serde(default)]
+    r2_url: Option<String>,
+    #[serde(default)]
+    metadata: Option<VideoMetadata>,
+    #[serde(default)]
+    error: Option<String>,
+    #[serde(default)]
+    cached: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -281,7 +305,149 @@ impl YtdlpApiClient {
     }
 
     /// Single download attempt (no retries)
+    ///
+    /// Background-first (Oct 2026): submit to /api/v1/download-async and poll
+    /// short status requests, so throttled multi-hour VOD pulls outlive every
+    /// proxy timeout in the chain. Falls back to the legacy sync endpoint
+    /// when the service predates the async API (404).
     async fn _download_attempt(
+        &self,
+        video_url: &str,
+        output_path: &str,
+        job_id: Option<String>,
+        r2_key: Option<String>,
+    ) -> Result<VideoDownloadResult, String> {
+        match self
+            ._download_attempt_async(video_url, output_path, job_id.clone(), r2_key.clone())
+            .await
+        {
+            Ok(result) => Ok(result),
+            Err(e) if e == "ASYNC_API_MISSING" => {
+                warn!("async download API missing — falling back to sync download");
+                self._download_attempt_sync(video_url, output_path, job_id, r2_key)
+                    .await
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Content-hash for the shared R2 source cache (same URL → same key,
+    /// so retries and sibling deliveries reuse one download).
+    fn source_cache_key(video_url: &str) -> String {
+        use sha2::{Digest, Sha256};
+        hex::encode(Sha256::digest(video_url.as_bytes()))
+    }
+
+    /// Background download: submit + poll. No request lives longer than
+    /// seconds, so proxy idle timeouts cannot kill large VOD pulls.
+    async fn _download_attempt_async(
+        &self,
+        video_url: &str,
+        output_path: &str,
+        job_id: Option<String>,
+        r2_key: Option<String>,
+    ) -> Result<VideoDownloadResult, String> {
+        const ASYNC_TIMEOUT_SECS: u64 = 5400; // 90 min ceiling per attempt (service-side too)
+        const POLL_SECS: u64 = 10;
+
+        let cache_key = Self::source_cache_key(video_url);
+        let submit = DownloadRequest {
+            video_url: video_url.to_string(),
+            job_id: job_id
+                .clone()
+                .or_else(|| Some(format!("adl_{}", &cache_key[..16.min(cache_key.len())]))),
+            quality: Some("720p".to_string()),
+            format: Some("mp4".to_string()),
+            prefer_base64: Some(false),
+            timeout_seconds: Some(ASYNC_TIMEOUT_SECS as u32),
+            r2_key: r2_key.clone(),
+            r2_bucket: None,
+            cache_key: Some(cache_key),
+        };
+        let endpoint = format!("{}/api/v1/download-async", self.base_url);
+        info!("📤 POST {} (background VOD pull)", endpoint);
+        let resp = self
+            .http_client
+            .post(&endpoint)
+            .json(&submit)
+            .send()
+            .await
+            .map_err(|e| format!("HTTP request failed: {}", e))?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Err("ASYNC_API_MISSING".to_string());
+        }
+        if !resp.status().is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(format!("async submit failed: {}", body.chars().take(300).collect::<String>()));
+        }
+        let sub: AsyncSubmitResponse = resp
+            .json()
+            .await
+            .map_err(|e| format!("Failed to parse async submit: {}", e))?;
+        info!("⏳ background download job {} submitted", sub.job_id);
+
+        let poll_url = format!("{}/api/v1/download-async/{}", self.base_url, sub.job_id);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(ASYNC_TIMEOUT_SECS + 300);
+        loop {
+            if tokio::time::Instant::now() > deadline {
+                return Err("async download poll deadline exceeded (transient — retry)".to_string());
+            }
+            tokio::time::sleep(Duration::from_secs(POLL_SECS)).await;
+            let resp = self
+                .http_client
+                .get(&poll_url)
+                .send()
+                .await
+                .map_err(|e| format!("HTTP request failed: {}", e))?;
+            if !resp.status().is_success() {
+                continue; // transient poll blip — keep waiting for the job
+            }
+            let st: AsyncStatusResponse = match resp.json().await {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            match st.status.as_str() {
+                "done" => {
+                    let r2_url = st.r2_url.filter(|u| !u.is_empty()).ok_or_else(|| {
+                        "async job done without R2 URL".to_string()
+                    })?;
+                    if st.cached.unwrap_or(false) {
+                        info!("♻️ source cache hit — reusing {}", r2_url.chars().take(80).collect::<String>());
+                    } else {
+                        info!("✅ R2 source available: {}", r2_url.chars().take(80).collect::<String>());
+                    }
+                    // Empty placeholder keeps downstream file validation happy
+                    // (same contract as the sync r2 path).
+                    let mut file = File::create(output_path)
+                        .await
+                        .map_err(|e| format!("Failed to create output file: {}", e))?;
+                    file.write_all(b"")
+                        .await
+                        .map_err(|e| format!("Failed to write placeholder: {}", e))?;
+                    file.flush().await.ok();
+                    let (title, duration, width, height) = match st.metadata {
+                        Some(m) => (m.title, m.duration_seconds, m.width, m.height),
+                        None => ("cached source".to_string(), 0.0, None, None),
+                    };
+                    return Ok(VideoDownloadResult {
+                        file_path: output_path.to_string(),
+                        title,
+                        duration_seconds: duration,
+                        width,
+                        height,
+                        r2_url: Some(r2_url),
+                    });
+                }
+                "failed" | "cancelled" => {
+                    return Err(st.error.unwrap_or_else(|| "async download failed".to_string()));
+                }
+                _ => {} // queued | running — keep polling
+            }
+        }
+    }
+
+    /// Legacy single download attempt (no retries) — sync endpoint.
+    async fn _download_attempt_sync(
         &self,
         video_url: &str,
         output_path: &str,
@@ -298,6 +464,7 @@ impl YtdlpApiClient {
             timeout_seconds: Some(600), // 10 minutes (matches HTTP client timeout)
             r2_key: r2_key.clone(),
             r2_bucket: None,
+            cache_key: None, // sync fallback carries no cache (async path owns caching)
         };
 
         // POST to /api/v1/download
