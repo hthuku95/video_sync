@@ -199,9 +199,24 @@ impl AgenticServicePipeline {
         // raw URL is kept and the pipeline tries it as before. Scoped to
         // Clipping (the only service whose sources are channels); R2/presigned
         // artifacts are never touched.
+        //
+        // Already-direct media URLs (VOD/clip/watch/m3u8 links, incl. explicit
+        // source_url overrides from sample packs) must NOT be re-resolved:
+        // resolve_latest_video_url is channel-oriented and clobbers them back
+        // to the latest full VOD (Oct 11: a 60s twitch clip became an 8GB VOD).
+        fn is_direct_media_url(url: &str) -> bool {
+            let u = url.to_ascii_lowercase();
+            u.contains("/videos/")
+                || u.contains("/clip/")
+                || u.contains("/clips/")
+                || u.contains("watch?v=")
+                || u.contains("youtu.be/")
+                || u.contains("/shorts/")
+                || u.contains(".m3u8")
+        }
         if service_type == ServiceType::Clipping {
             if let Some(url) = input.source_url.clone() {
-                if !url.contains("r2.cloudflarestorage") {
+                if !url.contains("r2.cloudflarestorage") && !is_direct_media_url(&url) {
                     match crate::services::campaign_engine::resolve_latest_video_url(
                         &state, &url,
                     )
