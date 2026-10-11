@@ -2985,12 +2985,12 @@ async fn list_prospects(
         conditions.push("sourced_by");
     }
 
-    let mut sql = "SELECT id, platform, channel_id, display_name, platform_url, \
+    let mut sql = "SELECT prospects.id, platform, channel_id, display_name, platform_url, \
                    subscriber_count, avg_viewer_count, content_category, prospect_type, \
                    ai_score, ai_reasoning, dm_script_creator, dm_script_clipper, \
                    x_dm_script, email_script, contact_status, notes, twitter_handle, instagram_handle, \
                    business_email, external_url, service_type, sample_delivery_id, contact_enrichment, \
-                   referred_by, sourced_by, u.email AS sourced_by_email, created_at, \
+                   referred_by, sourced_by, u.email AS sourced_by_email, prospects.created_at, \
                    ((CASE WHEN business_email IS NOT NULL AND business_email <> '' THEN 60 ELSE 0 END) + \
                     (CASE WHEN twitter_handle IS NOT NULL AND twitter_handle <> '' THEN 50 ELSE 0 END) + \
                     (CASE WHEN external_url IS NOT NULL AND external_url <> '' THEN 25 ELSE 0 END) + \
