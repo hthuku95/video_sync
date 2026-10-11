@@ -399,6 +399,11 @@ impl YtdlpApiClient {
                 .send()
                 .await
                 .map_err(|e| format!("HTTP request failed: {}", e))?;
+            if resp.status() == reqwest::StatusCode::NOT_FOUND {
+                // Service restarted (in-memory jobs wiped) — fail fast so the
+                // retry loop resubmits a fresh job instead of polling a ghost.
+                return Err("async job lost on service side (transient — resubmit)".to_string());
+            }
             if !resp.status().is_success() {
                 continue; // transient poll blip — keep waiting for the job
             }
