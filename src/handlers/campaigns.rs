@@ -26,6 +26,17 @@ pub fn campaign_app_slug(service_type: &str) -> &'static str {
     }
 }
 
+/// Read-scope check for campaign apps (owner directive §65): when a caller
+/// identifies its app via X-App, it may only see campaigns of its own
+/// services (a shorts campaign must never surface in the learn app, etc.).
+/// Unknown or absent app → visible (content_machine ops + transition compat).
+fn app_owns_service(app: &str, service_type: &str) -> bool {
+    match app {
+        "clips" | "shorts" | "app" | "learn" | "motion" => campaign_app_slug(service_type) == app,
+        _ => true,
+    }
+}
+
 /// Display name per app (VideoSync X branding).
 pub fn campaign_app_name(app: &str) -> &'static str {
     match app {
@@ -548,6 +559,7 @@ async fn client_create_campaign(
 async fn client_list_campaigns(
     Extension(state): Extension<Arc<AppState>>,
     Extension(claims): Extension<crate::models::auth::Claims>,
+    headers: axum::http::HeaderMap,
 ) -> Json<serde_json::Value> {
     let user_id: i32 = claims.sub.parse().unwrap_or(0);
     let rows = sqlx::query_as::<_, (
@@ -561,7 +573,7 @@ async fn client_list_campaigns(
     .fetch_all(&state.db_pool)
     .await;
 
-    let campaigns: Vec<serde_json::Value> = match rows {
+    let mut campaigns: Vec<serde_json::Value> = match rows {
         Ok(rows) => rows.into_iter().map(|(
             id, name, service_type, status, source_url, schedule, posts_per_day,
             total_planned, total_published, created_at,
@@ -581,6 +593,22 @@ async fn client_list_campaigns(
         Err(e) => return Json(json!({"success": false, "error": e.to_string()})),
     };
 
+    // App scoping (§65): a campaign app only sees its own services.
+    if let Some(app) = headers
+        .get("X-App")
+        .and_then(|h| h.to_str().ok())
+        .map(|s| s.to_ascii_lowercase())
+    {
+        if matches!(app.as_str(), "clips" | "shorts" | "app" | "learn" | "motion") {
+            campaigns.retain(|c| {
+                c.get("service_type")
+                    .and_then(|s| s.as_str())
+                    .map(|st| app_owns_service(&app, st))
+                    .unwrap_or(false)
+            });
+        }
+    }
+
     Json(json!({"success": true, "campaigns": campaigns}))
 }
 
@@ -590,6 +618,7 @@ async fn client_get_campaign(
     Extension(state): Extension<Arc<AppState>>,
     Extension(claims): Extension<crate::models::auth::Claims>,
     Path(id): Path<Uuid>,
+    headers: axum::http::HeaderMap,
 ) -> Json<serde_json::Value> {
     let user_id: i32 = claims.sub.parse().unwrap_or(0);
     let campaign = sqlx::query_as::<_, (
@@ -612,6 +641,19 @@ async fn client_get_campaign(
         Ok(None) => return Json(json!({"success": false, "error": "Campaign not found"})),
         Err(e) => return Json(json!({"success": false, "error": e.to_string()})),
     };
+
+    // App scoping (§65): hide foreign-app campaigns as not-found.
+    if let Some(app) = headers
+        .get("X-App")
+        .and_then(|h| h.to_str().ok())
+        .map(|s| s.to_ascii_lowercase())
+    {
+        if matches!(app.as_str(), "clips" | "shorts" | "app" | "learn" | "motion")
+            && !app_owns_service(&app, &service_type)
+        {
+            return Json(json!({"success": false, "error": "Campaign not found"}));
+        }
+    }
 
     let posts = sqlx::query_as::<_, (Uuid, i32, i32, chrono::DateTime<chrono::Utc>, Option<String>, String, Option<String>)>(
         "SELECT id, day_number, slot_index, scheduled_at, media_r2_url, status, zernio_post_id \
