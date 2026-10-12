@@ -9319,8 +9319,8 @@ async fn execute_search_youtube_channels_with_state_claude(
                         "📺 {}\n   Channel ID: {}\n   Description: {}\n   Created: {}",
                         item.snippet.title,
                         item.snippet.channel_id,
-                        if item.snippet.description.len() > 100 {
-                            format!("{}...", &item.snippet.description[..100])
+                        if item.snippet.description.chars().count() > 100 {
+                            format!("{}...", item.snippet.description.chars().take(100).collect::<String>())
                         } else {
                             item.snippet.description.clone()
                         },
@@ -19659,8 +19659,8 @@ pub(crate) async fn execute_search_crawled_content_inner(
                 let url = r.get("agent_response").and_then(|v| v.as_str()).unwrap_or("unknown");
                 let title = r.get("context").and_then(|c| c.get("page_title")).and_then(|v| v.as_str()).unwrap_or("");
                 let content = r.get("user_message").and_then(|v| v.as_str()).unwrap_or("");
-                let snippet = if content.len() > 500 {
-                    format!("{}...", &content[..500])
+                let snippet = if content.chars().count() > 500 {
+                    format!("{}...", content.chars().take(500).collect::<String>())
                 } else {
                     content.to_string()
                 };
