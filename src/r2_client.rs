@@ -60,6 +60,12 @@ impl R2Client {
         let s3_config = S3ConfigBuilder::from(&sdk_config)
             .endpoint_url(&endpoint)
             .force_path_style(true)
+            // R2 rejects the opportunistic CRC checksums newer SDKs attach by
+            // default (WhenSupported) — multipart completion 500s. Only send
+            // checksums when an operation actually requires them.
+            .request_checksum_calculation(
+                aws_sdk_s3::config::RequestChecksumCalculation::WhenRequired,
+            )
             .build();
 
         let client = Client::from_conf(s3_config);
@@ -293,7 +299,7 @@ impl R2Client {
             .multipart_upload(completed)
             .send()
             .await
-            .map_err(|e| format!("complete_multipart_upload failed: {e}"))?;
+            .map_err(|e| format!("complete_multipart_upload failed: {e} | debug: {e:?}"))?;
 
         tracing::info!("R2 multipart upload: {local_path} → {key}");
         Ok(())
@@ -372,7 +378,7 @@ impl R2Client {
             .multipart_upload(completed)
             .send()
             .await
-            .map_err(|e| format!("complete_multipart_upload failed: {e}"))?;
+            .map_err(|e| format!("complete_multipart_upload failed: {e} | debug: {e:?}"))?;
 
         tracing::info!("R2 stream upload complete: {key} ({part_number} parts)");
         Ok(())
