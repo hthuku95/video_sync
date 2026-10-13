@@ -5319,10 +5319,17 @@ async fn execute_clip_compilation_value(
     // For kick AND twitch sources the vertical spec (9:16, logo, transcribed
     // captions, outro+handle) is MANDATORY — not an agent choice. Other
     // sources keep the agent-controlled kick_style flag.
+    // NOTE (Oct 13): detect on the EFFECTIVE source URL, not just the
+    // campaign binding — sample-pack/prospect deliveries have no
+    // campaign_posts row, so bound_source is None and the spec silently
+    // never fired for the entire launch-test path.
     let bound_lower = bound_source.as_deref().unwrap_or("").to_ascii_lowercase();
-    let spec_platform: Option<&str> = if bound_lower.contains("kick.com") {
+    let effective_lower = source_url.to_ascii_lowercase();
+    let spec_platform: Option<&str> = if bound_lower.contains("kick.com")
+        || effective_lower.contains("kick.com")
+    {
         Some("Kick")
-    } else if bound_lower.contains("twitch.tv") {
+    } else if bound_lower.contains("twitch.tv") || effective_lower.contains("twitch.tv") {
         Some("Twitch")
     } else {
         None
@@ -5338,7 +5345,10 @@ async fn execute_clip_compilation_value(
                 std::env::var(logo_env).ok().filter(|s| !s.is_empty())
             });
             let name = string_arg(args, &["streamer_name"]).or_else(|| {
-                url::Url::parse(bound_source.as_deref().unwrap_or(""))
+                // Prefer the campaign binding, fall back to the effective
+                // source URL (sample packs have no campaign row).
+                let url = bound_source.as_deref().unwrap_or(&source_url);
+                url::Url::parse(url)
                     .ok()
                     .and_then(|p| p.path_segments().and_then(|mut s| s.next().map(String::from)))
                     .filter(|s| !s.is_empty())
