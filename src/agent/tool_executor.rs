@@ -4898,19 +4898,23 @@ async fn execute_clip_compilation_gemini(
     execute_clip_compilation_value(&Value::Object(object), ctx).await
 }
 
-/// Transcribe a trimmed clip's audio via VibeVoice and build a timed SRT
-/// file with real speech segments. Returns the SRT path, or None (caller
-/// falls back to the static title caption). Best-effort: any failure → None.
+/// Transcribe a trimmed clip's audio via VibeVoice: returns the timed SRT
+/// path (if speech found) plus a meaningful human title derived from the
+/// spoken words. Falls back to (None, fallback_title) on any failure.
 async fn transcribe_clip_to_srt(
     ctx: &ToolExecutionContext,
     clip_path: &std::path::Path,
     tmp_dir: &std::path::Path,
     index: usize,
     clip_duration: f64,
-) -> Option<std::path::PathBuf> {
-    let vibevoice = ctx.app_state.vibevoice_client.as_ref()?;
+    fallback_title: &str,
+) -> (Option<std::path::PathBuf>, String) {
+    let none_with_fallback = || (None, fallback_title.to_string());
+    let Some(vibevoice) = ctx.app_state.vibevoice_client.as_ref() else {
+        return none_with_fallback();
+    };
     // Transcriber fetches by URL — publish the raw clip to a temp R2 URL first.
-    let audio_url = crate::cloud_storage::upload_local_file_to_cloud(
+    let audio_url = match crate::cloud_storage::upload_local_file_to_cloud(
         clip_path.to_str().unwrap_or(""),
         "video/mp4",
         ctx.user_id.unwrap_or(0),
@@ -4919,18 +4923,106 @@ async fn transcribe_clip_to_srt(
         &ctx.app_state,
     )
     .await
-    .ok()?;
-    let payload = vibevoice
+    {
+        Ok(u) => u,
+        Err(_) => return none_with_fallback(),
+    };
+    let payload = match vibevoice
         .transcribe_url(&audio_url, &[], None, None, None)
         .await
-        .ok()?;
-    let srt = build_srt_from_transcript(&payload, clip_duration)?;
-    if srt.trim().is_empty() {
-        return None;
+    {
+        Ok(p) => p,
+        Err(_) => return none_with_fallback(),
+    };
+    let title = clip_title_from_transcript(&payload, fallback_title);
+    match build_srt_from_transcript(&payload, clip_duration) {
+        Some(srt) if !srt.trim().is_empty() => {
+            let srt_path = tmp_dir.join(format!("clip_{:02}.srt", index));
+            match tokio::fs::write(&srt_path, srt.as_bytes()).await {
+                Ok(_) => (Some(srt_path), title),
+                Err(_) => (None, title),
+            }
+        }
+        _ => (None, title),
     }
-    let srt_path = tmp_dir.join(format!("clip_{:02}.srt", index));
-    tokio::fs::write(&srt_path, srt.as_bytes()).await.ok()?;
-    Some(srt_path)
+}
+
+/// Derive a short human title for a clip from its transcript: first
+/// striking phrase (up to ~8 words), title-cased. Falls back to the
+/// platform highlight label when there is no speech.
+fn clip_title_from_transcript(payload: &serde_json::Value, fallback: &str) -> String {
+    let mut text = String::new();
+    if let Some(segs) = payload.get("segments").and_then(|v| v.as_array()) {
+        for seg in segs {
+            if let Some(t) = seg
+                .get("text")
+                .or_else(|| seg.get("content"))
+                .and_then(|v| v.as_str())
+            {
+                let t = t.trim().replace('\n', " ");
+                if t.split_whitespace().count() >= 3 {
+                    text = t;
+                    break;
+                }
+            }
+        }
+    }
+    if text.is_empty() {
+        text = payload
+            .get("text")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .replace('\n', " ");
+    }
+    let words: Vec<&str> = text.split_whitespace().take(8).collect();
+    if words.len() < 3 {
+        return fallback.to_string();
+    }
+    let mut title = words.join(" ");
+    // Strip trailing filler words and cap length.
+    for filler in [" um", " uh", " like", " you know"] {
+        if let Some(stripped) = title.to_ascii_lowercase().strip_suffix(filler) {
+            if stripped.split_whitespace().count() >= 3 {
+                title.truncate(stripped.len());
+                break;
+            }
+        }
+    }
+    if title.chars().count() > 64 {
+        title = title.chars().take(61).collect::<String>() + "...";
+    }
+    // Title-case first letter of each word (ASCII-safe).
+    title
+        .split_whitespace()
+        .map(|w| {
+            let mut c = w.chars();
+            match c.next() {
+                Some(f) => f.to_ascii_uppercase().to_string() + c.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Filesafe slug from a clip title (ascii alphanumerics, max 28 chars).
+fn slugify_title(title: &str) -> String {
+    let slug: String = title
+        .to_ascii_lowercase()
+        .chars()
+        .filter_map(|c| {
+            if c.is_ascii_alphanumeric() {
+                Some(c)
+            } else if c.is_whitespace() || c == '-' {
+                Some('_')
+            } else {
+                None
+            }
+        })
+        .collect();
+    let slug = slug.trim_matches('_').to_string();
+    slug.chars().take(28).collect()
 }
 
 /// Build SRT from a whisper-style transcript payload. Accepts segments with
@@ -5410,6 +5502,7 @@ async fn execute_clip_compilation_value(
     }
 
     let mut clip_urls: Vec<String> = Vec::new();
+    let mut clip_titles: Vec<String> = Vec::new();
 
     for (i, &start) in clip_starts.iter().enumerate() {
         let raw = format!("clip_{:02}.mp4", i + 1);
@@ -5436,8 +5529,25 @@ async fn execute_clip_compilation_value(
         tracing::info!("✂️ Clip {} trimmed at {:.1}s ({}s)", i + 1, start, clip_duration);
 
         let final_path = if kick_style {
-            let kick_name = format!("clip_{:02}_kick.mp4", i + 1);
+            let (caption_srt, clip_title) = {
+                // Real speech captions + meaningful title from transcription.
+                let fallback = match &streamer_name {
+                    Some(name) if !name.is_empty() => {
+                        format!("{} Highlight — @{}", platform_label, name)
+                    }
+                    _ => format!("{} Highlight", platform_label),
+                };
+                transcribe_clip_to_srt(ctx, &raw_path, &tmp_dir, i + 1, clip_duration, &fallback).await
+            };
+            let slug = slugify_title(&clip_title);
+            let kick_name = if slug.is_empty() {
+                format!("clip_{:02}_clip.mp4", i + 1)
+            } else {
+                format!("clip_{:02}_{}.mp4", i + 1, slug)
+            };
             let kick_path = tmp_dir.join(&kick_name);
+            let caption = clip_title.clone();
+            clip_titles.push(clip_title);
 
             let logo_local = if let Some(url) = &logo_url {
                 if !url.is_empty() {
@@ -5451,18 +5561,6 @@ async fn execute_clip_compilation_value(
                     }
                 } else { None }
             } else { None };
-
-            let caption = match &streamer_name {
-                Some(name) if !name.is_empty() => {
-                    format!("{} Highlight — @{}", platform_label, name)
-                }
-                _ => format!("{} Highlight", platform_label),
-            };
-
-            // Real speech captions: transcribe the trimmed clip, burn timed
-            // segments. Falls back to the static title inside post-process.
-            let caption_srt =
-                transcribe_clip_to_srt(ctx, &raw_path, &tmp_dir, i + 1, clip_duration).await;
             tracing::info!(
                 "📝 Clip {} transcription: {}",
                 i + 1,
@@ -5544,6 +5642,7 @@ async fn execute_clip_compilation_value(
     serde_json::json!({
         "clips": clip_urls,
         "count": clip_urls.len(),
+        "titles": clip_titles,
         "source": source_url,
         "total_duration_seconds": duration,
         "clip_start_times": clip_starts,
