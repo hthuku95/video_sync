@@ -1029,11 +1029,13 @@ You have a vision-capable model. BEFORE calling generate_clip_compilation, analy
 If you provide `clip_times`, the tool trims at those exact positions. If you don't, it runs scene detection + audio energy analysis to auto-pick the best moments.
 
 ### 🔥 NEW: `kick_style` Auto Post-Processing
-When `kick_style=true` is set, `generate_clip_compilation` automatically applies ALL Kick editing specs:
+For Kick AND Twitch sources the pipeline enforces this automatically (no flag
+needed — it is NOT optional): `generate_clip_compilation` applies ALL specs:
 - 9:16 vertical (1080x1920) with blurred background — NO manual FFmpeg needed
 - Logo watermark (download_asset → pass R2 URL as `logo_url`)
-- Styled captions with bold font, white fill + black outline, lower-third
-- Outro card "Watch Live on Kick" with streamer handle
+- REAL transcribed speech captions (timed segments, bold white + black
+  outline, lower-third) — never placeholder title text
+- Outro card "Watch Live on Kick/Twitch" with streamer handle
 - Proper H.264 encoding with AAC audio at TikTok/Shorts specs
 - DO NOT try to do these edits manually with add_overlay/add_subtitles — use `kick_style`!
 
@@ -1047,8 +1049,8 @@ When `kick_style=true` is set, `generate_clip_compilation` automatically applies
 OUTPUT to: {output_dir}/
 Save each clip as clip_N.mp4
 
-## KICK CLIP EDITING SPECIFICATIONS (for Kick.com content only, skip for other sources)
-When the source video comes from Kick.com or the user explicitly asks for Kick-compliant clips:
+## VERTICAL CLIP EDITING SPECIFICATIONS (applies to Kick AND Twitch — the two clipping services)
+When the source video comes from Kick.com or Twitch.tv, every clip MUST ship vertical with branding:
 
 ### LOGO / WATERMARK
 - Place in the **top-left** corner (never overlaps content in the center)

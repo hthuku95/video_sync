@@ -4898,22 +4898,129 @@ async fn execute_clip_compilation_gemini(
     execute_clip_compilation_value(&Value::Object(object), ctx).await
 }
 
+/// Transcribe a trimmed clip's audio via VibeVoice and build a timed SRT
+/// file with real speech segments. Returns the SRT path, or None (caller
+/// falls back to the static title caption). Best-effort: any failure → None.
+async fn transcribe_clip_to_srt(
+    ctx: &ToolExecutionContext,
+    clip_path: &std::path::Path,
+    tmp_dir: &std::path::Path,
+    index: usize,
+    clip_duration: f64,
+) -> Option<std::path::PathBuf> {
+    let vibevoice = ctx.app_state.vibevoice_client.as_ref()?;
+    // Transcriber fetches by URL — publish the raw clip to a temp R2 URL first.
+    let audio_url = crate::cloud_storage::upload_local_file_to_cloud(
+        clip_path.to_str().unwrap_or(""),
+        "video/mp4",
+        ctx.user_id.unwrap_or(0),
+        &ctx.session_id,
+        ctx.workflow_id,
+        &ctx.app_state,
+    )
+    .await
+    .ok()?;
+    let payload = vibevoice
+        .transcribe_url(&audio_url, &[], None, None, None)
+        .await
+        .ok()?;
+    let srt = build_srt_from_transcript(&payload, clip_duration)?;
+    if srt.trim().is_empty() {
+        return None;
+    }
+    let srt_path = tmp_dir.join(format!("clip_{:02}.srt", index));
+    tokio::fs::write(&srt_path, srt.as_bytes()).await.ok()?;
+    Some(srt_path)
+}
+
+/// Build SRT from a whisper-style transcript payload. Accepts segments with
+/// {start|begin|from, end|finish|to, text|content}; falls back to spreading
+/// the full text across the clip when no timed segments exist.
+fn build_srt_from_transcript(
+    payload: &serde_json::Value,
+    clip_duration: f64,
+) -> Option<String> {
+    fn num(v: Option<&serde_json::Value>) -> Option<f64> {
+        v.and_then(|x| x.as_f64().or_else(|| x.as_i64().map(|i| i as f64)))
+    }
+    fn fmt_ts(sec: f64) -> String {
+        let sec = sec.max(0.0);
+        let h = (sec / 3600.0).floor() as u32;
+        let m = ((sec % 3600.0) / 60.0).floor() as u32;
+        let s = (sec % 60.0).floor() as u32;
+        let ms = ((sec * 1000.0) % 1000.0).floor() as u32;
+        format!("{:02}:{:02}:{:02},{:03}", h, m, s, ms)
+    }
+    let mut out = String::new();
+    let mut n = 0u32;
+    if let Some(segs) = payload.get("segments").and_then(|v| v.as_array()) {
+        for seg in segs {
+            let start = num(seg.get("start").or_else(|| seg.get("begin")).or_else(|| seg.get("from")));
+            let end = num(seg.get("end").or_else(|| seg.get("finish")).or_else(|| seg.get("to")));
+            let text = seg
+                .get("text")
+                .or_else(|| seg.get("content"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                .replace('\n', " ");
+            if text.is_empty() {
+                continue;
+            }
+            let (s, e) = match (start, end) {
+                (Some(a), Some(b)) if b > a => (a, b),
+                _ => continue,
+            };
+            n += 1;
+            out.push_str(&format!("{}\n{} --> {}\n{}\n\n", n, fmt_ts(s), fmt_ts(e), text));
+        }
+    }
+    if n == 0 {
+        // No timed segments — spread the full transcript across the clip.
+        let text = payload
+            .get("text")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .replace('\n', " ");
+        if text.is_empty() {
+            return None;
+        }
+        let words: Vec<&str> = text.split_whitespace().collect();
+        let chunks: Vec<String> = words.chunks(12).map(|c| c.join(" ")).collect();
+        let per = (clip_duration / chunks.len().max(1) as f64).max(1.0);
+        for (i, chunk) in chunks.iter().enumerate() {
+            let s = i as f64 * per;
+            let e = ((i + 1) as f64 * per).min(clip_duration.max(0.5));
+            n += 1;
+            out.push_str(&format!("{}\n{} --> {}\n{}\n\n", n, fmt_ts(s), fmt_ts(e), chunk));
+        }
+    }
+    if n == 0 {
+        return None;
+    }
+    Some(out)
+}
+
 /// Core clip compilation logic
-/// Apply Kick-compliant post-processing to a trimmed clip.
+/// Apply vertical clip-spec post-processing to a trimmed clip.
 /// Converts to 9:16 (1080x1920) with blurred background, adds logo watermark,
-/// styled captions, outro card, and re-encodes to H.264/AAC.
+/// transcribed segment captions (or a static title fallback), outro card with
+/// the platform handle, and re-encodes to H.264/AAC.
 async fn kick_post_process_clip(
     input_path: &Path,
     output_path: &Path,
     logo_path: Option<&Path>,
     streamer_name: Option<&str>,
+    platform_label: &str,
     caption_text: &str,
+    caption_srt: Option<&Path>,
     clip_duration: f64,
 ) -> Result<(), String> {
     let font = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf";
     let outro_text = match streamer_name {
-        Some(name) if !name.is_empty() => format!("Watch Live on Kick\\n@{}", name),
-        _ => "Watch Live on Kick".to_string(),
+        Some(name) if !name.is_empty() => format!("Watch Live on {platform_label}\\n@{name}"),
+        _ => format!("Watch Live on {platform_label}"),
     };
     let outro_start = (clip_duration - 2.0).max(0.0);
 
@@ -4940,12 +5047,21 @@ async fn kick_post_process_clip(
         current_label = "with_logo";
     }
 
-    // Caption text (lower-third, full duration)
-    let safe_caption = caption_text.replace('\'', "'\\\\''");
-    filter.push_str(&format!(
-        ";[{}]drawtext=text='{}':x=40:y=h-100:fontfile={}:fontsize=36:fontcolor=white:box=1:boxcolor=black@0.5:boxborderw=8[captioned]",
-        current_label, safe_caption, font
-    ));
+    // Captions: timed transcribed segments via SRT when available (real
+    // speech, segment-timed); otherwise the static title fallback.
+    if let Some(srt) = caption_srt {
+        filter.push_str(&format!(
+            ";[{}]subtitles='{}':force_style='FontName=DejaVu Sans Bold,FontSize=20,PrimaryColour=&HFFFFFF,OutlineColour=&H80000000,BorderStyle=1,Outline=2,Shadow=0,Alignment=2,MarginV=70'[captioned]",
+            current_label,
+            srt.to_string_lossy().replace('\'', "'\\\\''"),
+        ));
+    } else {
+        let safe_caption = caption_text.replace('\'', "'\\\\''");
+        filter.push_str(&format!(
+            ";[{}]drawtext=text='{}':x=40:y=h-100:fontfile={}:fontsize=36:fontcolor=white:box=1:boxcolor=black@0.5:boxborderw=8[captioned]",
+            current_label, safe_caption, font
+        ));
+    }
     current_label = "captioned";
 
     // Outro text (last 2 seconds)
@@ -5107,27 +5223,42 @@ async fn execute_clip_compilation_value(
     // (logo, lower-third caption, vertical) is MANDATORY — not an agent
     // choice. Force kick_style=true and prefill branding from the campaign;
     // the agent can still pass explicit values for name/logo.
-    let is_campaign_kick = bound_source
-        .as_deref()
-        .map(|u| u.contains("kick.com"))
-        .unwrap_or(false);
-    let (kick_style, logo_url, streamer_name) = if is_campaign_kick {
-        let logo = string_arg(args, &["logo_url"]).or_else(|| {
-            std::env::var("KICK_DEFAULT_LOGO_URL").ok().filter(|s| !s.is_empty())
-        });
-        let name = string_arg(args, &["streamer_name"]).or_else(|| {
-            url::Url::parse(bound_source.as_deref().unwrap_or(""))
-                .ok()
-                .and_then(|p| p.path_segments().and_then(|mut s| s.next().map(String::from)))
-                .filter(|s| !s.is_empty())
-        });
-        (true, logo, name)
+    // ── VERTICAL CLIP-SPEC ENFORCEMENT ──
+    // For kick AND twitch sources the vertical spec (9:16, logo, transcribed
+    // captions, outro+handle) is MANDATORY — not an agent choice. Other
+    // sources keep the agent-controlled kick_style flag.
+    let bound_lower = bound_source.as_deref().unwrap_or("").to_ascii_lowercase();
+    let spec_platform: Option<&str> = if bound_lower.contains("kick.com") {
+        Some("Kick")
+    } else if bound_lower.contains("twitch.tv") {
+        Some("Twitch")
     } else {
-        (
+        None
+    };
+    let (kick_style, logo_url, streamer_name, platform_label) = match spec_platform {
+        Some(platform) => {
+            let logo_env = if platform == "Kick" {
+                "KICK_DEFAULT_LOGO_URL"
+            } else {
+                "TWITCH_DEFAULT_LOGO_URL"
+            };
+            let logo = string_arg(args, &["logo_url"]).or_else(|| {
+                std::env::var(logo_env).ok().filter(|s| !s.is_empty())
+            });
+            let name = string_arg(args, &["streamer_name"]).or_else(|| {
+                url::Url::parse(bound_source.as_deref().unwrap_or(""))
+                    .ok()
+                    .and_then(|p| p.path_segments().and_then(|mut s| s.next().map(String::from)))
+                    .filter(|s| !s.is_empty())
+            });
+            (true, logo, name, platform.to_string())
+        }
+        None => (
             bool_arg(args, &["kick_style"]).unwrap_or(false),
             string_arg(args, &["logo_url"]),
             string_arg(args, &["streamer_name"]),
-        )
+            "Kick".to_string(),
+        ),
     };
 
     // Parse new params
@@ -5321,16 +5452,25 @@ async fn execute_clip_compilation_value(
             } else { None };
 
             let caption = match &streamer_name {
-                Some(name) if !name.is_empty() => format!("Kick Highlight — @{}", name),
-                _ => "Kick Highlight".to_string(),
+                Some(name) if !name.is_empty() => {
+                    format!("{} Highlight — @{}", platform_label, name)
+                }
+                _ => format!("{} Highlight", platform_label),
             };
+
+            // Real speech captions: transcribe the trimmed clip, burn timed
+            // segments. Falls back to the static title inside post-process.
+            let caption_srt =
+                transcribe_clip_to_srt(ctx, &raw_path, &tmp_dir, i + 1, clip_duration).await;
 
             match kick_post_process_clip(
                 &raw_path,
                 &kick_path,
                 logo_local.as_ref().map(|p| p.as_path()),
                 streamer_name.as_deref(),
+                &platform_label,
                 &caption,
+                caption_srt.as_deref(),
                 clip_duration,
             ).await {
                 Ok(_) => kick_path,
