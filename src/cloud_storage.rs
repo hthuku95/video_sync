@@ -142,7 +142,26 @@ pub async fn upload_local_file_to_cloud(
         .and_then(|n| n.to_str())
         .unwrap_or("unknown");
 
-    let object_key = format!("generated/{user_id}/{file_name}");
+    // Namespace by session: concurrent deliveries all upload as user 0 with
+    // identical filenames (clip_01.mp4), and colliding multipart uploads to
+    // the same key 500 on complete (Oct 13: "service error" on every clip).
+    let session_slug: String = session_id
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('_')
+        .to_string();
+    let object_key = if session_slug.is_empty() {
+        format!("generated/{user_id}/{file_name}")
+    } else {
+        format!("generated/{user_id}/{session_slug}/{file_name}")
+    };
 
     upload_bytes_to_cloud(
         bytes, &object_key, content_type, user_id, session_id, workflow_id, app_state,
