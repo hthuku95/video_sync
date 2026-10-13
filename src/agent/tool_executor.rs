@@ -5363,6 +5363,10 @@ async fn execute_clip_compilation_value(
     }
     let (kick_style, logo_url, streamer_name, platform_label) = match spec_platform {
         Some(platform) => {
+            tracing::info!(
+                "🎬 Vertical spec ON (platform={}, kick_style enforced)",
+                platform
+            );
             let logo_env = if platform == "Kick" {
                 "KICK_DEFAULT_LOGO_URL"
             } else {
