@@ -5325,7 +5325,7 @@ async fn execute_clip_compilation_value(
     // never fired for the entire launch-test path.
     let bound_lower = bound_source.as_deref().unwrap_or("").to_ascii_lowercase();
     let effective_lower = source_url.to_ascii_lowercase();
-    let spec_platform: Option<&str> = if bound_lower.contains("kick.com")
+    let mut spec_platform: Option<&str> = if bound_lower.contains("kick.com")
         || effective_lower.contains("kick.com")
     {
         Some("Kick")
@@ -5334,6 +5334,33 @@ async fn execute_clip_compilation_value(
     } else {
         None
     };
+    // Service fallback: the agent often passes an R2/presigned URL (no
+    // platform marker) after the first attempt. Resolve the platform from
+    // the workflow's service instead so enforcement survives URL shapes.
+    if spec_platform.is_none() {
+        if let Some(wid) = ctx.workflow_id {
+            if let Ok(row) = sqlx::query_scalar::<_, serde_json::Value>(
+                "SELECT metadata FROM app_workflows WHERE id = $1",
+            )
+            .bind(wid)
+            .fetch_optional(&ctx.app_state.db_pool)
+            .await
+            {
+                if let Some(meta) = row {
+                    let svc = meta
+                        .get("service_slug")
+                        .or_else(|| meta.get("service_type"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    if svc.contains("kick") {
+                        spec_platform = Some("Kick");
+                    } else if svc.contains("twitch") || svc == "clipping" {
+                        spec_platform = Some("Twitch");
+                    }
+                }
+            }
+        }
+    }
     let (kick_style, logo_url, streamer_name, platform_label) = match spec_platform {
         Some(platform) => {
             let logo_env = if platform == "Kick" {
