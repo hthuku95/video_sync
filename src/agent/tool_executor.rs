@@ -5433,6 +5433,7 @@ async fn execute_clip_compilation_value(
             tracing::warn!("⚠️ Clip {} trim at {:.1}s failed, skipping", i + 1, start);
             continue;
         }
+        tracing::info!("✂️ Clip {} trimmed at {:.1}s ({}s)", i + 1, start, clip_duration);
 
         let final_path = if kick_style {
             let kick_name = format!("clip_{:02}_kick.mp4", i + 1);
@@ -5462,6 +5463,11 @@ async fn execute_clip_compilation_value(
             // segments. Falls back to the static title inside post-process.
             let caption_srt =
                 transcribe_clip_to_srt(ctx, &raw_path, &tmp_dir, i + 1, clip_duration).await;
+            tracing::info!(
+                "📝 Clip {} transcription: {}",
+                i + 1,
+                if caption_srt.is_some() { "SRT ready" } else { "fallback (static caption)" }
+            );
 
             match kick_post_process_clip(
                 &raw_path,
