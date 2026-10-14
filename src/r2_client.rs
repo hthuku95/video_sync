@@ -23,7 +23,11 @@ use std::time::Duration;
 use tokio::fs::File;
 use tokio::io::{AsyncRead, AsyncReadExt};
 
-const MULTIPART_THRESHOLD: u64 = 50 * 1024 * 1024; // 50 MB — use multipart above this
+// Multipart COMPLETE fails against R2 from this SDK (EntityTooSmall on
+// complete despite CLI multipart working — SDK-level incompatibility, still
+// open). Route everything under 500MB through presigned PUT (proven by every
+// temp upload). Multipart remains only for true giants.
+const MULTIPART_THRESHOLD: u64 = 500 * 1024 * 1024; // 500 MB — use multipart above this
 const PART_SIZE: usize = 50 * 1024 * 1024; // 50 MB parts
 
 #[derive(Clone)]
