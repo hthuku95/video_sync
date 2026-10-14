@@ -5190,7 +5190,10 @@ async fn kick_post_process_clip(
     cmd.arg("-map").arg("[vout]");
     cmd.arg("-map").arg("0:a?"); // optional audio
     cmd.arg("-c:v").arg("libx264");
-    cmd.arg("-preset").arg("medium");
+    // preset fast + capped threads: the 2GB Fargate tasks OOM-kill medium
+    // preset under concurrent attempts (Oct 14). Visual delta negligible.
+    cmd.arg("-preset").arg("fast");
+    cmd.arg("-threads").arg("2");
     cmd.arg("-crf").arg("18");
     cmd.arg("-c:a").arg("aac");
     cmd.arg("-b:a").arg("128k");
@@ -5202,7 +5205,14 @@ async fn kick_post_process_clip(
     let output = cmd.output().map_err(|e| format!("FFmpeg spawn failed: {}", e))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("Kick post-process FFmpeg failed: {}", stderr));
+        // Log the exit code: banner-only stderr + signal = OOM-kill on the
+        // 2GB Fargate tasks (Oct 14: every vertical post-process died with a
+        // truncated banner and no ffmpeg error text).
+        return Err(format!(
+            "Kick post-process FFmpeg failed (exit={:?}): {}",
+            output.status.code(),
+            stderr.chars().take(2000).collect::<String>(),
+        ));
     }
 
     Ok(())
