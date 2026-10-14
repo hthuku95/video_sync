@@ -5138,9 +5138,13 @@ async fn kick_post_process_clip(
         input_path.to_string_lossy().to_string(),
     ];
     let mut filter = String::from(
+        // Blur-fill 9:16: bg scale COVERs then CROPs to exactly 1080x1920
+        // (scale alone overshoots to e.g. 3413x1920 for 16:9 sources and
+        // libx264 rejects odd widths — Oct 14 local repro), fg auto dims use
+        // -2 so they stay even.
         "[0:v]split=2[fg][bgsrc];\
-         [bgsrc]scale=1080:1920:force_original_aspect_ratio=increase,boxblur=20:5[bg];\
-         [fg]scale='if(gt(a,9/16),1080,-1)':'if(gt(a,9/16),-1,1920)',setsar=1[fg_scaled];\
+         [bgsrc]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:5[bg];\
+         [fg]scale='if(gt(a,9/16),1080,-2)':'if(gt(a,9/16),-2,1920)',setsar=1[fg_scaled];\
          [bg][fg_scaled]overlay=(W-w)/2:(H-h)/2[base]"
     );
     let mut current_label = "base";
