@@ -5337,6 +5337,7 @@ async fn execute_clip_compilation_value(
     // Service fallback: the agent often passes an R2/presigned URL (no
     // platform marker) after the first attempt. Resolve the platform from
     // the workflow's service instead so enforcement survives URL shapes.
+    let mut svc_seen = String::new();
     if spec_platform.is_none() {
         if let Some(wid) = ctx.workflow_id {
             if let Ok(row) = sqlx::query_scalar::<_, serde_json::Value>(
@@ -5352,6 +5353,7 @@ async fn execute_clip_compilation_value(
                         .or_else(|| meta.get("service_type"))
                         .and_then(|v| v.as_str())
                         .unwrap_or("");
+                    svc_seen = svc.to_string();
                     if svc.contains("kick") {
                         spec_platform = Some("Kick");
                     } else if svc.contains("twitch") || svc == "clipping" {
@@ -5361,6 +5363,19 @@ async fn execute_clip_compilation_value(
             }
         }
     }
+    // Session-scoped gate verdict (Oct 14): the bare "Vertical spec ON" line
+    // is invisible to delivery-scoped greps. Always log the session slug.
+    tracing::info!(
+        "🎬 VSpecGate session={} src_host={} bound={} svc={} decision={}",
+        ctx.session_id,
+        url::Url::parse(&source_url)
+            .ok()
+            .and_then(|u| u.host_str().map(String::from))
+            .unwrap_or_else(|| "?".to_string()),
+        if bound_source.is_some() { "some" } else { "none" },
+        if svc_seen.is_empty() { "-" } else { &svc_seen },
+        spec_platform.unwrap_or("OFF"),
+    );
     let (kick_style, logo_url, streamer_name, platform_label) = match spec_platform {
         Some(platform) => {
             tracing::info!(
@@ -5660,8 +5675,24 @@ async fn execute_clip_compilation_value(
         .await;
 
         match url {
-            Ok(u) => clip_urls.push(u),
-            Err(e) => tracing::warn!("⚠️ Upload failed for clip {}: {}", i + 1, e),
+            Ok(u) => {
+                tracing::info!(
+                    "✅ ClipDone session={} clip={} file={}",
+                    ctx.session_id,
+                    i + 1,
+                    final_path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("?"),
+                );
+                clip_urls.push(u);
+            }
+            Err(e) => tracing::warn!(
+                "⚠️ Upload failed for clip {} session={}: {}",
+                i + 1,
+                ctx.session_id,
+                e
+            ),
         }
     }
 
