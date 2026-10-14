@@ -4441,6 +4441,50 @@ fn execute_submit_final_answer_gemini(args: &HashMap<String, Value>) -> String {
 // ============================================================================
 
 /// Generate image and upload directly to cloud storage (Gemini version, with ctx)
+/// Resolve image bytes for the generate_image tool: NIM FLUX.1-dev first
+/// (fast, no Gemini quota), Gemini fallback. Everything timeout-bounded so a
+/// hung provider fails open instead of wedging the workflow (Oct 14: traces
+/// froze 20+ min inside generate_image — suspected Gemini 429/quota stall
+/// with no timeout on the request).
+async fn generate_image_bytes(
+    prompt: &str,
+    aspect_ratio: Option<&str>,
+    image_size: Option<&str>,
+    model: Option<&str>,
+) -> Result<Vec<u8>, String> {
+    if let Ok(nim_key) = std::env::var("NVIDIA_API_KEY") {
+        if !nim_key.trim().is_empty() {
+            match crate::nvidia_nim_client::generate_image_flux(&nim_key, prompt).await {
+                Ok(bytes) => {
+                    tracing::info!("🖼️ image via NIM FLUX ({} bytes)", bytes.len());
+                    return Ok(bytes);
+                }
+                Err(e) => tracing::warn!("NIM FLUX failed ({}), falling back to Gemini", e),
+            }
+        }
+    }
+    let api_key = std::env::var("VIDEO_GEMINI_API_KEY").unwrap_or_else(|_| {
+        std::env::var("GEMINI_API_KEY")
+            .unwrap_or_else(|_| std::env::var("GOOGLE_API_KEY").unwrap_or_default())
+    });
+    if api_key.is_empty() {
+        return Err(
+            "GEMINI_API_KEY or GOOGLE_API_KEY environment variable not set".to_string(),
+        );
+    }
+    let client = crate::gemini_client::GeminiClient::new(api_key);
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(150),
+        client.generate_image(prompt, aspect_ratio, image_size, model),
+    )
+    .await
+    {
+        Ok(Ok(bytes)) => Ok(bytes),
+        Ok(Err(e)) => Err(format!("Gemini image generation failed: {}", e)),
+        Err(_) => Err("Gemini image generation timed out after 150s".to_string()),
+    }
+}
+
 async fn execute_generate_image_with_state_gemini(
     args: &HashMap<String, Value>,
     ctx: &ToolExecutionContext,
@@ -4458,21 +4502,7 @@ async fn execute_generate_image_with_state_gemini(
         return "❌ Error: prompt is required".to_string();
     }
 
-    let api_key = std::env::var("VIDEO_GEMINI_API_KEY").unwrap_or_else(|_| {
-        std::env::var("GEMINI_API_KEY")
-            .unwrap_or_else(|_| std::env::var("GOOGLE_API_KEY").unwrap_or_default())
-    });
-
-    if api_key.is_empty() {
-        return "❌ Error: GEMINI_API_KEY or GOOGLE_API_KEY environment variable not set"
-            .to_string();
-    }
-
-    let client = crate::gemini_client::GeminiClient::new(api_key);
-
-    match client
-        .generate_image(prompt, aspect_ratio, image_size, model)
-        .await
+    match generate_image_bytes(prompt, aspect_ratio, image_size, model).await
     {
         Ok(image_bytes) => {
             let output_file = ensure_outputs_directory(output_file_raw);
@@ -4554,21 +4584,7 @@ async fn execute_generate_image_with_state_claude(
         return "❌ Error: prompt and output_file are required".to_string();
     }
 
-    let api_key = std::env::var("VIDEO_GEMINI_API_KEY").unwrap_or_else(|_| {
-        std::env::var("GEMINI_API_KEY")
-            .unwrap_or_else(|_| std::env::var("GOOGLE_API_KEY").unwrap_or_default())
-    });
-
-    if api_key.is_empty() {
-        return "❌ Error: GEMINI_API_KEY or GOOGLE_API_KEY environment variable not set"
-            .to_string();
-    }
-
-    let client = crate::gemini_client::GeminiClient::new(api_key);
-
-    match client
-        .generate_image(prompt, aspect_ratio, image_size, model)
-        .await
+    match generate_image_bytes(prompt, aspect_ratio, image_size, model).await
     {
         Ok(image_bytes) => {
             let file_name = std::path::Path::new(output_file_raw)
