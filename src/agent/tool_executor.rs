@@ -5183,6 +5183,20 @@ async fn kick_post_process_clip(
         current_label, safe_outro, font, outro_start
     ));
 
+    // Pre-flight diagnostics (Oct 14): the Fargate ffmpeg fails with
+    // banner-only stderr, so record everything about the invocation.
+    let font_exists = std::path::Path::new(font).exists();
+    let input_meta = std::fs::metadata(&input_path)
+        .map(|m| format!("{} bytes", m.len()))
+        .unwrap_or_else(|e| format!("MISSING ({})", e));
+    tracing::info!(
+        "🎬 PostProc preflight: font_exists={} input={} filter_len={} logo={}",
+        font_exists,
+        input_meta,
+        filter.len(),
+        logo_path.is_some(),
+    );
+
     let mut cmd = StdCommand::new("ffmpeg");
     cmd.arg("-y");
     for input in &inputs {
@@ -5208,14 +5222,19 @@ async fn kick_post_process_clip(
 
     let output = cmd.output().map_err(|e| format!("FFmpeg spawn failed: {}", e))?;
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        // Log the exit code: banner-only stderr + signal = OOM-kill on the
-        // 2GB Fargate tasks (Oct 14: every vertical post-process died with a
-        // truncated banner and no ffmpeg error text).
+        // Full stderr, chunked (CloudWatch + tracing handle large events;
+        // previous take(2000) hid nothing — the process genuinely emits ~150
+        // chars — but keep everything now that exit codes print).
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        tracing::warn!(
+            "🎬 PostProc stderr ({} bytes): {}",
+            stderr.len(),
+            stderr.chars().take(4000).collect::<String>(),
+        );
         return Err(format!(
             "Kick post-process FFmpeg failed (exit={:?}): {}",
             output.status.code(),
-            stderr.chars().take(2000).collect::<String>(),
+            stderr.chars().take(500).collect::<String>(),
         ));
     }
 
