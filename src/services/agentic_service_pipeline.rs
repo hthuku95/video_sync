@@ -872,11 +872,12 @@ Use the extracted content to understand:
 
 ## MANDATORY TOOL SEQUENCE
 1. generate_video_script(topic, duration, style, tone) — plan the content using the website info from step 0
-2. Render the MAIN VISUAL using blender_generate_scene_type(prompt, params) — this is the core of your landing page video. Use it for product mockups, device frames, animated UI mockups, title cards, logos, and any 3D content.
+2. Render the MAIN VISUAL using hyperframes_render(html, resolution) — this is the core of your landing page video. Write a complete standalone HTML composition (inline CSS/JS, data-* timing, seekable GSAP/CSS animation) for product mockups, device frames, animated UI mockups, title cards, logos, and animated backgrounds. CPU-rendered, no GPU needed. Use blender_generate_scene_type ONLY for true 3D work (real geometry, 3D product rotations, simulations) that HTML cannot do.
 3. If your video needs animated diagrams, data visualizations, or math/technical content, use manim_execute_script(description, ...) and merge with merge_videos
 4. add_voiceover_to_video(video_path, script) or generate_text_to_speech(text, voice) — narrate the video
-5. review_video(video_path_or_url) — check quality, fix issues, iterate
-6. submit_final_answer(summary, output_files=[path]) — only after review passes
+5. POST-PRODUCTION (mandatory, full editing toolbox at your disposal): assemble and polish the final timeline with ANY editing tools you need — trim_video, split_video, merge_videos, crop_video, resize_video, add_subtitles (real transcribed speech via transcribe_audio_url — never placeholder text), add_text_overlay, add_overlay, transitions (add_transition, apply_xfade_transition), color (adjust_color, adjust_curves, adjust_levels, apply_lut), speed (adjust_speed), stabilize_video, denoise, add_film_grain, add_vignette, and full audio mixing (adjust_volume, generate_music, generate_sound_effect, add_audio). Captions must be real speech, branding/logo must be present, no stream chrome or placeholder text in frame.
+6. review_video(video_path_or_url) — check quality, fix issues, iterate
+7. submit_final_answer(summary, output_files=[path]) — only after review passes
 
 OUTPUT to: {output_dir}/
 Save your final video with .mp4 extension"#,
@@ -975,12 +976,14 @@ That tool delegates to another agent and will NOT produce the correct educationa
 ## MANDATORY TOOL SEQUENCE
 1. generate_video_script(topic="{brief}", duration={duration_seconds}, style="{style}", tone="professional")
 2. Render scenes using the right tool for each visual:
-   - manim_execute_script(description=..., quality="h") — for math equations, diagrams, code animations, data charts, LaTeX formulas, and ALL educational/technical visual content
-   - blender_generate_scene_type(prompt=..., params=...) — for 3D backgrounds, animated props, intro/outro sequences
-   - Use both together for mixed Blender+Manim scenes, then merge with merge_videos
+   - hyperframes_render(html=..., resolution=...) — for titles, kinetic typography, layouts, animated backgrounds, intro/outro sequences, and ALL 2D motion graphics. CPU-rendered, no GPU needed. This replaces Blender for non-3D work.
+   - manim_execute_script(description=..., quality="h") — for math equations, diagrams, code animations, data charts, LaTeX formulas, and ALL educational/technical visual content (Manim is untouched).
+   - blender_generate_scene_type(prompt=..., params=...) — ONLY for true 3D work (real geometry, simulations) that HTML cannot do.
+   - Use together for mixed scenes, then merge with merge_videos
 3. add_voiceover_to_video(video_path="{out}/output.mp4", script="from script above")
-4. review_video(video_path_or_url="{out}/output.mp4")
-5. submit_final_answer(summary="education video {title}", output_files=["{out}/output.mp4"])
+4. POST-PRODUCTION (mandatory, full editing toolbox at your disposal): assemble and polish the final timeline with ANY editing tools you need — trim_video, split_video, merge_videos, crop_video, resize_video, add_subtitles (real transcribed speech via transcribe_audio_url — never placeholder text), add_text_overlay, add_overlay, transitions (add_transition, apply_xfade_transition), color (adjust_color, adjust_curves, adjust_levels, apply_lut), speed (adjust_speed), stabilize_video, denoise, add_film_grain, add_vignette, and full audio mixing (adjust_volume, generate_music, generate_sound_effect, add_audio). Captions must be real speech, branding must be present, no placeholder text in frame.
+5. review_video(video_path_or_url="{out}/output.mp4")
+6. submit_final_answer(summary="education video {title}", output_files=["{out}/output.mp4"])
 
 OUTPUT dir: {out}/"#,
             duration_seconds = input.duration_seconds as i32,

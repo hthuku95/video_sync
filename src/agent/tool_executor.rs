@@ -853,6 +853,11 @@ async fn execute_tool_claude_with_context_inner(
     if name == "manim_execute_script" {
         return execute_manim_execute_script_claude(args).await;
     }
+    // HyperFrames CPU rendering (needs ctx for AppState client + R2 upload)
+    if name == "hyperframes_render" {
+        let result = execute_hyperframes_render_with_state_claude(args, ctx).await;
+        return finalize_special_tool_result_value(name, args, result, ctx).await;
+    }
 
     if name == "run_director" {
         let result = execute_run_director_claude(args, ctx).await;
@@ -1061,6 +1066,11 @@ async fn execute_tool_gemini_with_context_inner(
     }
     if name == "manim_execute_script" {
         return execute_manim_execute_script_gemini(args).await;
+    }
+    // HyperFrames CPU rendering (needs ctx for AppState client + R2 upload)
+    if name == "hyperframes_render" {
+        let result = execute_hyperframes_render_with_state_gemini(args, ctx).await;
+        return finalize_special_tool_result_gemini(name, args, result, ctx).await;
     }
     if name == "run_director" {
         let result = execute_run_director_gemini(args, ctx).await;
@@ -20417,8 +20427,57 @@ fn extract_url_from_async_result(result: &serde_json::Value, label: &str) -> Str
 // MANIM EXECUTE SCRIPT — consolidated Manim tool
 // =============================================================================
 
-async fn execute_manim_execute_script_claude(args: &Value) -> String {
-    let description = args.get("description").and_then(|v| v.as_str()).unwrap_or("");
+/// HyperFrames CPU render (Claude version, with ctx).
+/// Submits a complete HTML composition to the media-box render shim,
+/// polls to completion, downloads the MP4 and uploads it to R2.
+/// Returns the R2 URL. Manim stays untouched; this takes Blender's
+/// GPU-bound 2D-motion slots (education + landing_page).
+async fn execute_hyperframes_render_with_state_claude(
+    args: &Value,
+    ctx: &ToolExecutionContext,
+) -> String {
+    let html = args.get("html").and_then(|v| v.as_str()).unwrap_or("");
+    if html.trim().is_empty() {
+        return "❌ Error: html (complete standalone composition) is required".to_string();
+    }
+    let resolution = args.get("resolution").and_then(|v| v.as_str());
+    let filename = args
+        .get("filename")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or("hyperframes.mp4");
+
+    let client = match ctx.app_state.hyperframes_client.as_ref() {
+        Some(c) => c.clone(),
+        None => {
+            let base_url = std::env::var("HYPERFRAMES_URL").unwrap_or_default();
+            if base_url.is_empty() {
+                return "❌ HyperFrames not configured. Set HYPERFRAMES_URL in .env.".to_string();
+            }
+            crate::hyperframes_client::HyperFramesClient::new(base_url)
+        }
+    };
+    match client.render_html(html, resolution, filename, 1800).await {
+        Ok(local_path) => {
+            match crate::cloud_storage::upload_local_file_to_cloud(
+                &local_path,
+                "video/mp4",
+                ctx.user_id.unwrap_or(0),
+                &ctx.session_id,
+                ctx.workflow_id,
+                &ctx.app_state,
+            )
+            .await
+            {
+                Ok(url) => format!("✅ HyperFrames render ready: {url}"),
+                Err(e) => format!("❌ HyperFrames render done but R2 upload failed: {e}"),
+            }
+        }
+        Err(e) => format!("❌ hyperframes_render failed: {}", e),
+    }
+}
+
+async fn execute_manim_execute_script_claude(args: &Value) -> String {    let description = args.get("description").and_then(|v| v.as_str()).unwrap_or("");
     if description.is_empty() {
         return "❌ Error: description is required".to_string();
     }
@@ -20451,6 +20510,52 @@ async fn execute_manim_execute_script_claude(args: &Value) -> String {
     ).await {
         Ok(result) => extract_url_from_async_result(&result, "Output"),
         Err(e) => format!("❌ manim_execute_script failed: {}", e),
+    }
+}
+
+/// HyperFrames CPU render (Gemini version, with ctx). See Claude twin above.
+async fn execute_hyperframes_render_with_state_gemini(
+    args: &HashMap<String, Value>,
+    ctx: &ToolExecutionContext,
+) -> String {
+    let html = args.get("html").and_then(|v| v.as_str()).unwrap_or("");
+    if html.trim().is_empty() {
+        return "❌ Error: html (complete standalone composition) is required".to_string();
+    }
+    let resolution = args.get("resolution").and_then(|v| v.as_str());
+    let filename = args
+        .get("filename")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or("hyperframes.mp4");
+
+    let client = match ctx.app_state.hyperframes_client.as_ref() {
+        Some(c) => c.clone(),
+        None => {
+            let base_url = std::env::var("HYPERFRAMES_URL").unwrap_or_default();
+            if base_url.is_empty() {
+                return "❌ HyperFrames not configured. Set HYPERFRAMES_URL in .env.".to_string();
+            }
+            crate::hyperframes_client::HyperFramesClient::new(base_url)
+        }
+    };
+    match client.render_html(html, resolution, filename, 1800).await {
+        Ok(local_path) => {
+            match crate::cloud_storage::upload_local_file_to_cloud(
+                &local_path,
+                "video/mp4",
+                ctx.user_id.unwrap_or(0),
+                &ctx.session_id,
+                ctx.workflow_id,
+                &ctx.app_state,
+            )
+            .await
+            {
+                Ok(url) => format!("✅ HyperFrames render ready: {url}"),
+                Err(e) => format!("❌ HyperFrames render done but R2 upload failed: {e}"),
+            }
+        }
+        Err(e) => format!("❌ hyperframes_render failed: {}", e),
     }
 }
 

@@ -1138,6 +1138,36 @@ impl GeminiClient {
         }
     }
 
+    pub fn hyperframes_render_tool() -> FunctionDeclaration {
+        FunctionDeclaration {
+            name: "hyperframes_render".to_string(),
+            description: "Render an HTML/CSS/JS composition to MP4 on CPU (headless Chrome + FFmpeg, no GPU). Use for: landing page hero videos, product intros, title cards, kinetic typography, animated explainers, slideshows — anywhere you would otherwise use blender_generate_scene_type for non-3D motion graphics. Pass a COMPLETE standalone index.html string (inline CSS/JS, data-* timing attributes per HyperFrames composition contract). Returns an R2 URL to the finished MP4. Prefer this over Blender for 2D motion graphics (much faster on CPU); keep manim_execute_script for math/diagrams/LaTeX.".to_string(),
+            parameters: Parameters {
+                param_type: "object".to_string(),
+                properties: {
+                    let mut props = std::collections::HashMap::new();
+                    props.insert("html".to_string(), PropertyDefinition {
+                        prop_type: "string".to_string(),
+                        description: "Complete standalone HTML composition (index.html). Inline all CSS/JS; use data-start/data-duration/data-track-index timing attributes and seekable animation (GSAP/CSS/WAAPI).".to_string(),
+                        items: None,
+                    });
+                    props.insert("resolution".to_string(), PropertyDefinition {
+                        prop_type: "string".to_string(),
+                        description: "Output shape: \"landscape\" (1920x1080) | \"portrait\" (1080x1920) | \"square\" (1080x1080). Default landscape.".to_string(),
+                        items: None,
+                    });
+                    props.insert("filename".to_string(), PropertyDefinition {
+                        prop_type: "string".to_string(),
+                        description: "Output filename base, e.g. \"hero.mp4\". Defaults to hyperframes render name.".to_string(),
+                        items: None,
+                    });
+                    props
+                },
+                required: vec!["html".to_string()],
+            },
+        }
+    }
+
     pub fn create_video_editing_tools() -> Vec<FunctionDeclaration> {
         vec![
             FunctionDeclaration {

@@ -171,6 +171,7 @@ impl ToolRegistry {
         filtered.push(crate::gemini_client::GeminiClient::apply_audio_ffmpeg_filter_tool());
         filtered.push(crate::gemini_client::GeminiClient::blender_generate_scene_type_tool());
         filtered.push(crate::gemini_client::GeminiClient::manim_execute_script_tool());
+        filtered.push(crate::gemini_client::GeminiClient::hyperframes_render_tool());
         filtered.push(crate::gemini_client::GeminiClient::export_video_tool());
 
         filtered
@@ -198,6 +199,9 @@ impl ToolRegistry {
         ));
         claude_tools.push(gemini_to_claude_tool(
             crate::gemini_client::GeminiClient::manim_execute_script_tool()
+        ));
+        claude_tools.push(gemini_to_claude_tool(
+            crate::gemini_client::GeminiClient::hyperframes_render_tool()
         ));
         claude_tools.push(gemini_to_claude_tool(
             crate::gemini_client::GeminiClient::export_video_tool()

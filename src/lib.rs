@@ -9,6 +9,7 @@ pub mod ai_tool_selector;
 pub mod bedrock_client;
 pub mod browserbase_client;
 pub mod blender_mcp_client;
+pub mod hyperframes_client;
 pub mod blender_quality;
 pub mod claude_client;
 pub mod clipping;
@@ -99,6 +100,7 @@ pub struct AppState {
     pub elevenlabs_client: Option<elevenlabs_client::ElevenLabsClient>,
     pub vibevoice_client: Option<vibevoice_client::VibeVoiceClient>,
     pub blender_mcp_client: Option<blender_mcp_client::BlenderMCPClient>,
+    pub hyperframes_client: Option<hyperframes_client::HyperFramesClient>,
     pub r2_client: Option<std::sync::Arc<r2_client::R2Client>>,
     pub youtube_client: Option<youtube_client::YouTubeClient>,
     pub youtube_analytics_client: Option<youtube_analytics_client::YouTubeAnalyticsClient>,

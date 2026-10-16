@@ -8,6 +8,7 @@ use tower_http::cors::CorsLayer;
 mod agent;
 mod ai_tool_selector; // 🧠 AI-driven tool selection — Gemma 4 picks relevant tools per request
 mod blender_mcp_client; // 🎨 BlenderMCPServer — 3D rendering + Manim
+mod hyperframes_client; // 🎬 HyperFrames — CPU headless-Chrome rendering (education + landing_page)
 mod bedrock_client;
 mod blender_quality;
 mod browserbase_client; // 🌐 BrowserBase — cloud browser fetch + search
@@ -90,6 +91,7 @@ pub struct AppState {
     pub elevenlabs_client: Option<elevenlabs_client::ElevenLabsClient>, // 🎙️ Audio generation
     pub vibevoice_client: Option<vibevoice_client::VibeVoiceClient>, // 🎤 Shared TTS + transcription microservice
     pub blender_mcp_client: Option<blender_mcp_client::BlenderMCPClient>, // 🎨 3D rendering + Manim
+    pub hyperframes_client: Option<hyperframes_client::HyperFramesClient>, // 🎬 CPU rendering (education + landing_page)
     pub r2_client: Option<Arc<r2_client::R2Client>>,                 // ☁️ Cloudflare R2 storage
     pub youtube_client: Option<youtube_client::YouTubeClient>,       // 📺 YouTube integration
     pub youtube_analytics_client: Option<youtube_analytics_client::YouTubeAnalyticsClient>, // 📊 YouTube Analytics
@@ -528,6 +530,21 @@ async fn main() {
         }
     };
 
+    // Initialize HyperFramesClient if URL is configured (CPU rendering
+    // for education + landing_page; takes Blender's GPU-bound slots)
+    let hyperframes_client = match std::env::var("HYPERFRAMES_URL").ok() {
+        Some(url) if !url.is_empty() => {
+            tracing::info!("🎬 Initializing HyperFramesClient (CPU rendering)...");
+            Some(hyperframes_client::HyperFramesClient::new(url))
+        }
+        _ => {
+            tracing::info!(
+                "HyperFrames not configured (set HYPERFRAMES_URL to enable CPU rendering)"
+            );
+            None
+        }
+    };
+
     // Initialize Eleven Labs client if API key is provided
     let elevenlabs_client = match std::env::var("ELEVEN_LABS_API_KEY").ok() {
         Some(api_key) if !api_key.is_empty() => {
@@ -713,6 +730,7 @@ async fn main() {
         elevenlabs_client,
         vibevoice_client,
         blender_mcp_client,
+        hyperframes_client,
         r2_client,
         youtube_client,
         youtube_analytics_client,
