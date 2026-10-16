@@ -124,10 +124,10 @@ impl HyperFramesClient {
                 .await
                 .map_err(|e| format!("Step Functions poll failed: {e}"))?;
             match desc.status() {
-                Some(aws_sdk_sfn::types::ExecutionStatus::Succeeded) => break,
-                Some(aws_sdk_sfn::types::ExecutionStatus::Failed)
-                | Some(aws_sdk_sfn::types::ExecutionStatus::TimedOut)
-                | Some(aws_sdk_sfn::types::ExecutionStatus::Aborted) => {
+                aws_sdk_sfn::types::ExecutionStatus::Succeeded => break,
+                aws_sdk_sfn::types::ExecutionStatus::Failed
+                | aws_sdk_sfn::types::ExecutionStatus::TimedOut
+                | aws_sdk_sfn::types::ExecutionStatus::Aborted => {
                     return Err(format!(
                         "Lambda render ended {:?}: {}",
                         desc.status(),
