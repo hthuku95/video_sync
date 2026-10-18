@@ -8,7 +8,6 @@ use tokio::io::AsyncWriteExt;
 
 // Use the same types as apify_client to ensure compatibility
 use crate::clipping::apify_client::{VideoDownloadResult, VideoInfo};
-use crate::r2_client::R2Client;
 
 pub struct RustyYtdlClient;
 
@@ -17,7 +16,7 @@ impl RustyYtdlClient {
     pub async fn download_video(
         video_url: &str,
         output_path: &str,
-        r2_client: Option<&R2Client>,
+        r2_client: Option<&crate::storage::StorageRouter>,
         r2_key: Option<&str>,
     ) -> Result<VideoDownloadResult, String> {
         tracing::info!("📥 Downloading video from YouTube using rusty_ytdl: {}", video_url);

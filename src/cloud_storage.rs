@@ -27,18 +27,25 @@ pub async fn upload_bytes_to_cloud(
         .await
         .map_err(|e| format!("Failed to write temp file: {e}"))?;
 
-    // 2. Upload to R2 (and register in GeneratedArtifactService)
+    // 2. Upload to object storage (R2 primary, S3 fallback)
     let mut public_url: Option<String> = None;
-    if let Some(r2) = app_state.r2_client.as_ref() {
-        match r2.upload(tmp.to_str().unwrap_or(""), &storage_key).await {
-            Ok(()) => match r2.presign_get(&storage_key, 7 * 24 * 3600).await {
-                Ok(url) => {
-                    public_url = Some(url.clone());
-                    tracing::info!("R2: uploaded → {storage_key} → {url}");
+    let mut storage_backend: &str = "r2";
+    if let Some(storage) = app_state.r2_client.as_ref() {
+        match storage.upload_tracked(tmp.to_str().unwrap_or(""), &storage_key).await {
+            Ok(backend) => {
+                storage_backend = backend.as_str();
+                match storage
+                    .presign_get_backend(&storage_key, backend, 7 * 24 * 3600)
+                    .await
+                {
+                    Ok(url) => {
+                        public_url = Some(url.clone());
+                        tracing::info!("☁️ uploaded → {storage_key} ({storage_backend}) → {url}");
+                    }
+                    Err(e) => tracing::warn!("presign failed: {e}"),
                 }
-                Err(e) => tracing::warn!("R2 presign failed: {e}"),
-            },
-            Err(e) => tracing::warn!("R2 upload failed: {e}"),
+            }
+            Err(e) => tracing::warn!("object storage upload failed: {e}"),
         }
     }
 
@@ -46,13 +53,12 @@ pub async fn upload_bytes_to_cloud(
     let _ = tokio::fs::remove_file(&tmp).await;
 
     if public_url.is_none() {
-        return Err(format!("No cloud storage available (R2 unavailable or failed)"));
+        return Err(format!("No cloud storage available (R2/S3 unavailable or failed)"));
     }
 
     let public_url = public_url.unwrap();
 
     // 4. Register in GeneratedArtifactService
-    let storage_backend = "r2";
 
     let file_name = std::path::Path::new(object_key)
         .file_name()

@@ -959,9 +959,10 @@ Target: 600 seconds (10 minutes). Use multiple scenes — don't try to fit every
     let output_url = agent_result.trim().to_string();
 
     sqlx::query(
-        "UPDATE deliveries SET output_r2_url = $1, status = 'completed', completed_at = NOW() WHERE id = $2",
+        "UPDATE deliveries SET output_r2_url = $1, status = 'completed', storage_backend = $2, completed_at = NOW() WHERE id = $3",
     )
     .bind(&output_url)
+    .bind(crate::storage::backend_from_url(&output_url).as_str())
     .bind(delivery_id)
     .execute(&app_state.db_pool)
     .await
@@ -1375,15 +1376,15 @@ pub async fn post_process_clipping_delivery(
     );
     let _ = crate::core::merge_videos(&temp_paths, &output_path)?;
 
-    // 4. Upload compilation to R2
+    // 4. Upload compilation to object storage (R2 primary, S3 fallback)
     let compilation_key = format!("clip_compilation/{delivery_id}/{job_id}/compilation.mp4");
-    let compilation_url = app_state
+    let (compilation_backend, compilation_url) = app_state
         .r2_client
         .as_ref()
-        .ok_or("R2 client not configured for clip compilation")?
-        .upload_file(&output_path, &compilation_key)
+        .ok_or("Object storage not configured for clip compilation")?
+        .upload_file_tracked(&output_path, &compilation_key)
         .await
-        .map_err(|e| format!("R2 compilation upload failed: {e}"))?;
+        .map_err(|e| format!("Compilation upload failed: {e}"))?;
 
     // 5. Build clip keys JSON for gallery on delivery page
     let extra_args_update = serde_json::json!({
@@ -1395,10 +1396,12 @@ pub async fn post_process_clipping_delivery(
     let _ = sqlx::query(
         "UPDATE deliveries SET \
          output_r2_url = COALESCE($1, output_r2_url), \
-         extra_args = COALESCE(extra_args, '{}'::jsonb) || $2::jsonb \
-         WHERE id = $3",
+         storage_backend = $2, \
+         extra_args = COALESCE(extra_args, '{}'::jsonb) || $3::jsonb \
+         WHERE id = $4",
     )
     .bind(&compilation_url)
+    .bind(compilation_backend.as_str())
     .bind(&extra_args_update)
     .bind(delivery_id)
     .execute(&app_state.db_pool)
@@ -1418,11 +1421,9 @@ pub async fn post_process_clipping_delivery(
     Ok(())
 }
 
-/// Extract the R2 object key from a presigned URL like:
-/// `https://<bucket>.<account>.r2.cloudflarestorage.com/<key>?<query>`
+/// Extract the object key from an R2 or AWS S3 presigned URL, e.g.
+/// `https://<account>.r2.cloudflarestorage.com/<bucket>/<key>?<query>` or
+/// `https://<bucket>.s3.<region>.amazonaws.com/<key>?<query>`.
 fn r2_key_from_presigned_url(url: &str, bucket: &str) -> Option<String> {
-    let pattern = format!(".r2.cloudflarestorage.com/");
-    let after_bucket = url.split(&pattern).nth(1)?;
-    let key = after_bucket.split('?').next()?;
-    Some(urlencoding::decode(key).ok()?.into_owned())
+    crate::storage::object_key_from_url(url, &[bucket])
 }

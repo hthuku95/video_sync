@@ -1334,22 +1334,8 @@ async fn download_fallback_delivery_output(
 }
 
 fn r2_bucket_and_key_from_url(output_url: &str) -> Option<(String, String)> {
-    let url = url::Url::parse(output_url).ok()?;
-    let host = url.host_str().unwrap_or_default();
-    if !host.contains(".r2.cloudflarestorage.com") {
-        return None;
-    }
-
-    let mut parts = url
-        .path_segments()?
-        .filter(|part| !part.is_empty());
-    let bucket = parts.next()?.to_string();
-    let key = parts.collect::<Vec<_>>().join("/");
-    if key.is_empty() {
-        None
-    } else {
-        Some((bucket, key))
-    }
+    // Supports both path-style R2 and virtual-hosted AWS S3 URLs.
+    crate::storage::bucket_and_key_from_url(output_url)
 }
 
 fn fallback_delivery_youtube_title(source_video_title: &str, delivery_title: &str) -> String {

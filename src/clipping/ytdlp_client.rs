@@ -8,7 +8,6 @@ use tokio::process::Command;
 
 // Use shared types from apify_client to ensure compatibility
 use crate::clipping::apify_client::VideoDownloadResult;
-use crate::r2_client::R2Client;
 
 pub struct YtDlpClient;
 
@@ -78,7 +77,7 @@ impl YtDlpClient {
     pub async fn download_video(
         video_url: &str,
         output_path: &str,
-        r2_client: Option<&R2Client>,
+        r2_client: Option<&crate::storage::StorageRouter>,
         r2_key: Option<&str>,
     ) -> Result<VideoDownloadResult, String> {
         Self::check_ytdlp_installed().await?;

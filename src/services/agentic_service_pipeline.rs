@@ -749,16 +749,16 @@ impl AgenticServicePipeline {
     ) -> Result<(), String> {
         let output_key = format!("agentic_output/{}/{}.mp4", input.delivery_id, input.service_filename());
 
-        // If the agent already uploaded to R2, use that URL directly — no re-upload
-        let public_url = if output_path.starts_with("https://") {
+        // If the agent already uploaded to cloud storage, use that URL directly — no re-upload
+        let (upload_backend, public_url) = if output_path.starts_with("https://") {
             let url = output_path.to_string();
             tracing::info!(url = %url, "publish_output: output already in cloud, skipping re-upload");
-            url
+            (None, url)
         } else {
-            let r2 = state
+            let storage = state
                 .r2_client
                 .as_ref()
-                .ok_or("R2 not configured for publishing")?;
+                .ok_or("Object storage not configured for publishing")?;
 
             // ── LAST-LINE BACKSTOP (§CRIT, Sep 2 2026) ──
             // Never upload a provably-empty/corrupt artifact. The 0-byte
@@ -784,11 +784,16 @@ impl AgenticServicePipeline {
                 }
             }
 
-            let url = r2
-                .upload_file(output_path, &output_key)
+            let (backend, url) = storage
+                .upload_file_tracked(output_path, &output_key)
                 .await
-                .map_err(|e| format!("R2 upload failed: {e}"))?;
-            url
+                .map_err(|e| format!("Object storage upload failed: {e}"))?;
+            tracing::info!(
+                backend = backend.as_str(),
+                key = %output_key,
+                "publish_output: artifact stored"
+            );
+            (Some(backend), url)
         };
 
         let qa_note: Option<String> = if qa_score < 6 {
@@ -798,17 +803,32 @@ impl AgenticServicePipeline {
         };
 
         if input.source_table.as_deref() == Some("deliveries") {
-            let update_result = sqlx::query(
-                "UPDATE deliveries SET status = 'completed', output_r2_url = $1, \
-                 output_filename = $2, final_qa_score = $3, completed_at = NOW() \
-                 WHERE id = $4",
-            )
-            .bind(&public_url)
-            .bind(&output_key)
-            .bind(qa_score)
-            .bind(input.delivery_id)
-            .execute(&state.db_pool)
-            .await;
+            let update_result = if let Some(backend) = upload_backend {
+                sqlx::query(
+                    "UPDATE deliveries SET status = 'completed', output_r2_url = $1, \
+                     output_filename = $2, final_qa_score = $3, storage_backend = $4, \
+                     completed_at = NOW() WHERE id = $5",
+                )
+                .bind(&public_url)
+                .bind(&output_key)
+                .bind(qa_score)
+                .bind(backend.as_str())
+                .bind(input.delivery_id)
+                .execute(&state.db_pool)
+                .await
+            } else {
+                sqlx::query(
+                    "UPDATE deliveries SET status = 'completed', output_r2_url = $1, \
+                     output_filename = $2, final_qa_score = $3, completed_at = NOW() \
+                     WHERE id = $4",
+                )
+                .bind(&public_url)
+                .bind(&output_key)
+                .bind(qa_score)
+                .bind(input.delivery_id)
+                .execute(&state.db_pool)
+                .await
+            };
             if let Err(e) = update_result {
                 tracing::warn!("publish_output: failed to update delivery {}: {e}", input.delivery_id);
             }

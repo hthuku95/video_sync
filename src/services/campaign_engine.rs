@@ -752,9 +752,10 @@ async fn check_rendering_post(state: &Arc<AppState>, campaign: &CampaignRow, pos
 
     // Store the media URL on the post
     let _ = sqlx::query(
-        "UPDATE campaign_posts SET media_r2_url = $1 WHERE id = $2",
+        "UPDATE campaign_posts SET media_r2_url = $1, storage_backend = $2 WHERE id = $3",
     )
     .bind(&url)
+    .bind(crate::storage::backend_from_url(&url).as_str())
     .bind(post.id)
     .execute(&state.db_pool)
     .await;

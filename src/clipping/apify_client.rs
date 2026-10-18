@@ -15,7 +15,6 @@ use crate::clipping::rustube_client::RustubeClient;
 use crate::clipping::rusty_ytdl_client::RustyYtdlClient;
 use crate::clipping::ytdlp_api_client::YtdlpApiClient;
 use crate::clipping::ytdlp_client::YtDlpClient;
-use crate::r2_client::R2Client;
 use tokio::process::Command as TokioCommand;
 
 #[derive(Debug)]
@@ -322,7 +321,7 @@ impl ApifyClient {
         &self,
         video_url: &str,
         output_path: &str,
-        r2_client: Option<&R2Client>,
+        r2_client: Option<&crate::storage::StorageRouter>,
         r2_key: Option<&str>,
     ) -> Result<VideoDownloadResult, String> {
         // Twitch VODs need a dedicated download path — strategies 2-5 are YouTube-only
@@ -457,7 +456,7 @@ impl ApifyClient {
         &self,
         video_url: &str,
         output_path: &str,
-        r2_client: Option<&R2Client>,
+        r2_client: Option<&crate::storage::StorageRouter>,
         r2_key: Option<&str>,
     ) -> Result<VideoDownloadResult, String> {
         tracing::info!("🎬 Starting Apify actor run for: {}", video_url);
@@ -710,7 +709,7 @@ impl ApifyClient {
 async fn download_twitch_vod(
     video_url: &str,
     output_path: &str,
-    r2_client: Option<&R2Client>,
+    r2_client: Option<&crate::storage::StorageRouter>,
     r2_key: Option<&str>,
 ) -> Result<VideoDownloadResult, String> {
     tracing::info!("🎮 Twitch VOD detected — using Twitch-specific download strategies");
@@ -752,7 +751,7 @@ async fn download_twitch_vod(
 async fn download_twitch_hls(
     video_url: &str,
     output_path: &str,
-    r2_client: Option<&R2Client>,
+    r2_client: Option<&crate::storage::StorageRouter>,
     r2_key: Option<&str>,
 ) -> Result<VideoDownloadResult, String> {
     // Extract numeric VOD ID from URL: https://www.twitch.tv/videos/2025985859
@@ -911,7 +910,7 @@ async fn download_twitch_hls(
 async fn download_kick_video(
     video_url: &str,
     output_path: &str,
-    r2_client: Option<&R2Client>,
+    r2_client: Option<&crate::storage::StorageRouter>,
     r2_key: Option<&str>,
 ) -> Result<VideoDownloadResult, String> {
     tracing::info!("💥 Kick.com broadcast detected — using kick-specific download strategies");

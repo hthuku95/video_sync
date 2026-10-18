@@ -37,6 +37,7 @@ pub mod product_hunt_client;
 pub mod portfolio_samples;
 pub mod qdrant_client;
 pub mod r2_client;
+pub mod storage;
 pub mod render_review;
 pub mod services;
 pub mod sketchfab_client;
@@ -101,7 +102,7 @@ pub struct AppState {
     pub vibevoice_client: Option<vibevoice_client::VibeVoiceClient>,
     pub blender_mcp_client: Option<blender_mcp_client::BlenderMCPClient>,
     pub hyperframes_client: Option<hyperframes_client::HyperFramesClient>,
-    pub r2_client: Option<std::sync::Arc<r2_client::R2Client>>,
+    pub r2_client: Option<std::sync::Arc<storage::StorageRouter>>,
     pub youtube_client: Option<youtube_client::YouTubeClient>,
     pub youtube_analytics_client: Option<youtube_analytics_client::YouTubeAnalyticsClient>,
     pub google_oauth_client_id: Option<String>,

@@ -9224,14 +9224,14 @@ Output file paths clearly in your final response so the delivery pipeline can fi
     };
 
     // Upload full clean HD video
-    let full_url = match r2
-        .upload_file(
+    let (full_backend, full_url) = match r2
+        .upload_file_tracked(
             &full_path_final,
             &format!("deliveries/{}/full.mp4", delivery_id),
         )
         .await
     {
-        Ok(u) => u,
+        Ok(v) => v,
         Err(e) => {
             tracing::error!("Failed to upload full video: {e}");
             let _ = sqlx::query(
@@ -9258,10 +9258,10 @@ Output file paths clearly in your final response so the delivery pipeline can fi
     // Upload preview (watermarked) — fall back to full video if preview wasn't produced
     let preview_url = if let Some(pp) = best_preview.as_ref() {
         match r2
-            .upload_file(pp, &format!("deliveries/{}/preview.mp4", delivery_id))
+            .upload_file_tracked(pp, &format!("deliveries/{}/preview.mp4", delivery_id))
             .await
         {
-            Ok(u) => Some(u),
+            Ok((_, u)) => Some(u),
             Err(e) => {
                 tracing::warn!(
                     "Preview upload failed: {e} — clients will see full video as preview"
@@ -9286,14 +9286,16 @@ Output file paths clearly in your final response so the delivery pipeline can fi
 
     let _ = sqlx::query(
         "UPDATE deliveries SET status='completed', output_r2_url=$1, preview_r2_url=$2,
-         qa_retry_count=$3, final_qa_score=$4, error_message=$5, completed_at=NOW()
-         WHERE id=$6",
+         qa_retry_count=$3, final_qa_score=$4, error_message=$5, storage_backend=$6,
+         completed_at=NOW()
+         WHERE id=$7",
     )
     .bind(&full_url)
     .bind(preview_url.as_deref())
     .bind(retries_used + 1)
     .bind(best_score)
     .bind(qa_note.as_deref())
+    .bind(full_backend.as_str())
     .bind(delivery_id)
     .execute(&state.db_pool)
     .await;

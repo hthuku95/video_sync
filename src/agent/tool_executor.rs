@@ -2541,15 +2541,14 @@ async fn download_file_to_path(url: &str, path: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Upload a file to R2 using a fresh R2Client (no AppState dependency).
+/// Upload a file to object storage (R2 primary, S3 fallback) using a router
+/// built from the environment (no AppState dependency).
 async fn upload_to_r2_raw(local_path: &str, key: &str) -> Result<String, String> {
-    let account_id = std::env::var("R2_ACCOUNT_ID").map_err(|_| "R2_ACCOUNT_ID not set".to_string())?;
-    let access_key_id = std::env::var("R2_ACCESS_KEY_ID").map_err(|_| "R2_ACCESS_KEY_ID not set".to_string())?;
-    let secret_access_key = std::env::var("R2_SECRET_ACCESS_KEY").map_err(|_| "R2_SECRET_ACCESS_KEY not set".to_string())?;
-    let bucket = std::env::var("R2_BUCKET").unwrap_or_else(|_| "video-editor".to_string());
-
-    let r2 = crate::r2_client::R2Client::new(&account_id, &access_key_id, &secret_access_key, &bucket).await?;
-    r2.upload_file(local_path, key).await
+    let router = crate::storage::router_from_env().await.ok_or_else(|| {
+        "R2 not configured (R2_ENDPOINT/R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY/R2_BUCKET)"
+            .to_string()
+    })?;
+    router.upload_file(local_path, key).await
 }
 
 async fn execute_sketchfab_get_model_claude(args: &Value) -> String {
@@ -19765,34 +19764,14 @@ async fn execute_download_asset_inner(url: &str, description: &str) -> String {
         };
         let r2_key = format!("assets/{}/{}-{}", domain, prefix, filename);
 
-        // Check R2 cache
-        let account_id = match std::env::var("R2_ACCOUNT_ID") {
-            Ok(id) => id,
-            Err(_) => {
-                errors.push(format!("R2_ACCOUNT_ID not set — cannot upload '{}'", filename));
-                continue;
-            }
-        };
-        let access_key_id = match std::env::var("R2_ACCESS_KEY_ID") {
-            Ok(id) => id,
-            Err(_) => {
-                errors.push(format!("R2_ACCESS_KEY_ID not set — cannot upload '{}'", filename));
-                continue;
-            }
-        };
-        let secret_access_key = match std::env::var("R2_SECRET_ACCESS_KEY") {
-            Ok(id) => id,
-            Err(_) => {
-                errors.push(format!("R2_SECRET_ACCESS_KEY not set — cannot upload '{}'", filename));
-                continue;
-            }
-        };
-        let bucket = std::env::var("R2_BUCKET").unwrap_or_else(|_| "video-editor".to_string());
-
-        let r2 = match crate::r2_client::R2Client::new(&account_id, &access_key_id, &secret_access_key, &bucket).await {
-            Ok(c) => c,
-            Err(e) => {
-                errors.push(format!("R2 client init failed: {e}"));
+        // Check object-storage cache (R2 primary, S3 fallback)
+        let r2 = match crate::storage::router_from_env().await {
+            Some(c) => c,
+            None => {
+                errors.push(format!(
+                    "Object storage not configured (R2_*) — cannot upload '{}'",
+                    filename
+                ));
                 continue;
             }
         };

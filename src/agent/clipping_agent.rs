@@ -1615,21 +1615,24 @@ impl GeminiClippingAgent {
 
         update_job_status(job_id, "clips_extracted", 60, None, &self.app_state.db_pool).await?;
 
-        // Upload clips to R2 before saving to DB so r2_clip_url is populated
+        // Upload clips to object storage (R2 primary, S3 fallback) before saving to DB
+        let mut clip_backend: Option<crate::storage::StorageBackend> = None;
         if let Some(r2) = self.app_state.r2_client.as_ref() {
             for clip in clips.iter_mut() {
                 let clip_n = clip.clip_number as usize;
                 let clip_key = crate::r2_client::R2Client::key_clip(job_id, clip_n);
-                match r2.upload(&clip.local_clip_path, &clip_key).await {
-                    Ok(()) => {
-                        match r2.presign_get(&clip_key, 86400).await {
+                match r2.upload_tracked(&clip.local_clip_path, &clip_key).await {
+                    Ok(backend) => {
+                        clip_backend = Some(backend);
+                        match r2.presign_get_backend(&clip_key, backend, 86400).await {
                             Ok(url) => {
                                 clip.r2_clip_key = Some(clip_key.clone());
                                 clip.r2_clip_url = Some(url);
                                 tracing::info!(
                                     job_id = job_id,
                                     clip_number = clip_n,
-                                    "Uploaded clip to R2"
+                                    backend = backend.as_str(),
+                                    "Uploaded clip to object storage"
                                 );
                             }
                             Err(e) => {
@@ -1637,7 +1640,7 @@ impl GeminiClippingAgent {
                                     job_id = job_id,
                                     clip_number = clip_n,
                                     error = %e,
-                                    "Failed to presign R2 clip URL (non-fatal)"
+                                    "Failed to presign clip URL (non-fatal)"
                                 );
                             }
                         }
@@ -1647,7 +1650,7 @@ impl GeminiClippingAgent {
                             job_id = job_id,
                             clip_number = clip_n,
                             error = %e,
-                            "Failed to upload clip to R2 (non-fatal)"
+                            "Failed to upload clip to storage (non-fatal)"
                         );
                     }
                 }
@@ -1656,6 +1659,17 @@ impl GeminiClippingAgent {
 
         let clip_ids =
             save_clips_to_database(job_id, &clips, &linkage, &self.app_state.db_pool).await?;
+
+        // Record which backend holds this job's clips.
+        if let Some(backend) = clip_backend {
+            let _ = sqlx::query(
+                "UPDATE extracted_clips SET storage_backend = $1 WHERE clipping_job_id = $2",
+            )
+            .bind(backend.as_str())
+            .bind(job_id)
+            .execute(&self.app_state.db_pool)
+            .await;
+        }
 
         // Update state
         state.phase_c_complete = true;

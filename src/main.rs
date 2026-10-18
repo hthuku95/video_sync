@@ -38,7 +38,8 @@ mod product_hunt_client; // 🚀 Product Hunt API v2 — SaaS product discovery
 mod usage; // 📊 Token-usage primitives shared by LLM clients + run ledger
 mod portfolio_samples;
 mod qdrant_client;
-mod r2_client; // ☁️ Cloudflare R2 object storage
+mod r2_client; // ☁️ Cloudflare R2 object storage (primary)
+mod storage; // ☁️☁️ Object storage router — R2 primary + AWS S3 fallback
 mod render_review; // 🔍 LLM QA review of every render before handoff
 mod services;
 mod sketchfab_client;
@@ -92,7 +93,7 @@ pub struct AppState {
     pub vibevoice_client: Option<vibevoice_client::VibeVoiceClient>, // 🎤 Shared TTS + transcription microservice
     pub blender_mcp_client: Option<blender_mcp_client::BlenderMCPClient>, // 🎨 3D rendering + Manim
     pub hyperframes_client: Option<hyperframes_client::HyperFramesClient>, // 🎬 CPU rendering (education + landing_page)
-    pub r2_client: Option<Arc<r2_client::R2Client>>,                 // ☁️ Cloudflare R2 storage
+    pub r2_client: Option<Arc<storage::StorageRouter>>,               // ☁️ R2 primary + S3 fallback router
     pub youtube_client: Option<youtube_client::YouTubeClient>,       // 📺 YouTube integration
     pub youtube_analytics_client: Option<youtube_analytics_client::YouTubeAnalyticsClient>, // 📊 YouTube Analytics
     pub google_oauth_client_id: Option<String>, // Google OAuth client ID
@@ -650,8 +651,8 @@ async fn main() {
         None
     };
 
-    // Initialize Cloudflare R2 client
-    let r2_client = match (
+    // Initialize Cloudflare R2 (primary) + AWS S3 (fallback) object storage.
+    let r2_primary = match (
         std::env::var("R2_ENDPOINT").ok(),
         std::env::var("R2_ACCESS_KEY_ID").ok(),
         std::env::var("R2_SECRET_ACCESS_KEY").ok(),
@@ -662,19 +663,7 @@ async fn main() {
         {
             tracing::info!("☁️ Initializing Cloudflare R2 storage client (bucket: {bucket}, endpoint: {endpoint})...");
             match r2_client::R2Client::new(&endpoint, &access_key, &secret_key, &bucket).await {
-                Ok(client) => {
-                    tracing::info!("☁️ R2 client initialized; deferring health check to background");
-                    let background_client = client.clone();
-                    let bucket_name = bucket.clone();
-                    tokio::spawn(async move {
-                        if background_client.health_check().await {
-                            tracing::info!("✅ R2 storage connected — bucket: {bucket_name}");
-                        } else {
-                            tracing::warn!("R2 health check failed — uploads may fall back to local disk semantics");
-                        }
-                    });
-                    Some(Arc::new(client))
-                }
+                Ok(client) => Some(Arc::new(client)),
                 Err(e) => {
                     tracing::warn!(
                         "Failed to init R2 client: {e} — file storage will use local disk"
@@ -688,6 +677,56 @@ async fn main() {
             None
         }
     };
+
+    // AWS S3 fallback backend (account 960882269041, region us-east-1). Uses the
+    // ECS task role through the default AWS credential chain — no static keys.
+    // Enabled by setting S3_FALLBACK_BUCKET; used automatically when R2 is down.
+    let s3_fallback: Option<Arc<r2_client::R2Client>> =
+        match std::env::var("S3_FALLBACK_BUCKET").ok().filter(|b| !b.is_empty()) {
+            Some(s3_bucket) => {
+                let region = std::env::var("S3_REGION")
+                    .ok()
+                    .or_else(|| std::env::var("AWS_REGION").ok())
+                    .filter(|r| !r.is_empty())
+                    .unwrap_or_else(|| "us-east-1".to_string());
+                tracing::info!(
+                    "☁️ Initializing AWS S3 fallback storage (bucket: {s3_bucket}, region: {region})..."
+                );
+                match r2_client::R2Client::new_aws_s3(&s3_bucket, &region).await {
+                    Ok(client) => Some(Arc::new(client)),
+                    Err(e) => {
+                        tracing::warn!("Failed to init S3 fallback client: {e}");
+                        None
+                    }
+                }
+            }
+            None => {
+                tracing::info!("S3 fallback not configured (set S3_FALLBACK_BUCKET to enable)");
+                None
+            }
+        };
+
+    let r2_client = r2_primary.map(|primary| {
+        let has_fallback = s3_fallback.is_some();
+        let router = Arc::new(storage::StorageRouter::new(primary, s3_fallback));
+        tracing::info!(
+            "☁️ Storage router ready — R2 primary{}",
+            if has_fallback {
+                " + S3 fallback"
+            } else {
+                " (no fallback configured)"
+            }
+        );
+        let background_client = router.clone();
+        tokio::spawn(async move {
+            if background_client.health_check().await {
+                tracing::info!("✅ Object storage connected");
+            } else {
+                tracing::warn!("Object storage health check failed — uploads may fall back to local disk semantics");
+            }
+        });
+        router
+    });
 
     // Initialize PubSubBus before AppState so JobManager can also use it
     let pubsub_bus = crate::services::redis_pubsub::PubSubBus::connect(

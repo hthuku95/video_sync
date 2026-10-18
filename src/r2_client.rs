@@ -86,6 +86,36 @@ impl R2Client {
         })
     }
 
+    /// Build a client for **real AWS S3** (the fallback backend), using the
+    /// standard AWS credential provider chain (ECS task role / env / IMDS) and
+    /// a regional endpoint. No custom endpoint, no path-style addressing, so
+    /// presigned URLs come out as virtual-hosted `bucket.s3.<region>.amazonaws.com`.
+    pub async fn new_aws_s3(bucket: &str, region: &str) -> Result<Self, String> {
+        let sdk_config = aws_config::defaults(BehaviorVersion::latest())
+            .region(aws_config::Region::new(region.to_string()))
+            .load()
+            .await;
+
+        let s3_config = S3ConfigBuilder::from(&sdk_config)
+            .request_checksum_calculation(
+                aws_sdk_s3::config::RequestChecksumCalculation::WhenRequired,
+            )
+            .build();
+
+        let client = Client::from_conf(s3_config);
+        let http = reqwest::Client::builder()
+            .timeout(Duration::from_secs(120))
+            .build()
+            .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
+
+        Ok(Self {
+            client,
+            http,
+            bucket: bucket.to_string(),
+            endpoint: format!("https://{bucket}.s3.{region}.amazonaws.com"),
+        })
+    }
+
     // -------------------------------------------------------------------------
     // Upload — auto-selects simple vs multipart based on file size
     // -------------------------------------------------------------------------

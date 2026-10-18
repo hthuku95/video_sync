@@ -1394,12 +1394,12 @@ async fn upload_campaign_file(
         if fs::write(&tmp, &data).await.is_err() { continue; }
 
         let r2_key = format!("campaigns/{id}/{}", Uuid::new_v4());
-        let r2_url = match &state.r2_client {
+        let (file_backend, r2_url) = match &state.r2_client {
             Some(r2) => {
-                match r2.upload_file(&tmp, &r2_key).await {
-                    Ok(url) => url,
+                match r2.upload_file_tracked(&tmp, &r2_key).await {
+                    Ok(v) => v,
                     Err(e) => {
-                        tracing::error!("R2 upload failed for campaign file: {e}");
+                        tracing::error!("Campaign file upload failed: {e}");
                         let _ = fs::remove_file(&tmp).await;
                         continue;
                     }
@@ -1407,7 +1407,7 @@ async fn upload_campaign_file(
             }
             None => {
                 let _ = fs::remove_file(&tmp).await;
-                return Json(json!({"success": false, "error": "R2 not configured"}));
+                return Json(json!({"success": false, "error": "Object storage not configured"}));
             }
         };
 
@@ -1415,13 +1415,14 @@ async fn upload_campaign_file(
 
         let file_id = Uuid::new_v4();
         if let Err(e) = sqlx::query(
-            "INSERT INTO campaign_files (id, campaign_id, file_name, r2_url, file_type) VALUES ($1, $2, $3, $4, $5)"
+            "INSERT INTO campaign_files (id, campaign_id, file_name, r2_url, file_type, storage_backend) VALUES ($1, $2, $3, $4, $5, $6)"
         )
         .bind(file_id)
         .bind(id)
         .bind(&filename)
         .bind(&r2_url)
         .bind(file_type)
+        .bind(file_backend.as_str())
         .execute(&state.db_pool)
         .await
         {
@@ -1811,7 +1812,6 @@ async fn campaign_chat(
 }
 
 fn extract_r2_key_from_url(url: &str) -> Option<String> {
-    let after_bucket = url.split(".r2.cloudflarestorage.com/").nth(1)?;
-    let key = after_bucket.split('?').next()?;
-    Some(urlencoding::decode(key).ok()?.into_owned())
+    // Handles path-style R2 URLs and virtual-hosted AWS S3 URLs.
+    crate::storage::object_key_from_url(url, &[])
 }

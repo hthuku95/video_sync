@@ -8788,29 +8788,10 @@ async fn refresh_r2_presigned_url_from_existing(
 }
 
 pub(crate) fn extract_r2_object_key_from_url(existing_url: &str, bucket: &str) -> Option<String> {
-    let parsed = reqwest::Url::parse(existing_url).ok()?;
-    let host = parsed.host_str().unwrap_or_default();
-    let segments = parsed
-        .path_segments()?
-        .filter(|segment| !segment.is_empty())
-        .collect::<Vec<_>>();
-
-    if segments.is_empty() {
-        return None;
-    }
-
-    if host.starts_with(&format!("{bucket}.")) {
-        return Some(segments.join("/"));
-    }
-
-    if segments.first().copied() == Some(bucket) {
-        if segments.len() < 2 {
-            return None;
-        }
-        return Some(segments[1..].join("/"));
-    }
-
-    Some(segments.join("/"))
+    // Works for both Cloudflare R2 (`*.r2.cloudflarestorage.com`) and AWS S3
+    // (virtual-hosted or path-style) presigned URLs, so a refresh after a
+    // backend switch still resolves the object key.
+    crate::storage::object_key_from_url(existing_url, &[bucket])
 }
 
 fn portfolio_sample_json_from_row(row: &sqlx::postgres::PgRow) -> serde_json::Value {

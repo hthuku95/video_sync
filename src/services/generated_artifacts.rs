@@ -114,7 +114,12 @@ impl GeneratedArtifactService {
 
         let legacy_file_id = Some(Self::legacy_file_id(&output_video.file_path));
         let now = Utc::now();
-        let storage_backend = if output_video.r2_url.is_some() { "r2" } else { "local" };
+        let storage_backend = if output_video.r2_url.is_some() {
+            crate::storage::backend_from_url(output_video.r2_url.as_deref().unwrap_or_default())
+                .as_str()
+        } else {
+            "local"
+        };
         let storage_key = output_video.r2_url.clone().unwrap_or_else(|| output_video.file_path.clone());
         let artifact = sqlx::query_as::<_, GeneratedArtifact>(
             r#"
