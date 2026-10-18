@@ -47,6 +47,18 @@ pub(crate) const PAYPAL_OFFERS: &[PayPalOffer] = &[
         description: "Up to 30 AI-generated videos from your website URL.",
     },
     PayPalOffer {
+        id: "education-video-10",
+        name: "Education Video Starter (10 videos)",
+        amount: "50.00",
+        description: "10 AI-generated animated lesson videos from your topic or course URL.",
+    },
+    PayPalOffer {
+        id: "education-video-30",
+        name: "Education Video Pro (up to 30 videos)",
+        amount: "100.00",
+        description: "Up to 30 AI-generated animated lesson videos from your topic or course URL.",
+    },
+    PayPalOffer {
         id: "saas-demo-starter",
         name: "SaaS/App Demo Starter",
         amount: "399.00",
