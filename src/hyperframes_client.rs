@@ -107,7 +107,7 @@ impl HyperFramesClient {
             .send()
             .await
             .map_err(|e| format!("Step Functions start failed: {e}"))?;
-        let exec_arn: String = start_out.execution_arn().unwrap_or_default().to_string();
+        let exec_arn: String = start_out.execution_arn().to_string();
         if exec_arn.is_empty() {
             return Err("Step Functions returned no execution ARN".to_string());
         }
