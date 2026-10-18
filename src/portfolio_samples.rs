@@ -390,7 +390,7 @@ async fn discover_twitch_source(state: &std::sync::Arc<crate::AppState>) -> Opti
 /// Discover a live Kick channel via the Kick public API, then resolve it.
 async fn discover_kick_source(state: &std::sync::Arc<crate::AppState>) -> Option<String> {
     let client = state.kick_client.as_ref()?;
-    let streams = match client.get_livestreams(None, Some("en"), 25).await {
+    let streams = match client.get_livestreams(None, Some("en"), Some(25)).await {
         Ok(s) => s,
         Err(e) => {
             tracing::warn!("Kick discovery: get_livestreams failed: {e}");
