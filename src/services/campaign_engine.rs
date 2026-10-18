@@ -993,9 +993,18 @@ async fn schedule_via_zernio(
     let scheduled_for = post.scheduled_at.format("%Y-%m-%dT%H:%M:%SZ").to_string();
     let scheduled_for_clone = scheduled_for.clone();
 
+    // Re-presign from the stored key so the URL is fresh when Zernio fetches it.
+    // S3 fallback URLs are only valid for the signing session (~6h); the stored
+    // URL may be similarly stale by publish time.
+    let media_url = crate::handlers::admin::refresh_r2_presigned_url_from_existing(
+        state, media_url,
+    )
+    .await
+    .unwrap_or_else(|| media_url.to_string());
+
     let media_items = vec![zernio_client::MediaItem {
         r#type: "video".to_string(),
-        url: media_url.to_string(),
+        url: media_url.clone(),
     }];
     let req = zernio_client::CreatePostRequest {
         content: Some(text),

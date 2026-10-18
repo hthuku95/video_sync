@@ -8759,7 +8759,7 @@ async fn refreshed_r2_media_value(
     }
 }
 
-async fn refresh_r2_presigned_url_from_existing(
+pub(crate) async fn refresh_r2_presigned_url_from_existing(
     state: &Arc<AppState>,
     existing_url: &str,
 ) -> Option<String> {

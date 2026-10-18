@@ -167,14 +167,16 @@ impl PortfolioTestRunner {
                          llm_review_score = $4, \
                          llm_review_feedback = $5, \
                          llm_reviewer = 'gemini', \
+                         storage_backend = $6, \
                          completed_at = NOW() \
-                     WHERE id = $6",
+                     WHERE id = $7",
                 )
                 .bind(&r2_url)
                 .bind(&r2_url)
                 .bind(&filename)
                 .bind(review.score)
                 .bind(&review.feedback)
+                .bind(crate::storage::backend_from_url(&r2_url).as_str())
                 .bind(result_id)
                 .execute(&self.app_state.db_pool)
                 .await;

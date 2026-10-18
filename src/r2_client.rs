@@ -91,10 +91,40 @@ impl R2Client {
     /// a regional endpoint. No custom endpoint, no path-style addressing, so
     /// presigned URLs come out as virtual-hosted `bucket.s3.<region>.amazonaws.com`.
     pub async fn new_aws_s3(bucket: &str, region: &str) -> Result<Self, String> {
-        let sdk_config = aws_config::defaults(BehaviorVersion::latest())
-            .region(aws_config::Region::new(region.to_string()))
-            .load()
-            .await;
+        let loader = aws_config::defaults(BehaviorVersion::latest())
+            .region(aws_config::Region::new(region.to_string()));
+
+        // Optional long-lived signing credentials. The ECS task role issues
+        // session credentials that expire in ~6h, and AWS truncates a presigned
+        // URL's usable lifetime to that session expiry no matter what
+        // `expires_in` we request. A dedicated least-privilege key pair lets
+        // presigned URLs live the full requested duration — required for
+        // same-day scheduled campaign posts that Zernio fetches at slot time.
+        let static_key = std::env::var("S3_FALLBACK_ACCESS_KEY_ID")
+            .ok()
+            .filter(|v| !v.trim().is_empty());
+        let static_secret = std::env::var("S3_FALLBACK_SECRET_ACCESS_KEY")
+            .ok()
+            .filter(|v| !v.trim().is_empty());
+
+        let sdk_config = match (static_key, static_secret) {
+            (Some(key), Some(secret)) => {
+                tracing::info!(
+                    "☁️ S3 fallback: using static signing credentials (S3_FALLBACK_ACCESS_KEY_ID)"
+                );
+                loader
+                    .credentials_provider(Credentials::new(
+                        key,
+                        secret,
+                        None,
+                        None,
+                        "s3-fallback-static",
+                    ))
+                    .load()
+                    .await
+            }
+            _ => loader.load().await,
+        };
 
         let s3_config = S3ConfigBuilder::from(&sdk_config)
             .request_checksum_calculation(

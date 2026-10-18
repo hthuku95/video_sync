@@ -16,6 +16,23 @@ pub async fn upload_bytes_to_cloud(
     let now = chrono::Utc::now();
     let storage_key = object_key.to_string();
 
+    // ── Empty-artifact backstop (§CRIT) ──────────────────────────────────────
+    // Never store a provably-empty/corrupt video. Mirrors the publish_output
+    // guard so the tool-executor "upload to cloud" path can't persist 0-byte
+    // MP4s (Oct 19: education agent uploaded a 0-byte output.mp4 + fallback).
+    if content_type.starts_with("video/") {
+        let min_bytes: usize = std::env::var("ARTIFACT_MIN_BYTES")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(50_000);
+        if bytes.len() < min_bytes {
+            return Err(format!(
+                "ARTIFACT_INVALID: refusing to upload {}-byte video (minimum {min_bytes}) — {storage_key}",
+                bytes.len()
+            ));
+        }
+    }
+
     // 1. Write to a temp file for R2 upload (R2 SDK requires a file path)
     let tmp = std::env::temp_dir().join(&storage_key.replace('/', "_"));
     if let Some(parent) = tmp.parent() {
@@ -85,6 +102,16 @@ pub async fn upload_bytes_to_cloud(
             $6, $7, $8, $9,
             $10, $11, NULL, 'cloud_uploads', $12, $13, $13
         )
+        ON CONFLICT (source_table, source_record_key)
+            WHERE source_table IS NOT NULL AND source_record_key IS NOT NULL
+        DO UPDATE SET
+            storage_backend = EXCLUDED.storage_backend,
+            storage_key     = EXCLUDED.storage_key,
+            public_url      = EXCLUDED.public_url,
+            preview_url     = EXCLUDED.preview_url,
+            bytes           = EXCLUDED.bytes,
+            mime_type       = EXCLUDED.mime_type,
+            updated_at      = NOW()
         RETURNING *
         "#,
     )

@@ -448,6 +448,13 @@ pub async fn try_publish_delivery_to_zernio(delivery_id: Uuid, state: &Arc<AppSt
         return;
     }
 
+    // Re-presign from the stored object key before handing the URL to Zernio.
+    // The stored `output_r2_url` was minted at render time; with the S3 fallback
+    // the signing session lasts only ~6h, so a stale URL would 403 for Zernio.
+    let refreshed_output_url =
+        crate::handlers::admin::refresh_r2_presigned_url_from_existing(state, &output_url).await;
+    let output_url = refreshed_output_url.unwrap_or(output_url);
+
     let text = format!(
         "New video render completed! 🎬\n\nAutomated delivery via VideoSync.\n\n{}",
         output_url
