@@ -36,7 +36,7 @@ fn parse_gemini_retry_delay(error_body: &str, default_secs: f64) -> f64 {
                 if let Some(rd) = detail["retryDelay"].as_str() {
                     let secs_str = rd.trim_end_matches('s');
                     if let Ok(secs) = secs_str.parse::<f64>() {
-                        return secs;
+                        return secs.min(GEMINI_RETRY_MAX_SECS);
                     }
                 }
             }
@@ -48,14 +48,23 @@ fn parse_gemini_retry_delay(error_body: &str, default_secs: f64) -> f64 {
                 let rest = &msg[start + marker.len()..];
                 if let Some(end) = rest.find('s') {
                     if let Ok(secs) = rest[..end].parse::<f64>() {
-                        return secs;
+                        return secs.min(GEMINI_RETRY_MAX_SECS);
                     }
                 }
             }
         }
     }
-    default_secs
+    default_secs.min(GEMINI_RETRY_MAX_SECS)
 }
+
+/// Upper bound on the wait we honour for a Gemini 429 `retryDelay`.
+///
+/// Gemini returns the *full quota-reset* delay when a quota window is
+/// exhausted (observed: 4320s / 3468s ≈ 1h). Sleeping that long blocks the
+/// whole pipeline and starves every other tool call in the session. Cap it so
+/// a quota hit surfaces quickly and the caller can fall back to another
+/// provider (see `llm_utils::generate_video_script_best_effort`).
+const GEMINI_RETRY_MAX_SECS: f64 = 60.0;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct GenerateContentRequest {
@@ -793,7 +802,8 @@ impl GeminiClient {
                             .and_then(|s| s.trim_end_matches('s').parse::<u64>().ok())
                     })
                 })
-                .unwrap_or(30);
+                .unwrap_or(30)
+                .min(GEMINI_RETRY_MAX_SECS as u64);
             tracing::warn!("Gemini image generation hit 429 quota, retrying after {}s", retry_seconds);
             tokio::time::sleep(std::time::Duration::from_secs(retry_seconds)).await;
             let retry_response = self.client.post(&url)

@@ -85,6 +85,31 @@ struct Pagination {
     cursor: Option<String>,
 }
 
+// ─────────────────────────── helpers ─────────────────────────────────────────
+
+/// Parse a Twitch duration string (`"1h2m3s"`, `"45m30s"`, `"90s"`) into seconds.
+/// Twitch's Helix API returns VOD durations in this human-readable form.
+pub fn parse_duration_secs(duration: &str) -> u64 {
+    let mut total = 0u64;
+    let mut num = String::new();
+    for ch in duration.chars() {
+        if ch.is_ascii_digit() {
+            num.push(ch);
+        } else {
+            if let Ok(n) = num.parse::<u64>() {
+                match ch {
+                    'h' => total += n * 3600,
+                    'm' => total += n * 60,
+                    's' => total += n,
+                    _ => {}
+                }
+            }
+            num.clear();
+        }
+    }
+    total
+}
+
 // ─────────────────────────── client ──────────────────────────────────────────
 
 #[derive(Clone)]

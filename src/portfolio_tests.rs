@@ -227,7 +227,13 @@ impl PortfolioTestRunner {
             .find(|s| s.slug == scenario.slug)
             .ok_or_else(|| format!("Managed Campaign service '{}' not found", scenario.slug))?;
 
-        let input = crate::portfolio_samples::service_input_for(service_def);
+        let mut input = crate::portfolio_samples::service_input_for(service_def);
+        input.source_url = crate::portfolio_samples::resolve_service_source_url(
+            &self.app_state,
+            service_def.slug,
+            service_def.source_url,
+        )
+        .await;
         let mut extra = crate::portfolio_samples::portfolio_extra_args(service_def);
         extra["test_run_id"] = json!(delivery_id.to_string());
 

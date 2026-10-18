@@ -82,3 +82,39 @@ pub async fn generate_text_best_effort(
 
     Err("No LLM client configured for text generation".into())
 }
+
+/// Video-script generation with provider fallback (Oct 19 2026).
+///
+/// The `generate_video_script` agent tool used to hit Gemini directly, so a
+/// single Gemini 429 (quota) stalled the whole education/clipping pipeline for
+/// ~1h per attempt. This walks the working text providers first
+/// (Qwen → NVIDIA NIM → DeepSeek); the caller keeps the Gemini script-tuned
+/// path as a last resort. Clients are built from env so the tool handler —
+/// which has no `AppState` — can use them.
+pub async fn generate_video_script_best_effort(
+    prompt: &str,
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    let qwen = std::env::var("DASHSCOPE_API_KEY")
+        .ok()
+        .filter(|k| !k.trim().is_empty())
+        .map(QwenClient::new);
+    let nvidia = std::env::var("NVIDIA_API_KEY")
+        .ok()
+        .filter(|k| !k.trim().is_empty())
+        .map(NvidiaNimClient::new);
+    let deepseek = std::env::var("DEEPSEEK_API_KEY")
+        .ok()
+        .filter(|k| !k.trim().is_empty())
+        .map(DeepSeekClient::new);
+
+    try_provider!(qwen.as_ref(), prompt, "Qwen (script)", "trying NVIDIA NIM");
+    try_provider!(nvidia.as_ref(), prompt, "NVIDIA NIM (script)", "trying DeepSeek");
+    try_provider!(
+        deepseek.as_ref(),
+        prompt,
+        "DeepSeek V4 (script)",
+        "no script fallbacks left"
+    );
+
+    Err("No text provider available for script generation".into())
+}

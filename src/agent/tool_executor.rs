@@ -2919,6 +2919,42 @@ async fn execute_generate_text_to_speech_claude(args: &Value) -> String {
     }
 }
 
+/// Build a provider-agnostic prompt for video-script generation.
+///
+/// Used by the provider-chain fallback in the `generate_video_script` handlers.
+/// The Gemini path builds its own script-tuned prompts; this one is deliberately
+/// generic so it works with any instruction-following text model (Qwen, NVIDIA
+/// NIM, DeepSeek).
+fn build_video_script_prompt(topic: &str, style: &str, duration: f64, tone: &str) -> String {
+    let approx_words = (duration * 2.5) as u32;
+    format!(
+        "Create a {duration:.0}-second {style} video script about \"{topic}\".\n\n\
+         Target audience / tone: {tone}.\n\
+         Approximate narration length: {approx_words} words (~150 words per minute).\n\n\
+         Requirements:\n\
+         - Strong opening hook\n\
+         - Clear, well-structured narration segments (optionally with timestamps)\n\
+         - Accurate, specific information about the topic\n\
+         - Natural spoken phrasing suitable for text-to-speech\n\
+         - A concise summary or call to action at the end\n\n\
+         Return only the script text (no markdown fences, no preamble)."
+    )
+}
+
+/// Format the tool response for a generated video script.
+fn format_video_script_result(
+    topic: &str,
+    duration: f64,
+    style: &str,
+    tone: &str,
+    script: &str,
+) -> String {
+    format!(
+        "📝 **Video Script Generated**\n\nTopic: {}\nDuration: {:.0}s\nStyle: {}\nTone: {}\n\n{}",
+        topic, duration, style, tone, script
+    )
+}
+
 async fn execute_generate_video_script_claude(args: &Value) -> String {
     let topic = args["topic"].as_str().unwrap_or("");
     let duration = args["duration"].as_f64().unwrap_or(60.0);
@@ -2935,7 +2971,23 @@ async fn execute_generate_video_script_claude(args: &Value) -> String {
         return "❌ Error: topic is required".to_string();
     }
 
-    // Get Gemini API key
+    // Preferred: provider chain (Qwen → NVIDIA NIM → DeepSeek). This avoids the
+    // ~1h Gemini quota stall when Gemini is rate-limited.
+    let prompt = build_video_script_prompt(topic, style, duration, tone);
+    match crate::llm_utils::generate_video_script_best_effort(&prompt).await {
+        Ok(script) => {
+            tracing::info!("✅ Video script generated via provider chain (Claude path)");
+            return format_video_script_result(topic, duration, style, tone, &script);
+        }
+        Err(e) => {
+            tracing::warn!(
+                "⚠️ Provider chain failed for video script ({}), falling back to Gemini",
+                e
+            );
+        }
+    }
+
+    // Last resort: the Gemini script-tuned path.
     let api_key = match std::env::var("VIDEO_GEMINI_API_KEY")
         .or_else(|_| std::env::var("GEMINI_API_KEY"))
         .or_else(|_| std::env::var("GOOGLE_API_KEY"))
@@ -2960,10 +3012,7 @@ async fn execute_generate_video_script_claude(args: &Value) -> String {
         )
         .await
     {
-        Ok(script) => {
-            format!("📝 **Video Script Generated**\n\nTopic: {}\nDuration: {:.0}s\nStyle: {}\nTone: {}\n\n{}",
-                topic, duration, style, tone, script)
-        }
+        Ok(script) => format_video_script_result(topic, duration, style, tone, &script),
         Err(e) => format!("❌ Failed to generate video script: {}", e),
     }
 }
@@ -4137,7 +4186,23 @@ async fn execute_generate_video_script_gemini(args: &HashMap<String, Value>) -> 
         return "❌ Error: topic is required".to_string();
     }
 
-    // Get Gemini API key
+    // Preferred: provider chain (Qwen → NVIDIA NIM → DeepSeek). This avoids the
+    // ~1h Gemini quota stall when Gemini is rate-limited.
+    let prompt = build_video_script_prompt(topic, style, duration, tone);
+    match crate::llm_utils::generate_video_script_best_effort(&prompt).await {
+        Ok(script) => {
+            tracing::info!("✅ Video script generated via provider chain (Gemini path)");
+            return format_video_script_result(topic, duration, style, tone, &script);
+        }
+        Err(e) => {
+            tracing::warn!(
+                "⚠️ Provider chain failed for video script ({}), falling back to Gemini",
+                e
+            );
+        }
+    }
+
+    // Last resort: the Gemini script-tuned path.
     let api_key = match std::env::var("VIDEO_GEMINI_API_KEY")
         .or_else(|_| std::env::var("GEMINI_API_KEY"))
         .or_else(|_| std::env::var("GOOGLE_API_KEY"))
@@ -4162,10 +4227,7 @@ async fn execute_generate_video_script_gemini(args: &HashMap<String, Value>) -> 
         )
         .await
     {
-        Ok(script) => {
-            format!("📝 **Video Script Generated**\n\nTopic: {}\nDuration: {:.0}s\nStyle: {}\nTone: {}\n\n{}",
-                topic, duration, style, tone, script)
-        }
+        Ok(script) => format_video_script_result(topic, duration, style, tone, &script),
         Err(e) => format!("❌ Failed to generate video script: {}", e),
     }
 }
@@ -5295,6 +5357,55 @@ async fn resolve_kick_latest_vod(channel_url: &str) -> Result<String, String> {
     Ok(url.to_string())
 }
 
+/// Extract a Twitch channel login from a channel URL.
+/// `https://www.twitch.tv/kaicenat` → `Some("kaicenat")`.
+fn twitch_login_from_url(channel_url: &str) -> Option<String> {
+    let parsed = url::Url::parse(channel_url).ok()?;
+    let login = parsed
+        .path_segments()?
+        .find(|s| !s.trim().is_empty())?
+        .trim()
+        .to_string();
+    if login.is_empty() {
+        None
+    } else {
+        Some(login)
+    }
+}
+
+/// Resolve a Twitch *channel* URL to its latest archived VOD page URL via the
+/// Helix API. Mirrors `resolve_kick_latest_vod` so the compilation tool accepts
+/// plain channel URLs (`https://www.twitch.tv/kaicenat`) in addition to explicit
+/// `/videos/<id>` URLs. Prefers the newest VOD of at least 5 minutes.
+async fn resolve_twitch_latest_vod(
+    ctx: &ToolExecutionContext,
+    channel_url: &str,
+) -> Result<String, String> {
+    let client = ctx
+        .app_state
+        .twitch_client
+        .as_ref()
+        .ok_or_else(|| "Twitch client not configured".to_string())?;
+
+    let login = twitch_login_from_url(channel_url)
+        .ok_or_else(|| format!("could not parse Twitch channel from '{channel_url}'"))?;
+
+    let channel = client
+        .get_user_by_login(&login)
+        .await?
+        .ok_or_else(|| format!("Twitch channel '{login}' not found"))?;
+
+    let (videos, _cursor) = client.get_videos(&channel.broadcaster_id, None, 6).await?;
+
+    let pick = videos
+        .iter()
+        .find(|v| crate::twitch_client::parse_duration_secs(&v.duration) >= 300)
+        .or_else(|| videos.first())
+        .ok_or_else(|| format!("Twitch channel '{login}' has no archived VODs"))?;
+
+    Ok(pick.url.clone())
+}
+
 async fn execute_clip_compilation_value(
     args: &Value,
     ctx: &ToolExecutionContext,
@@ -5485,6 +5596,10 @@ async fn execute_clip_compilation_value(
     let tmp_dir = std::path::PathBuf::from("/tmp").join(format!("clip_compilation_{}_{}", session_slug, uuid));
     let _ = tokio::fs::create_dir_all(&tmp_dir).await;
     let is_kick = source_url.contains("kick.com");
+    let is_twitch = source_url.contains("twitch.tv");
+    // A Twitch URL that already points at a VOD (`.../videos/<id>`) needs no
+    // channel→VOD resolution; only bare channel URLs do.
+    let is_twitch_vod = is_twitch && source_url.contains("/videos/");
     let r2_key = format!("downloads/clip_compilation/{}/{}/source.mp4", ctx.session_id, uuid);
 
     let download_result = if is_kick {
@@ -5523,6 +5638,27 @@ async fn execute_clip_compilation_value(
             }
             Err(e) => Err(format!(
                 "Kick VOD resolution failed ({}). Campaign source must have a completed VOD.",
+                e
+            )),
+        }
+    } else if is_twitch && !is_twitch_vod {
+        // ── TWITCH CHANNEL VIA HELIX (Oct 19 2026) ──
+        // Mirrors the Kick path: a bare channel URL (e.g.
+        // https://www.twitch.tv/kaicenat) is resolved to its latest archived
+        // VOD before download. Helix gives us a real VOD page URL, which the
+        // generic ytdlp service path can stream.
+        match resolve_twitch_latest_vod(ctx, &source_url).await {
+            Ok(vod_url) => {
+                tracing::info!("🎬 Twitch resolved to latest archived VOD: {}", vod_url);
+                let tmp_path = format!("/tmp/ytdlp_api_dl_{}", uuid);
+                let result = crate::clipping::ytdlp_api_client::YtdlpApiClient::download_video(
+                    &vod_url, &tmp_path, Some(r2_key.clone()),
+                ).await;
+                let _ = tokio::fs::remove_file(&tmp_path).await;
+                result
+            }
+            Err(e) => Err(format!(
+                "Twitch VOD resolution failed ({}). Channel must have at least one archived VOD.",
                 e
             )),
         }

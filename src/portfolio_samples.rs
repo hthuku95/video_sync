@@ -79,7 +79,7 @@ pub fn dfy_services() -> &'static [DfyServiceDef] {
             brief: "Turn a 30-minute tech podcast episode into 5 high-retention short-form clips with captions, branded lower thirds, and viral hooks for TikTok and YouTube Shorts.",
             style: "high-retention clip pack, captions, branded lower thirds, viral hooks",
             duration_seconds: 15.0,
-            source_url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            source_url: "",
         },
         DfyServiceDef {
             slug: "youtube_clipping",
@@ -88,7 +88,7 @@ pub fn dfy_services() -> &'static [DfyServiceDef] {
             brief: "Turn a 30-minute YouTube video essay into 5 high-retention short-form clips with captions, branded lower thirds, and viral hooks for TikTok and YouTube Shorts.",
             style: "high-retention clip pack, captions, branded lower thirds, viral hooks",
             duration_seconds: 15.0,
-            source_url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            source_url: "",
         },
         DfyServiceDef {
             slug: "twitch_clipping",
@@ -97,7 +97,7 @@ pub fn dfy_services() -> &'static [DfyServiceDef] {
             brief: "Turn a 2-hour Twitch stream VOD into 10 viral highlights with captions, branded lower thirds, and stream-highlight energy, optimized for TikTok/Shorts vertical format.",
             style: "high-retention clip pack, vertical 9:16, karaoke captions, zoom on reactions",
             duration_seconds: 15.0,
-            source_url: "https://www.twitch.tv/videos/1234567890",
+            source_url: "",
         },
         DfyServiceDef {
             slug: "kick_auto_clipper",
@@ -106,7 +106,7 @@ pub fn dfy_services() -> &'static [DfyServiceDef] {
             brief: "Automatically clip a 2-hour Kick streaming VOD into 10 viral highlights with Kick-compliant branding (logo, captions, zooms, outro card), optimized for TikTok/Shorts vertical format.",
             style: "Kick clip style, vertical 9:16, karaoke captions, logo overlay, zoom on reactions",
             duration_seconds: 45.0,
-            source_url: "https://kick.com/example",
+            source_url: "",
         },
         DfyServiceDef {
             slug: "landing_page",
@@ -235,6 +235,206 @@ pub fn portfolio_extra_args(def: &DfyServiceDef) -> serde_json::Value {
 /// Generate a delivery-style client_ref for a Managed Campaign portfolio sample.
 pub fn dfy_client_ref(slug: &str) -> String {
     format!("portfolio:dfy:{}", slug)
+}
+
+// ── Service source discovery (Oct 19 2026) ───────────────────────────────
+//
+// Clipping services no longer hardcode a streamer/channel in `dfy_services()`.
+// Their `source_url` is empty and resolved here at delivery-creation time by
+// reusing the existing discovery clients, then cached in `service_test_sources`
+// so repeated quality-test runs use the SAME source (deterministic) and only
+// re-discover when the cached URL is stale. See migration
+// `20261019000000_service_test_sources.sql`.
+
+/// How long a cached discovered source is trusted before re-discovery.
+const SERVICE_SOURCE_TTL_DAYS: i64 = 7;
+
+/// Minimum VOD length (seconds) worth clipping in a quality test.
+const SERVICE_SOURCE_MIN_VOD_SECS: u64 = 300;
+
+/// Discovery platform for a Managed Campaign service slug, if it needs one.
+/// Returns `None` for services whose source is an explicit fixture URL (or none).
+pub fn discovery_platform(slug: &str) -> Option<&'static str> {
+    match slug {
+        "twitch_clipping" => Some("twitch"),
+        "kick_auto_clipper" => Some("kick"),
+        "youtube_clipping" | "clipping" => Some("youtube"),
+        _ => None,
+    }
+}
+
+/// Resolve the source URL for a Managed Campaign service.
+///
+/// Non-clipping services (or any service with an explicit fixture URL) are
+/// returned unchanged. Clipping services reuse a cached discovery, and only
+/// re-discover when the cache is missing or older than `SERVICE_SOURCE_TTL_DAYS`.
+pub async fn resolve_service_source_url(
+    state: &std::sync::Arc<crate::AppState>,
+    slug: &str,
+    fixture_url: &str,
+) -> Option<String> {
+    let Some(platform) = discovery_platform(slug) else {
+        return if fixture_url.is_empty() {
+            None
+        } else {
+            Some(fixture_url.to_string())
+        };
+    };
+
+    // 1) Reuse a fresh cached pick.
+    let cache_sql = format!(
+        "SELECT source_url, \
+                (COALESCE(last_verified_at, discovered_at) > NOW() - INTERVAL '{} days') AS fresh \
+         FROM service_test_sources WHERE service_slug = $1",
+        SERVICE_SOURCE_TTL_DAYS
+    );
+    let cached: Option<(String, bool)> = sqlx::query_as::<_, (String, bool)>(&cache_sql)
+        .bind(slug)
+        .fetch_optional(&state.db_pool)
+        .await
+        .ok()
+        .flatten();
+
+    if let Some((url, true)) = &cached {
+        tracing::debug!("♻️ Reusing cached {} source for '{}': {}", platform, slug, url);
+        return Some(url.clone());
+    }
+
+    // 2) Discover a fresh source.
+    let discovered = match platform {
+        "twitch" => discover_twitch_source(state).await,
+        "kick" => discover_kick_source(state).await,
+        "youtube" => discover_youtube_source(state).await,
+        _ => None,
+    };
+
+    if let Some(url) = discovered {
+        if let Err(e) = sqlx::query(
+            "INSERT INTO service_test_sources (service_slug, source_url, platform, discovered_at, last_verified_at) \
+             VALUES ($1, $2, $3, NOW(), NOW()) \
+             ON CONFLICT (service_slug) DO UPDATE SET \
+                 source_url = EXCLUDED.source_url, platform = EXCLUDED.platform, \
+                 discovered_at = NOW(), last_verified_at = NOW(), verify_failures = 0",
+        )
+        .bind(slug)
+        .bind(&url)
+        .bind(platform)
+        .execute(&state.db_pool)
+        .await
+        {
+            tracing::warn!("service_test_sources upsert failed for '{}': {e}", slug);
+        }
+        tracing::info!("🎯 Discovered {} source for '{}': {}", platform, slug, url);
+        return Some(url);
+    }
+
+    // 3) Discovery failed — fall back to a stale cache, then the fixture URL.
+    if let Some((url, _)) = cached {
+        tracing::warn!(
+            "⚠️ Discovery failed for '{}'; reusing stale cached source {}",
+            slug,
+            url
+        );
+        return Some(url);
+    }
+    if !fixture_url.is_empty() {
+        return Some(fixture_url.to_string());
+    }
+    tracing::warn!("⚠️ No source could be discovered for service '{}'", slug);
+    None
+}
+
+/// Discover a Twitch channel that has a substantial recent VOD, then resolve it.
+async fn discover_twitch_source(state: &std::sync::Arc<crate::AppState>) -> Option<String> {
+    let client = state.twitch_client.as_ref()?;
+    for query in ["gaming", "just chatting", "podcast", "irl"] {
+        let channels = match client.search_channels(query, 20).await {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!("Twitch discovery: search '{query}' failed: {e}");
+                continue;
+            }
+        };
+        for ch in channels {
+            let videos = match client.get_videos(&ch.broadcaster_id, None, 6).await {
+                Ok((v, _)) => v,
+                Err(e) => {
+                    tracing::warn!(
+                        "Twitch discovery: get_videos failed for {}: {e}",
+                        ch.broadcaster_login
+                    );
+                    continue;
+                }
+            };
+            // Use the specific long VOD directly: `resolve_latest_video_url`
+            // would take the *newest* VOD, which may be shorter than the one we
+            // just qualified. The VOD page URL already contains `/videos/<id>`,
+            // so downstream source resolution passes it straight through.
+            if let Some(v) = videos
+                .iter()
+                .find(|v| crate::twitch_client::parse_duration_secs(&v.duration) >= SERVICE_SOURCE_MIN_VOD_SECS)
+            {
+                tracing::info!(
+                    "Twitch discovery: channel '{}' has a {}-second VOD ({})",
+                    ch.broadcaster_login,
+                    crate::twitch_client::parse_duration_secs(&v.duration),
+                    v.url
+                );
+                return Some(v.url.clone());
+            }
+        }
+    }
+    None
+}
+
+/// Discover a live Kick channel via the Kick public API, then resolve it.
+async fn discover_kick_source(state: &std::sync::Arc<crate::AppState>) -> Option<String> {
+    let client = state.kick_client.as_ref()?;
+    let streams = match client.get_livestreams(None, Some("en"), 25).await {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!("Kick discovery: get_livestreams failed: {e}");
+            return None;
+        }
+    };
+    for stream in streams {
+        if stream.slug.trim().is_empty() {
+            continue;
+        }
+        let channel_url = format!("https://kick.com/{}", stream.slug);
+        match crate::services::campaign_engine::resolve_latest_video_url(state, &channel_url).await {
+            Ok(url) if url != channel_url => return Some(url),
+            Ok(_) => {}
+            Err(e) => tracing::warn!("Kick discovery: resolve failed for {}: {e}", stream.slug),
+        }
+    }
+    None
+}
+
+/// Discover a YouTube channel via search, then resolve it to its latest upload.
+async fn discover_youtube_source(state: &std::sync::Arc<crate::AppState>) -> Option<String> {
+    let client = state.youtube_client.as_ref()?;
+    for query in ["technology podcast", "gaming highlights", "educational explainer"] {
+        let resp = match client.search_channels(None, query, 10, None).await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!("YouTube discovery: search '{query}' failed: {e}");
+                continue;
+            }
+        };
+        for item in resp.items {
+            let channel_url = format!("https://youtube.com/channel/{}", item.id.channel_id);
+            match crate::services::campaign_engine::resolve_latest_video_url(state, &channel_url).await {
+                Ok(url) if url != channel_url => return Some(url),
+                Ok(_) => {}
+                Err(e) => tracing::warn!(
+                    "YouTube discovery: resolve failed for {}: {e}",
+                    item.id.channel_id
+                ),
+            }
+        }
+    }
+    None
 }
 
 #[cfg(test)]

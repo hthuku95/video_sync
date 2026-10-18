@@ -8469,7 +8469,13 @@ pub async fn api_generate_dfy_portfolio_samples(
 
         // Create delivery row
         let delivery_id = Uuid::new_v4();
-        let input = crate::portfolio_samples::service_input_for(service);
+        let mut input = crate::portfolio_samples::service_input_for(service);
+        input.source_url = crate::portfolio_samples::resolve_service_source_url(
+            &state,
+            service.slug,
+            service.source_url,
+        )
+        .await;
         let mut extra = crate::portfolio_samples::portfolio_extra_args(service);
         mark_portfolio_sample_as_shared_seed(&mut extra);
 
@@ -8968,7 +8974,12 @@ pub async fn api_generate_service_portfolio_sample(
             let style = svc.style.to_string();
             let brief = svc.brief.to_string();
             let duration = svc.duration_seconds;
-            let source_url = if svc.source_url.is_empty() { None } else { Some(svc.source_url.to_string()) };
+            let source_url = crate::portfolio_samples::resolve_service_source_url(
+                &state,
+                svc.slug,
+                svc.source_url,
+            )
+            .await;
 
             tokio::spawn(async move {
                 let service_type = crate::services::agentic_service_pipeline::ServiceType::from_normalized(&slug);
