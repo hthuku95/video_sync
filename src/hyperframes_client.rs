@@ -100,15 +100,17 @@ impl HyperFramesClient {
             "Config": {"fps": 30, "width": 1920, "height": 1080, "format": "mp4"},
         })
         .to_string();
-        let exec_arn = sfn
+        let start_out = sfn
             .start_execution()
             .state_machine_arn(&self.state_machine_arn)
             .input(input)
             .send()
             .await
-            .map_err(|e| format!("Step Functions start failed: {e}"))?
-            .execution_arn
-            .ok_or("Step Functions returned no execution ARN")?;
+            .map_err(|e| format!("Step Functions start failed: {e}"))?;
+        let exec_arn: String = start_out.execution_arn().unwrap_or_default().to_string();
+        if exec_arn.is_empty() {
+            return Err("Step Functions returned no execution ARN".to_string());
+        }
         tracing::info!("🎬 HyperFrames Lambda execution: {exec_arn}");
 
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
