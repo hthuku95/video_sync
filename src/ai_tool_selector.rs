@@ -264,6 +264,7 @@ fn service_tool_names(scope: &str) -> Option<Vec<&'static str>> {
         "landing_page" => vec![
             "blender_generate_scene_type",
             "manim_execute_script",
+            "hyperframes_render",
             "merge_videos",
             "review_video",
             "export_video",
@@ -271,6 +272,7 @@ fn service_tool_names(scope: &str) -> Option<Vec<&'static str>> {
         "education" => vec![
             "manim_execute_script",
             "blender_generate_scene_type",
+            "hyperframes_render",
             "merge_videos",
             "generate_text_to_speech",
             "review_video",
