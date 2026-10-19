@@ -599,20 +599,35 @@ impl AgenticServicePipeline {
                 }
             };
 
-            if review.score > best_score {
+            // A reviewer-unavailable result (pass=true, score=0) means the
+            // artifact cleared the deterministic gate but no model could review
+            // it. Ship this attempt rather than an older known-failing one, and
+            // do not treat 0 as a real verdict.
+            let reviewer_outage = crate::render_review::reviewer_unavailable(&review);
+            if reviewer_outage || review.score > best_score {
                 best_score = review.score;
-                best_output_path = produced.map(|loc| loc.canonical);
+                best_output_path = produced.as_ref().map(|loc| loc.canonical.clone());
                 best_feedback = review.feedback.clone();
             }
 
             if review.pass {
+                let event = if reviewer_outage {
+                    "agentic_review_unavailable"
+                } else {
+                    "agentic_review_passed"
+                };
                 runtime
                     .heartbeat(
                         workflow_id,
                         WorkflowStatus::Running,
-                        Some("agentic_review_passed"),
-                        &format!("Review passed on attempt {} (score {})", attempt + 1, review.score),
-                        json!({ "score": review.score, "attempt": attempt + 1 }),
+                        Some(event),
+                        &format!(
+                            "Review {} on attempt {} (score {})",
+                            if reviewer_outage { "unavailable" } else { "passed" },
+                            attempt + 1,
+                            review.score
+                        ),
+                        json!({ "score": review.score, "attempt": attempt + 1, "reviewer_unavailable": reviewer_outage }),
                     )
                     .await;
                 break;

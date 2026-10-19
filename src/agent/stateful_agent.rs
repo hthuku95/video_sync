@@ -933,6 +933,19 @@ IMPORTANT: For fetching website content, use `browserbase_crawl_website(url)` �
         let mut final_response = String::new();
         let mut conversation_contents = contents;
 
+        // Durable resume: Qwen/NIM may have failed after completing turns.
+        // Convert their OpenAI-format checkpoint so Gemini continues from the
+        // last completed turn instead of restarting from history.
+        if let Some(saved) =
+            resume_checkpoint_messages(&app_state, workflow_id, "Gemini fallback").await
+        {
+            let converted = openai_messages_to_gemini_contents(&saved);
+            if !converted.is_empty() {
+                send_progress("♻️ Resuming from previous progress...");
+                conversation_contents = converted;
+            }
+        }
+
         // Tool calling loop - continue until AI returns text (not function calls)
         let mut is_first_call = true;
         loop {
@@ -1121,6 +1134,14 @@ IMPORTANT: For fetching website content, use `browserbase_crawl_website(url)` �
             // 2. Try NVIDIA NIM (cloud fallback, 40 RPM free tier)
             if let Some(ref nim) = self.nvidia_nim_client {
                 let mut nim_messages = build_messages(&system_instruction);
+                // Same OpenAI message format as Qwen — continue the in-flight
+                // turn if Qwen failed mid-run instead of re-planning.
+                if let Some(saved) =
+                    resume_checkpoint_messages(&app_state, workflow_id, "NVIDIA NIM fallback").await
+                {
+                    send_progress("♻️ Resuming from previous progress...");
+                    nim_messages = saved;
+                }
                 match run_nvidia_tool_loop(
                     nim,
                     &mut nim_messages,
@@ -1156,6 +1177,14 @@ IMPORTANT: For fetching website content, use `browserbase_crawl_website(url)` �
                 Err(gemini_err) => {
                     tracing::warn!("⚠️ Gemini failed, trying DeepSeek fallback: {}", gemini_err);
                     let mut ds_messages = build_messages(&system_instruction);
+                    // Resume from the last completed turn if one exists.
+                    if let Some(saved) =
+                        resume_checkpoint_messages(&app_state, workflow_id, "DeepSeek fallback")
+                            .await
+                    {
+                        send_progress("♻️ Resuming from previous progress...");
+                        ds_messages = saved;
+                    }
 
                     if let Some(ref ds_client) = app_state.deepseek_client {
                         send_progress("🤖 Processing your request...");
@@ -2783,6 +2812,139 @@ async fn clear_agent_checkpoint(pool: &sqlx::PgPool, workflow_id: uuid::Uuid) {
     {
         tracing::warn!("⚠️ Agent checkpoint clear failed: {}", e);
     }
+}
+
+/// Resume-from-checkpoint for FALLBACK providers.
+///
+/// The Qwen path already reloads `agent_checkpoint` on entry, but the fallback
+/// providers previously rebuilt their context from persisted conversation
+/// history — which drops the tool results of turns that already completed in
+/// this run, forcing the new model to redo work. When a checkpoint exists we
+/// hand it to the fallback instead, so a provider switch continues from the
+/// last completed turn rather than re-planning from scratch.
+///
+/// `provider_label` is only used for the log line.
+async fn resume_checkpoint_messages(
+    app_state: &Arc<AppState>,
+    workflow_id: Option<uuid::Uuid>,
+    provider_label: &str,
+) -> Option<Vec<serde_json::Value>> {
+    if !checkpoints_enabled() {
+        return None;
+    }
+    let wid = workflow_id?;
+    let saved = load_agent_checkpoint(&app_state.db_pool, wid).await?;
+    tracing::info!(
+        "♻️ {} resuming agent run from checkpoint ({} messages)",
+        provider_label,
+        saved.len()
+    );
+    Some(saved)
+}
+
+/// Convert OpenAI-format chat messages (the shape persisted by the
+/// Qwen/NIM/DeepSeek tool loops) into Gemini `Content`s. Used so the Gemini
+/// fallback can also resume mid-run instead of restarting from history.
+fn openai_messages_to_gemini_contents(
+    messages: &[serde_json::Value],
+) -> Vec<crate::gemini_client::Content> {
+    use crate::gemini_client::{Content, FunctionCall, FunctionResponse, Part};
+
+    let mut id_to_name: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    let mut out: Vec<Content> = Vec::new();
+
+    for msg in messages {
+        let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("");
+        match role {
+            // System prompt is supplied separately via `system_instruction`.
+            "system" | "" => continue,
+            "user" => {
+                if let Some(text) = msg.get("content").and_then(|c| c.as_str()) {
+                    if !text.is_empty() {
+                        out.push(Content {
+                            parts: vec![Part::Text {
+                                text: text.to_string(),
+                            }],
+                            role: Some("user".to_string()),
+                        });
+                    }
+                }
+            }
+            "assistant" => {
+                let mut parts: Vec<Part> = Vec::new();
+                if let Some(text) = msg.get("content").and_then(|c| c.as_str()) {
+                    if !text.is_empty() {
+                        parts.push(Part::Text {
+                            text: text.to_string(),
+                        });
+                    }
+                }
+                if let Some(calls) = msg.get("tool_calls").and_then(|t| t.as_array()) {
+                    for call in calls {
+                        let name = call
+                            .get("function")
+                            .and_then(|f| f.get("name"))
+                            .and_then(|n| n.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let args = match call.get("function").and_then(|f| f.get("arguments")) {
+                            Some(serde_json::Value::String(s)) => {
+                                serde_json::from_str::<std::collections::HashMap<_, _>>(s)
+                                    .unwrap_or_default()
+                            }
+                            Some(serde_json::Value::Object(o)) => {
+                                o.clone().into_iter().collect()
+                            }
+                            _ => std::collections::HashMap::new(),
+                        };
+                        if let Some(id) = call.get("id").and_then(|i| i.as_str()) {
+                            id_to_name.insert(id.to_string(), name.clone());
+                        }
+                        parts.push(Part::FunctionCall {
+                            function_call: FunctionCall {
+                                name,
+                                args,
+                                thought_signature: None,
+                            },
+                        });
+                    }
+                }
+                if !parts.is_empty() {
+                    out.push(Content {
+                        parts,
+                        role: Some("model".to_string()),
+                    });
+                }
+            }
+            "tool" => {
+                let id = msg
+                    .get("tool_call_id")
+                    .and_then(|i| i.as_str())
+                    .unwrap_or("");
+                let name = id_to_name
+                    .get(id)
+                    .cloned()
+                    .unwrap_or_else(|| "tool".to_string());
+                let result = msg.get("content").cloned().unwrap_or(serde_json::Value::Null);
+                let mut response = std::collections::HashMap::new();
+                response.insert("result".to_string(), result);
+                out.push(Content {
+                    parts: vec![Part::FunctionResponse {
+                        function_response: FunctionResponse {
+                            name,
+                            response,
+                            thought_signature: None,
+                        },
+                    }],
+                    role: Some("function".to_string()),
+                });
+            }
+            _ => continue,
+        }
+    }
+
+    out
 }
 
 // ── Gemma 4 / NVIDIA NIM tool calling loop ────────────────────────────────────

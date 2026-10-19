@@ -44,6 +44,34 @@ const GEMINI_DAILY_LIMIT: u32 = 18;
 /// review prompt scores 1-10; 6+ means "buyer-quality", 5- means "redo".
 const PASS_THRESHOLD: i32 = 6;
 
+/// Hard cap for a single Gemini 429 back-off inside the reviewer. Mirrors
+/// `gemini_client::GEMINI_RETRY_MAX_SECS` — a quota error must never park a
+/// render for minutes. Exceeding the cap means "reviewer unavailable", which is
+/// non-fatal (see `reviewer_unavailable`).
+const REVIEWER_RETRY_MAX_SECS: u64 = 60;
+
+/// True when NO reviewer could produce a verdict (all providers errored/out of
+/// quota). Such a result is `pass: true` with `score: 0`: the artifact already
+/// passed the deterministic validity gate, so it is shippable, but it was never
+/// content-reviewed. Callers must not treat `score == 0` as a 0/10 verdict here.
+pub fn reviewer_unavailable(review: &ReviewResult) -> bool {
+    review.pass && review.score == 0
+}
+
+/// Build a non-fatal "could not review" result.
+fn unavailable_review(detail: String) -> ReviewResult {
+    ReviewResult {
+        pass: true,
+        score: 0,
+        feedback: format!(
+            "QA reviewer unavailable: {}. The artifact passed the deterministic \
+             validity gate (size/duration) but was not content-reviewed.",
+            detail
+        ),
+        retry_hint: None,
+    }
+}
+
 /// Agentic reviewer bounds (§52 GAP A): the Qwen reviewer runs a bounded
 /// ReAct tool loop (probe_media → finish_review). Max turns + per-call
 /// timeout keep a single review from hanging the render pipeline.
@@ -259,16 +287,32 @@ pub async fn review_render(
     {
         Some(g) => g,
         None => {
-            return ReviewResult {
-                pass: false,
-                score: 0,
-                feedback: "No reviewer (Qwen, NIM, Bedrock, or Gemini) configured — QA review skipped".to_string(),
-                retry_hint: None,
-            };
+            let review = unavailable_review(
+                "no reviewer (Qwen, NIM, Bedrock, or Gemini) is configured".to_string(),
+            );
+            tracing::warn!(
+                "⚠️ No reviewer configured for '{}' — accepting artifact after deterministic gate",
+                output_url
+            );
+            persist_review(state, tool_name, &review, delivery_id, output_url).await;
+            return review;
         }
     };
 
     let review = run_review_via_gemini(gemini, output_url, &prompt).await;
+    // Every reviewer failed to return a verdict (quota/outage). The artifact
+    // already cleared the deterministic gate, so ship it and mark the review as
+    // unavailable instead of failing the delivery and burning retries.
+    let review = if review.score == 0 {
+        tracing::warn!(
+            "⚠️ All reviewers unavailable for '{}' ({}) — accepting artifact after deterministic gate",
+            output_url,
+            review.feedback
+        );
+        unavailable_review(review.feedback)
+    } else {
+        review
+    };
     persist_review(state, tool_name, &review, delivery_id, output_url).await;
     review
 }
@@ -851,8 +895,9 @@ fn parse_gemini_retry_delay(err_text: &str) -> Option<u64> {
     let delay_str = &after_quote[..quote_end];
     let delay_str = delay_str.trim_end_matches('s');
     let secs: f64 = delay_str.parse().ok()?;
-    // Clamp to reasonable range
-    Some((secs.ceil() as u64).clamp(1, 120))
+    // Clamp: a 429's retryDelay can be hours (daily quota reset). Never park the
+    // reviewer longer than the shared cap — beyond that it's "unavailable".
+    Some((secs.ceil() as u64).clamp(1, REVIEWER_RETRY_MAX_SECS))
 }
 
 fn parse_review_response(response: &str) -> ReviewResult {
