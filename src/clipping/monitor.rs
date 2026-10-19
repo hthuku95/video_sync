@@ -189,6 +189,20 @@ impl ChannelMonitor {
 
     /// Poll all active source channels for new videos
     pub async fn poll_all_channels(&self) -> Result<(), String> {
+        // Owner directive: the legacy YouTube auto-clip producer is OFF. Gate the
+        // WHOLE cycle here, not only at enqueue time. Checking in
+        // `enqueue_clipping_job` refused the job only after the cycle had already
+        // spent YouTube quota (playlistItems per channel) and logged an error for
+        // every discovered video — every 5 minutes, in all 3 API tasks.
+        if !crate::services::service_flags::service_enabled(&self.db_pool, "legacy_youtube_clipping")
+            .await
+        {
+            tracing::debug!(
+                "⏸️ Legacy YouTube auto-clipping disabled (service_flags) — polling cycle skipped"
+            );
+            return Ok(());
+        }
+
         tracing::info!("🔍 Starting channel polling cycle...");
 
         // NEW: Process pending videos first (from previous blocked attempts)
