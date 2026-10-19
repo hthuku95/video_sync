@@ -98,6 +98,31 @@ fn reported_output_path(result: &str, requested: &str) -> String {
     requested.to_string()
 }
 
+/// Verify a render produced real bytes before it is uploaded or reported as a
+/// success. Returns an `❌`-prefixed error when the artifact is missing/empty.
+///
+/// A failed ffmpeg merge can still leave the inner result looking successful, so
+/// without this check a 0-byte `output.mp4` was uploaded and the pipeline
+/// retried the delivery to death (Oct 19 2026).
+fn check_rendered_artifact(output_file: &str) -> Option<String> {
+    // With the FFmpeg MCP the local file is a marker, not the render itself.
+    if std::env::var("FFMPEG_MCP_URL").is_ok() {
+        return None;
+    }
+    let size = std::fs::metadata(output_file).map(|m| m.len()).unwrap_or(0);
+    if size < 50_000 {
+        tracing::warn!(
+            "auto_generate_video: render produced {size} bytes at {output_file} (minimum 50000)"
+        );
+        return Some(format!(
+            "❌ auto_generate_video failed: render produced {size} bytes at {output_file} \
+             (minimum 50000). The render did not produce a usable video — do not treat this \
+             as success."
+        ));
+    }
+    None
+}
+
 /// Context needed for tool execution to save outputs to DB and vectorize them
 #[derive(Clone)]pub struct ToolExecutionContext {
     pub session_id: String,
@@ -6037,6 +6062,9 @@ async fn dispatch_auto_generate_video_gemini(
             .and_then(|v| v.as_str())
             .unwrap_or("");
         let output_file = reported_output_path(&result, requested);
+        if let Some(err) = check_rendered_artifact(&output_file) {
+            return format!("{err}\n\n{result}");
+        }
         if output_file != requested {
             tracing::info!(
                 "auto_generate_video: uploading reported output path (requested={requested}, actual={output_file})"
@@ -6173,6 +6201,9 @@ async fn dispatch_auto_generate_video_claude(args: &Value, ctx: &ToolExecutionCo
             .and_then(|v| v.as_str())
             .unwrap_or("");
         let output_file = reported_output_path(&result, requested);
+        if let Some(err) = check_rendered_artifact(&output_file) {
+            return format!("{err}\n\n{result}");
+        }
         if output_file != requested {
             tracing::info!(
                 "auto_generate_video (Claude): uploading reported output path (requested={requested}, actual={output_file})"

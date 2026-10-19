@@ -244,38 +244,62 @@ pub fn trim_and_convert_to_shorts(
 }
 
 pub fn merge_videos(input_files: &[String], output_file: &str) -> Result<String, String> {
-    // Log video properties before merge for debugging
+    // Log video properties before merge for debugging, and record per-clip
+    // duration + audio presence. Pexels b-roll frequently has NO audio stream,
+    // and `[i:a]` then makes ffmpeg fail instantly ("Stream specifier ':a'
+    // matches no streams") — which is how every education render ended up as a
+    // 0-byte output.mp4 (Oct 19 2026).
     tracing::info!("🎞️ Merging {} video clips", input_files.len());
+    let mut clip_secs: Vec<f64> = Vec::with_capacity(input_files.len());
+    let mut clip_has_audio: Vec<bool> = Vec::with_capacity(input_files.len());
     for (i, file) in input_files.iter().enumerate() {
         match analyze_video(file) {
             Ok(meta) => {
                 tracing::info!(
-                    "  Clip {}: {}x{} @ {:.1}fps, format: {}, duration: {:.1}s",
+                    "  Clip {}: {}x{} @ {:.1}fps, format: {}, duration: {:.1}s, audio: {}",
                     i + 1,
                     meta.width,
                     meta.height,
                     meta.fps,
                     meta.format,
-                    meta.duration_seconds
+                    meta.duration_seconds,
+                    meta.has_audio
                 );
+                clip_secs.push(meta.duration_seconds.max(1.0));
+                clip_has_audio.push(meta.has_audio);
             }
             Err(e) => {
                 tracing::warn!("  Clip {}: Unable to analyze - {}", i + 1, e);
+                clip_secs.push(10.0);
+                clip_has_audio.push(false);
             }
         }
     }
 
-    // Build concat filter for re-encoding (handles mixed properties)
+    // Build concat filter for re-encoding (handles mixed properties).
     // Format: [0:v][0:a][1:v][1:a]...concat=n=N:v=1:a=1[outv][outa]
-    let mut filter_parts = Vec::new();
+    // Clips without an audio stream get a silent track trimmed to their duration
+    // so `concat` always has an audio input to pair with each video input.
+    let mut filter_parts: Vec<String> = Vec::new();
+    let mut concat_inputs = String::new();
     for i in 0..input_files.len() {
-        filter_parts.push(format!("[{}:v][{}:a]", i, i));
+        concat_inputs.push_str(&format!("[{}:v]", i));
+        if clip_has_audio[i] {
+            filter_parts.push(format!("[{}:a]aresample=44100[a{}]", i, i));
+        } else {
+            filter_parts.push(format!(
+                "anullsrc=channel_layout=stereo:sample_rate=44100,atrim=0:{:.3},asetpts=PTS-STARTPTS[a{}]",
+                clip_secs[i], i
+            ));
+        }
+        concat_inputs.push_str(&format!("[a{}]", i));
     }
-    let filter_complex = format!(
+    filter_parts.push(format!(
         "{}concat=n={}:v=1:a=1[outv][outa]",
-        filter_parts.join(""),
+        concat_inputs,
         input_files.len()
-    );
+    ));
+    let filter_complex = filter_parts.join(";");
 
     tracing::info!("🔧 Using concat filter with re-encoding for compatibility");
 
@@ -365,9 +389,13 @@ pub fn merge_videos_with_transitions(
 
     // Get durations for computing xfade time offsets
     let mut durations: Vec<f64> = Vec::new();
+    let mut has_audio: Vec<bool> = Vec::new();
     for f in input_files {
-        let d = analyze_video(f).map(|m| m.duration_seconds).unwrap_or(10.0);
+        let meta = analyze_video(f);
+        let d = meta.as_ref().map(|m| m.duration_seconds).unwrap_or(10.0);
+        let audio = meta.map(|m| m.has_audio).unwrap_or(false);
         durations.push(d.max(transition_duration * 2.0 + 0.1)); // guard: clip must be longer than 2×transition
+        has_audio.push(audio);
     }
 
     let n = input_files.len();
@@ -404,9 +432,17 @@ pub fn merge_videos_with_transitions(
         current = out;
     }
 
-    // Audio: normalise sample rate and concat
+    // Audio: normalise sample rate and concat. Clips without an audio stream get
+    // a silent track trimmed to their duration (see `merge_videos`).
     for i in 0..n {
-        filter_parts.push(format!("[{}:a]aresample=44100[a{}]", i, i));
+        if has_audio[i] {
+            filter_parts.push(format!("[{}:a]aresample=44100[a{}]", i, i));
+        } else {
+            filter_parts.push(format!(
+                "anullsrc=channel_layout=stereo:sample_rate=44100,atrim=0:{:.3},asetpts=PTS-STARTPTS[a{}]",
+                durations[i], i
+            ));
+        }
     }
     let audio_inputs: String = (0..n)
         .map(|i| format!("[a{}]", i))
