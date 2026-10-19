@@ -63,13 +63,17 @@ fn poll_interval_secs() -> u64 {
 }
 
 fn max_run_hours() -> u64 {
-    // Safety valve: after this long the ticker stops renewing, so the
-    // supervisor will eventually reclaim a pathologically hung run.
+    // Safety valve ONLY — this is not a task deadline. Agentic workflows are
+    // expected to run until their work is done (hours, or days for a heavy
+    // multi-render task); liveness is proven separately by the lease-renewal
+    // ticker. This cap exists solely to abort a future that is genuinely
+    // wedged (e.g. an HTTP call with no timeout) so the worker always returns
+    // to claiming. Default: 7 days. Override with AGENTIC_MAX_RUN_HOURS.
     std::env::var("AGENTIC_MAX_RUN_HOURS")
         .ok()
         .and_then(|v| v.trim().parse::<u64>().ok())
-        .filter(|&v| v >= 1 && v <= 48)
-        .unwrap_or(6)
+        .filter(|&v| v >= 1 && v <= 8760)
+        .unwrap_or(168)
 }
 
 /// Spawn the worker pool + supervisor. Called once from main.rs.
@@ -202,21 +206,12 @@ async fn execute_claimed(
         let runtime = WorkflowRuntime::new(state.db_pool.clone());
         let stop = stop_ticker.clone();
         let lease_min = lease_minutes();
-        let max_run = Duration::from_secs(max_run_hours() * 3600);
-        let started = std::time::Instant::now();
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(Duration::from_secs(60));
             tick.tick().await; // immediate first renewal not needed (claim sets it)
             loop {
                 tick.tick().await;
                 if stop.load(Ordering::Relaxed) {
-                    break;
-                }
-                if started.elapsed() > max_run {
-                    tracing::warn!(
-                        "⏰ workflow {} exceeded max run duration — stopping lease renewals",
-                        workflow_id
-                    );
                     break;
                 }
                 match runtime.renew_lease(workflow_id, instance_id(), lease_min).await {

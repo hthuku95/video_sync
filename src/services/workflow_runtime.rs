@@ -131,8 +131,8 @@ impl WorkflowRuntime {
         .bind(workflow.source_record_id)
         .bind(&workflow.request_summary)
         .bind(workflow.current_step.as_deref())
-        .bind(workflow.metadata)
-        .bind(workflow.artifact_requirements)
+        .bind(workflow.metadata.clone())
+        .bind(workflow.artifact_requirements.clone())
         .fetch_optional(&self.pool)
         .await
         .map_err(|e| format!("Failed to create workflow: {}", e))?;
@@ -762,16 +762,18 @@ impl WorkflowRuntime {
     /// Requeue running agentic workflows whose lease expired (owner died).
     /// Returns the requeued workflow ids for logging.
     pub async fn requeue_expired_leases(&self) -> Result<Vec<Uuid>, String> {
-        // ── AGE CAP (§CRIT, Sep 2 2026) ──
-        // Runs older than AGENTIC_MAX_RUN_HOURS are FAILED, not requeued.
-        // Without this, ancient zombie workflows (e.g. LLM-starvation loops
-        // from a starved GPU pool) get requeued forever, re-claimed
-        // oldest-first, and starve the live queue (observed: 4 cancels +
-        // mass-cancel needed to free 2 worker slots for the Kaysan campaign).
+        // ── AGE CAP (§CRIT, Sep 2 2026; raised Oct 19 2026) ──
+        // Only runs whose LEASE has already expired (i.e. their worker died) are
+        // eligible here — a live worker keeps its lease fresh, so a long-running
+        // task is never killed by age. Among dead-owner rows, runs older than
+        // AGENTIC_MAX_RUN_HOURS are FAILED rather than requeued, so ancient
+        // zombie workflows cannot be requeued forever, re-claimed oldest-first,
+        // and starve the live queue. Default: 7 days — long enough that a real
+        // task whose worker crashed is resumed, not discarded.
         let max_run_hours: i64 = std::env::var("AGENTIC_MAX_RUN_HOURS")
             .ok()
             .and_then(|v| v.parse().ok())
-            .unwrap_or(6);
+            .unwrap_or(168);
 
         // 1. Expire the zombie cohort: runs whose EXECUTION age exceeds the cap.
         // Age is measured from started_at (first claim), NOT created_at — a

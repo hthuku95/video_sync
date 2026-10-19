@@ -2566,6 +2566,28 @@ fn budget_env_u64(name: &str, default: u64) -> u64 {
         .unwrap_or(default)
 }
 
+/// Max LLM↔tool round-trips a *single provider attempt* may take before the
+/// loop hands off to the next provider.
+///
+/// This is a runaway-loop safety valve, NOT a task deadline. The agent is
+/// expected to keep working until the task is finished; progress is carried in
+/// the durable checkpoint, so a provider that runs out of turns hands the
+/// in-flight conversation to the next provider instead of losing work. Spend is
+/// bounded by `RunLedger` (`AGENTIC_MAX_LLM_CALLS_PER_RUN`), not by this number.
+///
+/// The default is deliberately generous (100) because a real multi-step task —
+/// e.g. an educational explainer with narration and several renders — needs far
+/// more than the old hard-coded 10 turns, and hitting the limit used to be
+/// miscategorised as a provider failure, cascading a healthy task onto a
+/// rate-limited fallback. Override with `AGENTIC_MAX_TURNS_PER_PROVIDER`.
+fn max_provider_turns() -> usize {
+    std::env::var("AGENTIC_MAX_TURNS_PER_PROVIDER")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|&v| v >= 1 && v <= 1000)
+        .unwrap_or(100)
+}
+
 impl RunLedger {
     fn max_llm_calls() -> u64 {
         budget_env_u64("AGENTIC_MAX_LLM_CALLS_PER_RUN", 300)
@@ -3024,7 +3046,8 @@ fn tool_mandate_nudge(text: &str, tools_empty: bool) -> Option<String> {
 /// THE DEFAULT FIRST ATTEMPT for every agent call since Ollama was retired
 /// (Sep 2026, §52.2). Same contract as `run_deepseek_tool_loop` — feeds tool
 /// results back as `{role:"tool", tool_call_id}` messages and keeps calling
-/// until a text answer is returned (or MAX_TURNS exhausted). Carries durable-turn
+/// until a text answer is returned (or the per-provider turn cap is exhausted).
+/// Carries durable-turn
 /// checkpoint + compaction, because Qwen is now the primary path and must survive
 /// crashes/timeouts.
 async fn run_qwen_tool_loop<F>(
@@ -3038,7 +3061,7 @@ async fn run_qwen_tool_loop<F>(
 where
     F: Fn(&str),
 {
-    const MAX_TURNS: usize = 10;
+    let max_turns = max_provider_turns();
     // Unified tool-loop policy state (see header): tracks whether any tool has
     // run yet, how many prose nudges were spent, and the cached
     // artifact-requirement verdict for this run.
@@ -3046,7 +3069,7 @@ where
     let mut nudges_used: usize = 0;
     let mut artifacts_required: Option<bool> = None;
 
-    for turn in 0..MAX_TURNS {
+    for turn in 0..max_turns {
         // Cooperative cancellation probe (durable pipeline runner).
         if workflow_cancel_requested(exec_context).await {
             return Err("WORKFLOW_CANCELLED: cancellation requested".to_string());
@@ -3202,7 +3225,7 @@ where
         }
     }
 
-    Err(format!("Qwen exceeded max turns ({})", MAX_TURNS))
+    Err(format!("Qwen exceeded max turns ({})", max_turns))
 }
 
 // OpenAI-compatible API. Gemma 4 has NATIVE function calling (special tokens,
@@ -3214,7 +3237,8 @@ where
 
 /// Multi-turn tool loop for DeepSeek V4.
 /// Same contract as `run_nvidia_tool_loop` — feeds tool results back to the model
-/// and keeps calling until a text answer is returned (or MAX_TURNS exhausted).
+/// and keeps calling until a text answer is returned (or the per-provider turn
+/// cap is exhausted).
 async fn run_deepseek_tool_loop<F>(
     ds_client: &crate::deepseek_client::DeepSeekClient,
     messages: &mut Vec<serde_json::Value>,
@@ -3226,13 +3250,13 @@ async fn run_deepseek_tool_loop<F>(
 where
     F: Fn(&str),
 {
-    const MAX_TURNS: usize = 10;
+    let max_turns = max_provider_turns();
     // Unified tool-loop policy state (see header).
     let mut tool_calls_made: usize = 0;
     let mut nudges_used: usize = 0;
     let mut artifacts_required: Option<bool> = None;
 
-    for turn in 0..MAX_TURNS {
+    for turn in 0..max_turns {
         if workflow_cancel_requested(exec_context).await {
             return Err("WORKFLOW_CANCELLED: cancellation requested".to_string());
         }
@@ -3384,7 +3408,7 @@ where
         }
     }
 
-    Err(format!("DeepSeek V4 exceeded max turns ({})", MAX_TURNS))
+    Err(format!("DeepSeek V4 exceeded max turns ({})", max_turns))
 }
 
 /// Multi-turn tool loop for NVIDIA NIM (Nemotron Super 120B via free API).
@@ -3400,13 +3424,13 @@ async fn run_nvidia_tool_loop<F>(
 where
     F: Fn(&str),
 {
-    const MAX_TURNS: usize = 10;
+    let max_turns = max_provider_turns();
     // Unified tool-loop policy state (see header).
     let mut tool_calls_made: usize = 0;
     let mut nudges_used: usize = 0;
     let mut artifacts_required: Option<bool> = None;
 
-    for turn in 0..MAX_TURNS {
+    for turn in 0..max_turns {
         if workflow_cancel_requested(exec_context).await {
             return Err("WORKFLOW_CANCELLED: cancellation requested".to_string());
         }
@@ -3558,5 +3582,5 @@ where
         }
     }
 
-    Err(format!("NVIDIA NIM exceeded max turns ({})", MAX_TURNS))
+    Err(format!("NVIDIA NIM exceeded max turns ({})", max_turns))
 }

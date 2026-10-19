@@ -287,11 +287,13 @@ impl PortfolioTestRunner {
             .await;
 
         // Poll for completion. Education/landing_page runs legitimately take
-        // longer than clipping, so the cap is configurable (default 45 min).
+        // longer than clipping. This is an *observation window* for the test
+        // harness only — it no longer cancels the workflow on expiry, and the
+        // agent itself has no deadlines. Configurable (default 90 min).
         let timeout_secs: u64 = std::env::var("PORTFOLIO_TEST_TIMEOUT_SECS")
             .ok()
             .and_then(|v| v.parse().ok())
-            .unwrap_or(2700);
+            .unwrap_or(5400);
         let max_polls = (timeout_secs / 5).max(1);
         for _ in 0..max_polls {
             let row = sqlx::query(
@@ -325,25 +327,14 @@ impl PortfolioTestRunner {
             }
         }
 
-        // Timed out: cancel the durable workflow so it does not keep burning
-        // tokens/renders in the background, then fail the test result.
-        let _ = crate::services::workflow_runtime::WorkflowRuntime::new(
-            self.app_state.db_pool.clone(),
-        )
-        .request_cancel(workflow_id)
-        .await;
-        let _ = sqlx::query(
-            "UPDATE deliveries SET status = 'failed', error_message = $2 WHERE id = $1",
-        )
-        .bind(delivery_id)
-        .bind(format!(
-            "Portfolio test timeout after {timeout_secs}s (workflow cancelled)"
-        ))
-        .execute(&self.app_state.db_pool)
-        .await;
-
+        // Observation window elapsed. Do NOT cancel the workflow or fail the
+        // delivery: agents are allowed to keep working past the test's wait
+        // (long tasks are expected, and the pipeline is durable). Report the
+        // timeout so the run result records that the harness did not observe
+        // completion in time; the workflow and its delivery stay live and can
+        // still finish on their own.
         Err(format!(
-            "Delivery timed out after {timeout_secs}s — pipeline may be stuck or queue is too deep"
+            "Delivery still running after {timeout_secs}s observation window — test did not observe completion (workflow left running)"
         ))
     }
 
