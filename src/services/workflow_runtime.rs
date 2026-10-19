@@ -92,15 +92,15 @@ impl WorkflowRuntime {
         Self { pool }
     }
 
-    pub async fn create_workflow(&self, workflow: NewWorkflow) -> Result<Uuid, String> {
-        let workflow_type = workflow.workflow_type.clone();
-        let status = workflow.status.as_str().to_string();
-        let session_uuid = workflow.session_uuid.clone();
-        let user_id = workflow.user_id;
-        let idempotency_key = workflow.idempotency_key.clone();
-        let current_step = workflow.current_step.clone();
-
-        let created_id = sqlx::query_scalar::<_, Uuid>(
+    /// Raw `INSERT` of one workflow row.
+    ///
+    /// Returns `Some(id)` when the row was created, or `None` when the insert
+    /// lost the partial unique-index race on `idempotency_key` (the
+    /// `ON CONFLICT ... DO NOTHING` path). Extracted from `create_workflow` so
+    /// the conflict-retry path can re-insert without an async-recursive call,
+    /// which Rust rejects (E0733).
+    async fn insert_workflow(&self, workflow: &NewWorkflow) -> Result<Option<Uuid>, String> {
+        sqlx::query_scalar::<_, Uuid>(
             r#"
             INSERT INTO app_workflows (
                 idempotency_key,
@@ -135,50 +135,61 @@ impl WorkflowRuntime {
         .bind(workflow.artifact_requirements.clone())
         .fetch_optional(&self.pool)
         .await
-        .map_err(|e| format!("Failed to create workflow: {}", e))?;
+        .map_err(|e| format!("Failed to create workflow: {}", e))
+    }
 
-        match created_id {
-            Some(id) => {
-                tracing::info!(
-                    workflow_id = %id,
-                    workflow_type = %workflow_type,
-                    status = %status,
-                    session_uuid = session_uuid.as_deref().unwrap_or(""),
-                    user_id = user_id.unwrap_or_default(),
-                    idempotency_key = idempotency_key.as_deref().unwrap_or(""),
-                    current_step = current_step.as_deref().unwrap_or(""),
-                    "Created durable workflow"
-                );
-                Ok(id)
-            }
-            None => {
-                let key = workflow.idempotency_key.clone().unwrap_or_default();
+    pub async fn create_workflow(&self, workflow: NewWorkflow) -> Result<Uuid, String> {
+        let workflow_type = workflow.workflow_type.clone();
+        let status = workflow.status.as_str().to_string();
+        let session_uuid = workflow.session_uuid.clone();
+        let user_id = workflow.user_id;
+        let idempotency_key = workflow.idempotency_key.clone();
+        let current_step = workflow.current_step.clone();
 
-                // The insert lost a race against an existing row with this
-                // idempotency key. Only reuse it while it is still ACTIVE.
-                // Reusing a terminal (completed/failed/cancelled) workflow
-                // silently orphans the new work: the delivery is enqueued
-                // against a workflow no worker will ever claim, so the caller
-                // waits until it times out.
-                if let Some(active_id) = self.find_reusable_workflow(&key).await? {
-                    tracing::info!(
-                        workflow_id = %active_id,
-                        idempotency_key = %key,
-                        "Reusing active workflow after concurrent insert conflict"
-                    );
-                    return Ok(active_id);
-                }
-
-                tracing::warn!(
-                    idempotency_key = %key,
-                    workflow_type = %workflow.workflow_type,
-                    "Idempotency key maps to a terminal workflow — creating a fresh workflow"
-                );
-                let mut fresh = workflow;
-                fresh.idempotency_key = None;
-                self.create_workflow(fresh).await
-            }
+        if let Some(id) = self.insert_workflow(&workflow).await? {
+            tracing::info!(
+                workflow_id = %id,
+                workflow_type = %workflow_type,
+                status = %status,
+                session_uuid = session_uuid.as_deref().unwrap_or(""),
+                user_id = user_id.unwrap_or_default(),
+                idempotency_key = idempotency_key.as_deref().unwrap_or(""),
+                current_step = current_step.as_deref().unwrap_or(""),
+                "Created durable workflow"
+            );
+            return Ok(id);
         }
+
+        // The insert lost a race against an existing row with this
+        // idempotency key. Only reuse it while it is still ACTIVE. Reusing a
+        // terminal (completed/failed/cancelled) workflow silently orphans the
+        // new work: the delivery is enqueued against a workflow no worker will
+        // ever claim, so the caller waits until it times out.
+        let key = idempotency_key.clone().unwrap_or_default();
+        if let Some(active_id) = self.find_reusable_workflow(&key).await? {
+            tracing::info!(
+                workflow_id = %active_id,
+                idempotency_key = %key,
+                "Reusing active workflow after concurrent insert conflict"
+            );
+            return Ok(active_id);
+        }
+
+        tracing::warn!(
+            idempotency_key = %key,
+            workflow_type = %workflow_type,
+            "Idempotency key maps to a terminal workflow — creating a fresh workflow"
+        );
+
+        // Retry with a NULL idempotency key: the partial unique index
+        // (`WHERE idempotency_key IS NOT NULL`) cannot conflict on NULL, so
+        // this insert always creates a fresh, claimable workflow. Done inline
+        // rather than by recursing — async recursion requires boxing.
+        let mut fresh = workflow;
+        fresh.idempotency_key = None;
+        self.insert_workflow(&fresh).await?.ok_or_else(|| {
+            "Idempotency-key conflict: failed to insert a fresh workflow".to_string()
+        })
     }
 
     #[allow(dead_code)]
