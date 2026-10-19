@@ -48,6 +48,7 @@ impl HyperFramesClient {
     pub async fn render_lambda(
         &self,
         html: &str,
+        resolution: Option<&str>,
         filename: &str,
         timeout_secs: u64,
     ) -> Result<String, String> {
@@ -92,12 +93,22 @@ impl HyperFramesClient {
             .await
             .map_err(|e| format!("S3 project upload failed: {e}"))?;
 
+        let (width, height) = match resolution
+            .unwrap_or("")
+            .trim()
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "portrait" => (1080, 1920),
+            "square" => (1080, 1080),
+            _ => (1920, 1080),
+        };
         let input = serde_json::json!({
             "PlanProtocol": "v1",
             "ProjectS3Uri": std::format!("s3://{}/{project_key}", self.render_bucket),
             "PlanOutputS3Prefix": std::format!("s3://{}/renders/rust-{stamp}/", self.render_bucket),
             "OutputS3Uri": std::format!("s3://{}/{output_key}", self.render_bucket),
-            "Config": {"fps": 30, "width": 1920, "height": 1080, "format": "mp4"},
+            "Config": {"fps": 30, "width": width, "height": height, "format": "mp4"},
         })
         .to_string();
         let start_out = sfn
@@ -295,7 +306,7 @@ impl HyperFramesClient {
         timeout_secs: u64,
     ) -> Result<String, String> {
         if self.mode == "lambda" {
-            return self.render_lambda(html, filename, timeout_secs).await;
+            return self.render_lambda(html, resolution, filename, timeout_secs).await;
         }
         let job_id = self.submit(html, resolution).await?;
         tracing::info!("🎬 HyperFrames job submitted: {job_id}");
