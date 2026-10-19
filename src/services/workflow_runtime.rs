@@ -152,28 +152,36 @@ impl WorkflowRuntime {
                 Ok(id)
             }
             None => {
-                let existing_id = self
-                    .find_workflow_by_idempotency_key(
-                        workflow.idempotency_key.as_deref().unwrap_or(""),
-                    )
-                    .await?
-                    .ok_or_else(|| {
-                        format!(
-                            "Idempotency key conflict but no existing workflow found for '{}'",
-                            workflow.idempotency_key.as_deref().unwrap_or("")
-                        )
-                    })?;
+                let key = workflow.idempotency_key.clone().unwrap_or_default();
 
-                tracing::info!(
-                    workflow_id = %existing_id,
-                    idempotency_key = workflow.idempotency_key.as_deref().unwrap_or(""),
-                    "Reusing existing workflow after concurrent insert conflict"
+                // The insert lost a race against an existing row with this
+                // idempotency key. Only reuse it while it is still ACTIVE.
+                // Reusing a terminal (completed/failed/cancelled) workflow
+                // silently orphans the new work: the delivery is enqueued
+                // against a workflow no worker will ever claim, so the caller
+                // waits until it times out.
+                if let Some(active_id) = self.find_reusable_workflow(&key).await? {
+                    tracing::info!(
+                        workflow_id = %active_id,
+                        idempotency_key = %key,
+                        "Reusing active workflow after concurrent insert conflict"
+                    );
+                    return Ok(active_id);
+                }
+
+                tracing::warn!(
+                    idempotency_key = %key,
+                    workflow_type = %workflow.workflow_type,
+                    "Idempotency key maps to a terminal workflow — creating a fresh workflow"
                 );
-                Ok(existing_id)
+                let mut fresh = workflow;
+                fresh.idempotency_key = None;
+                self.create_workflow(fresh).await
             }
         }
     }
 
+    #[allow(dead_code)]
     pub async fn find_workflow_by_idempotency_key(
         &self,
         idempotency_key: &str,
