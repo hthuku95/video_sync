@@ -198,6 +198,11 @@ impl TokenManager {
 
     /// Refresh tokens for all channels that expire within the next hour
     /// Returns the count of successfully refreshed tokens
+    ///
+    /// Channels already flagged `requires_reauth` are skipped: their refresh
+    /// token is permanently invalid (`invalid_grant` / `REFRESH_TOKEN_EXPIRED`),
+    /// so every attempt is guaranteed to fail. Only an operator reconnecting the
+    /// channel clears the flag.
     pub async fn refresh_all_expiring_tokens(&self) -> Result<usize, String> {
         let now = Utc::now();
         let threshold = now + Duration::hours(1);
@@ -206,6 +211,7 @@ impl TokenManager {
         let channels = sqlx::query_as::<_, ConnectedYouTubeChannel>(
             "SELECT * FROM connected_youtube_channels
              WHERE is_active = true
+             AND COALESCE(requires_reauth, false) = false
              AND token_expiry < $1
              ORDER BY token_expiry ASC",
         )

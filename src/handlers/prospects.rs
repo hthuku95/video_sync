@@ -9515,7 +9515,10 @@ struct UpdateServiceTypeRequest {
 /// default_service_for_prospect logic. Runs at startup.
 pub async fn backfill_null_service_types(db_pool: &sqlx::PgPool) {
     tracing::info!("🔄 Backfilling prospects with null service_type...");
-    match sqlx::query_as::<_, (uuid::Uuid, String, String, Option<String>)>(
+    // `content_category` is nullable (`prospect_type` is the only NOT NULL one),
+    // so it must be decoded as Option: a single NULL row otherwise aborted the
+    // entire backfill with "unexpected null; try decoding as an Option".
+    match sqlx::query_as::<_, (uuid::Uuid, Option<String>, String, Option<String>)>(
         "SELECT id, content_category, prospect_type, platform FROM prospects WHERE service_type IS NULL"
     )
     .fetch_all(db_pool)
@@ -9528,7 +9531,11 @@ pub async fn backfill_null_service_types(db_pool: &sqlx::PgPool) {
             }
             let mut updated = 0u64;
             for (id, category, prospect_type, platform) in &rows {
-                let service = default_service_for_prospect(category, prospect_type, platform.as_deref().unwrap_or(""));
+                let service = default_service_for_prospect(
+                    category.as_deref().unwrap_or(""),
+                    prospect_type,
+                    platform.as_deref().unwrap_or(""),
+                );
                 match sqlx::query("UPDATE prospects SET service_type = $1, updated_at = NOW() WHERE id = $2")
                     .bind(&service)
                     .bind(id)
