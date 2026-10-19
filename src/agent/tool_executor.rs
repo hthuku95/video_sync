@@ -54,7 +54,23 @@ fn ensure_outputs_directory(file_path: &str) -> String {
         return file_path.to_string();
     }
 
-    // If path is absolute or contains directory separators, extract just the filename
+    // Preserve any caller-supplied relative subdirectory (e.g.
+    // `generated/<n>/<session>/output.mp4`). Collapsing these down to a bare
+    // filename silently redirected renders away from the path the agent and the
+    // pipeline expected, leaving 0-byte placeholders at the declared location
+    // (Oct 19 2026: education renders "succeeded" but every attempt published a
+    // 0-byte output.mp4 and failed the artifact guard).
+    if !file_path.is_empty() && !std::path::Path::new(file_path).is_absolute() {
+        if let Some(parent) = std::path::Path::new(file_path).parent() {
+            if !parent.as_os_str().is_empty() {
+                let _ = std::fs::create_dir_all(parent);
+                return file_path.to_string();
+            }
+        }
+    }
+
+    // Bare filename (or absolute path): extract just the filename and root it
+    // under outputs/.
     let filename = std::path::Path::new(file_path)
         .file_name()
         .and_then(|f| f.to_str())
@@ -62,6 +78,24 @@ fn ensure_outputs_directory(file_path: &str) -> String {
 
     // Return path with outputs/ prefix
     format!("outputs/{}", filename)
+}
+
+/// Resolve the local output path to upload from an `auto_generate_video` result.
+///
+/// Prefers the path the inner tool actually reported (`📥 Output: <path>`),
+/// falling back to the requested `output_file`. The two can differ because the
+/// inner tool normalises its path via `ensure_outputs_directory`.
+fn reported_output_path(result: &str, requested: &str) -> String {
+    for line in result.lines() {
+        if let Some(rest) = line.trim().strip_prefix("📥 Output:") {
+            let path = rest.trim();
+            if !path.is_empty() && !path.starts_with("http") && std::path::Path::new(path).exists()
+            {
+                return path.to_string();
+            }
+        }
+    }
+    requested.to_string()
 }
 
 /// Context needed for tool execution to save outputs to DB and vectorize them
@@ -5998,17 +6032,23 @@ async fn dispatch_auto_generate_video_gemini(
 
     // Upload generated video to cloud storage if successful
     if !result.starts_with("❌") && !result.starts_with("Error") {
-        let output_file = args
+        let requested = args
             .get("output_file")
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        if !output_file.is_empty() && std::path::Path::new(output_file).exists() {
-            let _file_name = std::path::Path::new(output_file)
+        let output_file = reported_output_path(&result, requested);
+        if output_file != requested {
+            tracing::info!(
+                "auto_generate_video: uploading reported output path (requested={requested}, actual={output_file})"
+            );
+        }
+        if !output_file.is_empty() && std::path::Path::new(&output_file).exists() {
+            let _file_name = std::path::Path::new(&output_file)
                 .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or("video.mp4");
             match crate::cloud_storage::upload_local_file_to_cloud(
-                output_file,
+                &output_file,
                 "video/mp4",
                 ctx.user_id.unwrap_or(0),
                 &ctx.session_id,
@@ -6021,7 +6061,7 @@ async fn dispatch_auto_generate_video_gemini(
                     tracing::info!("auto_generate_video: uploaded to cloud → {url}");
                     // Replace local path in result with cloud URL
                     let updated = result.replace(
-                        &format!("📥 Output: {}", output_file),
+                        &format!("📥 Output: {output_file}"),
                         &format!("📥 Output: {url}"),
                     );
                     return updated;
@@ -6128,13 +6168,19 @@ async fn dispatch_auto_generate_video_claude(args: &Value, ctx: &ToolExecutionCo
 
     // Upload generated video to cloud storage if successful
     if !result.starts_with("❌") && !result.starts_with("Error") {
-        let output_file = args
+        let requested = args
             .get("output_file")
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        if !output_file.is_empty() && std::path::Path::new(output_file).exists() {
+        let output_file = reported_output_path(&result, requested);
+        if output_file != requested {
+            tracing::info!(
+                "auto_generate_video (Claude): uploading reported output path (requested={requested}, actual={output_file})"
+            );
+        }
+        if !output_file.is_empty() && std::path::Path::new(&output_file).exists() {
             match crate::cloud_storage::upload_local_file_to_cloud(
-                output_file,
+                &output_file,
                 "video/mp4",
                 ctx.user_id.unwrap_or(0),
                 &ctx.session_id,
@@ -6146,7 +6192,7 @@ async fn dispatch_auto_generate_video_claude(args: &Value, ctx: &ToolExecutionCo
                 Ok(url) => {
                     tracing::info!("auto_generate_video (Claude): uploaded to cloud → {url}");
                     let updated = result.replace(
-                        &format!("📥 Output: {}", output_file),
+                        &format!("📥 Output: {output_file}"),
                         &format!("📥 Output: {url}"),
                     );
                     return updated;
