@@ -286,8 +286,13 @@ impl PortfolioTestRunner {
             .execute(&self.app_state.db_pool)
             .await;
 
-        // Poll for completion (up to 10 minutes)
-        let max_polls = 120u32; // 120 * 5s = 600s = 10 minutes
+        // Poll for completion. Education/landing_page runs legitimately take
+        // longer than clipping, so the cap is configurable (default 45 min).
+        let timeout_secs: u64 = std::env::var("PORTFOLIO_TEST_TIMEOUT_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(2700);
+        let max_polls = (timeout_secs / 5).max(1);
         for _ in 0..max_polls {
             let row = sqlx::query(
                 "SELECT status, output_r2_url, error_message FROM deliveries WHERE id = $1",
@@ -320,7 +325,26 @@ impl PortfolioTestRunner {
             }
         }
 
-        Err("Delivery timed out (10 min) — pipeline may be stuck or queue is too deep".to_string())
+        // Timed out: cancel the durable workflow so it does not keep burning
+        // tokens/renders in the background, then fail the test result.
+        let _ = crate::services::workflow_runtime::WorkflowRuntime::new(
+            self.app_state.db_pool.clone(),
+        )
+        .request_cancel(workflow_id)
+        .await;
+        let _ = sqlx::query(
+            "UPDATE deliveries SET status = 'failed', error_message = $2 WHERE id = $1",
+        )
+        .bind(delivery_id)
+        .bind(format!(
+            "Portfolio test timeout after {timeout_secs}s (workflow cancelled)"
+        ))
+        .execute(&self.app_state.db_pool)
+        .await;
+
+        Err(format!(
+            "Delivery timed out after {timeout_secs}s — pipeline may be stuck or queue is too deep"
+        ))
     }
 
     async fn review(&self, r2_url: &str, scenario: &DfyScenario) -> LLMReview {
