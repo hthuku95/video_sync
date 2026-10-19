@@ -252,6 +252,7 @@ pub fn merge_videos(input_files: &[String], output_file: &str) -> Result<String,
     tracing::info!("🎞️ Merging {} video clips", input_files.len());
     let mut clip_secs: Vec<f64> = Vec::with_capacity(input_files.len());
     let mut clip_has_audio: Vec<bool> = Vec::with_capacity(input_files.len());
+    let mut clip_geom: Vec<Option<(u32, u32)>> = Vec::with_capacity(input_files.len());
     for (i, file) in input_files.iter().enumerate() {
         match analyze_video(file) {
             Ok(meta) => {
@@ -267,11 +268,13 @@ pub fn merge_videos(input_files: &[String], output_file: &str) -> Result<String,
                 );
                 clip_secs.push(meta.duration_seconds.max(1.0));
                 clip_has_audio.push(meta.has_audio);
+                clip_geom.push(Some((meta.width, meta.height)));
             }
             Err(e) => {
                 tracing::warn!("  Clip {}: Unable to analyze - {}", i + 1, e);
                 clip_secs.push(10.0);
                 clip_has_audio.push(false);
+                clip_geom.push(None);
             }
         }
     }
@@ -280,10 +283,35 @@ pub fn merge_videos(input_files: &[String], output_file: &str) -> Result<String,
     // Format: [0:v][0:a][1:v][1:a]...concat=n=N:v=1:a=1[outv][outa]
     // Clips without an audio stream get a silent track trimmed to their duration
     // so `concat` always has an audio input to pair with each video input.
+    //
+    // GEOMETRY: the ffmpeg `concat` filter requires every video input to share
+    // one resolution and otherwise aborts — which is how mixed-size assemblies
+    // (e.g. a 1080x1920 portrait HyperFrames scene next to a 1920x1080 Manim
+    // scene) ended up as a 0-byte output. Scale+pad *only* the clips that
+    // differ, targeting the first clip we could measure, so the common
+    // uniform-resolution case keeps the exact same filter graph as before.
+    let target_geom = clip_geom.iter().flatten().next().copied();
     let mut filter_parts: Vec<String> = Vec::new();
     let mut concat_inputs = String::new();
     for i in 0..input_files.len() {
-        concat_inputs.push_str(&format!("[{}:v]", i));
+        match (target_geom, clip_geom[i]) {
+            (Some((tw, th)), Some((w, h))) if (w, h) != (tw, th) => {
+                tracing::info!(
+                    "  Clip {}: normalising {}x{} -> {}x{} for concat",
+                    i + 1,
+                    w,
+                    h,
+                    tw,
+                    th
+                );
+                filter_parts.push(format!(
+                    "[{}:v]scale={}:{}:force_original_aspect_ratio=decrease,pad={}:{}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1[v{}]",
+                    i, tw, th, tw, th, i
+                ));
+                concat_inputs.push_str(&format!("[v{}]", i));
+            }
+            _ => concat_inputs.push_str(&format!("[{}:v]", i)),
+        }
         if clip_has_audio[i] {
             filter_parts.push(format!("[{}:a]aresample=44100[a{}]", i, i));
         } else {
