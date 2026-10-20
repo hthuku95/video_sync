@@ -9,7 +9,25 @@ use std::sync::Arc;
 /// Maximum number of concurrent Gemini API calls across the entire process.
 /// At 600 jobs/day target (25/hr), 5 permits allows Phase A to process ~5 jobs simultaneously
 /// without exceeding paid-tier RPM limits. Raise to 8 if on a higher quota tier.
+///
+/// NOTE: this bounds concurrency, NOT requests per minute. On the free tier
+/// (5 req/min for gemini-2.5-flash) five parallel calls exhaust the minute in
+/// under a second. `gemini_min_interval()` is what actually keeps us inside
+/// the quota.
 const GEMINI_MAX_CONCURRENT: usize = 5;
+
+/// Minimum spacing between Gemini request starts.
+///
+/// The free tier limit is `generate_content_free_tier_requests` = 5/min for
+/// gemini-2.5-flash, so 12s between starts = 5/min. Override with
+/// `GEMINI_MIN_INTERVAL_MS` (set 0 after enabling billing).
+fn gemini_min_interval() -> std::time::Duration {
+    std::env::var("GEMINI_MIN_INTERVAL_MS")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .map(std::time::Duration::from_millis)
+        .unwrap_or(std::time::Duration::from_millis(12_000))
+}
 
 #[derive(Debug, Clone)]
 pub struct GeminiClient {
@@ -21,6 +39,15 @@ pub struct GeminiClient {
     pub text_model: String,
     /// Semaphore that limits concurrent in-flight Gemini API calls.
     semaphore: Arc<tokio::sync::Semaphore>,
+    /// Enforces minimum spacing between request *starts*.
+    ///
+    /// A concurrency semaphore bounds in-flight calls, not calls per minute.
+    /// The free tier allows 5 requests/min for gemini-2.5-flash, so five
+    /// parallel calls (GEMINI_MAX_CONCURRENT) exhaust the whole window in under
+    /// a second and the sixth gets 429 — which is exactly how Twitch/Kick
+    /// clipping failed on 2026-10-20. Spacing is configurable so it can be
+    /// dropped to 0 the moment billing is enabled.
+    rate_gate: Arc<tokio::sync::Mutex<Option<tokio::time::Instant>>>,
 }
 
 /// Parse the retry delay from a Gemini 429 error body.
@@ -318,6 +345,7 @@ impl GeminiClient {
             base_url: "https://generativelanguage.googleapis.com/v1beta".to_string(),
             text_model,
             semaphore: Arc::new(tokio::sync::Semaphore::new(GEMINI_MAX_CONCURRENT)),
+            rate_gate: Arc::new(tokio::sync::Mutex::new(None)),
         }
     }
 
@@ -330,7 +358,37 @@ impl GeminiClient {
             base_url: "https://generativelanguage.googleapis.com/v1beta".to_string(),
             text_model: model,
             semaphore: Arc::new(tokio::sync::Semaphore::new(GEMINI_MAX_CONCURRENT)),
+            rate_gate: Arc::new(tokio::sync::Mutex::new(None)),
         }
+    }
+
+    /// Acquire a concurrency permit, then wait for the next rate slot.
+    ///
+    /// Spacing comes from `GEMINI_MIN_INTERVAL_MS` (default 12000 ms = 5/min,
+    /// the gemini-2.5-flash free-tier limit). Set it to 0 after enabling
+    /// billing to remove the throttle entirely.
+    async fn acquire_slot(&self) -> Result<tokio::sync::SemaphorePermit<'_>, String> {
+        let permit = self
+            .semaphore
+            .acquire()
+            .await
+            .map_err(|e| format!("Gemini semaphore error: {}", e))?;
+
+        let interval = gemini_min_interval();
+        if !interval.is_zero() {
+            // Held across the sleep so concurrent callers queue in order
+            // instead of all waking and firing at once.
+            let mut last = self.rate_gate.lock().await;
+            if let Some(prev) = *last {
+                let elapsed = prev.elapsed();
+                if elapsed < interval {
+                    tokio::time::sleep(interval - elapsed).await;
+                }
+            }
+            *last = Some(tokio::time::Instant::now());
+        }
+
+        Ok(permit)
     }
 
     pub async fn generate_content(
@@ -338,11 +396,7 @@ impl GeminiClient {
         request: GenerateContentRequest,
     ) -> Result<GenerateContentResponse, Box<dyn std::error::Error + Send + Sync>> {
         // Acquire concurrency permit — released automatically when _permit is dropped.
-        let _permit = self
-            .semaphore
-            .acquire()
-            .await
-            .map_err(|e| format!("Gemini semaphore error: {}", e))?;
+        let _permit = self.acquire_slot().await?;
 
         let url = format!(
             "{}/models/{}:generateContent?key={}",
@@ -708,11 +762,7 @@ impl GeminiClient {
         image_size: Option<&str>,
         model: Option<&str>,
     ) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
-        let _permit = self
-            .semaphore
-            .acquire()
-            .await
-            .map_err(|e| format!("Gemini semaphore error: {}", e))?;
+        let _permit = self.acquire_slot().await?;
 
         let model_id = Self::resolve_image_model(model);
 
@@ -854,11 +904,7 @@ impl GeminiClient {
         aspect_ratio: Option<&str>,
         model: Option<&str>,
     ) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
-        let _permit = self
-            .semaphore
-            .acquire()
-            .await
-            .map_err(|e| format!("Gemini semaphore error: {}", e))?;
+        let _permit = self.acquire_slot().await?;
 
         let model_id = Self::resolve_image_model(model);
         let image_b64 = BASE64_STANDARD.encode(image_bytes);
@@ -7215,11 +7261,7 @@ Generate a well-structured script appropriate for this type of video.",
         Box<dyn std::error::Error + Send + Sync>,
     > {
         // Acquire concurrency permit for this expensive video analysis call.
-        let _permit = self
-            .semaphore
-            .acquire()
-            .await
-            .map_err(|e| format!("Gemini semaphore error: {}", e))?;
+        let _permit = self.acquire_slot().await?;
 
         tracing::info!(
             "🎬 Analyzing video via YouTube URL (1 Gemini call): {}",
@@ -7418,11 +7460,7 @@ Provide ONLY the JSON object, no markdown, no code blocks, no other text."#,
         crate::clipping::gemini_video_analyzer::VideoAnalysis,
         Box<dyn std::error::Error + Send + Sync>,
     > {
-        let _permit = self
-            .semaphore
-            .acquire()
-            .await
-            .map_err(|e| format!("Gemini semaphore error: {}", e))?;
+        let _permit = self.acquire_slot().await?;
 
         tracing::info!(
             "Analyzing video via Gemini native full-video API: {}",
@@ -7636,11 +7674,7 @@ Provide ONLY the JSON object, no markdown, no code blocks, no other text."#,
         &self,
         prompt: &str,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        let _permit = self
-            .semaphore
-            .acquire()
-            .await
-            .map_err(|e| format!("Gemini semaphore error: {}", e))?;
+        let _permit = self.acquire_slot().await?;
 
         let url = format!(
             "{}/models/{}:generateContent?key={}",
