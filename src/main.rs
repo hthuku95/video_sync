@@ -398,18 +398,19 @@ async fn main() {
             gemini_client::GeminiClient::new_with_model(k, std::env::var("GEMMA_MODEL").unwrap_or_else(|_| "gemma-4-26b-a4b-it".to_string()))
         });
 
-    // NVIDIA NIM — text + tool-calling model (default: Gemma 4 31B, 40 RPM).
+    // NVIDIA NIM — text + tool-calling model (free tier; verified working).
     let nvidia_nim_client = std::env::var("NVIDIA_API_KEY").ok().map(|k| {
         let model = std::env::var("NVIDIA_NIM_MODEL")
-            .unwrap_or_else(|_| "google/gemma-4-31b-it".to_string());
+            .unwrap_or_else(|_| "nvidia/nemotron-3-ultra-550b-a55b".to_string());
         tracing::info!("Initializing NVIDIA NIM text client ({})...", model);
         nvidia_nim_client::NvidiaNimClient::with_model(k, model)
     });
 
-    // NVIDIA NIM — vision + tool-calling model (Gemini multimodal fallback).
+    // NVIDIA NIM — vision model. super-vl returns 200 with null content on
+    // image input (its answer lands in reasoning_content), so use Glimmer.
     let nvidia_nim_vision_client = std::env::var("NVIDIA_API_KEY").ok().map(|k| {
         let model = std::env::var("NVIDIA_NIM_VISION_MODEL")
-            .unwrap_or_else(|_| "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning".to_string());
+            .unwrap_or_else(|_| "meta/muse-glimmer-30b".to_string());
         tracing::info!("Initializing NVIDIA NIM vision client ({})...", model);
         nvidia_nim_client::NvidiaNimClient::with_model(k, model)
     });
@@ -746,6 +747,9 @@ async fn main() {
         job_manager.set_pubsub_bus(bus.clone()).await;
         tracing::info!("🔗 PubSubBus attached to JobManager");
     }
+
+    // Cross-replica NIM pacing shares this pool (see nim_rate_limit migration).
+    nvidia_nim_client::set_shared_pool(db_pool.clone());
 
     // Create the shared state
     let shared_state = Arc::new(AppState {

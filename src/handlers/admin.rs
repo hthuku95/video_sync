@@ -6645,10 +6645,15 @@ pub async fn api_trigger_test_run(
 
     match crate::portfolio_tests::PortfolioTestRunner::create_and_spawn(state, name).await {
         Ok(run_id) => Ok(Json(json!({ "run_id": run_id, "status": "running" }))),
-        Err(e) => Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": e })),
-        )),
+        Err(e) => {
+            // A second run while one is active is a conflict, not a server fault.
+            let status = if e.starts_with("Test run ") && e.contains("already active") {
+                StatusCode::CONFLICT
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            };
+            Err((status, Json(json!({ "error": e }))))
+        }
     }
 }
 

@@ -17,10 +17,10 @@
 /// | Model ID | Tools | Vision | Notes |
 /// |---|---|---|---|
 /// | nvidia/nemotron-3-ultra-550b-a55b | ✅ | ❌ | 1M context — default text |
-/// | nvidia/nemotron-3.5-super-vl-120b-a12b | ✅ | ✅ | fastest (~1.5s) |
+/// | nvidia/nemotron-3.5-super-vl-120b-a12b | ✅ | ⚠️ | chat only — returns null content on image input |
 /// | nvidia/nemotron-3.5-lightning-30b-a3b | ✅ | ❌ | fast agentic 30B |
 /// | nvidia/nemotron-3-nano-omni-30b-a3b-reasoning | ✅ | ✅ | omni (text/image/audio) |
-/// | meta/muse-glimmer-30b | ✅ | ✅ | multimodal reasoning |
+/// | meta/muse-glimmer-30b | ✅ | ✅ | multimodal reasoning — default vision |
 /// | openai/gpt-oss-20b | ✅ | ❌ | |
 /// | google/diffusiongemma-26b-a4b-it | — | — | diffusion text model |
 /// | nvidia/ising-calibration-1.5-31b | — | ✅ | calibration charts |
@@ -56,11 +56,68 @@ fn nim_gate() -> &'static tokio::sync::Semaphore {
     })
 }
 
+/// Shared pool, installed once at startup, used to pace requests across Fargate
+/// replicas. `None` (e.g. in unit tests or a bin without AppState) simply skips
+/// cross-replica pacing.
+static SHARED_POOL: std::sync::OnceLock<sqlx::PgPool> = std::sync::OnceLock::new();
+
+pub fn set_shared_pool(pool: sqlx::PgPool) {
+    let _ = SHARED_POOL.set(pool);
+}
+
+/// Reserve this account's next send slot in Postgres and sleep until it opens.
+///
+/// The free tier throttles per account: three replicas each honouring a local
+/// limit still burst together and every turn eats two 429 retries. Slots are
+/// spaced by `NIM_MIN_INTERVAL_MS` (default 4s, 0 disables). A DB failure is
+/// non-fatal — the per-process semaphore and the 429 backoff still apply.
+async fn space_request() {
+    let Some(pool) = SHARED_POOL.get() else {
+        return;
+    };
+    let interval_ms: i64 = std::env::var("NIM_MIN_INTERVAL_MS")
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(4000);
+    if interval_ms <= 0 {
+        return;
+    }
+
+    let reserved: Result<Option<chrono::DateTime<chrono::Utc>>, sqlx::Error> = async {
+        let mut tx = pool.begin().await?;
+        let current: Option<chrono::DateTime<chrono::Utc>> =
+            sqlx::query_scalar("SELECT next_at FROM nim_rate_limit WHERE id = 1 FOR UPDATE")
+                .fetch_optional(&mut *tx)
+                .await?;
+        let now = chrono::Utc::now();
+        let slot = current.unwrap_or(now).max(now);
+        sqlx::query("UPDATE nim_rate_limit SET next_at = $1 WHERE id = 1")
+            .bind(slot + chrono::Duration::milliseconds(interval_ms))
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(Some(slot))
+    }
+    .await;
+
+    match reserved {
+        Ok(Some(slot)) => {
+            let wait_ms = (slot - chrono::Utc::now()).num_milliseconds().max(0);
+            if wait_ms > 0 {
+                tracing::debug!("NVIDIA NIM pacing: sleeping {}ms for the next slot", wait_ms);
+                tokio::time::sleep(std::time::Duration::from_millis(wait_ms as u64)).await;
+            }
+        }
+        Ok(None) => {}
+        Err(e) => tracing::warn!("NVIDIA NIM pacing skipped (rate-limit row unavailable): {e}"),
+    }
+}
+
 const NVIDIA_NIM_ENDPOINT: &str = "https://integrate.api.nvidia.com/v1/chat/completions";
 const NVIDIA_FLUX_IMAGE_ENDPOINT: &str =
     "https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux.1-dev";
 const NVIDIA_DEFAULT_MODEL: &str = "nvidia/nemotron-3-ultra-550b-a55b";
-const NVIDIA_DEFAULT_VISION_MODEL: &str = "nvidia/nemotron-3.5-super-vl-120b-a12b";
+const NVIDIA_DEFAULT_VISION_MODEL: &str = "meta/muse-glimmer-30b";
 
 /// Generate an image with FLUX.1-dev via NVIDIA's hosted NIM API (free tier).
 /// Returns decoded image bytes (JPEG, 1024x1024). Verified working Aug 22 2026
@@ -318,6 +375,7 @@ impl NvidiaNimClient {
                     Ok(p) => p,
                     Err(e) => return Err(format!("NVIDIA NIM gate closed: {e}").into()),
                 };
+                space_request().await;
                 self.client
                     .post(NVIDIA_NIM_ENDPOINT)
                     .header("Authorization", format!("Bearer {}", self.api_key))
@@ -420,6 +478,7 @@ impl NvidiaNimClient {
                 Ok(p) => p,
                 Err(e) => return Err(format!("NVIDIA NIM gate closed: {e}").into()),
             };
+            space_request().await;
             self.client
                 .post(NVIDIA_NIM_ENDPOINT)
                 .header("Authorization", format!("Bearer {}", self.api_key))
@@ -476,6 +535,7 @@ impl NvidiaNimClient {
                 Ok(p) => p,
                 Err(e) => return Err(format!("NVIDIA NIM gate closed: {e}").into()),
             };
+            space_request().await;
             self.client
                 .post(NVIDIA_NIM_ENDPOINT)
                 .header("Authorization", format!("Bearer {}", self.api_key))
@@ -582,6 +642,7 @@ impl NvidiaNimClient {
                     Ok(p) => p,
                     Err(e) => return Err(format!("NVIDIA NIM gate closed: {e}").into()),
                 };
+                space_request().await;
                 self.client
                     .post(NVIDIA_NIM_ENDPOINT)
                     .header("Authorization", format!("Bearer {}", self.api_key))
