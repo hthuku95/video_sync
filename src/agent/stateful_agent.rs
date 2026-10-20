@@ -2987,6 +2987,22 @@ fn openai_messages_to_gemini_contents(
 // by every live loop (qwen/nvidia/deepseek).
 const MAX_TOOL_NUDGES: usize = 2;
 
+/// How many times a provider may answer with an EMPTY message before the loop
+/// gives up. An empty `content` is not a final answer: OpenAI-compatible
+/// providers return `content: null` when they emit nothing (truncation at
+/// `max_tokens`, a dropped turn, or a reasoning-only reply), and treating that
+/// as success made `chat()` return `Ok("")`. The caller then saw "agent
+/// finished" with no output and re-ran the whole delivery — observed as
+/// "No usable output from 5 attempts … Last attempt: AGENT_OK_TAIL: "
+/// (33 minutes and ~245K prompt tokens per attempt for Twitch clipping).
+const MAX_EMPTY_RESPONSE_NUDGES: usize = 2;
+
+/// Nudge sent when a provider returns an empty message. Kept terse: the model
+/// usually just needs to be told that its turn produced no content.
+const EMPTY_RESPONSE_NUDGE: &str =
+    "Your previous reply was empty. Continue the task: call the next tool, or \
+     state the final result including the output file path or Cloud URL.";
+
 /// Markers that count a prose response as carrying a salvaged usable artifact.
 fn text_contains_artifact_url(text: &str) -> bool {
     text.contains("https://")
@@ -3068,6 +3084,7 @@ where
     let mut tool_calls_made: usize = 0;
     let mut nudges_used: usize = 0;
     let mut artifacts_required: Option<bool> = None;
+    let mut empty_responses: usize = 0;
 
     for turn in 0..max_turns {
         // Cooperative cancellation probe (durable pipeline runner).
@@ -3102,6 +3119,28 @@ where
 
         match response {
             crate::qwen_client::QwenResponse::Text(text) => {
+                // Never treat an empty reply as a final answer (see
+                // MAX_EMPTY_RESPONSE_NUDGES): it produced silent
+                // ok-but-no-output runs that the pipeline retried five times.
+                if text.trim().is_empty() {
+                    empty_responses += 1;
+                    if empty_responses <= MAX_EMPTY_RESPONSE_NUDGES {
+                        tracing::warn!(
+                            "⚠️ Qwen returned an empty reply ({}/{}); re-prompting",
+                            empty_responses, MAX_EMPTY_RESPONSE_NUDGES
+                        );
+                        send_progress("🔁 Model returned no content — retrying…");
+                        messages.push(serde_json::json!({
+                            "role": "user",
+                            "content": EMPTY_RESPONSE_NUDGE,
+                        }));
+                        continue;
+                    }
+                    return Err(format!(
+                        "Qwen returned {} consecutive empty replies — no usable output",
+                        empty_responses
+                    ));
+                }
                 // Unified policy: bare prose with zero tool calls ends the run
                 // ONLY for pure-chat runs. Artifact runs get a bounded tool
                 // mandate instead of a false "final answer".
@@ -3255,6 +3294,7 @@ where
     let mut tool_calls_made: usize = 0;
     let mut nudges_used: usize = 0;
     let mut artifacts_required: Option<bool> = None;
+    let mut empty_responses: usize = 0;
 
     for turn in 0..max_turns {
         if workflow_cancel_requested(exec_context).await {
@@ -3285,6 +3325,27 @@ where
 
         match response {
             crate::deepseek_client::DeepSeekResponse::Text(text) => {
+                // Never treat an empty reply as a final answer (see
+                // MAX_EMPTY_RESPONSE_NUDGES).
+                if text.trim().is_empty() {
+                    empty_responses += 1;
+                    if empty_responses <= MAX_EMPTY_RESPONSE_NUDGES {
+                        tracing::warn!(
+                            "⚠️ DeepSeek returned an empty reply ({}/{}); re-prompting",
+                            empty_responses, MAX_EMPTY_RESPONSE_NUDGES
+                        );
+                        send_progress("🔁 Model returned no content — retrying…");
+                        messages.push(serde_json::json!({
+                            "role": "user",
+                            "content": EMPTY_RESPONSE_NUDGE,
+                        }));
+                        continue;
+                    }
+                    return Err(format!(
+                        "DeepSeek returned {} consecutive empty replies — no usable output",
+                        empty_responses
+                    ));
+                }
                 // Unified policy: bare prose with zero tool calls ends the run
                 // ONLY for pure-chat runs. Artifact runs get a bounded tool
                 // mandate instead of a false "final answer".
@@ -3429,6 +3490,7 @@ where
     let mut tool_calls_made: usize = 0;
     let mut nudges_used: usize = 0;
     let mut artifacts_required: Option<bool> = None;
+    let mut empty_responses: usize = 0;
 
     for turn in 0..max_turns {
         if workflow_cancel_requested(exec_context).await {
@@ -3459,6 +3521,28 @@ where
 
         match response {
             crate::nvidia_nim_client::NimResponse::Text(text) => {
+                // Never treat an empty reply as a final answer (see
+                // MAX_EMPTY_RESPONSE_NUDGES). This is the path that produced
+                // "AGENT_OK_TAIL: " and five full retries.
+                if text.trim().is_empty() {
+                    empty_responses += 1;
+                    if empty_responses <= MAX_EMPTY_RESPONSE_NUDGES {
+                        tracing::warn!(
+                            "⚠️ NVIDIA NIM returned an empty reply ({}/{}); re-prompting",
+                            empty_responses, MAX_EMPTY_RESPONSE_NUDGES
+                        );
+                        send_progress("🔁 Model returned no content — retrying…");
+                        messages.push(serde_json::json!({
+                            "role": "user",
+                            "content": EMPTY_RESPONSE_NUDGE,
+                        }));
+                        continue;
+                    }
+                    return Err(format!(
+                        "NVIDIA NIM returned {} consecutive empty replies — no usable output",
+                        empty_responses
+                    ));
+                }
                 // Unified policy: bare prose with zero tool calls ends the run
                 // ONLY for pure-chat runs. Artifact runs get a bounded tool
                 // mandate instead of a false "final answer".

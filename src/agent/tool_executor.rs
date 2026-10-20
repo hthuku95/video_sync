@@ -5755,12 +5755,27 @@ async fn execute_clip_compilation_value(
             // Cookie health: track consecutive download failures so the admin
             // gets emailed before renders pile up (see cookie_health module).
             let err_text = e.replace('"', "'");
+            // This branch previously returned without logging, so a failed
+            // download was invisible in CloudWatch — the only trace was the
+            // cookie-health counter. Log the source and the reason.
+            tracing::error!(
+                "❌ Clip-compilation download failed for {} (session={}): {}",
+                source_url,
+                ctx.session_id,
+                err_text
+            );
             crate::services::cookie_health::note_download_failure(
                 &ctx.app_state.db_pool,
                 &err_text,
             )
             .await;
-            return format!(r#"{{"error":"Failed to download video: {}"}}"#, err_text);
+            // Steer the model away from the fallback tools it otherwise tries
+            // (auto_generate_video is hard-denied for clipping) — that used to
+            // burn the rest of the run.
+            return format!(
+                r#"{{"error":"Failed to download video: {}","hint":"The source video could not be downloaded. Do not substitute a generated video or retry with unrelated tools — report this failure."}}"#,
+                err_text
+            );
         }
     };
 
