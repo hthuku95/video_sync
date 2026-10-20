@@ -101,6 +101,27 @@ impl PortfolioTestRunner {
 
     /// Create a new test_run row and spawn a background task that runs all enabled scenarios.
     pub async fn create_and_spawn(app_state: Arc<AppState>, name: String) -> Result<Uuid, String> {
+        // Serialise runs. The agentic pool is one worker per Fargate task and a
+        // clipping delivery legitimately runs for ~an hour, so a second run does
+        // not slow the first down — it starves it, and both report timeouts that
+        // look like product failures. (2026-10-20: five concurrent runs left
+        // five clipping workflows queued behind three workers.)
+        let active = sqlx::query_scalar::<_, Uuid>(
+            "SELECT id FROM test_runs \
+              WHERE status = 'running' \
+                AND COALESCE(heartbeat_at, started_at) > NOW() - INTERVAL '2 minutes' \
+              ORDER BY started_at DESC LIMIT 1",
+        )
+        .fetch_optional(&app_state.db_pool)
+        .await
+        .map_err(|e| format!("Failed to check for an active test run: {e}"))?;
+
+        if let Some(active_id) = active {
+            return Err(format!(
+                "Test run {active_id} is already active. Wait for it to finish or cancel it before starting another."
+            ));
+        }
+
         let row = sqlx::query(
             "INSERT INTO test_runs (name, heartbeat_at) VALUES ($1, NOW()) RETURNING id",
         )
@@ -204,6 +225,14 @@ impl PortfolioTestRunner {
         }
 
         for scenario in &all {
+            if self.run_cancelled(run_id).await {
+                tracing::warn!(
+                    "⏹️ Test run {} cancelled — stopping before '{}'",
+                    run_id,
+                    scenario.slug
+                );
+                break;
+            }
             if terminal.contains(scenario.slug) {
                 tracing::info!(
                     "⏭️ Test run {}: '{}' already finished — not re-rendering",
@@ -247,7 +276,7 @@ impl PortfolioTestRunner {
              SET status = CASE WHEN failed_tests = 0 THEN 'completed' ELSE 'completed_with_failures' END, \
                  completed_at = NOW(), \
                  heartbeat_at = NULL \
-             WHERE id = $1",
+             WHERE id = $1 AND status = 'running'",
         )
         .bind(run_id)
         .execute(&self.app_state.db_pool)
@@ -286,6 +315,61 @@ impl PortfolioTestRunner {
              WHERE id = $1",
         )
         .bind(run_id)
+        .execute(&self.app_state.db_pool)
+        .await;
+    }
+
+    /// Has an operator cancelled this run? Checked between scenarios and on every
+    /// poll: without this the in-memory driver keeps advancing to the next
+    /// scenario after the run row is cancelled, creating deliveries that nobody
+    /// is waiting for and that then compete with the next run for workers.
+    async fn run_cancelled(&self, run_id: Uuid) -> bool {
+        sqlx::query_scalar::<_, bool>("SELECT status = 'cancelled' FROM test_runs WHERE id = $1")
+            .bind(run_id)
+            .fetch_optional(&self.app_state.db_pool)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or(false)
+    }
+
+    /// Stop the delivery and its durable workflow when the owning run is
+    /// cancelled. Cancellation is cooperative for a running agent (checked at
+    /// turn boundaries); a queued workflow is removed from the claim queue
+    /// outright so no worker ever starts it.
+    async fn cancel_delivery(&self, delivery_id: Uuid) {
+        let workflow_id: Option<Uuid> = sqlx::query_scalar::<_, Option<Uuid>>(
+            "SELECT workflow_id FROM deliveries WHERE id = $1",
+        )
+        .bind(delivery_id)
+        .fetch_optional(&self.app_state.db_pool)
+        .await
+        .ok()
+        .flatten()
+        .flatten();
+
+        if let Some(wf) = workflow_id {
+            let runtime = crate::services::workflow_runtime::WorkflowRuntime::new(
+                self.app_state.db_pool.clone(),
+            );
+            let _ = runtime.request_cancel(wf).await;
+            let _ = sqlx::query(
+                "UPDATE app_workflows \
+                    SET status = 'cancelled', completed_at = NOW(), \
+                        result_summary = 'cancelled: test run was cancelled', updated_at = NOW() \
+                  WHERE id = $1 AND status = 'queued'",
+            )
+            .bind(wf)
+            .execute(&self.app_state.db_pool)
+            .await;
+        }
+
+        let _ = sqlx::query(
+            "UPDATE deliveries SET status = 'failed', \
+                 error_message = 'RUN_CANCELLED: test run was cancelled' \
+              WHERE id = $1 AND status IN ('pending', 'processing')",
+        )
+        .bind(delivery_id)
         .execute(&self.app_state.db_pool)
         .await;
     }
@@ -346,7 +430,7 @@ impl PortfolioTestRunner {
             .execute(&self.app_state.db_pool)
             .await;
 
-        match self.drive_delivery(scenario, &plan).await {
+        match self.drive_delivery(run_id, scenario, &plan).await {
             Ok((r2_url, filename)) => {
                 let review = self.review(&r2_url, scenario).await;
 
@@ -496,6 +580,7 @@ impl PortfolioTestRunner {
     /// pipeline_worker keeps executing it), so we only reattach and observe.
     async fn drive_delivery(
         &self,
+        run_id: Uuid,
         scenario: &DfyScenario,
         plan: &DeliveryPlan,
     ) -> Result<(String, String), String> {
@@ -539,6 +624,10 @@ impl PortfolioTestRunner {
             .unwrap_or(5400);
         let max_polls = (timeout_secs / 5).max(1);
         for _ in 0..max_polls {
+            if self.run_cancelled(run_id).await {
+                self.cancel_delivery(delivery_id).await;
+                return Err("RUN_CANCELLED: test run was cancelled".to_string());
+            }
             let row = sqlx::query(
                 "SELECT status, output_r2_url, error_message FROM deliveries WHERE id = $1",
             )
