@@ -1188,6 +1188,17 @@ async fn main() {
         crate::services::pipeline_worker::start_pipeline_infrastructure(pw_state);
     }
 
+    // ── Portfolio test runs — resume runs whose driver died ───────────────────
+    // A run is driven by a tokio task that dies with the task (deploy/OOM/
+    // panic). Its heartbeat stops, a replica claims the row, and the run
+    // resumes: finished scenarios are skipped and an interrupted one reattaches
+    // to its delivery (whose workflow keeps running on the durable pipeline)
+    // instead of being re-rendered. See src/portfolio_tests.rs.
+    {
+        let tr_state = shared_state.clone();
+        crate::portfolio_tests::start_reconciler(tr_state);
+    }
+
     // ── Chat agent workers + supervisor (§53.12) ──────────────────────────────
     // Durable reclaim of orphaned/in-flight agent_background_jobs. In-process WS
     // spawns are the fast path (claim-then-spawn in handlers/chat.rs); this pool

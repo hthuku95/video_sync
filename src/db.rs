@@ -76,6 +76,9 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     // embed all current migration files.
     // Last touched: 2026-10-20 to force sqlx::migrate!() to re-embed the
     // current migration set, including:
+    //   20261020130000 — test_run_heartbeat (heartbeat_at on test_runs +
+    //                    delivery_id on test_results, so a run orphaned by a
+    //                    deploy is detected and resumed instead of hanging)
     //   20261020000000 — fix_viral_factor_null_guards (COALESCE the aggregates
     //                    in refresh_viral_factor_performance(); NULLs violated
     //                    the NOT NULL columns on viral_factor_performance)

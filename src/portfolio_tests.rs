@@ -8,12 +8,43 @@
 use crate::AppState;
 use serde_json::{json, Value};
 use sqlx::Row;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use uuid::Uuid;
+
+/// How often the task driving a run pings `test_runs.heartbeat_at`.
+const RUN_HEARTBEAT_SECS: u64 = 20;
+
+/// A running run whose heartbeat is older than this has no live driver.
+/// Comfortably larger than RUN_HEARTBEAT_SECS so a busy replica is never
+/// mistaken for a dead one, and small enough that a deploy resumes promptly.
+const RUN_STALE_AFTER_SECS: i64 = 120;
+
+/// How often every replica looks for orphaned runs.
+const RUN_RECONCILE_SECS: u64 = 60;
+
+/// Aborts the heartbeat task when the run future ends — including on panic.
+/// Dropping a JoinHandle does NOT abort it, so this guard is required; without
+/// it a panicking runner would leave a heartbeat pinging forever and the run
+/// could never be detected as orphaned.
+struct HeartbeatGuard(tokio::task::JoinHandle<()>);
+
+impl Drop for HeartbeatGuard {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
 
 struct LLMReview {
     score: i32,
     feedback: String,
+}
+
+/// The delivery backing one scenario, plus the input needed to start its
+/// pipeline. Rebuilt from the DB when a run resumes.
+struct DeliveryPlan {
+    delivery_id: Uuid,
+    input: crate::services::agentic_service_pipeline::ServiceInput,
 }
 
 fn parse_review(text: &str) -> LLMReview {
@@ -68,25 +99,37 @@ impl PortfolioTestRunner {
         Self { app_state }
     }
 
-    /// Create a new test_run row and spawn a background task that runs all 12 Managed Campaign services.
+    /// Create a new test_run row and spawn a background task that runs all enabled scenarios.
     pub async fn create_and_spawn(app_state: Arc<AppState>, name: String) -> Result<Uuid, String> {
-        let row = sqlx::query("INSERT INTO test_runs (name) VALUES ($1) RETURNING id")
-            .bind(&name)
-            .fetch_one(&app_state.db_pool)
-            .await
-            .map_err(|e| format!("Failed to create test run: {e}"))?;
+        let row = sqlx::query(
+            "INSERT INTO test_runs (name, heartbeat_at) VALUES ($1, NOW()) RETURNING id",
+        )
+        .bind(&name)
+        .fetch_one(&app_state.db_pool)
+        .await
+        .map_err(|e| format!("Failed to create test run: {e}"))?;
 
         let run_id: Uuid = row.get("id");
 
-        tokio::spawn(async move {
-            let runner = PortfolioTestRunner::new(app_state);
-            runner.run_all(run_id).await;
-        });
+        Self::spawn_run(app_state, run_id, false);
 
         Ok(run_id)
     }
 
-    async fn run_all(&self, run_id: Uuid) {
+    /// Spawn the driver task. `resume = true` reattaches an interrupted run
+    /// instead of starting the scenarios over.
+    fn spawn_run(app_state: Arc<AppState>, run_id: Uuid, resume: bool) {
+        tokio::spawn(async move {
+            let runner = PortfolioTestRunner::new(app_state);
+            runner.run_all(run_id, resume).await;
+        });
+    }
+
+    async fn run_all(&self, run_id: Uuid, resume: bool) {
+        // Liveness: this task is the only thing that can drive the run. If it
+        // dies the timestamp stops advancing and another replica takes over.
+        let _heartbeat = self.start_heartbeat(run_id);
+
         // Service switch (owner directive Sep 2026): only run scenarios for
         // enabled services. Disabled-service scenarios are skipped, not failed.
         let mut all = Vec::new();
@@ -114,23 +157,137 @@ impl PortfolioTestRunner {
             .execute(&self.app_state.db_pool)
             .await;
 
+        // Resume bookkeeping. Terminal scenarios are NOT re-rendered (that is
+        // the token saving); a scenario left 'running' is reattached to the
+        // durable workflow that was already executing.
+        let mut terminal: HashSet<String> = HashSet::new();
+        let mut in_flight: HashMap<String, (Uuid, Option<Uuid>)> = HashMap::new();
+        if resume {
+            match sqlx::query(
+                "SELECT id, gig_type, status, delivery_id FROM test_results WHERE run_id = $1",
+            )
+            .bind(run_id)
+            .fetch_all(&self.app_state.db_pool)
+            .await
+            {
+                Ok(rows) => {
+                    for row in rows {
+                        let slug: String = row.get("gig_type");
+                        let status: String = row.get("status");
+                        let result_id: Uuid = row.get("id");
+                        let delivery_id: Option<Uuid> = row.try_get("delivery_id").ok().flatten();
+                        match status.as_str() {
+                            "passed" | "failed" => {
+                                terminal.insert(slug);
+                            }
+                            "running" => {
+                                in_flight.insert(slug, (result_id, delivery_id));
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                Err(e) => tracing::warn!("Test run {run_id}: could not load prior results ({e})"),
+            }
+        }
+
+        if resume {
+            let remaining = (total.max(0) as usize)
+                .saturating_sub(terminal.len())
+                .saturating_sub(in_flight.len());
+            tracing::warn!(
+                "♻️ Resuming test run {run_id}: {} already finished, {} in flight, {} to run",
+                terminal.len(),
+                in_flight.len(),
+                remaining
+            );
+        }
+
         for scenario in &all {
-            self.run_one(run_id, scenario).await;
+            if terminal.contains(scenario.slug) {
+                tracing::info!(
+                    "⏭️ Test run {}: '{}' already finished — not re-rendering",
+                    run_id,
+                    scenario.slug
+                );
+                continue;
+            }
+            if let Some((result_id, delivery_id)) = in_flight.get(scenario.slug).copied() {
+                tracing::warn!(
+                    "♻️ Test run {}: reattaching '{}' (result {}, delivery {:?})",
+                    run_id,
+                    scenario.slug,
+                    result_id,
+                    delivery_id
+                );
+                self.execute_and_record(run_id, scenario, result_id, delivery_id)
+                    .await;
+            } else {
+                self.run_one(run_id, scenario).await;
+            }
             // Brief pause between scenarios
             tokio::time::sleep(std::time::Duration::from_secs(3)).await;
         }
 
+        // Defensive: nothing may be left 'running' once the driver is done.
+        let _ = sqlx::query(
+            "UPDATE test_results SET status = 'failed', \
+                 error_message = COALESCE(error_message, 'interrupted before completion'), \
+                 completed_at = NOW() \
+             WHERE run_id = $1 AND status = 'running'",
+        )
+        .bind(run_id)
+        .execute(&self.app_state.db_pool)
+        .await;
+
+        self.refresh_counters(run_id).await;
+
         let _ = sqlx::query(
             "UPDATE test_runs \
              SET status = CASE WHEN failed_tests = 0 THEN 'completed' ELSE 'completed_with_failures' END, \
-                 completed_at = NOW() \
+                 completed_at = NOW(), \
+                 heartbeat_at = NULL \
              WHERE id = $1",
         )
         .bind(run_id)
         .execute(&self.app_state.db_pool)
         .await;
 
-        tracing::info!("Portfolio test run {run_id} finished (12 Managed Campaign services)");
+        tracing::info!("Portfolio test run {run_id} finished");
+    }
+
+    /// Ping `heartbeat_at` until dropped. Guarded so a panic aborts it too.
+    fn start_heartbeat(&self, run_id: Uuid) -> HeartbeatGuard {
+        let pool = self.app_state.db_pool.clone();
+        let handle = tokio::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(RUN_HEARTBEAT_SECS));
+            tick.tick().await; // immediate first tick
+            loop {
+                tick.tick().await;
+                let _ = sqlx::query(
+                    "UPDATE test_runs SET heartbeat_at = NOW() \
+                     WHERE id = $1 AND status = 'running'",
+                )
+                .bind(run_id)
+                .execute(&pool)
+                .await;
+            }
+        });
+        HeartbeatGuard(handle)
+    }
+
+    /// Counters are derived from the result rows, never incremented, so a
+    /// resumed run cannot double-count a scenario.
+    async fn refresh_counters(&self, run_id: Uuid) {
+        let _ = sqlx::query(
+            "UPDATE test_runs SET \
+                 passed_tests = (SELECT count(*) FROM test_results WHERE run_id = $1 AND status = 'passed'), \
+                 failed_tests = (SELECT count(*) FROM test_results WHERE run_id = $1 AND status = 'failed') \
+             WHERE id = $1",
+        )
+        .bind(run_id)
+        .execute(&self.app_state.db_pool)
+        .await;
     }
 
     async fn run_one(&self, run_id: Uuid, scenario: &DfyScenario) {
@@ -154,7 +311,42 @@ impl PortfolioTestRunner {
             }
         };
 
-        match self.execute_via_pipeline(scenario).await {
+        self.execute_and_record(run_id, scenario, result_id, None).await;
+    }
+
+    /// Execute (or reattach) one scenario and record the outcome on an existing
+    /// result row. `delivery_id` is Some only when resuming an interrupted run.
+    async fn execute_and_record(
+        &self,
+        run_id: Uuid,
+        scenario: &DfyScenario,
+        result_id: Uuid,
+        delivery_id: Option<Uuid>,
+    ) {
+        let plan = match delivery_id {
+            Some(id) => self.load_delivery_plan(scenario, id).await,
+            None => self.prepare_delivery(scenario).await,
+        };
+
+        let plan = match plan {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::error!("❌ '{}' could not be prepared: {e}", scenario.name);
+                self.record_failure(result_id, &e).await;
+                self.refresh_counters(run_id).await;
+                return;
+            }
+        };
+
+        // Persist the link immediately: if this task dies mid-render, the next
+        // driver reattaches to this delivery instead of re-rendering it.
+        let _ = sqlx::query("UPDATE test_results SET delivery_id = $1 WHERE id = $2")
+            .bind(plan.delivery_id)
+            .bind(result_id)
+            .execute(&self.app_state.db_pool)
+            .await;
+
+        match self.drive_delivery(scenario, &plan).await {
             Ok((r2_url, filename)) => {
                 let review = self.review(&r2_url, scenario).await;
 
@@ -181,47 +373,33 @@ impl PortfolioTestRunner {
                 .execute(&self.app_state.db_pool)
                 .await;
 
-                let _ = sqlx::query(
-                    "UPDATE test_runs SET passed_tests = passed_tests + 1 WHERE id = $1",
-                )
-                .bind(run_id)
-                .execute(&self.app_state.db_pool)
-                .await;
-
                 tracing::info!("✅ '{}' passed — score {}/10", scenario.name, review.score);
             }
             Err(e) => {
                 tracing::error!("❌ '{}' failed: {e}", scenario.name);
-
-                let _ = sqlx::query(
-                    "UPDATE test_results SET \
-                         status = 'failed', \
-                         error_message = $1, \
-                         completed_at = NOW() \
-                     WHERE id = $2",
-                )
-                .bind(&e)
-                .bind(result_id)
-                .execute(&self.app_state.db_pool)
-                .await;
-
-                let _ = sqlx::query(
-                    "UPDATE test_runs SET failed_tests = failed_tests + 1 WHERE id = $1",
-                )
-                .bind(run_id)
-                .execute(&self.app_state.db_pool)
-                .await;
+                self.record_failure(result_id, &e).await;
             }
         }
+
+        self.refresh_counters(run_id).await;
     }
 
-    /// Run a Managed Campaign service through the AgenticServicePipeline and wait for completion.
-    /// Returns (output_r2_url, filename) on success.
-    async fn execute_via_pipeline(&self, scenario: &DfyScenario) -> Result<(String, String), String> {
-        let service_type = crate::services::agentic_service_pipeline::ServiceType::from_normalized(scenario.slug);
-        let delivery_id = Uuid::new_v4();
+    async fn record_failure(&self, result_id: Uuid, err: &str) {
+        let _ = sqlx::query(
+            "UPDATE test_results SET \
+                 status = 'failed', \
+                 error_message = $1, \
+                 completed_at = NOW() \
+             WHERE id = $2",
+        )
+        .bind(err)
+        .bind(result_id)
+        .execute(&self.app_state.db_pool)
+        .await;
+    }
 
-        // Create a delivery row
+    /// Resolve the source and insert the delivery row. Nothing executes yet.
+    async fn prepare_delivery(&self, scenario: &DfyScenario) -> Result<DeliveryPlan, String> {
         let service_def = crate::portfolio_samples::dfy_services()
             .iter()
             .find(|s| s.slug == scenario.slug)
@@ -234,12 +412,14 @@ impl PortfolioTestRunner {
             service_def.source_url,
         )
         .await;
+
+        let delivery_id = Uuid::new_v4();
         let mut extra = crate::portfolio_samples::portfolio_extra_args(service_def);
         extra["test_run_id"] = json!(delivery_id.to_string());
 
         let title = format!("Test Run — {}", scenario.name);
 
-        let _ = sqlx::query(
+        sqlx::query(
             "INSERT INTO deliveries (id, client_ref, title, gig_type, prompt, style, duration, extra_args, status, unlock_price_usdc, source_url) \
              VALUES ($1, $2, $3, 'agentic_pipeline', $4, $5, $6, $7, 'pending', 0.0, $8)",
         )
@@ -255,36 +435,99 @@ impl PortfolioTestRunner {
         .await
         .map_err(|e| format!("DB insert failed: {e}"))?;
 
-        // Start the AgenticServicePipeline
-        let svc_input = crate::services::agentic_service_pipeline::ServiceInput {
-            title,
-            brief: input.brief.clone(),
-            source_url: input.source_url.clone(),
-            style: input.style.clone(),
-            duration_seconds: input.duration_seconds,
+        Ok(DeliveryPlan {
             delivery_id,
-            prospect_id: None,
-            session_uuid: None,
-            user_id: None,
-            source_table: Some("deliveries".to_string()),
-            source_record_id: Some(delivery_id),
-            idempotency_key: Some(format!("test-run:{}", scenario.slug)),
-            reference_images: vec![],
-        };
+            input: crate::services::agentic_service_pipeline::ServiceInput {
+                title,
+                brief: input.brief,
+                source_url: input.source_url,
+                style: input.style,
+                duration_seconds: input.duration_seconds,
+                delivery_id,
+                prospect_id: None,
+                session_uuid: None,
+                user_id: None,
+                source_table: Some("deliveries".to_string()),
+                source_record_id: Some(delivery_id),
+                idempotency_key: Some(format!("test-run:{}", scenario.slug)),
+                reference_images: vec![],
+            },
+        })
+    }
 
-        let workflow_id = crate::services::AgenticServicePipeline::start(
-            self.app_state.clone(),
-            scenario.slug.clone(),
-            svc_input,
+    /// Rebuild the plan for a delivery created before an interruption.
+    async fn load_delivery_plan(
+        &self,
+        scenario: &DfyScenario,
+        delivery_id: Uuid,
+    ) -> Result<DeliveryPlan, String> {
+        let row = sqlx::query(
+            "SELECT title, prompt, style, duration, source_url FROM deliveries WHERE id = $1",
         )
+        .bind(delivery_id)
+        .fetch_optional(&self.app_state.db_pool)
         .await
-        .map_err(|e| format!("AgenticServicePipeline start failed: {e}"))?;
+        .map_err(|e| format!("DB read failed: {e}"))?
+        .ok_or_else(|| format!("delivery {delivery_id} vanished before resume"))?;
 
-        let _ = sqlx::query("UPDATE deliveries SET workflow_id = $1 WHERE id = $2")
-            .bind(workflow_id)
-            .bind(delivery_id)
-            .execute(&self.app_state.db_pool)
-            .await;
+        let title: String = row.get("title");
+        Ok(DeliveryPlan {
+            delivery_id,
+            input: crate::services::agentic_service_pipeline::ServiceInput {
+                title,
+                brief: row.get("prompt"),
+                source_url: row.get("source_url"),
+                style: row.get("style"),
+                duration_seconds: row.get("duration"),
+                delivery_id,
+                prospect_id: None,
+                session_uuid: None,
+                user_id: None,
+                source_table: Some("deliveries".to_string()),
+                source_record_id: Some(delivery_id),
+                idempotency_key: Some(format!("test-run:{}", scenario.slug)),
+                reference_images: vec![],
+            },
+        })
+    }
+
+    /// Start the pipeline if the delivery has no workflow yet, then poll it to
+    /// completion. A resumed delivery already owns a workflow (the durable
+    /// pipeline_worker keeps executing it), so we only reattach and observe.
+    async fn drive_delivery(
+        &self,
+        scenario: &DfyScenario,
+        plan: &DeliveryPlan,
+    ) -> Result<(String, String), String> {
+        let delivery_id = plan.delivery_id;
+
+        let workflow_id: Option<Uuid> = sqlx::query_scalar::<_, Option<Uuid>>(
+            "SELECT workflow_id FROM deliveries WHERE id = $1",
+        )
+        .bind(delivery_id)
+        .fetch_optional(&self.app_state.db_pool)
+        .await
+        .map_err(|e| format!("DB read failed: {e}"))?
+        .flatten();
+
+        match workflow_id {
+            Some(wf) => tracing::info!("♻️ '{}': reattaching to workflow {wf}", scenario.name),
+            None => {
+                let started = crate::services::AgenticServicePipeline::start(
+                    self.app_state.clone(),
+                    scenario.slug.clone(),
+                    plan.input.clone(),
+                )
+                .await
+                .map_err(|e| format!("AgenticServicePipeline start failed: {e}"))?;
+
+                let _ = sqlx::query("UPDATE deliveries SET workflow_id = $1 WHERE id = $2")
+                    .bind(started)
+                    .bind(delivery_id)
+                    .execute(&self.app_state.db_pool)
+                    .await;
+            }
+        }
 
         // Poll for completion. Education/landing_page runs legitimately take
         // longer than clipping. This is an *observation window* for the test
@@ -367,5 +610,58 @@ impl PortfolioTestRunner {
             Ok(resp) => parse_review(&resp),
             Err(e) => LLMReview { score: 0, feedback: format!("Review call failed: {e}") },
         }
+    }
+}
+
+// ── Orphan recovery ───────────────────────────────────────────────────────
+
+/// Start the test-run reconciler: resume any run whose driver died.
+///
+/// Every replica runs this. A run is claimed with `FOR UPDATE SKIP LOCKED`, so
+/// exactly one replica resumes it even when all three sweep at the same time.
+/// A healthy run keeps its heartbeat fresh and is never touched.
+pub fn start_reconciler(state: Arc<AppState>) {
+    tokio::spawn(async move {
+        reconcile_orphaned_runs(&state).await;
+
+        let mut tick =
+            tokio::time::interval(std::time::Duration::from_secs(RUN_RECONCILE_SECS));
+        tick.tick().await; // skip the immediate tick — already swept above
+        loop {
+            tick.tick().await;
+            reconcile_orphaned_runs(&state).await;
+        }
+    });
+}
+
+async fn reconcile_orphaned_runs(state: &Arc<AppState>) {
+    let claimed = sqlx::query(
+        "UPDATE test_runs SET heartbeat_at = NOW() \
+         WHERE id IN ( \
+             SELECT id FROM test_runs \
+             WHERE status = 'running' \
+               AND (heartbeat_at IS NULL \
+                    OR heartbeat_at < NOW() - make_interval(secs => $1)) \
+             ORDER BY started_at \
+             LIMIT 3 \
+             FOR UPDATE SKIP LOCKED \
+         ) \
+         RETURNING id",
+    )
+    .bind(RUN_STALE_AFTER_SECS as f64)
+    .fetch_all(&state.db_pool)
+    .await;
+
+    match claimed {
+        Ok(rows) => {
+            for row in rows {
+                let run_id: Uuid = row.get("id");
+                tracing::warn!(
+                    "♻️ Test run {run_id} has no live driver (heartbeat older than {RUN_STALE_AFTER_SECS}s) — resuming"
+                );
+                PortfolioTestRunner::spawn_run(state.clone(), run_id, true);
+            }
+        }
+        Err(e) => tracing::warn!("Test-run reconciliation failed: {e}"),
     }
 }
