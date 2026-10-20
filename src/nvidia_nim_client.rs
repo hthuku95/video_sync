@@ -270,7 +270,7 @@ impl NvidiaNimClient {
         &self,
         prompt: &str,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        self.generate_text_with_tokens(prompt, 1024).await
+        self.generate_text_with_tokens(prompt, 2048).await
     }
 
     pub async fn generate_text_with_tokens(
@@ -514,7 +514,9 @@ impl NvidiaNimClient {
             "messages": messages,
             "tools": openai_tools,
             "tool_choice": "auto",
-            "max_tokens": 2048,
+            // Reasoning models spend tokens on the trace before answering; 2048
+            // truncated long tool-loop turns into empty content.
+            "max_tokens": 8192,
             "temperature": 0.5,
         });
 
@@ -565,28 +567,66 @@ impl NvidiaNimClient {
                 let usage = crate::usage::UsageInfo::from_openai(&json);
                 let choice = &json["choices"][0];
                 let finish_reason = choice["finish_reason"].as_str().unwrap_or("");
+                let raw_tool_calls = choice["message"]["tool_calls"].as_array();
+                let has_tool_calls = raw_tool_calls
+                    .map(|a| !a.is_empty())
+                    .unwrap_or(false);
 
-                if finish_reason == "tool_calls" {
-                    let tool_calls: Vec<NimToolCall> = choice["message"]["tool_calls"]
-                        .as_array()
-                        .unwrap_or(&vec![])
-                        .iter()
-                        .filter_map(|tc| {
-                            let id = tc["id"].as_str()?.to_string();
-                            let name = tc["function"]["name"].as_str()?.to_string();
-                            let args_str = tc["function"]["arguments"].as_str().unwrap_or("{}");
-                            let arguments =
-                                serde_json::from_str(args_str).unwrap_or(serde_json::json!({}));
-                            Some(NimToolCall { id, name, arguments })
-                        })
-                        .collect();
-                    return Ok((NimResponse::ToolCalls(tool_calls), usage));
+                // Do NOT key this on finish_reason alone. vLLM-backed NIM models
+                // return tool calls with `finish_reason: "stop"` in multi-turn
+                // contexts, and treating those as text produced an empty reply,
+                // which the agent then nudged in a loop until it gave up (the
+                // "3 consecutive empty replies" failures on 2026-10-20).
+                if finish_reason == "tool_calls" || has_tool_calls {
+                    let mut tool_calls: Vec<NimToolCall> = Vec::new();
+                    for (idx, tc) in raw_tool_calls.unwrap_or(&vec![]).iter().enumerate() {
+                        let Some(name) = tc["function"]["name"].as_str() else {
+                            continue;
+                        };
+                        // Some servers omit the call id; synthesise a stable one
+                        // so the tool result can still be paired with the call.
+                        let id = tc["id"]
+                            .as_str()
+                            .filter(|s| !s.is_empty())
+                            .map(|s| s.to_string())
+                            .unwrap_or_else(|| format!("call_{idx}"));
+                        let arguments = match &tc["function"]["arguments"] {
+                            serde_json::Value::String(s) => {
+                                serde_json::from_str(s).unwrap_or(serde_json::json!({}))
+                            }
+                            v if v.is_object() => v.clone(),
+                            _ => serde_json::json!({}),
+                        };
+                        tool_calls.push(NimToolCall {
+                            id,
+                            name: name.to_string(),
+                            arguments,
+                        });
+                    }
+                    // Only take the tool path if we recovered at least one
+                    // usable call; otherwise fall through to the text path.
+                    if !tool_calls.is_empty() {
+                        return Ok((NimResponse::ToolCalls(tool_calls), usage));
+                    }
                 }
 
                 let text = choice["message"]["content"]
                     .as_str()
                     .unwrap_or("")
                     .to_string();
+
+                if text.trim().is_empty() {
+                    tracing::warn!(
+                        "NVIDIA NIM returned empty content (finish_reason={}, tool_calls={}, reasoning_len={})",
+                        finish_reason,
+                        raw_tool_calls.map(|a| a.len()).unwrap_or(0),
+                        choice["message"]["reasoning_content"]
+                            .as_str()
+                            .map(|s| s.len())
+                            .unwrap_or(0)
+                    );
+                }
+
                 return Ok((NimResponse::Text(text), usage));
             }
 
