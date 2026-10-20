@@ -2,23 +2,32 @@
 /// Uses OpenAI-compatible chat completions endpoint — 40 RPM free tier.
 ///
 /// ## Model configuration
-/// - `NVIDIA_NIM_MODEL` — text + tool-calling model (default: google/gemma-4-31b-it)
-/// - `NVIDIA_NIM_VISION_MODEL` — vision + tool-calling model (default: nvidia/nemotron-3-nano-omni-30b-a3b-reasoning)
+/// - `NVIDIA_NIM_MODEL` — text + tool-calling model
+///   (default: nvidia/nemotron-3-ultra-550b-a55b)
+/// - `NVIDIA_NIM_VISION_MODEL` — vision + tool-calling model
+///   (default: nvidia/nemotron-3.5-super-vl-120b-a12b)
 ///
-/// Only models with tool-calling support are listed below. Models that support
-/// vision or audio are flagged accordingly.
+/// ## Which models actually work
+/// `/v1/models` lists models globally; entitlement is per account and many
+/// entries return `404 Function '<uuid>': Not found for account`. On
+/// 2026-10-20 an exhaustive probe of all 81 listed models against the
+/// production key found exactly these serving chat completions (all verified
+/// with tool calling):
 ///
-/// | Model ID | Tools | Vision | Audio |
+/// | Model ID | Tools | Vision | Notes |
 /// |---|---|---|---|
-/// | google/gemma-4-31b-it | ✅ | ❌ | ❌ |
-/// | nvidia/nemotron-3-super-120b-a12b | ✅ | ❌ | ❌ |
-/// | meta/llama-3.3-70b-instruct | ✅ | ❌ | ❌ |
-/// | mistralai/mistral-nemo | ✅ | ❌ | ❌ |
-/// | qwen/qwen3-coder-480b | ✅ | ❌ | ❌ |
-/// | minimaxai/minimax-m2.7 | ✅ | ❌ | ❌ |
-/// | moonshotai/kimi-k2.5 | ✅ | ❌ | ❌ |
-/// | z-ai/glm-5.1 | ✅ | ❌ | ❌ |
-/// | nvidia/nemotron-3-nano-omni-30b-a3b-reasoning | ✅ | ✅ | ✅ |
+/// | nvidia/nemotron-3-ultra-550b-a55b | ✅ | ❌ | 1M context — default text |
+/// | nvidia/nemotron-3.5-super-vl-120b-a12b | ✅ | ✅ | fastest (~1.5s) |
+/// | nvidia/nemotron-3.5-lightning-30b-a3b | ✅ | ❌ | fast agentic 30B |
+/// | nvidia/nemotron-3-nano-omni-30b-a3b-reasoning | ✅ | ✅ | omni (text/image/audio) |
+/// | meta/muse-glimmer-30b | ✅ | ✅ | multimodal reasoning |
+/// | openai/gpt-oss-20b | ✅ | ❌ | |
+/// | google/diffusiongemma-26b-a4b-it | — | — | diffusion text model |
+/// | nvidia/ising-calibration-1.5-31b | — | ✅ | calibration charts |
+/// | nvidia/nemotron-parse-2.0 | — | ✅ | OCR/parsing |
+/// | nvidia/riva-translate-4b-instruct-v2 | — | — | translation |
+/// | nvidia/llama-3.1-nemotron-safety-guard-8b-v3 | — | — | safety classifier |
+/// | nvidia/nemotron-3.5-content-safety | — | — | safety classifier |
 ///
 /// Get API key: https://build.nvidia.com/settings/api-keys
 use base64::Engine as _;
@@ -27,8 +36,8 @@ use reqwest::Client;
 const NVIDIA_NIM_ENDPOINT: &str = "https://integrate.api.nvidia.com/v1/chat/completions";
 const NVIDIA_FLUX_IMAGE_ENDPOINT: &str =
     "https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux.1-dev";
-const NVIDIA_DEFAULT_MODEL: &str = "meta/llama-3.3-70b-instruct";
-const NVIDIA_DEFAULT_VISION_MODEL: &str = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning";
+const NVIDIA_DEFAULT_MODEL: &str = "nvidia/nemotron-3-ultra-550b-a55b";
+const NVIDIA_DEFAULT_VISION_MODEL: &str = "nvidia/nemotron-3.5-super-vl-120b-a12b";
 
 /// Generate an image with FLUX.1-dev via NVIDIA's hosted NIM API (free tier).
 /// Returns decoded image bytes (JPEG, 1024x1024). Verified working Aug 22 2026
@@ -120,7 +129,12 @@ pub struct NimModelInfo {
 }
 
 pub const NIM_MODELS: &[NimModelInfo] = &[
-    // Tool-calling text models
+    // Verified serving on the production key 2026-10-20 (all tool-capable).
+    NimModelInfo { id: "nvidia/nemotron-3-ultra-550b-a55b", name: "Nemotron 3 Ultra 550B", capabilities: NimCapabilities::text_tools() },
+    NimModelInfo { id: "nvidia/nemotron-3.5-super-vl-120b-a12b", name: "Nemotron 3.5 Super VL 120B", capabilities: NimCapabilities::text_vision() },
+    NimModelInfo { id: "nvidia/nemotron-3.5-lightning-30b-a3b", name: "Nemotron 3.5 Lightning 30B", capabilities: NimCapabilities::text_tools() },
+    NimModelInfo { id: "openai/gpt-oss-20b", name: "GPT-OSS 20B", capabilities: NimCapabilities::text_tools() },
+    // Tool-calling text models (entitlement not guaranteed per account)
     NimModelInfo { id: "google/gemma-4-31b-it", name: "Gemma 4 31B", capabilities: NimCapabilities::text_tools() },
     NimModelInfo { id: "nvidia/nemotron-3-super-120b-a12b", name: "Nemotron 3 Super 120B", capabilities: NimCapabilities::text_tools() },
     NimModelInfo { id: "meta/llama-3.3-70b-instruct", name: "Llama 3.3 70B", capabilities: NimCapabilities::text_tools() },

@@ -1086,8 +1086,48 @@ IMPORTANT: For fetching website content, use `browserbase_crawl_website(url)` �
             // Per-run budget & cost ledger (enforced at turn boundaries).
             let mut ledger = RunLedger::default();
 
-            // 1. Try Qwen (qwen3.7-plus via DashScope) — DEFAULT FIRST ATTEMPT
-            //    Ollama is retired (Sep 2026); Qwen replaces it as the primary path.
+            // 1. Try NVIDIA NIM — DEFAULT FIRST ATTEMPT (owner directive Oct 20
+            //    2026). The free NIM endpoints are the only working provider on
+            //    this account: DeepSeek returns 402, Qwen is in arrearage, and
+            //    Gemini is capped at 5 req/min on the free tier.
+            if let Some(ref nim) = self.nvidia_nim_client {
+                let mut nim_messages = build_messages(&system_instruction);
+                // Continue the in-flight turn if a checkpoint exists instead of
+                // re-planning from scratch (crash/timeout recovery).
+                if let Some(saved) =
+                    resume_checkpoint_messages(&app_state, workflow_id, "NVIDIA NIM").await
+                {
+                    send_progress("♻️ Resuming from previous progress...");
+                    nim_messages = saved;
+                }
+                send_progress("🤖 Processing your request...");
+                match run_nvidia_tool_loop(
+                    nim,
+                    &mut nim_messages,
+                    &mut all_tools,
+                    &exec_context,
+                    &send_progress,
+                    &mut ledger,
+                )
+                .await
+                {
+                    Ok(response) => {
+                        let clean = response.trim().to_string();
+                        let msg = ConversationMessage::new_assistant(
+                            session_id.to_string(),
+                            clean.clone(),
+                        );
+                        let _ = conversation_manager.save_message(&msg).await;
+                        tracing::info!("✅ NVIDIA NIM completed task for session {}", session_id);
+                        return Ok(clean);
+                    }
+                    Err(nim_err) => {
+                        tracing::warn!("⚠️ NVIDIA NIM failed, trying Qwen: {}", nim_err);
+                    }
+                }
+            }
+
+            // 2. Try Qwen (qwen3.7-plus via DashScope) — secondary
             if let Some(qwen) = app_state.qwen_client.as_ref() {
                 let mut qa_messages = build_messages(&system_instruction);
                 // Durable resume: pick up from the last completed turn if a
@@ -1126,44 +1166,7 @@ IMPORTANT: For fetching website content, use `browserbase_crawl_website(url)` �
                         return Ok(clean);
                     }
                     Err(qwen_err) => {
-                        tracing::warn!("⚠️ Qwen failed, trying NVIDIA NIM: {}", qwen_err);
-                    }
-                }
-            }
-
-            // 2. Try NVIDIA NIM (cloud fallback, 40 RPM free tier)
-            if let Some(ref nim) = self.nvidia_nim_client {
-                let mut nim_messages = build_messages(&system_instruction);
-                // Same OpenAI message format as Qwen — continue the in-flight
-                // turn if Qwen failed mid-run instead of re-planning.
-                if let Some(saved) =
-                    resume_checkpoint_messages(&app_state, workflow_id, "NVIDIA NIM fallback").await
-                {
-                    send_progress("♻️ Resuming from previous progress...");
-                    nim_messages = saved;
-                }
-                match run_nvidia_tool_loop(
-                    nim,
-                    &mut nim_messages,
-                    &mut all_tools,
-                    &exec_context,
-                    &send_progress,
-                    &mut ledger,
-                )
-                .await
-                {
-                    Ok(response) => {
-                        let clean = response.trim().to_string();
-                        let msg = ConversationMessage::new_assistant(
-                            session_id.to_string(),
-                            clean.clone(),
-                        );
-                        let _ = conversation_manager.save_message(&msg).await;
-                        tracing::info!("✅ NVIDIA NIM completed task for session {}", session_id);
-                        return Ok(clean);
-                    }
-                    Err(nim_err) => {
-                        tracing::warn!("⚠️ NVIDIA NIM failed, trying Gemini: {}", nim_err);
+                        tracing::warn!("⚠️ Qwen failed, trying Gemini: {}", qwen_err);
                     }
                 }
             }

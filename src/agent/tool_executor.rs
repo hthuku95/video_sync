@@ -1015,39 +1015,36 @@ async fn analyze_image_gemini_nim_fallback(
     prompt: &str,
     nim_vision: Option<&crate::nvidia_nim_client::NvidiaNimClient>,
 ) -> String {
-    // Try Gemini first
-    if let Ok(api_key) = std::env::var("GEMINI_API_KEY") {
-        if !api_key.is_empty() {
-            let client = crate::gemini_client::GeminiClient::new(api_key);
-            match client.analyze_image_bytes(image_bytes, prompt).await {
+    // NVIDIA NIM vision is the default (owner directive Oct 20 2026): the free
+    // NIM endpoints work, while Gemini is capped at 5 requests/minute and 429s
+    // under any real agent load.
+    if let Some(nim) = nim_vision {
+        match nim.analyze_image_bytes(image_bytes, prompt).await {
+            Ok(text) => return text,
+            Err(e) => tracing::warn!("NIM vision failed, trying Gemini: {}", e),
+        }
+    } else if let Ok(nim_key) = std::env::var("NVIDIA_API_KEY") {
+        if !nim_key.trim().is_empty() {
+            let nim = crate::nvidia_nim_client::NvidiaNimClient::new_vision(nim_key);
+            match nim.analyze_image_bytes(image_bytes, prompt).await {
                 Ok(text) => return text,
-                Err(e) => {
-                    let err_str = e.to_string().to_lowercase();
-                    if err_str.contains("503") || err_str.contains("unavailable") || err_str.contains("500") {
-                        tracing::warn!("Gemini vision unavailable, trying NIM vision: {}", e);
-                    } else {
-                        return format!("❌ Image analysis failed: {}", e);
-                    }
-                }
+                Err(e) => tracing::warn!("NIM vision failed, trying Gemini: {}", e),
             }
         }
     }
 
-    // Fallback to NIM vision
-    if let Some(nim) = nim_vision {
-        match nim.analyze_image_bytes(image_bytes, prompt).await {
-            Ok(text) => text,
-            Err(e) => format!("❌ Gemini + NIM vision both failed: {}", e),
+    // Fallback: Gemini vision (quota-walled, last resort)
+    if let Ok(api_key) = std::env::var("GEMINI_API_KEY") {
+        if !api_key.is_empty() {
+            let client = crate::gemini_client::GeminiClient::new(api_key);
+            return match client.analyze_image_bytes(image_bytes, prompt).await {
+                Ok(text) => text,
+                Err(e) => format!("❌ NIM + Gemini vision both failed: {}", e),
+            };
         }
-    } else if let Ok(nim_key) = std::env::var("NVIDIA_API_KEY") {
-        let nim = crate::nvidia_nim_client::NvidiaNimClient::new_vision(nim_key);
-        match nim.analyze_image_bytes(image_bytes, prompt).await {
-            Ok(text) => text,
-            Err(e) => format!("❌ Gemini + NIM vision both failed: {}", e),
-        }
-    } else {
-        "❌ No vision provider available (Gemini unavailable, NIM not configured)".to_string()
     }
+
+    "❌ No vision provider available (NIM and Gemini unavailable)".to_string()
 }
 
 async fn execute_tool_gemini_with_context_inner(

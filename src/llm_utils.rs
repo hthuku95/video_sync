@@ -1,12 +1,13 @@
 /// LLM utility functions — multi-provider text generation with automatic fallback.
 ///
-/// Priority order for ALL text tasks (§52, Sep 8 2026 — Qwen is the DEFAULT,
-/// Ollama retired):
-///   1. Qwen (qwen3.7-plus via DashScope compatible-mode — multimodal, default)
-///   2. DeepSeek V4 (OpenAI-compatible, 1M context — cheapest cloud fallback)
-///   3. Gemini (last-resort fallback, quota-limited)
+/// Priority order for ALL text tasks (owner directive Oct 20 2026 — NVIDIA NIM
+/// is the DEFAULT; Qwen/DeepSeek are unpaid, Gemini is quota-walled):
+///   1. NVIDIA NIM (free endpoints, tool calling — the only provider that works)
+///   2. Qwen (qwen3.7-plus via DashScope — currently in arrearage)
+///   3. DeepSeek V4 (currently 402 Insufficient Balance)
+///   4. Gemini / Gemma (free tier: 5 requests/minute, last resort)
 ///
-/// ⚠️ Qwen MUST be the first attempt for EVERY LLM call (owner directive §52.2).
+/// ⚠️ NIM MUST be the first attempt for EVERY LLM call.
 ///    No text-only models are permitted. Ollama (gemma4:12b) is RETIRED — it
 ///    does not run on the Alibaba Cloud box, do not re-enable.
 use crate::deepseek_client::DeepSeekClient;
@@ -46,7 +47,12 @@ macro_rules! try_provider {
     }};
 }
 
-/// Fast text generation — tries Qwen (qwen3.7-plus) first, then DeepSeek, then Gemini.
+/// Fast text generation — tries NVIDIA NIM first, then Qwen, then DeepSeek,
+/// then Gemini.
+///
+/// NIM is built from `NVIDIA_API_KEY` here rather than threaded through the
+/// signature so the 21 existing call sites (twitch_mapper, kick_mapper,
+/// campaign_engine, skills) get the working provider without churn.
 /// Use for bulk/scoring tasks where speed matters.
 pub async fn generate_text_fast(
     qwen: Option<&QwenClient>,
@@ -54,6 +60,12 @@ pub async fn generate_text_fast(
     gemini: Option<&GeminiClient>,
     prompt: &str,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    let nim = std::env::var("NVIDIA_API_KEY")
+        .ok()
+        .filter(|k| !k.trim().is_empty())
+        .map(NvidiaNimClient::new);
+
+    try_provider!(nim.as_ref(), prompt, "NVIDIA NIM (fast path)", "trying Qwen");
     try_provider!(qwen, prompt, "Qwen (qwen3.7-plus, fast path)", "trying DeepSeek");
     try_provider!(deepseek, prompt, "DeepSeek V4 (fast path)", "trying Gemini");
     try_provider!(gemini, prompt, "Gemini Flash (fast path)", "no more fallbacks");
@@ -64,7 +76,7 @@ pub async fn generate_text_fast(
 /// Generate text using the best available LLM, with automatic fallback.
 ///
 /// Use this for all text-only tasks (DM scripts, prospect scoring, outreach messages,
-/// code generation) to avoid hitting Gemini Flash quota limits.
+/// code generation). NVIDIA NIM is the default and only working provider.
 /// Do NOT use this for video analysis — call GeminiClient::analyze_video_from_url directly.
 pub async fn generate_text_best_effort(
     qwen: Option<&QwenClient>,
@@ -74,8 +86,8 @@ pub async fn generate_text_best_effort(
     deepseek: Option<&DeepSeekClient>,
     prompt: &str,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-    try_provider!(qwen, prompt, "Qwen (qwen3.7-plus)", "trying NVIDIA NIM fallback");
-    try_provider!(nvidia, prompt, "NVIDIA NIM (Gemma 4)", "trying Gemma via AI Studio fallback");
+    try_provider!(nvidia, prompt, "NVIDIA NIM", "trying Qwen fallback");
+    try_provider!(qwen, prompt, "Qwen (qwen3.7-plus)", "trying Gemma via AI Studio fallback");
     try_provider!(gemma, prompt, "Gemma 4 (Google AI Studio)", "trying Gemini Flash fallback");
     try_provider!(gemini, prompt, "Gemini Flash", "trying DeepSeek fallback");
     try_provider!(deepseek, prompt, "DeepSeek V4", "no more fallbacks");
@@ -107,8 +119,8 @@ pub async fn generate_video_script_best_effort(
         .filter(|k| !k.trim().is_empty())
         .map(DeepSeekClient::new);
 
-    try_provider!(qwen.as_ref(), prompt, "Qwen (script)", "trying NVIDIA NIM");
-    try_provider!(nvidia.as_ref(), prompt, "NVIDIA NIM (script)", "trying DeepSeek");
+    try_provider!(nvidia.as_ref(), prompt, "NVIDIA NIM (script)", "trying Qwen");
+    try_provider!(qwen.as_ref(), prompt, "Qwen (script)", "trying DeepSeek");
     try_provider!(
         deepseek.as_ref(),
         prompt,
