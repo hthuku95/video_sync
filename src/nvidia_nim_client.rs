@@ -33,6 +33,29 @@
 use base64::Engine as _;
 use reqwest::Client;
 
+/// Process-wide cap on concurrent NIM chat requests.
+///
+/// The free tier returns 429 as soon as a few long-running completions overlap
+/// (three ECS tasks × one delivery each is already enough). Serialising within
+/// each process is the cheapest way to stay inside the account's concurrency
+/// budget. The permit is held only for the HTTP request itself, never across a
+/// backoff sleep, so a retry cannot deadlock the queue.
+fn nim_gate() -> &'static tokio::sync::Semaphore {
+    static GATE: std::sync::OnceLock<tokio::sync::Semaphore> = std::sync::OnceLock::new();
+    GATE.get_or_init(|| {
+        let permits = std::env::var("NIM_MAX_CONCURRENT")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .filter(|n| *n > 0)
+            .unwrap_or(1);
+        tracing::info!(
+            "NVIDIA NIM concurrency gate initialised: {} request(s) at a time",
+            permits
+        );
+        tokio::sync::Semaphore::new(permits)
+    })
+}
+
 const NVIDIA_NIM_ENDPOINT: &str = "https://integrate.api.nvidia.com/v1/chat/completions";
 const NVIDIA_FLUX_IMAGE_ENDPOINT: &str =
     "https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux.1-dev";
@@ -285,20 +308,25 @@ impl NvidiaNimClient {
             "temperature": 0.1,
         });
 
-        let max_attempts = 3u32;
+        let max_attempts = 5u32;
         let mut last_err: Box<dyn std::error::Error + Send + Sync> =
             "NVIDIA NIM: no attempts made".into();
 
         for attempt in 0..max_attempts {
-            let resp = match self
-                .client
-                .post(NVIDIA_NIM_ENDPOINT)
-                .header("Authorization", format!("Bearer {}", self.api_key))
-                .header("Content-Type", "application/json")
-                .json(&body)
-                .send()
-                .await
-            {
+            let send_result = {
+                let _permit = match nim_gate().acquire().await {
+                    Ok(p) => p,
+                    Err(e) => return Err(format!("NVIDIA NIM gate closed: {e}").into()),
+                };
+                self.client
+                    .post(NVIDIA_NIM_ENDPOINT)
+                    .header("Authorization", format!("Bearer {}", self.api_key))
+                    .header("Content-Type", "application/json")
+                    .json(&body)
+                    .send()
+                    .await
+            };
+            let resp = match send_result {
                 Ok(r) => r,
                 Err(e) => {
                     let is_last = attempt == max_attempts - 1;
@@ -336,13 +364,25 @@ impl NvidiaNimClient {
                 return Ok(text);
             }
 
+            let retry_after = resp
+                .headers()
+                .get("retry-after")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.trim().parse::<u64>().ok());
             let err_body = resp.text().await.unwrap_or_default();
 
             if status.as_u16() == 429 && attempt < max_attempts - 1 {
-                let wait = 2u64;
+                // 2s was too short: the free tier needs the previous long
+                // completion to drain before it admits another one.
+                let wait = retry_after.unwrap_or_else(|| {
+                    [5u64, 10, 20, 30]
+                        .get(attempt as usize)
+                        .copied()
+                        .unwrap_or(30)
+                });
                 tracing::warn!(
-                    "⏳ NVIDIA NIM 429 (attempt {}/{}). Waiting {wait}s…",
-                    attempt + 1, max_attempts
+                    "⏳ NVIDIA NIM 429 (attempt {}/{}). Waiting {}s…",
+                    attempt + 1, max_attempts, wait
                 );
                 tokio::time::sleep(tokio::time::Duration::from_secs(wait)).await;
                 last_err = format!("NVIDIA NIM 429: {}", err_body).into();
@@ -375,14 +415,20 @@ impl NvidiaNimClient {
             "temperature": 0.3,
         });
 
-        let resp = self
-            .client
-            .post(NVIDIA_NIM_ENDPOINT)
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .header("Content-Type", "application/json")
-            .json(&body)
-            .send()
-            .await?;
+        let send_result = {
+            let _permit = match nim_gate().acquire().await {
+                Ok(p) => p,
+                Err(e) => return Err(format!("NVIDIA NIM gate closed: {e}").into()),
+            };
+            self.client
+                .post(NVIDIA_NIM_ENDPOINT)
+                .header("Authorization", format!("Bearer {}", self.api_key))
+                .header("Content-Type", "application/json")
+                .json(&body)
+                .send()
+                .await
+        };
+        let resp = send_result?;
 
         let status = resp.status();
         if !status.is_success() {
@@ -425,14 +471,20 @@ impl NvidiaNimClient {
             "temperature": 0.2,
         });
 
-        let resp = self
-            .client
-            .post(NVIDIA_NIM_ENDPOINT)
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .header("Content-Type", "application/json")
-            .json(&body)
-            .send()
-            .await?;
+        let send_result = {
+            let _permit = match nim_gate().acquire().await {
+                Ok(p) => p,
+                Err(e) => return Err(format!("NVIDIA NIM gate closed: {e}").into()),
+            };
+            self.client
+                .post(NVIDIA_NIM_ENDPOINT)
+                .header("Authorization", format!("Bearer {}", self.api_key))
+                .header("Content-Type", "application/json")
+                .json(&body)
+                .send()
+                .await
+        };
+        let resp = send_result?;
 
         let status = resp.status();
         if !status.is_success() {
@@ -520,20 +572,25 @@ impl NvidiaNimClient {
             "temperature": 0.5,
         });
 
-        let max_attempts = 3u32;
+        let max_attempts = 5u32;
         let mut last_err: Box<dyn std::error::Error + Send + Sync> =
             "NVIDIA NIM: no attempts made".into();
 
         for attempt in 0..max_attempts {
-            let resp = match self
-                .client
-                .post(NVIDIA_NIM_ENDPOINT)
-                .header("Authorization", format!("Bearer {}", self.api_key))
-                .header("Content-Type", "application/json")
-                .json(&body)
-                .send()
-                .await
-            {
+            let send_result = {
+                let _permit = match nim_gate().acquire().await {
+                    Ok(p) => p,
+                    Err(e) => return Err(format!("NVIDIA NIM gate closed: {e}").into()),
+                };
+                self.client
+                    .post(NVIDIA_NIM_ENDPOINT)
+                    .header("Authorization", format!("Bearer {}", self.api_key))
+                    .header("Content-Type", "application/json")
+                    .json(&body)
+                    .send()
+                    .await
+            };
+            let resp = match send_result {
                 Ok(r) => r,
                 Err(e) => {
                     let is_last = attempt == max_attempts - 1;
@@ -630,14 +687,25 @@ impl NvidiaNimClient {
                 return Ok((NimResponse::Text(text), usage));
             }
 
+            let retry_after = resp
+                .headers()
+                .get("retry-after")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.trim().parse::<u64>().ok());
             let err_body = resp.text().await.unwrap_or_default();
 
             if status.as_u16() == 429 && attempt < max_attempts - 1 {
+                let wait = retry_after.unwrap_or_else(|| {
+                    [5u64, 10, 20, 30]
+                        .get(attempt as usize)
+                        .copied()
+                        .unwrap_or(30)
+                });
                 tracing::warn!(
-                    "⏳ NVIDIA NIM tool call 429 (attempt {}/{}). Waiting 15s…",
-                    attempt + 1, max_attempts
+                    "⏳ NVIDIA NIM tool call 429 (attempt {}/{}). Waiting {}s…",
+                    attempt + 1, max_attempts, wait
                 );
-                tokio::time::sleep(tokio::time::Duration::from_secs(15)).await;
+                tokio::time::sleep(tokio::time::Duration::from_secs(wait)).await;
                 last_err = format!("NVIDIA NIM 429: {}", err_body).into();
                 continue;
             }
