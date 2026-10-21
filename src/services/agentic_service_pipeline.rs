@@ -528,7 +528,43 @@ impl AgenticServicePipeline {
                 .await;
             // Dropping progress_tx closes the channel, stopping progress_task
 
-            let produced = locate_output_from_result(&agent_result, &output_dir);
+            let produced = match locate_output_from_result(&agent_result, &output_dir) {
+                Some(loc) => Some(loc),
+                None => {
+                    // The agent does not always restate the artifact URL in its
+                    // final prose (it can simply say "uploaded"). Every upload
+                    // is registered against the workflow, so fall back to the
+                    // newest artifact instead of declaring the attempt empty
+                    // after it actually produced and uploaded the file.
+                    let wanted_kind = if service_type == ServiceType::Thumbnails {
+                        "image"
+                    } else {
+                        "video"
+                    };
+                    let recovered: Option<String> = sqlx::query_scalar(
+                        "SELECT public_url FROM generated_artifacts \
+                          WHERE workflow_id = $1 AND kind = $2 AND public_url IS NOT NULL \
+                            AND COALESCE(bytes, 0) >= 50000 \
+                          ORDER BY created_at DESC LIMIT 1",
+                    )
+                    .bind(workflow_id)
+                    .bind(wanted_kind)
+                    .fetch_optional(&state.db_pool)
+                    .await
+                    .ok()
+                    .flatten();
+
+                    if let Some(url) = &recovered {
+                        tracing::info!(
+                            "📍 Output located from artifact registry (agent did not restate it): {url}"
+                        );
+                    }
+                    recovered.map(|canonical| LocatedOutput {
+                        canonical,
+                        review_path: None,
+                    })
+                }
+            };
             retries_used = attempt as i32;
             // Evidence capture for terminal diagnosability.
             last_attempt_tail = match &agent_result {
