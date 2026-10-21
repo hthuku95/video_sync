@@ -1,0 +1,12 @@
+-- Driver ownership for portfolio test runs.
+--
+-- The reconciler resumes a run whose heartbeat is older than 120s. Under Neon
+-- connection hiccups the heartbeat can miss that window while the original
+-- driver is still alive, and then two drivers advance the same run: on
+-- 2026-10-20 a live run was resumed four times and ran Education twice (one
+-- row passed, one was swept as "interrupted before completion").
+--
+-- A token makes ownership explicit: a driver claims it, the heartbeat renews it
+-- only while it still owns the token, and every long loop re-checks it. A
+-- duplicate spawn finds the token held and exits instead of rendering.
+ALTER TABLE test_runs ADD COLUMN IF NOT EXISTS driver_token UUID;

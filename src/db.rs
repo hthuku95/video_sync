@@ -76,6 +76,9 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     // embed all current migration files.
     // Last touched: 2026-10-20 to force sqlx::migrate!() to re-embed the
     // current migration set, including:
+    //   20261021090000 — test_run_driver_token (a driver claims the run; a
+    //                    false "stale" resume finds the token held and exits
+    //                    instead of rendering the same scenario twice)
     //   20261020160000 — nim_rate_limit (one row holding the next allowed NIM
     //                    request time, so the three Fargate replicas pace the
     //                    free tier together instead of bursting into 429s)

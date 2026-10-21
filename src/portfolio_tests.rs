@@ -18,7 +18,10 @@ const RUN_HEARTBEAT_SECS: u64 = 20;
 /// A running run whose heartbeat is older than this has no live driver.
 /// Comfortably larger than RUN_HEARTBEAT_SECS so a busy replica is never
 /// mistaken for a dead one, and small enough that a deploy resumes promptly.
-const RUN_STALE_AFTER_SECS: i64 = 120;
+/// Neon occasionally drops several writes in a row (SSL EOF under load), and a
+/// false resume is expensive: it re-renders and double-counts. Five minutes
+/// still recovers a genuinely dead driver quickly.
+const RUN_STALE_AFTER_SECS: i64 = 300;
 
 /// How often every replica looks for orphaned runs.
 const RUN_RECONCILE_SECS: u64 = 60;
@@ -152,9 +155,19 @@ impl PortfolioTestRunner {
     }
 
     async fn run_all(&self, run_id: Uuid, resume: bool) {
+        // Ownership first. The reconciler resumes on a stale heartbeat, and a
+        // false positive used to start a second driver for a live run.
+        let Some(token) = self.claim_driver(run_id).await else {
+            tracing::warn!(
+                "⏹️ Test run {} already has a live driver — duplicate spawn exiting",
+                run_id
+            );
+            return;
+        };
+
         // Liveness: this task is the only thing that can drive the run. If it
         // dies the timestamp stops advancing and another replica takes over.
-        let _heartbeat = self.start_heartbeat(run_id);
+        let _heartbeat = self.start_heartbeat(run_id, token);
 
         // Service switch (owner directive Sep 2026): only run scenarios for
         // enabled services. Disabled-service scenarios are skipped, not failed.
@@ -238,6 +251,14 @@ impl PortfolioTestRunner {
                 );
                 break;
             }
+            if !self.owns_run(run_id, token).await {
+                tracing::warn!(
+                    "⏹️ Test run {} — driver ownership moved, stopping before '{}'",
+                    run_id,
+                    scenario.slug
+                );
+                break;
+            }
             if terminal.contains(scenario.slug) {
                 tracing::info!(
                     "⏭️ Test run {}: '{}' already finished — not re-rendering",
@@ -254,13 +275,19 @@ impl PortfolioTestRunner {
                     result_id,
                     delivery_id
                 );
-                self.execute_and_record(run_id, scenario, result_id, delivery_id)
+                self.execute_and_record(run_id, scenario, result_id, delivery_id, token)
                     .await;
             } else {
-                self.run_one(run_id, scenario).await;
+                self.run_one(run_id, scenario, token).await;
             }
             // Brief pause between scenarios
             tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+        }
+
+        // A superseded driver must not sweep or close a run that the new owner
+        // is still driving.
+        if !self.owns_run(run_id, token).await {
+            return;
         }
 
         // Defensive: nothing may be left 'running' once the driver is done.
@@ -281,9 +308,10 @@ impl PortfolioTestRunner {
              SET status = CASE WHEN failed_tests = 0 THEN 'completed' ELSE 'completed_with_failures' END, \
                  completed_at = NOW(), \
                  heartbeat_at = NULL \
-             WHERE id = $1 AND status = 'running'",
+             WHERE id = $1 AND status = 'running' AND driver_token = $2",
         )
         .bind(run_id)
+        .bind(token)
         .execute(&self.app_state.db_pool)
         .await;
 
@@ -291,23 +319,77 @@ impl PortfolioTestRunner {
     }
 
     /// Ping `heartbeat_at` until dropped. Guarded so a panic aborts it too.
-    fn start_heartbeat(&self, run_id: Uuid) -> HeartbeatGuard {
+    fn start_heartbeat(&self, run_id: Uuid, token: Uuid) -> HeartbeatGuard {
         let pool = self.app_state.db_pool.clone();
         let handle = tokio::spawn(async move {
             let mut tick = tokio::time::interval(std::time::Duration::from_secs(RUN_HEARTBEAT_SECS));
             tick.tick().await; // immediate first tick
             loop {
                 tick.tick().await;
-                let _ = sqlx::query(
-                    "UPDATE test_runs SET heartbeat_at = NOW() \
-                     WHERE id = $1 AND status = 'running'",
-                )
-                .bind(run_id)
-                .execute(&pool)
-                .await;
+                // Retry a dropped write instead of waiting a whole tick: Neon
+                // drops the occasional connection (SSL EOF) and a missed
+                // heartbeat is what makes a live run look orphaned.
+                for attempt in 0..3 {
+                    let res = sqlx::query(
+                        "UPDATE test_runs SET heartbeat_at = NOW() \
+                         WHERE id = $1 AND status = 'running' AND driver_token = $2",
+                    )
+                    .bind(run_id)
+                    .bind(token)
+                    .execute(&pool)
+                    .await;
+                    if res.is_ok() {
+                        break;
+                    }
+                    if attempt == 2 {
+                        tracing::warn!("Test run {run_id}: heartbeat write failed after 3 tries");
+                    } else {
+                        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    }
+                }
             }
         });
         HeartbeatGuard(handle)
+    }
+
+    /// Claim driver ownership for this run.
+    ///
+    /// Returns None when another driver holds a fresh heartbeat — a duplicate
+    /// spawn after a false "stale" resume. Rendering the same scenario twice
+    /// burns tokens and double-counts the report.
+    async fn claim_driver(&self, run_id: Uuid) -> Option<Uuid> {
+        let token = Uuid::new_v4();
+        sqlx::query_scalar::<_, Uuid>(
+            "UPDATE test_runs SET driver_token = $2, heartbeat_at = NOW() \
+              WHERE id = $1 AND status = 'running' \
+                AND (driver_token IS NULL \
+                     OR heartbeat_at IS NULL \
+                     OR heartbeat_at < NOW() - make_interval(secs => $3)) \
+             RETURNING id",
+        )
+        .bind(run_id)
+        .bind(token)
+        .bind(RUN_STALE_AFTER_SECS as f64)
+        .fetch_optional(&self.app_state.db_pool)
+        .await
+        .ok()
+        .flatten()
+        .map(|_| token)
+    }
+
+    /// Does this driver still own the run? A DB hiccup answers "yes": a
+    /// transient error must never make the legitimate driver abandon its work.
+    async fn owns_run(&self, run_id: Uuid, token: Uuid) -> bool {
+        sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(SELECT 1 FROM test_runs WHERE id = $1 AND driver_token = $2)",
+        )
+        .bind(run_id)
+        .bind(token)
+        .fetch_optional(&self.app_state.db_pool)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or(true)
     }
 
     /// Counters are derived from the result rows, never incremented, so a
@@ -379,7 +461,7 @@ impl PortfolioTestRunner {
         .await;
     }
 
-    async fn run_one(&self, run_id: Uuid, scenario: &DfyScenario) {
+    async fn run_one(&self, run_id: Uuid, scenario: &DfyScenario, token: Uuid) {
         tracing::info!("▶ Managed Campaign test: {}", scenario.name);
 
         let result_id = match sqlx::query(
@@ -400,7 +482,8 @@ impl PortfolioTestRunner {
             }
         };
 
-        self.execute_and_record(run_id, scenario, result_id, None).await;
+        self.execute_and_record(run_id, scenario, result_id, None, token)
+            .await;
     }
 
     /// Execute (or reattach) one scenario and record the outcome on an existing
@@ -411,6 +494,7 @@ impl PortfolioTestRunner {
         scenario: &DfyScenario,
         result_id: Uuid,
         delivery_id: Option<Uuid>,
+        token: Uuid,
     ) {
         let plan = match delivery_id {
             Some(id) => self.load_delivery_plan(scenario, id).await,
@@ -435,7 +519,7 @@ impl PortfolioTestRunner {
             .execute(&self.app_state.db_pool)
             .await;
 
-        match self.drive_delivery(run_id, scenario, &plan).await {
+        match self.drive_delivery(run_id, scenario, &plan, token).await {
             Ok((r2_url, filename)) => {
                 let review = self.review(&r2_url, scenario).await;
 
@@ -464,6 +548,9 @@ impl PortfolioTestRunner {
                 .await;
 
                 tracing::info!("✅ '{}' passed — score {}/10", scenario.name, review.score);
+            }
+            Err(e) if e.starts_with("DRIVER_SUPERSEDED") => {
+                tracing::warn!("↪️ '{}' handed over to the new driver: {e}", scenario.name);
             }
             Err(e) => {
                 tracing::error!("❌ '{}' failed: {e}", scenario.name);
@@ -589,6 +676,7 @@ impl PortfolioTestRunner {
         run_id: Uuid,
         scenario: &DfyScenario,
         plan: &DeliveryPlan,
+        token: Uuid,
     ) -> Result<(String, String), String> {
         let delivery_id = plan.delivery_id;
 
@@ -633,6 +721,9 @@ impl PortfolioTestRunner {
             if self.run_cancelled(run_id).await {
                 self.cancel_delivery(delivery_id).await;
                 return Err("RUN_CANCELLED: test run was cancelled".to_string());
+            }
+            if !self.owns_run(run_id, token).await {
+                return Err("DRIVER_SUPERSEDED: another driver took over this run".to_string());
             }
             let row = sqlx::query(
                 "SELECT status, output_r2_url, error_message FROM deliveries WHERE id = $1",
