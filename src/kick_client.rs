@@ -73,15 +73,26 @@ pub struct KickLivestream {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KickVideo {
-    pub uuid: String,
+    /// Only some API responses carry a top-level uuid; the identifier usually
+    /// lives in the nested `video` object.
+    #[serde(default)]
+    pub uuid: Option<String>,
+    #[serde(default)]
+    pub video: Option<KickVideoInner>,
     #[serde(default)]
     pub session_title: Option<String>,
     #[serde(default)]
     pub is_live: Option<bool>,
+    /// Milliseconds.
     #[serde(default)]
     pub duration: Option<i64>,
     #[serde(default)]
     pub created_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KickVideoInner {
+    pub uuid: String,
 }
 
 impl KickClient {
@@ -121,13 +132,34 @@ impl KickClient {
         serde_json::from_value(items).map_err(|e| format!("Kick videos decode failed: {e}"))
     }
 
-    /// Newest finished VOD as a durable page URL, if the channel has one.
+    /// Best finished VOD as a durable page URL, if the channel has one.
+    ///
+    /// Kick VOD pages are addressed by uuid (`kick.com/{slug}/videos/{uuid}`);
+    /// the human-readable slug is read as a live channel by yt-dlp. Prefer a
+    /// session long enough to clip but short enough to download in one pass —
+    /// these channels routinely archive 9-hour streams.
     pub async fn latest_vod_url(&self, slug: &str) -> Result<Option<String>, String> {
         let videos = self.get_recent_videos(slug).await?;
-        Ok(videos
-            .into_iter()
-            .find(|v| v.is_live != Some(true) && !v.uuid.trim().is_empty())
-            .map(|v| format!("https://kick.com/{slug}/videos/{}", v.uuid)))
+        let candidate = videos
+            .iter()
+            .filter(|v| v.is_live != Some(true))
+            .filter_map(|v| {
+                let uuid = v
+                    .uuid
+                    .clone()
+                    .or_else(|| v.video.as_ref().map(|inner| inner.uuid.clone()))?;
+                if uuid.trim().is_empty() {
+                    return None;
+                }
+                let minutes = v.duration.map(|ms| ms / 60_000).unwrap_or(0);
+                Some((minutes, uuid))
+            })
+            .min_by_key(|(minutes, _)| {
+                let preferred = (10..=240).contains(minutes);
+                (if preferred { 0 } else { 1 }, *minutes)
+            });
+
+        Ok(candidate.map(|(_, uuid)| format!("https://kick.com/{slug}/videos/{uuid}")))
     }
     pub fn new(client_id: String, client_secret: String) -> Self {
         Self {
