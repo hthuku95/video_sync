@@ -296,8 +296,19 @@ pub async fn resolve_service_source_url(
         .flatten();
 
     if let Some((url, true)) = &cached {
-        tracing::debug!("♻️ Reusing cached {} source for '{}': {}", platform, slug, url);
-        return Some(url.clone());
+        // A signed live manifest is not a reusable fixture: it stops
+        // downloading within hours, and a two-day-old Kick HLS entry failed
+        // every clipping attempt on 2026-10-20. Rediscover instead.
+        if !url.trim().is_empty() && !url.to_ascii_lowercase().contains(".m3u8") {
+            tracing::debug!("♻️ Reusing cached {} source for '{}': {}", platform, slug, url);
+            return Some(url.clone());
+        }
+        tracing::warn!(
+            "Discarding cached {} source for '{}' — expiring manifest: {}",
+            platform,
+            slug,
+            url
+        );
     }
 
     // 2) Discover a fresh source.
@@ -401,11 +412,18 @@ async fn discover_kick_source(state: &std::sync::Arc<crate::AppState>) -> Option
         if stream.slug.trim().is_empty() {
             continue;
         }
-        let channel_url = format!("https://kick.com/{}", stream.slug);
-        match crate::services::campaign_engine::resolve_latest_video_url(state, &channel_url).await {
-            Ok(url) if url != channel_url => return Some(url),
-            Ok(_) => {}
-            Err(e) => tracing::warn!("Kick discovery: resolve failed for {}: {e}", stream.slug),
+        // A VOD *page*, never a live HLS manifest: yt-dlp takes the page, and
+        // the page is what the source cache can safely reuse for days. Live
+        // playback manifests are signed and expire within hours.
+        match client.latest_vod_url(&stream.slug).await {
+            Ok(Some(url)) => {
+                tracing::info!("Kick discovery: '{}' -> {}", stream.slug, url);
+                return Some(url);
+            }
+            Ok(None) => {
+                tracing::debug!("Kick discovery: '{}' has no finished VOD yet", stream.slug)
+            }
+            Err(e) => tracing::warn!("Kick discovery: videos failed for {}: {e}", stream.slug),
         }
     }
     None

@@ -71,7 +71,64 @@ pub struct KickLivestream {
     pub custom_tags: Option<Vec<String>>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KickVideo {
+    pub uuid: String,
+    #[serde(default)]
+    pub session_title: Option<String>,
+    #[serde(default)]
+    pub is_live: Option<bool>,
+    #[serde(default)]
+    pub duration: Option<i64>,
+    #[serde(default)]
+    pub created_at: Option<String>,
+}
+
 impl KickClient {
+    /// Recent videos (VODs) for a channel, from Kick's public website API.
+    ///
+    /// The OAuth API (`api.kick.com/public/v1`) exposes live channels only.
+    /// Clipping needs a finished VOD, and the HLS playback URL that live
+    /// resolution returns is signed and expires within hours — a Kick source
+    /// cached on 16 Oct was dead by the 20th. VOD *pages*
+    /// (`kick.com/{slug}/videos/{uuid}`) stay valid, so discovery must return
+    /// those.
+    pub async fn get_recent_videos(&self, slug: &str) -> Result<Vec<KickVideo>, String> {
+        let url = format!("https://kick.com/api/v2/channels/{slug}/videos");
+        let resp = self
+            .client
+            .get(&url)
+            .header("Accept", "application/json")
+            .header(
+                "User-Agent",
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+            )
+            .send()
+            .await
+            .map_err(|e| format!("Kick videos request failed: {e}"))?;
+
+        if !resp.status().is_success() {
+            return Err(format!("Kick videos API returned {}", resp.status()));
+        }
+
+        // The endpoint answers with a bare array; older responses wrapped it in
+        // `{ "data": [...] }`. Accept both.
+        let value: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| format!("Kick videos parse failed: {e}"))?;
+        let items = value.get("data").cloned().unwrap_or(value);
+        serde_json::from_value(items).map_err(|e| format!("Kick videos decode failed: {e}"))
+    }
+
+    /// Newest finished VOD as a durable page URL, if the channel has one.
+    pub async fn latest_vod_url(&self, slug: &str) -> Result<Option<String>, String> {
+        let videos = self.get_recent_videos(slug).await?;
+        Ok(videos
+            .into_iter()
+            .find(|v| v.is_live != Some(true) && !v.uuid.trim().is_empty())
+            .map(|v| format!("https://kick.com/{slug}/videos/{}", v.uuid)))
+    }
     pub fn new(client_id: String, client_secret: String) -> Self {
         Self {
             client: reqwest::Client::new(),

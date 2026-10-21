@@ -1311,6 +1311,19 @@ pub(crate) async fn resolve_latest_video_url(state: &Arc<AppState>, url: &str) -
             }
         }
 
+        // Prefer a durable VOD page: it is what yt-dlp needs, and it is what
+        // the source cache can hold for days. The HLS fallback is short-lived.
+        if let Some(ref client) = state.kick_client {
+            match client.latest_vod_url(&slug).await {
+                Ok(Some(vod)) => {
+                    tracing::info!("Kick '{}' resolved to VOD page {}", slug, vod);
+                    return Ok(vod);
+                }
+                Ok(None) => tracing::warn!("Kick '{}' has no finished VOD; falling back to HLS", slug),
+                Err(e) => tracing::warn!("Kick VOD lookup failed for '{}': {}", slug, e),
+            }
+        }
+
         // Resolve to HLS stream URL (Browserbase → VOD page → HLS m3u8)
         let resolved = crate::kick_vod_scraper::resolve_url_to_hls(trimmed).await;
         if resolved != trimmed {
@@ -1378,6 +1391,10 @@ fn is_direct_video_url(url: &str) -> bool {
         || url.contains("twitch.tv/videos/")
         || url.contains("kick.com/video/")
         || url.contains("kick.com/videos/")
+        // Kick VOD pages live under the channel: kick.com/{slug}/videos/{uuid}.
+        // They are durable, so resolution must pass them through untouched
+        // instead of turning them into an expiring live HLS manifest.
+        || (url.contains("kick.com/") && url.contains("/videos/"))
         || url.contains("vimeo.com/")
         || url.ends_with(".mp4")
         || url.ends_with(".webm")
