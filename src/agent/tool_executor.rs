@@ -136,19 +136,30 @@ struct ToolExecutionNodeStart {
     cached_result: Option<String>,
 }
 
-/// Hard tool deny-list for clipping runs (Oct 2026 — proven live: agents call
-/// `auto_generate_video` inside clipping workflows, which routes to the dead
-/// BlenderMCP URL and hangs until the 6h cap; scoped toolbelts are advisory
-/// only since search_tools re-opens the full catalog). Returns an error JSON
-/// (which the model reads as a tool result and course-corrects) when a banned
-/// generative/3D tool is called inside a clipping-service workflow.
-/// Applies to all clipping slugs incl. legacy_youtube_clipping (which
-/// normalizes to LandingPage, so it needs the explicit check).
-async fn clipping_tool_deny(tool_name: &str, ctx: &ToolExecutionContext) -> Option<String> {
+/// Hard tool deny-list. Returns an error JSON (which the model reads as a tool
+/// result and course-corrects) instead of letting a doomed call burn the
+/// workflow cap.
+///
+/// Two layers:
+/// 1. Blender is a **policy switch, not a capability probe**. The renderer is
+///    reachable on the CPU media node, so an existence/health check would say
+///    "available" and then hang for 30+ minutes. `BLENDER_TOOLS_ENABLED`
+///    defaults to off; every `blender_*` call is refused with a pointer to
+///    `hyperframes_render`.
+/// 2. Clipping workflows additionally refuse 3D/animation generation
+///    (`auto_generate_video`, Manim, `run_director`) because those tools cannot
+///    clip source video and previously hung until the 6h cap.
+async fn service_tool_deny(tool_name: &str, ctx: &ToolExecutionContext) -> Option<String> {
+    if tool_name.starts_with("blender_") && !blender_tools_enabled() {
+        tracing::warn!("🚫 tool '{}' denied: Blender disabled (no GPU)", tool_name);
+        return Some(format!(
+            r#"{{"error":"Tool '{tool_name}' is disabled on this deployment (no GPU; BLENDER_TOOLS_ENABLED is off). Do NOT retry Blender. Render the visual with hyperframes_render(html=..., resolution=...) instead — use CSS perspective, layered parallax, gradients and shadows for 3D-looking depth."}}"#,
+        ));
+    }
+
     const DENIED_EXACT: &[&str] = &[
         "auto_generate_video",
         "generate_long_form_video",
-        "blender_generate_scene_type",
         "manim_execute_script",
         "run_director",
     ];
@@ -184,6 +195,15 @@ async fn clipping_tool_deny(tool_name: &str, ctx: &ToolExecutionContext) -> Opti
     Some(format!(
         r#"{{"error":"Tool '{tool_name}' is disabled for clipping renders — 3D/animation generation cannot clip source video. Call generate_clip_compilation with the source URL instead."}}"#,
     ))
+}
+
+/// Blender is only usable on a GPU-backed deployment. The CPU media node has
+/// the renderer installed, so reachability is not the right signal; this is an
+/// explicit owner switch. Default: off.
+fn blender_tools_enabled() -> bool {
+    std::env::var("BLENDER_TOOLS_ENABLED")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
 }
 
 async fn start_tool_execution_node(
@@ -786,9 +806,9 @@ async fn execute_tool_claude_with_context_inner(
     args: &Value,
     ctx: &ToolExecutionContext,
 ) -> String {
-    // Hard deny-list for clipping runs (misrouted Blender calls die here in
-    // milliseconds instead of hanging to the 6h workflow cap).
-    if let Some(denied) = clipping_tool_deny(name, ctx).await {
+    // Hard deny-list (Blender policy + clipping generative tools) — misrouted
+    // calls die here in milliseconds instead of hanging to the workflow cap.
+    if let Some(denied) = service_tool_deny(name, ctx).await {
         return denied;
     }
     // Handle special tools that need AppState access
@@ -1052,8 +1072,8 @@ async fn execute_tool_gemini_with_context_inner(
     args: &HashMap<String, Value>,
     ctx: &ToolExecutionContext,
 ) -> String {
-    // Hard deny-list for clipping runs (same guard as the Claude arm).
-    if let Some(denied) = clipping_tool_deny(name, ctx).await {
+    // Hard deny-list (same guard as the Claude arm).
+    if let Some(denied) = service_tool_deny(name, ctx).await {
         return denied;
     }
     // Handle special tools that need AppState access
@@ -19709,7 +19729,7 @@ pub(crate) async fn execute_browserbase_crawl_website_inner(url: &str) -> String
             output
         }
         Err(e) => {
-            format!("Website crawl failed: {e}. Try using a direct URL or check if BrowserBase is configured.")
+            format!("Website crawl failed: {e}. All fetch paths failed (BrowserBase, Scrapling, direct HTTP) — check the URL.")
         }
     }
 }

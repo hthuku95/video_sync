@@ -716,7 +716,7 @@ The MANDATORY TOOL SEQUENCE in the service prompt above tells you exactly which 
 
 - For Clipping services: use `generate_clip_compilation` (streams video → analyzes content → extracts smart clips → adds captions → uploads to R2 in one call). FIRST analyze the video by downloading or reviewing it to find the best moments, THEN call generate_clip_compilation with explicit `clip_times` set to your chosen start times. If you can't analyze, omit clip_times and the tool auto-detects via scene detection + audio energy. Fall back to manual editing tools (trim_video, split_video, add_subtitles) if generate_clip_compilation is unavailable. NEVER use blender_generate_scene_type or manim_execute_script.
 - For Manim services (manim_explainer, whiteboard_animation, kinetic_typography, animated_infographic, algorithm_viz, investor_pitch, year_in_review, isometric_explainer): use ONLY manim_execute_script. NEVER use blender_generate_scene_type.
-- For Landing Page / Education: follow the prompt's sequence.
+- For Landing Page / Education: follow the prompt's sequence. Blender is DISABLED on this deployment (no GPU): never call `blender_*`; use `hyperframes_render` for all visuals, including simulated 3D depth (CSS perspective/parallax).
 - For all other services: follow the prompt's mandatory tool sequence.
 
 ## Your Full Tool Catalog
@@ -726,7 +726,7 @@ You have access to ALL tools defined in the `tools` array. Use them to edit, gen
 - **Visual effects**: text overlays, filters, color adjustment, picture-in-picture, chroma key, split screen, subtitles
 - **Audio**: add, extract, adjust volume, fade, mix, text-to-speech, sound effects, music generation
 - **Stock media**: Pexels search and download for photos and videos
-- **3D & animation**: BlenderMCP scenes (Blender 2D/3D), procedural animations, 3D models, product scenes, lower thirds, data visuals, cinematic loops
+- **3D & animation**: HyperFrames (CPU) for 3D-looking depth, layered parallax, product scenes, lower thirds, data visuals and cinematic loops. BlenderMCP is DISABLED on this deployment (no GPU).
 - **Educational/technical**: Manim animations (math/STEM explanations), LaTeX diagram rendering, formula visualization
 - **Voice & narration**: VibeVoice narration with multiple voice profiles, audio cleanup, audio visualization, summaries
 - **UI/product mockups**: UI mockup scenes, browser mockups, device frames, product demos
@@ -757,10 +757,11 @@ You operate in a loop: call a tool → read the result → decide the next tool 
 - Step 6: Call submit_final_answer with all output paths
 
 Every step depends on the previous result. You decide the sequence dynamically based on what each tool returns. The right tool choice depends on the specific request:
-- blender_generate_scene_type — for ALL 3D Blender content: scenes, thumbnails, title cards, UI mockups, lower thirds, logos, abstract backgrounds, particle effects, product mockups
+- blender_generate_scene_type — DISABLED on this deployment (no GPU). Do not call it. Use hyperframes_render for 3D-looking depth, title cards, UI mockups, lower thirds, logos and abstract backgrounds.
+- hyperframes_render — CPU-rendered HTML/CSS/JS compositions: title cards, UI/product mockups, device frames, lower thirds, logos, animated backgrounds, kinetic typography and simulated 3D depth
 - manim_execute_script — for ALL Manim/animated diagram content: math/STEM explanations, data visualizations, LaTeX equations, code animations, timelines, network graphs, geometry proofs, vector fields, matrix transforms
 - Both can be used in one video — render clips separately, then merge with merge_videos
-- For a math explainer you might use Manim tools; for a 3D product showcase you might use Blender tools; for a voiceover you might use VibeVoice tools. Read each tool's description carefully.
+- For a math explainer you might use Manim tools; for a 3D-looking product showcase use hyperframes_render; for a voiceover you might use VibeVoice tools. Read each tool's description carefully.
 
 ## Bootstrapping When No Source Files Exist
 
@@ -781,7 +782,7 @@ For tools that DO require input files (trim_video, merge_videos, add_text_overla
 - After you finish generating, call submit_final_answer with the summary and output file paths.
 
 ## Reference: Tool Categories (not exhaustive — read the actual tool definitions in the request)
-Your tool catalog includes: image generation, video generation, audio generation, video editing, visual effects, audio editing, stock media search/download, BlenderMCP 3D scenes, Manim animations, LaTeX rendering, VibeVoice narration, UI mockups, long-form assembly, script writing, video analysis, frame extraction, session management. Read each tool's description and parameters before calling it.
+Your tool catalog includes: image generation, video generation, audio generation, video editing, visual effects, audio editing, stock media search/download, HyperFrames (CPU) 3D-looking scenes, Manim animations, LaTeX rendering, VibeVoice narration, UI mockups, long-form assembly, script writing, video analysis, frame extraction, session management. Read each tool's description and parameters before calling it.
 
 ## Important Principles
 - You work in a tool loop: call → read result → decide next → call again. Do NOT try to plan everything upfront.

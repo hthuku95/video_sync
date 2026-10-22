@@ -1645,9 +1645,15 @@ async fn generate_execution_plan(
         Some(url) if !url.is_empty() => format!("\nSource video/website: {url}"),
         _ => String::new(),
     };
+    // Blender is deliberately absent: this deployment has no GPU and a planner
+    // that lists it will burn 30+ minutes per failed job. The plan is injected
+    // ahead of the service prompt, so a Blender step here overrides the
+    // service-level "never call Blender" rule.
     let tool_hints = match service_type {
         ServiceType::Clipping => "generate_clip_compilation (downloads + extracts + captions clips), kick_post_processing happens automatically; final artifacts are clip URLs",
-        _ => "generate_video_script, blender_generate_scene_type, manim_execute_script, merge_videos, add_voiceover_to_video, review_video, submit_final_answer",
+        ServiceType::LandingPage => "browserbase_crawl_website (read the source site first), generate_video_script, hyperframes_render, merge_videos, add_voiceover_to_video, review_video, submit_final_answer",
+        ServiceType::Education => "generate_video_script, hyperframes_render, manim_execute_script, merge_videos, add_voiceover_to_video, review_video, submit_final_answer",
+        _ => "generate_video_script, hyperframes_render, manim_execute_script, merge_videos, add_voiceover_to_video, review_video, submit_final_answer",
     };
 
     let prompt = format!(
@@ -1658,6 +1664,7 @@ async fn generate_execution_plan(
          Each step must be ONE line in exactly this format:\n\
          STEP <n>: <tool_name>(<key args>) -> <expected artifact>\n\n\
          Rules:\n\
+         - Blender is DISABLED (no GPU): never plan blender_generate_scene_type or any blender_* step; use hyperframes_render for 3D-looking depth\n\
          - The FINAL step must yield outputs/agentic_{delivery_id}/output.mp4 (or clip URLs for clipping)\n\
          - Include a review_video QA step before submit_final_answer\n\
          - No prose, no markdown headers — ONLY the STEP lines\n",

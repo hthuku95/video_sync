@@ -45,12 +45,13 @@ fn headers() -> Option<reqwest::header::HeaderMap> {
     Some(h)
 }
 
-/// Fetch a URL via BrowserBase and return clean markdown content.
-/// Returns `Ok(Some(content))` on success, `Ok(None)` if BrowserBase is not configured,
-/// or `Err(error_message)` on failure.
+/// Fetch a URL as clean text. BrowserBase first; when it is missing or fails
+/// (e.g. HTTP 402) this falls back to direct HTTP + local HTML→text.
+/// Returns `Ok(Some(content))` on success or `Err(error_message)` when every
+/// path fails.
 pub async fn fetch_url(url: &str) -> Result<Option<String>, String> {
     if api_key().is_none() {
-        return Ok(None);
+        return direct_fetch_markdown(url).await;
     }
 
     let hdrs = headers().ok_or("Failed to build BrowserBase headers")?;
@@ -83,7 +84,8 @@ pub async fn fetch_url(url: &str) -> Result<Option<String>, String> {
             .or_else(|| data.get("error"))
             .and_then(|v| v.as_str())
             .unwrap_or("unknown error");
-        return Err(format!("BrowserBase fetch failed (HTTP {status}): {msg}"));
+        tracing::warn!("BrowserBase fetch failed (HTTP {status}): {msg} — trying direct HTTP");
+        return direct_fetch_markdown(url).await;
     }
 
     let content = data
@@ -93,7 +95,8 @@ pub async fn fetch_url(url: &str) -> Result<Option<String>, String> {
         .to_string();
 
     if content.is_empty() {
-        return Err(format!("BrowserBase returned empty content for: {url}"));
+        tracing::warn!("BrowserBase returned empty content for {url} — trying direct HTTP");
+        return direct_fetch_markdown(url).await;
     }
 
     let truncated = if content.len() > MAX_CONTENT_CHARS {
@@ -112,7 +115,7 @@ pub async fn fetch_url(url: &str) -> Result<Option<String>, String> {
 /// Useful for parsing structured data embedded in <script> tags on server-rendered pages.
 pub async fn fetch_url_raw(url: &str) -> Result<Option<String>, String> {
     if api_key().is_none() {
-        return Ok(None);
+        return direct_fetch_raw(url).await;
     }
 
     let hdrs = headers().ok_or("Failed to build BrowserBase headers")?;
@@ -146,14 +149,7 @@ pub async fn fetch_url_raw(url: &str) -> Result<Option<String>, String> {
             .and_then(|v| v.as_str())
             .unwrap_or("unknown error");
         let bb_err = format!("BrowserBase raw fetch failed (HTTP {status}): {msg}");
-        // ── SCRAPLING FALLBACK (Sep 4 2026) ──
-        // BrowserBase 402 (credits exhausted) silently broke Kick VOD
-        // resolution and cascaded into publishing a wrong video. Fall back
-        // to our self-hosted Scrapling service (ytdlp node) on ANY failure.
-        tracing::warn!("{bb_err} — trying Scrapling fallback");
-        return scrapling_fetch_raw(url)
-            .await
-            .map_err(|e| format!("{bb_err}; Scrapling fallback also failed: {e}"));
+        return raw_fallback(url, &bb_err).await;
     }
 
     let content = data
@@ -164,10 +160,7 @@ pub async fn fetch_url_raw(url: &str) -> Result<Option<String>, String> {
 
     if content.is_empty() {
         let bb_err = format!("BrowserBase returned empty raw content for: {url}");
-        tracing::warn!("{bb_err} — trying Scrapling fallback");
-        return scrapling_fetch_raw(url)
-            .await
-            .map_err(|e| format!("{bb_err}; Scrapling fallback also failed: {e}"));
+        return raw_fallback(url, &bb_err).await;
     }
 
     Ok(Some(content))
@@ -223,6 +216,104 @@ async fn scrapling_fetch_raw(url: &str) -> Result<Option<String>, String> {
         data.get("mode").and_then(|m| m.as_str()).unwrap_or("?")
     );
     Ok(Some(html))
+}
+
+/// Cascade after BrowserBase fails: Scrapling (self-hosted), then a direct
+/// HTTP GET. BrowserBase 402 previously left landing-page runs with no site
+/// copy at all, so the agent invented a brand and product.
+async fn raw_fallback(url: &str, bb_err: &str) -> Result<Option<String>, String> {
+    tracing::warn!("{bb_err} — trying Scrapling fallback");
+    match scrapling_fetch_raw(url).await {
+        Ok(v) => Ok(v),
+        Err(scr_err) => {
+            tracing::warn!("Scrapling failed ({scr_err}) — trying direct HTTP");
+            direct_fetch_raw(url).await.map_err(|direct_err| {
+                format!("{bb_err}; Scrapling: {scr_err}; direct: {direct_err}")
+            })
+        }
+    }
+}
+
+/// Last-resort direct HTTP GET. Works for server-rendered sites; JS-only pages
+/// return a shell rather than an error, so the caller can judge the content.
+async fn direct_fetch_raw(url: &str) -> Result<Option<String>, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .user_agent(
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 \
+             (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+        )
+        .redirect(reqwest::redirect::Policy::limited(5))
+        .build()
+        .map_err(|e| format!("direct fetch client: {e}"))?;
+
+    let resp = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| format!("direct fetch request failed: {e}"))?;
+    let status = resp.status();
+    let body = resp
+        .text()
+        .await
+        .map_err(|e| format!("direct fetch body failed: {e}"))?;
+
+    if !status.is_success() {
+        return Err(format!("direct fetch failed (HTTP {status})"));
+    }
+    if body.trim().is_empty() {
+        return Err(format!("direct fetch returned empty body for: {url}"));
+    }
+
+    tracing::info!(
+        "✅ direct HTTP fallback fetched {} ({} bytes)",
+        url,
+        body.len()
+    );
+    Ok(Some(body))
+}
+
+/// Direct HTTP + local HTML→text, matching `fetch_url`'s contract.
+async fn direct_fetch_markdown(url: &str) -> Result<Option<String>, String> {
+    let html = match direct_fetch_raw(url).await? {
+        Some(h) => h,
+        None => return Ok(None),
+    };
+    let text = html_to_text(&html);
+    if text.is_empty() {
+        return Err(format!("direct fetch produced no readable text for: {url}"));
+    }
+    let truncated = if text.chars().count() > MAX_CONTENT_CHARS {
+        let mut s: String = text.chars().take(MAX_CONTENT_CHARS).collect();
+        s.push_str(&format!("\n\n[...truncated at {} chars]", MAX_CONTENT_CHARS));
+        s
+    } else {
+        text
+    };
+    Ok(Some(truncated))
+}
+
+/// Minimal readability: drop scripts/styles, strip tags, collapse whitespace.
+/// Good enough for landing-page copy extraction when BrowserBase/Scrapling are
+/// unavailable.
+fn html_to_text(html: &str) -> String {
+    // The regex crate has no backreferences, so script/style are separate.
+    let script = Regex::new(r"(?is)<script[^>]*>.*?</script>").unwrap();
+    let style = Regex::new(r"(?is)<style[^>]*>.*?</style>").unwrap();
+    let tags = Regex::new(r"(?is)<[^>]+>").unwrap();
+    let ws = Regex::new(r"\s+").unwrap();
+
+    let no_script = script.replace_all(html, " ");
+    let no_style = style.replace_all(&no_script, " ");
+    let no_tags = tags.replace_all(&no_style, " ");
+    let decoded = no_tags
+        .replace("&nbsp;", " ")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&amp;", "&");
+    ws.replace_all(&decoded, " ").trim().to_string()
 }
 
 /// Check if BrowserBase is configured (API key is set).
@@ -330,10 +421,10 @@ async fn fetch_and_extract_stylesheet(url: &str, colors: &mut Vec<String>, fonts
 /// Crawl a website: fetch the homepage, extract internal links, fetch each subpage.
 /// Returns structured markdown + CSS info + a feature tag for Qdrant vectorization.
 pub async fn crawl_website(url: &str) -> Result<CrawlResult, String> {
-    if api_key().is_none() {
-        return Err("BrowserBase not configured (BROWSERBASE_API_KEY not set)".to_string());
-    }
-
+    // No hard requirement on BrowserBase: fetch_url/fetch_url_raw fall back to
+    // Scrapling and then direct HTTP, so a 402 (or a missing key) still crawls
+    // server-rendered sites. JS-only pages will yield a thin shell, which is
+    // visible in the extracted text instead of failing the whole workflow.
     let full_url = if !url.starts_with("http") {
         format!("https://{url}")
     } else {
