@@ -274,7 +274,9 @@ impl NvidiaNimClient {
         );
         Self {
             client: Client::builder()
-                .timeout(std::time::Duration::from_secs(60))
+                // Long generations (550B tool calls) and 6-frame vision
+                // requests regularly exceed 60s under load.
+                .timeout(std::time::Duration::from_secs(150))
                 .build()
                 .unwrap_or_default(),
             api_key,
@@ -292,7 +294,9 @@ impl NvidiaNimClient {
         );
         Self {
             client: Client::builder()
-                .timeout(std::time::Duration::from_secs(60))
+                // Long generations (550B tool calls) and 6-frame vision
+                // requests regularly exceed 60s under load.
+                .timeout(std::time::Duration::from_secs(150))
                 .build()
                 .unwrap_or_default(),
             api_key,
@@ -526,7 +530,9 @@ impl NvidiaNimClient {
         let body = serde_json::json!({
             "model": self.model,
             "messages": [{"role": "user", "content": content}],
-            "max_tokens": 2048,
+            // 4096: the VLM spends most of the budget on reasoning before it
+            // emits the JSON; 1024/2048 truncated real reviews mid-string.
+            "max_tokens": 4096,
             "temperature": 0.1,
         });
 

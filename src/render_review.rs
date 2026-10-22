@@ -810,12 +810,15 @@ async fn run_review_via_nim_frames(
 ) -> ReviewResult {
     match nim_frames_review(nim, output_url, prompt).await {
         Ok(r) => r,
-        Err(e) => ReviewResult {
-            pass: false,
-            score: 0,
-            feedback: format!("NIM frame review failed: {}", e),
-            retry_hint: None,
-        },
+        Err(e) => {
+            tracing::warn!("NIM frame review failed for '{}': {}", output_url, e);
+            ReviewResult {
+                pass: false,
+                score: 0,
+                feedback: format!("NIM frame review failed: {}", e),
+                retry_hint: None,
+            }
+        }
     }
 }
 
