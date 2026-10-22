@@ -496,19 +496,49 @@ impl PortfolioTestRunner {
             Ok((r2_url, filename)) => {
                 let review = self.review(&r2_url, scenario).await;
 
+                // Objective brief requirements do not need a model: the wrong
+                // aspect ratio or a far-too-short artifact is a failed delivery
+                // even when the pipeline itself completed without error. The
+                // requested duration comes from the service definition (the
+                // "user" for this test), never a hardcoded constant.
+                let requested = crate::portfolio_samples::dfy_services()
+                    .iter()
+                    .find(|s| s.slug == scenario.slug)
+                    .map(|s| s.duration_seconds)
+                    .unwrap_or(0.0);
+                let violations = crate::render_review::brief_violations(
+                    &r2_url,
+                    scenario.description,
+                    requested,
+                )
+                .await;
+
+                let passed = violations.is_empty();
+                let status = if passed { "passed" } else { "failed" };
+                let error_message = (!passed).then(|| {
+                    format!(
+                        "QUALITY_GATE: {}. Reviewer {}/10: {}",
+                        violations.join("; "),
+                        review.score,
+                        review.feedback
+                    )
+                });
+
                 let _ = sqlx::query(
                     "UPDATE test_results SET \
-                         status = 'passed', \
-                         output_r2_key = $1, \
-                         output_r2_url = $2, \
-                         output_filename = $3, \
-                         llm_review_score = $4, \
-                         llm_review_feedback = $5, \
-                         llm_reviewer = $6, \
-                         storage_backend = $7, \
+                         status = $1, \
+                         output_r2_key = $2, \
+                         output_r2_url = $3, \
+                         output_filename = $4, \
+                         llm_review_score = $5, \
+                         llm_review_feedback = $6, \
+                         llm_reviewer = $7, \
+                         storage_backend = $8, \
+                         error_message = $9, \
                          completed_at = NOW() \
-                     WHERE id = $8",
+                     WHERE id = $10",
                 )
+                .bind(status)
                 .bind(&r2_url)
                 .bind(&r2_url)
                 .bind(&filename)
@@ -516,11 +546,20 @@ impl PortfolioTestRunner {
                 .bind(&review.feedback)
                 .bind(&review.reviewer)
                 .bind(crate::storage::backend_from_url(&r2_url).as_str())
+                .bind(error_message.as_deref())
                 .bind(result_id)
                 .execute(&self.app_state.db_pool)
                 .await;
 
-                tracing::info!("✅ '{}' passed — score {}/10", scenario.name, review.score);
+                if passed {
+                    tracing::info!("✅ '{}' passed — score {}/10", scenario.name, review.score);
+                } else {
+                    tracing::warn!(
+                        "⚠️ '{}' rendered but failed the quality gate: {}",
+                        scenario.name,
+                        violations.join("; ")
+                    );
+                }
             }
             Err(e) if e.starts_with("DRIVER_SUPERSEDED") => {
                 tracing::warn!("↪️ '{}' handed over to the new driver: {e}", scenario.name);

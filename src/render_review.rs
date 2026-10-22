@@ -201,7 +201,7 @@ pub struct ReviewResult {
 /// Review a rendered output using the unified Qwen-first fallback chain (§52):
 ///   1. Qwen (qwen3.7-plus — FULL video native, images, audio; the default
 ///      multimodal reviewer. First in the §6 fallback order, replacing Ollama.)
-///   2. NVIDIA NIM (images/audio only, skip video)
+///   2. NVIDIA NIM (images/audio natively; video via evenly-sampled frames)
 ///   3. AWS Bedrock (images/audio/text)
 ///   4. Gemini 2.5 Flash (full video inlineData, images, audio — last resort)
 pub async fn review_render(
@@ -257,16 +257,20 @@ pub async fn review_render(
         }
     }
 
-    // 2. Try NVIDIA NIM vision model (images/audio only, skip video)
+    // 2. Try NVIDIA NIM. Images/audio go native; video is sampled into frames
+    //    because no NIM model served on this account accepts `video_url`
+    //    (Cosmos-Reason2 is 404; the chat VLMs 500/timeout on it).
     let ext = output_url.rsplit('.').next().unwrap_or("").to_lowercase();
     let is_video = matches!(ext.as_str(), "mp4" | "mov" | "mkv" | "webm" | "avi");
-    if !is_video {
-        if let Some(nim) = state.nvidia_nim_vision_client.as_ref() {
-            let review = run_review_via_nim(nim, output_url, &prompt).await;
-            if review.score > 0 {
-                persist_review(state, tool_name, &review, delivery_id, output_url).await;
-                return review;
-            }
+    if let Some(nim) = state.nvidia_nim_vision_client.as_ref() {
+        let review = if is_video {
+            run_review_via_nim_frames(nim, output_url, &prompt).await
+        } else {
+            run_review_via_nim(nim, output_url, &prompt).await
+        };
+        if review.score > 0 {
+            persist_review(state, tool_name, &review, delivery_id, output_url).await;
+            return review;
         }
     }
 
@@ -792,6 +796,210 @@ async fn run_review_via_nim(
     parse_review_response(&response)
 }
 
+/// Review a video by sampling frames and asking the NIM VLM.
+///
+/// No NIM model served on this account accepts whole-video input:
+/// `nvidia/cosmos-reason2-8b` is 404 for this key, and the chat VLMs return
+/// 500/timeout when handed `video_url`. Six evenly-spaced frames plus the
+/// measured duration/resolution are enough to catch brief mismatch, wrong
+/// aspect ratio, illegible/overlapping typography, and placeholder content.
+async fn run_review_via_nim_frames(
+    nim: &NvidiaNimClient,
+    output_url: &str,
+    prompt: &str,
+) -> ReviewResult {
+    match nim_frames_review(nim, output_url, prompt).await {
+        Ok(r) => r,
+        Err(e) => ReviewResult {
+            pass: false,
+            score: 0,
+            feedback: format!("NIM frame review failed: {}", e),
+            retry_hint: None,
+        },
+    }
+}
+
+async fn nim_frames_review(
+    nim: &NvidiaNimClient,
+    output_url: &str,
+    prompt: &str,
+) -> Result<ReviewResult, Box<dyn std::error::Error + Send + Sync>> {
+    let (video_path, _bytes) = download_to_temp(output_url)
+        .await?
+        .ok_or("could not download artifact for frame review")?;
+
+    let temp_dir = std::env::temp_dir().join(format!("frames_{}", uuid::Uuid::new_v4()));
+    let _ = std::fs::create_dir_all(&temp_dir);
+
+    let result: Result<ReviewResult, Box<dyn std::error::Error + Send + Sync>> = async {
+        // Authoritative metadata: the model cannot measure duration or aspect
+        // from frames, so give it the ffprobe facts instead of letting it guess.
+        let probe = tokio::time::timeout(
+            std::time::Duration::from_secs(60),
+            tokio::process::Command::new("ffprobe")
+                .args([
+                    "-v", "error", "-print_format", "json",
+                    "-show_format", "-show_streams",
+                ])
+                .arg(&video_path)
+                .output(),
+        )
+        .await??;
+        let json: serde_json::Value =
+            serde_json::from_slice(&probe.stdout).unwrap_or_default();
+
+        // ffprobe emits `duration` as a string, not a number.
+        let duration = json["format"]["duration"]
+            .as_f64()
+            .or_else(|| json["format"]["duration"].as_str().and_then(|s| s.parse().ok()))
+            .unwrap_or(0.0);
+        let (width, height) = json["streams"]
+            .as_array()
+            .and_then(|streams| streams.iter().find(|s| s["codec_type"] == "video"))
+            .map(|v| {
+                (
+                    v["width"].as_u64().unwrap_or(0),
+                    v["height"].as_u64().unwrap_or(0),
+                )
+            })
+            .unwrap_or((0, 0));
+        let aspect = if height > width && width > 0 {
+            "vertical"
+        } else if width > height {
+            "horizontal"
+        } else {
+            "square"
+        };
+
+        let fps = if duration > 0.0 { 6.0 / duration } else { 1.0 };
+        let pattern = temp_dir.join("frame_%d.jpg");
+        let status = tokio::time::timeout(
+            std::time::Duration::from_secs(120),
+            tokio::process::Command::new("ffmpeg")
+                .args(["-y", "-v", "error", "-i"])
+                .arg(&video_path)
+                .args([
+                    "-vf",
+                    &format!("fps={:.4},scale=800:-2", fps),
+                    "-frames:v",
+                    "6",
+                    "-q:v",
+                    "4",
+                ])
+                .arg(&pattern)
+                .status(),
+        )
+        .await??;
+        if !status.success() {
+            return Err("ffmpeg could not extract frames".into());
+        }
+
+        let mut frames = Vec::new();
+        for i in 1..=6 {
+            if let Ok(bytes) = std::fs::read(temp_dir.join(format!("frame_{}.jpg", i))) {
+                if !bytes.is_empty() {
+                    frames.push(bytes);
+                }
+            }
+        }
+        if frames.is_empty() {
+            return Err("no frames could be extracted".into());
+        }
+
+        let frame_prompt = format!(
+            "{prompt}\n\nMEASURED METADATA (authoritative — do not guess): \
+             duration={duration:.1}s, resolution={width}x{height}, aspect={aspect}. \
+             The {n} attached images are frames sampled evenly across the video. \
+             Judge brief alignment, aspect correctness, typography legibility \
+             (overlapping or truncated titles are defects), and whether the content \
+             is repetitive or a placeholder. Return ONLY the JSON object described above.",
+            n = frames.len()
+        );
+
+        let text = nim.analyze_images_bytes(&frames, &frame_prompt).await?;
+        Ok(parse_review_response(&text))
+    }
+    .await;
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    let _ = std::fs::remove_file(&video_path);
+    result
+}
+
+/// Model-free checks for objective requirements in the brief.
+///
+/// These should never depend on a VLM: aspect ratio, delivered vs requested
+/// duration, and whether a narration brief actually produced an audio track.
+/// Returns human-readable violations (empty = none).
+pub async fn brief_violations(
+    output_url: &str,
+    brief: &str,
+    requested_duration_secs: f64,
+) -> Vec<String> {
+    let mut violations = Vec::new();
+    let lower = brief.to_ascii_lowercase();
+
+    let Ok(Some((path, _))) = download_to_temp(output_url).await else {
+        return violations;
+    };
+
+    let probe = tokio::time::timeout(
+        std::time::Duration::from_secs(60),
+        tokio::process::Command::new("ffprobe")
+            .args([
+                "-v", "error", "-print_format", "json",
+                "-show_format", "-show_streams",
+            ])
+            .arg(&path)
+            .output(),
+    )
+    .await;
+
+    let json = match probe {
+        Ok(Ok(out)) if out.status.success() => {
+            serde_json::from_slice::<serde_json::Value>(&out.stdout).unwrap_or_default()
+        }
+        _ => {
+            let _ = std::fs::remove_file(&path);
+            return violations;
+        }
+    };
+    let _ = std::fs::remove_file(&path);
+
+    let duration = json["format"]["duration"]
+        .as_f64()
+        .or_else(|| json["format"]["duration"].as_str().and_then(|s| s.parse().ok()))
+        .unwrap_or(0.0);
+    let streams = json["streams"].as_array().cloned().unwrap_or_default();
+    let video = streams.iter().find(|s| s["codec_type"] == "video");
+    let width = video.and_then(|v| v["width"].as_u64()).unwrap_or(0);
+    let height = video.and_then(|v| v["height"].as_u64()).unwrap_or(0);
+    let has_audio = streams.iter().any(|s| s["codec_type"] == "audio");
+
+    if lower.contains("vertical") && width > height && height > 0 {
+        violations.push(format!(
+            "brief requires vertical (9:16) output; artifact is {width}x{height} horizontal"
+        ));
+    }
+
+    if requested_duration_secs > 0.0 && duration > 0.0 {
+        let minimum = requested_duration_secs * 0.8;
+        if duration < minimum {
+            violations.push(format!(
+                "artifact is {duration:.1}s but the request asked for {requested_duration_secs:.0}s (minimum {minimum:.0}s)"
+            ));
+        }
+    }
+
+    if (lower.contains("narration") || lower.contains("narrated")) && !has_audio {
+        violations.push(
+            "brief requires narration but the artifact has no audio stream".to_string(),
+        );
+    }
+
+    violations
+}
+
 /// Run review via Bedrock (images/audio/text).
 async fn run_review_via_bedrock(
     bedrock: &Arc<crate::bedrock_client::BedrockClient>,
@@ -910,17 +1118,24 @@ fn parse_review_response(response: &str) -> ReviewResult {
 
     let parsed: serde_json::Value = match serde_json::from_str(cleaned) {
         Ok(v) => v,
-        Err(_) => {
-            return ReviewResult {
-                pass: false,
-                score: 0,
-                feedback: format!(
-                    "Unparseable review response: {}",
-                    cleaned.chars().take(120).collect::<String>()
-                ),
-                retry_hint: None,
-            };
-        }
+        // NIM VLMs sometimes wrap the JSON in prose, especially when the answer
+        // arrives via `reasoning_content`. Pull out the first object.
+        Err(_) => match extract_json_object(cleaned)
+            .and_then(|candidate| serde_json::from_str::<serde_json::Value>(candidate).ok())
+        {
+            Some(v) => v,
+            None => {
+                return ReviewResult {
+                    pass: false,
+                    score: 0,
+                    feedback: format!(
+                        "Unparseable review response: {}",
+                        cleaned.chars().take(120).collect::<String>()
+                    ),
+                    retry_hint: None,
+                };
+            }
+        },
     };
 
     let score = parsed.get("score").and_then(|s| s.as_i64()).unwrap_or(0) as i32;
@@ -941,6 +1156,13 @@ fn parse_review_response(response: &str) -> ReviewResult {
         feedback,
         retry_hint,
     }
+}
+
+/// First `{ ... }` span in a response, used when a model wraps JSON in prose.
+fn extract_json_object(text: &str) -> Option<&str> {
+    let start = text.find('{')?;
+    let end = text.rfind('}')?;
+    (end > start).then(|| &text[start..=end])
 }
 
 fn review_prompt(original_prompt: &str, tool_name: &str, output_url: &str) -> String {

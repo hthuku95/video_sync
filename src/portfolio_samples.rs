@@ -115,7 +115,11 @@ pub fn dfy_services() -> &'static [DfyServiceDef] {
             brief: "Create a 30-second animated hero video for a boutique consulting firm's homepage. Showcase their expertise with clean motion graphics, subtle 3D depth, professional typography, and a clear value proposition.",
             style: "premium business explainer, cinematic, clean motion graphics",
             duration_seconds: 30.0,
-            source_url: "https://example.com",
+            // Fallback only: at run time this is replaced by a real prospect's
+            // website (see `resolve_prospect_site`). `example.com` was a
+            // placeholder with no copy, which made the agent invent a brand and
+            // render an abstract loop.
+            source_url: "https://www.videosync.ink",
         },
         DfyServiceDef {
             slug: "education",
@@ -263,6 +267,68 @@ pub fn discovery_platform(slug: &str) -> Option<&'static str> {
     }
 }
 
+/// Resolve a real prospect's website for a business-site service.
+///
+/// Cached in `service_test_sources` for the same reason clipping discovery is:
+/// repeated quality runs must render the SAME source so results are
+/// comparable. Excludes `example.com` (the old placeholder, which had no copy
+/// and made the agent invent a brand) and non-HTTP URLs.
+async fn resolve_prospect_site(
+    state: &std::sync::Arc<crate::AppState>,
+    slug: &str,
+) -> Option<String> {
+    let cache_sql = format!(
+        "SELECT source_url FROM service_test_sources \
+         WHERE service_slug = $1 \
+           AND COALESCE(last_verified_at, discovered_at) > NOW() - INTERVAL '{} days'",
+        SERVICE_SOURCE_TTL_DAYS
+    );
+    if let Ok(Some(url)) = sqlx::query_scalar::<_, String>(&cache_sql)
+        .bind(slug)
+        .fetch_optional(&state.db_pool)
+        .await
+    {
+        if !url.trim().is_empty() {
+            tracing::debug!("♻️ Reusing cached prospect site for '{}': {}", slug, url);
+            return Some(url);
+        }
+    }
+
+    let picked: Option<String> = sqlx::query_scalar(
+        "SELECT external_url FROM prospects \
+         WHERE service_type = $1 \
+           AND COALESCE(external_url, '') ~ '^https?://' \
+           AND external_url NOT ILIKE '%example.com%' \
+         ORDER BY ai_score DESC NULLS LAST, updated_at DESC \
+         LIMIT 1",
+    )
+    .bind(slug)
+    .fetch_optional(&state.db_pool)
+    .await
+    .ok()
+    .flatten();
+
+    if let Some(url) = &picked {
+        if let Err(e) = sqlx::query(
+            "INSERT INTO service_test_sources (service_slug, source_url, platform, discovered_at, last_verified_at) \
+             VALUES ($1, $2, 'prospect', NOW(), NOW()) \
+             ON CONFLICT (service_slug) DO UPDATE SET \
+                 source_url = EXCLUDED.source_url, platform = 'prospect', \
+                 discovered_at = NOW(), last_verified_at = NOW(), verify_failures = 0",
+        )
+        .bind(slug)
+        .bind(url)
+        .execute(&state.db_pool)
+        .await
+        {
+            tracing::warn!("prospect source cache upsert failed for '{}': {e}", slug);
+        }
+        tracing::info!("🎯 Using real prospect site for '{}': {}", slug, url);
+    }
+
+    picked
+}
+
 /// Resolve the source URL for a Managed Campaign service.
 ///
 /// Non-clipping services (or any service with an explicit fixture URL) are
@@ -273,6 +339,22 @@ pub async fn resolve_service_source_url(
     slug: &str,
     fixture_url: &str,
 ) -> Option<String> {
+    // Business-site services are driven by a customer's website, not a stream.
+    // Standing owner directive: quality tests must use real potential customers
+    // found by the leads/prospect pipeline, not synthetic demo URLs, so the
+    // samples show whether media they would actually buy can be produced
+    // consistently. Cached for determinism; the fixture is only a fallback.
+    if slug == "landing_page" {
+        if let Some(url) = resolve_prospect_site(state, slug).await {
+            return Some(url);
+        }
+        return if fixture_url.is_empty() {
+            None
+        } else {
+            Some(fixture_url.to_string())
+        };
+    }
+
     let Some(platform) = discovery_platform(slug) else {
         return if fixture_url.is_empty() {
             None

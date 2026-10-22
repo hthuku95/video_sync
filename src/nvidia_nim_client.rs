@@ -496,15 +496,85 @@ impl NvidiaNimClient {
         }
 
         let json: serde_json::Value = resp.json().await?;
-        let text = json["choices"][0]["message"]["content"]
-            .as_str()
-            .unwrap_or("")
-            .to_string();
+        Self::message_text(&json).ok_or_else(|| -> Box<dyn std::error::Error + Send + Sync> {
+            "NVIDIA NIM vision: empty response".into()
+        })
+    }
 
-        if text.is_empty() {
-            Err("NVIDIA NIM vision: empty response".into())
+    /// Analyze several images in a single request (used for video frame
+    /// sampling). The NIM VLMs on this account accept multiple `image_url`
+    /// blocks; none accept whole-video input.
+    pub async fn analyze_images_bytes(
+        &self,
+        images: &[Vec<u8>],
+        analysis_prompt: &str,
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        if images.is_empty() {
+            return Err("NVIDIA NIM vision: no frames supplied".into());
+        }
+
+        let mut content = Vec::with_capacity(images.len() + 1);
+        content.push(serde_json::json!({"type": "text", "text": analysis_prompt}));
+        for bytes in images {
+            let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
+            content.push(serde_json::json!({
+                "type": "image_url",
+                "image_url": {"url": format!("data:{};base64,{}", detect_mime(bytes), b64)},
+            }));
+        }
+
+        let body = serde_json::json!({
+            "model": self.model,
+            "messages": [{"role": "user", "content": content}],
+            "max_tokens": 1024,
+            "temperature": 0.1,
+        });
+
+        let resp = {
+            let _permit = match nim_gate().acquire().await {
+                Ok(p) => p,
+                Err(e) => return Err(format!("NVIDIA NIM gate closed: {e}").into()),
+            };
+            space_request().await;
+            self.client
+                .post(NVIDIA_NIM_ENDPOINT)
+                .header("Authorization", format!("Bearer {}", self.api_key))
+                .header("Content-Type", "application/json")
+                .json(&body)
+                .send()
+                .await?
+        };
+
+        let status = resp.status();
+        if !status.is_success() {
+            let err_body = resp.text().await.unwrap_or_default();
+            return Err(format!("NVIDIA NIM vision error {}: {}", status, err_body).into());
+        }
+
+        let json: serde_json::Value = resp.json().await?;
+        Self::message_text(&json).ok_or_else(|| -> Box<dyn std::error::Error + Send + Sync> {
+            "NVIDIA NIM vision: empty response".into()
+        })
+    }
+
+    /// Read the assistant answer, falling back to `reasoning_content`.
+    ///
+    /// The NIM VLMs served on this account (`meta/muse-glimmer-30b`,
+    /// `nvidia/nemotron-3.5-super-vl-120b-a12b`) sometimes return HTTP 200
+    /// with an empty `content` and put the whole answer in `reasoning_content`.
+    /// Reading only `content` turned every successful call into
+    /// "empty response", which is why NIM vision appeared to fail silently.
+    fn message_text(json: &serde_json::Value) -> Option<String> {
+        let msg = &json["choices"][0]["message"];
+        let content = msg["content"].as_str().unwrap_or("").trim();
+        if !content.is_empty() {
+            return Some(content.to_string());
+        }
+        let reasoning = msg["reasoning_content"].as_str().unwrap_or("").trim();
+        if reasoning.is_empty() {
+            None
         } else {
-            Ok(text)
+            Some(reasoning.to_string())
         }
     }
 
@@ -553,16 +623,9 @@ impl NvidiaNimClient {
         }
 
         let json: serde_json::Value = resp.json().await?;
-        let text = json["choices"][0]["message"]["content"]
-            .as_str()
-            .unwrap_or("")
-            .to_string();
-
-        if text.is_empty() {
-            Err("NVIDIA NIM audio: empty response".into())
-        } else {
-            Ok(text)
-        }
+        Self::message_text(&json).ok_or_else(|| -> Box<dyn std::error::Error + Send + Sync> {
+            "NVIDIA NIM audio: empty response".into()
+        })
     }
 
     // ─── Tool calling ────────────────────────────────────────────────────
