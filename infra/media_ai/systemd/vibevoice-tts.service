@@ -1,0 +1,27 @@
+[Unit]
+Description=VideoSync VibeVoice TTS service (127.0.0.1:8016)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/media/ai-tts
+EnvironmentFile=/opt/media/media.env
+Environment=PORT=8016
+Environment=VIBEVOICE_REPO_DIR=/opt/media/vibevoice-runtime
+Environment=VIBEVOICE_TTS_MODEL=microsoft/VibeVoice-Realtime-0.5B
+Environment=VIBEVOICE_TTS_CPU_DTYPE=bfloat16
+Environment=VIBEVOICE_TTS_THREADS=2
+Environment=VIBEVOICE_TTS_CONCURRENCY=1
+Environment=VIBEVOICE_TTS_MAX_QUEUE=16
+Environment=VIBEVOICE_TTS_QUEUE_TIMEOUT=240
+Environment=VIBEVOICE_TTS_DDPM_STEPS=5
+Environment=LOG_LEVEL=INFO
+ExecStart=/opt/media/vibevoice/.venv/bin/uvicorn tts_service:app --host 127.0.0.1 --port 8016 --workers 1
+Restart=always
+RestartSec=10
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

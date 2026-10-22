@@ -1,0 +1,27 @@
+[Unit]
+Description=VideoSync faster-whisper ASR service (127.0.0.1:8017)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/media/ai-asr
+EnvironmentFile=/opt/media/media.env
+Environment=PORT=8017
+Environment=VIBEVOICE_ASR_MODEL=base.en
+Environment=VIBEVOICE_ASR_CPU_THREADS=2
+Environment=VIBEVOICE_ASR_COMPUTE_TYPE=int8
+Environment=VIBEVOICE_ASR_BEAM_SIZE=5
+Environment=VIBEVOICE_ASR_MAX_WORDS=5
+Environment=VIBEVOICE_ASR_CONCURRENCY=1
+Environment=VIBEVOICE_ASR_MAX_QUEUE=32
+Environment=VIBEVOICE_ASR_QUEUE_TIMEOUT=240
+Environment=VIBEVOICE_ASR_VAD=1
+ExecStart=/opt/media/vibevoice/.venv/bin/uvicorn asr_service:app --host 127.0.0.1 --port 8017 --workers 1
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
