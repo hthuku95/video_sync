@@ -112,7 +112,7 @@ pub fn dfy_services() -> &'static [DfyServiceDef] {
             slug: "landing_page",
             name: "Business Landing Page Video",
             price_mo: 149,
-            brief: "Create a 30-second animated hero video for a boutique consulting firm's homepage. Showcase their expertise with clean motion graphics, subtle 3D depth, professional typography, and a clear value proposition.",
+            brief: "Create a 30-second animated hero video for this business's homepage. Showcase their expertise with clean motion graphics, subtle 3D depth, professional typography, and a clear value proposition.",
             style: "premium business explainer, cinematic, clean motion graphics",
             duration_seconds: 30.0,
             // Fallback only: at run time this is replaced by a real prospect's
