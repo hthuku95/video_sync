@@ -526,7 +526,7 @@ impl NvidiaNimClient {
         let body = serde_json::json!({
             "model": self.model,
             "messages": [{"role": "user", "content": content}],
-            "max_tokens": 1024,
+            "max_tokens": 2048,
             "temperature": 0.1,
         });
 

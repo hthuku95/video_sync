@@ -912,7 +912,8 @@ async fn nim_frames_review(
              The {n} attached images are frames sampled evenly across the video. \
              Judge brief alignment, aspect correctness, typography legibility \
              (overlapping or truncated titles are defects), and whether the content \
-             is repetitive or a placeholder. Return ONLY the JSON object described above.",
+             is repetitive or a placeholder. Keep feedback under 40 words. \
+             Return ONLY the JSON object described above.",
             n = frames.len()
         );
 
@@ -1124,17 +1125,22 @@ fn parse_review_response(response: &str) -> ReviewResult {
             .and_then(|candidate| serde_json::from_str::<serde_json::Value>(candidate).ok())
         {
             Some(v) => v,
-            None => {
-                return ReviewResult {
-                    pass: false,
-                    score: 0,
-                    feedback: format!(
-                        "Unparseable review response: {}",
-                        cleaned.chars().take(120).collect::<String>()
-                    ),
-                    retry_hint: None,
-                };
-            }
+            None => match salvage_review(cleaned) {
+                // Truncated JSON: the VLM hit max_tokens mid-string. Salvage
+                // the score/feedback instead of reporting "unavailable".
+                Some(v) => v,
+                None => {
+                    return ReviewResult {
+                        pass: false,
+                        score: 0,
+                        feedback: format!(
+                            "Unparseable review response: {}",
+                            cleaned.chars().take(120).collect::<String>()
+                        ),
+                        retry_hint: None,
+                    };
+                }
+            },
         },
     };
 
@@ -1156,6 +1162,24 @@ fn parse_review_response(response: &str) -> ReviewResult {
         feedback,
         retry_hint,
     }
+}
+
+/// Recover score/feedback from a JSON response the model truncated at
+/// `max_tokens`. Without this, a good review reads as "unavailable".
+fn salvage_review(text: &str) -> Option<serde_json::Value> {
+    let score_re = regex::Regex::new(r#""score"\s*:\s*(\d+)"#).ok()?;
+    let score = score_re
+        .captures(text)?
+        .get(1)?
+        .as_str()
+        .parse::<i64>()
+        .ok()?;
+    let feedback = regex::Regex::new(r#""feedback"\s*:\s*"([^"]*)"#)
+        .ok()
+        .and_then(|re| re.captures(text))
+        .and_then(|c| c.get(1).map(|m| m.as_str().to_string()))
+        .unwrap_or_default();
+    Some(serde_json::json!({ "score": score, "feedback": feedback }))
 }
 
 /// First `{ ... }` span in a response, used when a model wraps JSON in prose.
