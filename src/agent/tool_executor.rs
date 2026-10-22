@@ -5279,11 +5279,11 @@ async fn kick_post_process_clip(
     };
     let outro_start = (clip_duration - 2.0).max(0.0);
 
-    // Build complex filtergraph dynamically based on whether logo is provided
-    let mut inputs = vec![
-        "-i".to_string(),
-        input_path.to_string_lossy().to_string(),
-    ];
+    // Build complex filtergraph dynamically based on whether logo is provided.
+    // `inputs` holds paths only: the command builder below prepends `-i` for
+    // every entry. Keeping "-i" in this vec produced `ffmpeg -y -i -i <path>`
+    // and every clip silently fell back to the raw horizontal file.
+    let mut inputs = vec![input_path.to_string_lossy().to_string()];
     let mut filter = String::from(
         // Blur-fill 9:16: bg scale COVERs then CROPs to exactly 1080x1920
         // (scale alone overshoots to e.g. 3413x1920 for 16:9 sources and
@@ -5297,7 +5297,6 @@ async fn kick_post_process_clip(
     let mut current_label = "base";
 
     if let Some(logo) = logo_path {
-        inputs.push("-i".to_string());
         inputs.push(logo.to_string_lossy().to_string());
         filter.push_str(
             ";[1:v]scale='min(86,iw)':-1[logo_scaled];\
