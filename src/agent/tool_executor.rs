@@ -5274,7 +5274,7 @@ async fn kick_post_process_clip(
 ) -> Result<(), String> {
     let font = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf";
     let outro_text = match streamer_name {
-        Some(name) if !name.is_empty() => format!("Watch Live on {platform_label}\\n@{name}"),
+        Some(name) if !name.is_empty() => format!("Watch Live on {platform_label} @{name}"),
         _ => format!("Watch Live on {platform_label}"),
     };
     let outro_start = (clip_duration - 2.0).max(0.0);
@@ -5285,14 +5285,10 @@ async fn kick_post_process_clip(
     // and every clip silently fell back to the raw horizontal file.
     let mut inputs = vec![input_path.to_string_lossy().to_string()];
     let mut filter = String::from(
-        // Blur-fill 9:16: bg scale COVERs then CROPs to exactly 1080x1920
-        // (scale alone overshoots to e.g. 3413x1920 for 16:9 sources and
-        // libx264 rejects odd widths — Oct 14 local repro), fg auto dims use
-        // -2 so they stay even.
-        "[0:v]split=2[fg][bgsrc];\
-         [bgsrc]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:5[bg];\
-         [fg]scale='if(gt(a,9/16),1080,-2)':'if(gt(a,9/16),-2,1920)',setsar=1[fg_scaled];\
-         [bg][fg_scaled]overlay=(W-w)/2:(H-h)/2[base]"
+        // Full-bleed 9:16: cover-crop the source to exactly 1080x1920. The old
+        // blurred-background fit left a 1080x608 foreground floating inside a
+        // 1080x1920 frame, which reads as a repost rather than a native short.
+        "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1[base]"
     );
     let mut current_label = "base";
 
@@ -5445,6 +5441,36 @@ fn twitch_login_from_url(channel_url: &str) -> Option<String> {
         None
     } else {
         Some(login)
+    }
+}
+
+/// Extract the VOD id from `https://www.twitch.tv/videos/<id>`.
+fn twitch_vod_id_from_url(vod_url: &str) -> Option<String> {
+    let parsed = url::Url::parse(vod_url).ok()?;
+    let segments: Vec<&str> = parsed
+        .path_segments()?
+        .filter(|segment| !segment.is_empty())
+        .collect();
+    let pos = segments.iter().position(|segment| *segment == "videos")?;
+    segments.get(pos + 1).map(|id| id.to_string())
+}
+
+/// Resolve the real channel login for a Twitch VOD URL via Helix
+/// `/videos?id=`. `.../videos/2862518334` → the streamer, never the literal
+/// URL path segment `videos`.
+async fn resolve_twitch_vod_login(
+    ctx: &ToolExecutionContext,
+    vod_url: &str,
+) -> Option<String> {
+    let video_id = twitch_vod_id_from_url(vod_url)?;
+    let client = ctx.app_state.twitch_client.as_ref()?;
+    match client.get_video_by_id(&video_id).await {
+        Ok(Some(video)) => video.user_login,
+        Ok(None) => None,
+        Err(e) => {
+            tracing::warn!("Twitch VOD handle lookup failed for {}: {}", vod_url, e);
+            None
+        }
     }
 }
 
@@ -5634,15 +5660,19 @@ async fn execute_clip_compilation_value(
             let logo = string_arg(args, &["logo_url"]).or_else(|| {
                 std::env::var(logo_env).ok().filter(|s| !s.is_empty())
             });
-            let name = string_arg(args, &["streamer_name"]).or_else(|| {
+            let mut name = string_arg(args, &["streamer_name"]);
+            if name.is_none() {
                 // Prefer the campaign binding, fall back to the effective
-                // source URL (sample packs have no campaign row).
+                // source URL (sample packs have no campaign row). A VOD URL
+                // has `/videos/<id>`, so its first path segment is not the
+                // handle; ask Helix for the real `user_login`.
                 let url = bound_source.as_deref().unwrap_or(&source_url);
-                url::Url::parse(url)
-                    .ok()
-                    .and_then(|p| p.path_segments().and_then(|mut s| s.next().map(String::from)))
-                    .filter(|s| !s.is_empty())
-            });
+                name = if platform == "Twitch" && url.contains("/videos/") {
+                    resolve_twitch_vod_login(ctx, url).await
+                } else {
+                    twitch_login_from_url(url)
+                };
+            }
             (true, logo, name, platform.to_string())
         }
         None => (

@@ -22,6 +22,7 @@ pub struct TwitchChannel {
 pub struct TwitchVideo {
     pub id: String,
     pub user_id: String,
+    pub user_login: Option<String>,
     pub title: String,
     pub url: String,
     pub published_at: DateTime<Utc>,
@@ -73,6 +74,7 @@ struct VideosResponse {
 struct VideoItem {
     id: String,
     user_id: String,
+    user_login: Option<String>,
     title: String,
     url: String,
     published_at: DateTime<Utc>,
@@ -311,6 +313,7 @@ impl TwitchClient {
                 .map(|v| TwitchVideo {
                     id: v.id,
                     user_id: v.user_id,
+                    user_login: v.user_login,
                     title: v.title,
                     url: v.url,
                     published_at: v.published_at,
@@ -320,6 +323,42 @@ impl TwitchClient {
                 .collect();
 
             Ok((videos, next_cursor))
+        })
+        .await
+    }
+
+    /// Fetch a single VOD by id. Helix includes `user_login`, which is needed
+    /// to brand `/videos/<id>` URLs with the real channel handle (`videos` is
+    /// the URL path segment, not the streamer).
+    pub async fn get_video_by_id(&self, video_id: &str) -> Result<Option<TwitchVideo>, String> {
+        let token = self.get_app_token().await?;
+
+        let resp = self
+            .client
+            .get("https://api.twitch.tv/helix/videos")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Client-Id", &self.client_id)
+            .query(&[("id", video_id)])
+            .send()
+            .await
+            .map_err(|e| format!("Twitch get_video_by_id request failed: {}", e))?;
+
+        self.handle_rate_limit_once(resp, |r| async move {
+            let data: VideosResponse = r
+                .json()
+                .await
+                .map_err(|e| format!("Failed to parse video response: {}", e))?;
+
+            Ok(data.data.into_iter().next().map(|v| TwitchVideo {
+                id: v.id,
+                user_id: v.user_id,
+                user_login: v.user_login,
+                title: v.title,
+                url: v.url,
+                published_at: v.published_at,
+                duration: v.duration,
+                view_count: v.view_count,
+            }))
         })
         .await
     }
