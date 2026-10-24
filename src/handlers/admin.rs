@@ -124,6 +124,8 @@ pub fn admin_routes() -> Router {
         .route("/api/admin/referral-commissions", get(api_list_referral_commissions))
         .route("/api/admin/service-flags", get(api_list_service_flags).post(api_set_service_flag))
         .route("/admin/service-flags", get(admin_service_flags_page))
+        .route("/api/admin/payment-methods", get(api_list_payment_methods).post(api_set_payment_method))
+        .route("/admin/payment-methods", get(admin_payment_methods_page))
         .route("/api/admin/ytdlp/cookies", get(api_cookie_health).post(api_cookie_rotated))
         .route("/admin/referrals", get(admin_referrals_page))
         .route("/api/admin/revenue-ledger", get(api_revenue_ledger))
@@ -12965,4 +12967,142 @@ loadCommissions();
 </script>
 </body></html>"###,
     )
+}
+
+/// GET /api/payment-methods — Public list of enabled payment methods.
+pub async fn api_list_payment_methods_public(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    let methods = crate::services::payment_methods::enabled_methods(&state.db_pool).await;
+    Json(json!({"success": true, "methods": methods}))
+}
+
+/// GET /api/admin/payment-methods — Admin list with full rows.
+pub async fn api_list_payment_methods(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    let rows = sqlx::query_as::<_, (String, bool, Option<String>, chrono::DateTime<chrono::Utc>)>(
+        "SELECT method, enabled, updated_by, updated_at FROM payment_methods ORDER BY method",
+    )
+    .fetch_all(&state.db_pool)
+    .await;
+    match rows {
+        Ok(rows) => {
+            let methods: Vec<serde_json::Value> = rows
+                .into_iter()
+                .map(|(method, enabled, updated_by, updated_at)| {
+                    json!({"method": method, "enabled": enabled,
+                           "updated_by": updated_by, "updated_at": updated_at})
+                })
+                .collect();
+            Json(json!({"success": true, "methods": methods}))
+        }
+        Err(e) => Json(json!({"success": false, "error": format!("Failed to list payment methods: {e}")})),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct SetPaymentMethodRequest {
+    pub method: String,
+    pub enabled: bool,
+}
+
+/// POST /api/admin/payment-methods — Flip one payment method switch.
+pub async fn api_set_payment_method(
+    Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
+    Json(req): Json<SetPaymentMethodRequest>,
+) -> Json<serde_json::Value> {
+    let method = req.method.to_ascii_lowercase();
+    if !crate::services::payment_methods::is_known_method(&method) {
+        return Json(json!({"success": false, "error": format!("Unknown payment method: {}", req.method)}));
+    }
+    let who = claims.email.clone();
+    let row = sqlx::query_as::<_, (bool, chrono::DateTime<chrono::Utc>)>(
+        "INSERT INTO payment_methods (method, enabled, updated_by, updated_at) \
+         VALUES ($1, $2, $3, NOW()) \
+         ON CONFLICT (method) DO UPDATE SET enabled = EXCLUDED.enabled, updated_by = EXCLUDED.updated_by, updated_at = NOW() \
+         RETURNING enabled, updated_at",
+    )
+    .bind(&method)
+    .bind(req.enabled)
+    .bind(&who)
+    .fetch_one(&state.db_pool)
+    .await;
+    match row {
+        Ok((enabled, updated_at)) => {
+            tracing::info!("💳 payment_methods: {method} -> {enabled} by {who}");
+            Json(json!({"success": true, "method": method, "enabled": enabled,
+                        "updated_by": who, "updated_at": updated_at}))
+        }
+        Err(e) => Json(json!({"success": false, "error": format!("Failed to set payment method: {e}")})),
+    }
+}
+
+/// GET /admin/payment-methods — Admin page with on/off toggles.
+pub async fn admin_payment_methods_page() -> Html<&'static str> {
+    Html(
+        r###"<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Payment Methods — VideoSync Admin</title>
+<style>
+:root { --bg:#07111d; --panel:#0b1626; --line:rgba(148,163,184,0.16); --text:#e5eefb; --muted:#a8b8d3; --blue:#3b82f6; --green:#22c55e; --red:#ef4444; }
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:var(--bg); color:var(--text); padding:2rem; }
+h1 { font-size:1.4rem; margin-bottom:0.4rem; }
+.sub { color:var(--muted); font-size:0.85rem; margin-bottom:1.5rem; }
+table { width:100%; max-width:720px; border-collapse:collapse; background:var(--panel); border:1px solid var(--line); border-radius:12px; overflow:hidden; }
+th, td { padding:0.7rem 1rem; text-align:left; font-size:0.88rem; border-bottom:1px solid var(--line); }
+th { color:var(--muted); font-size:0.72rem; text-transform:uppercase; letter-spacing:0.06em; }
+tr:last-child td { border-bottom:none; }
+.pill { display:inline-block; padding:3px 12px; border-radius:999px; font-size:0.75rem; font-weight:700; }
+.pill.on { background:rgba(34,197,94,0.15); color:var(--green); border:1px solid rgba(34,197,94,0.4); }
+.pill.off { background:rgba(239,68,68,0.12); color:var(--red); border:1px solid rgba(239,68,68,0.4); }
+.toggle { padding:6px 14px; border-radius:8px; border:1px solid var(--line); background:transparent; color:var(--text); cursor:pointer; font-size:0.8rem; font-weight:600; }
+.toggle:hover { border-color:var(--blue); }
+.meta { color:var(--muted); font-size:0.75rem; }
+.nav { margin-bottom:1.5rem; }
+.nav a { color:var(--blue); text-decoration:none; font-size:0.85rem; }
+</style></head>
+<body>
+<div class="nav"><a href="/admin/deliveries">← Admin</a></div>
+<h1>Payment Methods</h1>
+<p class="sub">Takes effect immediately — no restart. Disabled methods disappear from all UIs.</p>
+<table><thead><tr><th>Method</th><th>Status</th><th>Updated</th><th></th></tr></thead>
+<tbody id="rows"><tr><td colspan="4" class="meta">Loading…</td></tr></tbody></table>
+<script>
+const token = localStorage.getItem('auth_token') || localStorage.getItem('authToken');
+async function load() {
+  const res = await fetch('/api/admin/payment-methods', {headers:{'Authorization':'Bearer '+token}});
+  const data = await res.json();
+  const tb = document.getElementById('rows');
+  if (!data.success) { tb.innerHTML = '<tr><td colspan="4">Error: '+data.error+'</td></tr>'; return; }
+  tb.innerHTML = data.methods.map(m =>
+    `<tr><td><strong>${m.method}</strong></td>` +
+    `<td><span class="pill ${m.enabled?'on':'off'}">${m.enabled?'ON':'OFF'}</span></td>` +
+    `<td class="meta">${m.updated_by||'seed'} · ${m.updated_at||''}</td>` +
+    `<td><button class="toggle" onclick="flip('${m.method}',${!m.enabled})">Turn ${m.enabled?'OFF':'ON'}</button></td></tr>`
+  ).join('');
+}
+async function flip(method, enabled) {
+  if (!confirm(`Turn ${method} ${enabled?'ON':'OFF'}?`)) return;
+  const res = await fetch('/api/admin/payment-methods', {method:'POST',
+    headers:{'Authorization':'Bearer '+token,'Content-Type':'application/json'},
+    body: JSON.stringify({method, enabled})});
+  const data = await res.json();
+  if (!data.success) alert('Failed: '+data.error);
+  load();
+}
+load();
+</script>
+</body></html>
+    "###,
+    )
+}
+
+/// GET /api/payment-methods — Public endpoint for frontends to fetch enabled methods.
+pub fn payment_method_routes() -> axum::Router {
+    axum::Router::new()
+        .route("/api/payment-methods", axum::routing::get(api_list_payment_methods_public))
 }

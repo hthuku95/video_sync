@@ -1041,6 +1041,7 @@ async fn main() {
         .merge(handlers::upload::upload_routes())
         .merge(handlers::output::output_routes())
         .merge(handlers::admin::admin_routes())
+        .merge(handlers::admin::payment_method_routes())
         .merge(handlers::background_routes::background_routes())
         .merge(handlers::jobs::job_routes()) // 🆕 Job control endpoints
         .merge(handlers::youtube::youtube_routes()) // 📺 YouTube integration

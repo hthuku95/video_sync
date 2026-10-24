@@ -3339,6 +3339,15 @@ async fn generate_outreach_message(
     };
 
     let pitch_focus = service_offer_line(&service);
+    // Landing page + education have BOTH a one-time video bundle (10 for $50 /
+    // 30 for $100) and a monthly campaign. Lead outreach with the one-time offer
+    // and mention the campaign as the recurring upsell. Clipping services lead
+    // with the campaign (their core value is ongoing daily clips).
+    let one_time_offer: Option<&str> = match service.as_str() {
+        "landing_page" => Some("one-time bundle: 10 videos for $50 or 30 videos for $100, generated from their website URL"),
+        "education" => Some("one-time bundle: 10 lesson videos for $50 or 30 for $100"),
+        _ => None,
+    };
     // Social handles for multi-channel outreach (X DM + email + manual IG DM).
     let ig_handle: Option<String> = row.get("instagram_handle");
     let _tw_handle: Option<String> = row.get("twitter_handle");
@@ -3365,6 +3374,7 @@ Include the delivery link naturally in both the DM and email — do NOT ask for 
 {ig_line}
 
 Offer: {pitch_focus}
+{lead_offer_block}
 
 X DM must be short and direct (under 280 chars). Email must include a subject and brief body.
 Be conversational, specific to their content/niche, and end with a soft call-to-action.
@@ -3381,6 +3391,9 @@ Legacy DM tone: {existing_dm}"#,
         pt = pt.replace('_', " "),
         audience = audience_label,
         pitch_focus = pitch_focus,
+        lead_offer_block = one_time_offer
+            .map(|o| format!("PRIMARY (lead with this): {}\nSECONDARY (mention as the recurring option): monthly campaign subscription that generates and posts fresh videos daily.", o))
+            .unwrap_or_else(|| "PRIMARY (lead with this): monthly campaign subscription that generates and posts fresh videos daily.".to_string()),
         delivery_url = payload.delivery_url,
         ig_line = ig_line,
         existing_x_dm = existing_x_dm.chars().take(220).collect::<String>(),
@@ -3750,7 +3763,6 @@ async fn generate_prospect_sample_pack(
         "delivery_id": delivery_id.to_string(),
         "delivery_url": delivery_url,
         "service": service,
-        "unlock_price_usdc": unlock_price,
         "message": "Revenue sample pack queued. The delivery link is shareable immediately and will update when rendering completes."
     })))
 }

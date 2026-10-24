@@ -69,6 +69,8 @@ fn calculate_recommended_pool_size() -> u32 {
 }
 
 pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
+    // Last touched: 2026-10-24 to force sqlx::migrate!() to re-embed
+    //   20261024000003 — payment_methods (admin on/off toggle, paypal ON, usdc OFF)
     tracing::info!("Running database migrations...");
 
     // sqlx::migrate!() is a proc macro — Cargo only re-runs it when THIS file
