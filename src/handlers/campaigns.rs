@@ -73,6 +73,7 @@ pub fn campaign_routes() -> Router {
     Router::new()
         .route("/api/campaigns", get(client_list_campaigns).post(client_create_campaign))
         .route("/api/campaigns/:id", get(client_get_campaign))
+        .route("/api/campaigns/:id/activity", get(client_campaign_activity))
         .route("/api/campaigns/:id/pause", post(client_pause_campaign))
         .route("/api/campaigns/:id/resume", post(client_resume_campaign))
         .route("/api/campaigns/:id/cancel", post(client_cancel_campaign))
@@ -655,10 +656,19 @@ async fn client_get_campaign(
         }
     }
 
-    let posts = sqlx::query_as::<_, (Uuid, i32, i32, chrono::DateTime<chrono::Utc>, Option<String>, String, Option<String>)>(
-        "SELECT id, day_number, slot_index, scheduled_at, media_r2_url, status, zernio_post_id \
-         FROM campaign_posts WHERE campaign_id = $1 \
-         ORDER BY day_number, slot_index",
+    let posts = sqlx::query_as::<_, (
+        Uuid, i32, i32, chrono::DateTime<chrono::Utc>, Option<String>, Option<String>,
+        Option<String>, String, Option<String>, Option<Uuid>, Option<Uuid>, Option<String>,
+        Option<String>,
+    )>(
+        "SELECT cp.id, cp.day_number, cp.slot_index, cp.scheduled_at, cp.variation_prompt, \
+                cp.caption, cp.media_r2_url, cp.status, cp.zernio_post_id, cp.delivery_id, \
+                d.workflow_id, aw.status AS workflow_status, aw.current_step \
+           FROM campaign_posts cp \
+      LEFT JOIN deliveries d ON d.id = cp.delivery_id \
+      LEFT JOIN app_workflows aw ON aw.id = d.workflow_id \
+          WHERE cp.campaign_id = $1 \
+       ORDER BY cp.day_number, cp.slot_index",
     )
     .bind(id)
     .fetch_all(&state.db_pool)
@@ -666,17 +676,24 @@ async fn client_get_campaign(
     .unwrap_or_default();
 
     let posts_json: Vec<serde_json::Value> = posts.into_iter().map(|(
-        post_id, day, slot, scheduled_at, media_url, post_status, zernio_id,
+        post_id, day, slot, scheduled_at, variation, caption, media_url, post_status,
+        zernio_id, delivery_id, workflow_id, workflow_status, current_step,
     )| {
         json!({
             "id": post_id.to_string(),
             "day_number": day,
             "slot_index": slot,
             "scheduled_at": scheduled_at.to_rfc3339(),
+            "variation_prompt": variation,
+            "caption": caption,
             "media_r2_url": media_url,
             "media_url": media_url.as_ref().map(|_| format!("/api/campaign-posts/{}/stream", post_id)),
             "status": post_status,
             "zernio_post_id": zernio_id,
+            "delivery_id": delivery_id.map(|v| v.to_string()),
+            "workflow_id": workflow_id.map(|v| v.to_string()),
+            "workflow_status": workflow_status,
+            "current_step": current_step,
         })
     }).collect();
 
@@ -699,6 +716,238 @@ async fn client_get_campaign(
             "total_posts_published": total_published,
         },
         "posts": posts_json,
+    }))
+}
+
+// ── Client: customer-safe production activity ───────────────────────────────
+
+fn workflow_is_active(status: &str) -> bool {
+    matches!(
+        status,
+        "queued"
+            | "planning"
+            | "running"
+            | "retrying"
+            | "waiting_for_input"
+            | "waiting_for_external_service"
+    )
+}
+
+/// GET /api/campaigns/:id/activity
+///
+/// One poll for the whole campaign: the customer sees which post is queued,
+/// planning, producing, in review or ready, plus a short customer-safe event
+/// feed. Raw prompts, tool arguments, URLs and provider errors never leave the
+/// server. The response is intentionally small enough to poll every few
+/// seconds for a 30–50 video campaign.
+async fn client_campaign_activity(
+    Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<crate::models::auth::Claims>,
+    Path(id): Path<Uuid>,
+    headers: axum::http::HeaderMap,
+) -> Json<serde_json::Value> {
+    let user_id: i32 = claims.sub.parse().unwrap_or(0);
+    let campaign = sqlx::query_as::<_, (String, String)>(
+        "SELECT service_type, status FROM campaigns WHERE id = $1 AND user_id = $2",
+    )
+    .bind(id)
+    .bind(user_id)
+    .fetch_optional(&state.db_pool)
+    .await;
+
+    let (service_type, _campaign_status) = match campaign {
+        Ok(Some(row)) => row,
+        Ok(None) => return Json(json!({"success": false, "error": "Campaign not found"})),
+        Err(e) => return Json(json!({"success": false, "error": e.to_string()})),
+    };
+
+    if let Some(app) = headers
+        .get("X-App")
+        .and_then(|h| h.to_str().ok())
+        .map(|s| s.to_ascii_lowercase())
+    {
+        if matches!(app.as_str(), "clips" | "shorts" | "app" | "learn" | "motion")
+            && !app_owns_service(&app, &service_type)
+        {
+            return Json(json!({"success": false, "error": "Campaign not found"}));
+        }
+    }
+
+    let rows = sqlx::query(
+        "SELECT cp.id, cp.day_number, cp.slot_index, cp.status AS post_status, \
+                cp.delivery_id, d.workflow_id, aw.status AS workflow_status, \
+                aw.current_step, aw.created_at AS workflow_created_at, \
+                aw.last_heartbeat_at \
+           FROM campaign_posts cp \
+      LEFT JOIN deliveries d ON d.id = cp.delivery_id \
+      LEFT JOIN app_workflows aw ON aw.id = d.workflow_id \
+          WHERE cp.campaign_id = $1 \
+       ORDER BY cp.day_number, cp.slot_index",
+    )
+    .bind(id)
+    .fetch_all(&state.db_pool)
+    .await
+    .unwrap_or_default();
+
+    let mut workflow_ids: Vec<Uuid> = rows
+        .iter()
+        .filter_map(|row| row.try_get::<Option<Uuid>, _>("workflow_id").ok().flatten())
+        .collect();
+    workflow_ids.sort();
+    workflow_ids.dedup();
+
+    let event_rows = if workflow_ids.is_empty() {
+        Vec::new()
+    } else {
+        sqlx::query_as::<_, (Uuid, String, String, serde_json::Value, chrono::DateTime<chrono::Utc>)>(
+            "SELECT workflow_id, event_type, message, details, created_at \
+               FROM ( \
+                   SELECT workflow_id, event_type, message, details, created_at, \
+                          ROW_NUMBER() OVER (PARTITION BY workflow_id ORDER BY created_at DESC) AS rn \
+                     FROM app_workflow_events \
+                    WHERE workflow_id = ANY($1) \
+               ) ranked \
+              WHERE rn <= 14 \
+           ORDER BY created_at DESC",
+        )
+        .bind(&workflow_ids)
+        .fetch_all(&state.db_pool)
+        .await
+        .unwrap_or_default()
+    };
+
+    // Newest first while grouping, then reverse for chronological display.
+    let mut events_by_workflow: std::collections::HashMap<Uuid, Vec<serde_json::Value>> =
+        std::collections::HashMap::new();
+    for (workflow_id, event_type, message, details, created_at) in event_rows {
+        let Some(label) = crate::services::activity::public_event_label(
+            &event_type,
+            &message,
+            &details,
+        ) else {
+            continue;
+        };
+        let mut event = json!({
+            "type": event_type,
+            "label": label,
+            "at": created_at.to_rfc3339(),
+        });
+        if event_type == "user_feedback" {
+            if let Some(note) = crate::services::activity::visible_user_note(&details) {
+                event["note"] = json!(note);
+            }
+        }
+        events_by_workflow.entry(workflow_id).or_default().push(event);
+    }
+
+    // Reverse + collapse consecutive duplicate labels (progress heartbeats are
+    // intentionally chatty; the customer should see a calm timeline).
+    for events in events_by_workflow.values_mut() {
+        events.reverse();
+        let mut deduped: Vec<serde_json::Value> = Vec::with_capacity(events.len());
+        let mut last_label: Option<String> = None;
+        for event in events.drain(..) {
+            let label = event
+                .get("label")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            if last_label.as_deref() == Some(label.as_str()) {
+                continue;
+            }
+            last_label = Some(label);
+            deduped.push(event);
+        }
+        *events = deduped;
+    }
+
+    let now = chrono::Utc::now();
+    let mut active = 0usize;
+    let mut completed = 0usize;
+    let mut failed = 0usize;
+    let mut items = Vec::with_capacity(rows.len());
+
+    for row in &rows {
+        let post_id: Uuid = row.get("id");
+        let day: i32 = row.get("day_number");
+        let slot: i32 = row.get("slot_index");
+        let post_status: String = row.get("post_status");
+        let delivery_id: Option<Uuid> = row.try_get("delivery_id").ok().flatten();
+        let workflow_id: Option<Uuid> = row.try_get("workflow_id").ok().flatten();
+        let workflow_status: String = row
+            .try_get::<Option<String>, _>("workflow_status")
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        let current_step: String = row
+            .try_get::<Option<String>, _>("current_step")
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        let workflow_created_at: Option<chrono::DateTime<chrono::Utc>> =
+            row.try_get("workflow_created_at").ok().flatten();
+        let last_heartbeat_at: Option<chrono::DateTime<chrono::Utc>> =
+            row.try_get("last_heartbeat_at").ok().flatten();
+
+        let events = workflow_id
+            .and_then(|wf| events_by_workflow.get(&wf).cloned())
+            .unwrap_or_default();
+        let latest_event = events
+            .last()
+            .and_then(|e| e.get("type"))
+            .and_then(|v| v.as_str());
+        let (stage_index, stage_label) =
+            crate::services::activity::stage_for(&workflow_status, &current_step, latest_event);
+        let is_active = workflow_id.is_some() && workflow_is_active(&workflow_status);
+        let is_failed = post_status == "failed" || workflow_status == "failed";
+        let is_completed = !is_failed
+            && (workflow_status == "completed"
+                || matches!(post_status.as_str(), "scheduled" | "published"));
+        if is_active {
+            active += 1;
+        } else if is_failed {
+            failed += 1;
+        } else if is_completed {
+            completed += 1;
+        }
+
+        let elapsed_seconds = workflow_created_at
+            .map(|created| (now - created).num_seconds().max(0))
+            .unwrap_or(0);
+
+        items.push(json!({
+            "post_id": post_id.to_string(),
+            "day_number": day,
+            "slot_index": slot,
+            "post_status": post_status,
+            "delivery_id": delivery_id.map(|v| v.to_string()),
+            "workflow_id": workflow_id.map(|v| v.to_string()),
+            "workflow_status": workflow_status,
+            "current_step": current_step,
+            "current_step_label": crate::services::activity::public_step_label(&current_step),
+            "stage_index": stage_index,
+            "stage_count": 5,
+            "stage_label": stage_label,
+            "active": is_active,
+            "can_feedback": is_active,
+            "elapsed_seconds": elapsed_seconds,
+            "last_heartbeat_at": last_heartbeat_at.map(|v| v.to_rfc3339()),
+            "events": events,
+        }));
+    }
+
+    Json(json!({
+        "success": true,
+        "campaign_id": id.to_string(),
+        "service_type": service_type,
+        "generated_at": now.to_rfc3339(),
+        "summary": {
+            "total": items.len(),
+            "active": active,
+            "completed": completed,
+            "failed": failed,
+        },
+        "items": items,
     }))
 }
 

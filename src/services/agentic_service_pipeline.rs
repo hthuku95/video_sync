@@ -467,6 +467,20 @@ impl AgenticServicePipeline {
                 )
                 .await;
 
+            // Notes sent while the workflow was between attempts are durable.
+            // Pull them before the attempt starts and mark them consumed so a
+            // restart does not apply the same note twice.
+            let pending_notes = drain_pending_feedback(&state.db_pool, workflow_id).await;
+            if !pending_notes.is_empty() {
+                let notes = pending_notes.join("\n- ");
+                current_prompt.push_str(&format!(
+                    "\n\n## CUSTOMER NOTES (apply these to the next cut)\n- {notes}\n\
+                     These notes came from the customer while the production was running. \
+                     Address them in this attempt. Do not discard the existing good work; \
+                     change only the parts the note targets."
+                ));
+            }
+
             let agent = crate::agent::stateful_agent::StatefulGeminiAgent::new_with_nvidia(
                 gemini_client.clone(),
                 state.bedrock_client.clone(),
@@ -483,13 +497,18 @@ impl AgenticServicePipeline {
             let wf_id = workflow_id;
             let progress_task = tokio::spawn(async move {
                 while let Some(msg) = progress_rx.recv().await {
+                    // `message` is the customer-safe label; the raw line stays
+                    // in `details` for operator traces only. The public
+                    // campaign-activity endpoint never returns `details`.
+                    let safe = crate::services::activity::public_progress_label(&msg);
                     let _ = sqlx::query(
                         r#"INSERT INTO app_workflow_events
                            (workflow_id, event_type, node_name, message, details)
-                           VALUES ($1, 'agent_progress', NULL, $2, '{}'::jsonb)"#,
+                           VALUES ($1, 'agent_progress', NULL, $2, $3)"#,
                     )
                     .bind(wf_id)
-                    .bind(&msg)
+                    .bind(&safe)
+                    .bind(serde_json::json!({ "raw": msg }))
                     .execute(&pool)
                     .await;
                 }
@@ -499,8 +518,11 @@ impl AgenticServicePipeline {
             // Subscribe to a Redis feedback channel so
             // POST /api/workflows/{workflow_id}/feedback can send messages to the
             // running agent (re-editing / add-on requests) across Fargate instances.
+            // Customer notes are addressed by workflow id (the campaign UI only
+            // knows the workflow). The chat path uses a session id, so the
+            // feedback endpoint publishes to both channels.
             let feedback_rx = if let Some(ref bus) = state.pubsub_bus {
-                match bus.subscribe(&format!("feedback:{}", session_id)).await {
+                match bus.subscribe(&format!("feedback:{}", workflow_id)).await {
                     Ok(rx) => Some(rx),
                     Err(e) => {
                         tracing::warn!("Failed to subscribe to feedback channel: {}", e);
@@ -1701,6 +1723,26 @@ enum RepairScope {
     Full,
     /// Re-render only the flagged aspect; reuse surviving artifacts.
     Partial { instructions: String },
+}
+
+/// Claim and return notes the customer sent while the workflow was between
+/// attempts. The update is atomic, so two workers cannot apply the same note.
+async fn drain_pending_feedback(pool: &sqlx::PgPool, workflow_id: Uuid) -> Vec<String> {
+    sqlx::query_scalar::<_, String>(
+        "WITH pending AS ( \
+             SELECT id, message FROM workflow_feedback \
+              WHERE workflow_id = $1 AND consumed_at IS NULL \
+              ORDER BY created_at \
+              FOR UPDATE SKIP LOCKED \
+         ) \
+         UPDATE workflow_feedback f SET consumed_at = NOW() \
+           FROM pending p WHERE f.id = p.id \
+         RETURNING p.message",
+    )
+    .bind(workflow_id)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default()
 }
 
 /// Local files the previous attempt left in its output dir — candidates for

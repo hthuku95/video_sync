@@ -1,4 +1,5 @@
 // src/services/mod.rs
+pub mod activity;
 pub mod agentic_service_pipeline;
 pub mod app_tiers;
 pub mod artifact_verifier;

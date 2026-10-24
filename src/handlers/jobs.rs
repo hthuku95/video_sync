@@ -617,45 +617,119 @@ pub async fn get_workflow_debug(
 pub async fn workflow_feedback(
     Path(workflow_id): Path<String>,
     Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<crate::models::auth::Claims>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    let session_id = match uuid::Uuid::parse_str(&workflow_id) {
-        Ok(_) => workflow_id,
-        Err(_) => return (StatusCode::BAD_REQUEST, "Invalid workflow id").into_response(),
+    let Ok(workflow_uuid) = uuid::Uuid::parse_str(&workflow_id) else {
+        return (StatusCode::BAD_REQUEST, "Invalid workflow id").into_response();
     };
 
     let message = body
         .get("message")
         .and_then(|v| v.as_str())
         .unwrap_or("")
+        .trim()
         .to_string();
     if message.is_empty() {
         return (StatusCode::BAD_REQUEST, "Missing 'message' field").into_response();
     }
+    // Bound the note: this is guidance, not an unbounded prompt.
+    let message: String = message.chars().take(2_000).collect();
 
-    // Publish feedback to Redis pub/sub channel
-    let published = if let Some(ref bus) = state.pubsub_bus {
-        let channel = format!("feedback:{}", session_id);
-        match bus.publish(&channel, &message).await {
-            Ok(n) if n > 0 => {
-                tracing::info!("📨 Feedback sent to workflow {} via Redis: {:.60}", session_id, message);
-                true
-            }
-            Ok(_) => false,
-            Err(e) => {
-                tracing::warn!("Redis publish failed for feedback: {}", e);
-                false
-            }
+    let workflow = sqlx::query_as::<_, (Option<i32>, String, Option<String>)>(
+        "SELECT user_id, status, session_uuid FROM app_workflows WHERE id = $1",
+    )
+    .bind(workflow_uuid)
+    .fetch_optional(&state.db_pool)
+    .await;
+
+    let (owner_id, status, session_uuid) = match workflow {
+        Ok(Some(row)) => row,
+        Ok(None) => return (StatusCode::NOT_FOUND, "Workflow not found").into_response(),
+        Err(e) => {
+            tracing::warn!("workflow_feedback lookup failed: {e}");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Could not load workflow").into_response();
         }
-    } else {
-        false
     };
 
-    if published {
-        (StatusCode::OK, "Feedback sent to running agent").into_response()
-    } else {
-        (StatusCode::NOT_FOUND, "No active agent found for this workflow").into_response()
+    let requester: i32 = claims.sub.parse().unwrap_or(0);
+    if let Some(owner) = owner_id {
+        if owner != requester && !claims.is_staff && !claims.is_superuser {
+            return (StatusCode::FORBIDDEN, "Not your workflow").into_response();
+        }
     }
+
+    if matches!(status.as_str(), "completed" | "failed" | "cancelled") {
+        return (
+            StatusCode::CONFLICT,
+            "This production has already finished; start a new render to apply changes",
+        )
+            .into_response();
+    }
+
+    // Persist first: Redis delivery is best-effort and there may be no
+    // subscriber while the workflow is between attempts or restarting.
+    let saved = sqlx::query_scalar::<_, uuid::Uuid>(
+        "INSERT INTO workflow_feedback (workflow_id, user_id, message) \
+         VALUES ($1, $2, $3) RETURNING id",
+    )
+    .bind(workflow_uuid)
+    .bind(requester)
+    .bind(&message)
+    .fetch_optional(&state.db_pool)
+    .await;
+
+    if let Err(e) = saved {
+        tracing::warn!("workflow_feedback insert failed: {e}");
+        return (StatusCode::INTERNAL_SERVER_ERROR, "Could not save your note").into_response();
+    }
+
+    // The customer activity feed shows the note without exposing internals.
+    let runtime = crate::services::workflow_runtime::WorkflowRuntime::new(state.db_pool.clone());
+    let _ = runtime
+        .append_event(
+            workflow_uuid,
+            "user_feedback",
+            None,
+            "Customer note",
+            serde_json::json!({ "message": message }),
+        )
+        .await;
+
+    // Publish to the workflow channel (service pipeline) and the legacy
+    // session channel (interactive chat) if the workflow has a session.
+    let mut published = false;
+    if let Some(ref bus) = state.pubsub_bus {
+        let mut channels = vec![format!("feedback:{}", workflow_uuid)];
+        if let Some(session) = session_uuid.filter(|s| !s.trim().is_empty()) {
+            channels.push(format!("feedback:{}", session));
+        }
+        for channel in channels {
+            match bus.publish(&channel, &message).await {
+                Ok(n) if n > 0 => {
+                    published = true;
+                    tracing::info!("📨 Feedback delivered to {}", channel);
+                }
+                Ok(_) => {}
+                Err(e) => tracing::warn!("Redis publish failed for {}: {}", channel, e),
+            }
+        }
+    }
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "success": true,
+            "saved": true,
+            "delivered": published,
+            "message": if published {
+                "Note delivered to the producer"
+            } else {
+                "Note saved — the producer will apply it on the next step"
+            },
+        })),
+    )
+        .into_response()
 }
 
 /// POST /api/workflows/{workflow_id}/cancel
