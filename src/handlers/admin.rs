@@ -176,6 +176,7 @@ pub struct UsersQuery {
     pub page: Option<u32>,
     pub limit: Option<u32>,
     pub search: Option<String>,
+    pub whitelisted: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -1134,13 +1135,27 @@ pub async fn admin_users_api(
     // Full column set including the subscription columns added by the
     // 20260415000001 migration — surfaces trial status + paid-until on
     // the admin users page without having to modify UserResponse.
-    let select = "SELECT id, email, username, is_active, is_superuser, is_staff, \
-                  created_at, subscription_status, subscription_tier, \
-                  trial_ends_at, subscription_active_until, last_payment_at, \
-                  is_dfy_customer \
-                  FROM users";
+    let (select, base_from) = if params.whitelisted.unwrap_or(false) {
+        (
+            "SELECT u.id, u.email, u.username, u.is_active, u.is_superuser, u.is_staff, \
+             u.created_at, u.subscription_status, u.subscription_tier, \
+             u.trial_ends_at, u.subscription_active_until, u.last_payment_at, \
+             u.is_dfy_customer \
+             FROM users u JOIN whitelist_emails w ON w.email = u.email",
+            "SELECT COUNT(*) FROM users u JOIN whitelist_emails w ON w.email = u.email",
+        )
+    } else {
+        (
+            "SELECT id, email, username, is_active, is_superuser, is_staff, \
+             created_at, subscription_status, subscription_tier, \
+             trial_ends_at, subscription_active_until, last_payment_at, \
+             is_dfy_customer \
+             FROM users",
+            "SELECT COUNT(*) FROM users",
+        )
+    };
     let mut query = select.to_string();
-    let mut count_query = "SELECT COUNT(*) FROM users".to_string();
+    let mut count_query = base_from.to_string();
 
     if params.search.is_some() {
         let where_clause = " WHERE username ILIKE $1 OR email ILIKE $1";

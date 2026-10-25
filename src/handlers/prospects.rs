@@ -2825,7 +2825,7 @@ fn service_offer_line(service: &str) -> &'static str {
         "youtube_clipping" => "automated clip generation from your YouTube videos and podcasts — posted to your social accounts daily",
         "twitch_clipping" => "automated clip generation from your Twitch streams and VODs — posted to your social accounts daily",
         "education" => "animated educational videos with narration and motion graphics — generated and posted to your social accounts daily",
-        "landing_page" => "videos generated from your website URL — posted to your social accounts as marketing content daily",
+        "landing_page" => "videos generated from your website URL — any type of video (how-to, marketing, product demo, explainer, testimonial) built from what the AI learns by crawling your site — posted to your social accounts as marketing content daily",
         "kick_auto_clipper" => "automated Kick VOD clipping from your favorite streamers — posted to your social accounts daily",
         "manim_explainer" => "narrated animated explainer videos — generated and posted to your social accounts daily",
         "whiteboard_animation" => "narrated whiteboard-style hand-drawn explainer videos — generated and posted daily",
@@ -3510,6 +3510,7 @@ async fn generate_outreach_message(
     };
 
     let pitch_focus = service_offer_line(&service);
+    let price_line = service_price_line(&service);
     // Landing page + education have BOTH a one-time video bundle (10 for $50 /
     // 30 for $100) and a monthly campaign. Lead outreach with the one-time offer
     // and mention the campaign as the recurring upsell. Clipping services lead
@@ -3600,7 +3601,10 @@ Include the delivery link naturally in both the DM and email — do NOT ask for 
 {ig_line}
 
 Offer: {pitch_focus}
+Price: {price_line}
 {lead_offer_block}
+
+CRITICAL: The DM and email MUST both contain the free sample delivery link (provided above) and, if a referral/signup link is provided below, that link too. Do NOT omit either link. Do NOT start the message with "Verified", "Verified here", or any verification phrase — start with a genuine, personalized observation about their content/niche.
 
 X DM must be short and direct (under 280 chars). Email must include a subject and brief body.
 Be conversational, specific to their content/niche, and end with a soft call-to-action.
@@ -3617,6 +3621,7 @@ Legacy DM tone: {existing_dm}"#,
         pt = pt.replace('_', " "),
         audience = audience_label,
         pitch_focus = pitch_focus,
+        price_line = price_line,
         lead_offer_block = one_time_offer
             .map(|o| format!("PRIMARY (lead with this): {}\nSECONDARY (mention as the recurring option): monthly campaign subscription that generates and posts fresh videos daily.", o))
             .unwrap_or_else(|| "PRIMARY (lead with this): monthly campaign subscription that generates and posts fresh videos daily.".to_string()),
@@ -6764,8 +6769,10 @@ async fn instagram_generate_dm(
     // Build the sample-link block injected into the prompt. If a sample
     // exists, the LLM is instructed to work the URL in naturally; without
     // one, we tell the model not to invent a link.
-    let base_url = std::env::var("PUBLIC_BASE_URL")
-        .unwrap_or_else(|_| "https://www.videosync.video".to_string());
+    let base_url = format!(
+        "https://{}.videosync.ink",
+        app_subdomain_for_service(service.as_deref().unwrap_or("landing_page"))
+    );
     let sample_block =
         "NO sample exists yet — do NOT invent a URL. Offer to make one: \"want me to put together a quick sample?\"".to_string();
 
@@ -6796,6 +6803,53 @@ async fn instagram_generate_dm(
 
     let service_block = service_offer_prompt(service.as_deref());
 
+    // Referral attribution (whitelisted non-admin senders only).
+    let acting_is_admin = claims.is_superuser || claims.is_staff;
+    let referral_url: Option<String> = if !acting_is_admin {
+        let uid = user_id;
+        let app = app_subdomain_for_service(service.as_deref().unwrap_or("landing_page"));
+        let existing: Option<String> = sqlx::query_scalar(
+            "SELECT code FROM referral_codes WHERE user_id = $1 AND app_slug = $2",
+        )
+        .bind(uid)
+        .bind(app)
+        .fetch_optional(&state.db_pool)
+        .await
+        .ok()
+        .flatten();
+        let code = match existing {
+            Some(c) => c,
+            None => {
+                let new_code = format!("ref-{}-{}", app, &Uuid::new_v4().to_string()[..6]);
+                sqlx::query(
+                    "INSERT INTO referral_codes (user_id, code, app_slug) VALUES ($1, $2, $3) ON CONFLICT (user_id, app_slug) DO NOTHING",
+                )
+                .bind(uid)
+                .bind(&new_code)
+                .bind(app)
+                .execute(&state.db_pool)
+                .await
+                .ok();
+                sqlx::query_scalar::<_, String>(
+                    "SELECT code FROM referral_codes WHERE user_id = $1 AND app_slug = $2",
+                )
+                .bind(uid)
+                .bind(app)
+                .fetch_optional(&state.db_pool)
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or(new_code)
+            }
+        };
+        Some(format!("https://videosync.ink/ref/{}/{}", app, code))
+    } else {
+        None
+    };
+    let referral_block = referral_url
+        .map(|u| format!("If they want to sign up or create an account, include this signup link naturally: {}", u))
+        .unwrap_or_default();
+
     let prompt = format!(
         r#"You are a senior outbound copywriter for a video production studio. Write a personalized Instagram DM (≤120 words) to this creator.
 
@@ -6811,6 +6865,8 @@ Creator info:
 
 {sample_block}
 
+{referral_block}
+
 The DM must:
 - Be specific. Reference an actual detail from the bio/caption — never generic flattery.
 - State concretely what the studio would do for THEM, with the realistic price from the service block above.
@@ -6818,6 +6874,7 @@ The DM must:
 - End with a clear ask: "want me to send over the breakdown?" or "does this fit what you had in mind?"
 - Sound like one founder messaging another. Casual, lowercase ok, no corporate fluff, no emoji spam.
 - Adapt tone to follower size — micro creators (<10k) warm + helpful; mid creators (10k–100k) business-direct; big creators (>100k) concise with clear ROI angle.
+- Do NOT start the DM with "Verified", "Verified here", or any verification phrase. Start with a genuine, personalized observation about their content.
 
 Output ONLY the DM body. No quotes, no labels, no preamble."#,
         username = username,
@@ -6828,6 +6885,7 @@ Output ONLY the DM body. No quotes, no labels, no preamble."#,
         ext_url = ext_url,
         service_block = service_block,
         sample_block = sample_block,
+        referral_block = referral_block,
     );
 
     let dm_text = match generate_text_best_effort(
