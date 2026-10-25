@@ -26,10 +26,66 @@ pub fn sender_for(profile: &str) -> String {
     }
 }
 
+/// Determine which email provider to use. Defaults to Resend if RESEND_API_KEY is
+/// set, otherwise falls back to SES. Override with EMAIL_PROVIDER env var
+/// ("resend" | "ses").
+fn email_provider() -> &'static str {
+    match std::env::var("EMAIL_PROVIDER").as_deref() {
+        Ok("ses") => "ses",
+        Ok("resend") => "resend",
+        _ => {
+            if std::env::var("RESEND_API_KEY").is_ok() {
+                "resend"
+            } else {
+                "ses"
+            }
+        }
+    }
+}
+
 /// Build an SESv2 client inline (same pattern as SQS — SDK discovers creds from env).
 async fn ses_client() -> Result<aws_sdk_sesv2::Client, String> {
     let config = aws_config::load_from_env().await;
     Ok(aws_sdk_sesv2::Client::new(&config))
+}
+
+/// Send a single email via Resend (https://resend.com). Returns message_id.
+async fn resend_send(
+    to: &str,
+    subject: &str,
+    body: &str,
+    html: Option<&str>,
+    from_addr: &str,
+) -> Result<String, String> {
+    let api_key = std::env::var("RESEND_API_KEY")
+        .map_err(|_| "RESEND_API_KEY not set".to_string())?;
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .unwrap_or_default();
+    let mut payload = serde_json::json!({
+        "from": from_addr,
+        "to": [to],
+        "subject": subject,
+        "text": body,
+    });
+    if let Some(h) = html {
+        payload["html"] = serde_json::Value::String(h.to_string());
+    }
+    let resp = client
+        .post("https://api.resend.com/emails")
+        .bearer_auth(&api_key)
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("Resend request failed: {e}"))?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("Resend error {status}: {body}"));
+    }
+    let v: serde_json::Value = resp.json().await.map_err(|e| format!("Resend parse failed: {e}"))?;
+    Ok(v.get("id").and_then(|x| x.as_str()).unwrap_or("resend-unknown").to_string())
 }
 
 /// Send a single plain-text email via AWS SESv2 and log the result.
@@ -82,48 +138,56 @@ pub async fn send_email(
         None
     };
 
-    let client = ses_client().await?;
-
-    let dest = Destination::builder().to_addresses(to).build();
-    let subject_content = Content::builder()
-        .data(subject)
-        .charset("UTF-8")
-        .build()
-        .map_err(|e| format!("Failed to build subject content: {e}"))?;
-    let text_content = Content::builder()
-        .data(body)
-        .charset("UTF-8")
-        .build()
-        .map_err(|e| format!("Failed to build body content: {e}"))?;
-    let mut body_builder = Body::builder().text(text_content);
-    if let Some(html_body) = html {
-        let html_content = Content::builder()
-            .data(html_body)
+    let provider = email_provider();
+    let send_result: Result<String, String> = if provider == "resend" {
+        resend_send(to, subject, body, html, &from_addr).await
+    } else {
+        // SES path
+        let client = ses_client().await?;
+        let dest = Destination::builder().to_addresses(to).build();
+        let subject_content = Content::builder()
+            .data(subject)
             .charset("UTF-8")
             .build()
-            .map_err(|e| format!("Failed to build html content: {e}"))?;
-        body_builder = body_builder.html(html_content);
-    }
-    let body = body_builder.build();
-    let msg = Message::builder()
-        .subject(subject_content)
-        .body(body)
-        .build();
+            .map_err(|e| format!("Failed to build subject content: {e}"))?;
+        let text_content = Content::builder()
+            .data(body)
+            .charset("UTF-8")
+            .build()
+            .map_err(|e| format!("Failed to build body content: {e}"))?;
+        let mut body_builder = Body::builder().text(text_content);
+        if let Some(html_body) = html {
+            let html_content = Content::builder()
+                .data(html_body)
+                .charset("UTF-8")
+                .build()
+                .map_err(|e| format!("Failed to build html content: {e}"))?;
+            body_builder = body_builder.html(html_content);
+        }
+        let body = body_builder.build();
+        let msg = Message::builder()
+            .subject(subject_content)
+            .body(body)
+            .build();
+        match tokio::time::timeout(SES_TIMEOUT, async {
+            client
+                .send_email()
+                .from_email_address(&from_addr)
+                .destination(dest)
+                .content(EmailContent::builder().simple(msg).build())
+                .send()
+                .await
+        })
+        .await
+        {
+            Ok(Ok(response)) => Ok(response.message_id().unwrap_or("unknown").to_string()),
+            Ok(Err(e)) => Err(format!("SES send error: {e}")),
+            Err(_) => Err("SES send timed out".to_string()),
+        }
+    };
 
-    match tokio::time::timeout(SES_TIMEOUT, async {
-        client
-            .send_email()
-            .from_email_address(&from_addr)
-            .destination(dest)
-            .content(EmailContent::builder().simple(msg).build())
-            .send()
-            .await
-    })
-    .await
-    {
-        Ok(Ok(response)) => {
-            let message_id = response.message_id().unwrap_or("unknown").to_string();
-            // Update log entry to 'sent'
+    match send_result {
+        Ok(message_id) => {
             if let (Some(pool), Some(lid)) = (db, log_id) {
                 let _ = sqlx::query(
                     "UPDATE email_log SET status = 'sent', message_id = $1 WHERE id = $2",
@@ -135,22 +199,7 @@ pub async fn send_email(
             }
             Ok((message_id, log_id))
         }
-        Ok(Err(e)) => {
-            let err = format!("SES send error: {e}");
-            // Update log entry to 'failed'
-            if let (Some(pool), Some(lid)) = (db, log_id) {
-                let _ = sqlx::query(
-                    "UPDATE email_log SET status = 'failed', error_message = $1 WHERE id = $2",
-                )
-                .bind(&err)
-                .bind(lid)
-                .execute(pool)
-                .await;
-            }
-            Err(err)
-        }
-        Err(_) => {
-            let err = "SES send timed out".to_string();
+        Err(err) => {
             if let (Some(pool), Some(lid)) = (db, log_id) {
                 let _ = sqlx::query(
                     "UPDATE email_log SET status = 'failed', error_message = $1 WHERE id = $2",
