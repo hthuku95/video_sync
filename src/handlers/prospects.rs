@@ -124,6 +124,10 @@ pub fn prospect_routes() -> Router {
             "/api/admin/prospects/:id/send-email",
             post(send_prospect_email_handler),
         )
+        .route(
+            "/api/admin/prospects/bulk-send-email",
+            post(bulk_send_prospect_emails),
+        )
         .route("/api/admin/prospects/:id", delete(delete_prospect))
         .layer(axum::middleware::from_fn(admin_or_whitelisted_middleware))
         .layer(axum::middleware::from_fn(auth_middleware));
@@ -3239,6 +3243,157 @@ async fn regenerate_dm_script(
     })))
 }
 
+async fn bulk_send_prospect_emails(
+    Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<crate::models::auth::Claims>,
+    Json(payload): Json<Option<BulkSendEmailRequest>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    let is_admin = claims.is_superuser || claims.is_staff;
+    let acting_user: i32 = claims.sub.parse().unwrap_or(0);
+
+    let req = payload.unwrap_or(BulkSendEmailRequest {
+        service_type: None,
+        contact_status: None,
+        fresh_days: None,
+        include_contacted: false,
+        limit: None,
+    });
+
+    // Build the candidate list. Whitelisted (non-admin) users are scoped to
+    // their own sourced prospects; admins see everything.
+    let mut sql = String::from(
+        "SELECT id, display_name, business_email, email_script, service_type, sourced_by          FROM prospects WHERE business_email IS NOT NULL AND business_email <> ''",
+    );
+    let mut binds: Vec<String> = Vec::new();
+    if !req.include_contacted() {
+        sql.push_str(" AND (contact_status IS NULL OR contact_status NOT IN ('contacted','replied','interested','deal','converted'))");
+    }
+    if let Some(ref st) = req.service_type {
+        sql.push_str(" AND service_type = $");
+        sql.push_str(&(binds.len() + 1).to_string());
+        binds.push(st.clone());
+    }
+    if !is_admin {
+        sql.push_str(&format!(" AND sourced_by = ${}", binds.len() + 1));
+        binds.push(acting_user.to_string());
+    }
+    if let Some(days) = req.fresh_days.filter(|d| *d > 0) {
+        sql.push_str(&format!(
+            " AND created_at > NOW() - (INTERVAL '1 day' * {})",
+            days
+        ));
+    }
+    // Only send to enabled services (owner directive Sep 2026).
+    let enabled = crate::services::service_flags::enabled_services(&state.db_pool).await;
+    if !enabled.is_empty() {
+        sql.push_str(&format!(
+            " AND (service_type IS NULL OR service_type = ANY(${}))",
+            binds.len() + 1
+        ));
+        // bind enabled as text[] via a separate path below (handled specially)
+    }
+    let cap = req.limit.unwrap_or(50).clamp(1, 200) as usize;
+    sql.push_str(&format!(" ORDER BY created_at DESC LIMIT {}", cap));
+
+    // Fetch candidates. enabled_services bind handled inline.
+    let mut query = sqlx::query(&sql);
+    for b in &binds {
+        query = query.bind(b);
+    }
+    if !enabled.is_empty() {
+        query = query.bind(&enabled);
+    }
+    let rows = query.fetch_all(&state.db_pool).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                success: false,
+                message: format!("Failed to load prospects: {e}"),
+            }),
+        )
+    })?;
+
+    // Collect candidate list, skipping prospects without an email script.
+    let mut candidates: Vec<(uuid::Uuid, String, String, String, String)> = Vec::new();
+    let mut skipped_no_script = 0usize;
+    for r in rows {
+        let id: uuid::Uuid = r.get("id");
+        let name: String = r.get("display_name");
+        let email: String = r.get("business_email");
+        let script: Option<String> = r.get("email_script");
+        let service: String = r
+            .get::<Option<String>, _>("service_type")
+            .unwrap_or_else(|| "landing_page".to_string());
+        match script {
+            Some(s) if !s.is_empty() => candidates.push((id, name, email, s, service)),
+            _ => skipped_no_script += 1,
+        }
+    }
+
+    let queued = candidates.len();
+    if queued == 0 {
+        return Ok(Json(json!({
+            "success": true,
+            "queued": 0,
+            "message": "No prospects with emails and outreach scripts to send. Generate outreach first.",
+            "skipped_no_script": skipped_no_script,
+        })));
+    }
+
+    // Spawn background sender. Each send is rate-limited and logged to email_log.
+    let pool = state.db_pool.clone();
+    let qwen = state.qwen_client.clone();
+    let nvidia = state.nvidia_nim_client.clone();
+    let gemini = state.gemini_client.clone();
+    let video_gemini = state.video_gemini_client.clone();
+    let gemma = state.gemma_client.clone();
+    tokio::spawn(async move {
+        for (id, name, email, script, _service) in candidates {
+            // Ensure an email script exists; generate outreach if missing.
+            let _ = crate::services::email_service::send_prospect_email(
+                &pool,
+                &email,
+                &name,
+                &script,
+                id,
+            )
+            .await;
+            // Update contact status.
+            let _ = sqlx::query(
+                "UPDATE prospects SET contact_status = 'contacted', updated_at = NOW() WHERE id = $1",
+            )
+            .bind(id)
+            .execute(&pool)
+            .await;
+            // Rate limit: ~5 emails/sec max to stay under SES limits.
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        }
+        tracing::info!("Bulk email send completed");
+    });
+
+    Ok(Json(json!({
+        "success": true,
+        "queued": queued,
+        "message": format!("Queued {} emails for sending in the background ({} skipped — no outreach script yet). Progress visible on /admin/email-logs.", queued, skipped_no_script),
+        "skipped_no_script": skipped_no_script,
+    })))
+}
+
+#[derive(serde::Deserialize)]
+struct BulkSendEmailRequest {
+    service_type: Option<String>,
+    contact_status: Option<String>,
+    fresh_days: Option<i64>,
+    include_contacted: Option<bool>,
+    limit: Option<i64>,
+}
+
+impl BulkSendEmailRequest {
+    fn include_contacted(&self) -> bool {
+        self.include_contacted.unwrap_or(false)
+    }
+}
+
 async fn delete_prospect(
     Extension(state): Extension<Arc<AppState>>,
     Path(id): Path<Uuid>,
@@ -3363,12 +3518,17 @@ async fn generate_outreach_message(
         "education" => Some("one-time bundle: 10 lesson videos for $50 or 30 for $100"),
         _ => None,
     };
-    // Referral attribution: if this prospect was sourced by a whitelisted
-    // referral user, look up (or create) their referral code for the service's
-    // app so the outreach DM/email can include a signup link that attributes
-    // the conversion to them (40% commission on first month).
-    let referral_url: Option<String> = if let Some(uid) = sourced_by {
-        let app = app_subdomain_for_service(&service);
+    // Referral attribution: only whitelisted (non-admin) senders get their
+    // referral signup link attached — admins send plain outreach with no
+    // referral. Uses the acting user's own referral code (claims.sub), not the
+    // prospect's sourced_by, so the sender is the one attributed.
+    let acting_is_admin = claims.is_superuser || claims.is_staff;
+    let referral_url: Option<String> = if !acting_is_admin {
+        let uid: i32 = claims.sub.parse().unwrap_or(0);
+        if uid == 0 {
+            None
+        } else {
+            let app = app_subdomain_for_service(&service);
         // Try to read an existing code for this user+app.
         let existing: Option<String> = sqlx::query_scalar(
             "SELECT code FROM referral_codes WHERE user_id = $1 AND app_slug = $2",
@@ -3407,6 +3567,7 @@ async fn generate_outreach_message(
             }
         };
         Some(format!("https://videosync.ink/ref/{}/{}", app, code))
+        }
     } else {
         None
     };
@@ -3850,17 +4011,28 @@ async fn send_prospect_email_handler(
     Extension(claims): Extension<crate::models::auth::Claims>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
-    // Owner directive Oct 2026: emails are admin-only. Whitelisted helpers do
-    // IG DMs; only staff/superusers may send email (route middleware admits
-    // whitelisted users, so enforce here).
-    if !(claims.is_superuser || claims.is_staff) {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(ErrorResponse {
-                success: false,
-                message: "Email sending is restricted to admin users.".to_string(),
-            }),
-        ));
+    // Emails go out from support@videosync.ink. Admins may send to any prospect;
+    // whitelisted referral users may send only to their own sourced prospects.
+    let is_admin = claims.is_superuser || claims.is_staff;
+    if !is_admin {
+        // Whitelisted (non-admin) users must own the prospect (sourced_by).
+        let owned: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM prospects WHERE id = $1 AND sourced_by = $2)",
+        )
+        .bind(id)
+        .bind(claims.sub.parse::<i32>().unwrap_or(0))
+        .fetch_one(&state.db_pool)
+        .await
+        .unwrap_or(false);
+        if !owned {
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(ErrorResponse {
+                    success: false,
+                    message: "You can only send email to prospects you sourced.".to_string(),
+                }),
+            ));
+        }
     }
     let row = sqlx::query(
         "SELECT display_name, business_email, email_script

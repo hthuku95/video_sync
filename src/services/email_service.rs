@@ -47,6 +47,7 @@ pub async fn send_email(
     to: &str,
     subject: &str,
     body: &str,
+    html: Option<&str>,
     db: Option<&PgPool>,
     prospect_id: Option<uuid::Uuid>,
     from: Option<&str>,
@@ -89,14 +90,21 @@ pub async fn send_email(
         .charset("UTF-8")
         .build()
         .map_err(|e| format!("Failed to build subject content: {e}"))?;
-    let body_content = Content::builder()
+    let text_content = Content::builder()
         .data(body)
         .charset("UTF-8")
         .build()
         .map_err(|e| format!("Failed to build body content: {e}"))?;
-    let body = Body::builder()
-        .text(body_content)
-        .build();
+    let mut body_builder = Body::builder().text(text_content);
+    if let Some(html_body) = html {
+        let html_content = Content::builder()
+            .data(html_body)
+            .charset("UTF-8")
+            .build()
+            .map_err(|e| format!("Failed to build html content: {e}"))?;
+        body_builder = body_builder.html(html_content);
+    }
+    let body = body_builder.build();
     let msg = Message::builder()
         .subject(subject_content)
         .body(body)
@@ -166,10 +174,12 @@ pub async fn send_prospect_email(
     prospect_id: uuid::Uuid,
 ) -> Result<(String, uuid::Uuid), String> {
     let (subject, body) = split_email_script(email_script, prospect_name);
+    let html = build_prospect_html_email(&subject, &body);
     let (message_id, log_id) = send_email(
         to_email,
         &subject,
         &body,
+        Some(&html),
         Some(pool),
         Some(prospect_id),
         Some("support"),
@@ -178,51 +188,28 @@ pub async fn send_prospect_email(
     Ok((message_id, log_id.unwrap_or_else(uuid::Uuid::new_v4)))
 }
 
-/// Split an email script into subject + body.
-/// The first non-empty line is treated as the subject.
-fn split_email_script(script: &str, _name: &str) -> (String, String) {
-    let trimmed = script.trim();
-    if let Some(first_newline) = trimmed.find('\n') {
-        let subject = trimmed[..first_newline].trim().to_string();
-        let body = trimmed[first_newline..].trim().to_string();
-        (subject, body)
-    } else {
-        ("Your free video sample from VideoSync".to_string(), trimmed.to_string())
-    }
-}
-
-/// Fetch recent email log entries for the admin dashboard.
-pub async fn list_email_logs(
-    pool: &PgPool,
-    limit: i64,
-) -> Result<Vec<serde_json::Value>, String> {
-    let rows = sqlx::query_as::<_, (uuid::Uuid, Option<uuid::Uuid>, String, String, String, Option<String>, Option<chrono::DateTime<chrono::Utc>>, chrono::DateTime<chrono::Utc>, Option<String>)>(
-        "SELECT id, prospect_id, to_email, subject, status, error_message, opened_at, created_at, from_email \
-         FROM email_log ORDER BY created_at DESC LIMIT $1",
+/// Build a professional HTML email body using the VideoSync brand palette
+/// (indigo/blue accent, light card, footer with contact + privacy/terms links).
+fn build_prospect_html_email(subject: &str, body: &str) -> String {
+    let body_html = body
+        .lines()
+        .map(|line| {
+            let escaped = line
+                .replace('&', "&amp;")
+                .replace('<', "&lt;")
+                .replace('>', "&gt;");
+            if escaped.trim().is_empty() {
+                "<br>".to_string()
+            } else {
+                format!("<p style=\"margin:0 0 12px 0;line-height:1.6;color:#1f2937;\">{}</p>", escaped)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    format!(
+        "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"UTF-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1.0\"><title>{subject}</title></head><body style=\"margin:0;padding:0;background:#f3f4f6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;\"><table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"background:#f3f4f6;padding:32px 16px;\"><tr><td align=\"center\"><table role=\"presentation\" width=\"600\" cellpadding=\"0\" cellspacing=\"0\" style=\"max-width:600px;background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.06);\"><tr><td style=\"background:linear-gradient(135deg,#3b82f6,#6366f1);padding:24px 32px;\"><h1 style=\"margin:0;color:#ffffff;font-size:20px;font-weight:700;\">VideoSync</h1><p style=\"margin:4px 0 0;color:rgba(255,255,255,0.85);font-size:13px;\">AI video production for your content</p></td></tr><tr><td style=\"padding:32px;\">{body_html}</td></tr><tr><td style=\"padding:20px 32px;border-top:1px solid #e5e7eb;background:#f9fafb;\"><p style=\"margin:0 0 8px;font-size:12px;color:#6b7280;\">Questions? Reply to this email or reach us at <a href=\"mailto:support@videosync.ink\" style=\"color:#3b82f6;text-decoration:none;\">support@videosync.ink</a>.</p><p style=\"margin:0;font-size:11px;color:#9ca3af;\">&copy; VideoSync &middot; <a href=\"https://videosync.ink/privacy\" style=\"color:#9ca3af;text-decoration:underline;\">Privacy Policy</a> &middot; <a href=\"https://videosync.ink/terms\" style=\"color:#9ca3af;text-decoration:underline;\">Terms</a></p></td></tr></table></td></tr></table></body></html>",
+        body_html = body_html,
     )
-    .bind(limit)
-    .fetch_all(pool)
-    .await
-    .map_err(|e| format!("Failed to fetch email logs: {e}"))?;
-
-    Ok(rows
-        .into_iter()
-        .map(
-            |(id, prospect_id, to_email, subject, status, error_message, opened_at, created_at, from_email)| {
-                serde_json::json!({
-                    "id": id,
-                    "prospect_id": prospect_id,
-                    "to_email": to_email,
-                    "subject": subject,
-                    "status": status,
-                    "error_message": error_message,
-                    "opened_at": opened_at,
-                    "created_at": created_at,
-                    "from_email": from_email,
-                })
-            },
-        )
-        .collect())
 }
 
 #[cfg(test)]
