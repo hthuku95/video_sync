@@ -2940,6 +2940,20 @@ fn should_use_long_form_for_revenue_sample(service: &str, has_reference_url: boo
         ))
 }
 
+/// Map a Managed Campaign service to the TypeScript app subdomain that hosts its
+/// branded delivery viewer (so free-sample links never leak raw storage URLs).
+fn app_subdomain_for_service(service: &str) -> &'static str {
+    match service {
+        "kick_auto_clipper" | "twitch_clipping" | "youtube_clipping" | "clipping" => "clips",
+        "landing_page" => "app",
+        "education" => "learn",
+        "manim_explainer" | "whiteboard_animation" | "kinetic_typography"
+        | "animated_infographic" | "algorithm_viz" | "investor_pitch"
+        | "year_in_review" | "isometric_explainer" => "motion",
+        _ => "app",
+    }
+}
+
 fn default_x_dm(name: &str, service: &str) -> String {
     format!(
         "Hey {} — I put together a free sample of what I can do for your content — {}.",
@@ -3506,7 +3520,11 @@ async fn generate_prospect_sample_pack(
         return Ok(Json(json!({
             "success": true,
             "delivery_id": existing.to_string(),
-            "delivery_url": format!("/delivery/{existing}"),
+            "delivery_url": format!(
+                "https://{}.videosync.ink/delivery/{}",
+                app_subdomain_for_service(&service),
+                existing
+            ),
             "message": "Sample pack already exists for this prospect."
         })));
     }
@@ -3757,7 +3775,11 @@ async fn generate_prospect_sample_pack(
     .execute(&state.db_pool)
     .await;
 
-    let delivery_url = format!("/delivery/{delivery_id}");
+    let delivery_url = format!(
+        "https://{}.videosync.ink/delivery/{}",
+        app_subdomain_for_service(&service),
+        delivery_id,
+    );
     Ok(Json(json!({
         "success": true,
         "delivery_id": delivery_id.to_string(),
@@ -6617,7 +6639,11 @@ async fn instagram_generate_sample(
         return Json(json!({
             "success":      true,
             "delivery_id":  existing.to_string(),
-            "delivery_url": format!("/delivery/{}", existing),
+            "delivery_url": format!(
+                "https://{}.videosync.ink/delivery/{}",
+                app_subdomain_for_service(service_key),
+                existing
+            ),
             "message":      "Sample already exists for this lead.",
         }));
     }
@@ -6905,7 +6931,11 @@ async fn instagram_generate_sample(
     Json(json!({
         "success":      true,
         "delivery_id":  delivery_id.to_string(),
-        "delivery_url": format!("/delivery/{}", delivery_id),
+        "delivery_url": format!(
+            "https://{}.videosync.ink/delivery/{}",
+            app_subdomain_for_service(service_key),
+            delivery_id,
+        ),
         "service":      service,
         "message":      "Sample queued. Render takes 1-3 minutes; the /delivery/:id link is shareable immediately and will show the result when ready.",
     }))
