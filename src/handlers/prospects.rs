@@ -3280,7 +3280,7 @@ async fn generate_outreach_message(
     let row = sqlx::query(
         "SELECT display_name, subscriber_count, avg_viewer_count, content_category,
                 prospect_type, dm_script_creator, service_type, x_dm_script, email_script,
-                instagram_handle, twitter_handle, platform
+                instagram_handle, twitter_handle, platform, sourced_by
          FROM prospects WHERE id=$1",
     )
     .bind(id)
@@ -3321,6 +3321,7 @@ async fn generate_outreach_message(
     let service: String = row
         .get::<Option<String>, _>("service_type")
         .unwrap_or_else(|| default_service_for_prospect(&category, &pt, &platform));
+    let sourced_by: Option<i32> = row.get::<Option<i32>, _>("sourced_by");
     let existing_x_dm: String = row
         .get::<Option<String>, _>("x_dm_script")
         .unwrap_or_else(|| default_x_dm(&name, &service));
@@ -3362,6 +3363,54 @@ async fn generate_outreach_message(
         "education" => Some("one-time bundle: 10 lesson videos for $50 or 30 for $100"),
         _ => None,
     };
+    // Referral attribution: if this prospect was sourced by a whitelisted
+    // referral user, look up (or create) their referral code for the service's
+    // app so the outreach DM/email can include a signup link that attributes
+    // the conversion to them (40% commission on first month).
+    let referral_url: Option<String> = if let Some(uid) = sourced_by {
+        let app = app_subdomain_for_service(&service);
+        // Try to read an existing code for this user+app.
+        let existing: Option<String> = sqlx::query_scalar(
+            "SELECT code FROM referral_codes WHERE user_id = $1 AND app_slug = $2",
+        )
+        .bind(uid)
+        .bind(app)
+        .fetch_optional(&state.db_pool)
+        .await
+        .ok()
+        .flatten();
+        let code = match existing {
+            Some(c) => c,
+            None => {
+                // Auto-create one (mirrors /api/referrals/my-codes).
+                let new_code = format!("ref-{}-{}", app, &Uuid::new_v4().to_string()[..6]);
+                sqlx::query(
+                    "INSERT INTO referral_codes (user_id, code, app_slug)                      VALUES ($1, $2, $3) ON CONFLICT (user_id, app_slug) DO NOTHING",
+                )
+                .bind(uid)
+                .bind(&new_code)
+                .bind(app)
+                .execute(&state.db_pool)
+                .await
+                .ok();
+                // Re-read in case of race.
+                sqlx::query_scalar::<_, String>(
+                    "SELECT code FROM referral_codes WHERE user_id = $1 AND app_slug = $2",
+                )
+                .bind(uid)
+                .bind(app)
+                .fetch_optional(&state.db_pool)
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or(new_code)
+            }
+        };
+        Some(format!("https://videosync.ink/ref/{}/{}", app, code))
+    } else {
+        None
+    };
+
     // Social handles for multi-channel outreach (X DM + email + manual IG DM).
     let ig_handle: Option<String> = row.get("instagram_handle");
     let _tw_handle: Option<String> = row.get("twitter_handle");
@@ -3385,6 +3434,7 @@ async fn generate_outreach_message(
         r#"Write a personalized X DM and email from VideoSync to {name}, a {category} {pt} with {audience} audience.
 The subject already has a free sample ready at this link: {delivery_url}
 Include the delivery link naturally in both the DM and email — do NOT ask for permission to send it.
+{referral_block}
 {ig_line}
 
 Offer: {pitch_focus}
@@ -3409,6 +3459,9 @@ Legacy DM tone: {existing_dm}"#,
             .map(|o| format!("PRIMARY (lead with this): {}\nSECONDARY (mention as the recurring option): monthly campaign subscription that generates and posts fresh videos daily.", o))
             .unwrap_or_else(|| "PRIMARY (lead with this): monthly campaign subscription that generates and posts fresh videos daily.".to_string()),
         delivery_url = payload.delivery_url,
+        referral_block = referral_url
+            .map(|u| format!("If they want to sign up or create an account, send them here: {u}\nMention it as an optional next step (e.g. \"you can create an account here\") — keep it light, not pushy."))
+            .unwrap_or_default(),
         ig_line = ig_line,
         existing_x_dm = existing_x_dm.chars().take(220).collect::<String>(),
         existing_email = existing_email.chars().take(300).collect::<String>(),
