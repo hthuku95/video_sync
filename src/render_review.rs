@@ -939,6 +939,7 @@ pub async fn brief_violations(
     output_url: &str,
     brief: &str,
     requested_duration_secs: f64,
+    require_audio: bool,
 ) -> Vec<String> {
     let mut violations = Vec::new();
     let lower = brief.to_ascii_lowercase();
@@ -978,7 +979,22 @@ pub async fn brief_violations(
     let video = streams.iter().find(|s| s["codec_type"] == "video");
     let width = video.and_then(|v| v["width"].as_u64()).unwrap_or(0);
     let height = video.and_then(|v| v["height"].as_u64()).unwrap_or(0);
-    let has_audio = streams.iter().any(|s| s["codec_type"] == "audio");
+    let audio_stream = streams.iter().find(|s| s["codec_type"] == "audio");
+    let has_audio = audio_stream.is_some();
+    let audio_duration = audio_stream
+        .and_then(|s| {
+            s["duration"]
+                .as_f64()
+                .or_else(|| s["duration"].as_str().and_then(|v| v.parse().ok()))
+        })
+        .unwrap_or(0.0);
+    let video_duration = video
+        .and_then(|s| {
+            s["duration"]
+                .as_f64()
+                .or_else(|| s["duration"].as_str().and_then(|v| v.parse().ok()))
+        })
+        .unwrap_or(0.0);
 
     if lower.contains("vertical") && width > height && height > 0 {
         violations.push(format!(
@@ -995,10 +1011,22 @@ pub async fn brief_violations(
         }
     }
 
-    if (lower.contains("narration") || lower.contains("narrated")) && !has_audio {
+    if (require_audio || lower.contains("narration") || lower.contains("narrated")) && !has_audio {
         violations.push(
-            "brief requires narration but the artifact has no audio stream".to_string(),
+            "this service requires narration but the artifact has no audio stream".to_string(),
         );
+    }
+
+    // A track that only covers part of the picture is the classic "visuals
+    // outrun the voiceover" failure: add_audio used -shortest, or the render
+    // was timed independently of the narration. Keep a small codec tolerance.
+    if has_audio && audio_duration > 0.0 && video_duration > 0.0 {
+        let delta = (audio_duration - video_duration).abs();
+        if delta > 0.75 {
+            violations.push(format!(
+                "audio ({audio_duration:.2}s) and video ({video_duration:.2}s) differ by {delta:.2}s — narration and scene timing are not locked"
+            ));
+        }
     }
 
     violations

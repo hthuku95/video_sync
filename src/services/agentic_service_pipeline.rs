@@ -963,13 +963,19 @@ Use the extracted content to understand:
 - Brand colors, tone, and style
 - Call-to-action and target audience
 
-## MANDATORY TOOL SEQUENCE
-1. generate_video_script(topic, duration, style, tone) — plan the content using the website info from step 0
-2. Render the MAIN VISUAL using hyperframes_render(html, resolution) — this is the core of your landing page video. Write a complete standalone HTML composition (inline CSS/JS, data-* timing, seekable GSAP/CSS animation) for product mockups, device frames, animated UI mockups, title cards, logos, and animated backgrounds. CPU-rendered, no GPU needed. Blender and all 3D tools are UNAVAILABLE on this deployment (no GPU): NEVER call blender_generate_scene_type or blender_execute_bpy_script. For "subtle 3D depth", use CSS perspective, layered parallax, gradients, shadows and depth-of-field inside hyperframes_render.
-3. If your video needs animated diagrams, data visualizations, or math/technical content, use manim_execute_script(description, ...) and merge with merge_videos
-4. add_voiceover_to_video(video_path, script) or generate_text_to_speech(text, voice) — narrate the video
-5. POST-PRODUCTION (mandatory, full editing toolbox at your disposal): assemble and polish the final timeline with ANY editing tools you need — trim_video, split_video, merge_videos, crop_video, resize_video, add_subtitles (real transcribed speech via transcribe_audio_url — never placeholder text), add_text_overlay, add_overlay, transitions (add_transition, apply_xfade_transition), color (adjust_color, adjust_curves, adjust_levels, apply_lut), speed (adjust_speed), stabilize_video, denoise, add_film_grain, add_vignette, and full audio mixing (adjust_volume, generate_music, generate_sound_effect, add_audio). Captions must be real speech, branding/logo must be present, no stream chrome or placeholder text in frame.
-6. review_video(video_path_or_url) — check quality, fix issues, iterate
+## MANDATORY TOOL SEQUENCE (NARRATION-FIRST — DO NOT SKIP OR REORDER)
+1. generate_video_script(topic, duration, style, tone) — plan the content using the website info from step 0. The script MUST be split into 4-7 scenes, one short narration line per scene (1-3 sentences).
+2. generate_narration(lines=[...], voice="Emma", output_file="{output_dir}/narration.mp3", gap_seconds=0.35) — synthesize one audio track and get the exact SCENE_TIMELINE_JSON. This is the clock for the entire video.
+3. Render the MAIN VISUAL as ONE hyperframes_render(html, resolution) composition. Build it directly from the returned timeline:
+   - Root `data-duration` = the returned total audio duration.
+   - Every scene's `data-start` and `data-duration` MUST equal the returned timeline. Scenes tile end-to-end with no gaps or overlaps.
+   - One scene per narration line. Never cut to a new scene while the current line is still being spoken.
+   - The last readable element in each scene must finish entering by 50% of that scene; hold the rest of the scene (no fade-to-black in the middle of a sentence).
+   - Text must fit the frame: 8-10% safe margins on every side, `max-width` on headlines, `clamp()` font sizes, `overflow-wrap:anywhere`. Never use a fixed font size that can crop words on the left/right. Keep headlines to 6-8 words and body copy to at most 2 short lines.
+   - CPU-rendered, no GPU needed. Blender and all 3D tools are UNAVAILABLE on this deployment (no GPU): NEVER call blender_generate_scene_type or blender_execute_bpy_script. For "subtle 3D depth", use CSS perspective, layered parallax, gradients, shadows and depth-of-field inside hyperframes_render.
+4. Mux the SAME narration file: add_audio(input_file="<rendered hyperframes video>", audio_file="{output_dir}/narration.mp3", output_file="{output_dir}/output.mp4"). Do NOT call add_voiceover_to_video in this service — it creates a second, unsynchronized track.
+5. POST-PRODUCTION (optional polish): trim/merge only if you keep absolute scene timing intact; add real transcribed captions if needed (transcribe_audio_url — never placeholder text). Branding/logo must be present, no stream chrome or placeholder text in frame. Do not add music that masks the narration.
+6. review_video(video_path_or_url, original_request=<brief>, expected_features=["audible narration","scene changes stay in sync with narration","no cropped or overflowing text","clear call to action"]) — fix issues, re-render only the affected scene/timing if possible
 7. submit_final_answer(summary, output_files=[path]) — only after review passes
 
 OUTPUT to: {output_dir}/
@@ -1011,7 +1017,7 @@ If a source URL is provided, call `browserbase_crawl_website(url="{url}")` to cr
    shapes whenever a real-world object is central to the scene.
 1. generate_video_script(topic, duration, style, tone) — plan the content
 2. Render the product mockup using blender_generate_scene_type(prompt, params) — for device mockups, 3D product animations, UI mockups, text reveals, and animated backgrounds
-3. add_voiceover_to_video(video_path, script) or generate_text_to_speech(text, voice) — narrate if it improves the result
+3. add_voiceover_to_video(input_video=<video path>, voiceover_text=<narration script>, output_video=<final path>) or generate_text_to_speech(text=<narration>, output_file=<path>) — narrate if it improves the result
 4. review_video(video_path_or_url) — check quality, iterate
 5. submit_final_answer(summary, output_files=[path]) — only after review passes
 
@@ -1066,17 +1072,18 @@ Style: {style}
 ## ⚠️ CRITICAL: DO NOT USE generate_long_form_video
 That tool delegates to another agent and will NOT produce the correct educational video. Render directly.
 
-## MANDATORY TOOL SEQUENCE
-1. generate_video_script(topic="{brief}", duration={duration_seconds}, style="{style}", tone="professional")
-2. Render scenes using the right tool for each visual:
-   - hyperframes_render(html=..., resolution=...) — for titles, kinetic typography, layouts, animated backgrounds, intro/outro sequences, and ALL 2D motion graphics. CPU-rendered, no GPU needed. This replaces Blender for non-3D work.
-   - manim_execute_script(description=..., quality="h") — for math equations, diagrams, code animations, data charts, LaTeX formulas, and ALL educational/technical visual content (Manim is untouched).
-   - Blender and all 3D tools are UNAVAILABLE on this deployment (no GPU): NEVER call blender_generate_scene_type or blender_execute_bpy_script. Simulate any 3D-looking depth with CSS perspective/parallax in hyperframes_render.
-   - Use together for mixed scenes, then merge with merge_videos
-3. add_voiceover_to_video(video_path="{out}/output.mp4", script="from script above")
-4. POST-PRODUCTION (mandatory, full editing toolbox at your disposal): assemble and polish the final timeline with ANY editing tools you need — trim_video, split_video, merge_videos, crop_video, resize_video, add_subtitles (real transcribed speech via transcribe_audio_url — never placeholder text), add_text_overlay, add_overlay, transitions (add_transition, apply_xfade_transition), color (adjust_color, adjust_curves, adjust_levels, apply_lut), speed (adjust_speed), stabilize_video, denoise, add_film_grain, add_vignette, and full audio mixing (adjust_volume, generate_music, generate_sound_effect, add_audio). Captions must be real speech, branding must be present, no placeholder text in frame.
-5. review_video(video_path_or_url="{out}/output.mp4")
-6. submit_final_answer(summary="education video {title}", output_files=["{out}/output.mp4"])
+## MANDATORY TOOL SEQUENCE (NARRATION-FIRST — DO NOT SKIP OR REORDER)
+1. generate_video_script(topic="{brief}", duration={duration_seconds}, style="{style}", tone="professional"). Split the lesson into 4-8 scenes, one short narration line per scene.
+2. generate_narration(lines=[...], voice="Emma", output_file="{out}/narration.mp3", gap_seconds=0.35) — synthesize the voice track and get the exact SCENE_TIMELINE_JSON. This is the clock for the whole lesson.
+3. Render each scene to EXACTLY its timeline duration:
+   - hyperframes_render(html=..., resolution=...) — for titles, kinetic typography, layouts, animated backgrounds, intro/outro sequences, and ALL 2D motion graphics. Its root data-duration and scene data-start/data-duration MUST equal the timeline. CPU-rendered, no GPU needed.
+   - manim_execute_script(description=..., duration=<scene duration>, quality="h", include_narration=false) — for math equations, diagrams, code animations, data charts, LaTeX formulas. Trim/pad the result with trim_video or pad_video_time so it is exactly the scene duration.
+   - Blender and all 3D tools are UNAVAILABLE on this deployment (no GPU): NEVER call blender_generate_scene_type or blender_execute_bpy_script. Simulate 3D-looking depth with CSS perspective/parallax in hyperframes_render.
+   - Keep EVERY scene inside its own duration; when merging, preserve the narration timeline exactly.
+4. merge_videos the scene clips in narration order, then add_audio(input_file="{out}/merged.mp4", audio_file="{out}/narration.mp3", output_file="{out}/output.mp4"). Do NOT call add_voiceover_to_video in this service — it creates a second, unsynchronized track.
+5. POST-PRODUCTION (optional polish): add real transcribed captions via transcribe_audio_url (never placeholder text), brand/logo, color and subtle music. Never change scene boundaries or mask narration. Text must fit with safe margins; no cropped words, no overlapping titles/formulas.
+6. review_video(video_path_or_url="{out}/output.mp4", original_request="{brief}", expected_features=["audible narration","scene changes stay in sync with narration","no cropped, truncated, or overlapping text","all formulas fully visible","no blank or partial frames"])
+7. submit_final_answer(summary="education video {title}", output_files=["{out}/output.mp4"])
 
 OUTPUT dir: {out}/"#,
             duration_seconds = input.duration_seconds as i32,
@@ -1263,7 +1270,7 @@ That tool delegates to another agent. For a full-stack deliverable you MUST call
 - generate_video_script(topic, duration, style, tone) — plan
 - Render using blender_generate_scene_type(prompt, params) for the main visual
 - Optionally use manim_execute_script for data/technical visuals and merge with merge_videos
-- add_voiceover_to_video(video_path, script) or generate_text_to_speech(text, voice) — narrate
+- add_voiceover_to_video(input_video=<video path>, voiceover_text=<narration script>, output_video=<final path>) or generate_text_to_speech(text=<narration>, output_file=<path>) — narrate
 - review_video — check quality, iterate
 
 ### 2. THUMBNAIL
@@ -1304,7 +1311,7 @@ That tool delegates to another agent. Call rendering tools directly.
 2. Render the main visual using blender_generate_scene_type(prompt, params) — for 3D scenes, title cards, product mockups, abstract backgrounds, and branded visuals
 3. Use manim_execute_script(description, ...) — for data visualizations, charts, diagrams, flowcharts, timelines, and any analytical/technical content. Render these as separate clips.
 4. Use merge_videos to combine all rendered clips into a single cohesive video
-5. add_voiceover_to_video(video_path, script) or generate_text_to_speech(text, voice) — professional narration
+5. add_voiceover_to_video(input_video=<video path>, voiceover_text=<narration script>, output_video=<final path>) or generate_text_to_speech(text=<narration>, output_file=<path>) — professional narration
 6. review_video(video_path_or_url) — check quality, fix issues, iterate
 7. submit_final_answer(summary, output_files=[path]) — only after review passes
 
@@ -1362,7 +1369,7 @@ That tool delegates to another agent and will NOT produce the correct output.
 1. generate_video_script(topic="{brief}", duration={duration}, style="{style}", tone="professional")
 2. Render ALL scenes using manim_execute_script(description=..., quality="h") — for title cards, text animations, diagrams, charts, and ALL visual content. Each call returns a Cloud URL.
 3. Use merge_videos if multiple manim clips need combining
-4. add_voiceover_to_video(video_path="{out}/output.mp4", script="from script above")
+4. add_voiceover_to_video(input_video="{out}/output.mp4", voiceover_text="<the narration from the script above>", output_video="{out}/output.mp4")
 5. review_video(video_path_or_url="{out}/output.mp4")
 6. submit_final_answer(summary="manim explainer {title}", output_files=["{out}/output.mp4"])
 "#,
@@ -1402,7 +1409,7 @@ Use ONLY manim_execute_script for ALL visual content — every render call uploa
 1. generate_video_script(topic="{brief}", duration={duration}, style="whiteboard hand-drawn", tone="friendly educational")
 2. Render ALL scenes using manim_execute_script(description=..., quality="h", background="light") — every visual must be Manim-generated stroke-by-stroke. Each call returns a Cloud URL.
 3. Use merge_videos if multiple clips need combining
-4. add_voiceover_to_video(video_path="{out}/output.mp4", script="from script above")
+4. add_voiceover_to_video(input_video="{out}/output.mp4", voiceover_text="<the narration from the script above>", output_video="{out}/output.mp4")
 5. review_video(video_path_or_url="{out}/output.mp4")
 6. submit_final_answer(summary="whiteboard animation {title}", output_files=["{out}/output.mp4"])
 "#,
@@ -1441,7 +1448,7 @@ Use ONLY manim_execute_script for ALL visual content — every render call uploa
 1. generate_video_script(topic="{brief}", duration={duration}, style="kinetic typography", tone="dynamic energetic")
 2. Render ALL scenes using manim_execute_script(description=..., quality="h") — text animations only, no diagrams or charts. Each call returns a Cloud URL.
 3. Use merge_videos if multiple clips need combining
-4. add_voiceover_to_video(video_path="{out}/output.mp4", script="from script above")
+4. add_voiceover_to_video(input_video="{out}/output.mp4", voiceover_text="<the narration from the script above>", output_video="{out}/output.mp4")
 5. review_video(video_path_or_url="{out}/output.mp4")
 6. submit_final_answer(summary="kinetic typography {title}", output_files=["{out}/output.mp4"])
 "#,
@@ -1480,7 +1487,7 @@ Use ONLY manim_execute_script for ALL visual content — every render call uploa
 1. generate_video_script(topic="{brief}", duration={duration}, style="infographic animated charts", tone="professional data-driven")
 2. Render ALL scenes using manim_execute_script(description=..., quality="h") — charts, counters, data viz only. Each call returns a Cloud URL.
 3. Use merge_videos if multiple clips need combining
-4. add_voiceover_to_video(video_path="{out}/output.mp4", script="from script above")
+4. add_voiceover_to_video(input_video="{out}/output.mp4", voiceover_text="<the narration from the script above>", output_video="{out}/output.mp4")
 5. review_video(video_path_or_url="{out}/output.mp4")
 6. submit_final_answer(summary="animated infographic {title}", output_files=["{out}/output.mp4"])
 "#,
@@ -1519,7 +1526,7 @@ Use ONLY manim_execute_script for ALL visual content — every render call uploa
 1. generate_video_script(topic="{brief}", duration={duration}, style="algorithm visualization", tone="educational technical")
 2. Render ALL scenes using manim_execute_script(description=..., quality="h") — algorithm visuals, data structures, code animations. Each call returns a Cloud URL.
 3. Use merge_videos if multiple clips need combining
-4. add_voiceover_to_video(video_path="{out}/output.mp4", script="from script above")
+4. add_voiceover_to_video(input_video="{out}/output.mp4", voiceover_text="<the narration from the script above>", output_video="{out}/output.mp4")
 5. review_video(video_path_or_url="{out}/output.mp4")
 6. submit_final_answer(summary="algorithm visualization {title}", output_files=["{out}/output.mp4"])
 "#,
@@ -1558,7 +1565,7 @@ Use ONLY manim_execute_script for ALL visual content — every render call uploa
 1. generate_video_script(topic="{brief}", duration={duration}, style="investor pitch deck", tone="professional confident persuasive")
 2. Render ALL scenes using manim_execute_script(description=..., quality="h") — pitch deck slides, charts, animated metrics. Each call returns a Cloud URL.
 3. Use merge_videos if multiple clips need combining
-4. add_voiceover_to_video(video_path="{out}/output.mp4", script="from script above")
+4. add_voiceover_to_video(input_video="{out}/output.mp4", voiceover_text="<the narration from the script above>", output_video="{out}/output.mp4")
 5. review_video(video_path_or_url="{out}/output.mp4")
 6. submit_final_answer(summary="investor pitch {title}", output_files=["{out}/output.mp4"])
 "#,
@@ -1598,7 +1605,7 @@ Use ONLY manim_execute_script for ALL visual content — every render call uploa
 1. generate_video_script(topic="{brief}", duration={duration}, style="year-in-review wrapped", tone="energetic celebratory")
 2. Render ALL scenes using manim_execute_script(description=..., quality="h") — stat reveals, counters, charts. Each call returns a Cloud URL.
 3. Use merge_videos if multiple clips need combining
-4. add_voiceover_to_video(video_path="{out}/output.mp4", script="from script above")
+4. add_voiceover_to_video(input_video="{out}/output.mp4", voiceover_text="<the narration from the script above>", output_video="{out}/output.mp4")
 5. review_video(video_path_or_url="{out}/output.mp4")
 6. submit_final_answer(summary="year in review {title}", output_files=["{out}/output.mp4"])
 "#,
@@ -1639,7 +1646,7 @@ Use ONLY manim_execute_script for ALL visual content — every render call uploa
 1. generate_video_script(topic="{brief}", duration={duration}, style="isometric 3D explainer", tone="professional modern")
 2. Render ALL scenes using manim_execute_script(description=..., quality="h") — isometric 3D scenes, animated objects. Each call returns a Cloud URL.
 3. Use merge_videos if multiple clips need combining
-4. add_voiceover_to_video(video_path="{out}/output.mp4", script="from script above")
+4. add_voiceover_to_video(input_video="{out}/output.mp4", voiceover_text="<the narration from the script above>", output_video="{out}/output.mp4")
 5. review_video(video_path_or_url="{out}/output.mp4")
 6. submit_final_answer(summary="isometric explainer {title}", output_files=["{out}/output.mp4"])
 "#,
@@ -1673,8 +1680,8 @@ async fn generate_execution_plan(
     // service-level "never call Blender" rule.
     let tool_hints = match service_type {
         ServiceType::Clipping => "generate_clip_compilation (downloads + extracts + captions clips), kick_post_processing happens automatically; final artifacts are clip URLs",
-        ServiceType::LandingPage => "browserbase_crawl_website (read the source site first), generate_video_script, hyperframes_render, merge_videos, add_voiceover_to_video, review_video, submit_final_answer",
-        ServiceType::Education => "generate_video_script, hyperframes_render, manim_execute_script, merge_videos, add_voiceover_to_video, review_video, submit_final_answer",
+        ServiceType::LandingPage => "browserbase_crawl_website (read the source site first), generate_video_script, generate_narration (audio-first timing), hyperframes_render, add_audio, review_video, submit_final_answer",
+        ServiceType::Education => "generate_video_script, generate_narration (audio-first timing), hyperframes_render, manim_execute_script, merge_videos, add_audio, review_video, submit_final_answer",
         _ => "generate_video_script, hyperframes_render, manim_execute_script, merge_videos, add_voiceover_to_video, review_video, submit_final_answer",
     };
 

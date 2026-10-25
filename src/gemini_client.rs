@@ -1197,7 +1197,7 @@ impl GeminiClient {
     pub fn hyperframes_render_tool() -> FunctionDeclaration {
         FunctionDeclaration {
             name: "hyperframes_render".to_string(),
-            description: "Render an HTML/CSS/JS composition to MP4 on CPU (headless Chrome + FFmpeg, no GPU). Use for: landing page hero videos, product intros, title cards, kinetic typography, animated explainers, slideshows — anywhere you would otherwise use blender_generate_scene_type for non-3D motion graphics. Pass a COMPLETE standalone index.html string (inline CSS/JS, data-* timing attributes per HyperFrames composition contract). Returns an R2 URL to the finished MP4. Prefer this over Blender for 2D motion graphics (much faster on CPU); keep manim_execute_script for math/diagrams/LaTeX.".to_string(),
+            description: "Render an HTML/CSS/JS composition to MP4 on CPU (headless Chrome + FFmpeg, no GPU). Use for: landing page hero videos, product intros, title cards, kinetic typography, animated explainers, slideshows — anywhere you would otherwise use blender_generate_scene_type for non-3D motion graphics. Pass a COMPLETE standalone index.html string (inline CSS/JS, data-* timing attributes per HyperFrames composition contract). When a narration timeline exists, the root data-duration MUST equal the narration duration and every scene's data-start/data-duration MUST match the timeline exactly; scenes tile end-to-end, and the last readable element enters by 50% of its scene. Keep text inside safe margins with clamp() sizes and overflow-wrap so nothing is cropped. Returns an R2 URL to the finished MP4. Prefer this over Blender for 2D motion graphics (much faster on CPU); keep manim_execute_script for math/diagrams/LaTeX.".to_string(),
             parameters: Parameters {
                 param_type: "object".to_string(),
                 properties: {
@@ -2204,6 +2204,42 @@ impl GeminiClient {
                         props
                     },
                     required: vec!["text".to_string(), "output_file".to_string()],
+                },
+            },
+            FunctionDeclaration {
+                name: "generate_narration".to_string(),
+                description: "Generate narration for a multi-scene video in ONE deterministic pass. Synthesizes each line separately, measures its real duration, pads it with a short gap, concatenates the lines into one audio file, and returns the exact scene timeline (start/duration seconds). Use this BEFORE rendering a HyperFrames composition: set every scene's data-start and data-duration from the returned timeline so visuals cannot outrun the voiceover.".to_string(),
+                parameters: Parameters {
+                    param_type: "object".to_string(),
+                    properties: {
+                        let mut props = HashMap::new();
+                        props.insert("lines".to_string(), PropertyDefinition {
+                            prop_type: "array".to_string(),
+                            description: "Narration lines in scene order. One line per scene, 1-3 short sentences each. The returned timeline has exactly one entry per line.".to_string(),
+                            items: Some(Box::new(PropertyDefinition {
+                                prop_type: "string".to_string(),
+                                description: "Narration for one scene".to_string(),
+                                items: None,
+                            })),
+                        });
+                        props.insert("output_file".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Path for the concatenated narration audio (e.g., 'outputs/hero_narration.mp3')".to_string(),
+                            items: None,
+                        });
+                        props.insert("voice".to_string(), PropertyDefinition {
+                            prop_type: "string".to_string(),
+                            description: "Narration voice (default: Emma). Uses the same voice names as generate_text_to_speech.".to_string(),
+                            items: None,
+                        });
+                        props.insert("gap_seconds".to_string(), PropertyDefinition {
+                            prop_type: "number".to_string(),
+                            description: "Silence after each line before the next scene starts (default 0.35, range 0.0-2.0).".to_string(),
+                            items: None,
+                        });
+                        props
+                    },
+                    required: vec!["lines".to_string(), "output_file".to_string()],
                 },
             },
             FunctionDeclaration {

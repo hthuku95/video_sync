@@ -1339,6 +1339,7 @@ IMPORTANT: For fetching website content, use `browserbase_crawl_website(url)` â€
                                         | "generate_clip_compilation"
                                         | "add_subtitles"
                                         | "add_voiceover_to_video"
+                                        | "generate_narration"
                                         | "generate_text_to_speech"
                                         | "generate_music"
                                         | "generate_sound_effect"

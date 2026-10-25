@@ -82,6 +82,7 @@ fn tool_label(tool: &str) -> &'static str {
         "vectorize_crawled_content" | "search_crawled_content" => "Researching the brand",
         "generate_clip_compilation" => "Finding the best moments",
         "add_voiceover_to_video" | "generate_text_to_speech" => "Recording narration",
+        "generate_narration" => "Recording narration",
         "transcribe_audio_url" | "add_subtitles" => "Preparing captions",
         "merge_videos" | "apply_xfade_transition" | "add_transition" => "Assembling the final cut",
         "review_video" | "view_image" => "Reviewing the cut",

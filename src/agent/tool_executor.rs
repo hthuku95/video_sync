@@ -825,6 +825,10 @@ async fn execute_tool_claude_with_context_inner(
         let result = execute_generate_text_to_speech_with_state_claude(args, ctx).await;
         return finalize_special_tool_result_value(name, args, result, ctx).await;
     }
+    if name == "generate_narration" {
+        let result = execute_generate_narration_with_state(args, ctx).await;
+        return finalize_special_tool_result_value(name, args, result, ctx).await;
+    }
     if name == "generate_sound_effect" {
         let result = execute_generate_sound_effect_with_state_claude(args, ctx).await;
         return finalize_special_tool_result_value(name, args, result, ctx).await;
@@ -1088,6 +1092,11 @@ async fn execute_tool_gemini_with_context_inner(
     }
     if name == "generate_text_to_speech" {
         let result = execute_generate_text_to_speech_with_state_gemini(args, ctx).await;
+        return finalize_special_tool_result_gemini(name, args, result, ctx).await;
+    }
+    if name == "generate_narration" {
+        let value = serde_json::to_value(args).unwrap_or_default();
+        let result = execute_generate_narration_with_state(&value, ctx).await;
         return finalize_special_tool_result_gemini(name, args, result, ctx).await;
     }
     if name == "generate_sound_effect" {
@@ -8961,6 +8970,249 @@ fn format_transcription_result(payload: &Value) -> String {
             provider, model, text, segment_count
         )
     }
+}
+
+/// Measure the real duration of an audio file with ffprobe.
+async fn probe_audio_duration_secs(path: &str) -> Result<f64, String> {
+    let output = tokio::process::Command::new("ffprobe")
+        .args([
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=nokey=1:noprint_wrappers=1",
+        ])
+        .arg(path)
+        .output()
+        .await
+        .map_err(|e| format!("ffprobe spawn failed: {e}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "ffprobe failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+                .chars()
+                .take(300)
+                .collect::<String>()
+        ));
+    }
+    let raw = String::from_utf8_lossy(&output.stdout);
+    raw.trim()
+        .parse::<f64>()
+        .map_err(|e| format!("ffprobe duration parse failed ({raw:?}): {e}"))
+}
+
+async fn cleanup_narration_temps(paths: &[String]) {
+    for path in paths {
+        let _ = tokio::fs::remove_file(path).await;
+    }
+}
+
+/// Deterministic narration planner for multi-scene videos.
+///
+/// Synthesizes every scene line separately, measures the real speech duration,
+/// pads it with the requested gap, concatenates the result into one audio file,
+/// and returns an exact scene timeline. The agent uses those timings for the
+/// HyperFrames `data-start` / `data-duration` attributes, so scene changes can
+/// never outrun the narration.
+async fn execute_generate_narration_with_state(
+    args: &Value,
+    ctx: &ToolExecutionContext,
+) -> String {
+    let lines: Vec<String> = args
+        .get("lines")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    if lines.is_empty() {
+        return "❌ Error: lines must contain at least one non-empty narration line".to_string();
+    }
+    if lines.len() > 12 {
+        return "❌ Error: at most 12 narration lines are supported per video".to_string();
+    }
+
+    let output_raw = args
+        .get("output_file")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or("outputs/narration.mp3");
+    let output_file = ensure_outputs_directory(output_raw);
+    let voice = args
+        .get("voice")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or("Emma");
+    let gap = args
+        .get("gap_seconds")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.35)
+        .clamp(0.0, 2.0);
+
+    let Some(client) = ctx.app_state.vibevoice_client.as_ref() else {
+        return "❌ generate_narration needs the VibeVoice client (VIBEVOICE_SERVICE_URL)"
+            .to_string();
+    };
+
+    let run_id = uuid::Uuid::new_v4();
+    let mut temp_paths: Vec<String> = Vec::new();
+    let mut speech_durations: Vec<f64> = Vec::new();
+
+    for (idx, line) in lines.iter().enumerate() {
+        let metadata = serde_json::json!({
+            "pipeline": "videosync-rust",
+            "tool": "generate_narration",
+            "line": idx,
+        });
+        let bytes = match client
+            .text_to_speech_base64(line, voice, "mp3", None, Some(metadata))
+            .await
+        {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                cleanup_narration_temps(&temp_paths).await;
+                return format!("❌ Narration line {} failed: {}", idx + 1, e);
+            }
+        };
+        if bytes.len() < 1_000 {
+            cleanup_narration_temps(&temp_paths).await;
+            return format!(
+                "❌ Narration line {} returned only {} bytes of audio",
+                idx + 1,
+                bytes.len()
+            );
+        }
+
+        let path = format!("outputs/narration_{run_id}_{idx}.mp3");
+        if let Err(e) = tokio::fs::write(&path, &bytes).await {
+            cleanup_narration_temps(&temp_paths).await;
+            return format!("❌ Failed to save narration line {}: {e}", idx + 1);
+        }
+        let duration = match probe_audio_duration_secs(&path).await {
+            Ok(d) => d,
+            Err(e) => {
+                temp_paths.push(path);
+                cleanup_narration_temps(&temp_paths).await;
+                return format!("❌ Could not measure narration line {}: {e}", idx + 1);
+            }
+        };
+        if duration <= 0.05 {
+            temp_paths.push(path);
+            cleanup_narration_temps(&temp_paths).await;
+            return format!("❌ Narration line {} produced empty audio", idx + 1);
+        }
+
+        temp_paths.push(path);
+        speech_durations.push(duration);
+    }
+
+    // Every scene holds its line plus the gap before the next scene. The last
+    // scene gets a short tail so the final frame does not cut on a hard stop.
+    let scene_durations: Vec<f64> = speech_durations
+        .iter()
+        .enumerate()
+        .map(|(idx, duration)| {
+            let tail = if idx + 1 == speech_durations.len() {
+                0.25
+            } else {
+                gap
+            };
+            ((duration + tail) * 1000.0).round() / 1000.0
+        })
+        .collect();
+    let total: f64 = scene_durations.iter().sum();
+
+    let mut command = StdCommand::new("ffmpeg");
+    command.arg("-y");
+    for path in &temp_paths {
+        command.arg("-i").arg(path);
+    }
+    let mut filters: Vec<String> = Vec::new();
+    for (idx, duration) in scene_durations.iter().enumerate() {
+        filters.push(format!(
+            "[{idx}:a]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=mono,apad=whole_dur={duration:.3}[a{idx}]"
+        ));
+    }
+    let labels: String = (0..temp_paths.len()).map(|i| format!("[a{i}]")).collect();
+    filters.push(format!(
+        "{labels}concat=n={}:v=0:a=1[out]",
+        temp_paths.len()
+    ));
+    command
+        .arg("-filter_complex")
+        .arg(filters.join(";"))
+        .arg("-map")
+        .arg("[out]")
+        .arg("-c:a")
+        .arg("libmp3lame")
+        .arg("-q:a")
+        .arg("2")
+        .arg(&output_file);
+
+    let concat_result = command.output();
+    cleanup_narration_temps(&temp_paths).await;
+
+    let concat_output = match concat_result {
+        Ok(output) => output,
+        Err(e) => return format!("❌ Narration concat failed to start: {e}"),
+    };
+    if !concat_output.status.success() {
+        return format!(
+            "❌ Narration concat failed: {}",
+            String::from_utf8_lossy(&concat_output.stderr)
+                .chars()
+                .take(800)
+                .collect::<String>()
+        );
+    }
+
+    let actual_total = probe_audio_duration_secs(&output_file)
+        .await
+        .unwrap_or(total);
+
+    let mut scenes = Vec::new();
+    let mut start = 0.0_f64;
+    let mut timing_snippet = String::new();
+    for (idx, duration) in scene_durations.iter().enumerate() {
+        scenes.push(serde_json::json!({
+            "index": idx + 1,
+            "scene_id": format!("s{}", idx + 1),
+            "start": ((start * 1000.0).round() / 1000.0),
+            "duration": duration,
+            "end": (((start + duration) * 1000.0).round() / 1000.0),
+            "words": lines[idx].split_whitespace().count(),
+        }));
+        timing_snippet.push_str(&format!(
+            "  <div class=\"scene clip\" id=\"s{}\" data-start=\"{start:.3}\" data-duration=\"{duration:.3}\" data-track-index=\"0\">\n",
+            idx + 1
+        ));
+        start += duration;
+    }
+
+    format!(
+        "✅ Narration ready: {output_file}\n\
+         Total audio: {actual_total:.3}s across {} scenes (gap {gap:.2}s)\n\n\
+         SCENE_TIMELINE_JSON:\n{}\n\n\
+         HYPERFRAMES_TIMING (copy exactly; root data-duration=\"{actual_total:.3}\"):\n{}\n\
+         RULES: every scene's data-start/data-duration must match this timeline; \
+         scenes must tile end-to-end with no gaps or overlaps; the last readable \
+         element must finish animating by 50% of its scene; do NOT cut to a new \
+         scene mid-sentence; leave the final scene on screen through the end. \
+         Mux this file with add_audio(input_file=<rendered_video>, \
+         audio_file=\"{output_file}\", output_file=<final_video>). \
+         Do NOT call add_voiceover_to_video — that would generate a second, \
+         unsynchronized voice track.",
+        serde_json::to_string_pretty(&scenes).unwrap_or_else(|_| "[]".to_string()),
+        timing_snippet,
+        actual_total = actual_total,
+        gap = gap,
+    )
 }
 
 /// Generate text-to-speech using Eleven Labs (Claude version)

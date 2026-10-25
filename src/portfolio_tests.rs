@@ -506,10 +506,15 @@ impl PortfolioTestRunner {
                     .find(|s| s.slug == scenario.slug)
                     .map(|s| s.duration_seconds)
                     .unwrap_or(0.0);
+                // Landing and education are narrated products by contract;
+                // never let them pass silently even when the brief happens to
+                // omit the word "narration".
+                let require_audio = matches!(scenario.slug, "landing_page" | "education");
                 let violations = crate::render_review::brief_violations(
                     &r2_url,
                     scenario.description,
                     requested,
+                    require_audio,
                 )
                 .await;
 
