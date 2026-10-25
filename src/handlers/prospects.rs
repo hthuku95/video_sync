@@ -3255,7 +3255,7 @@ async fn bulk_send_prospect_emails(
         service_type: None,
         contact_status: None,
         fresh_days: None,
-        include_contacted: false,
+        include_contacted: Some(false),
         limit: None,
     });
 
