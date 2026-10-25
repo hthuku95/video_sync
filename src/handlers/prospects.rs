@@ -3417,6 +3417,7 @@ async fn delete_prospect(
 /// Generate a personalized cold outreach DM using Gemini, given a delivery URL.
 async fn generate_outreach_message(
     Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<crate::models::auth::Claims>,
     Path(id): Path<Uuid>,
     Json(payload): Json<GenerateOutreachRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
