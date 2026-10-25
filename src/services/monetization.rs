@@ -16,7 +16,7 @@ pub const SERVICE_OFFERS: [ServiceOffer; 14] = [
         key: "clipping",
         title: "SHORT-FORM CLIPPING (LEGACY — PARKED)",
         what_you_offer: "legacy combined clip service, superseded by YouTube/Twitch clipping — not offered to new clients.",
-        pricing_tiers: "$297/mo (parked).",
+        pricing_tiers: "$199/mo (parked).",
         best_fit: "existing legacy campaigns only.",
     },
     ServiceOffer {
@@ -30,14 +30,14 @@ pub const SERVICE_OFFERS: [ServiceOffer; 14] = [
         key: "twitch_clipping",
         title: "TWITCH CLIPPING",
         what_you_offer: "automated daily clips from Twitch streams and VODs — captioned, thumbnailed, posted to your connected social accounts.",
-        pricing_tiers: "$297/mo for a daily campaign with up to 3 posts/day across your connected platforms.",
+        pricing_tiers: "$199/mo for a daily campaign with up to 3 posts/day across your connected platforms.",
         best_fit: "Twitch streamers and their clip channels who want every stream turned into daily short-form content.",
     },
     ServiceOffer {
         key: "kick_auto_clipper",
         title: "KICK AUTO-CLIPPER",
         what_you_offer: "automated daily clips from Kick streamer VODs — discover, clip, caption, and post to your connected social accounts.",
-        pricing_tiers: "$297/mo for a daily campaign with up to 3 posts/day.",
+        pricing_tiers: "$199/mo for a daily campaign with up to 3 posts/day.",
         best_fit: "clipping channels that repost big Kick streamers' content and need fresh clips daily.",
     },
     ServiceOffer {
