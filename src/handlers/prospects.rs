@@ -3516,6 +3516,9 @@ async fn generate_prospect_sample_pack(
         )
     })?;
 
+    let service: String = row
+        .get::<Option<String>, _>("service_type")
+        .unwrap_or_else(|| "landing_page".to_string());
     if let Some(existing) = row.get::<Option<Uuid>, _>("sample_delivery_id") {
         return Ok(Json(json!({
             "success": true,
@@ -6635,13 +6638,16 @@ async fn instagram_generate_sample(
 
     // If a sample is already attached, just return it — re-generating costs
     // money and the user wants the link to paste, not a fresh render.
+    let service_key: String = row
+        .get::<Option<String>, _>("service_type")
+        .unwrap_or_else(|| "landing_page".to_string());
     if let Some(existing) = row.get::<Option<uuid::Uuid>, _>("sample_delivery_id") {
         return Json(json!({
             "success":      true,
             "delivery_id":  existing.to_string(),
             "delivery_url": format!(
                 "https://{}.videosync.ink/delivery/{}",
-                app_subdomain_for_service(service_key),
+                app_subdomain_for_service(&service_key),
                 existing
             ),
             "message":      "Sample already exists for this lead.",
