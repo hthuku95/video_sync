@@ -4837,7 +4837,7 @@ function renderContactQueue(prospects){
     const x = (p.twitter_handle||'').trim();
     const igHandle = (p.instagram_handle||'').trim();
     const url = (p.external_url||p.platform_url||'').trim();
-    const sampleUrl = p.sample_delivery_url ? `${window.location.origin}${p.sample_delivery_url}` : '';
+    const sampleUrl = p.sample_delivery_url ? `https://${appSubdomainForService(p.service_type)}.videosync.ink${p.sample_delivery_url}` : '';
     const service = p.service_type || 'landing_page';
     return `<div class="pb-job-row" style="grid-template-columns:minmax(220px,1fr) auto minmax(240px,1.2fr) auto">
       <span>
@@ -4861,6 +4861,16 @@ function renderContactQueue(prospects){
       </span>
     </div>`;
   }).join('');
+}
+
+function appSubdomainForService(svc){
+  svc = (svc||'').toLowerCase();
+  if(['kick_auto_clipper','twitch_clipping','youtube_clipping','clipping'].includes(svc)) return 'clips';
+  if(svc==='landing_page') return 'app';
+  if(svc==='education') return 'learn';
+  if(['manim_explainer','whiteboard_animation','kinetic_typography','animated_infographic','algorithm_viz','investor_pitch','year_in_review','isometric_explainer'].includes(svc)) return 'motion';
+  if(svc==='shorts') return 'shorts';
+  return 'app';
 }
 
 async function loadProspects(){
@@ -4895,7 +4905,7 @@ async function loadProspects(){
     const ig = p.instagram_handle||'';
     const email = p.business_email||'';
     const ext = p.external_url||'';
-    const sampleUrl = p.sample_delivery_url ? `${window.location.origin}${p.sample_delivery_url}` : '';
+    const sampleUrl = p.sample_delivery_url ? `https://${appSubdomainForService(p.service_type)}.videosync.ink${p.sample_delivery_url}` : '';
     const typeBadge = p.prospect_type ? `<span class="badge" style="background:rgba(59,130,246,0.15);color:#93c5fd;padding:2px 8px;border-radius:999px;font-size:0.72rem;margin-right:6px">${(p.prospect_type||'').replaceAll('_',' ')}</span>` : '';
     const svcBadge = p.service_type ? `<span class="badge" style="background:rgba(122,76,255,0.15);color:var(--purple);padding:2px 8px;border-radius:999px;font-size:0.72rem">${p.service_type}</span>` : '';
     const creators = (((p.contact_enrichment||{}).detected_source_creators)||[]).filter(Boolean);
