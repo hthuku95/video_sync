@@ -4639,6 +4639,10 @@ tr:hover td{background:rgba(92,84,112,0.12)}
   <!-- PROSPECTS VIEW -->
   <div id="view-prospects">
     <div class="stat-strip" id="prospect-contact-summary"></div>
+    <div style="margin:10px 0;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <button class="btn btn-primary" onclick="bulkSendEmails()">📧 Bulk Send Emails (new, with outreach)</button>
+      <span id="bulk-send-status" style="color:#a8b8d3;font-size:0.85rem"></span>
+    </div>
     <!-- Filter Tabs -->
     <div class="tabs">
       <div class="tab active" onclick="setFilter('all',this)">All</div>
@@ -5342,6 +5346,30 @@ async function regen(id){
   const data = await res.json();
   if(data.success){ showMsg('DM scripts refreshed'); loadProspects(); }
   else showMsg('Refresh failed', false);
+}
+
+async function bulkSendEmails(){
+  if(!confirm('Send emails to all prospects with emails + outreach scripts? Skips already-contacted.')) return;
+  const status = document.getElementById('bulk-send-status');
+  status.textContent = 'Queueing…';
+  try {
+    const res = await fetch('/api/admin/prospects/bulk-send-email', {
+      method:'POST',
+      headers:{'Authorization':'Bearer '+token,'Content-Type':'application/json'},
+      body: JSON.stringify({limit: 100})
+    });
+    const data = await res.json();
+    if(data.success){
+      status.textContent = `✓ ${data.queued} queued (${data.skipped_no_script||0} skipped — no outreach). Check Email Logs.`;
+      showMsg(data.message||'Bulk send queued');
+    } else {
+      status.textContent = 'Error: '+(data.message||data.error||'failed');
+      showMsg(data.message||data.error||'Bulk send failed', false);
+    }
+  } catch(e){
+    status.textContent = 'Network error: '+e;
+    showMsg('Network error: '+e, false);
+  }
 }
 
 async function generateSamplePack(id, encodedUrl, encodedService){
