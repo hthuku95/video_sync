@@ -43,8 +43,8 @@ pub const SERVICE_OFFERS: [ServiceOffer; 14] = [
     ServiceOffer {
         key: "landing_page",
         title: "ANIMATED LANDING PAGE HERO",
-        what_you_offer: "animated homepage hero videos, narrated product demos, and brand videos generated from your website URL — posted to your connected social accounts.",
-        pricing_tiers: "$149/mo for a daily campaign with up to 3 posts/day.",
+        what_you_offer: "animated videos of ANY type generated from your website URL — how-to, marketing, product demo, explainer, testimonial, brand story. The AI crawls your site and learns your business, then produces the video you ask for — posted to your connected social accounts.",
+        pricing_tiers: "$149/mo for a daily campaign with up to 3 posts/day. One-time bundles: 10 videos for $50 or 30 for $100.",
         best_fit: "SaaS founders, business owners, consultants, and marketers who want a daily video presence.",
     },
     ServiceOffer {
