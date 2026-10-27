@@ -1498,7 +1498,6 @@ async fn multimodal_review_via_gemini(
     let (local_path_buf, local_url_owned) = match _downloaded.as_ref() {
         Some((path, _)) => (Some(path.clone()), Some(path.to_string_lossy().to_string())),
         None => (None, None),
-        failing_section: None,
     };
     let local_path: &Path = local_path_buf.as_deref().unwrap_or_else(|| Path::new(output_url));
     let local_url: &str = local_url_owned.as_deref().unwrap_or(output_url);
