@@ -2841,8 +2841,8 @@ fn service_offer_line(service: &str) -> &'static str {
 
 fn service_price_line(service: &str) -> &'static str {
     match normalize_revenue_service(service) {
-        "clipping" | "kick_auto_clipper" | "youtube_clipping" | "twitch_clipping" => "$297/mo",
-        "education" => "$199/mo",
+        "youtube_clipping" => "$297/mo",
+        "clipping" | "kick_auto_clipper" | "twitch_clipping" | "education" => "$199/mo",
         "landing_page" => "$149/mo",
         "manim_explainer" | "whiteboard_animation" | "kinetic_typography"
         | "animated_infographic" | "algorithm_viz" | "investor_pitch"
