@@ -947,8 +947,8 @@ Title: {title}
 Brief: {brief}
 Style: {style}
 
-## ⚠️ CRITICAL: DO NOT USE generate_long_form_video
-The tool `generate_long_form_video` is a convenience wrapper that delegates to another agent — it will NOT produce the correct output for this Managed Campaign service. You MUST call the rendering tools directly yourself.
+## ⚠️ CRITICAL: DO NOT USE generate_long_form_video or auto_generate_video
+These tools delegate to another agent — they will NOT produce the correct output for this Managed Campaign service, and in production they hung for 12+ hours. You MUST call the rendering tools directly yourself.
 
 ## STEP 0: UNDERSTAND THE WEBSITE
 Before making anything, call `browserbase_crawl_website(url="{url}")` to crawl the full website. This fetches all subpages and extracts CSS design tokens (colors, fonts). From the response:
@@ -965,7 +965,7 @@ Use the extracted content to understand:
 
 ## MANDATORY TOOL SEQUENCE (NARRATION-FIRST — DO NOT SKIP OR REORDER)
 1. generate_video_script(topic, duration, style, tone) — plan the content using the website info from step 0. The script MUST be split into 4-7 scenes, one short narration line per scene (1-3 sentences).
-2. generate_narration(lines=[...], voice="Emma", output_file="{output_dir}/narration.mp3", gap_seconds=0.35) — synthesize one audio track and get the exact SCENE_TIMELINE_JSON. This is the clock for the entire video.
+2. generate_narration(lines=[...], voice="Emma", output_file="{output_dir}/narration.mp3", gap_seconds=0.35) — synthesize one audio track and get the exact SCENE_TIMELINE_JSON. This is the clock for the entire video. Call it ONCE with all scene lines. If it errors, fix the arguments and retry once; do NOT fall back to per-line generate_text_to_speech and do NOT call auto_generate_video.
 3. Render the MAIN VISUAL as ONE hyperframes_render(html, resolution) composition. Build it directly from the returned timeline:
    - Root `data-duration` = the returned total audio duration.
    - Every scene's `data-start` and `data-duration` MUST equal the returned timeline. Scenes tile end-to-end with no gaps or overlaps.
@@ -1074,7 +1074,7 @@ That tool delegates to another agent and will NOT produce the correct educationa
 
 ## MANDATORY TOOL SEQUENCE (NARRATION-FIRST — DO NOT SKIP OR REORDER)
 1. generate_video_script(topic="{brief}", duration={duration_seconds}, style="{style}", tone="professional"). Split the lesson into 4-8 scenes, one short narration line per scene.
-2. generate_narration(lines=[...], voice="Emma", output_file="{out}/narration.mp3", gap_seconds=0.35) — synthesize the voice track and get the exact SCENE_TIMELINE_JSON. This is the clock for the whole lesson.
+2. generate_narration(lines=[...], voice="Emma", output_file="{out}/narration.mp3", gap_seconds=0.35) — synthesize the voice track and get the exact SCENE_TIMELINE_JSON. This is the clock for the whole lesson. Call it ONCE with all scene lines. If it errors, fix the arguments and retry once; do NOT fall back to per-line generate_text_to_speech and do NOT call auto_generate_video.
 3. Render each scene to EXACTLY its timeline duration:
    - hyperframes_render(html=..., resolution=...) — for titles, kinetic typography, layouts, animated backgrounds, intro/outro sequences, and ALL 2D motion graphics. Its root data-duration and scene data-start/data-duration MUST equal the timeline. CPU-rendered, no GPU needed.
    - manim_execute_script(description=..., duration=<scene duration>, quality="h", include_narration=false) — for math equations, diagrams, code animations, data charts, LaTeX formulas. Trim/pad the result with trim_video or pad_video_time so it is exactly the scene duration.

@@ -9052,20 +9052,38 @@ async fn execute_generate_narration_with_state(
     args: &Value,
     ctx: &ToolExecutionContext,
 ) -> String {
-    let lines: Vec<String> = args
+    // NIM providers sometimes serialize the array as a string or use
+    // {text: ...} objects. Accept all three shapes so one bad-shaped call does
+    // not force the agent into a slow per-line TTS fallback.
+    let raw_lines = args
         .get("lines")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str())
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect()
-        })
-        .unwrap_or_default();
+        .or_else(|| args.get("line"))
+        .or_else(|| args.get("script"));
+    let lines: Vec<String> = match raw_lines {
+        Some(Value::Array(arr)) => arr
+            .iter()
+            .filter_map(|v| match v {
+                Value::String(s) => Some(s.trim().to_string()),
+                Value::Object(o) => o
+                    .get("text")
+                    .or_else(|| o.get("line"))
+                    .or_else(|| o.get("narration"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.trim().to_string()),
+                _ => None,
+            })
+            .filter(|s| !s.is_empty())
+            .collect(),
+        Some(Value::String(s)) => s
+            .split('\n')
+            .map(|line| line.trim().to_string())
+            .filter(|line| !line.is_empty())
+            .collect(),
+        _ => Vec::new(),
+    };
 
     if lines.is_empty() {
-        return "❌ Error: lines must contain at least one non-empty narration line".to_string();
+        return "❌ Error: lines must contain at least one non-empty narration line (array of strings, array of {text}, or newline-separated string)".to_string();
     }
     if lines.len() > 12 {
         return "❌ Error: at most 12 narration lines are supported per video".to_string();
@@ -9103,24 +9121,39 @@ async fn execute_generate_narration_with_state(
             "tool": "generate_narration",
             "line": idx,
         });
-        let bytes = match client
-            .text_to_speech_base64(line, voice, "mp3", None, Some(metadata))
-            .await
-        {
-            Ok(bytes) => bytes,
-            Err(e) => {
-                cleanup_narration_temps(&temp_paths).await;
-                return format!("❌ Narration line {} failed: {}", idx + 1, e);
+        // The persistent TTS service can be briefly saturated when several
+        // sample packs render at once. Retry the line instead of aborting the
+        // whole storyboard and sending the agent down a broken fallback path.
+        let mut bytes_opt: Option<Vec<u8>> = None;
+        let mut last_error = String::new();
+        for attempt in 0..3 {
+            match client
+                .text_to_speech_base64(line, voice, "mp3", None, Some(metadata.clone()))
+                .await
+            {
+                Ok(bytes) if bytes.len() >= 1_000 => {
+                    bytes_opt = Some(bytes);
+                    break;
+                }
+                Ok(bytes) => {
+                    last_error = format!("only {} bytes of audio", bytes.len());
+                }
+                Err(e) => {
+                    last_error = e.to_string();
+                }
             }
-        };
-        if bytes.len() < 1_000 {
+            if attempt < 2 {
+                tokio::time::sleep(Duration::from_secs(5 * (attempt as u64 + 1))).await;
+            }
+        }
+        let Some(bytes) = bytes_opt else {
             cleanup_narration_temps(&temp_paths).await;
             return format!(
-                "❌ Narration line {} returned only {} bytes of audio",
+                "❌ Narration line {} failed after 3 attempts: {}",
                 idx + 1,
-                bytes.len()
+                last_error
             );
-        }
+        };
 
         let path = format!("outputs/narration_{run_id}_{idx}.mp3");
         if let Err(e) = tokio::fs::write(&path, &bytes).await {
