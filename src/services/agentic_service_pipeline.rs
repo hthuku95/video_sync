@@ -964,7 +964,7 @@ Use the extracted content to understand:
 - Call-to-action and target audience
 
 ## MANDATORY TOOL SEQUENCE (NARRATION-FIRST — DO NOT SKIP OR REORDER)
-1. generate_video_script(topic, duration, style, tone) — plan the content using the website info from step 0. The script MUST be split into 4-7 scenes, one short narration line per scene (1-3 sentences).
+1. generate_video_script(topic, duration, style, tone) — plan the content using the website info from step 0. The script MUST be split into 4-6 scenes, one short narration line per scene (1-3 sentences).
 2. generate_narration(lines=[...], voice="Emma", output_file="{output_dir}/narration.mp3", gap_seconds=0.35) — synthesize one audio track and get the exact SCENE_TIMELINE_JSON. This is the clock for the entire video. Call it ONCE with all scene lines. If it errors, fix the arguments and retry once; do NOT fall back to per-line generate_text_to_speech and do NOT call auto_generate_video.
 3. Render the MAIN VISUAL as ONE hyperframes_render(html, resolution) composition. Build it directly from the returned timeline:
    - Root `data-duration` = the returned total audio duration.
@@ -1073,7 +1073,7 @@ Style: {style}
 That tool delegates to another agent and will NOT produce the correct educational video. Render directly.
 
 ## MANDATORY TOOL SEQUENCE (NARRATION-FIRST — DO NOT SKIP OR REORDER)
-1. generate_video_script(topic="{brief}", duration={duration_seconds}, style="{style}", tone="professional"). Split the lesson into 4-8 scenes, one short narration line per scene.
+1. generate_video_script(topic="{brief}", duration={duration_seconds}, style="{style}", tone="professional"). Split the lesson into 4-6 scenes, one short narration line per scene.
 2. generate_narration(lines=[...], voice="Emma", output_file="{out}/narration.mp3", gap_seconds=0.35) — synthesize the voice track and get the exact SCENE_TIMELINE_JSON. This is the clock for the whole lesson. Call it ONCE with all scene lines. If it errors, fix the arguments and retry once; do NOT fall back to per-line generate_text_to_speech and do NOT call auto_generate_video.
 3. Render each scene to EXACTLY its timeline duration:
    - hyperframes_render(html=..., resolution=...) — for titles, kinetic typography, layouts, animated backgrounds, intro/outro sequences, and ALL 2D motion graphics. Its root data-duration and scene data-start/data-duration MUST equal the timeline. CPU-rendered, no GPU needed.
