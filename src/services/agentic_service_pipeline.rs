@@ -692,10 +692,18 @@ impl AgenticServicePipeline {
             }
 
             if attempt + 1 < AGENT_MAX_RETRIES {
-                let hint = review
+                let mut hint = review
                     .retry_hint
                     .clone()
                     .unwrap_or_else(|| review.feedback.clone());
+                // Section-scoped repair: if the reviewer identified a specific
+                // failing section, narrow the retry hint to that part only.
+                if let Some(section) = &review.failing_section {
+                    hint = format!(
+                        "SECTION-SCOPED REPAIR — only fix the '{}' section; keep all other sections unchanged. {}",
+                        section, hint
+                    );
+                }
 
                 // ── TARGETED REPAIR (§36.9 rec: repair beats regenerate) ──
                 // One fast call decides whether the QA failure can be fixed by

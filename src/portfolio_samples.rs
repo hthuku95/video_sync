@@ -251,7 +251,7 @@ pub fn dfy_client_ref(slug: &str) -> String {
 // `20261019000000_service_test_sources.sql`.
 
 /// How long a cached discovered source is trusted before re-discovery.
-const SERVICE_SOURCE_TTL_DAYS: i64 = 7;
+const SERVICE_SOURCE_TTL_DAYS: i64 = 1;
 
 /// Minimum VOD length (seconds) worth clipping in a quality test.
 const SERVICE_SOURCE_MIN_VOD_SECS: u64 = 300;
@@ -299,7 +299,7 @@ async fn resolve_prospect_site(
          WHERE service_type = $1 \
            AND COALESCE(external_url, '') ~ '^https?://' \
            AND external_url NOT ILIKE '%example.com%' \
-         ORDER BY ai_score DESC NULLS LAST, updated_at DESC \
+         ORDER BY random() \
          LIMIT 1",
     )
     .bind(slug)

@@ -69,6 +69,7 @@ fn unavailable_review(detail: String) -> ReviewResult {
             detail
         ),
         retry_hint: None,
+        failing_section: None,
     }
 }
 
@@ -196,6 +197,7 @@ pub struct ReviewResult {
     pub score: i32,
     pub feedback: String,
     pub retry_hint: Option<String>,
+    pub failing_section: Option<String>,
 }
 
 /// Review a rendered output using the unified Qwen-first fallback chain (§52):
@@ -376,7 +378,7 @@ fn reviewer_tools() -> Vec<FunctionDeclaration> {
         },
         FunctionDeclaration {
             name: "finish_review".to_string(),
-            description: "Submit the final verdict. score is 1-10 (>=6 ships, <=5 re-render). feedback is a short evidence-based justification. retry_hint is a one-sentence concrete fix to prepend to the render prompt when score <=5 (omit/null when shipping).".to_string(),
+            description: "Submit the final verdict. score is 1-10 (>=6 ships, <=5 re-render). feedback is a short evidence-based justification. retry_hint is a one-sentence concrete fix to prepend to the render prompt when score <=5 (omit/null when shipping). failing_section identifies the specific scene/section that failed (e.g. 'scene 2', 'intro', 'outro') so only that part is regenerated — omit/null when the whole render is fine or the defect is global.".to_string(),
             parameters: Parameters {
                 param_type: "object".to_string(),
                 properties: {
@@ -425,7 +427,9 @@ You have exactly two tools:
      (duration, resolution, fps, audio, size, codecs). Use it whenever the \
      brief specifies technical requirements or when in doubt.
 2. finish_review — submit your verdict. You must end with this tool: \
-     {\"score\": 1-10, \"feedback\": \"...\", \"retry_hint\": \"...\"}.
+     {\"score\": 1-10, \"feedback\": \"...\", \"retry_hint\": \"...\", \"failing_section\": \"...\"}. \
+     failing_section is the specific scene/section that failed (e.g. \"scene 2\", \"intro\", \"outro\") \
+     so only that part is regenerated; omit when the defect is global or the render ships.
 
 Work like an inspector: inspect the attached media, probe for evidence, THEN \
 finish. Do not answer in prose — call a tool on every single turn. A score of \
@@ -668,11 +672,17 @@ fn parse_finish_review(args: &serde_json::Value) -> Option<ReviewResult> {
         .and_then(|h| h.as_str())
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string());
+    let failing_section = args
+        .get("failing_section")
+        .and_then(|s| s.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
     Some(ReviewResult {
         pass: score >= PASS_THRESHOLD,
         score,
         feedback,
         retry_hint,
+        failing_section,
     })
 }
 
