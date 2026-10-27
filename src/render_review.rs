@@ -70,7 +70,6 @@ fn unavailable_review(detail: String) -> ReviewResult {
         ),
         retry_hint: None,
         failing_section: None,
-        failing_section: None,
     }
 }
 
