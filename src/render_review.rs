@@ -630,7 +630,6 @@ async fn agentic_review_via_qwen(
         ),
         retry_hint: None,
         failing_section: None,
-        failing_section: None,
     }
 }
 
