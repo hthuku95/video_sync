@@ -181,10 +181,43 @@ async fn service_tool_deny(tool_name: &str, ctx: &ToolExecutionContext) -> Optio
     .flatten();
     let (slug, stype) = row?;
     let s = slug.as_deref().unwrap_or("");
-    let is_clipping = crate::services::agentic_service_pipeline::ServiceType::from_normalized(s)
+    let normalized = if s.is_empty() {
+        stype.as_deref().unwrap_or("")
+    } else {
+        s
+    };
+    let service =
+        crate::services::agentic_service_pipeline::ServiceType::from_normalized(normalized);
+    let is_clipping = service
         == crate::services::agentic_service_pipeline::ServiceType::Clipping
         || s == "legacy_youtube_clipping"
         || stype.as_deref() == Some("clipping");
+
+    // Landing/education must render their own timeline. `auto_generate_video`
+    // and `generate_long_form_video` spawn a nested agent; in production they
+    // burned 12+ hours across two sample-pack workflows and never returned.
+    let is_direct_render = matches!(
+        service,
+        crate::services::agentic_service_pipeline::ServiceType::LandingPage
+            | crate::services::agentic_service_pipeline::ServiceType::Education
+    );
+    let is_delegating = matches!(
+        tool_name,
+        "auto_generate_video" | "generate_long_form_video" | "run_director"
+    );
+    if is_direct_render && is_delegating {
+        tracing::warn!(
+            "🚫 tool '{}' denied in {} workflow {} (render directly)",
+            tool_name,
+            service.as_str(),
+            wid
+        );
+        return Some(format!(
+            r#"{{"error":"Tool '{tool_name}' is disabled for {} renders — it delegates to a nested agent and has hung for hours. Call hyperframes_render directly, and for narration use generate_narration then add_audio."}}"#,
+            service.as_str()
+        ));
+    }
+
     if !is_clipping {
         return None;
     }

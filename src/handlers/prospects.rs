@@ -3273,8 +3273,13 @@ async fn bulk_send_prospect_emails(
         sql.push_str(&(binds.len() + 1).to_string());
         binds.push(st.clone());
     }
+    if let Some(ref cs) = req.contact_status {
+        sql.push_str(&format!(" AND contact_status = ${}", binds.len() + 1));
+        binds.push(cs.clone());
+    }
     if !is_admin {
-        sql.push_str(&format!(" AND sourced_by = ${}", binds.len() + 1));
+        // sourced_by is an integer; the bind vector is text, so cast explicitly.
+        sql.push_str(&format!(" AND sourced_by = ${}::int", binds.len() + 1));
         binds.push(acting_user.to_string());
     }
     if let Some(days) = req.fresh_days.filter(|d| *d > 0) {
@@ -3349,24 +3354,33 @@ async fn bulk_send_prospect_emails(
     let gemma = state.gemma_client.clone();
     tokio::spawn(async move {
         for (id, name, email, script, _service) in candidates {
-            // Ensure an email script exists; generate outreach if missing.
-            let _ = crate::services::email_service::send_prospect_email(
+            match crate::services::email_service::send_prospect_email(
                 &pool,
                 &email,
                 &name,
                 &script,
                 id,
             )
-            .await;
-            // Update contact status.
-            let _ = sqlx::query(
-                "UPDATE prospects SET contact_status = 'contacted', updated_at = NOW() WHERE id = $1",
-            )
-            .bind(id)
-            .execute(&pool)
-            .await;
-            // Rate limit: ~5 emails/sec max to stay under SES limits.
-            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            .await
+            {
+                Ok((message_id, _log_id)) => {
+                    let _ = sqlx::query(
+                        "UPDATE prospects SET contact_status = 'contacted', updated_at = NOW() WHERE id = $1",
+                    )
+                    .bind(id)
+                    .execute(&pool)
+                    .await;
+                    tracing::info!(prospect_id = %id, %message_id, "Prospect outreach email sent");
+                }
+                Err(e) => {
+                    // Never mark a failed send as contacted: it would be
+                    // silently dropped from every future bulk run.
+                    tracing::warn!(prospect_id = %id, error = %e, "Prospect outreach email failed");
+                }
+            }
+            // SES sandbox is 1 email/sec (MaxSendRate=1.0). Stay under it even
+            // after production access; 1.1s still clears 200/day quickly.
+            tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
         }
         tracing::info!("Bulk email send completed");
     });
