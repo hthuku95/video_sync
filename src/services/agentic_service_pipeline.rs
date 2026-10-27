@@ -654,6 +654,7 @@ impl AgenticServicePipeline {
                     retry_hint: Some(
                         "Produce the output file in the specified output directory".to_string(),
                     ),
+                    failing_section: None,
                 }
             };
 

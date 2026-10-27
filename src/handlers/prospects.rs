@@ -9478,6 +9478,7 @@ Output file paths clearly in your final response so the delivery pipeline can fi
                 retry_hint: Some(
                     "Produce the full video at the exact path specified in the prompt".to_string(),
                 ),
+                failing_section: None,
             }
         };
 

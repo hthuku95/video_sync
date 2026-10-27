@@ -70,6 +70,7 @@ fn unavailable_review(detail: String) -> ReviewResult {
         ),
         retry_hint: None,
         failing_section: None,
+        failing_section: None,
     }
 }
 
@@ -233,6 +234,7 @@ pub async fn review_render(
                     "Re-render the output; the previous artifact was empty or corrupt."
                         .to_string(),
                 ),
+        failing_section: None,
             },
             delivery_id,
             output_url,
@@ -246,6 +248,7 @@ pub async fn review_render(
                 "Re-render the output; the previous artifact was empty or corrupt."
                     .to_string(),
             ),
+        failing_section: None,
         };
     }
 
@@ -353,6 +356,7 @@ async fn run_review_via_qwen(
                 score: 0,
                 feedback: format!("Qwen review call failed: {}", e),
                 retry_hint: None,
+        failing_section: None,
             };
         }
     };
@@ -536,6 +540,7 @@ async fn agentic_review_via_qwen(
                     score: 0,
                     feedback: format!("Agentic Qwen review tool loop failed: {}", e),
                     retry_hint: None,
+        failing_section: None,
                 };
             }
             Err(_) => {
@@ -547,6 +552,7 @@ async fn agentic_review_via_qwen(
                         REVIEWER_CALL_TIMEOUT_SECS
                     ),
                     retry_hint: None,
+        failing_section: None,
                 };
             }
         };
@@ -624,6 +630,8 @@ async fn agentic_review_via_qwen(
             REVIEWER_MAX_TURNS
         ),
         retry_hint: None,
+        failing_section: None,
+        failing_section: None,
     }
 }
 
@@ -800,6 +808,7 @@ async fn run_review_via_nim(
                 score: 0,
                 feedback: format!("NIM review call failed: {}", e),
                 retry_hint: None,
+        failing_section: None,
             };
         }
     };
@@ -827,6 +836,7 @@ async fn run_review_via_nim_frames(
                 score: 0,
                 feedback: format!("NIM frame review failed: {}", e),
                 retry_hint: None,
+        failing_section: None,
             }
         }
     }
@@ -1055,6 +1065,7 @@ async fn run_review_via_bedrock(
             score: 0,
             feedback: "Bedrock (Llama 4) does not natively support video input through Converse API — skipped".to_string(),
             retry_hint: None,
+        failing_section: None,
         };
     }
     let response = match multimodal_review_via_bedrock(bedrock, output_url, prompt).await {
@@ -1065,6 +1076,7 @@ async fn run_review_via_bedrock(
                 score: 0,
                 feedback: format!("Bedrock review call failed: {}", e),
                 retry_hint: None,
+        failing_section: None,
             };
         }
     };
@@ -1088,6 +1100,7 @@ async fn run_review_via_gemini(
                 GEMINI_DAILY_LIMIT
             ),
             retry_hint: None,
+        failing_section: None,
         };
     }
 
@@ -1116,6 +1129,7 @@ async fn run_review_via_gemini(
                                     calls, retry_err
                                 ),
                                 retry_hint: None,
+        failing_section: None,
                             };
                         }
                     }
@@ -1127,6 +1141,7 @@ async fn run_review_via_gemini(
                 score: 0,
                 feedback: format!("Gemini review call failed (call #{}/20): {}", calls, err_text),
                 retry_hint: None,
+        failing_section: None,
             };
         }
     };
@@ -1179,6 +1194,7 @@ fn parse_review_response(response: &str) -> ReviewResult {
                             cleaned.chars().take(120).collect::<String>()
                         ),
                         retry_hint: None,
+        failing_section: None,
                     };
                 }
             },
@@ -1202,6 +1218,7 @@ fn parse_review_response(response: &str) -> ReviewResult {
         score,
         feedback,
         retry_hint,
+        failing_section: None,
     }
 }
 
@@ -1483,6 +1500,7 @@ async fn multimodal_review_via_gemini(
     let (local_path_buf, local_url_owned) = match _downloaded.as_ref() {
         Some((path, _)) => (Some(path.clone()), Some(path.to_string_lossy().to_string())),
         None => (None, None),
+        failing_section: None,
     };
     let local_path: &Path = local_path_buf.as_deref().unwrap_or_else(|| Path::new(output_url));
     let local_url: &str = local_url_owned.as_deref().unwrap_or(output_url);

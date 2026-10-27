@@ -10189,6 +10189,7 @@ pub async fn run_delivery_job(delivery_id: Uuid, state: Arc<AppState>) {
                 score: 0,
                 feedback: "Review infrastructure error".to_string(),
                 retry_hint: None,
+                failing_section: None,
             });
             let url = best_url;
 
