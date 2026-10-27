@@ -809,6 +809,46 @@ impl AgenticServicePipeline {
             }
         }
 
+        // Skill capture: extract a reusable pattern from this successful render
+        // and store it (PG + Qdrant) so future renders of the same service type
+        // benefit. Best-effort; failures are logged, not fatal.
+        let skill_prompt = format!(
+            "You analyzed a successful '{}' render with brief: '{}'.\n\n             Extract a reusable skill. Respond in JSON: {{\"name\": \"...\", \"description\": \"...\", \"trigger_conditions\": {{\"brief_contains\": \"...\"}}}}",
+            service_type.as_str(),
+            input.brief,
+        );
+        if let Ok(text) = crate::llm_utils::generate_text_fast(
+            state.qwen_client.as_ref(),
+            state.deepseek_client.as_ref(),
+            state.gemini_client.as_ref(),
+            &skill_prompt,
+        )
+        .await
+        {
+            let parsed: serde_json::Value = serde_json::from_str(&text).unwrap_or(serde_json::json!({}));
+            let name = parsed["name"].as_str().unwrap_or("Workflow pattern");
+            let description = parsed["description"]
+                .as_str()
+                .unwrap_or("Learned from successful render");
+            let trigger_conditions = parsed.get("trigger_conditions").cloned().unwrap_or(serde_json::json!({}));
+            let _ = crate::services::skills::store_skill(
+                &state.db_pool,
+                state.qdrant_client.as_ref(),
+                state.gemini_client.as_ref(),
+                input.user_id,
+                Some(service_type.as_str()),
+                None,
+                name,
+                description,
+                trigger_conditions,
+                serde_json::json!({"output_path": output_path, "qa_score": best_score}),
+                "successful_workflow",
+                None,
+                "service",
+            )
+            .await;
+        }
+
         Ok(())
     }
 
