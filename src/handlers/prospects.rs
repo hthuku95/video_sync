@@ -3561,7 +3561,7 @@ async fn generate_outreach_message(
                 // Auto-create one (mirrors /api/referrals/my-codes).
                 let new_code = format!("ref-{}-{}", app, &Uuid::new_v4().to_string()[..6]);
                 sqlx::query(
-                    "INSERT INTO referral_codes (user_id, code, app_slug)                      VALUES ($1, $2, $3) ON CONFLICT (user_id, app_slug) DO NOTHING",
+                    "INSERT INTO referral_codes (user_id, code, app_slug)                      VALUES ($1, $2, $3) ON CONFLICT (user_id, app_slug) WHERE app_slug IS NOT NULL DO NOTHING",
                 )
                 .bind(uid)
                 .bind(&new_code)
@@ -6838,7 +6838,7 @@ async fn instagram_generate_dm(
             None => {
                 let new_code = format!("ref-{}-{}", app, &Uuid::new_v4().to_string()[..6]);
                 sqlx::query(
-                    "INSERT INTO referral_codes (user_id, code, app_slug) VALUES ($1, $2, $3) ON CONFLICT (user_id, app_slug) DO NOTHING",
+                    "INSERT INTO referral_codes (user_id, code, app_slug) VALUES ($1, $2, $3) ON CONFLICT (user_id, app_slug) WHERE app_slug IS NOT NULL DO NOTHING",
                 )
                 .bind(uid)
                 .bind(&new_code)
