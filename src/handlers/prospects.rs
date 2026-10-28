@@ -3495,37 +3495,6 @@ async fn generate_outreach_message(
     let assigned_app: Option<String> = row
         .get::<Option<serde_json::Value>, _>("contact_enrichment")
         .and_then(|ce| ce.get("assigned_app").and_then(|v| v.as_str().map(String::from)));
-    // A/B testing: for landing_page and education prospects, randomly assign
-    // half to the self-serve app (app/learn) and half to the DFY studio app.
-    // Stored in contact_enrichment.assigned_app for consistency across re-runs.
-    let existing_assigned: Option<String> = row
-        .get::<Option<serde_json::Value>, _>("contact_enrichment")
-        .and_then(|ce| ce.get("assigned_app").and_then(|v| v.as_str().map(String::from)));
-    let is_new_assignment = existing_assigned.is_none();
-    let assigned_app: String = if let Some(a) = existing_assigned {
-        a
-    } else if service == "landing_page" || service == "education" {
-        // 50/50 split
-        if rand::random::<f64>() < 0.5 {
-            "studio".to_string()
-        } else if service == "landing_page" {
-            "app".to_string()
-        } else {
-            "learn".to_string()
-        }
-    } else {
-        app_subdomain_for_service(&service).to_string()
-    };
-    // Persist the assignment
-    if is_new_assignment && (service == "landing_page" || service == "education") {
-        let _ = sqlx::query(
-            "UPDATE prospects SET contact_enrichment = COALESCE(contact_enrichment, '{}'::jsonb) || jsonb_build_object('assigned_app', $2::text) WHERE id = $1",
-        )
-        .bind(id)
-        .bind(&assigned_app)
-        .execute(&state.db_pool)
-        .await;
-    }
     let existing_x_dm: String = row
         .get::<Option<String>, _>("x_dm_script")
         .unwrap_or_else(|| default_x_dm(&name, &service));
@@ -3789,13 +3758,41 @@ async fn generate_prospect_sample_pack(
     let service: String = row
         .get::<Option<String>, _>("service_type")
         .unwrap_or_else(|| "landing_page".to_string());
+    // A/B testing: for landing_page and education prospects, randomly assign
+    // half to the self-serve app (app/learn) and half to the DFY studio app.
+    let existing_assigned: Option<String> = row
+        .get::<Option<serde_json::Value>, _>("contact_enrichment")
+        .and_then(|ce| ce.get("assigned_app").and_then(|v| v.as_str().map(String::from)));
+    let is_new_assignment = existing_assigned.is_none();
+    let assigned_app: String = if let Some(a) = existing_assigned {
+        a
+    } else if service == "landing_page" || service == "education" {
+        if rand::random::<f64>() < 0.5 {
+            "studio".to_string()
+        } else if service == "landing_page" {
+            "app".to_string()
+        } else {
+            "learn".to_string()
+        }
+    } else {
+        app_subdomain_for_service(&service).to_string()
+    };
+    if is_new_assignment && (service == "landing_page" || service == "education") {
+        let _ = sqlx::query(
+            "UPDATE prospects SET contact_enrichment = COALESCE(contact_enrichment, '{}'::jsonb) || jsonb_build_object('assigned_app', $2::text) WHERE id = $1",
+        )
+        .bind(id)
+        .bind(&assigned_app)
+        .execute(&state.db_pool)
+        .await;
+    }
     if let Some(existing) = row.get::<Option<Uuid>, _>("sample_delivery_id") {
         return Ok(Json(json!({
             "success": true,
             "delivery_id": existing.to_string(),
             "delivery_url": format!(
                 "https://{}.videosync.ink/delivery/{}",
-                app_subdomain_for_service(&service),
+                if assigned_app == "studio" { "studio" } else { app_subdomain_for_service(&service) },
                 existing
             ),
             "message": "Sample pack already exists for this prospect."
