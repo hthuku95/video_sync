@@ -3547,7 +3547,7 @@ async fn generate_outreach_message(
         if uid == 0 {
             None
         } else {
-            let app = if assigned_app == "studio" { "studio" } else { app_subdomain_for_service(&service) };
+            let app = if assigned_app.as_deref() == Some("studio") { "studio" } else { app_subdomain_for_service(&service) };
         // Try to read an existing code for this user+app.
         let existing: Option<String> = sqlx::query_scalar(
             "SELECT code FROM referral_codes WHERE user_id = $1 AND app_slug = $2",
@@ -7027,7 +7027,7 @@ async fn instagram_generate_sample(
             "delivery_id":  existing.to_string(),
             "delivery_url": format!(
                 "https://{}.videosync.ink/delivery/{}",
-                assigned.as_deref().unwrap_or_else(|| app_subdomain_for_service(Some(service_key.as_str()))),
+                assigned.as_deref().unwrap_or_else(|| app_subdomain_for_service(service_key.as_str())),
                 existing
             ),
             "message":      "Sample already exists for this lead.",
