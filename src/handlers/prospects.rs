@@ -3526,16 +3526,35 @@ async fn generate_outreach_message(
         audience.to_string()
     };
 
-    let pitch_focus = service_offer_line(&service);
-    let price_line = service_price_line(&service);
+    // Studio (DFY) prospects get a different pitch: we produce and deliver
+    // the videos for them, at $100-$200 for 10-30 videos, with a 15-min call.
+    let is_studio = assigned_app.as_deref() == Some("studio");
+    let pitch_focus = if is_studio {
+        match service.as_str() {
+            "landing_page" => "done-for-you animated videos of ANY type generated from your website URL — how-to, marketing, product demo, explainer, testimonial, brand story. We crawl your site, learn your business, and produce 10-30 videos for you to download and use. You do nothing — we handle everything.",
+            "education" => "done-for-you animated educational videos of ANY type — math, science, coding, language, history, finance, and more. We produce 10-30 lesson videos with equations, diagrams, motion graphics, VFX, and 3D depth with narration. You do nothing — we handle everything.",
+            _ => service_offer_line(&service),
+        }
+    } else {
+        service_offer_line(&service)
+    };
+    let price_line = if is_studio {
+        "$100-$200 for 10-30 fully produced animated videos (done-for-you)"
+    } else {
+        service_price_line(&service)
+    };
     // Landing page + education have BOTH a one-time video bundle (10 for $50 /
     // 30 for $100) and a monthly campaign. Lead outreach with the one-time offer
     // and mention the campaign as the recurring upsell. Clipping services lead
     // with the campaign (their core value is ongoing daily clips).
-    let one_time_offer: Option<&str> = match service.as_str() {
-        "landing_page" => Some("one-time bundle: 10 videos for $50 or 30 videos for $100, generated from their website URL"),
-        "education" => Some("one-time bundle: 10 lesson videos for $50 or 30 for $100"),
-        _ => None,
+    let one_time_offer: Option<&str> = if is_studio {
+        Some("done-for-you: 10-30 fully produced animated videos for $100-$200 — we handle everything, you just receive the delivery link")
+    } else {
+        match service.as_str() {
+            "landing_page" => Some("one-time bundle: 10 videos for $50 or 30 videos for $100, generated from their website URL"),
+            "education" => Some("one-time bundle: 10 lesson videos for $50 or 30 for $100"),
+            _ => None,
+        }
     };
     // Referral attribution: only whitelisted (non-admin) senders get their
     // referral signup link attached — admins send plain outreach with no
@@ -3622,6 +3641,7 @@ Price: {price_line}
 {lead_offer_block}
 
 IMPORTANT: For landing_page, the system can generate ANY type of animated video from a website URL (how-to, marketing, product demo, explainer, testimonial, brand story, etc.) — not just hero sections. For education, it can generate ANY type of animated educational video (math, science, coding, language, history, finance, etc.) with equations, diagrams, motion graphics, VFX, and 3D depth. Mention this breadth naturally so the prospect knows the full capability.
+{studio_block}
 
 CRITICAL: The DM and email MUST both contain the free sample delivery link (provided above) and, if a referral/signup link is provided below, that link too. Do NOT omit either link. Do NOT start the message with "Verified", "Verified here", or any verification phrase — start with a genuine, personalized observation about their content/niche.
 
@@ -3644,6 +3664,11 @@ Legacy DM tone: {existing_dm}"#,
         lead_offer_block = one_time_offer
             .map(|o| format!("PRIMARY (lead with this): {}\nSECONDARY (mention as the recurring option): monthly campaign subscription that generates and posts fresh videos daily.", o))
             .unwrap_or_else(|| "PRIMARY (lead with this): monthly campaign subscription that generates and posts fresh videos daily.".to_string()),
+        studio_block = if is_studio {
+            "STUDIO (done-for-you) MODE: We produce and deliver the videos for the client — they do nothing. Mention a 15-min strategy call (Calendly) and that payment is via freelance escrow (deposit upfront, release on delivery).".to_string()
+        } else {
+            String::new()
+        },
         delivery_url = payload.delivery_url,
         referral_block = referral_url
             .map(|u| format!("If they want to sign up or create an account, send them here: {u}\nMention it as an optional next step (e.g. \"you can create an account here\") — keep it light, not pushy."))
@@ -6930,6 +6955,9 @@ The DM must:
 - Sound like one founder messaging another. Casual, lowercase ok, no corporate fluff, no emoji spam.
 - Adapt tone to follower size — micro creators (<10k) warm + helpful; mid creators (10k–100k) business-direct; big creators (>100k) concise with clear ROI angle.
 - Do NOT start the DM with "Verified", "Verified here", or any verification phrase. Start with a genuine, personalized observation about their content.
+- For landing_page: mention that the system can generate ANY type of animated video from their website URL (how-to, marketing, product demo, explainer, testimonial, etc.) — not just hero sections.
+- For education: mention that it can generate ANY type of animated educational video (math, science, coding, language, history, finance, etc.) with equations, diagrams, motion graphics, VFX, and 3D depth.
+- If this is a done-for-you (studio) prospect, mention that we produce and deliver the videos for them ($100-$200 for 10-30 videos) with a 15-min strategy call.
 
 Output ONLY the DM body. No quotes, no labels, no preamble."#,
         username = username,
