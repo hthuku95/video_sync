@@ -50,8 +50,8 @@ pub const SERVICE_OFFERS: [ServiceOffer; 14] = [
     ServiceOffer {
         key: "education",
         title: "EDUCATIONAL ANIMATED VIDEOS",
-        what_you_offer: "Manim/LaTeX-powered educational explainer videos — math, science, finance, coding — posted to your connected social accounts.",
-        pricing_tiers: "$199/mo for a daily campaign with up to 3 posts/day.",
+        what_you_offer: "AI-animated educational videos of ANY type — math, science, coding, language, history, finance, and more. The system produces equations, diagrams, code animations, data charts, motion graphics, VFX, and 3D depth with narration — posted to your connected social accounts.",
+        pricing_tiers: "$199/mo for a daily campaign with up to 3 posts/day. One-time bundles: 10 videos for $50 or 30 for $100.",
         best_fit: "educators, course creators, edu-YouTubers, and academic content channels.",
     },
     ServiceOffer {

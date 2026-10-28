@@ -2824,7 +2824,7 @@ fn service_offer_line(service: &str) -> &'static str {
         "clipping" => "automated clip generation from your streams and VODs — posted to your social accounts daily",
         "youtube_clipping" => "automated clip generation from your YouTube videos and podcasts — posted to your social accounts daily",
         "twitch_clipping" => "automated clip generation from your Twitch streams and VODs — posted to your social accounts daily",
-        "education" => "animated educational videos with narration and motion graphics — generated and posted to your social accounts daily",
+        "education" => "AI-animated educational videos of ANY type — math, science, coding, language, history, finance, and more. The system produces equations, diagrams, code animations, data charts, motion graphics, VFX, and 3D depth with narration — generated and posted to your social accounts daily",
         "landing_page" => "videos generated from your website URL — any type of video (how-to, marketing, product demo, explainer, testimonial) built from what the AI learns by crawling your site — posted to your social accounts as marketing content daily",
         "kick_auto_clipper" => "automated Kick VOD clipping from your favorite streamers — posted to your social accounts daily",
         "manim_explainer" => "narrated animated explainer videos — generated and posted to your social accounts daily",
@@ -3617,6 +3617,8 @@ Include the delivery link naturally in both the DM and email — do NOT ask for 
 Offer: {pitch_focus}
 Price: {price_line}
 {lead_offer_block}
+
+IMPORTANT: For landing_page, the system can generate ANY type of animated video from a website URL (how-to, marketing, product demo, explainer, testimonial, brand story, etc.) — not just hero sections. For education, it can generate ANY type of animated educational video (math, science, coding, language, history, finance, etc.) with equations, diagrams, motion graphics, VFX, and 3D depth. Mention this breadth naturally so the prospect knows the full capability.
 
 CRITICAL: The DM and email MUST both contain the free sample delivery link (provided above) and, if a referral/signup link is provided below, that link too. Do NOT omit either link. Do NOT start the message with "Verified", "Verified here", or any verification phrase — start with a genuine, personalized observation about their content/niche.
 
