@@ -3501,6 +3501,7 @@ async fn generate_outreach_message(
     let existing_assigned: Option<String> = row
         .get::<Option<serde_json::Value>, _>("contact_enrichment")
         .and_then(|ce| ce.get("assigned_app").and_then(|v| v.as_str().map(String::from)));
+    let is_new_assignment = existing_assigned.is_none();
     let assigned_app: String = if let Some(a) = existing_assigned {
         a
     } else if service == "landing_page" || service == "education" {
@@ -3516,7 +3517,7 @@ async fn generate_outreach_message(
         app_subdomain_for_service(&service).to_string()
     };
     // Persist the assignment
-    if existing_assigned.is_none() && (service == "landing_page" || service == "education") {
+    if is_new_assignment && (service == "landing_page" || service == "education") {
         let _ = sqlx::query(
             "UPDATE prospects SET contact_enrichment = COALESCE(contact_enrichment, '{}'::jsonb) || jsonb_build_object('assigned_app', $2::text) WHERE id = $1",
         )
@@ -6805,6 +6806,9 @@ async fn instagram_generate_dm(
         Err(e) => return Json(json!({"success": false, "error": format!("DB error: {}", e)})),
     };
 
+    let assigned_app: Option<String> = row
+        .get::<Option<serde_json::Value>, _>("contact_enrichment")
+        .and_then(|ce| ce.get("assigned_app").and_then(|v| v.as_str().map(String::from)));
     let username: String = row.get::<Option<String>, _>("username").unwrap_or_default();
     let full_name: String = row
         .get::<Option<String>, _>("full_name")
