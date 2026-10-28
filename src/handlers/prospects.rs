@@ -7019,12 +7019,15 @@ async fn instagram_generate_sample(
         .get::<Option<String>, _>("service_type")
         .unwrap_or_else(|| "landing_page".to_string());
     if let Some(existing) = row.get::<Option<uuid::Uuid>, _>("sample_delivery_id") {
+        let assigned = row
+            .get::<Option<serde_json::Value>, _>("contact_enrichment")
+            .and_then(|ce| ce.get("assigned_app").and_then(|v| v.as_str().map(String::from)));
         return Json(json!({
             "success":      true,
             "delivery_id":  existing.to_string(),
             "delivery_url": format!(
                 "https://{}.videosync.ink/delivery/{}",
-                assigned_app.as_deref().unwrap_or_else(|| app_subdomain_for_service(service.as_deref().unwrap_or("landing_page"))),
+                assigned.as_deref().unwrap_or_else(|| app_subdomain_for_service(Some(service_key.as_str()))),
                 existing
             ),
             "message":      "Sample already exists for this lead.",
