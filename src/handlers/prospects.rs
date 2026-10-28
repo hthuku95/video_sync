@@ -3577,7 +3577,7 @@ async fn generate_outreach_message(
         if uid == 0 {
             None
         } else {
-            let app = assigned_app.as_deref().unwrap_or_else(|| app_subdomain_for_service(&service));
+            let app = if assigned_app == "studio" { "studio" } else { app_subdomain_for_service(&service) };
         // Try to read an existing code for this user+app.
         let existing: Option<String> = sqlx::query_scalar(
             "SELECT code FROM referral_codes WHERE user_id = $1 AND app_slug = $2",
@@ -6861,7 +6861,7 @@ async fn instagram_generate_dm(
     let acting_is_admin = claims.is_superuser || claims.is_staff;
     let referral_url: Option<String> = if !acting_is_admin {
         let uid = user_id;
-        let app = app_subdomain_for_service(service.as_deref().unwrap_or("landing_page"));
+        let app = assigned_app.as_deref().unwrap_or_else(|| app_subdomain_for_service(service.as_deref().unwrap_or("landing_page")));
         let existing: Option<String> = sqlx::query_scalar(
             "SELECT code FROM referral_codes WHERE user_id = $1 AND app_slug = $2",
         )
@@ -7023,7 +7023,7 @@ async fn instagram_generate_sample(
             "delivery_id":  existing.to_string(),
             "delivery_url": format!(
                 "https://{}.videosync.ink/delivery/{}",
-                app_subdomain_for_service(&service_key),
+                assigned_app.as_deref().unwrap_or_else(|| app_subdomain_for_service(service.as_deref().unwrap_or("landing_page"))),
                 existing
             ),
             "message":      "Sample already exists for this lead.",
@@ -7036,6 +7036,9 @@ async fn instagram_generate_sample(
         .unwrap_or_else(|| username.clone());
     let bio: String = row.get::<Option<String>, _>("bio").unwrap_or_default();
     let service: Option<String> = row.get::<Option<String>, _>("service_type");
+    let assigned_app: Option<String> = row
+        .get::<Option<serde_json::Value>, _>("contact_enrichment")
+        .and_then(|ce| ce.get("assigned_app").and_then(|v| v.as_str().map(String::from)));
     let lead_ext_url: Option<String> = row.get::<Option<String>, _>("external_url");
     let contact_enrichment: Option<serde_json::Value> = row.get::<Option<serde_json::Value>, _>("contact_enrichment");
 
@@ -7315,7 +7318,7 @@ async fn instagram_generate_sample(
         "delivery_id":  delivery_id.to_string(),
         "delivery_url": format!(
             "https://{}.videosync.ink/delivery/{}",
-            app_subdomain_for_service(service_key),
+            assigned_app.as_deref().unwrap_or_else(|| app_subdomain_for_service(service_key)),
             delivery_id,
         ),
         "service":      service,
