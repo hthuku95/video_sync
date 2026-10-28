@@ -3492,6 +3492,39 @@ async fn generate_outreach_message(
         .get::<Option<String>, _>("service_type")
         .unwrap_or_else(|| default_service_for_prospect(&category, &pt, &platform));
     let sourced_by: Option<i32> = row.get::<Option<i32>, _>("sourced_by");
+    let assigned_app: Option<String> = row
+        .get::<Option<serde_json::Value>, _>("contact_enrichment")
+        .and_then(|ce| ce.get("assigned_app").and_then(|v| v.as_str().map(String::from)));
+    // A/B testing: for landing_page and education prospects, randomly assign
+    // half to the self-serve app (app/learn) and half to the DFY studio app.
+    // Stored in contact_enrichment.assigned_app for consistency across re-runs.
+    let existing_assigned: Option<String> = row
+        .get::<Option<serde_json::Value>, _>("contact_enrichment")
+        .and_then(|ce| ce.get("assigned_app").and_then(|v| v.as_str().map(String::from)));
+    let assigned_app: String = if let Some(a) = existing_assigned {
+        a
+    } else if service == "landing_page" || service == "education" {
+        // 50/50 split
+        if rand::random::<f64>() < 0.5 {
+            "studio".to_string()
+        } else if service == "landing_page" {
+            "app".to_string()
+        } else {
+            "learn".to_string()
+        }
+    } else {
+        app_subdomain_for_service(&service).to_string()
+    };
+    // Persist the assignment
+    if existing_assigned.is_none() && (service == "landing_page" || service == "education") {
+        let _ = sqlx::query(
+            "UPDATE prospects SET contact_enrichment = COALESCE(contact_enrichment, '{}'::jsonb) || jsonb_build_object('assigned_app', $2::text) WHERE id = $1",
+        )
+        .bind(id)
+        .bind(&assigned_app)
+        .execute(&state.db_pool)
+        .await;
+    }
     let existing_x_dm: String = row
         .get::<Option<String>, _>("x_dm_script")
         .unwrap_or_else(|| default_x_dm(&name, &service));
@@ -3544,7 +3577,7 @@ async fn generate_outreach_message(
         if uid == 0 {
             None
         } else {
-            let app = app_subdomain_for_service(&service);
+            let app = assigned_app.as_deref().unwrap_or_else(|| app_subdomain_for_service(&service));
         // Try to read an existing code for this user+app.
         let existing: Option<String> = sqlx::query_scalar(
             "SELECT code FROM referral_codes WHERE user_id = $1 AND app_slug = $2",
@@ -4014,9 +4047,14 @@ async fn generate_prospect_sample_pack(
     .execute(&state.db_pool)
     .await;
 
+    let delivery_subdomain = if assigned_app == "studio" {
+        "studio"
+    } else {
+        app_subdomain_for_service(&service)
+    };
     let delivery_url = format!(
         "https://{}.videosync.ink/delivery/{}",
-        app_subdomain_for_service(&service),
+        delivery_subdomain,
         delivery_id,
     );
     Ok(Json(json!({
