@@ -35,6 +35,7 @@ pub fn admin_routes() -> Router {
         .route("/delivery/:id", get(delivery_page))
         .route("/delivery/:id/stream", get(delivery_stream))
         .route("/delivery/:id/clip/:idx", get(delivery_clip_stream))
+        .route("/delivery/:id/feedback", post(delivery_feedback))
         .route("/api/portfolio-samples", get(api_list_portfolio_samples))
         // Referral link redirects
         .route("/ref/:code", get(referral_redirect))
@@ -7340,6 +7341,44 @@ load();
 // GET /delivery/:id
 // ─────────────────────────────────────────────────────────────────────────────
 
+async fn delivery_feedback(
+    Path(id): Path<String>,
+    Extension(state): Extension<Arc<AppState>>,
+    Json(payload): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let msg = payload.get("message").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+    if msg.is_empty() {
+        return Json(json!({"success": false, "error": "Empty message"}));
+    }
+    let wf_id: Option<String> = if let Ok(uuid) = uuid::Uuid::parse_str(&id) {
+        sqlx::query_scalar("SELECT workflow_id FROM deliveries WHERE id = $1")
+            .bind(uuid)
+            .fetch_optional(&state.db_pool)
+            .await
+            .ok()
+            .flatten()
+    } else {
+        None
+    };
+    let wf_id = match wf_id {
+        Some(w) => w,
+        None => {
+            return Json(json!({"success": false, "error": "No workflow linked to this delivery"}));
+        }
+    };
+    let _ = sqlx::query(
+        "INSERT INTO workflow_feedback (workflow_id, message, created_at) VALUES ($1, $2, NOW())",
+    )
+    .bind(&wf_id)
+    .bind(&msg)
+    .execute(&state.db_pool)
+    .await;
+    if let Some(ref bus) = state.redis_bus {
+        let _ = bus.publish(&format!("feedback:{}", wf_id), &msg).await;
+    }
+    Json(json!({"success": true, "message": "Note saved — will be applied on the next render attempt."}))
+}
+
 async fn delivery_page(
     Path(id): Path<String>,
     Query(query): Query<DeliveryViewQuery>,
@@ -7354,7 +7393,7 @@ async fn delivery_page(
 
     // Try test_results first, then custom deliveries table
     let mut clip_presigned_urls: Vec<String> = Vec::new();
-    let (name, gig_type, status, r2_url, filename, score, feedback, unlock_price, unlocked_until) =
+    let (name, gig_type, status, r2_url, filename, score, feedback, unlock_price, unlocked_until, workflow_id) =
         if let Ok(uuid) = uuid::Uuid::parse_str(&id) {
             // 1. Portfolio test result
             let tr = sqlx::query(
@@ -7390,7 +7429,7 @@ async fn delivery_page(
             } else {
                 // 2. Custom delivery.
                 let dr = sqlx::query(
-                    "SELECT title, gig_type, status, output_r2_url, output_filename, extra_args \
+                    "SELECT title, gig_type, status, output_r2_url, output_filename, extra_args, workflow_id \
                      FROM deliveries WHERE id = $1",
                 )
                 .bind(uuid)
@@ -7414,6 +7453,7 @@ async fn delivery_page(
                         None => None,
                     };
                     let f: Option<String> = row.try_get("output_filename").ok();
+                    let wf: Option<String> = row.try_get::<Option<String>, _>("workflow_id").ok().flatten();
 
                     // Build clip gallery from extra_args.clip_keys
                     if let Ok(Some(extra)) = row.try_get::<Option<serde_json::Value>, _>("extra_args") {
@@ -7440,14 +7480,14 @@ async fn delivery_page(
                         None,
                         None,
                         None,
-                        None,
+                        wf,
                     )
                 } else {
-                    (None, None, None, None, None, None, None, None, None)
+                    (None, None, None, None, None, None, None, None, None, None)
                 }
             }
         } else {
-            (None, None, None, None, None, None, None, None, None)
+            (None, None, None, None, None, None, None, None, None, None)
         };
 
     // All deliveries are free — no paywall.
@@ -7520,6 +7560,36 @@ async fn delivery_page(
                         )
                     }
                 }
+            };
+
+            let feedback_html = if workflow_id.is_some() {
+                format!(r#"<div class="feedback-box" style="margin-top:16px;padding:16px;background:#12121a;border:1px solid #2a2a36;border-radius:10px;">
+  <div style="font-size:13px;color:#9999bb;margin-bottom:8px;">Send a note to the producer (applied on the next render attempt):</div>
+  <div style="display:flex;gap:8px;">
+    <input id="fb-input" type="text" placeholder="e.g. make the captions bigger, shorter intro..." style="flex:1;padding:8px 12px;border-radius:8px;border:1px solid #2a2a36;background:#1a1a24;color:#e0e0e0;font-size:14px;">
+    <button type="button" onclick="sendFeedback()" style="padding:8px 16px;border-radius:8px;border:0;background:#6366f1;color:#fff;font-weight:600;cursor:pointer;">Send</button>
+  </div>
+  <div id="fb-status" style="font-size:12px;color:#6366f1;margin-top:6px;"></div>
+</div>
+<script>
+function sendFeedback(){{
+  const inp = document.getElementById('fb-input');
+  const msg = inp.value.trim();
+  if(!msg) return;
+  const st = document.getElementById('fb-status');
+  st.textContent = 'Sending...';
+  fetch('/delivery/{id}/feedback', {{method:'POST', headers:{{'Content-Type':'application/json'}}, body: JSON.stringify({{message: msg}})}})
+    .then(r=>r.json()).then(d=>{{
+      if(d.success){{ st.textContent='Note saved — will be applied on the next render attempt.'; inp.value=''; }}
+      else {{ st.textContent='Error: '+(d.error||'failed'); }}
+    }}).catch(()=>{{ st.textContent='Network error'; }});
+}}
+if(document.querySelector('.status-dot') && !document.querySelector('.status-dot').style.background.includes('22c55e')){{
+  setTimeout(()=>location.reload(), 10000);
+}}
+</script>"#, id = id)
+            } else {
+                String::new()
             };
 
             let stream_url_str = stream_url.as_deref().unwrap_or("");
@@ -7643,6 +7713,7 @@ async fn delivery_page(
   {download_btn}
   {score_html}
   {clip_gallery_html}
+  {feedback_html}
   <div id="zernio-section" style="margin-top:16px;"></div>
 </div>
 <div class="footer">
