@@ -1,0 +1,43 @@
+# Combined Dockerfile: Rust API + media services (yt-dlp, HyperFrames) in one container.
+# For Render free tier (512MB). VibeVoice TTS runs on external Cloud Run.
+# Build: docker build -f Dockerfile.render -t video-editor-render .
+
+# Stage 1: Build Rust binary (self-contained, cargo-chef)
+FROM rust:1.82-slim AS builder
+RUN apt-get update && apt-get install -y pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
+RUN cargo install cargo-chef --locked
+WORKDIR /app
+COPY Cargo.toml Cargo.lock ./
+RUN cargo chef prepare --recipe-path recipe.json
+RUN cargo chef cook --release --recipe-path recipe.json
+COPY . .
+RUN cargo build --release --bin video_editor
+
+# Stage 2: Runtime (Debian slim + Python + Node + FFmpeg + yt-dlp + HyperFrames)
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y \
+    ca-certificates libssl3 curl python3 python3-pip ffmpeg nodejs npm \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install yt-dlp
+RUN pip3 install --no-cache-dir --break-system-packages yt-dlp
+
+# Install HyperFrames renderer (clone repo, build)
+RUN git clone --depth 1 https://github.com/hthuku95/framefields.git /opt/hyperframes 2>/dev/null || \
+    (mkdir -p /opt/hyperframes && echo "HyperFrames not available, skipping")
+
+# Copy Rust binary
+COPY --from=builder /app/target/release/video_editor /usr/local/bin/video_editor
+
+# Copy startup script
+COPY docker-entrypoint-render.sh /usr/local/bin/docker-entrypoint-render.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint-render.sh
+
+EXPOSE 10000 8001 8082
+
+ENV PORT=10000
+ENV RUST_LOG=info
+ENV YTDLP_API_URL=http://localhost:8001
+ENV HYPERFRAMES_URL=http://localhost:8082
+
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint-render.sh"]

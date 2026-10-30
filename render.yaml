@@ -1,138 +1,75 @@
+# Render Blueprint — VideoSync full stack
+# Deploy: push this file to GitHub, then create Blueprint in Render Dashboard
+# Free tier: web service sleeps after 15min idle. Paid ($7/mo) for always-on.
+
 services:
   - type: web
-    name: videosync-vibevoice
+    name: video-editor-api
     runtime: docker
-    dockerfilePath: VibeVoiceService/Dockerfile
-    rootDir: VideoSyncIntegrations
-    dockerContext: .
-    region: oregon
-    plan: standard
+    dockerfilePath: ./Dockerfile.render
+    plan: free
+    region: frankfurt
     healthCheckPath: /health
-    autoDeploy: true
     envVars:
       - key: PORT
-        value: 8015
-      - key: VIBEVOICE_OUTPUT_DIR
-        value: /tmp/videosync-vibevoice
-      - key: VIBEVOICE_TTS_MODEL
-        value: microsoft/VibeVoice-Realtime-0.5B
-      - key: VIBEVOICE_ASR_MODEL
-        value: microsoft/VibeVoice-ASR-7B
-  - type: web
-    name: video_sync
-    runtime: rust
-    buildCommand: pip3 install --upgrade yt-dlp && cargo build --release
-    startCommand: ./target/release/video_editor
-    region: oregon
-    plan: standard
-    healthCheckPath: /health
-    autoDeploy: true
-    envVars:
-      - key: PORT
-        value: 3000
-      - key: RUST_LOG
-        value: info
-      - key: FRONTEND_URL
-        value: https://content-machine-pbjp.vercel.app
+        value: 10000
       - key: DATABASE_URL
-        sync: false
-      - key: JWT_SECRET
-        sync: false
-      - key: GOOGLE_OAUTH_CLIENT_ID
-        sync: false
-      - key: GOOGLE_OAUTH_CLIENT_SECRET
-        sync: false
-      - key: GOOGLE_OAUTH_REDIRECT_URI
-        value: https://www.videosync.video/api/auth/google
-      - key: GOOGLE_OAUTH_REDIRECT_URI_AUTH
-        value: https://www.videosync.video/api/auth/google/callback
-      - key: ALLOWED_REDIRECT_ORIGINS
-        sync: false
-      - key: YOUTUBE_API_KEY
-        sync: false
-      - key: GOOGLE_API_KEY
-        sync: false
-      - key: GEMINI_API_KEY
-        sync: false
-      - key: MANUAL_CLIPPING_GEMINI_API_KEY
-        sync: false
-      - key: VIDEO_GEMINI_API_KEY
-        sync: false
-      - key: GEMMA_API_KEY
-        sync: false
-      - key: NVIDIA_API_KEY
-        sync: false
-      - key: ANTHROPIC_API_KEY
-        sync: false
-      - key: ELEVEN_LABS_API_KEY
-        sync: false
-      - key: PEXELS_API_KEY
-        sync: false
-      - key: VOYAGEAI_API_KEY
-        sync: false
-      - key: APIFY_TOKEN
-        sync: false
-      - key: APIFY_YOUTUBE_CLIENT_ACTOR
-        sync: false
-      - key: APIFY_CIRCUIT_BREAKER_FAILURE_THRESHOLD
-        value: 5
-      - key: APIFY_CIRCUIT_BREAKER_SUCCESS_THRESHOLD
-        value: 2
-      - key: APIFY_CIRCUIT_BREAKER_TIMEOUT_SECONDS
-        value: 300
-      - key: TWITCH_TV_CLIENT_ID
-        sync: false
-      - key: TWITCH_TV_CLIENT_SECRET
-        sync: false
-      - key: QDRANT_URL
-        sync: false
-      - key: QDRANT_API_KEY
-        sync: false
-      - key: ASTRA_DB_API_ENDPOINT
-        sync: false
-      - key: ASTRA_DB_APPLICATION_TOKEN
-        sync: false
-      - key: R2_ACCOUNT_ID
         sync: false
       - key: R2_ACCESS_KEY_ID
         sync: false
       - key: R2_SECRET_ACCESS_KEY
         sync: false
-      - key: R2_BUCKET
+      - key: R2_BUCKET_NAME
+        value: videosync-production
+      - key: R2_ACCOUNT_ID
         sync: false
-      - key: R2_ENDPOINT
+      - key: DASHSCOPE_API_KEY
         sync: false
+      - key: QWEN_MODEL
+        value: qwen3.7-plus
+      - key: QWEN_BASE_URL
+        value: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+      - key: DEEPSEEK_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: NVIDIA_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: EMAIL_PROVIDER
+        value: resend
+      - key: SES_FROM_EMAIL
+        value: VideoSync <support@videosync.ink>
       - key: BLENDER_MCP_URL
-        sync: false
-      - key: BLENDER_MCP_API_KEY
-        sync: false
+        value: http://localhost:8000
       - key: YTDLP_API_URL
-        sync: false
-      - key: YTDLP_PROXY
-        sync: false
-      - key: YTDLP_COOKIES_B64
-        sync: false
-      - key: WEBSHARE_YTDLAPI_API_KEY
-        sync: false
-      - key: WEBSHARE_DOWNLOAD_LINK
-        sync: false
-      - key: DATABASE_MAX_CONNECTIONS
-        value: 20
-      - key: CLIPPING_WORKER_CONCURRENCY
-        value: 3
-      - key: CLIPPING_WORKER_POLL_INTERVAL
-        value: 30
-      - key: DOWNLOAD_SEMAPHORE_PERMITS
-        value: 2
-      - key: VECTORIZATION_TIMEOUT_SECONDS
-        value: 3600
-      - key: FRAME_ANALYSIS_TIMEOUT_SECONDS
-        value: 30
-      - key: FRAME_ANALYSIS_CONCURRENCY
-        value: 3
-      - key: MAX_FRAMES_PER_VIDEO
-        value: 100
-      - key: TEST_ADMIN_EMAIL
-        value: testadmin@videosync.test
-      - key: TEST_ADMIN_PASSWORD
-        sync: false
+        value: http://localhost:8001
+      - key: VIBEVOICE_SERVICE_URL
+        value: http://localhost:8015
+      - key: HYPERFRAMES_URL
+        value: http://localhost:8082
+      - key: RUST_LOG
+        value: info
+      - key: CLIPPING_SQS_QUEUE_URL
+        value: ""
+      - key: AGENTIC_RENDER_WORKERS
+        value: "1"
+      - key: AGENTIC_LEASE_MINUTES
+        value: "10"
+      - key: AGENTIC_WORKER_POLL_SECS
+        value: "5"
+      - key: AGENTIC_MAX_RUN_HOURS
+        value: "6"
+      - key: CAMPAIGN_STALE_MINUTES
+        value: "90"
+      - key: ARTIFACT_MIN_BYTES
+        value: "50000"
+
+  - type: keyvalue
+    name: clipping-queue
+    plan: free
+    region: frankfurt
+    maxmemoryPolicy: noeviction
