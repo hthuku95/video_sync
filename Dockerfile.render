@@ -1,34 +1,23 @@
 # Combined Dockerfile: Rust API for Render free tier.
-# Build: docker build -f Dockerfile.render -t video-editor-render .
+# Render builds this automatically from Git. No local builds needed.
 
-# Stage 1: Build Rust binary
 FROM rust:1.82-slim AS builder
 RUN apt-get update && apt-get install -y pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
-RUN cargo install cargo-chef --locked
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
-RUN cargo chef prepare --recipe-path recipe.json
-RUN cargo chef cook --release --recipe-path recipe.json
-COPY . .
+COPY src ./src
+COPY migrations ./migrations
 RUN cargo build --release --bin video_editor
 
-# Stage 2: Runtime (Debian slim + Python + FFmpeg + yt-dlp)
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y \
-    ca-certificates libssl3 curl python3 python3-pip ffmpeg \
+    ca-certificates libssl3 python3 python3-pip ffmpeg \
     && rm -rf /var/lib/apt/lists/*
-
-# Install yt-dlp
 RUN pip3 install --no-cache-dir --break-system-packages yt-dlp
-
-# Copy Rust binary
 COPY --from=builder /app/target/release/video_editor /usr/local/bin/video_editor
-
 EXPOSE 10000
-
 ENV PORT=10000
 ENV RUST_LOG=info
 ENV YTDLP_API_URL=
 ENV HYPERFRAMES_URL=
-
 CMD ["video_editor"]
