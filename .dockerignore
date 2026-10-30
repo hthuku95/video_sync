@@ -1,0 +1,14 @@
+target/
+node_modules/
+VideoSyncIntegrations/
+.git/
+*.log
+images_for_claude/
+uploads/
+outputs/
+temp_frames/
+downloads/
+test_outputs/
+test_downloads/
+thumbnails/
+salvage/
