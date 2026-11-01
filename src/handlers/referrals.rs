@@ -25,6 +25,7 @@ pub const REFERRAL_APPS: &[(&str, &str)] = &[
     ("app", "Website Video"),
     ("learn", "VideoSync Learn"),
     ("motion", "VideoSync Motion"),
+    ("studio", "VideoSync Studio"),
 ];
 
 pub fn referral_app_host(app: &str) -> Option<&'static str> {
@@ -34,6 +35,7 @@ pub fn referral_app_host(app: &str) -> Option<&'static str> {
         "app" => Some("https://app.videosync.ink"),
         "learn" => Some("https://learn.videosync.ink"),
         "motion" => Some("https://motion.videosync.ink"),
+        "studio" => Some("https://studio.videosync.ink"),
         _ => None,
     }
 }
