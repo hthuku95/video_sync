@@ -1,9 +1,13 @@
 // Multi-backend object storage router.
 //
 // Primary backend  = Cloudflare R2 (`R2_*` env vars) — all historic media lives here.
-// Fallback backend = AWS S3 (`S3_FALLBACK_BUCKET` + `S3_REGION`, task role creds) —
-//                    used automatically whenever R2 is unavailable (e.g. billing
-//                    block / NotEntitled) so renders keep flowing.
+// Fallback backend = S3-compatible provider (`S3_FALLBACK_BUCKET` +
+//                    `S3_FALLBACK_REGION` + optional `S3_FALLBACK_ENDPOINT`,
+//                    static creds via `S3_FALLBACK_ACCESS_KEY_ID`/`_SECRET`) —
+//                    i.e. Backblaze B2 by default (non-AWS, $6/TB/mo),
+//                    used automatically whenever R2 is unavailable so renders
+//                    keep flowing. `StorageBackend::S3` is the generic
+//                    "fallback bucket" marker regardless of provider.
 //
 // The router mirrors the public surface of `R2Client`, so existing call sites
 // (`state.r2_client.upload(...)`, `.presign_get(...)`, …) keep working while

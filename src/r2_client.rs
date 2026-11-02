@@ -86,10 +86,20 @@ impl R2Client {
         })
     }
 
-    /// Build a client for **real AWS S3** (the fallback backend), using the
-    /// standard AWS credential provider chain (ECS task role / env / IMDS) and
-    /// a regional endpoint. No custom endpoint, no path-style addressing, so
-    /// presigned URLs come out as virtual-hosted `bucket.s3.<region>.amazonaws.com`.
+    /// Build a client for the **S3 fallback backend**. Two modes:
+    ///
+    /// 1. **Real AWS S3** (default, no `S3_FALLBACK_ENDPOINT`): standard AWS
+    ///    credential provider chain (env / task role / IMDS) against regional
+    ///    AWS endpoints. Presigned URLs come out as virtual-hosted
+    ///    `bucket.s3.<region>.amazonaws.com`.
+    /// 2. **Third-party S3-compatible provider** (set `S3_FALLBACK_ENDPOINT`,
+    ///    e.g. Backblaze B2's `https://s3.<region>.backblazeb2.com`): SigV4
+    ///    signed against the provider's region string (B2 uses e.g.
+    ///    `us-west-004`), force-path-style addressing (B2/Wasabi don't support
+    ///    virtual-hosted buckets). Presigned URLs render as
+    ///    `https://<endpoint>/<bucket>/<key>?X-Amz-...` with the full static-key
+    ///    lifetime — required for same-day scheduled campaign posts that Zernio
+    ///    fetches at slot time.
     pub async fn new_aws_s3(bucket: &str, region: &str) -> Result<Self, String> {
         let loader = aws_config::defaults(BehaviorVersion::latest())
             .region(aws_config::Region::new(region.to_string()));
@@ -126,13 +136,44 @@ impl R2Client {
             _ => loader.load().await,
         };
 
-        let s3_config = S3ConfigBuilder::from(&sdk_config)
-            .request_checksum_calculation(
-                aws_sdk_s3::config::RequestChecksumCalculation::WhenRequired,
-            )
-            .build();
+        let checksum_when_required = aws_sdk_s3::config::RequestChecksumCalculation::WhenRequired;
 
-        let client = Client::from_conf(s3_config);
+        // Optional third-party S3-compatible endpoint (Backblaze B2, Wasabi,
+        // iDrive e2, Hetzner Object Storage, MinIO…). Never points at real AWS
+        // when set, so this stays an AWS-independent fallback.
+        let custom_endpoint = std::env::var("S3_FALLBACK_ENDPOINT")
+            .ok()
+            .map(|v| v.trim().trim_end_matches('/').to_string())
+            .filter(|v| !v.is_empty());
+
+        let (client, endpoint) = match &custom_endpoint {
+            Some(ep) => {
+                tracing::info!(
+                    "☁️ S3 fallback: custom S3-compatible endpoint configured (path-style addressing)"
+                );
+                let s3_config = S3ConfigBuilder::from(&sdk_config)
+                    .endpoint_url(ep)
+                    // B2 and most S3-compatible providers have no
+                    // virtual-hosted bucket DNS — path style is required,
+                    // matching how the R2 primary client is built.
+                    .force_path_style(true)
+                    .request_checksum_calculation(checksum_when_required)
+                    .build();
+                let client = Client::from_conf(s3_config);
+                (client, ep.clone())
+            }
+            None => {
+                let s3_config = S3ConfigBuilder::from(&sdk_config)
+                    .request_checksum_calculation(checksum_when_required)
+                    .build();
+                let client = Client::from_conf(s3_config);
+                (
+                    client,
+                    format!("https://{bucket}.s3.{region}.amazonaws.com"),
+                )
+            }
+        };
+
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(120))
             .build()
@@ -142,7 +183,7 @@ impl R2Client {
             client,
             http,
             bucket: bucket.to_string(),
-            endpoint: format!("https://{bucket}.s3.{region}.amazonaws.com"),
+            endpoint,
         })
     }
 

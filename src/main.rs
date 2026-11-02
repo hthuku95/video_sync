@@ -679,19 +679,30 @@ async fn main() {
         }
     };
 
-    // AWS S3 fallback backend (account 960882269041, region us-east-1). Uses the
-    // ECS task role through the default AWS credential chain — no static keys.
-    // Enabled by setting S3_FALLBACK_BUCKET; used automatically when R2 is down.
+    // S3-compatible fallback backend — provider-agnostic via S3-compatible API.
+    // Default provider: Backblaze B2 (independent, non-AWS, $6/TB/mo, 10GB
+    // free). Set S3_FALLBACK_BUCKET + S3_FALLBACK_REGION (B2's region string,
+    // e.g. `us-west-004`) + S3_FALLBACK_ENDPOINT (e.g.
+    // `https://s3.us-west-004.backblazeb2.com`) + S3_FALLBACK_ACCESS_KEY_ID /
+    // S3_FALLBACK_SECRET_ACCESS_KEY (a B2 application key — static creds are
+    // required because presigned URLs need the full key lifetime for
+    // same-day scheduled Zernio fetches). Leave S3_FALLBACK_ENDPOINT unset to
+    // fall back to real AWS S3 instead. Used automatically when R2 is down.
     let s3_fallback: Option<Arc<r2_client::R2Client>> =
         match std::env::var("S3_FALLBACK_BUCKET").ok().filter(|b| !b.is_empty()) {
             Some(s3_bucket) => {
-                let region = std::env::var("S3_REGION")
+                let region = std::env::var("S3_FALLBACK_REGION")
                     .ok()
+                    .or_else(|| std::env::var("S3_REGION").ok())
                     .or_else(|| std::env::var("AWS_REGION").ok())
                     .filter(|r| !r.is_empty())
                     .unwrap_or_else(|| "us-east-1".to_string());
                 tracing::info!(
-                    "☁️ Initializing AWS S3 fallback storage (bucket: {s3_bucket}, region: {region})..."
+                    "☁️ Initializing S3-compatible fallback storage (bucket: {s3_bucket}, region: {region}, endpoint: {})",
+                    std::env::var("S3_FALLBACK_ENDPOINT")
+                        .ok()
+                        .filter(|v| !v.trim().is_empty())
+                        .unwrap_or_else(|| "aws-native (no custom endpoint)".to_string())
                 );
                 match r2_client::R2Client::new_aws_s3(&s3_bucket, &region).await {
                     Ok(client) => Some(Arc::new(client)),
