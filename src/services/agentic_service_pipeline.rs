@@ -1028,6 +1028,12 @@ Use the extracted content to understand:
 6. review_video(video_path_or_url, original_request=<brief>, expected_features=["audible narration","scene changes stay in sync with narration","no cropped or overflowing text","clear call to action"]) — fix issues, re-render only the affected scene/timing if possible
 7. submit_final_answer(summary, output_files=[path]) — only after review passes
 
+## TOOL FALLBACK CHAIN (if a rendering tool fails or is unavailable)
+- hyperframes_render (PRIMARY for all 2D motion graphics, VFX, kinetic typography, d3 charts, 3D-looking depth via CSS perspective, audio visualization) — CPU-rendered, always available on this deployment.
+- manim_execute_script (FALLBACK for math equations, diagrams, code animations, data charts, LaTeX formulas) — requires BlenderMCP backend. If it returns 'not configured' or fails, switch to hyperframes_render with HTML/CSS for simple math and d3 for charts.
+- blender_generate_scene_type / blender_execute_bpy_script (FALLBACK for true 3D CGI, product mockups, physics simulation) — requires GPU. Currently UNAVAILABLE on this deployment. If available and needed, use it; otherwise use hyperframes_render with CSS perspective/parallax for 3D-looking depth.
+- If ALL rendering tools fail, report the specific error and do NOT substitute a generated video or retry with unrelated tools.
+
 OUTPUT to: {output_dir}/
 Save your final video with .mp4 extension"#,
             url = url,
@@ -1134,6 +1140,12 @@ That tool delegates to another agent and will NOT produce the correct educationa
 5. POST-PRODUCTION (optional polish): add real transcribed captions via transcribe_audio_url (never placeholder text), brand/logo, color and subtle music. Never change scene boundaries or mask narration. Text must fit with safe margins; no cropped words, no overlapping titles/formulas.
 6. review_video(video_path_or_url="{out}/output.mp4", original_request="{brief}", expected_features=["audible narration","scene changes stay in sync with narration","no cropped, truncated, or overlapping text","all formulas fully visible","no blank or partial frames"])
 7. submit_final_answer(summary="education video {title}", output_files=["{out}/output.mp4"])
+
+## TOOL FALLBACK CHAIN (if a rendering tool fails or is unavailable)
+- hyperframes_render (PRIMARY for all 2D motion graphics, VFX, kinetic typography, d3 charts, 3D-looking depth via CSS perspective, audio visualization) — CPU-rendered, always available on this deployment.
+- manim_execute_script (FALLBACK for math equations, diagrams, code animations, data charts, LaTeX formulas) — requires BlenderMCP backend. If it returns 'not configured' or fails, switch to hyperframes_render with HTML/CSS for simple math and d3 for charts.
+- blender_generate_scene_type / blender_execute_bpy_script (FALLBACK for true 3D CGI, product mockups, physics simulation) — requires GPU. Currently UNAVAILABLE on this deployment. If available and needed, use it; otherwise use hyperframes_render with CSS perspective/parallax for 3D-looking depth.
+- If ALL rendering tools fail, report the specific error and do NOT substitute a generated video or retry with unrelated tools.
 
 OUTPUT dir: {out}/"#,
             duration_seconds = input.duration_seconds as i32,

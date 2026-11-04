@@ -5861,7 +5861,7 @@ async fn execute_clip_compilation_value(
             // (auto_generate_video is hard-denied for clipping) — that used to
             // burn the rest of the run.
             return format!(
-                r#"{{"error":"Failed to download video: {}","hint":"The source video could not be downloaded. Do not substitute a generated video or retry with unrelated tools — report this failure."}}"#,
+                r#"{{"error":"Failed to download video: {}","hint":"The source video could not be downloaded. FALLBACK: retry generate_clip_compilation with a different source URL or a shorter clip. Do not substitute a generated video or retry with unrelated tools — report this failure if the retry also fails."}}"#,
                 err_text
             );
         }
@@ -21044,7 +21044,7 @@ async fn execute_hyperframes_render_with_state_claude(
                 Err(e) => format!("❌ HyperFrames render done but R2 upload failed: {e}"),
             }
         }
-        Err(e) => format!("❌ hyperframes_render failed: {}", e),
+        Err(e) => format!("❌ hyperframes_render failed: {}. FALLBACK: Try manim_execute_script for diagrams/charts, or trim_video + merge_videos to splice a partial fix.", e),
     }
 }
 
@@ -21080,7 +21080,7 @@ async fn execute_manim_execute_script_claude(args: &Value) -> String {    let de
         }),
     ).await {
         Ok(result) => extract_url_from_async_result(&result, "Output"),
-        Err(e) => format!("❌ manim_execute_script failed: {}", e),
+        Err(e) => format!("❌ manim_execute_script failed: {}. FALLBACK: Use hyperframes_render with HTML/CSS for simple math and d3 for charts instead.", e),
     }
 }
 
@@ -21126,7 +21126,7 @@ async fn execute_hyperframes_render_with_state_gemini(
                 Err(e) => format!("❌ HyperFrames render done but R2 upload failed: {e}"),
             }
         }
-        Err(e) => format!("❌ hyperframes_render failed: {}", e),
+        Err(e) => format!("❌ hyperframes_render failed: {}. FALLBACK: Try manim_execute_script for diagrams/charts, or trim_video + merge_videos to splice a partial fix.", e),
     }
 }
 
@@ -21163,7 +21163,7 @@ async fn execute_manim_execute_script_gemini(args: &HashMap<String, Value>) -> S
         }),
     ).await {
         Ok(result) => extract_url_from_async_result(&result, "Output"),
-        Err(e) => format!("❌ manim_execute_script failed: {}", e),
+        Err(e) => format!("❌ manim_execute_script failed: {}. FALLBACK: Use hyperframes_render with HTML/CSS for simple math and d3 for charts instead.", e),
     }
 }
 
