@@ -2277,6 +2277,35 @@ fn extract_best_external_url(description: &str) -> Option<String> {
     })
 }
 
+
+async fn guess_company_website(company_name: &str) -> Option<String> {
+    let slug: String = company_name
+        .to_lowercase()
+        .replace(' ', "")
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
+        .collect();
+
+    if slug.is_empty() {
+        return None;
+    }
+
+    let candidates = [
+        format!("https://www.{}.com", slug),
+        format!("https://{}.com", slug),
+        format!("https://www.{}.io", slug),
+        format!("https://{}.io", slug),
+    ];
+
+    for url in candidates {
+        match crate::browserbase_client::fetch_url_raw(&url).await {
+            Ok(Some(html)) if html.len() > 100 => return Some(url),
+            _ => {}
+        }
+    }
+    None
+}
+
 async fn enrich_public_contact_fields(
     url: Option<&str>,
     twitter_handle: &mut Option<String>,
@@ -6031,6 +6060,16 @@ async fn linkedin_fetch_results(
         let mut instagram_handle = extract_best_instagram_handle(&description);
         let mut business_email = lead.email.clone();
         let mut external_url = lead.company_url.clone();
+        // If no company URL was provided, try to guess one from the company name.
+        if external_url.is_none() {
+            if let Some(company_name) = lead.company_name.as_deref() {
+                if !company_name.trim().is_empty() {
+                    if let Some(guessed) = guess_company_website(company_name).await {
+                        external_url = Some(guessed);
+                    }
+                }
+            }
+        }
         let enrichment_url = external_url.clone();
         let _contact_enrichment = enrich_public_contact_fields(
             enrichment_url.as_deref(),
@@ -8093,6 +8132,90 @@ async fn instagram_top_leads(
     Json(json!({"success": true, "leads": leads, "count": leads.len()}))
 }
 
+pub async fn scrape_instagram_profile(username: &str) -> (Option<String>, Option<String>, Option<i32>) {
+    let url = format!("https://www.instagram.com/{}/", username);
+    let html = match crate::browserbase_client::fetch_url_raw(&url).await {
+        Ok(Some(h)) => h,
+        _ => return (None, None, None),
+    };
+
+    // bio: from og:description meta tag
+    let bio = {
+        let mut found = None;
+        if let Ok(re) = Regex::new(r#"<meta[^>]*property="og:description"[^>]*content="([^"]*)""#) {
+            if let Some(c) = re.captures(&html) {
+                found = c.get(1).map(|m| m.as_str().to_string());
+            }
+        }
+        if found.is_none() {
+            if let Ok(re) = Regex::new(r#"<meta[^>]*content="([^"]*)"[^>]*property="og:description""#) {
+                if let Some(c) = re.captures(&html) {
+                    found = c.get(1).map(|m| m.as_str().to_string());
+                }
+            }
+        }
+        found
+    };
+
+    // external_url: link in bio (href="https://..." that's not instagram.com)
+    let external_url = {
+        let mut found = None;
+        if let Ok(re) = Regex::new(r#"href="(https?://[^"]+)""#) {
+            for cap in re.captures_iter(&html) {
+                if let Some(m) = cap.get(1) {
+                    let u = m.as_str();
+                    if !u.contains("instagram.com") {
+                        found = Some(u.to_string());
+                        break;
+                    }
+                }
+            }
+        }
+        found
+    };
+
+    // follower_count: from page text (regex: (\d[\d,.]*[KMB]?)\s*Followers)
+    let follower_count = {
+        let mut found = None;
+        if let Ok(re) = Regex::new(r"(\d[\d,.]*[KMB]?)\s*Followers") {
+            if let Some(c) = re.captures(&html) {
+                if let Some(m) = c.get(1) {
+                    found = parse_instagram_follower_count(m.as_str());
+                }
+            }
+        }
+        found
+    };
+
+    (bio, external_url, follower_count)
+}
+
+fn parse_instagram_follower_count(s: &str) -> Option<i32> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    let (num, mult) = if let Some(rest) = s.strip_suffix('K') {
+        (rest, 1_000.0f64)
+    } else if let Some(rest) = s.strip_suffix('M') {
+        (rest, 1_000_000.0f64)
+    } else if let Some(rest) = s.strip_suffix('B') {
+        (rest, 1_000_000_000.0f64)
+    } else {
+        (s, 1.0f64)
+    };
+    let num = num.replace(',', "");
+    let val: f64 = num.parse().ok()?;
+    let total = (val * mult) as i64;
+    if total > i32::MAX as i64 {
+        return Some(i32::MAX);
+    }
+    if total < 0 {
+        return None;
+    }
+    Some(total as i32)
+}
+
 // ============================================================================
 // Background poller — auto-imports PhantomBuster Instagram results
 // ============================================================================
@@ -8259,6 +8382,31 @@ pub async fn poll_instagram_jobs(state: &Arc<AppState>) {
                 })
             });
 
+            // Best-effort: scrape the Instagram profile page to fill in any
+            // missing bio / external_url / followers_count before enrichment.
+            if lead.bio.as_ref().map(|v| v.trim().is_empty()).unwrap_or(true)
+                || lead.external_url.as_ref().map(|v| v.trim().is_empty()).unwrap_or(true)
+                || lead.followers_count.is_none()
+            {
+                let (scraped_bio, scraped_url, scraped_followers) =
+                    scrape_instagram_profile(&lead.username).await;
+                if lead.bio.as_ref().map(|v| v.trim().is_empty()).unwrap_or(true) {
+                    if let Some(b) = scraped_bio {
+                        lead.bio = Some(b);
+                    }
+                }
+                if lead.external_url.as_ref().map(|v| v.trim().is_empty()).unwrap_or(true) {
+                    if let Some(u) = scraped_url {
+                        lead.external_url = Some(u);
+                    }
+                }
+                if lead.followers_count.is_none() {
+                    if let Some(f) = scraped_followers {
+                        lead.followers_count = Some(f as i64);
+                    }
+                }
+            }
+
             // Enrich public contact fields from the lead's bio/external URL
             // before binding into the INSERT.
             let description = lead.bio.clone().unwrap_or_else(|| lead.username.clone());
@@ -8267,7 +8415,7 @@ pub async fn poll_instagram_jobs(state: &Arc<AppState>) {
             let mut business_email = lead.email.clone();
             let mut external_url = lead.external_url.clone();
             let enrichment_url = external_url.clone();
-            let _contact_enrichment = enrich_public_contact_fields(
+            let contact_enrichment_result = enrich_public_contact_fields(
                 enrichment_url.as_deref(),
                 &mut twitter_handle,
                 &mut instagram_handle,
@@ -8277,6 +8425,17 @@ pub async fn poll_instagram_jobs(state: &Arc<AppState>) {
             .await;
             lead.external_url = external_url;
             lead.email = business_email;
+
+            // Merge the enrichment result into the preset enrichment (if any)
+            // so the public contact fields we scraped land in contact_enrichment.
+            let mut merged_enrichment = preset_enrichment.clone().unwrap_or_else(|| serde_json::json!({}));
+            if let serde_json::Value::Object(map) = &mut merged_enrichment {
+                if let serde_json::Value::Object(enriched_map) = &contact_enrichment_result {
+                    for (k, v) in enriched_map {
+                        map.entry(k.clone()).or_insert_with(|| v.clone());
+                    }
+                }
+            }
 
             let result = sqlx::query(
                 "INSERT INTO instagram_leads
@@ -8305,7 +8464,7 @@ pub async fn poll_instagram_jobs(state: &Arc<AppState>) {
             .bind(&lead.email)
             .bind(&category_value)
             .bind(&hashtag_source)
-            .bind(preset_enrichment.as_ref().unwrap_or(&serde_json::json!({})))
+            .bind(&merged_enrichment)
             .bind(job_user_id)
             .execute(&state.db_pool)
             .await;
