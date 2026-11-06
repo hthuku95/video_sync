@@ -5941,14 +5941,36 @@ async fn linkedin_fetch_results(
             .clone()
             .unwrap_or_else(|| format!("li_{}", lead.full_name.to_lowercase().replace(' ', "_")));
 
+        // Extract contact fields from the lead before upsert.
+        let description = lead.company_name.clone().unwrap_or_default();
+        let mut twitter_handle = extract_best_twitter_handle(&description);
+        let mut instagram_handle = extract_best_instagram_handle(&description);
+        let mut business_email = lead.email.clone();
+        let mut external_url = lead.company_url.clone();
+        let enrichment_url = external_url.clone();
+        let _contact_enrichment = enrich_public_contact_fields(
+            enrichment_url.as_deref(),
+            &mut twitter_handle,
+            &mut instagram_handle,
+            &mut business_email,
+            &mut external_url,
+        )
+        .await;
+
         let result = sqlx::query(
             "INSERT INTO prospects
                (platform, channel_id, display_name, platform_url, prospect_type,
-                linkedin_url, job_title, company_name, company_size, seniority_level, email, contact_status)
-             VALUES ('linkedin', $1, $2, $3, 'linkedin_lead', $4, $5, $6, $7, $8, $9, 'new')
+                linkedin_url, job_title, company_name, company_size, seniority_level, email,
+                external_url, business_email, twitter_handle, instagram_handle, contact_status)
+             VALUES ('linkedin', $1, $2, $3, 'linkedin_lead', $4, $5, $6, $7, $8, $9,
+                     $10, $11, $12, $13, 'new')
              ON CONFLICT (platform, channel_id) DO UPDATE
                SET job_title = EXCLUDED.job_title,
                    company_name = EXCLUDED.company_name,
+                   external_url = EXCLUDED.external_url,
+                   business_email = EXCLUDED.business_email,
+                   twitter_handle = EXCLUDED.twitter_handle,
+                   instagram_handle = EXCLUDED.instagram_handle,
                    updated_at = NOW()"
         )
         .bind(&linkedin_id)
@@ -5960,6 +5982,10 @@ async fn linkedin_fetch_results(
         .bind(&lead.company_size)
         .bind(&lead.seniority)
         .bind(&lead.email)
+        .bind(&external_url)
+        .bind(&business_email)
+        .bind(&twitter_handle)
+        .bind(&instagram_handle)
         .execute(&state.db_pool)
         .await;
 
@@ -6815,7 +6841,7 @@ async fn instagram_generate_dm(
     // user's lead or learn that another user has that lead.
     let row = match sqlx::query(
         "SELECT username, full_name, bio, followers_count, category, hashtag_source,
-                external_url, service_type, sample_delivery_id
+                external_url, email, service_type, sample_delivery_id, contact_enrichment
          FROM instagram_leads WHERE id = $1 AND user_id = $2",
     )
     .bind(id)
@@ -6841,6 +6867,11 @@ async fn instagram_generate_dm(
     let ext_url: String = row
         .get::<Option<String>, _>("external_url")
         .unwrap_or_default();
+    let email: String = row
+        .get::<Option<String>, _>("email")
+        .unwrap_or_default();
+    let contact_enrichment: Option<serde_json::Value> =
+        row.try_get("contact_enrichment").ok().flatten();
     let service: Option<String> = row
         .get::<Option<String>, _>("service_type")
         .map(|s| normalize_revenue_service(&s).to_string());
@@ -6857,6 +6888,16 @@ async fn instagram_generate_dm(
         "NO sample exists yet — do NOT invent a URL. Offer to make one: \"want me to put together a quick sample?\"".to_string();
 
     let has_website = !ext_url.trim().is_empty();
+    let detected_creators: Vec<String> = contact_enrichment
+        .as_ref()
+        .and_then(|ce| ce.get("detected_source_creators"))
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
     let sample_block = match sample_id {
         Some(sid) => {
             let sample_unlock_price = 0.0;
@@ -6940,6 +6981,8 @@ Creator info:
 - Bio / recent post caption: {bio}
 - Niche hint:   {niche}
 - Link in bio:  {ext_url}
+- Email:        {email}
+- Detected source creators (Kick streamers they clip): {creators}
 
 {service_block}
 
@@ -6966,6 +7009,8 @@ Output ONLY the DM body. No quotes, no labels, no preamble."#,
         bio = bio,
         niche = niche,
         ext_url = ext_url,
+        email = if email.trim().is_empty() { "none".to_string() } else { email.clone() },
+        creators = if detected_creators.is_empty() { "none".to_string() } else { detected_creators.join(", ") },
         service_block = service_block,
         sample_block = sample_block,
         referral_block = referral_block,
@@ -8104,7 +8149,7 @@ pub async fn poll_instagram_jobs(state: &Arc<AppState>) {
         let total = leads.len();
         let mut imported = 0usize;
 
-        for lead in &leads {
+        for mut lead in leads {
             // Skip private accounts — they can't receive DMs from non-followers.
             if lead.is_private {
                 continue;
@@ -8129,6 +8174,25 @@ pub async fn poll_instagram_jobs(state: &Arc<AppState>) {
                     "method": "method_b",
                 })
             });
+
+            // Enrich public contact fields from the lead's bio/external URL
+            // before binding into the INSERT.
+            let description = lead.bio.clone().unwrap_or_else(|| lead.username.clone());
+            let mut twitter_handle = extract_best_twitter_handle(&description);
+            let mut instagram_handle = extract_best_instagram_handle(&description);
+            let mut business_email = lead.email.clone();
+            let mut external_url = lead.external_url.clone();
+            let enrichment_url = external_url.clone();
+            let _contact_enrichment = enrich_public_contact_fields(
+                enrichment_url.as_deref(),
+                &mut twitter_handle,
+                &mut instagram_handle,
+                &mut business_email,
+                &mut external_url,
+            )
+            .await;
+            lead.external_url = external_url;
+            lead.email = business_email;
 
             let result = sqlx::query(
                 "INSERT INTO instagram_leads

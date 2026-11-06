@@ -57,6 +57,7 @@ pub struct LinkedInLead {
     pub job_title: Option<String>,
     pub company_name: Option<String>,
     pub company_size: Option<String>,
+    pub company_url: Option<String>,
     pub linkedin_url: Option<String>,
     pub email: Option<String>,
     pub location: Option<String>,
@@ -703,11 +704,20 @@ impl PhantomBusterClient {
                     .or_else(|| get("defaultProfileUrl"))
                     .or_else(|| get("linkedinUrl"));
 
+                // Company URL — PB exports use a variety of keys.
+                let company_url = get("companyWebsite")
+                    .or_else(|| get("companyUrl"))
+                    .or_else(|| get("website"))
+                    .or_else(|| get("websiteUrl"))
+                    .or_else(|| get("company_website"))
+                    .or_else(|| get("url"));
+
                 Some(LinkedInLead {
                     full_name,
                     job_title: get("title").or_else(|| get("jobTitle")),
                     company_name: get("companyName").or_else(|| get("company")),
                     company_size: get("companySize"),
+                    company_url,
                     linkedin_url,
                     email: get("email"),
                     location: get("location"),
