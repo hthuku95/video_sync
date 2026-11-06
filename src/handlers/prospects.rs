@@ -3139,9 +3139,30 @@ const VALID_CONTACT_STATUSES: &[&str] = &[
 
 async fn update_prospect(
     Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<crate::models::auth::Claims>,
     Path(id): Path<Uuid>,
     Json(payload): Json<UpdateProspectRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    let is_admin = claims.is_superuser || claims.is_staff;
+    if !is_admin {
+        let owned: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM prospects WHERE id = $1 AND sourced_by = $2)",
+        )
+        .bind(id)
+        .bind(claims.sub.parse::<i32>().unwrap_or(0))
+        .fetch_one(&state.db_pool)
+        .await
+        .unwrap_or(false);
+        if !owned {
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(ErrorResponse {
+                    success: false,
+                    message: "You can only act on prospects you sourced.".to_string(),
+                }),
+            ));
+        }
+    }
     if let Some(ref status) = payload.contact_status {
         if !VALID_CONTACT_STATUSES.contains(&status.as_str()) {
             return Err((
@@ -3176,8 +3197,29 @@ async fn update_prospect(
 
 async fn regenerate_dm_script(
     Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<crate::models::auth::Claims>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    let is_admin = claims.is_superuser || claims.is_staff;
+    if !is_admin {
+        let owned: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM prospects WHERE id = $1 AND sourced_by = $2)",
+        )
+        .bind(id)
+        .bind(claims.sub.parse::<i32>().unwrap_or(0))
+        .fetch_one(&state.db_pool)
+        .await
+        .unwrap_or(false);
+        if !owned {
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(ErrorResponse {
+                    success: false,
+                    message: "You can only act on prospects you sourced.".to_string(),
+                }),
+            ));
+        }
+    }
     // Service switch (owner directive Sep 2026).
     if !crate::services::service_flags::service_enabled(&state.db_pool, "outreach").await {
         return Err((
@@ -3410,8 +3452,29 @@ impl BulkSendEmailRequest {
 
 async fn delete_prospect(
     Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<crate::models::auth::Claims>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    let is_admin = claims.is_superuser || claims.is_staff;
+    if !is_admin {
+        let owned: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM prospects WHERE id = $1 AND sourced_by = $2)",
+        )
+        .bind(id)
+        .bind(claims.sub.parse::<i32>().unwrap_or(0))
+        .fetch_one(&state.db_pool)
+        .await
+        .unwrap_or(false);
+        if !owned {
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(ErrorResponse {
+                    success: false,
+                    message: "You can only act on prospects you sourced.".to_string(),
+                }),
+            ));
+        }
+    }
     sqlx::query("DELETE FROM prospects WHERE id=$1")
         .bind(id)
         .execute(&state.db_pool)
@@ -3750,9 +3813,30 @@ Legacy DM tone: {existing_dm}"#,
 
 async fn generate_prospect_sample_pack(
     Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<crate::models::auth::Claims>,
     Path(id): Path<Uuid>,
     Json(req): Json<Option<GenerateProspectSamplePackRequest>>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    let is_admin = claims.is_superuser || claims.is_staff;
+    if !is_admin {
+        let owned: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM prospects WHERE id = $1 AND sourced_by = $2)",
+        )
+        .bind(id)
+        .bind(claims.sub.parse::<i32>().unwrap_or(0))
+        .fetch_one(&state.db_pool)
+        .await
+        .unwrap_or(false);
+        if !owned {
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(ErrorResponse {
+                    success: false,
+                    message: "You can only act on prospects you sourced.".to_string(),
+                }),
+            ));
+        }
+    }
     let row = sqlx::query(
         "SELECT display_name, platform, platform_url, content_category, channel_description,
                 service_type, external_url, sample_delivery_id, contact_enrichment
