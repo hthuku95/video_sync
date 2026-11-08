@@ -3983,6 +3983,16 @@ async fn generate_outreach_message(
     let existing_email: String = row
         .get::<Option<String>, _>("email_script")
         .unwrap_or_else(|| default_email_script(&name, &service));
+    // Campaigns switch OFF: stored scripts from older runs may contain
+    // monthly-campaign / subscription wording that the LLM would echo as
+    // tone references (observed live). When OFF, the tone inputs are
+    // campaign-neutral by construction.
+    let (existing_x_dm, existing_email) = if !campaigns_on {
+        ("Professional, concise, friendly; one-time product bundle offer only.".to_string(),
+         "Professional, concise, friendly; one-time product bundle offer only.".to_string())
+    } else {
+        (existing_x_dm, existing_email)
+    };
     let audience = subs.or(viewers).unwrap_or(0);
 
     if state.qwen_client.is_none()
@@ -4065,10 +4075,10 @@ async fn generate_outreach_message(
     } else if !campaigns_on {
         match one_time_offer {
             Some(o) => format!(
-                "OFFER (lead with this): {o}\nDo NOT mention monthly campaigns, subscriptions, or daily auto-posting — those are temporarily switched off. The bundle is one-time: they pay once, receive their videos, done."
+                "OFFER (lead with this): {o}\nHARD CONSTRAINT: The DM and email must NOT contain the words \"campaign\", \"subscription\", or any mention of recurring/monthly/daily posting. Everything offered is one-time: they pay once, receive their videos, done. Violating this constraint is a failed response."
             ),
             None => format!(
-                "OFFER (lead with this): one-time custom animated videos as described in the offer line.\nDo NOT mention monthly campaigns, subscriptions, or daily auto-posting — those are temporarily switched off. Everything offered is one-time."
+                "OFFER (lead with this): one-time custom animated videos as described in the offer line.\nHARD CONSTRAINT: The DM and email must NOT contain the words \"campaign\", \"subscription\", or any mention of recurring/monthly/daily posting. Everything offered is one-time: they pay once, receive their videos, done. Violating this constraint is a failed response."
             ),
         }
     } else {
@@ -4205,6 +4215,27 @@ Legacy DM tone: {existing_dm}"#,
         },
     );
 
+    // Campaigns-off contract enforcement: field-level guard so a defiant model
+    // (observed live — it echoed stored campaign wording via tone refs) can
+    // never leak recurring/subscription language while the switch is OFF.
+    let scrub_campaign_language = |text: &str| -> String {
+        if campaigns_on {
+            return text.to_string();
+        }
+        let forbidden = ["campaign", "subscription", "monthly", "posted daily", "auto-posting"];
+        text.split("\n")
+            .map(|paragraph| {
+                let lower = paragraph.to_lowercase();
+                if forbidden.iter().any(|f| lower.contains(f)) && !lower.contains("coming soon") {
+                    ""
+                } else {
+                    paragraph
+                }
+            })
+            .filter(|p| !p.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
     let (x_dm, email_script) = match generate_text_best_effort(
         state.qwen_client.as_ref(),
         state.nvidia_nim_client.as_ref(),
@@ -4251,6 +4282,12 @@ Legacy DM tone: {existing_dm}"#,
             ))
         }
     };
+
+    // Field-level guarantee while the switch is OFF (see scrub_campaign_language).
+    let (x_dm, email_script) = (
+        scrub_campaign_language(&x_dm),
+        scrub_campaign_language(&email_script),
+    );
 
     let _ = sqlx::query(
         "UPDATE prospects SET x_dm_script=$1, email_script=$2, updated_at=NOW() WHERE id=$3",
