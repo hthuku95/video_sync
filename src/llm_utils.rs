@@ -27,12 +27,7 @@ macro_rules! try_provider {
                     return Ok(result);
                 }
                 Ok(Err(e)) => {
-                    tracing::warn!(
-                        "⚠️ {} failed ({}), {}",
-                        $name,
-                        e,
-                        $fallback_label
-                    );
+                    tracing::warn!("⚠️ {} failed ({}), {}", $name, e, $fallback_label);
                 }
                 Err(_) => {
                     tracing::warn!(
@@ -65,10 +60,25 @@ pub async fn generate_text_fast(
         .filter(|k| !k.trim().is_empty())
         .map(NvidiaNimClient::new);
 
-    try_provider!(nim.as_ref(), prompt, "NVIDIA NIM (fast path)", "trying Qwen");
-    try_provider!(qwen, prompt, "Qwen (qwen3.7-plus, fast path)", "trying DeepSeek");
+    try_provider!(
+        nim.as_ref(),
+        prompt,
+        "NVIDIA NIM (fast path)",
+        "trying Qwen"
+    );
+    try_provider!(
+        qwen,
+        prompt,
+        "Qwen (qwen3.7-plus, fast path)",
+        "trying DeepSeek"
+    );
     try_provider!(deepseek, prompt, "DeepSeek V4 (fast path)", "trying Gemini");
-    try_provider!(gemini, prompt, "Gemini Flash (fast path)", "no more fallbacks");
+    try_provider!(
+        gemini,
+        prompt,
+        "Gemini Flash (fast path)",
+        "no more fallbacks"
+    );
 
     Err("No LLM client available for fast text generation".into())
 }
@@ -87,8 +97,18 @@ pub async fn generate_text_best_effort(
     prompt: &str,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     try_provider!(nvidia, prompt, "NVIDIA NIM", "trying Qwen fallback");
-    try_provider!(qwen, prompt, "Qwen (qwen3.7-plus)", "trying Gemma via AI Studio fallback");
-    try_provider!(gemma, prompt, "Gemma 4 (Google AI Studio)", "trying Gemini Flash fallback");
+    try_provider!(
+        qwen,
+        prompt,
+        "Qwen (qwen3.7-plus)",
+        "trying Gemma via AI Studio fallback"
+    );
+    try_provider!(
+        gemma,
+        prompt,
+        "Gemma 4 (Google AI Studio)",
+        "trying Gemini Flash fallback"
+    );
     try_provider!(gemini, prompt, "Gemini Flash", "trying DeepSeek fallback");
     try_provider!(deepseek, prompt, "DeepSeek V4", "no more fallbacks");
 
@@ -119,7 +139,12 @@ pub async fn generate_video_script_best_effort(
         .filter(|k| !k.trim().is_empty())
         .map(DeepSeekClient::new);
 
-    try_provider!(nvidia.as_ref(), prompt, "NVIDIA NIM (script)", "trying Qwen");
+    try_provider!(
+        nvidia.as_ref(),
+        prompt,
+        "NVIDIA NIM (script)",
+        "trying Qwen"
+    );
     try_provider!(qwen.as_ref(), prompt, "Qwen (script)", "trying DeepSeek");
     try_provider!(
         deepseek.as_ref(),

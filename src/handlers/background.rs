@@ -73,7 +73,10 @@ pub async fn get_background_image(gemini_client: Option<Arc<GeminiClient>>) -> R
     match generate_nim_background(&prompt).await {
         Ok(image_data) => generated = Some((image_data, "nvidia-flux.1-dev")),
         Err(nim_err) => {
-            tracing::warn!("NIM background generation failed: {} — trying Gemini fallback", nim_err);
+            tracing::warn!(
+                "NIM background generation failed: {} — trying Gemini fallback",
+                nim_err
+            );
             if let Some(client) = gemini_client.as_ref() {
                 match generate_new_background(client, &prompt).await {
                     Ok(image_data) => generated = Some((image_data, "gemini-nano-banana-2-lite")),
@@ -157,7 +160,12 @@ async fn generate_new_background(
     // Model: Nano Banana 2 Lite (gemini-3.1-flash-lite-image) — fastest/cheapest of the
     // nano banana family (~4s/image, ~$0.025-0.033), fine quality for UI backgrounds.
     let image_data = gemini_client
-        .generate_image(prompt, Some("16:9"), Some("2K"), Some("gemini-3.1-flash-lite-image"))
+        .generate_image(
+            prompt,
+            Some("16:9"),
+            Some("2K"),
+            Some("gemini-3.1-flash-lite-image"),
+        )
         .await?;
 
     // Validate that we got actual image data

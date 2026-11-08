@@ -31,24 +31,62 @@ pub enum ServiceType {
 impl ServiceType {
     pub fn from_normalized(s: &str) -> Self {
         match s {
-            "landing_page" | "saas_demo" | "saas_demo_pack" | "long_form_video" | "saas_launch_pack" => Self::LandingPage,
-            "product_mockup" | "product_explainer" | "product_mockup_pack" | "three_d_scene" | "blender_scene_pack" => Self::ProductMockup,
+            "landing_page" | "saas_demo" | "saas_demo_pack" | "long_form_video"
+            | "saas_launch_pack" => Self::LandingPage,
+            "product_mockup"
+            | "product_explainer"
+            | "product_mockup_pack"
+            | "three_d_scene"
+            | "blender_scene_pack" => Self::ProductMockup,
             "thumbnails" | "thumbnail" | "thumbnail_hero_pack" => Self::Thumbnails,
-            "education" | "course_lesson" | "explainer" | "tutorial" | "education_explainer_pack" => Self::Education,
-            "clipping" | "clip" | "short" | "clip_pack" | "kick_auto_clipper" | "kick" => Self::Clipping,
+            "education"
+            | "course_lesson"
+            | "explainer"
+            | "tutorial"
+            | "education_explainer_pack" => Self::Education,
+            "clipping" | "clip" | "short" | "clip_pack" | "kick_auto_clipper" | "kick" => {
+                Self::Clipping
+            }
             // Platform split (Oct 2026): youtube/twitch clipping share the clipping core.
             "youtube_clipping" | "youtube_clips" | "yt_clipping" => Self::Clipping,
             "twitch_clipping" | "twitch_clips" | "twitch" => Self::Clipping,
-            "business_explainer" | "business" | "business_case_study" | "saas_explainer" | "business_explainer_pack" => Self::BusinessExplainer,
-            "voice_audio" | "voice" | "voice_audio_pack" | "narration" | "podcast" => Self::VoiceAudio,
-            "full_stack" | "agency_bundle" | "agency" | "fullstack" | "full_stack_production_pack" | "agency_bundle_pack" => Self::FullStack,
+            "business_explainer"
+            | "business"
+            | "business_case_study"
+            | "saas_explainer"
+            | "business_explainer_pack" => Self::BusinessExplainer,
+            "voice_audio" | "voice" | "voice_audio_pack" | "narration" | "podcast" => {
+                Self::VoiceAudio
+            }
+            "full_stack"
+            | "agency_bundle"
+            | "agency"
+            | "fullstack"
+            | "full_stack_production_pack"
+            | "agency_bundle_pack" => Self::FullStack,
             "manim_explainer" | "manim" | "manim_only" | "manim_pack" => Self::ManimExplainer,
-            "whiteboard" | "whiteboard_animation" | "hand_drawn" | "sketch" | "whiteboard_pack" => Self::WhiteboardAnimation,
-            "kinetic_typography" | "kinetic_type" | "text_animation" | "type_pack" => Self::KineticTypography,
-            "animated_infographic" | "infographic" | "data_story" | "chart_animation" | "infographic_pack" => Self::AnimatedInfographic,
-            "algorithm_viz" | "algorithm_visualization" | "code_viz" | "data_structure" | "algorithm_pack" => Self::AlgorithmViz,
-            "investor_pitch" | "pitch_deck" | "investor_video" | "pitch_pack" => Self::InvestorPitch,
-            "year_in_review" | "wrapped" | "annual_recap" | "year_recap" | "wrapped_pack" => Self::YearInReview,
+            "whiteboard" | "whiteboard_animation" | "hand_drawn" | "sketch" | "whiteboard_pack" => {
+                Self::WhiteboardAnimation
+            }
+            "kinetic_typography" | "kinetic_type" | "text_animation" | "type_pack" => {
+                Self::KineticTypography
+            }
+            "animated_infographic"
+            | "infographic"
+            | "data_story"
+            | "chart_animation"
+            | "infographic_pack" => Self::AnimatedInfographic,
+            "algorithm_viz"
+            | "algorithm_visualization"
+            | "code_viz"
+            | "data_structure"
+            | "algorithm_pack" => Self::AlgorithmViz,
+            "investor_pitch" | "pitch_deck" | "investor_video" | "pitch_pack" => {
+                Self::InvestorPitch
+            }
+            "year_in_review" | "wrapped" | "annual_recap" | "year_recap" | "wrapped_pack" => {
+                Self::YearInReview
+            }
             "isometric_explainer" | "isometric" | "isometric_pack" => Self::IsometricExplainer,
             "fallback_summary" | "summary" | "ad" | "advert" => Self::LandingPage,
             _ => Self::LandingPage,
@@ -119,12 +157,21 @@ impl ServiceType {
     }
 
     pub fn expects_video(&self) -> bool {
-        matches!(self,
-            Self::LandingPage | Self::ProductMockup | Self::Education |
-            Self::Clipping | Self::BusinessExplainer | Self::ManimExplainer |
-            Self::WhiteboardAnimation | Self::KineticTypography | Self::AnimatedInfographic |
-            Self::AlgorithmViz | Self::InvestorPitch | Self::YearInReview |
-            Self::IsometricExplainer
+        matches!(
+            self,
+            Self::LandingPage
+                | Self::ProductMockup
+                | Self::Education
+                | Self::Clipping
+                | Self::BusinessExplainer
+                | Self::ManimExplainer
+                | Self::WhiteboardAnimation
+                | Self::KineticTypography
+                | Self::AnimatedInfographic
+                | Self::AlgorithmViz
+                | Self::InvestorPitch
+                | Self::YearInReview
+                | Self::IsometricExplainer
         )
     }
 
@@ -181,12 +228,7 @@ impl AgenticServicePipeline {
         // Service switch (owner directive Sep 2026): only enabled services may
         // enqueue renders. In-run calls (QA, embeddings, skills) inherit this
         // verdict — there is intentionally no second flag to misconfigure.
-        if !crate::services::service_flags::service_enabled(
-            &state.db_pool,
-            &service_slug,
-        )
-        .await
-        {
+        if !crate::services::service_flags::service_enabled(&state.db_pool, &service_slug).await {
             return Err(format!(
                 "Service '{service_slug}' is currently disabled (service_flags)."
             ));
@@ -217,18 +259,12 @@ impl AgenticServicePipeline {
         if service_type == ServiceType::Clipping {
             if let Some(url) = input.source_url.clone() {
                 if !url.contains("r2.cloudflarestorage") && !is_direct_media_url(&url) {
-                    match crate::services::campaign_engine::resolve_latest_video_url(
-                        &state, &url,
-                    )
-                    .await
+                    match crate::services::campaign_engine::resolve_latest_video_url(&state, &url)
+                        .await
                     {
                         Ok(resolved) => {
                             if resolved != url {
-                                tracing::info!(
-                                    "Resolved clipping source {} -> {}",
-                                    url,
-                                    resolved
-                                );
+                                tracing::info!("Resolved clipping source {} -> {}", url, resolved);
                                 input.source_url = Some(resolved);
                             }
                         }
@@ -309,7 +345,9 @@ impl AgenticServicePipeline {
                         50
                     }
                 }
-                Some("service_portfolio_samples") | Some("app_workflows") | Some("gig_sample_videos") => 200,
+                Some("service_portfolio_samples")
+                | Some("app_workflows")
+                | Some("gig_sample_videos") => 200,
                 _ => 100,
             }
         };
@@ -355,8 +393,9 @@ impl AgenticServicePipeline {
             });
 
         let input: ServiceInput = match job.metadata.get("input") {
-            Some(v) => serde_json::from_value(v.clone())
-                .map_err(|e| format!("Failed to deserialize ServiceInput for {workflow_id}: {e}"))?,
+            Some(v) => serde_json::from_value(v.clone()).map_err(|e| {
+                format!("Failed to deserialize ServiceInput for {workflow_id}: {e}")
+            })?,
             None => {
                 return Err(format!(
                     "Workflow {} has no serialized input snapshot — cannot execute",
@@ -399,7 +438,8 @@ impl AgenticServicePipeline {
         let ollama_client = state.ollama_client.clone().map(Arc::new);
 
         let output_dir = format!("outputs/agentic_{}", input.delivery_id);
-        std::fs::create_dir_all(&output_dir).map_err(|e| format!("Failed to create output dir: {e}"))?;
+        std::fs::create_dir_all(&output_dir)
+            .map_err(|e| format!("Failed to create output dir: {e}"))?;
 
         // ── PLAN-THEN-EXECUTE (§36.9 rec #1) ──
         // One cheap pre-flight LLM call emits an explicit stage plan that is
@@ -430,8 +470,12 @@ impl AgenticServicePipeline {
                      ──────────── FULL PIPELINE INSTRUCTIONS ────────────\n\n{agent_prompt}"
                 );
             }
-            Ok(_) => tracing::warn!(workflow_id = %workflow_id, "execution plan empty — continuing without"),
-            Err(e) => tracing::warn!(workflow_id = %workflow_id, "execution plan generation failed (non-fatal): {e}"),
+            Ok(_) => {
+                tracing::warn!(workflow_id = %workflow_id, "execution plan empty — continuing without")
+            }
+            Err(e) => {
+                tracing::warn!(workflow_id = %workflow_id, "execution plan generation failed (non-fatal): {e}")
+            }
         }
 
         let mut current_prompt = agent_prompt.clone();
@@ -446,7 +490,11 @@ impl AgenticServicePipeline {
         for attempt in 0..AGENT_MAX_RETRIES {
             // Cooperative cancellation probe — checked between every attempt
             // so a cancelled workflow stops burning GPU immediately.
-            if runtime.is_cancel_requested(workflow_id).await.unwrap_or(false) {
+            if runtime
+                .is_cancel_requested(workflow_id)
+                .await
+                .unwrap_or(false)
+            {
                 return Err("WORKFLOW_CANCELLED: cancellation requested".to_string());
             }
 
@@ -592,7 +640,14 @@ impl AgenticServicePipeline {
             last_attempt_tail = match &agent_result {
                 Err(e) => format!("AGENT_ERROR: {}", e.chars().take(400).collect::<String>()),
                 Ok(text) => {
-                    let tail: String = text.chars().rev().take(400).collect::<String>().chars().rev().collect();
+                    let tail: String = text
+                        .chars()
+                        .rev()
+                        .take(400)
+                        .collect::<String>()
+                        .chars()
+                        .rev()
+                        .collect();
                     format!("AGENT_OK_TAIL: {}", tail)
                 }
             };
@@ -622,10 +677,12 @@ impl AgenticServicePipeline {
                         .bind(input.delivery_id)
                         .execute(&state.db_pool)
                         .await
-                        .map_err(|e| tracing::warn!(
-                            "Failed to store clip URLs for delivery {}: {e}",
-                            input.delivery_id
-                        ));
+                        .map_err(|e| {
+                            tracing::warn!(
+                                "Failed to store clip URLs for delivery {}: {e}",
+                                input.delivery_id
+                            )
+                        });
                     }
                 }
             }
@@ -711,8 +768,7 @@ impl AgenticServicePipeline {
                 // redoing ONLY the flagged aspect while reusing surviving
                 // artifacts, instead of burning GPU on a full rebuild.
                 let artifacts = list_local_artifacts(&output_dir);
-                let repair =
-                    plan_repair_scope(&state, &review.feedback, &artifacts).await;
+                let repair = plan_repair_scope(&state, &review.feedback, &artifacts).await;
                 current_prompt = match repair {
                     RepairScope::Partial { instructions } => {
                         tracing::info!(
@@ -752,7 +808,11 @@ impl AgenticServicePipeline {
                 "No usable output from {} attempts for delivery {}. Last attempt: {}",
                 retries_used + 1,
                 input.delivery_id,
-                if last_attempt_tail.is_empty() { "(no agent response recorded)".to_string() } else { last_attempt_tail.clone() },
+                if last_attempt_tail.is_empty() {
+                    "(no agent response recorded)".to_string()
+                } else {
+                    last_attempt_tail.clone()
+                },
             ));
         };
 
@@ -794,7 +854,10 @@ impl AgenticServicePipeline {
                     .await
                     .unwrap_or(false);
                 if !owned {
-                    return Err("WORKFLOW_LEASE_LOST: ownership lost before completion — discarding result".to_string());
+                    return Err(
+                        "WORKFLOW_LEASE_LOST: ownership lost before completion — discarding result"
+                            .to_string(),
+                    );
                 }
             }
             None => {
@@ -834,12 +897,16 @@ impl AgenticServicePipeline {
         )
         .await
         {
-            let parsed: serde_json::Value = serde_json::from_str(&text).unwrap_or(serde_json::json!({}));
+            let parsed: serde_json::Value =
+                serde_json::from_str(&text).unwrap_or(serde_json::json!({}));
             let name = parsed["name"].as_str().unwrap_or("Workflow pattern");
             let description = parsed["description"]
                 .as_str()
                 .unwrap_or("Learned from successful render");
-            let trigger_conditions = parsed.get("trigger_conditions").cloned().unwrap_or(serde_json::json!({}));
+            let trigger_conditions = parsed
+                .get("trigger_conditions")
+                .cloned()
+                .unwrap_or(serde_json::json!({}));
             let _ = crate::services::skills::store_skill(
                 &state.db_pool,
                 state.qdrant_client.as_ref(),
@@ -869,7 +936,11 @@ impl AgenticServicePipeline {
         qa_feedback: &str,
         retries_used: i32,
     ) -> Result<(), String> {
-        let output_key = format!("agentic_output/{}/{}.mp4", input.delivery_id, input.service_filename());
+        let output_key = format!(
+            "agentic_output/{}/{}.mp4",
+            input.delivery_id,
+            input.service_filename()
+        );
 
         // If the agent already uploaded to cloud storage, use that URL directly — no re-upload
         let (upload_backend, public_url) = if output_path.starts_with("https://") {
@@ -919,7 +990,10 @@ impl AgenticServicePipeline {
         };
 
         let qa_note: Option<String> = if qa_score < 6 {
-            Some(format!("QA final score {} after {} retries: {}", qa_score, retries_used, qa_feedback))
+            Some(format!(
+                "QA final score {} after {} retries: {}",
+                qa_score, retries_used, qa_feedback
+            ))
         } else {
             None
         };
@@ -952,10 +1026,17 @@ impl AgenticServicePipeline {
                 .await
             };
             if let Err(e) = update_result {
-                tracing::warn!("publish_output: failed to update delivery {}: {e}", input.delivery_id);
+                tracing::warn!(
+                    "publish_output: failed to update delivery {}: {e}",
+                    input.delivery_id
+                );
             }
 
-            crate::handlers::social_publish::try_publish_delivery_to_zernio(input.delivery_id, state).await;
+            crate::handlers::social_publish::try_publish_delivery_to_zernio(
+                input.delivery_id,
+                state,
+            )
+            .await;
 
             if let Some(prospect_id) = input.prospect_id {
                 let _ = sqlx::query(
@@ -1388,7 +1469,11 @@ Save your final video as .mp4 (landscape 16:9 recommended)"#,
         )
     }
 
-    fn build_agent_prompt(service_type: ServiceType, input: &ServiceInput, output_dir: &str) -> String {
+    fn build_agent_prompt(
+        service_type: ServiceType,
+        input: &ServiceInput,
+        output_dir: &str,
+    ) -> String {
         match service_type {
             ServiceType::LandingPage => Self::landing_page_prompt(input),
             ServiceType::ProductMockup => Self::product_mockup_prompt(input),
@@ -1863,14 +1948,13 @@ async fn plan_repair_scope(
         Ok(text) => {
             // Lenient JSON extraction (same pattern as skill extraction).
             let json_text = text.trim();
-            let parsed: serde_json::Value =
-                serde_json::from_str(json_text).unwrap_or_else(|_| {
-                    regex::Regex::new(r"\{[^{}]*\}")
-                        .ok()
-                        .and_then(|re| re.find(json_text))
-                        .and_then(|m| serde_json::from_str(m.as_str()).ok())
-                        .unwrap_or(serde_json::json!({}))
-                });
+            let parsed: serde_json::Value = serde_json::from_str(json_text).unwrap_or_else(|_| {
+                regex::Regex::new(r"\{[^{}]*\}")
+                    .ok()
+                    .and_then(|re| re.find(json_text))
+                    .and_then(|m| serde_json::from_str(m.as_str()).ok())
+                    .unwrap_or(serde_json::json!({}))
+            });
             match parsed["strategy"].as_str() {
                 Some("partial") => RepairScope::Partial {
                     instructions: parsed["instructions"]
@@ -1900,10 +1984,17 @@ fn is_video_url(url: &str) -> bool {
 }
 
 fn is_image_url(url: &str) -> bool {
-    url.contains(".jpg") || url.contains(".jpeg") || url.contains(".png") || url.contains(".gif") || url.contains(".webp")
+    url.contains(".jpg")
+        || url.contains(".jpeg")
+        || url.contains(".png")
+        || url.contains(".gif")
+        || url.contains(".webp")
 }
 
-fn locate_output_from_result(agent_result: &Result<String, String>, output_dir: &str) -> Option<LocatedOutput> {
+fn locate_output_from_result(
+    agent_result: &Result<String, String>,
+    output_dir: &str,
+) -> Option<LocatedOutput> {
     let text = match agent_result {
         Ok(t) => t.as_str(),
         Err(t) => t.as_str(),
@@ -1917,7 +2008,8 @@ fn locate_output_from_result(agent_result: &Result<String, String>, output_dir: 
     for line in text.lines() {
         let trimmed = line.trim();
         // Cloud URL via "📤 Cloud URL:" or "Cloud URL:"
-        if let Some(url) = trimmed.strip_prefix("📤 Cloud URL: ")
+        if let Some(url) = trimmed
+            .strip_prefix("📤 Cloud URL: ")
             .or_else(|| trimmed.strip_prefix("Cloud URL: "))
         {
             let url = url.trim().to_string();
@@ -1930,7 +2022,13 @@ fn locate_output_from_result(agent_result: &Result<String, String>, output_dir: 
             }
         }
         // Raw https:// URL
-        if trimmed.starts_with("https://") && (trimmed.contains(".mp4") || trimmed.contains(".png") || trimmed.contains(".mp3") || trimmed.contains(".webm") || trimmed.contains(".jpg")) {
+        if trimmed.starts_with("https://")
+            && (trimmed.contains(".mp4")
+                || trimmed.contains(".png")
+                || trimmed.contains(".mp3")
+                || trimmed.contains(".webm")
+                || trimmed.contains(".jpg"))
+        {
             if cloud_url.is_none() {
                 cloud_url = Some(trimmed.to_string());
             } else if let Some(ref current) = cloud_url {
@@ -1940,7 +2038,13 @@ fn locate_output_from_result(agent_result: &Result<String, String>, output_dir: 
             }
         }
         // Local file path that exists
-        if trimmed.contains(output_dir) || trimmed.contains(".mp4") || trimmed.contains(".png") || trimmed.contains(".mp3") || trimmed.contains(".wav") || trimmed.contains(".webm") {
+        if trimmed.contains(output_dir)
+            || trimmed.contains(".mp4")
+            || trimmed.contains(".png")
+            || trimmed.contains(".mp3")
+            || trimmed.contains(".wav")
+            || trimmed.contains(".webm")
+        {
             let path = trimmed
                 .trim_start_matches('`')
                 .trim_end_matches('`')
@@ -1967,7 +2071,21 @@ fn locate_output_from_result(agent_result: &Result<String, String>, output_dir: 
                 .filter_map(|e| {
                     let p = e.path();
                     let ext = p.extension()?.to_str()?;
-                    if !matches!(ext, "mp4" | "webm" | "mov" | "avi" | "mkv" | "png" | "jpg" | "jpeg" | "gif" | "mp3" | "wav" | "aac") {
+                    if !matches!(
+                        ext,
+                        "mp4"
+                            | "webm"
+                            | "mov"
+                            | "avi"
+                            | "mkv"
+                            | "png"
+                            | "jpg"
+                            | "jpeg"
+                            | "gif"
+                            | "mp3"
+                            | "wav"
+                            | "aac"
+                    ) {
                         return None;
                     }
                     // Only accept files modified within the last hour
@@ -1980,18 +2098,25 @@ fn locate_output_from_result(agent_result: &Result<String, String>, output_dir: 
                             }
                         }
                     }
-                    let priority = if matches!(ext, "mp4" | "webm" | "mov" | "avi" | "mkv") { 2 }
-                        else if matches!(ext, "png" | "jpg" | "jpeg" | "gif") { 1 }
-                        else { 0 };
+                    let priority = if matches!(ext, "mp4" | "webm" | "mov" | "avi" | "mkv") {
+                        2
+                    } else if matches!(ext, "png" | "jpg" | "jpeg" | "gif") {
+                        1
+                    } else {
+                        0
+                    };
                     Some((p, priority))
                 })
                 .collect();
             if !candidates.is_empty() {
-                candidates.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| {
-                    std::fs::metadata(&b.0).ok()
-                        .and_then(|m| m.modified().ok())
-                        .cmp(&std::fs::metadata(&a.0).ok().and_then(|m| m.modified().ok()))
-                }));
+                candidates.sort_by(|a, b| {
+                    b.1.cmp(&a.1).then_with(|| {
+                        std::fs::metadata(&b.0)
+                            .ok()
+                            .and_then(|m| m.modified().ok())
+                            .cmp(&std::fs::metadata(&a.0).ok().and_then(|m| m.modified().ok()))
+                    })
+                });
                 if let Some((p, _)) = candidates.first() {
                     let p = p.to_string_lossy().to_string();
                     tracing::warn!(path = %p, dir = %output_dir, "locate_output_from_result found local file via dir scan");
@@ -2026,25 +2151,79 @@ mod tests {
 
     #[test]
     fn test_service_type_from_normalized() {
-        assert_eq!(ServiceType::from_normalized("landing_page"), ServiceType::LandingPage);
-        assert_eq!(ServiceType::from_normalized("landing"), ServiceType::LandingPage);
-        assert_eq!(ServiceType::from_normalized("product_mockup"), ServiceType::ProductMockup);
-        assert_eq!(ServiceType::from_normalized("product_explainer"), ServiceType::ProductMockup);
-        assert_eq!(ServiceType::from_normalized("thumbnails"), ServiceType::Thumbnails);
-        assert_eq!(ServiceType::from_normalized("thumbnail"), ServiceType::Thumbnails);
-        assert_eq!(ServiceType::from_normalized("education"), ServiceType::Education);
-        assert_eq!(ServiceType::from_normalized("clipping"), ServiceType::Clipping);
+        assert_eq!(
+            ServiceType::from_normalized("landing_page"),
+            ServiceType::LandingPage
+        );
+        assert_eq!(
+            ServiceType::from_normalized("landing"),
+            ServiceType::LandingPage
+        );
+        assert_eq!(
+            ServiceType::from_normalized("product_mockup"),
+            ServiceType::ProductMockup
+        );
+        assert_eq!(
+            ServiceType::from_normalized("product_explainer"),
+            ServiceType::ProductMockup
+        );
+        assert_eq!(
+            ServiceType::from_normalized("thumbnails"),
+            ServiceType::Thumbnails
+        );
+        assert_eq!(
+            ServiceType::from_normalized("thumbnail"),
+            ServiceType::Thumbnails
+        );
+        assert_eq!(
+            ServiceType::from_normalized("education"),
+            ServiceType::Education
+        );
+        assert_eq!(
+            ServiceType::from_normalized("clipping"),
+            ServiceType::Clipping
+        );
         assert_eq!(ServiceType::from_normalized("clip"), ServiceType::Clipping);
-        assert_eq!(ServiceType::from_normalized("youtube_clipping"), ServiceType::Clipping);
-        assert_eq!(ServiceType::from_normalized("twitch_clipping"), ServiceType::Clipping);
-        assert_eq!(ServiceType::from_normalized("kick_auto_clipper"), ServiceType::Clipping);
-        assert_eq!(ServiceType::from_normalized("voice_audio"), ServiceType::VoiceAudio);
-        assert_eq!(ServiceType::from_normalized("voice"), ServiceType::VoiceAudio);
-        assert_eq!(ServiceType::from_normalized("podcast"), ServiceType::VoiceAudio);
-        assert_eq!(ServiceType::from_normalized("full_stack"), ServiceType::FullStack);
-        assert_eq!(ServiceType::from_normalized("business_explainer"), ServiceType::BusinessExplainer);
-        assert_eq!(ServiceType::from_normalized("saas_explainer"), ServiceType::BusinessExplainer);
-        assert_eq!(ServiceType::from_normalized("unknown"), ServiceType::LandingPage);
+        assert_eq!(
+            ServiceType::from_normalized("youtube_clipping"),
+            ServiceType::Clipping
+        );
+        assert_eq!(
+            ServiceType::from_normalized("twitch_clipping"),
+            ServiceType::Clipping
+        );
+        assert_eq!(
+            ServiceType::from_normalized("kick_auto_clipper"),
+            ServiceType::Clipping
+        );
+        assert_eq!(
+            ServiceType::from_normalized("voice_audio"),
+            ServiceType::VoiceAudio
+        );
+        assert_eq!(
+            ServiceType::from_normalized("voice"),
+            ServiceType::VoiceAudio
+        );
+        assert_eq!(
+            ServiceType::from_normalized("podcast"),
+            ServiceType::VoiceAudio
+        );
+        assert_eq!(
+            ServiceType::from_normalized("full_stack"),
+            ServiceType::FullStack
+        );
+        assert_eq!(
+            ServiceType::from_normalized("business_explainer"),
+            ServiceType::BusinessExplainer
+        );
+        assert_eq!(
+            ServiceType::from_normalized("saas_explainer"),
+            ServiceType::BusinessExplainer
+        );
+        assert_eq!(
+            ServiceType::from_normalized("unknown"),
+            ServiceType::LandingPage
+        );
     }
 
     #[test]
@@ -2056,15 +2235,30 @@ mod tests {
         assert_eq!(ServiceType::Clipping.as_str(), "clipping");
         assert_eq!(ServiceType::VoiceAudio.as_str(), "voice_audio");
         assert_eq!(ServiceType::FullStack.as_str(), "full_stack");
-        assert_eq!(ServiceType::BusinessExplainer.as_str(), "business_explainer");
+        assert_eq!(
+            ServiceType::BusinessExplainer.as_str(),
+            "business_explainer"
+        );
         assert_eq!(ServiceType::ManimExplainer.as_str(), "manim_explainer");
-        assert_eq!(ServiceType::WhiteboardAnimation.as_str(), "whiteboard_animation");
-        assert_eq!(ServiceType::KineticTypography.as_str(), "kinetic_typography");
-        assert_eq!(ServiceType::AnimatedInfographic.as_str(), "animated_infographic");
+        assert_eq!(
+            ServiceType::WhiteboardAnimation.as_str(),
+            "whiteboard_animation"
+        );
+        assert_eq!(
+            ServiceType::KineticTypography.as_str(),
+            "kinetic_typography"
+        );
+        assert_eq!(
+            ServiceType::AnimatedInfographic.as_str(),
+            "animated_infographic"
+        );
         assert_eq!(ServiceType::AlgorithmViz.as_str(), "algorithm_viz");
         assert_eq!(ServiceType::InvestorPitch.as_str(), "investor_pitch");
         assert_eq!(ServiceType::YearInReview.as_str(), "year_in_review");
-        assert_eq!(ServiceType::IsometricExplainer.as_str(), "isometric_explainer");
+        assert_eq!(
+            ServiceType::IsometricExplainer.as_str(),
+            "isometric_explainer"
+        );
     }
 
     #[test]
@@ -2090,7 +2284,11 @@ mod tests {
         for v in variants {
             let s = v.as_str();
             let back = ServiceType::from_normalized(s);
-            assert_eq!(v, back, "round-trip failed for {:?} -> {} -> {:?}", v, s, back);
+            assert_eq!(
+                v, back,
+                "round-trip failed for {:?} -> {} -> {:?}",
+                v, s, back
+            );
         }
     }
 
@@ -2152,7 +2350,10 @@ mod tests {
 
     #[test]
     fn test_old_ugc_deleted() {
-        assert!(!matches!(ServiceType::from_normalized("ugc"), ServiceType::BusinessExplainer));
+        assert!(!matches!(
+            ServiceType::from_normalized("ugc"),
+            ServiceType::BusinessExplainer
+        ));
         assert_ne!(ServiceType::from_normalized("ugc").as_str(), "ugc");
     }
 }

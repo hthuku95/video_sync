@@ -7,9 +7,8 @@ use tower_http::cors::CorsLayer;
 
 mod agent;
 mod ai_tool_selector; // 🧠 AI-driven tool selection — Gemma 4 picks relevant tools per request
-mod blender_mcp_client; // 🎨 BlenderMCPServer — 3D rendering + Manim
-mod hyperframes_client; // 🎬 HyperFrames — CPU headless-Chrome rendering (education + landing_page)
 mod bedrock_client;
+mod blender_mcp_client; // 🎨 BlenderMCPServer — 3D rendering + Manim
 mod blender_quality;
 mod browserbase_client; // 🌐 BrowserBase — cloud browser fetch + search
 mod claude_client;
@@ -17,36 +16,37 @@ mod clipping; // 📹 YouTube clipping feature
 mod cloud_storage;
 mod db;
 mod deepseek_client;
-mod qwen_client;
+mod elevenlabs_client; // 🎙️ Eleven Labs TTS, Sound Effects, Music
 mod email;
 mod ffmpeg_mcp_client;
-mod elevenlabs_client; // 🎙️ Eleven Labs TTS, Sound Effects, Music
 mod gemini_client;
 mod handlers;
+mod hyperframes_client; // 🎬 HyperFrames — CPU headless-Chrome rendering (education + landing_page)
 mod jobs; // 🆕 Background job system for video editing
 mod kick_client; // 📺 Kick.com API client
 mod kick_vod_scraper; // 🎥 Kick VOD video list + HLS stream URL extraction (via BrowserBase)
 mod llm_utils;
-mod mns_client; // MNS — Alibaba Cloud Message Service (cloud SQS-equivalent) for clipping dispatch
 mod middleware;
+mod mns_client; // MNS — Alibaba Cloud Message Service (cloud SQS-equivalent) for clipping dispatch
 mod models;
 mod nvidia_nim_client;
 mod ollama_client;
 mod pexels_client;
 mod phantombuster_client; // 🎯 PhantomBuster — LinkedIn Sales Navigator scraping
-mod product_hunt_client; // 🚀 Product Hunt API v2 — SaaS product discovery
-mod usage; // 📊 Token-usage primitives shared by LLM clients + run ledger
 mod portfolio_samples;
+mod product_hunt_client; // 🚀 Product Hunt API v2 — SaaS product discovery
 mod qdrant_client;
+mod qwen_client;
 mod r2_client; // ☁️ Cloudflare R2 object storage (primary)
-mod storage; // ☁️☁️ Object storage router — R2 primary + AWS S3 fallback
 mod render_review; // 🔍 LLM QA review of every render before handoff
 mod services;
 mod sketchfab_client;
+mod storage; // ☁️☁️ Object storage router — R2 primary + AWS S3 fallback
 mod telegram_bot; // ✈️ Telegram Bot API — admin pings + AI sales DM replies
 mod telegram_client; // 🛰️ Telegram MTProto userbot — channel watcher for paid-gig leads
 mod token_manager; // 🔧 Centralized YouTube OAuth token refresh
 mod twitch_client; // 📺 Twitch Helix API client
+mod usage; // 📊 Token-usage primitives shared by LLM clients + run ledger
 mod utils; // 🔧 Utility modules (FFmpeg utilities, etc.)
 mod vector_db;
 mod vertex_multimodal_embeddings;
@@ -86,27 +86,28 @@ pub struct AppState {
     pub qwen_client: Option<qwen_client::QwenClient>, // Qwen via DashScope (multimodal text+image+video, embeddings)
     pub ollama_client: Option<ollama_client::OllamaClient>, // Self-hosted Gemma 4 12B via Ollama (free, multimodal, GPU auto-scaled)
     pub claude_client: Option<claude_client::ClaudeClient>,
-    pub vertex_multimodal_embeddings: Option<vertex_multimodal_embeddings::VertexMultimodalEmbeddingsClient>,
+    pub vertex_multimodal_embeddings:
+        Option<vertex_multimodal_embeddings::VertexMultimodalEmbeddingsClient>,
     pub voyage_embeddings: Option<voyage_embeddings::VoyageEmbeddings>,
     pub pexels_client: Option<pexels_client::PexelsClient>,
     pub elevenlabs_client: Option<elevenlabs_client::ElevenLabsClient>, // 🎙️ Audio generation
     pub vibevoice_client: Option<vibevoice_client::VibeVoiceClient>, // 🎤 Shared TTS + transcription microservice
     pub blender_mcp_client: Option<blender_mcp_client::BlenderMCPClient>, // 🎨 3D rendering + Manim
     pub hyperframes_client: Option<hyperframes_client::HyperFramesClient>, // 🎬 CPU rendering (education + landing_page)
-    pub r2_client: Option<Arc<storage::StorageRouter>>,               // ☁️ R2 primary + S3 fallback router
-    pub youtube_client: Option<youtube_client::YouTubeClient>,       // 📺 YouTube integration
+    pub r2_client: Option<Arc<storage::StorageRouter>>, // ☁️ R2 primary + S3 fallback router
+    pub youtube_client: Option<youtube_client::YouTubeClient>, // 📺 YouTube integration
     pub youtube_analytics_client: Option<youtube_analytics_client::YouTubeAnalyticsClient>, // 📊 YouTube Analytics
     pub google_oauth_client_id: Option<String>, // Google OAuth client ID
     pub google_oauth_client_secret: Option<String>, // Google OAuth client secret
     pub job_manager: jobs::SharedJobManager,    // 🆕 Background job management
     pub token_manager: Option<Arc<token_manager::TokenManager>>, // 🔧 Centralized token refresh
     pub twitch_client: Option<Arc<twitch_client::TwitchClient>>, // 📺 Twitch Helix API
-    pub download_semaphore: Arc<Semaphore>, // 🔒 Limits concurrent downloads to 2
+    pub download_semaphore: Arc<Semaphore>,     // 🔒 Limits concurrent downloads to 2
     pub delivery_render_semaphore: Arc<Semaphore>, // 🎬 Limits concurrent delivery renders to avoid OOM
     pub chat_agent_semaphore: Arc<Semaphore>, // 🤖 Limits concurrent in-process chat agents (§53.12)
     pub phantombuster_client: Option<phantombuster_client::PhantomBusterClient>, // 🎯 LinkedIn scraping
     pub pubsub_bus: Option<crate::services::redis_pubsub::PubSubBus>, // Redis pub/sub for cross-instance channels
-    pub kick_client: Option<kick_client::KickClient>, // 📺 Kick.com API client
+    pub kick_client: Option<kick_client::KickClient>,                 // 📺 Kick.com API client
     pub zernio_client: Option<zernio_client::ZernioClient>, // 📱 Multi-platform social publishing
 }
 
@@ -395,7 +396,10 @@ async fn main() {
         .ok()
         .map(|k| {
             tracing::info!("Initializing Gemma 4 client (text tasks, own quota)...");
-            gemini_client::GeminiClient::new_with_model(k, std::env::var("GEMMA_MODEL").unwrap_or_else(|_| "gemma-4-26b-a4b-it".to_string()))
+            gemini_client::GeminiClient::new_with_model(
+                k,
+                std::env::var("GEMMA_MODEL").unwrap_or_else(|_| "gemma-4-26b-a4b-it".to_string()),
+            )
         });
 
     // NVIDIA NIM — text + tool-calling model (free tier; verified working).
@@ -425,36 +429,47 @@ async fn main() {
             tracing::info!(
                 "Initializing AWS Bedrock client (region: {}, model: {})...",
                 region,
-                model.as_deref().unwrap_or("meta.llama3-2-90b-vision-instruct-maas")
+                model
+                    .as_deref()
+                    .unwrap_or("meta.llama3-2-90b-vision-instruct-maas")
             );
             Some(std::sync::Arc::new(
                 crate::bedrock_client::BedrockClient::new_async(&region, model).await,
             ))
         } else {
-            tracing::warn!("AWS Bedrock not configured (missing AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY)");
+            tracing::warn!(
+                "AWS Bedrock not configured (missing AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY)"
+            );
             None
         }
     };
 
     // DeepSeek V4 — OpenAI-compatible, fallback when Gemini/NIM are unavailable.
     let deepseek_client = std::env::var("DEEPSEEK_API_KEY").ok().map(|k| {
-        tracing::info!("Initializing DeepSeek V4 client (model: {})...",
-            std::env::var("DEEPSEEK_MODEL").unwrap_or_else(|_| "deepseek-v4-flash".to_string()));
+        tracing::info!(
+            "Initializing DeepSeek V4 client (model: {})...",
+            std::env::var("DEEPSEEK_MODEL").unwrap_or_else(|_| "deepseek-v4-flash".to_string())
+        );
         deepseek_client::DeepSeekClient::new(k)
     });
 
     // Qwen via Alibaba DashScope — multimodal (text+image+video), tool calling,
     // and qwen3-vl multimodal embeddings (1536d, DashScope REST).
     let qwen_client = std::env::var("DASHSCOPE_API_KEY").ok().map(|k| {
-        tracing::info!("Initializing Qwen/DashScope client (model: {})...",
-            std::env::var("QWEN_MODEL").unwrap_or_else(|_| "qwen3.7-plus".to_string()));
+        tracing::info!(
+            "Initializing Qwen/DashScope client (model: {})...",
+            std::env::var("QWEN_MODEL").unwrap_or_else(|_| "qwen3.7-plus".to_string())
+        );
         qwen_client::QwenClient::new(k)
     });
 
     // Ollama — self-hosted Gemma 4B (multimodal, free, on separate t3.xlarge).
     // Used as the primary text generation provider before NVIDIA NIM.
     let ollama_client = {
-        tracing::info!("Initializing Ollama client (gemma4:12b on {})...", ollama_client::OLLAMA_DEFAULT_URL);
+        tracing::info!(
+            "Initializing Ollama client (gemma4:12b on {})...",
+            ollama_client::OLLAMA_DEFAULT_URL
+        );
         let client = ollama_client::OllamaClient::new();
         // Warm up the model in background — non-blocking, non-fatal.
         let warmup_client = client.clone();
@@ -466,7 +481,9 @@ async fn main() {
 
     let vertex_multimodal_embeddings =
         vertex_multimodal_embeddings::VertexMultimodalEmbeddingsClient::from_env().map(|client| {
-            tracing::info!("Initializing Vertex multimodal embeddings client for gemini_mm lane...");
+            tracing::info!(
+                "Initializing Vertex multimodal embeddings client for gemini_mm lane..."
+            );
             client
         });
 
@@ -479,12 +496,16 @@ async fn main() {
             tracing::info!("Initializing Qdrant vector database...");
             match qdrant_client::QdrantClient::new(qdrant_url, Some(api_key)).await {
                 Ok(client) => {
-                    tracing::info!("Qdrant client initialized; deferring collection/index setup to background");
+                    tracing::info!(
+                        "Qdrant client initialized; deferring collection/index setup to background"
+                    );
                     let background_client = client.clone();
                     tokio::spawn(async move {
                         match background_client.create_collection().await {
                             Ok(_) => tracing::info!("Qdrant initialized successfully"),
-                            Err(e) => tracing::error!("Failed to initialize Qdrant collection: {}", e),
+                            Err(e) => {
+                                tracing::error!("Failed to initialize Qdrant collection: {}", e)
+                            }
                         }
                     });
                     Some(client)
@@ -688,35 +709,37 @@ async fn main() {
     // required because presigned URLs need the full key lifetime for
     // same-day scheduled Zernio fetches). Leave S3_FALLBACK_ENDPOINT unset to
     // fall back to real AWS S3 instead. Used automatically when R2 is down.
-    let s3_fallback: Option<Arc<r2_client::R2Client>> =
-        match std::env::var("S3_FALLBACK_BUCKET").ok().filter(|b| !b.is_empty()) {
-            Some(s3_bucket) => {
-                let region = std::env::var("S3_FALLBACK_REGION")
-                    .ok()
-                    .or_else(|| std::env::var("S3_REGION").ok())
-                    .or_else(|| std::env::var("AWS_REGION").ok())
-                    .filter(|r| !r.is_empty())
-                    .unwrap_or_else(|| "us-east-1".to_string());
-                tracing::info!(
+    let s3_fallback: Option<Arc<r2_client::R2Client>> = match std::env::var("S3_FALLBACK_BUCKET")
+        .ok()
+        .filter(|b| !b.is_empty())
+    {
+        Some(s3_bucket) => {
+            let region = std::env::var("S3_FALLBACK_REGION")
+                .ok()
+                .or_else(|| std::env::var("S3_REGION").ok())
+                .or_else(|| std::env::var("AWS_REGION").ok())
+                .filter(|r| !r.is_empty())
+                .unwrap_or_else(|| "us-east-1".to_string());
+            tracing::info!(
                     "☁️ Initializing S3-compatible fallback storage (bucket: {s3_bucket}, region: {region}, endpoint: {})",
                     std::env::var("S3_FALLBACK_ENDPOINT")
                         .ok()
                         .filter(|v| !v.trim().is_empty())
                         .unwrap_or_else(|| "aws-native (no custom endpoint)".to_string())
                 );
-                match r2_client::R2Client::new_aws_s3(&s3_bucket, &region).await {
-                    Ok(client) => Some(Arc::new(client)),
-                    Err(e) => {
-                        tracing::warn!("Failed to init S3 fallback client: {e}");
-                        None
-                    }
+            match r2_client::R2Client::new_aws_s3(&s3_bucket, &region).await {
+                Ok(client) => Some(Arc::new(client)),
+                Err(e) => {
+                    tracing::warn!("Failed to init S3 fallback client: {e}");
+                    None
                 }
             }
-            None => {
-                tracing::info!("S3 fallback not configured (set S3_FALLBACK_BUCKET to enable)");
-                None
-            }
-        };
+        }
+        None => {
+            tracing::info!("S3 fallback not configured (set S3_FALLBACK_BUCKET to enable)");
+            None
+        }
+    };
 
     let r2_client = r2_primary.map(|primary| {
         let has_fallback = s3_fallback.is_some();
@@ -884,7 +907,8 @@ async fn main() {
             let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(30));
             loop {
                 interval.tick().await;
-                jobs::clipping_worker::update_worker_heartbeat(&hb_state, &hb_worker_id, None).await;
+                jobs::clipping_worker::update_worker_heartbeat(&hb_state, &hb_worker_id, None)
+                    .await;
             }
         });
 
@@ -915,7 +939,10 @@ async fn main() {
                             Ok(payload) => {
                                 let job_id = payload["job_id"].as_i64().unwrap_or(0) as i32;
                                 if job_id == 0 {
-                                    tracing::error!("💥 Invalid job_id in MNS message: {}", msg.body);
+                                    tracing::error!(
+                                        "💥 Invalid job_id in MNS message: {}",
+                                        msg.body
+                                    );
                                     std::process::exit(1);
                                 }
                                 tracing::info!("🎬 Batch processing job {}", job_id);
@@ -927,7 +954,10 @@ async fn main() {
                                 {
                                     Ok(_) => {
                                         let _ = mns.delete_message(&msg.receipt_handle).await;
-                                        tracing::info!("✅ Batch job {} completed, message deleted", job_id);
+                                        tracing::info!(
+                                            "✅ Batch job {} completed, message deleted",
+                                            job_id
+                                        );
                                         std::process::exit(0);
                                     }
                                     Err(e) => {
@@ -955,8 +985,7 @@ async fn main() {
             }
         }
 
-        let queue_url = std::env::var("CLIPPING_SQS_QUEUE_URL")
-            .unwrap_or_default();
+        let queue_url = std::env::var("CLIPPING_SQS_QUEUE_URL").unwrap_or_default();
 
         if queue_url.is_empty() {
             tracing::error!("💥 BATCH_MODE requires CLIPPING_SQS_QUEUE_URL env var");
@@ -1007,7 +1036,10 @@ async fn main() {
                                         .receipt_handle(receipt_handle)
                                         .send()
                                         .await;
-                                    tracing::info!("✅ Batch job {} completed, message deleted", job_id);
+                                    tracing::info!(
+                                        "✅ Batch job {} completed, message deleted",
+                                        job_id
+                                    );
                                     std::process::exit(0);
                                 }
                                 Err(e) => {
@@ -1075,6 +1107,7 @@ async fn main() {
         .merge(handlers::auth::clipper_invite_routes()) // 🎫 Clipper invites
         .merge(admin_only_routes) // Admin-only routes like API docs
         .route("/api/status", axum::routing::get(api_status))
+        .route("/api/features", axum::routing::get(api_features))
         // .layer(axum::middleware::from_fn(middleware::frontend_rate_limit::frontend_rate_limit_middleware))
         // .layer(axum::middleware::from_fn(middleware::rate_limit::rate_limit_middleware))
         .layer(axum::middleware::from_fn(
@@ -1384,7 +1417,8 @@ async fn main() {
                     tracing::info!("🔁 Recovering {} orphaned legacy deliveries", rows.len());
                     for (delivery_id,) in rows {
                         tracing::info!("🔁 Re-triggering delivery {delivery_id}");
-                        handlers::admin::run_delivery_job(delivery_id, recovery_state.clone()).await;
+                        handlers::admin::run_delivery_job(delivery_id, recovery_state.clone())
+                            .await;
                     }
                 }
                 Ok(_) => tracing::info!("✅ No orphaned legacy deliveries found"),
@@ -1814,6 +1848,27 @@ fetch('/upload/session/my-session-123', {
     "###;
 
     axum::response::Html(html.to_string())
+}
+
+/// Public feature flags (owner directive Nov 8 2026): the five TS apps call
+/// this pre-login to render Coming-Soon states for gated products without
+/// needing any auth. Only sends booleans — nothing here is sensitive.
+async fn api_features(
+    Extension(state): Extension<Arc<AppState>>,
+) -> axum::response::Json<serde_json::Value> {
+    use serde_json::json;
+
+    let campaigns_enabled = crate::services::service_flags::campaigns_enabled(&state.db_pool).await;
+    axum::response::Json(json!({
+        "campaigns_enabled": campaigns_enabled,
+        "campaigns_message": if campaigns_enabled {
+            serde_json::Value::Null
+        } else {
+            serde_json::Value::String(
+                crate::services::service_flags::CAMPAIGNS_OFF_MESSAGE.to_string(),
+            )
+        },
+    }))
 }
 
 // API Status endpoint

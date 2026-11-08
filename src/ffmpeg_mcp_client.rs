@@ -38,7 +38,10 @@ impl FfmpegMcpClient {
             .send()
             .await
             .map_err(|e| format!("FFmpeg MCP unreachable: {}", e))?;
-        let h: HealthResponse = resp.json().await.map_err(|e| format!("bad health: {}", e))?;
+        let h: HealthResponse = resp
+            .json()
+            .await
+            .map_err(|e| format!("bad health: {}", e))?;
         Ok(h.status == "ok")
     }
 

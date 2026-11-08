@@ -681,7 +681,11 @@ pub async fn workflow_feedback(
 
     if let Err(e) = saved {
         tracing::warn!("workflow_feedback insert failed: {e}");
-        return (StatusCode::INTERNAL_SERVER_ERROR, "Could not save your note").into_response();
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Could not save your note",
+        )
+            .into_response();
     }
 
     // The customer activity feed shows the note without exposing internals.
@@ -800,7 +804,11 @@ pub async fn workflow_cancel(
     if flagged || published || status_flipped {
         (StatusCode::OK, "Cancellation requested").into_response()
     } else {
-        (StatusCode::NOT_FOUND, "Workflow not found or already finished").into_response()
+        (
+            StatusCode::NOT_FOUND,
+            "Workflow not found or already finished",
+        )
+            .into_response()
     }
 }
 
@@ -846,17 +854,27 @@ pub async fn workflow_trace(
         }),
         Ok(None) => return (StatusCode::NOT_FOUND, "Workflow not found").into_response(),
         Err(e) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, format!("query failed: {e}")).into_response()
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("query failed: {e}"),
+            )
+                .into_response()
         }
     };
 
     let runtime = crate::services::workflow_runtime::WorkflowRuntime::new(state.db_pool.clone());
-    let nodes = runtime
-        .list_nodes(workflow_uuid)
-        .await
-        .unwrap_or_default();
+    let nodes = runtime.list_nodes(workflow_uuid).await.unwrap_or_default();
 
-    let events: Vec<serde_json::Value> = sqlx::query_as::<_, (String, Option<String>, String, Option<serde_json::Value>, chrono::DateTime<chrono::Utc>)>(
+    let events: Vec<serde_json::Value> = sqlx::query_as::<
+        _,
+        (
+            String,
+            Option<String>,
+            String,
+            Option<serde_json::Value>,
+            chrono::DateTime<chrono::Utc>,
+        ),
+    >(
         "SELECT event_type, node_name, message, details, created_at \
          FROM app_workflow_events WHERE workflow_id = $1 ORDER BY created_at DESC LIMIT 200",
     )
@@ -904,7 +922,16 @@ pub async fn workflow_events(
         Err(_) => return (StatusCode::BAD_REQUEST, "Invalid workflow id").into_response(),
     };
 
-    let events = sqlx::query_as::<_, (String, Option<String>, String, serde_json::Value, chrono::DateTime<chrono::Utc>)>(
+    let events = sqlx::query_as::<
+        _,
+        (
+            String,
+            Option<String>,
+            String,
+            serde_json::Value,
+            chrono::DateTime<chrono::Utc>,
+        ),
+    >(
         r#"SELECT event_type, node_name, message, details, created_at
              FROM app_workflow_events
             WHERE workflow_id = $1
@@ -929,14 +956,17 @@ pub async fn workflow_events(
     .unwrap_or_default();
 
     // Also include the workflow's current status
-    let status: Option<(String, Option<String>, Option<chrono::DateTime<chrono::Utc>>)> =
-        sqlx::query_as(
-            r#"SELECT status, current_step, completed_at FROM app_workflows WHERE id = $1"#,
-        )
-        .bind(workflow_uuid)
-        .fetch_optional(&state.db_pool)
-        .await
-        .unwrap_or(None);
+    let status: Option<(
+        String,
+        Option<String>,
+        Option<chrono::DateTime<chrono::Utc>>,
+    )> = sqlx::query_as(
+        r#"SELECT status, current_step, completed_at FROM app_workflows WHERE id = $1"#,
+    )
+    .bind(workflow_uuid)
+    .fetch_optional(&state.db_pool)
+    .await
+    .unwrap_or(None);
 
     let response = serde_json::json!({
         "workflow_id": workflow_id,
@@ -956,30 +986,18 @@ pub fn job_routes() -> Router {
         .route("/api/jobs/:job_id/status", get(get_job_status))
         .route("/api/jobs/:job_id/control", post(control_job))
         .route("/api/jobs/session/:session_id", get(get_session_jobs))
-        .route(
-            "/api/workflows/:workflow_id/events",
-            get(workflow_events),
-        )
+        .route("/api/workflows/:workflow_id/events", get(workflow_events))
         .route(
             "/api/workflows/:workflow_id/status",
             get(get_workflow_status),
         )
-        .route(
-            "/api/workflows/:workflow_id/debug",
-            get(get_workflow_debug),
-        )
+        .route("/api/workflows/:workflow_id/debug", get(get_workflow_debug))
         .route(
             "/api/workflows/:workflow_id/feedback",
             post(workflow_feedback),
         )
-        .route(
-            "/api/workflows/:workflow_id/cancel",
-            post(workflow_cancel),
-        )
-        .route(
-            "/api/workflows/:workflow_id/trace",
-            get(workflow_trace),
-        )
+        .route("/api/workflows/:workflow_id/cancel", post(workflow_cancel))
+        .route("/api/workflows/:workflow_id/trace", get(workflow_trace))
         .route_layer(axum::middleware::from_fn(
             crate::middleware::auth::auth_middleware,
         ))

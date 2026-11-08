@@ -22,10 +22,7 @@ pub async fn run_twitch_mapping_cron(app_state: Arc<AppState>) {
     }
 }
 
-async fn run_mapping_pass(
-    twitch: &crate::twitch_client::TwitchClient,
-    app_state: &AppState,
-) {
+async fn run_mapping_pass(twitch: &crate::twitch_client::TwitchClient, app_state: &AppState) {
     let unmapped: Vec<SourceChannel> = match sqlx::query_as(
         "SELECT * FROM youtube_source_channels
          WHERE twitch_mapping_status = 'unmapped' AND is_active = true

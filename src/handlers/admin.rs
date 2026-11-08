@@ -19,8 +19,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use uuid::Uuid;
 
-
-
 #[derive(Debug, Deserialize, Default)]
 pub struct DeliveryViewQuery {
     pub token: Option<String>,
@@ -47,14 +45,23 @@ pub fn admin_routes() -> Router {
         .route("/admin/dashboard", get(admin_dashboard))
         .route("/admin/users", get(admin_users_list))
         .route("/admin/users/:id", get(admin_user_detail))
-        .route("/admin/clipping-activity", get(admin_clipping_activity_page))
+        .route(
+            "/admin/clipping-activity",
+            get(admin_clipping_activity_page),
+        )
         .route("/admin/clipping-jobs", get(admin_clipping_jobs_page))
         .route("/admin/performance", get(admin_performance_page))
         .route("/admin/test-runs", get(admin_test_runs_page))
         .route("/admin/test-runs/:id", get(admin_test_run_detail_page))
         .route("/admin/deliveries", get(admin_deliveries_page))
-        .route("/admin/portfolio-samples", get(admin_portfolio_samples_page))
-        .route("/admin/monetization-guide", get(admin_monetization_guide_page))
+        .route(
+            "/admin/portfolio-samples",
+            get(admin_portfolio_samples_page),
+        )
+        .route(
+            "/admin/monetization-guide",
+            get(admin_monetization_guide_page),
+        )
         .route("/admin/revenue-ledger", get(admin_revenue_ledger_page))
         .route("/admin/payments", get(admin_payments_page))
         .route("/admin/how-it-works", get(admin_how_it_works_page))
@@ -75,59 +82,158 @@ pub fn admin_routes() -> Router {
         .route("/api/admin/users", get(admin_users_api))
         .route("/api/admin/users/:id", get(admin_user_api))
         .route("/api/admin/users/:id", put(admin_update_user_api))
-        .route("/api/admin/users/:id/toggle-active", post(admin_toggle_user_active))
-        .route("/api/admin/users/:id/dfy-customer", post(admin_toggle_dfy_customer))
+        .route(
+            "/api/admin/users/:id/toggle-active",
+            post(admin_toggle_user_active),
+        )
+        .route(
+            "/api/admin/users/:id/dfy-customer",
+            post(admin_toggle_dfy_customer),
+        )
         .route("/api/admin/users/:id/make-staff", post(admin_make_staff))
-        .route("/api/admin/users/:id/remove-staff", post(admin_remove_staff))
+        .route(
+            "/api/admin/users/:id/remove-staff",
+            post(admin_remove_staff),
+        )
         .route("/api/admin/whitelist/status", get(get_whitelist_status))
         .route("/api/admin/whitelist/toggle", post(toggle_whitelist))
         .route("/api/admin/whitelist/emails", get(get_whitelist_emails))
         .route("/api/admin/whitelist/emails", post(add_whitelist_email))
-        .route("/api/admin/whitelist/emails/:id", delete(remove_whitelist_email))
+        .route(
+            "/api/admin/whitelist/emails/:id",
+            delete(remove_whitelist_email),
+        )
         .route("/api/admin/pricing", get(get_model_pricing))
         .route("/api/admin/pricing", post(update_model_pricing))
         .route("/api/admin/default-model", get(get_default_model))
         .route("/api/admin/default-model", post(update_default_model))
         .route("/api/admin/youtube/status", get(get_youtube_feature_status))
         .route("/api/admin/youtube/toggle", post(toggle_youtube_features))
-        .route("/api/admin/clipping/auto-toggle/status", get(get_auto_clipping_status))
-        .route("/api/admin/clipping/auto-toggle", post(toggle_auto_clipping))
+        .route(
+            "/api/admin/clipping/auto-toggle/status",
+            get(get_auto_clipping_status),
+        )
+        .route(
+            "/api/admin/clipping/auto-toggle",
+            post(toggle_auto_clipping),
+        )
         .route("/api/admin/clipping/stats", get(admin_clipping_stats))
-        .route("/api/admin/clipping/user/:user_id/details", get(admin_user_clipping_details))
+        .route(
+            "/api/admin/clipping/user/:user_id/details",
+            get(admin_user_clipping_details),
+        )
         .route("/api/admin/clipping/jobs", get(admin_list_all_jobs))
         .route("/api/admin/clipping/jobs/:id", get(admin_get_job_details))
         .route("/api/admin/clipping/jobs/:id/retry", post(admin_retry_job))
-        .route("/api/admin/clipping/jobs/:id/cancel", post(admin_cancel_job))
-        .route("/api/admin/clipping/jobs/:id/clips", get(admin_get_job_clips))
-        .route("/api/admin/clipping/throughput", get(admin_clipping_throughput))
-        .route("/api/admin/performance/viral-factors", get(admin_viral_factor_performance))
-        .route("/api/admin/performance/channel-health", get(admin_channel_health))
-        .route("/api/admin/performance/recommendations", get(admin_learning_recommendations))
-        .route("/api/admin/performance/thumbnails", get(admin_thumbnail_stats))
-        .route("/api/admin/test-runs", get(api_list_test_runs).post(api_trigger_test_run))
+        .route(
+            "/api/admin/clipping/jobs/:id/cancel",
+            post(admin_cancel_job),
+        )
+        .route(
+            "/api/admin/clipping/jobs/:id/clips",
+            get(admin_get_job_clips),
+        )
+        .route(
+            "/api/admin/clipping/throughput",
+            get(admin_clipping_throughput),
+        )
+        .route(
+            "/api/admin/performance/viral-factors",
+            get(admin_viral_factor_performance),
+        )
+        .route(
+            "/api/admin/performance/channel-health",
+            get(admin_channel_health),
+        )
+        .route(
+            "/api/admin/performance/recommendations",
+            get(admin_learning_recommendations),
+        )
+        .route(
+            "/api/admin/performance/thumbnails",
+            get(admin_thumbnail_stats),
+        )
+        .route(
+            "/api/admin/test-runs",
+            get(api_list_test_runs).post(api_trigger_test_run),
+        )
         .route("/api/admin/test-runs/:id", get(api_get_test_run))
-        .route("/api/admin/test/crawl-website", post(api_test_crawl_website))
-        .route("/api/admin/test/vectorize-content", post(api_test_vectorize_content))
-        .route("/api/admin/test/search-content", post(api_test_search_content))
-
-        .route("/api/admin/manual-clipping-tests/trigger", post(api_trigger_manual_clipping_test))
-        .route("/api/admin/reference-assets/normalize", post(api_normalize_reference_asset))
-        .route("/api/admin/deliveries", get(api_list_deliveries).post(api_create_delivery))
-        .route("/api/admin/deliveries/:id/zernio-targets", post(api_set_delivery_zernio_targets))
-        .route("/api/admin/portfolio-samples", get(api_list_portfolio_samples))
-        .route("/api/admin/portfolio-samples/crypto-saas", post(api_generate_crypto_saas_portfolio_samples))
-        .route("/api/admin/portfolio-samples/dfy", get(api_list_dfy_portfolio_samples).post(api_generate_dfy_portfolio_samples))
-        .route("/api/admin/service-samples", get(api_list_service_portfolio_samples).post(api_generate_service_portfolio_sample))
-        .route("/api/admin/service-samples/briefs", get(api_list_service_portfolio_briefs))
+        .route(
+            "/api/admin/test/crawl-website",
+            post(api_test_crawl_website),
+        )
+        .route(
+            "/api/admin/test/vectorize-content",
+            post(api_test_vectorize_content),
+        )
+        .route(
+            "/api/admin/test/search-content",
+            post(api_test_search_content),
+        )
+        .route(
+            "/api/admin/manual-clipping-tests/trigger",
+            post(api_trigger_manual_clipping_test),
+        )
+        .route(
+            "/api/admin/reference-assets/normalize",
+            post(api_normalize_reference_asset),
+        )
+        .route(
+            "/api/admin/deliveries",
+            get(api_list_deliveries).post(api_create_delivery),
+        )
+        .route(
+            "/api/admin/deliveries/:id/zernio-targets",
+            post(api_set_delivery_zernio_targets),
+        )
+        .route(
+            "/api/admin/portfolio-samples",
+            get(api_list_portfolio_samples),
+        )
+        .route(
+            "/api/admin/portfolio-samples/crypto-saas",
+            post(api_generate_crypto_saas_portfolio_samples),
+        )
+        .route(
+            "/api/admin/portfolio-samples/dfy",
+            get(api_list_dfy_portfolio_samples).post(api_generate_dfy_portfolio_samples),
+        )
+        .route(
+            "/api/admin/service-samples",
+            get(api_list_service_portfolio_samples).post(api_generate_service_portfolio_sample),
+        )
+        .route(
+            "/api/admin/service-samples/briefs",
+            get(api_list_service_portfolio_briefs),
+        )
         .route("/api/admin/email-logs", get(api_email_logs))
         .route("/admin/email-logs", get(admin_email_logs_page))
-        .route("/api/admin/referral-codes", get(api_list_referral_codes).post(api_create_referral_code))
-        .route("/api/admin/referral-commissions", get(api_list_referral_commissions))
-        .route("/api/admin/service-flags", get(api_list_service_flags).post(api_set_service_flag))
+        .route(
+            "/api/admin/referral-codes",
+            get(api_list_referral_codes).post(api_create_referral_code),
+        )
+        .route(
+            "/api/admin/referral-commissions",
+            get(api_list_referral_commissions),
+        )
+        .route(
+            "/api/admin/service-flags",
+            get(api_list_service_flags).post(api_set_service_flag),
+        )
         .route("/admin/service-flags", get(admin_service_flags_page))
-        .route("/api/admin/payment-methods", get(api_list_payment_methods).post(api_set_payment_method))
+        .route(
+            "/api/admin/campaigns-switch",
+            get(api_get_campaigns_switch).post(api_set_campaigns_switch),
+        )
+        .route(
+            "/api/admin/payment-methods",
+            get(api_list_payment_methods).post(api_set_payment_method),
+        )
         .route("/admin/payment-methods", get(admin_payment_methods_page))
-        .route("/api/admin/ytdlp/cookies", get(api_cookie_health).post(api_cookie_rotated))
+        .route(
+            "/api/admin/ytdlp/cookies",
+            get(api_cookie_health).post(api_cookie_rotated),
+        )
         .route("/admin/referrals", get(admin_referrals_page))
         .route("/api/admin/revenue-ledger", get(api_revenue_ledger))
         .route("/api/admin/payments", get(api_studio_payments))
@@ -140,15 +246,19 @@ pub fn admin_routes() -> Router {
 
     // Superuser-only endpoints
     let superuser_only = Router::new()
-        .route("/api/admin/users/:id/make-superuser", post(admin_make_superuser))
-        .route("/api/admin/users/:id/remove-superuser", post(admin_remove_superuser))
+        .route(
+            "/api/admin/users/:id/make-superuser",
+            post(admin_make_superuser),
+        )
+        .route(
+            "/api/admin/users/:id/remove-superuser",
+            post(admin_remove_superuser),
+        )
         .route("/api/admin/create-superuser", post(create_superuser_api))
         .layer(axum::middleware::from_fn(superuser_middleware))
         .layer(axum::middleware::from_fn(auth_middleware));
 
-    public_routes
-        .merge(protected_admin)
-        .merge(superuser_only)
+    public_routes.merge(protected_admin).merge(superuser_only)
 }
 
 #[derive(Deserialize)]
@@ -2400,7 +2510,11 @@ pub async fn admin_toggle_dfy_customer(
     tracing::info!(
         "👤 User {} Managed Campaigns customer {} by admin {}",
         updated_user.username,
-        if payload.is_dfy_customer { "marked" } else { "unmarked" },
+        if payload.is_dfy_customer {
+            "marked"
+        } else {
+            "unmarked"
+        },
         claims.username
     );
 
@@ -2623,7 +2737,7 @@ pub async fn admin_make_superuser(
                           subscription_status = 'grandfathered',
                           trial_ends_at = NULL,
                           updated_at = NOW()
-         WHERE id = $1 RETURNING *"
+         WHERE id = $1 RETURNING *",
     )
     .bind(id)
     .fetch_one(&state.db_pool)
@@ -2635,7 +2749,7 @@ pub async fn admin_make_superuser(
             Json(json!({
                 "success": false,
                 "message": "Failed to update user"
-            }))
+            })),
         )
     })?;
 
@@ -2962,7 +3076,7 @@ pub async fn admin_create_user(
                  CASE WHEN $4 THEN 'grandfathered' ELSE 'trial' END,
                  CASE WHEN $4 THEN NULL ELSE NOW() + INTERVAL '7 days' END,
                  NOW(), NOW())
-         RETURNING *"
+         RETURNING *",
     )
     .bind(&payload.email)
     .bind(&payload.username)
@@ -2977,7 +3091,7 @@ pub async fn admin_create_user(
             Json(json!({
                 "success": false,
                 "message": "Failed to create user"
-            }))
+            })),
         )
     })?;
 
@@ -3593,7 +3707,11 @@ pub async fn toggle_auto_clipping(
 
     tracing::info!(
         "Auto-clipping {} by admin user {} ({})",
-        if payload.enabled { "enabled" } else { "disabled" },
+        if payload.enabled {
+            "enabled"
+        } else {
+            "disabled"
+        },
         claims.username,
         claims.email
     );
@@ -6652,8 +6770,7 @@ pub async fn api_trigger_test_run(
             .await
         && !crate::services::service_flags::service_enabled(&state.db_pool, "youtube_clipping")
             .await
-        && !crate::services::service_flags::service_enabled(&state.db_pool, "twitch_clipping")
-            .await
+        && !crate::services::service_flags::service_enabled(&state.db_pool, "twitch_clipping").await
     {
         return Err((
             StatusCode::SERVICE_UNAVAILABLE,
@@ -6692,7 +6809,9 @@ pub async fn api_trigger_manual_clipping_test(
     {
         return Err((
             StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({ "error": "Legacy manual clipping tests are currently disabled (service_flags)." })),
+            Json(
+                json!({ "error": "Legacy manual clipping tests are currently disabled (service_flags)." }),
+            ),
         ));
     }
 
@@ -6854,12 +6973,17 @@ pub async fn api_test_vectorize_content(
     Json(body): Json<serde_json::Value>,
 ) -> Json<serde_json::Value> {
     // Service switch: ad-hoc vectorization tests run only while admin tests on.
-    if !crate::services::service_flags::service_enabled(&state.db_pool, "admin_tests").await
-    {
-        return Json(json!({"success": false, "error": "Admin tests are currently disabled (service_flags)."}));
+    if !crate::services::service_flags::service_enabled(&state.db_pool, "admin_tests").await {
+        return Json(
+            json!({"success": false, "error": "Admin tests are currently disabled (service_flags)."}),
+        );
     }
-    let feature_tag = body.get("feature_tag").and_then(|v| v.as_str()).unwrap_or("");
-    let pages: Vec<serde_json::Value> = body.get("pages")
+    let feature_tag = body
+        .get("feature_tag")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let pages: Vec<serde_json::Value> = body
+        .get("pages")
         .and_then(|v| v.as_array())
         .cloned()
         .unwrap_or_default();
@@ -6867,8 +6991,11 @@ pub async fn api_test_vectorize_content(
         return Json(json!({"success": false, "error": "feature_tag parameter required"}));
     }
     let result = crate::agent::tool_executor::execute_vectorize_crawled_content_inner(
-        feature_tag, &pages, &state,
-    ).await;
+        feature_tag,
+        &pages,
+        &state,
+    )
+    .await;
     Json(json!({"success": true, "result": result}))
 }
 
@@ -6879,19 +7006,29 @@ pub async fn api_test_search_content(
     Json(body): Json<serde_json::Value>,
 ) -> Json<serde_json::Value> {
     // Service switch: ad-hoc search tests run only while admin tests on.
-    if !crate::services::service_flags::service_enabled(&state.db_pool, "admin_tests").await
-    {
-        return Json(json!({"success": false, "error": "Admin tests are currently disabled (service_flags)."}));
+    if !crate::services::service_flags::service_enabled(&state.db_pool, "admin_tests").await {
+        return Json(
+            json!({"success": false, "error": "Admin tests are currently disabled (service_flags)."}),
+        );
     }
     let query = body.get("query").and_then(|v| v.as_str()).unwrap_or("");
-    let feature_tag = body.get("feature_tag").and_then(|v| v.as_str()).unwrap_or("");
+    let feature_tag = body
+        .get("feature_tag")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     let limit = body.get("limit").and_then(|v| v.as_u64()).unwrap_or(5) as usize;
     if query.is_empty() || feature_tag.is_empty() {
-        return Json(json!({"success": false, "error": "query and feature_tag parameters required"}));
+        return Json(
+            json!({"success": false, "error": "query and feature_tag parameters required"}),
+        );
     }
     let result = crate::agent::tool_executor::execute_search_crawled_content_inner(
-        query, feature_tag, limit, &state,
-    ).await;
+        query,
+        feature_tag,
+        limit,
+        &state,
+    )
+    .await;
     Json(json!({"success": true, "result": result}))
 }
 
@@ -7346,7 +7483,12 @@ async fn delivery_feedback(
     Extension(state): Extension<Arc<AppState>>,
     Json(payload): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    let msg = payload.get("message").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+    let msg = payload
+        .get("message")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
     if msg.is_empty() {
         return Json(json!({"success": false, "error": "Empty message"}));
     }
@@ -7376,7 +7518,9 @@ async fn delivery_feedback(
     if let Some(ref bus) = state.pubsub_bus {
         let _ = bus.publish(&format!("feedback:{}", wf_id), &msg).await;
     }
-    Json(json!({"success": true, "message": "Note saved — will be applied on the next render attempt."}))
+    Json(
+        json!({"success": true, "message": "Note saved — will be applied on the next render attempt."}),
+    )
 }
 
 async fn delivery_page(
@@ -7393,42 +7537,61 @@ async fn delivery_page(
 
     // Try test_results first, then custom deliveries table
     let mut clip_presigned_urls: Vec<String> = Vec::new();
-    let (name, gig_type, status, r2_url, filename, score, feedback, unlock_price, unlocked_until, workflow_id) =
-        if let Ok(uuid) = uuid::Uuid::parse_str(&id) {
-            // 1. Portfolio test result
-            let tr = sqlx::query(
-                "SELECT test_name, gig_type, status, output_r2_url, output_filename, \
+    let (
+        name,
+        gig_type,
+        status,
+        r2_url,
+        filename,
+        score,
+        feedback,
+        unlock_price,
+        unlocked_until,
+        workflow_id,
+    ) = if let Ok(uuid) = uuid::Uuid::parse_str(&id) {
+        // 1. Portfolio test result
+        let tr = sqlx::query(
+            "SELECT test_name, gig_type, status, output_r2_url, output_filename, \
                  llm_review_score, llm_review_feedback FROM test_results WHERE id = $1",
-            )
-            .bind(uuid)
-            .fetch_optional(&state.db_pool)
-            .await
-            .ok()
-            .flatten();
+        )
+        .bind(uuid)
+        .fetch_optional(&state.db_pool)
+        .await
+        .ok()
+        .flatten();
 
-            if let Some(row) = tr {
-                let n: String = row.get("test_name");
-                let g: String = row.get("gig_type");
-                let s: String = row.get("status");
-                let u = row
-                    .try_get::<Option<String>, _>("output_r2_url")
-                    .ok()
-                    .flatten();
-                let u = match u {
-                    Some(existing) => {
-                        refresh_r2_presigned_url_from_existing(&state, &existing).await
-                    }
-                    None => None,
-                };
-                let f: Option<String> = row.try_get("output_filename").ok();
-                let sc: Option<i32> = row.try_get("llm_review_score").ok();
-                let fb: Option<String> = row.try_get("llm_review_feedback").ok();
-                // Portfolio test results are never paywalled — they're
-                // demos that need to be visible to anyone.
-                (Some(n), Some(g), Some(s), u, f, sc, fb, None::<sqlx::types::Decimal>, None::<chrono::DateTime<chrono::Utc>>, None)
-            } else {
-                // 2. Custom delivery.
-                let dr = sqlx::query(
+        if let Some(row) = tr {
+            let n: String = row.get("test_name");
+            let g: String = row.get("gig_type");
+            let s: String = row.get("status");
+            let u = row
+                .try_get::<Option<String>, _>("output_r2_url")
+                .ok()
+                .flatten();
+            let u = match u {
+                Some(existing) => refresh_r2_presigned_url_from_existing(&state, &existing).await,
+                None => None,
+            };
+            let f: Option<String> = row.try_get("output_filename").ok();
+            let sc: Option<i32> = row.try_get("llm_review_score").ok();
+            let fb: Option<String> = row.try_get("llm_review_feedback").ok();
+            // Portfolio test results are never paywalled — they're
+            // demos that need to be visible to anyone.
+            (
+                Some(n),
+                Some(g),
+                Some(s),
+                u,
+                f,
+                sc,
+                fb,
+                None::<sqlx::types::Decimal>,
+                None::<chrono::DateTime<chrono::Utc>>,
+                None,
+            )
+        } else {
+            // 2. Custom delivery.
+            let dr = sqlx::query(
                     "SELECT title, gig_type, status, output_r2_url, output_filename, extra_args, workflow_id \
                      FROM deliveries WHERE id = $1",
                 )
@@ -7438,58 +7601,61 @@ async fn delivery_page(
                 .ok()
                 .flatten();
 
-                if let Some(row) = dr {
-                    let n: String = row.get("title");
-                    let g: String = row.get("gig_type");
-                    let s: String = row.get("status");
-                    let full_u = row
-                        .try_get::<Option<String>, _>("output_r2_url")
-                        .ok()
-                        .flatten();
-                    let full_u = match full_u {
-                        Some(existing) => {
-                            refresh_r2_presigned_url_from_existing(&state, &existing).await
-                        }
-                        None => None,
-                    };
-                    let f: Option<String> = row.try_get("output_filename").ok();
-                    let wf: Option<String> = row.try_get::<Option<String>, _>("workflow_id").ok().flatten();
+            if let Some(row) = dr {
+                let n: String = row.get("title");
+                let g: String = row.get("gig_type");
+                let s: String = row.get("status");
+                let full_u = row
+                    .try_get::<Option<String>, _>("output_r2_url")
+                    .ok()
+                    .flatten();
+                let full_u = match full_u {
+                    Some(existing) => {
+                        refresh_r2_presigned_url_from_existing(&state, &existing).await
+                    }
+                    None => None,
+                };
+                let f: Option<String> = row.try_get("output_filename").ok();
+                let wf: Option<String> = row
+                    .try_get::<Option<String>, _>("workflow_id")
+                    .ok()
+                    .flatten();
 
-                    // Build clip gallery from extra_args.clip_keys
-                    if let Ok(Some(extra)) = row.try_get::<Option<serde_json::Value>, _>("extra_args") {
-                        if let Some(keys) = extra.get("clip_keys").and_then(|v| v.as_array()) {
-                            if let Some(ref r2) = state.r2_client {
-                                for key_val in keys {
-                                    if let Some(key) = key_val.as_str() {
-                                        if let Ok(url) = r2.presign_get(key, 7 * 24 * 3600).await {
-                                            clip_presigned_urls.push(url);
-                                        }
+                // Build clip gallery from extra_args.clip_keys
+                if let Ok(Some(extra)) = row.try_get::<Option<serde_json::Value>, _>("extra_args") {
+                    if let Some(keys) = extra.get("clip_keys").and_then(|v| v.as_array()) {
+                        if let Some(ref r2) = state.r2_client {
+                            for key_val in keys {
+                                if let Some(key) = key_val.as_str() {
+                                    if let Ok(url) = r2.presign_get(key, 7 * 24 * 3600).await {
+                                        clip_presigned_urls.push(url);
                                     }
                                 }
                             }
                         }
                     }
-
-                    let served = full_u.clone();
-                    (
-                        Some(n),
-                        Some(g),
-                        Some(s),
-                        served,
-                        f,
-                        None,
-                        None,
-                        None,
-                        None,
-                        wf,
-                    )
-                } else {
-                    (None, None, None, None, None, None, None, None, None, None)
                 }
+
+                let served = full_u.clone();
+                (
+                    Some(n),
+                    Some(g),
+                    Some(s),
+                    served,
+                    f,
+                    None,
+                    None,
+                    None,
+                    None,
+                    wf,
+                )
+            } else {
+                (None, None, None, None, None, None, None, None, None, None)
             }
-        } else {
-            (None, None, None, None, None, None, None, None, None, None)
-        };
+        }
+    } else {
+        (None, None, None, None, None, None, None, None, None, None)
+    };
 
     // All deliveries are free — no paywall.
     let is_unlocked = true;
@@ -7564,7 +7730,8 @@ async fn delivery_page(
             };
 
             let feedback_html = if workflow_id.is_some() {
-                format!(r#"<div class="feedback-box" style="margin-top:16px;padding:16px;background:#12121a;border:1px solid #2a2a36;border-radius:10px;">
+                format!(
+                    r#"<div class="feedback-box" style="margin-top:16px;padding:16px;background:#12121a;border:1px solid #2a2a36;border-radius:10px;">
   <div style="font-size:13px;color:#9999bb;margin-bottom:8px;">Send a note to the producer (applied on the next render attempt):</div>
   <div style="display:flex;gap:8px;">
     <input id="fb-input" type="text" placeholder="e.g. make the captions bigger, shorter intro..." style="flex:1;padding:8px 12px;border-radius:8px;border:1px solid #2a2a36;background:#1a1a24;color:#e0e0e0;font-size:14px;">
@@ -7588,7 +7755,9 @@ function sendFeedback(){{
 if(document.querySelector('.status-dot') && !document.querySelector('.status-dot').style.background.includes('22c55e')){{
   setTimeout(()=>location.reload(), 10000);
 }}
-</script>"#, id = id)
+</script>"#,
+                    id = id
+                )
             } else {
                 String::new()
             };
@@ -7722,7 +7891,8 @@ if(document.querySelector('.status-dot') && !document.querySelector('.status-dot
 </div>
 
 </body>
-</html>"#);
+</html>"#
+            );
             const ZERNIO_SCRIPT: &str = r###"
 <!-- Zernio client-facing social self-service -->
 <div id="zernio-toast" style="position:fixed;bottom:1.5rem;right:1.5rem;padding:0.75rem 1.25rem;border-radius:8px;color:white;font-size:0.9rem;z-index:9999;display:none;background:#28a745;"></div>
@@ -7934,7 +8104,10 @@ async fn delivery_stream(
     Extension(state): Extension<Arc<AppState>>,
 ) -> Result<Response, (StatusCode, Json<serde_json::Value>)> {
     let uuid = Uuid::parse_str(&id).map_err(|_| {
-        (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Invalid delivery ID"})))
+        (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Invalid delivery ID"})),
+        )
     })?;
 
     let r2_url: Option<String> = {
@@ -7945,21 +8118,25 @@ async fn delivery_stream(
         .fetch_optional(&state.db_pool)
         .await
         .map_err(|e| {
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("DB error: {e}")})))
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": format!("DB error: {e}")})),
+            )
         })?;
 
         if let Some(Some(url)) = tr {
             Some(url)
         } else {
-            let row = sqlx::query(
-                "SELECT output_r2_url FROM deliveries WHERE id = $1",
-            )
-            .bind(uuid)
-            .fetch_optional(&state.db_pool)
-            .await
-            .map_err(|e| {
-                (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("DB error: {e}")})))
-            })?;
+            let row = sqlx::query("SELECT output_r2_url FROM deliveries WHERE id = $1")
+                .bind(uuid)
+                .fetch_optional(&state.db_pool)
+                .await
+                .map_err(|e| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(serde_json::json!({"error": format!("DB error: {e}")})),
+                    )
+                })?;
 
             match row {
                 Some(r) => {
@@ -7972,15 +8149,24 @@ async fn delivery_stream(
     };
 
     let r2_url = r2_url.ok_or_else(|| {
-        (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Delivery not found or no media available"})))
+        (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Delivery not found or no media available"})),
+        )
     })?;
 
     let r2 = state.r2_client.as_ref().ok_or_else(|| {
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Storage not configured"})))
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": "Storage not configured"})),
+        )
     })?;
 
     let key = extract_r2_object_key_from_url(&r2_url, &r2.bucket).ok_or_else(|| {
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Invalid media URL"})))
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": "Invalid media URL"})),
+        )
     })?;
 
     stream_r2_key_response(&state, &headers, &key).await
@@ -7994,25 +8180,43 @@ async fn delivery_clip_stream(
     Extension(state): Extension<Arc<AppState>>,
 ) -> Result<Response, (StatusCode, Json<serde_json::Value>)> {
     let uuid = Uuid::parse_str(&id).map_err(|_| {
-        (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Invalid delivery ID"})))
+        (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Invalid delivery ID"})),
+        )
     })?;
     let row = sqlx::query("SELECT extra_args FROM deliveries WHERE id = $1")
         .bind(uuid)
         .fetch_optional(&state.db_pool)
         .await
         .map_err(|e| {
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("DB error: {e}")})))
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": format!("DB error: {e}")})),
+            )
         })?
         .ok_or_else(|| {
-            (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Delivery not found"})))
+            (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "Delivery not found"})),
+            )
         })?;
     let key: String = row
         .try_get::<Option<serde_json::Value>, _>("extra_args")
         .ok()
         .flatten()
-        .and_then(|v| v.get("clip_keys").and_then(|k| k.as_array()).and_then(|a| a.get(idx)).and_then(|k| k.as_str()).map(str::to_string))
+        .and_then(|v| {
+            v.get("clip_keys")
+                .and_then(|k| k.as_array())
+                .and_then(|a| a.get(idx))
+                .and_then(|k| k.as_str())
+                .map(str::to_string)
+        })
         .ok_or_else(|| {
-            (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Clip not found"})))
+            (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "Clip not found"})),
+            )
         })?;
     stream_r2_key_response(&state, &headers, &key).await
 }
@@ -8026,22 +8230,35 @@ async fn stream_r2_key_response(
     key: &str,
 ) -> Result<Response, (StatusCode, Json<serde_json::Value>)> {
     let r2 = state.r2_client.as_ref().ok_or_else(|| {
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Storage not configured"})))
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": "Storage not configured"})),
+        )
     })?;
 
     let range = headers.get("range").and_then(|v| v.to_str().ok());
-    let (raw_status, resp_headers, byte_stream) = r2.stream_object(&key, range).await.map_err(|e| {
-        (StatusCode::BAD_GATEWAY, Json(serde_json::json!({"error": format!("Stream failed: {e}")})))
-    })?;
+    let (raw_status, resp_headers, byte_stream) =
+        r2.stream_object(&key, range).await.map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({"error": format!("Stream failed: {e}")})),
+            )
+        })?;
 
     let bytes = byte_stream.collect().await.map_err(|e| {
-        (StatusCode::BAD_GATEWAY, Json(serde_json::json!({"error": format!("Failed to read R2 stream: {e}")})))
+        (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({"error": format!("Failed to read R2 stream: {e}")})),
+        )
     })?;
 
     let mut response = Response::new(Body::from(bytes.to_vec()));
     *response.status_mut() = StatusCode::from_u16(raw_status).unwrap_or(StatusCode::OK);
     for (k, v) in resp_headers {
-        if let (Ok(key), Ok(val)) = (k.parse::<header::HeaderName>(), v.parse::<header::HeaderValue>()) {
+        if let (Ok(key), Ok(val)) = (
+            k.parse::<header::HeaderName>(),
+            v.parse::<header::HeaderValue>(),
+        ) {
             response.headers_mut().insert(key, val);
         }
     }
@@ -8049,8 +8266,6 @@ async fn stream_r2_key_response(
 }
 
 // GCS delivery download removed — R2 is the only storage backend.
-
-
 
 /// Read the public base URL from env, falling back to videosync.video.
 fn base_url() -> String {
@@ -8325,14 +8540,12 @@ pub async fn api_list_portfolio_samples(
         }
         samples.push(portfolio_sample_json_with_fresh_media_urls(&state, row).await);
     }
-    Json(
-        json!({
-            "success": true,
-            "samples": samples,
-            "targets": crate::portfolio_samples::crypto_saas_targets(),
-            "dfy_services": crate::portfolio_samples::dfy_services(),
-        }),
-    )
+    Json(json!({
+        "success": true,
+        "samples": samples,
+        "targets": crate::portfolio_samples::crypto_saas_targets(),
+        "dfy_services": crate::portfolio_samples::dfy_services(),
+    }))
 }
 
 pub async fn api_generate_crypto_saas_portfolio_samples(
@@ -8340,7 +8553,9 @@ pub async fn api_generate_crypto_saas_portfolio_samples(
 ) -> Json<serde_json::Value> {
     // Service switch: crypto-SaaS samples are landing_page business (OFF).
     if !crate::services::service_flags::service_enabled(&state.db_pool, "landing_page").await {
-        return Json(json!({"success": false, "error": "landing_page is currently disabled (service_flags)."}));
+        return Json(
+            json!({"success": false, "error": "landing_page is currently disabled (service_flags)."}),
+        );
     }
     let mut samples = Vec::new();
     let mut queued = 0usize;
@@ -8511,7 +8726,9 @@ pub async fn api_generate_dfy_portfolio_samples(
     .await
     .unwrap_or(false);
     if !claims.is_superuser && !claims.is_staff && !whitelisted {
-        return Json(json!({"success": false, "error": "Access restricted. Email not whitelisted."}));
+        return Json(
+            json!({"success": false, "error": "Access restricted. Email not whitelisted."}),
+        );
     }
 
     let mut samples = Vec::new();
@@ -8519,8 +8736,7 @@ pub async fn api_generate_dfy_portfolio_samples(
 
     for service in crate::portfolio_samples::dfy_services() {
         // Service switch: skip samples for disabled services.
-        if !crate::services::service_flags::service_enabled(&state.db_pool, service.slug).await
-        {
+        if !crate::services::service_flags::service_enabled(&state.db_pool, service.slug).await {
             tracing::info!(
                 "⏸️ Portfolio sample '{}' skipped (service disabled)",
                 service.slug
@@ -8547,7 +8763,7 @@ pub async fn api_generate_dfy_portfolio_samples(
                     // Recreate
                     let _ = sqlx::query("DELETE FROM deliveries WHERE id = $1")
                         .bind(row.get::<Uuid, _>("id"))
-    .fetch_one(&state.db_pool)
+                        .fetch_one(&state.db_pool)
                         .await;
                 } else {
                     samples.push(portfolio_sample_json_with_fresh_media_urls(&state, &row).await);
@@ -8600,7 +8816,8 @@ pub async fn api_generate_dfy_portfolio_samples(
 
         // Spawn AgenticServicePipeline
         let spawn_state = state.clone();
-        let service_type = crate::services::agentic_service_pipeline::ServiceType::from_normalized(service.slug);
+        let service_type =
+            crate::services::agentic_service_pipeline::ServiceType::from_normalized(service.slug);
         let svc_input = crate::services::agentic_service_pipeline::ServiceInput {
             title: title.clone(),
             brief: input.brief.clone(),
@@ -8619,7 +8836,13 @@ pub async fn api_generate_dfy_portfolio_samples(
         let slug = service.slug;
 
         tokio::spawn(async move {
-            match crate::services::AgenticServicePipeline::start(spawn_state.clone(), slug.clone(), svc_input).await {
+            match crate::services::AgenticServicePipeline::start(
+                spawn_state.clone(),
+                slug.clone(),
+                svc_input,
+            )
+            .await
+            {
                 Ok(wf_id) => {
                     let _ = sqlx::query("UPDATE deliveries SET workflow_id = $1 WHERE id = $2")
                         .bind(wf_id)
@@ -8629,11 +8852,13 @@ pub async fn api_generate_dfy_portfolio_samples(
                 }
                 Err(e) => {
                     tracing::error!("Managed Campaign sample '{}' failed: {e}", slug);
-                    let _ = sqlx::query("UPDATE deliveries SET status = 'failed', error_message = $1 WHERE id = $2")
-                        .bind(&format!("AgenticServicePipeline failed: {e}"))
-                        .bind(delivery_id)
-                        .execute(&spawn_state.db_pool)
-                        .await;
+                    let _ = sqlx::query(
+                        "UPDATE deliveries SET status = 'failed', error_message = $1 WHERE id = $2",
+                    )
+                    .bind(&format!("AgenticServicePipeline failed: {e}"))
+                    .bind(delivery_id)
+                    .execute(&spawn_state.db_pool)
+                    .await;
                 }
             }
         });
@@ -8667,7 +8892,9 @@ pub async fn api_list_dfy_portfolio_samples(
     .await
     .unwrap_or(false);
     if !claims.is_superuser && !claims.is_staff && !whitelisted {
-        return Json(json!({"success": false, "error": "Access restricted. Email not whitelisted."}));
+        return Json(
+            json!({"success": false, "error": "Access restricted. Email not whitelisted."}),
+        );
     }
 
     let rows = sqlx::query(
@@ -8946,9 +9173,7 @@ fn portfolio_sample_json_from_row(row: &sqlx::postgres::PgRow) -> serde_json::Va
         .get("service_name")
         .and_then(|value| value.as_str())
         .map(|value| value.to_string());
-    let price_mo = extra
-        .get("price_mo")
-        .and_then(|value| value.as_u64());
+    let price_mo = extra.get("price_mo").and_then(|value| value.as_u64());
     let unlock_price = row
         .try_get::<Option<sqlx::types::Decimal>, _>("unlock_price_usdc")
         .ok()
@@ -9041,11 +9266,15 @@ pub async fn api_generate_service_portfolio_sample(
         .find(|s| s.slug == body.service_slug);
 
     let Some(svc) = service_def else {
-        return Json(json!({"success": false, "error": format!("Unknown service: {}", body.service_slug)}));
+        return Json(
+            json!({"success": false, "error": format!("Unknown service: {}", body.service_slug)}),
+        );
     };
     // Service switch (owner directive Sep 2026).
     if !crate::services::service_flags::service_enabled(&state.db_pool, svc.slug).await {
-        return Json(json!({"success": false, "error": format!("Service '{}' is currently disabled (service_flags).", svc.slug)}));
+        return Json(
+            json!({"success": false, "error": format!("Service '{}' is currently disabled (service_flags).", svc.slug)}),
+        );
     }
 
     let inserted = sqlx::query(
@@ -9076,7 +9305,8 @@ pub async fn api_generate_service_portfolio_sample(
             .await;
 
             tokio::spawn(async move {
-                let service_type = crate::services::agentic_service_pipeline::ServiceType::from_normalized(&slug);
+                let service_type =
+                    crate::services::agentic_service_pipeline::ServiceType::from_normalized(&slug);
                 let input = crate::services::agentic_service_pipeline::ServiceInput {
                     title: format!("Managed Campaign Demo — {}", slug),
                     brief,
@@ -9093,7 +9323,13 @@ pub async fn api_generate_service_portfolio_sample(
                     reference_images: vec![],
                 };
 
-                match crate::services::AgenticServicePipeline::start(gen_state.clone(), slug.clone(), input).await {
+                match crate::services::AgenticServicePipeline::start(
+                    gen_state.clone(),
+                    slug.clone(),
+                    input,
+                )
+                .await
+                {
                     Ok(wf_id) => {
                         let _ = sqlx::query("UPDATE service_portfolio_samples SET workflow_id = $1, status = 'running' WHERE id = $2")
                             .bind(wf_id)
@@ -9112,7 +9348,9 @@ pub async fn api_generate_service_portfolio_sample(
                 }
             });
 
-            Json(json!({"success": true, "sample_id": sample_id, "message": "Sample queued for generation via AgenticServicePipeline."}))
+            Json(
+                json!({"success": true, "sample_id": sample_id, "message": "Sample queued for generation via AgenticServicePipeline."}),
+            )
         }
         Err(e) => Json(json!({"success": false, "error": format!("DB insert failed: {e}")})),
     }
@@ -9121,18 +9359,21 @@ pub async fn api_generate_service_portfolio_sample(
 pub async fn api_list_service_portfolio_briefs(
     Extension(_state): Extension<Arc<AppState>>,
 ) -> Json<serde_json::Value> {
-    let services: Vec<serde_json::Value> = crate::portfolio_samples::dfy_services().iter().map(|svc| {
-        json!({
-            "service_slug": svc.slug,
-            "service_name": svc.name,
-            "briefs": [{
-                "name": svc.name,
-                "description": svc.brief,
-                "duration_seconds": svc.duration_seconds,
-                "style": svc.style,
-            }],
+    let services: Vec<serde_json::Value> = crate::portfolio_samples::dfy_services()
+        .iter()
+        .map(|svc| {
+            json!({
+                "service_slug": svc.slug,
+                "service_name": svc.name,
+                "briefs": [{
+                    "name": svc.name,
+                    "description": svc.brief,
+                    "duration_seconds": svc.duration_seconds,
+                    "style": svc.style,
+                }],
+            })
         })
-    }).collect();
+        .collect();
     Json(json!({ "success": true, "services": services }))
 }
 
@@ -9140,7 +9381,10 @@ pub async fn api_list_service_portfolio_samples(
     Extension(state): Extension<Arc<AppState>>,
     Query(params): Query<HashMap<String, String>>,
 ) -> Json<serde_json::Value> {
-    let service_slug = params.get("service_slug").map(|s| s.as_str()).unwrap_or("%");
+    let service_slug = params
+        .get("service_slug")
+        .map(|s| s.as_str())
+        .unwrap_or("%");
     let rows = sqlx::query(
         "SELECT id, service_slug, sample_name, brief, description, status, session_id, output_r2_url, output_thumbnail_url, llm_review_score, llm_review_feedback, error_message, created_at, started_at, completed_at \
          FROM service_portfolio_samples \
@@ -9152,21 +9396,24 @@ pub async fn api_list_service_portfolio_samples(
     .await
     .unwrap_or_default();
 
-    let samples: Vec<serde_json::Value> = rows.into_iter().map(|row| {
-        json!({
-            "id": row.get::<uuid::Uuid, _>("id"),
-            "service_slug": row.get::<String, _>("service_slug"),
-            "sample_name": row.get::<String, _>("sample_name"),
-            "status": row.get::<String, _>("status"),
-            "output_r2_url": row.get::<Option<String>, _>("output_r2_url"),
-            "output_thumbnail_url": row.get::<Option<String>, _>("output_thumbnail_url"),
-            "llm_review_score": row.get::<Option<i32>, _>("llm_review_score"),
-            "llm_review_feedback": row.get::<Option<String>, _>("llm_review_feedback"),
-            "error_message": row.get::<Option<String>, _>("error_message"),
-            "created_at": row.get::<chrono::DateTime<chrono::Utc>, _>("created_at"),
-            "completed_at": row.get::<Option<chrono::DateTime<chrono::Utc>>, _>("completed_at"),
+    let samples: Vec<serde_json::Value> = rows
+        .into_iter()
+        .map(|row| {
+            json!({
+                "id": row.get::<uuid::Uuid, _>("id"),
+                "service_slug": row.get::<String, _>("service_slug"),
+                "sample_name": row.get::<String, _>("sample_name"),
+                "status": row.get::<String, _>("status"),
+                "output_r2_url": row.get::<Option<String>, _>("output_r2_url"),
+                "output_thumbnail_url": row.get::<Option<String>, _>("output_thumbnail_url"),
+                "llm_review_score": row.get::<Option<i32>, _>("llm_review_score"),
+                "llm_review_feedback": row.get::<Option<String>, _>("llm_review_feedback"),
+                "error_message": row.get::<Option<String>, _>("error_message"),
+                "created_at": row.get::<chrono::DateTime<chrono::Utc>, _>("created_at"),
+                "completed_at": row.get::<Option<chrono::DateTime<chrono::Utc>>, _>("completed_at"),
+            })
         })
-    }).collect();
+        .collect();
 
     Json(json!({ "success": true, "samples": samples }))
 }
@@ -9823,9 +10070,7 @@ async fn normalize_blender_reference_args(
 ) -> serde_json::Value {
     // Support blended/executed consolidated tool and general blender_execute_bpy_script
     let reference_image_url = match tool {
-        "blender_execute_bpy_script"
-        | "blender_generate_scene_type"
-        | "blender_generate_scene" => {
+        "blender_execute_bpy_script" | "blender_generate_scene_type" | "blender_generate_scene" => {
             args.get("reference_image_url").and_then(|v| v.as_str())
         }
         _ => return args,
@@ -10283,7 +10528,8 @@ pub async fn run_delivery_job(delivery_id: Uuid, state: Arc<AppState>) {
             .bind(retries_used + 1).bind(review.score).bind(delivery_id)
             .execute(&state.db_pool).await;
 
-            crate::handlers::social_publish::try_publish_delivery_to_zernio(delivery_id, &state).await;
+            crate::handlers::social_publish::try_publish_delivery_to_zernio(delivery_id, &state)
+                .await;
 
             if let Some(workflow_id) = workflow_id {
                 let workflow_runtime = crate::services::WorkflowRuntime::new(state.db_pool.clone());
@@ -10533,7 +10779,12 @@ fn build_delivery_tool_args(
                 args["reference_image_url"] = serde_json::Value::String(ref_url.to_string());
             }
             maybe_insert_delivery_narration_args("blender_execute_bpy_script", &mut args, extra);
-            ("blender_execute_bpy_script".to_string(), args, "video_url", "mp4")
+            (
+                "blender_execute_bpy_script".to_string(),
+                args,
+                "video_url",
+                "mp4",
+            )
         }
     }
 }
@@ -11482,7 +11733,7 @@ pub async fn api_studio_payments(
                 buyer_email, buyer_name, created_at, completed_at
          FROM studio_payments
          ORDER BY created_at DESC
-         LIMIT 100"
+         LIMIT 100",
     )
     .fetch_all(&state.db_pool)
     .await
@@ -11512,7 +11763,9 @@ pub async fn api_studio_payments(
         })
     }).collect();
 
-    Ok(Json(json!({"success": true, "payments": items, "count": items.len()})))
+    Ok(Json(
+        json!({"success": true, "payments": items, "count": items.len()}),
+    ))
 }
 
 /// GET /admin/payments — Admin payments dashboard (owner directive Oct 2026):
@@ -11574,15 +11827,13 @@ th{color:#9fb0c7;font-weight:600}
 pub async fn api_get_config(
     Extension(state): Extension<Arc<AppState>>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    let rows = sqlx::query(
-        "SELECT key, value, updated_at FROM app_config ORDER BY key"
-    )
-    .fetch_all(&state.db_pool)
-    .await
-    .map_err(|e| {
-        tracing::error!("app_config query failed: {}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
+    let rows = sqlx::query("SELECT key, value, updated_at FROM app_config ORDER BY key")
+        .fetch_all(&state.db_pool)
+        .await
+        .map_err(|e| {
+            tracing::error!("app_config query failed: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
 
     let items: Vec<serde_json::Value> = rows.iter().map(|r| {
         json!({
@@ -11608,17 +11859,23 @@ pub async fn api_update_config(
     Json(payload): Json<UpdateConfigRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let user_id: i32 = claims.sub.parse().map_err(|_| {
-        (StatusCode::BAD_REQUEST, Json(json!({"success": false, "error": "invalid user id"})))
+        (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"success": false, "error": "invalid user id"})),
+        )
     })?;
 
     if payload.key.trim().is_empty() || payload.value.trim().is_empty() {
-        return Err((StatusCode::BAD_REQUEST, Json(json!({"success": false, "error": "key and value are required"}))));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({"success": false, "error": "key and value are required"})),
+        ));
     }
 
     sqlx::query(
         "INSERT INTO app_config (key, value, updated_at, updated_by)
          VALUES ($1, $2, NOW(), $3)
-         ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = NOW(), updated_by = $3"
+         ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = NOW(), updated_by = $3",
     )
     .bind(payload.key.trim())
     .bind(payload.value.trim())
@@ -11627,12 +11884,22 @@ pub async fn api_update_config(
     .await
     .map_err(|e| {
         tracing::error!("app_config upsert failed: {}", e);
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"success": false, "error": "config update failed"})))
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"success": false, "error": "config update failed"})),
+        )
     })?;
 
-    tracing::info!("🔧 Config '{}' set to '{}' by admin user {}", payload.key, payload.value, user_id);
+    tracing::info!(
+        "🔧 Config '{}' set to '{}' by admin user {}",
+        payload.key,
+        payload.value,
+        user_id
+    );
 
-    Ok(Json(json!({"success": true, "message": format!("Config '{}' updated to '{}'", payload.key, payload.value)})))
+    Ok(Json(
+        json!({"success": true, "message": format!("Config '{}' updated to '{}'", payload.key, payload.value)}),
+    ))
 }
 
 const REVENUE_LEDGER_HTML: &str = r###"<!DOCTYPE html>
@@ -12586,20 +12853,26 @@ pub async fn api_admin_zernio_status(
 
     let profiles = match zernio.list_profiles().await {
         Ok(r) => r.profiles,
-        Err(e) => return Json(json!({"success": false, "error": format!("Failed to list profiles: {e}")})),
+        Err(e) => {
+            return Json(
+                json!({"success": false, "error": format!("Failed to list profiles: {e}")}),
+            )
+        }
     };
 
     let accounts = match zernio.list_accounts(None).await {
         Ok(r) => r.accounts,
-        Err(e) => return Json(json!({"success": false, "error": format!("Failed to list accounts: {e}")})),
+        Err(e) => {
+            return Json(
+                json!({"success": false, "error": format!("Failed to list accounts: {e}")}),
+            )
+        }
     };
 
     Json(json!({"success": true, "profiles": profiles, "accounts": accounts}))
 }
 
-pub async fn api_email_logs(
-    Extension(state): Extension<Arc<AppState>>,
-) -> Json<serde_json::Value> {
+pub async fn api_email_logs(Extension(state): Extension<Arc<AppState>>) -> Json<serde_json::Value> {
     match crate::services::email_service::list_email_logs(&state.db_pool, 100).await {
         Ok(logs) => Json(json!({"success": true, "logs": logs})),
         Err(e) => Json(json!({"success": false, "error": e})),
@@ -12672,9 +12945,7 @@ setInterval(loadLogs, 15000);
 
 /// GET /ref/{code} — Redirect referral links and tag the referring code.
 /// The landing page stores `?ref={code}` in session/cookie via JS.
-pub async fn referral_redirect(
-    Path(code): Path<String>,
-) -> axum::response::Redirect {
+pub async fn referral_redirect(Path(code): Path<String>) -> axum::response::Redirect {
     axum::response::Redirect::to(&format!("/?ref={code}"))
 }
 
@@ -12721,9 +12992,13 @@ pub async fn api_create_referral_code(
         Ok(row) => {
             let id: Uuid = row.get("id");
             let code: String = row.get("code");
-            Json(json!({"success": true, "id": id, "code": code, "ref_url": format!("/ref/{code}")}))
+            Json(
+                json!({"success": true, "id": id, "code": code, "ref_url": format!("/ref/{code}")}),
+            )
         }
-        Err(e) => Json(json!({"success": false, "error": format!("Failed to create referral code: {e}")})),
+        Err(e) => {
+            Json(json!({"success": false, "error": format!("Failed to create referral code: {e}")}))
+        }
     }
 }
 
@@ -12731,7 +13006,16 @@ pub async fn api_create_referral_code(
 pub async fn api_list_referral_codes(
     Extension(state): Extension<Arc<AppState>>,
 ) -> Json<serde_json::Value> {
-    let rows = sqlx::query_as::<_, (Uuid, i32, String, Option<String>, chrono::DateTime<chrono::Utc>)>(
+    let rows = sqlx::query_as::<
+        _,
+        (
+            Uuid,
+            i32,
+            String,
+            Option<String>,
+            chrono::DateTime<chrono::Utc>,
+        ),
+    >(
         "SELECT rc.id, rc.user_id, rc.code, rc.app_slug, rc.created_at \
          FROM referral_codes rc ORDER BY rc.created_at DESC",
     )
@@ -12752,7 +13036,9 @@ pub async fn api_list_referral_codes(
                 .collect();
             Json(json!({"success": true, "codes": codes}))
         }
-        Err(e) => Json(json!({"success": false, "error": format!("Failed to list referral codes: {e}")})),
+        Err(e) => {
+            Json(json!({"success": false, "error": format!("Failed to list referral codes: {e}")}))
+        }
     }
 }
 
@@ -12779,7 +13065,9 @@ pub async fn api_list_referral_commissions(
                 .collect();
             Json(json!({"success": true, "commissions": commissions}))
         }
-        Err(e) => Json(json!({"success": false, "error": format!("Failed to list commissions: {e}")})),
+        Err(e) => {
+            Json(json!({"success": false, "error": format!("Failed to list commissions: {e}")}))
+        }
     }
 }
 
@@ -12804,7 +13092,79 @@ pub async fn api_list_service_flags(
                 .collect();
             Json(json!({"success": true, "flags": flags}))
         }
-        Err(e) => Json(json!({"success": false, "error": format!("Failed to list service flags: {e}")})),
+        Err(e) => {
+            Json(json!({"success": false, "error": format!("Failed to list service flags: {e}")}))
+        }
+    }
+}
+
+#[derive(Deserialize)]
+pub struct SetServiceFlagRequest {
+    pub service: String,
+    pub enabled: bool,
+}
+
+/// GET /api/admin/campaigns-switch — convenience single-flag reader for the
+/// campaigns ON/OFF switch (owner directive Nov 8 2026). Same state as the
+/// `campaigns` row in GET /api/admin/service-flags.
+pub async fn api_get_campaigns_switch(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    let enabled = crate::services::service_flags::campaigns_enabled(&state.db_pool).await;
+    Json(json!({
+        "success": true,
+        "switch": "campaigns",
+        "enabled": enabled,
+        "note": if enabled {
+            "ON — campaigns creatable; outreach copy mentions campaigns+".to_string()
+        } else {
+            "OFF — campaigns coming-soon everywhere; outreach copy is bundles-only".to_string()
+        },
+        "message": crate::services::service_flags::CAMPAIGNS_OFF_MESSAGE,
+    }))
+}
+
+#[derive(Deserialize)]
+pub struct SetCampaignsSwitchRequest {
+    pub enabled: bool,
+}
+
+/// POST /api/admin/campaigns-switch — flip the campaigns ON/OFF switch.
+/// Body: {"enabled": true|false}. Admin-only via router middleware.
+/// Equivalent to POST /api/admin/service-flags with service="campaigns";
+/// kept separate so the owner can toggle it from the terminal in one call.
+pub async fn api_set_campaigns_switch(
+    Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
+    Json(req): Json<SetCampaignsSwitchRequest>,
+) -> Json<serde_json::Value> {
+    let who = claims.email.clone();
+    let row = sqlx::query_as::<_, (bool, chrono::DateTime<chrono::Utc>)>(
+        "INSERT INTO service_flags (service, enabled, updated_by, updated_at) \
+         VALUES ('campaigns', $1, $2, NOW()) \
+         ON CONFLICT (service) DO UPDATE SET enabled = EXCLUDED.enabled, updated_by = EXCLUDED.updated_by, updated_at = NOW() \
+         RETURNING enabled, updated_at",
+    )
+    .bind(req.enabled)
+    .bind(&who)
+    .fetch_one(&state.db_pool)
+    .await;
+
+    match row {
+        Ok((enabled, updated_at)) => {
+            tracing::info!("🎛️ campaigns switch -> {enabled} by {who}");
+            Json(json!({
+                "success": true,
+                "switch": "campaigns",
+                "enabled": enabled,
+                "updated_by": who,
+                "updated_at": updated_at,
+                "message": if enabled { "Campaigns are ON — campaign creation, app cards, and outreach copy mention campaigns again." } else { crate::services::service_flags::CAMPAIGNS_OFF_MESSAGE }
+            }))
+        }
+        Err(e) => {
+            Json(json!({"success": false, "error": format!("Failed to set campaigns switch: {e}")}))
+        }
     }
 }
 
@@ -12825,7 +13185,9 @@ pub async fn api_set_service_flag(
 ) -> Json<serde_json::Value> {
     let service = req.service.to_ascii_lowercase();
     if !crate::services::service_flags::is_known_flag(&service) {
-        return Json(json!({"success": false, "error": format!("Unknown service flag: {}", req.service)}));
+        return Json(
+            json!({"success": false, "error": format!("Unknown service flag: {}", req.service)}),
+        );
     }
     let who = claims.email.clone();
     let row = sqlx::query_as::<_, (bool, chrono::DateTime<chrono::Utc>)>(
@@ -12843,10 +13205,14 @@ pub async fn api_set_service_flag(
     match row {
         Ok((enabled, updated_at)) => {
             tracing::info!("🔀 service_flags: {service} -> {enabled} by {who}");
-            Json(json!({"success": true, "service": service, "enabled": enabled,
-                        "updated_by": who, "updated_at": updated_at}))
+            Json(
+                json!({"success": true, "service": service, "enabled": enabled,
+                        "updated_by": who, "updated_at": updated_at}),
+            )
         }
-        Err(e) => Json(json!({"success": false, "error": format!("Failed to set service flag: {e}")})),
+        Err(e) => {
+            Json(json!({"success": false, "error": format!("Failed to set service flag: {e}")}))
+        }
     }
 }
 
@@ -12854,15 +13220,19 @@ pub async fn api_set_service_flag(
 pub async fn api_cookie_health(
     Extension(state): Extension<Arc<AppState>>,
 ) -> Json<serde_json::Value> {
-    let row: Option<(Option<chrono::DateTime<chrono::Utc>>, Option<String>, i32, Option<chrono::DateTime<chrono::Utc>>)> =
-        sqlx::query_as(
-            "SELECT last_deployed_at, deployed_by, consecutive_failures, last_reminded_at \
+    let row: Option<(
+        Option<chrono::DateTime<chrono::Utc>>,
+        Option<String>,
+        i32,
+        Option<chrono::DateTime<chrono::Utc>>,
+    )> = sqlx::query_as(
+        "SELECT last_deployed_at, deployed_by, consecutive_failures, last_reminded_at \
              FROM ytdlp_cookie_health WHERE id = 1",
-        )
-        .fetch_optional(&state.db_pool)
-        .await
-        .ok()
-        .flatten();
+    )
+    .fetch_optional(&state.db_pool)
+    .await
+    .ok()
+    .flatten();
     match row {
         Some((deployed, by, failures, reminded)) => Json(json!({
             "success": true,
@@ -12871,7 +13241,9 @@ pub async fn api_cookie_health(
             "consecutive_failures": failures,
             "last_reminded_at": reminded,
         })),
-        None => Json(json!({"success": false, "error": "cookie health not initialized (migration pending?)"})),
+        None => Json(
+            json!({"success": false, "error": "cookie health not initialized (migration pending?)"}),
+        ),
     }
 }
 
@@ -12926,10 +13298,43 @@ tr:last-child td { border-bottom:none; }
 <div class="nav"><a href="/admin/deliveries">← Admin</a></div>
 <h1>AI Service Switches</h1>
 <p class="sub">Takes effect immediately — no restart. In-flight runs always finish. QA review and embeddings follow each service automatically.</p>
+<div id="campaigns-card" style="max-width:860px;background:#0b1626;border:1px solid rgba(59,130,246,0.35);border-radius:12px;padding:1rem 1.2rem;margin-bottom:1.2rem;display:none">
+  <div style="display:flex;justify-content:space-between;align-items:center;gap:1rem;flex-wrap:wrap">
+    <div>
+      <div style="font-weight:700;font-size:0.95rem">📅 Campaigns — app-wide switch</div>
+      <div id="campaigns-note" class="meta" style="margin-top:2px"></div>
+    </div>
+    <button id="campaigns-toggle" class="toggle" style="padding:10px 22px;font-size:0.9rem"></button>
+  </div>
+</div>
 <table><thead><tr><th>Service</th><th>Status</th><th>Updated</th><th></th></tr></thead>
 <tbody id="rows"><tr><td colspan="4" class="meta">Loading…</td></tr></tbody></table>
 <script>
 const token = localStorage.getItem('auth_token') || localStorage.getItem('authToken');
+async function loadCampaignsCard() {
+  try {
+    const res = await fetch('/api/admin/campaigns-switch', {headers:{'Authorization':'Bearer '+token}});
+    const data = await res.json();
+    const card = document.getElementById('campaigns-card');
+    if (!data.success) return;
+    card.style.display = 'block';
+    const btn = document.getElementById('campaigns-toggle');
+    const pill = data.enabled
+      ? '<span class="pill on">ON</span>'
+      : '<span class="pill off">OFF — coming soon everywhere</span>';
+    document.getElementById('campaigns-note').innerHTML = data.message + ' &nbsp;' + pill;
+    btn.textContent = data.enabled ? 'Turn Campaigns OFF' : 'Turn Campaigns ON';
+    btn.onclick = async () => {
+      const target = !data.enabled;
+      if (!window.confirm((target ? 'Turn Campaigns ON — campaign creation, app cards and outreach copy mention campaigns again?' : 'Turn Campaigns OFF — Coming Soon on all apps; outreach copy becomes bundles-only?'))) return;
+      const r2 = await fetch('/api/admin/campaigns-switch', {method:'POST',
+        headers:{'Authorization':'Bearer '+token, 'Content-Type':'application/json'},
+        body: JSON.stringify({enabled: target})});
+      if (r2.ok) { loadCampaignsCard(); load(); } else { const j = await r2.json().catch(()=>({})); window.alert(j.message || j.error || 'Failed to flip campaigns switch'); }
+    };
+  } catch (e) { console.warn('campaigns-switch card failed', e); }
+}
+loadCampaignsCard();
 async function load() {
   const res = await fetch('/api/admin/service-flags', {headers:{'Authorization':'Bearer '+token}});
   const data = await res.json();
@@ -13085,7 +13490,9 @@ pub async fn api_list_payment_methods(
                 .collect();
             Json(json!({"success": true, "methods": methods}))
         }
-        Err(e) => Json(json!({"success": false, "error": format!("Failed to list payment methods: {e}")})),
+        Err(e) => {
+            Json(json!({"success": false, "error": format!("Failed to list payment methods: {e}")}))
+        }
     }
 }
 
@@ -13103,7 +13510,9 @@ pub async fn api_set_payment_method(
 ) -> Json<serde_json::Value> {
     let method = req.method.to_ascii_lowercase();
     if !crate::services::payment_methods::is_known_method(&method) {
-        return Json(json!({"success": false, "error": format!("Unknown payment method: {}", req.method)}));
+        return Json(
+            json!({"success": false, "error": format!("Unknown payment method: {}", req.method)}),
+        );
     }
     let who = claims.email.clone();
     let row = sqlx::query_as::<_, (bool, chrono::DateTime<chrono::Utc>)>(
@@ -13120,10 +13529,14 @@ pub async fn api_set_payment_method(
     match row {
         Ok((enabled, updated_at)) => {
             tracing::info!("💳 payment_methods: {method} -> {enabled} by {who}");
-            Json(json!({"success": true, "method": method, "enabled": enabled,
-                        "updated_by": who, "updated_at": updated_at}))
+            Json(
+                json!({"success": true, "method": method, "enabled": enabled,
+                        "updated_by": who, "updated_at": updated_at}),
+            )
         }
-        Err(e) => Json(json!({"success": false, "error": format!("Failed to set payment method: {e}")})),
+        Err(e) => {
+            Json(json!({"success": false, "error": format!("Failed to set payment method: {e}")}))
+        }
     }
 }
 
@@ -13191,6 +13604,8 @@ load();
 
 /// GET /api/payment-methods — Public endpoint for frontends to fetch enabled methods.
 pub fn payment_method_routes() -> axum::Router {
-    axum::Router::new()
-        .route("/api/payment-methods", axum::routing::get(api_list_payment_methods_public))
+    axum::Router::new().route(
+        "/api/payment-methods",
+        axum::routing::get(api_list_payment_methods_public),
+    )
 }

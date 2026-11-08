@@ -11,11 +11,11 @@ pub mod performance_tracker;
 pub mod rust_yt_downloader_client; // Strategy #4: Feature-rich yt-dlp wrapper
 pub mod rustube_client; // Strategy #2: Pure Rust downloader (no external deps)
 pub mod rusty_ytdl_client; // Strategy #5: Pure Rust YouTube downloader (last resort)
+pub mod smart_clipping;
 pub mod thumbnail_generator;
 pub mod uploader;
 pub mod ytdlp_api_client; // Strategy #3: FastAPI yt-dlp microservice (HTTP API)
-pub mod ytdlp_client; // Legacy: yt-dlp CLI wrapper (deprecated, kept for compatibility)
-pub mod smart_clipping; // Smart clip selection via scene detection + audio energy
+pub mod ytdlp_client; // Legacy: yt-dlp CLI wrapper (deprecated, kept for compatibility) // Smart clip selection via scene detection + audio energy
 
 // Re-export commonly used types
 #[allow(unused_imports)] // Exported for external use

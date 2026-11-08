@@ -114,7 +114,7 @@ async fn process_clipping_jobs_parallel(
 ) -> Result<(), String> {
     // Check the auto-clipping toggle before processing any automatic jobs
     let auto_clipping_enabled: bool = sqlx::query_scalar(
-        "SELECT setting_value FROM system_settings WHERE setting_key = 'auto_clipping_enabled'"
+        "SELECT setting_value FROM system_settings WHERE setting_key = 'auto_clipping_enabled'",
     )
     .fetch_optional(&app_state.db_pool)
     .await
@@ -260,9 +260,7 @@ pub async fn execute_claimed_job(app_state: Arc<AppState>, job_id: i32) -> Resul
     )
     .await
     {
-        return Err(
-            "Legacy YouTube clipping is currently disabled (service_flags).".to_string(),
-        );
+        return Err("Legacy YouTube clipping is currently disabled (service_flags).".to_string());
     }
 
     let job_timeout_secs: u64 = std::env::var("JOB_EXECUTION_TIMEOUT_SECS")
@@ -427,12 +425,7 @@ pub async fn execute_claimed_job(app_state: Arc<AppState>, job_id: i32) -> Resul
                 let workflow_runtime =
                     crate::services::WorkflowRuntime::new(app_state.db_pool.clone());
                 let _ = workflow_runtime
-                    .mark_failed(
-                        workflow_id,
-                        Some("timeout"),
-                        &timeout_msg,
-                        None,
-                    )
+                    .mark_failed(workflow_id, Some("timeout"), &timeout_msg, None)
                     .await;
             }
 
@@ -982,9 +975,7 @@ async fn recover_completed_jobs_with_unpublished_clips(
     Ok(())
 }
 
-async fn reconcile_fallback_delivery_job_statuses(
-    app_state: &Arc<AppState>,
-) -> Result<(), String> {
+async fn reconcile_fallback_delivery_job_statuses(app_state: &Arc<AppState>) -> Result<(), String> {
     let failed = sqlx::query(
         "UPDATE clipping_jobs cj
          SET status = 'failed',
@@ -1178,17 +1169,19 @@ async fn recover_completed_fallback_deliveries_to_youtube(
         let upload_result = async {
             let destination_channel =
                 fetch_destination_channel(destination_channel_id, &app_state.db_pool).await?;
-            let local_path =
-                download_fallback_delivery_output(
-                    app_state,
-                    delivery_id,
-                    &output_url,
-                    output_filename.as_deref(),
-                )
-                .await?;
+            let local_path = download_fallback_delivery_output(
+                app_state,
+                delivery_id,
+                &output_url,
+                output_filename.as_deref(),
+            )
+            .await?;
             let title = fallback_delivery_youtube_title(&source_video_title, &delivery_title);
-            let description =
-                fallback_delivery_youtube_description(&source_video_title, &delivery_prompt, source_url.as_deref());
+            let description = fallback_delivery_youtube_description(
+                &source_video_title,
+                &delivery_prompt,
+                source_url.as_deref(),
+            );
             let tags = vec![
                 "VideoSync".to_string(),
                 "summary".to_string(),
@@ -1197,7 +1190,13 @@ async fn recover_completed_fallback_deliveries_to_youtube(
             ];
 
             let result = uploader
-                .upload_longform_video(&local_path, &title, &description, &tags, &destination_channel)
+                .upload_longform_video(
+                    &local_path,
+                    &title,
+                    &description,
+                    &tags,
+                    &destination_channel,
+                )
                 .await?;
 
             let _ = tokio::fs::remove_file(&local_path).await;
@@ -1221,7 +1220,9 @@ async fn recover_completed_fallback_deliveries_to_youtube(
                 .bind(delivery_id)
                 .execute(&app_state.db_pool)
                 .await
-                .map_err(|e| format!("Failed to mark fallback delivery {delivery_id} uploaded: {e}"))?;
+                .map_err(|e| {
+                    format!("Failed to mark fallback delivery {delivery_id} uploaded: {e}")
+                })?;
 
                 sqlx::query(
                     "UPDATE clipping_jobs
@@ -1254,7 +1255,9 @@ async fn recover_completed_fallback_deliveries_to_youtube(
                 .bind(&youtube_url)
                 .execute(&app_state.db_pool)
                 .await
-                .map_err(|e| format!("Failed to record fallback YouTube upload {youtube_video_id}: {e}"))?;
+                .map_err(|e| {
+                    format!("Failed to record fallback YouTube upload {youtube_video_id}: {e}")
+                })?;
 
                 tracing::warn!(
                     "Posted fallback summary delivery {} for clipping job {} to YouTube: {}",
@@ -1422,22 +1425,18 @@ async fn process_manual_jobs(app_state: &Arc<AppState>) -> Result<(), String> {
                     {
                         tracing::error!("Failed to mark manual clipping job {} as failed: {} — job may be stuck", id, db_err);
                     }
-                    if let Ok(Some(Some(workflow_id))) = sqlx::query_scalar::<_, Option<uuid::Uuid>>(
-                        "SELECT workflow_id FROM manual_clipping_jobs WHERE id = $1",
-                    )
-                    .bind(id)
-                    .fetch_optional(&state.db_pool)
-                    .await
+                    if let Ok(Some(Some(workflow_id))) =
+                        sqlx::query_scalar::<_, Option<uuid::Uuid>>(
+                            "SELECT workflow_id FROM manual_clipping_jobs WHERE id = $1",
+                        )
+                        .bind(id)
+                        .fetch_optional(&state.db_pool)
+                        .await
                     {
                         let workflow_runtime =
                             crate::services::WorkflowRuntime::new(state.db_pool.clone());
                         let _ = workflow_runtime
-                            .mark_failed(
-                                workflow_id,
-                                Some("manual_clipping_worker"),
-                                &e,
-                                None,
-                            )
+                            .mark_failed(workflow_id, Some("manual_clipping_worker"), &e, None)
                             .await;
                     }
                 }

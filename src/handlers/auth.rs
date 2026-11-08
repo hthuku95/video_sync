@@ -194,12 +194,10 @@ async fn register(
     if let Some(ref code) = payload.referred_by {
         let trimmed = code.trim();
         if !trimmed.is_empty() {
-            match sqlx::query_scalar::<_, i32>(
-                "SELECT user_id FROM referral_codes WHERE code = $1",
-            )
-            .bind(trimmed)
-            .fetch_optional(&state.db_pool)
-            .await
+            match sqlx::query_scalar::<_, i32>("SELECT user_id FROM referral_codes WHERE code = $1")
+                .bind(trimmed)
+                .fetch_optional(&state.db_pool)
+                .await
             {
                 Ok(Some(uid)) => {
                     referrer_user_id = Some(uid);
@@ -411,12 +409,15 @@ async fn login(
         axum::http::HeaderValue::from_str(&cookie_value).unwrap(),
     );
 
-    Ok((headers, Json(AuthResponse {
-        success: true,
-        message: "Login successful".to_string(),
-        user: UserResponse::from(user),
-        token,
-    })))
+    Ok((
+        headers,
+        Json(AuthResponse {
+            success: true,
+            message: "Login successful".to_string(),
+            user: UserResponse::from(user),
+            token,
+        }),
+    ))
 }
 
 fn generate_jwt_token(user: &User) -> Result<String, (StatusCode, Json<ErrorResponse>)> {
@@ -758,8 +759,7 @@ pub async fn initiate_google_oauth(
     }
 
     // Detect source app from redirect URL to ensure proper redirection
-    let source_app = if redirect_to.contains("content-machine-pbjp.vercel.app")
-    {
+    let source_app = if redirect_to.contains("content-machine-pbjp.vercel.app") {
         "content_machine"
     } else if redirect_to.contains("localhost:5173") || redirect_to.contains("localhost:4173") {
         "content_machine_local"
@@ -799,15 +799,18 @@ pub async fn google_oauth_callback(
     // Check for OAuth error
     if let Some(error) = params.error {
         tracing::error!("Google OAuth error: {}", error);
-        return Ok((HeaderMap::new(), Html(format!(
-            r#"<!DOCTYPE html><html><head><title>Login Failed</title>
+        return Ok((
+            HeaderMap::new(),
+            Html(format!(
+                r#"<!DOCTYPE html><html><head><title>Login Failed</title>
             <style>body {{ font-family: Arial; max-width: 600px; margin: 100px auto; text-align: center; }}</style>
             </head><body>
             <h1>❌ Login Failed</h1><p>Error: {}</p>
             <a href="/login">Try Again</a>
             </body></html>"#,
-            error
-        ))));
+                error
+            )),
+        ));
     }
 
     let code = params.code.ok_or_else(|| {
@@ -1047,7 +1050,10 @@ pub async fn google_oauth_callback(
                 updated_at: user_row.get("updated_at"),
                 subscription_status: user_row.try_get("subscription_status").ok().flatten(),
                 trial_ends_at: user_row.try_get("trial_ends_at").ok().flatten(),
-                subscription_active_until: user_row.try_get("subscription_active_until").ok().flatten(),
+                subscription_active_until: user_row
+                    .try_get("subscription_active_until")
+                    .ok()
+                    .flatten(),
                 subscription_tier: user_row.try_get("subscription_tier").ok().flatten(),
                 last_payment_at: user_row.try_get("last_payment_at").ok().flatten(),
                 is_dfy_customer: user_row.try_get("is_dfy_customer").unwrap_or(false),

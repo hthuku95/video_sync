@@ -18,14 +18,16 @@ use crate::clipping::{
     uploader::ClipUploader,
 };
 use crate::models::youtube::ConnectedYouTubeChannel;
-use crate::services::agentic_service_pipeline::{AgenticServicePipeline, ServiceInput, ServiceType};
+use crate::services::agentic_service_pipeline::{
+    AgenticServicePipeline, ServiceInput, ServiceType,
+};
 use crate::services::VideoVectorizationService;
 use crate::AppState;
 use chrono::Utc;
-use tokio::sync::mpsc;
 use serde_json::json;
 use sqlx::{PgPool, Row};
 use std::sync::Arc;
+use tokio::sync::mpsc;
 use uuid::Uuid;
 
 /// Phase determination for smart job resumption.
@@ -168,13 +170,12 @@ pub async fn execute_clipping_job(job_id: i32, app_state: Arc<AppState>) -> Resu
 
         tokio::time::sleep(poll_interval).await;
 
-        let status: Option<String> = sqlx::query_scalar::<_, String>(
-            "SELECT status FROM app_workflows WHERE id = $1"
-        )
-        .bind(workflow_id)
-        .fetch_optional(&app_state.db_pool)
-        .await
-        .map_err(|e| format!("Failed to poll workflow: {}", e))?;
+        let status: Option<String> =
+            sqlx::query_scalar::<_, String>("SELECT status FROM app_workflows WHERE id = $1")
+                .bind(workflow_id)
+                .fetch_optional(&app_state.db_pool)
+                .await
+                .map_err(|e| format!("Failed to poll workflow: {}", e))?;
 
         match status.as_deref() {
             Some("completed") => {
@@ -183,14 +184,18 @@ pub async fn execute_clipping_job(job_id: i32, app_state: Arc<AppState>) -> Resu
             }
             Some("failed") => {
                 let reason: Option<String> = sqlx::query_scalar::<_, String>(
-                    "SELECT error_message FROM app_workflows WHERE id = $1"
+                    "SELECT error_message FROM app_workflows WHERE id = $1",
                 )
                 .bind(workflow_id)
                 .fetch_optional(&app_state.db_pool)
                 .await
                 .ok()
                 .flatten();
-                return Err(format!("Pipeline failed for job {}: {}", job_id, reason.unwrap_or_else(|| "unknown".to_string())));
+                return Err(format!(
+                    "Pipeline failed for job {}: {}",
+                    job_id,
+                    reason.unwrap_or_else(|| "unknown".to_string())
+                ));
             }
             Some(s) => {
                 if last_status != s {
@@ -200,7 +205,10 @@ pub async fn execute_clipping_job(job_id: i32, app_state: Arc<AppState>) -> Resu
                 continue;
             }
             None => {
-                return Err(format!("Workflow {} not found for job {}", workflow_id, job_id));
+                return Err(format!(
+                    "Workflow {} not found for job {}",
+                    workflow_id, job_id
+                ));
             }
         }
     }
@@ -211,9 +219,11 @@ pub async fn execute_clipping_job(job_id: i32, app_state: Arc<AppState>) -> Resu
         tracing::warn!("Clip compilation failed (delivery still works): {e}");
     }
 
-    Ok(format!("Agentic clipping workflow completed for job {}", job_id))
+    Ok(format!(
+        "Agentic clipping workflow completed for job {}",
+        job_id
+    ))
 }
-
 
 pub(crate) fn should_fallback_from_gemini_video_analysis_error(error: &str) -> bool {
     let lower = error.to_lowercase();
@@ -319,15 +329,25 @@ async fn store_clip_in_qdrant(
 
     let text_to_embed = format!("{} {}", clip.ai_title, clip.ai_description);
 
-    let embedding = if let Some(ref gemini) = app_state.video_gemini_client.as_ref().or(app_state.gemini_client.as_ref()) {
+    let embedding = if let Some(ref gemini) = app_state
+        .video_gemini_client
+        .as_ref()
+        .or(app_state.gemini_client.as_ref())
+    {
         // Tier 1: Gemini Embedding 2
-        match gemini.embed_content_with_model(&text_to_embed, "models/gemini-embedding-2", Some(1536)).await {
+        match gemini
+            .embed_content_with_model(&text_to_embed, "models/gemini-embedding-2", Some(1536))
+            .await
+        {
             Ok(emb) => Some(emb),
             Err(e) => {
                 tracing::warn!("Gemini Embedding 2 failed for clip: {}", e);
                 // Tier 2: Voyage
                 if let Some(ref voyage) = app_state.voyage_embeddings {
-                    voyage.generate_single_embedding(text_to_embed.clone()).await.ok()
+                    voyage
+                        .generate_single_embedding(text_to_embed.clone())
+                        .await
+                        .ok()
                 } else {
                     // Tier 3: Gemini text-embedding-004
                     gemini.embed_content(&text_to_embed).await.ok()
@@ -904,11 +924,7 @@ pub async fn handle_download_failure_fallback(
         .or(app_state.gemini_client.as_ref())
     {
         Some(c) => Arc::new(c.clone()),
-        None => {
-            return Err(
-                "No Gemini client available for fallback video".to_string(),
-            )
-        }
+        None => return Err("No Gemini client available for fallback video".to_string()),
     };
 
     let agent = crate::agent::stateful_agent::StatefulGeminiAgent::new(gemini_client);
@@ -1287,13 +1303,11 @@ pub async fn post_process_clipping_delivery(
     app_state: &crate::AppState,
 ) -> Result<(), String> {
     // 1a. Try fetching clip URLs from deliveries.extra_args.clip_urls first (default agentic path)
-    let delivery_row = sqlx::query(
-        "SELECT extra_args FROM deliveries WHERE id = $1",
-    )
-    .bind(delivery_id)
-    .fetch_optional(&app_state.db_pool)
-    .await
-    .map_err(|e| format!("Failed to fetch delivery {delivery_id}: {e}"))?;
+    let delivery_row = sqlx::query("SELECT extra_args FROM deliveries WHERE id = $1")
+        .bind(delivery_id)
+        .fetch_optional(&app_state.db_pool)
+        .await
+        .map_err(|e| format!("Failed to fetch delivery {delivery_id}: {e}"))?;
 
     let (mut clip_urls, mut clip_keys): (Vec<String>, Vec<String>) = (vec![], vec![]);
     if let Some(row) = delivery_row {
@@ -1344,7 +1358,10 @@ pub async fn post_process_clipping_delivery(
             .collect();
     }
 
-    tracing::info!("Compiling {} clips for delivery {delivery_id}", clip_urls.len());
+    tracing::info!(
+        "Compiling {} clips for delivery {delivery_id}",
+        clip_urls.len()
+    );
 
     // 2. Download each clip from R2 to temp files
     let http = reqwest::Client::new();
@@ -1370,10 +1387,8 @@ pub async fn post_process_clipping_delivery(
     }
 
     // 3. Merge clips into a single compilation video
-    let output_path = crate::utils::ffmpeg_utils::create_temp_file(
-        &format!("compilation_{job_id}"),
-        "mp4",
-    );
+    let output_path =
+        crate::utils::ffmpeg_utils::create_temp_file(&format!("compilation_{job_id}"), "mp4");
     let _ = crate::core::merge_videos(&temp_paths, &output_path)?;
 
     // 4. Upload compilation to object storage (R2 primary, S3 fallback)

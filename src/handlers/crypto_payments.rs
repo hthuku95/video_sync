@@ -52,7 +52,9 @@ async fn crypto_unlock_spec(
         _ => {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"success": false, "error": "X402_RECIPIENT_ADDRESS not configured on server"})),
+                Json(
+                    json!({"success": false, "error": "X402_RECIPIENT_ADDRESS not configured on server"}),
+                ),
             )
         }
     };
@@ -103,7 +105,9 @@ async fn crypto_unlock(
         _ => {
             return (
                 StatusCode::PAYMENT_REQUIRED,
-                Json(json!({"success": false, "error": "Missing X-Payment header. Fetch /unlock-spec first."})),
+                Json(
+                    json!({"success": false, "error": "Missing X-Payment header. Fetch /unlock-spec first."}),
+                ),
             )
         }
     };
@@ -152,7 +156,9 @@ async fn crypto_unlock(
     // Extract payer address from the signed authorization payload
     let payer_address: Option<String> = (|| {
         use base64::Engine;
-        let bytes = base64::engine::general_purpose::STANDARD.decode(&x_payment).ok()?;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(&x_payment)
+            .ok()?;
         let parsed: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
         parsed
             .pointer("/payload/authorization/from")
@@ -191,10 +197,7 @@ async fn crypto_unlock(
         crate::telegram_bot::notify_admin(&notify_text).await;
     });
 
-    let email_subject = format!(
-        "New USDC payment: ${:.2} — {}",
-        dollars, offer_name,
-    );
+    let email_subject = format!("New USDC payment: ${:.2} — {}", dollars, offer_name,);
     let email_body = format!(
         "A new payment has been received.\n\n\
          Method: USDC (base)\n\

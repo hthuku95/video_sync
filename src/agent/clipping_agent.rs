@@ -227,7 +227,10 @@ impl GeminiClippingAgent {
     pub async fn process_job(&self, job_id: i32) -> Result<String, String> {
         // Ollama or Gemini is needed for Phase A video analysis
         if self.app_state.ollama_client.is_none() && self.app_state.gemini_client.is_none() {
-            return Err("Neither Ollama nor Gemini client configured — required for Phase A video analysis".to_string());
+            return Err(
+                "Neither Ollama nor Gemini client configured — required for Phase A video analysis"
+                    .to_string(),
+            );
         }
 
         // Load checkpoint (crash resumption) or create fresh state from resume_from
@@ -435,14 +438,17 @@ impl GeminiClippingAgent {
                                 // (same local-frame approach used for Twitch VODs)
                                 match self.tool_analyze_twitch_vod(&mut state, job_id).await {
                                     Ok(reresult) => {
-                                        let quality = reresult["overall_quality"].as_f64().unwrap_or(0.0);
+                                        let quality =
+                                            reresult["overall_quality"].as_f64().unwrap_or(0.0);
                                         if quality < 0.6 {
                                             let mut args = HashMap::new();
                                             args.insert(
                                                 "reason".to_string(),
                                                 json!("Kick video quality below threshold"),
                                             );
-                                            self.tool_mark_failed(&args, &mut state, job_id).await.ok();
+                                            self.tool_mark_failed(&args, &mut state, job_id)
+                                                .await
+                                                .ok();
                                             self.checkpointer.delete_all(job_id).await.ok();
                                             return Ok(format!(
                                                 "Job {} terminated: kick_video_quality_too_low",
@@ -459,7 +465,10 @@ impl GeminiClippingAgent {
                                         );
                                         self.tool_mark_failed(&args, &mut state, job_id).await.ok();
                                         self.checkpointer.delete_all(job_id).await.ok();
-                                        return Err(format!("Phase A (Kick fallback) failed: {}", e));
+                                        return Err(format!(
+                                            "Phase A (Kick fallback) failed: {}",
+                                            e
+                                        ));
                                     }
                                 }
                             } else {
@@ -470,8 +479,7 @@ impl GeminiClippingAgent {
                                 );
                                 match self
                                     .trigger_longform_fallback_after_download_failure(
-                                        job_id,
-                                        &combined,
+                                        job_id, &combined,
                                     )
                                     .await
                                 {
@@ -900,11 +908,18 @@ impl GeminiClippingAgent {
             let ollama_analysis = match ollama_result {
                 Ok(Ok(a)) => Some(a),
                 Ok(Err(e)) => {
-                    tracing::warn!("⚠️ Ollama Phase A analysis failed (job {}), falling back to Gemini: {}", job_id, e);
+                    tracing::warn!(
+                        "⚠️ Ollama Phase A analysis failed (job {}), falling back to Gemini: {}",
+                        job_id,
+                        e
+                    );
                     None
                 }
                 Err(_) => {
-                    tracing::warn!("⚠️ Ollama Phase A analysis timed out (job {}), falling back to Gemini", job_id);
+                    tracing::warn!(
+                        "⚠️ Ollama Phase A analysis timed out (job {}), falling back to Gemini",
+                        job_id
+                    );
                     None
                 }
             };
@@ -934,7 +949,9 @@ impl GeminiClippingAgent {
 
                     match gemini_result {
                         Ok(a) => a,
-                        Err(e) if should_fallback_from_gemini_video_analysis_error(&e.to_string()) => {
+                        Err(e)
+                            if should_fallback_from_gemini_video_analysis_error(&e.to_string()) =>
+                        {
                             tracing::warn!("⚠️ Gemini provider error on Phase A analysis (job {}), falling back to BlenderMCPServer: {}", job_id, e);
                             if let Some(blender) = self.app_state.blender_mcp_client.as_ref() {
                                 blender
@@ -1262,7 +1279,11 @@ impl GeminiClippingAgent {
             match ollama_result {
                 Ok(Ok(a)) => a,
                 Ok(Err(e)) => {
-                    tracing::warn!("⚠️ Ollama Twitch analysis failed (job {}), falling back to Gemini: {}", job_id, e);
+                    tracing::warn!(
+                        "⚠️ Ollama Twitch analysis failed (job {}), falling back to Gemini: {}",
+                        job_id,
+                        e
+                    );
 
                     // Tier 2: Gemini
                     let gemini = self
@@ -1286,7 +1307,10 @@ impl GeminiClippingAgent {
                     .map_err(|e| format!("Gemini analysis failed: {}", e))?
                 }
                 Err(_) => {
-                    tracing::warn!("⚠️ Ollama Twitch analysis timed out (job {}), falling back to Gemini", job_id);
+                    tracing::warn!(
+                        "⚠️ Ollama Twitch analysis timed out (job {}), falling back to Gemini",
+                        job_id
+                    );
 
                     let gemini = self
                         .app_state
@@ -1531,14 +1555,13 @@ impl GeminiClippingAgent {
         video_title: &Option<String>,
         job_id: i32,
     ) {
-        let db_id: Option<i32> = sqlx::query_scalar(
-            "SELECT id FROM kick_source_channels WHERE slug = $1",
-        )
-        .bind(kick_slug)
-        .fetch_optional(&self.app_state.db_pool)
-        .await
-        .ok()
-        .flatten();
+        let db_id: Option<i32> =
+            sqlx::query_scalar("SELECT id FROM kick_source_channels WHERE slug = $1")
+                .bind(kick_slug)
+                .fetch_optional(&self.app_state.db_pool)
+                .await
+                .ok()
+                .flatten();
 
         if let Some(kcid) = db_id {
             sqlx::query(

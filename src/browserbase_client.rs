@@ -102,7 +102,10 @@ pub async fn fetch_url(url: &str) -> Result<Option<String>, String> {
     let truncated = if content.len() > MAX_CONTENT_CHARS {
         let mut s = String::with_capacity(MAX_CONTENT_CHARS + 50);
         s.push_str(&content[..MAX_CONTENT_CHARS]);
-        s.push_str(&format!("\n\n[...truncated at {} chars]", MAX_CONTENT_CHARS));
+        s.push_str(&format!(
+            "\n\n[...truncated at {} chars]",
+            MAX_CONTENT_CHARS
+        ));
         s
     } else {
         content
@@ -285,7 +288,10 @@ async fn direct_fetch_markdown(url: &str) -> Result<Option<String>, String> {
     }
     let truncated = if text.chars().count() > MAX_CONTENT_CHARS {
         let mut s: String = text.chars().take(MAX_CONTENT_CHARS).collect();
-        s.push_str(&format!("\n\n[...truncated at {} chars]", MAX_CONTENT_CHARS));
+        s.push_str(&format!(
+            "\n\n[...truncated at {} chars]",
+            MAX_CONTENT_CHARS
+        ));
         s
     } else {
         text
@@ -339,13 +345,25 @@ fn extract_css_info(html: &str) -> String {
     let style_re = Regex::new(r#"<style[^>]*>(.*?)</style>"#).unwrap();
     for cap in style_re.captures_iter(html) {
         let css_text = &cap[1];
-        extract_css_tokens(css_text, &mut colors, &mut seen_colors, &mut fonts, &mut seen_fonts);
+        extract_css_tokens(
+            css_text,
+            &mut colors,
+            &mut seen_colors,
+            &mut fonts,
+            &mut seen_fonts,
+        );
     }
 
     // Extract inline style="..." attributes
     let inline_re = Regex::new(r#"style\s*=\s*"([^"]*?)""#).unwrap();
     for cap in inline_re.captures_iter(html) {
-        extract_css_tokens(&cap[1], &mut colors, &mut seen_colors, &mut fonts, &mut seen_fonts);
+        extract_css_tokens(
+            &cap[1],
+            &mut colors,
+            &mut seen_colors,
+            &mut fonts,
+            &mut seen_fonts,
+        );
     }
 
     let color_summary = if colors.is_empty() {
@@ -399,8 +417,17 @@ fn extract_css_tokens(
     let font_re = Regex::new(r#"(?i)font-family\s*:\s*([^;}]+)"#).unwrap();
     for cap in font_re.captures_iter(css) {
         for family in cap[1].split(',') {
-            let f = family.trim().trim_matches('\'').trim_matches('"').to_string();
-            if !f.is_empty() && f != "sans-serif" && f != "serif" && f != "monospace" && seen_fonts.insert(f.clone()) {
+            let f = family
+                .trim()
+                .trim_matches('\'')
+                .trim_matches('"')
+                .to_string();
+            if !f.is_empty()
+                && f != "sans-serif"
+                && f != "serif"
+                && f != "monospace"
+                && seen_fonts.insert(f.clone())
+            {
                 fonts.push(f);
             }
         }
@@ -408,12 +435,23 @@ fn extract_css_tokens(
 }
 
 /// Attempt to fetch a linked stylesheet and extract tokens from it.
-async fn fetch_and_extract_stylesheet(url: &str, colors: &mut Vec<String>, fonts: &mut Vec<String>) {
+async fn fetch_and_extract_stylesheet(
+    url: &str,
+    colors: &mut Vec<String>,
+    fonts: &mut Vec<String>,
+) {
     let mut seen_colors = std::collections::HashSet::new();
     let mut seen_fonts = std::collections::HashSet::new();
     if let Ok(Some(css_content)) = fetch_url_raw(url).await {
-        if !css_content.starts_with("<") { // skip if it returned HTML instead of CSS
-            extract_css_tokens(&css_content, colors, &mut seen_colors, fonts, &mut seen_fonts);
+        if !css_content.starts_with("<") {
+            // skip if it returned HTML instead of CSS
+            extract_css_tokens(
+                &css_content,
+                colors,
+                &mut seen_colors,
+                fonts,
+                &mut seen_fonts,
+            );
         }
     }
 }
@@ -432,7 +470,10 @@ pub async fn crawl_website(url: &str) -> Result<CrawlResult, String> {
     };
 
     let base_url = Url::parse(&full_url).map_err(|e| format!("Invalid URL '{full_url}': {e}"))?;
-    let base_host = base_url.host_str().ok_or_else(|| format!("No host in URL '{full_url}'"))?.to_string();
+    let base_host = base_url
+        .host_str()
+        .ok_or_else(|| format!("No host in URL '{full_url}'"))?
+        .to_string();
 
     // Feature tag: deterministic from base URL
     let hash = hex::encode(Sha256::digest(full_url.as_bytes()));
@@ -483,9 +524,11 @@ pub async fn crawl_website(url: &str) -> Result<CrawlResult, String> {
 
         // Skip file downloads
         let path = absolute.path();
-        let skip_extensions = [".pdf", ".zip", ".mp4", ".mp3", ".png", ".jpg", ".jpeg",
-                               ".gif", ".svg", ".webp", ".ico", ".woff", ".woff2", ".ttf",
-                               ".eot", ".mov", ".avi", ".mkv", ".doc", ".docx", ".xls", ".xlsx"];
+        let skip_extensions = [
+            ".pdf", ".zip", ".mp4", ".mp3", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp",
+            ".ico", ".woff", ".woff2", ".ttf", ".eot", ".mov", ".avi", ".mkv", ".doc", ".docx",
+            ".xls", ".xlsx",
+        ];
         if skip_extensions.iter().any(|ext| path.ends_with(ext)) {
             continue;
         }
@@ -507,7 +550,13 @@ pub async fn crawl_website(url: &str) -> Result<CrawlResult, String> {
     let mut fonts = Vec::new();
     let mut seen_c = std::collections::HashSet::new();
     let mut seen_f = std::collections::HashSet::new();
-    extract_css_tokens(&homepage_html, &mut colors, &mut seen_c, &mut fonts, &mut seen_f);
+    extract_css_tokens(
+        &homepage_html,
+        &mut colors,
+        &mut seen_c,
+        &mut fonts,
+        &mut seen_f,
+    );
 
     // Fetch linked stylesheets
     let link_re = Regex::new(r#"<link[^>]*href="([^"]*\.css[^"]*)"[^>]*>"#).unwrap();
@@ -538,13 +587,12 @@ pub async fn crawl_website(url: &str) -> Result<CrawlResult, String> {
     };
 
     // Step 4: Fetch homepage markdown
-    let homepage_md = fetch_url(&full_url)
-        .await?
-        .unwrap_or_default();
+    let homepage_md = fetch_url(&full_url).await?.unwrap_or_default();
 
     // Extract title from homepage HTML
     let title_re = Regex::new(r#"(?i)<title>([^<]+)"#).unwrap();
-    let homepage_title = title_re.captures(&homepage_html)
+    let homepage_title = title_re
+        .captures(&homepage_html)
         .map(|c| c[1].to_string())
         .unwrap_or_else(|| "Home".to_string());
 
@@ -557,21 +605,29 @@ pub async fn crawl_website(url: &str) -> Result<CrawlResult, String> {
 
     // Step 5: Fetch each subpage in parallel
     let title_re_for_closure = title_re.clone();
-    let subpage_fetches: Vec<_> = subpages.iter().map(|sub_url| {
-        let tr = title_re_for_closure.clone();
-        async move {
-            let md = fetch_url(sub_url).await.ok().flatten().unwrap_or_default();
-            let html = fetch_url_raw(sub_url).await.ok().flatten().unwrap_or_default();
-            let title = tr.captures(&html)
-                .map(|c| c[1].to_string())
-                .unwrap_or_else(|| sub_url.rsplit('/').next().unwrap_or("page").to_string());
-            CrawledPage {
-                url: sub_url.clone(),
-                title,
-                content: md,
+    let subpage_fetches: Vec<_> = subpages
+        .iter()
+        .map(|sub_url| {
+            let tr = title_re_for_closure.clone();
+            async move {
+                let md = fetch_url(sub_url).await.ok().flatten().unwrap_or_default();
+                let html = fetch_url_raw(sub_url)
+                    .await
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default();
+                let title = tr
+                    .captures(&html)
+                    .map(|c| c[1].to_string())
+                    .unwrap_or_else(|| sub_url.rsplit('/').next().unwrap_or("page").to_string());
+                CrawledPage {
+                    url: sub_url.clone(),
+                    title,
+                    content: md,
+                }
             }
-        }
-    }).collect::<Vec<_>>();
+        })
+        .collect::<Vec<_>>();
 
     // Collect results
     let mut page_title_lines = Vec::new();

@@ -126,26 +126,30 @@ impl YtDlpClient {
             stream_cmd
                 .arg("--format")
                 .arg("bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best")
-                .arg("--merge-output-format").arg("mp4")
-                .arg("-o").arg("-")
+                .arg("--merge-output-format")
+                .arg("mp4")
+                .arg("-o")
+                .arg("-")
                 .arg("--no-playlist")
                 .arg("--user-agent")
                 .arg("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-                .arg("--extractor-args").arg(Self::extractor_args())
+                .arg("--extractor-args")
+                .arg(Self::extractor_args())
                 .arg("--no-check-certificates")
                 .arg(video_url)
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped());
             let temp_cookie_path = Self::apply_optional_auth_args(&mut stream_cmd).await?;
-            let mut child = stream_cmd.spawn()
+            let mut child = stream_cmd
+                .spawn()
                 .map_err(|e| format!("Failed to spawn yt-dlp process: {e}"))?;
-            let mut stdout = child.stdout.take()
-                .ok_or("No stdout from yt-dlp process")?;
+            let mut stdout = child.stdout.take().ok_or("No stdout from yt-dlp process")?;
 
             let result = timeout(
                 Duration::from_secs(3600),
                 client.upload_stream(key, &mut stdout),
-            ).await;
+            )
+            .await;
 
             // Wait for process to finish
             let status = child.wait().await.ok();
@@ -155,7 +159,9 @@ impl YtDlpClient {
 
             match result {
                 Ok(Ok(())) => {
-                    let r2_url = client.presign_get(key, 7 * 24 * 3600).await
+                    let r2_url = client
+                        .presign_get(key, 7 * 24 * 3600)
+                        .await
                         .map_err(|e| format!("Failed to presign R2 URL: {e}"))?;
                     tracing::info!("✅ R2 stream complete: {r2_url}");
                     Ok(VideoDownloadResult {
@@ -199,7 +205,8 @@ impl YtDlpClient {
                 .stderr(Stdio::piped());
             let temp_cookie_path = Self::apply_optional_auth_args(&mut command).await?;
 
-            let output = timeout(Duration::from_secs(3600), command.output()).await
+            let output = timeout(Duration::from_secs(3600), command.output())
+                .await
                 .map_err(|_| "❌ Download timed out after 1 hour".to_string())?
                 .map_err(|e| format!("Failed to execute yt-dlp: {e}"))?;
             if let Some(path) = temp_cookie_path.as_deref() {
@@ -210,11 +217,16 @@ impl YtDlpClient {
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 tracing::error!("yt-dlp error: {}", stderr);
                 let lower = stderr.to_lowercase();
-                let auth_hint = if lower.contains("private video") || lower.contains("sign in")
-                    || lower.contains("members-only") || lower.contains("login")
-                    || lower.contains("confirm you're not a bot") {
+                let auth_hint = if lower.contains("private video")
+                    || lower.contains("sign in")
+                    || lower.contains("members-only")
+                    || lower.contains("login")
+                    || lower.contains("confirm you're not a bot")
+                {
                     format!(" {}", Self::auth_hint())
-                } else { String::new() };
+                } else {
+                    String::new()
+                };
                 return Err(format!("yt-dlp download failed: {}{}", stderr, auth_hint));
             }
 
@@ -223,15 +235,22 @@ impl YtDlpClient {
 
             tracing::info!("🔍 Validating downloaded video file");
             if !Path::new(output_path).exists() {
-                return Err(format!("❌ Downloaded file does not exist: {}", output_path));
+                return Err(format!(
+                    "❌ Downloaded file does not exist: {}",
+                    output_path
+                ));
             }
-            let metadata = tokio::fs::metadata(output_path).await
+            let metadata = tokio::fs::metadata(output_path)
+                .await
                 .map_err(|e| format!("Failed to read file metadata: {e}"))?;
             if metadata.len() < 1_000_000 {
                 return Err(format!("❌ File too small ({} bytes)", metadata.len()));
             }
             match crate::core::validate_video_file(output_path) {
-                Ok(false) => { let _ = tokio::fs::remove_file(output_path).await; return Err("❌ Video corrupted".to_string()); }
+                Ok(false) => {
+                    let _ = tokio::fs::remove_file(output_path).await;
+                    return Err("❌ Video corrupted".to_string());
+                }
                 _ => {}
             }
 

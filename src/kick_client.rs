@@ -315,7 +315,10 @@ impl KickClient {
             .find(|c| c.name.to_lowercase() == category_name.to_lowercase());
 
         match cat {
-            Some(category) => self.get_livestreams(Some(category.id), None, Some(100)).await,
+            Some(category) => {
+                self.get_livestreams(Some(category.id), None, Some(100))
+                    .await
+            }
             None => Ok(Vec::new()),
         }
     }

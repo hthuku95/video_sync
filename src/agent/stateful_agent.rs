@@ -83,7 +83,8 @@ impl StatefulClaudeAgent {
                     if let Some(ref meta) = msg.metadata {
                         if let Some(tool_name) = meta.get("tool_name").and_then(|v| v.as_str()) {
                             if let Some(tool_args) = meta.get("tool_args") {
-                                let use_id = meta.get("tool_call_id")
+                                let use_id = meta
+                                    .get("tool_call_id")
                                     .and_then(|v| v.as_str())
                                     .unwrap_or("history_tool_call")
                                     .to_string();
@@ -104,14 +105,18 @@ impl StatefulClaudeAgent {
                     // Fallback: plain text
                     messages.push(ClaudeMessage {
                         role: "assistant".to_string(),
-                        content: ClaudeContent::Text(format!("[Previous tool call] {}", msg.content)),
+                        content: ClaudeContent::Text(format!(
+                            "[Previous tool call] {}",
+                            msg.content
+                        )),
                     });
                 }
                 crate::agent::conversation_manager::MessageRole::ToolResult => {
                     // Reconstruct as user ToolResult block for Claude
                     if let Some(ref meta) = msg.metadata {
                         if let Some(tool_result) = meta.get("tool_result") {
-                            let use_id = meta.get("tool_call_id")
+                            let use_id = meta
+                                .get("tool_call_id")
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("history_tool_result")
                                 .to_string();
@@ -135,7 +140,10 @@ impl StatefulClaudeAgent {
                     // Fallback: plain text
                     messages.push(ClaudeMessage {
                         role: "user".to_string(),
-                        content: ClaudeContent::Text(format!("[Previous tool result] {}", msg.content)),
+                        content: ClaudeContent::Text(format!(
+                            "[Previous tool result] {}",
+                            msg.content
+                        )),
                     });
                 }
                 _ => continue, // Skip system and function messages
@@ -401,17 +409,17 @@ IMPORTANT: For fetching website content, use `browserbase_crawl_website(url)` �
                                         query,
                                         session_id,
                                         app_state.voyage_embeddings.as_ref(),
-                                        app_state.video_gemini_client.as_ref().or(app_state.gemini_client.as_ref()),
+                                        app_state
+                                            .video_gemini_client
+                                            .as_ref()
+                                            .or(app_state.gemini_client.as_ref()),
                                         app_state.qwen_client.as_ref(),
                                     )
                                     .await
                                 {
-                                    Ok(Some(context)) => {
-                                        context
-                                    }
-                                    Ok(None) => {
-                                        "Memory search unavailable - no embedding client".to_string()
-                                    }
+                                    Ok(Some(context)) => context,
+                                    Ok(None) => "Memory search unavailable - no embedding client"
+                                        .to_string(),
                                     Err(e) => format!("Error searching memory: {}", e),
                                 }
                             } else {
@@ -475,9 +483,13 @@ IMPORTANT: For fetching website content, use `browserbase_crawl_website(url)` �
             for (i, rc) in response_content.iter().enumerate() {
                 if let crate::claude_client::ResponseContent::ToolUse { id, name, input } = rc {
                     // Save tool call
-                    let call_msg = crate::agent::conversation_manager::ConversationMessage::new_tool_call(
-                        session_id.to_string(), name, input.clone(), Some(id.clone()),
-                    );
+                    let call_msg =
+                        crate::agent::conversation_manager::ConversationMessage::new_tool_call(
+                            session_id.to_string(),
+                            name,
+                            input.clone(),
+                            Some(id.clone()),
+                        );
                     let _ = conversation_manager.save_message(&call_msg).await;
 
                     // Save corresponding tool result
@@ -659,27 +671,28 @@ impl StatefulGeminiAgent {
         // when a scope is set and discovery is enabled; full belt otherwise.
         let scoped_mode =
             self.tool_scope.is_some() && crate::ai_tool_selector::tool_discovery_enabled();
-        let selected_video_tools = if let Some(scope) = self.tool_scope.as_deref().filter(|_| scoped_mode) {
-            send_progress(&format!(
-                "🎯 Loading the {} toolbelt for this task...",
-                scope
-            ));
-            crate::ai_tool_selector::service_scoped_tools(scope)
-        } else {
-            send_progress("🧠 Loading the full production toolbelt for your request...");
-            // Full-toolbelt mode: agents receive the full allowed video tool catalog by
-            // default and choose the right tools themselves at runtime.
-            crate::ai_tool_selector::select_tools_for_request(
-                user_input,
-                app_state.qwen_client.as_ref(),
-                app_state.nvidia_nim_client.as_ref(),
-                app_state
-                    .video_gemini_client
-                    .as_ref()
-                    .or(app_state.gemini_client.as_ref()),
-            )
-            .await
-        };
+        let selected_video_tools =
+            if let Some(scope) = self.tool_scope.as_deref().filter(|_| scoped_mode) {
+                send_progress(&format!(
+                    "🎯 Loading the {} toolbelt for this task...",
+                    scope
+                ));
+                crate::ai_tool_selector::service_scoped_tools(scope)
+            } else {
+                send_progress("🧠 Loading the full production toolbelt for your request...");
+                // Full-toolbelt mode: agents receive the full allowed video tool catalog by
+                // default and choose the right tools themselves at runtime.
+                crate::ai_tool_selector::select_tools_for_request(
+                    user_input,
+                    app_state.qwen_client.as_ref(),
+                    app_state.nvidia_nim_client.as_ref(),
+                    app_state
+                        .video_gemini_client
+                        .as_ref()
+                        .or(app_state.gemini_client.as_ref()),
+                )
+                .await
+            };
         // Prepend the 3 control tools (always needed for agent self-management)
         let mut all_tools = Self::create_control_tools_gemini();
         all_tools.extend(selected_video_tools);
@@ -690,7 +703,8 @@ impl StatefulGeminiAgent {
         );
 
         // Initialize ConversationManager to retrieve and save conversation history
-        let conversation_manager = ConversationManager::with_user(app_state.db_pool.clone(), user_id);
+        let conversation_manager =
+            ConversationManager::with_user(app_state.db_pool.clone(), user_id);
 
         // Ensure schema exists
         if let Err(e) = conversation_manager.initialize_schema().await {
@@ -842,12 +856,18 @@ IMPORTANT: For fetching website content, use `browserbase_crawl_website(url)` �
                     if let Some(ref meta) = msg.metadata {
                         if let Some(tool_name) = meta.get("tool_name").and_then(|v| v.as_str()) {
                             if let Some(tool_args) = meta.get("tool_args") {
-                                let call_id = meta.get("tool_call_id")
+                                let call_id = meta
+                                    .get("tool_call_id")
                                     .and_then(|v| v.as_str())
                                     .unwrap_or("history_call")
                                     .to_string();
-                                let func_decl_map: std::collections::HashMap<String, serde_json::Value> = match tool_args {
-                                    serde_json::Value::Object(map) => map.clone().into_iter().collect(),
+                                let func_decl_map: std::collections::HashMap<
+                                    String,
+                                    serde_json::Value,
+                                > = match tool_args {
+                                    serde_json::Value::Object(map) => {
+                                        map.clone().into_iter().collect()
+                                    }
                                     other => {
                                         let mut m = std::collections::HashMap::new();
                                         m.insert("args".to_string(), other.clone());
@@ -966,21 +986,20 @@ IMPORTANT: For fetching website content, use `browserbase_crawl_website(url)` �
                         return Ok(final_response);
                     }
 
-                    tracing::info!("📨 Agent received follow-up message mid-work: session={}", session_id);
+                    tracing::info!(
+                        "📨 Agent received follow-up message mid-work: session={}",
+                        session_id
+                    );
                     send_progress("💬 Received your follow-up while working...");
 
                     // Save user message to conversation history
-                    let user_msg = ConversationMessage::new_human(
-                        session_id.to_string(),
-                        followup.clone(),
-                    );
+                    let user_msg =
+                        ConversationMessage::new_human(session_id.to_string(), followup.clone());
                     let _ = conversation_manager.save_message(&user_msg).await;
 
                     // Append to conversation history for the LLM
                     conversation_contents.push(crate::gemini_client::Content {
-                        parts: vec![crate::gemini_client::Part::Text {
-                            text: followup,
-                        }],
+                        parts: vec![crate::gemini_client::Part::Text { text: followup }],
                         role: Some("user".to_string()),
                     });
 
@@ -1012,7 +1031,8 @@ IMPORTANT: For fetching website content, use `browserbase_crawl_website(url)` �
                                             session_id.to_string(),
                                             reply.clone(),
                                         );
-                                        let _ = conversation_manager.save_message(&assistant_msg).await;
+                                        let _ =
+                                            conversation_manager.save_message(&assistant_msg).await;
                                         // Push to conversation history
                                         conversation_contents.push(crate::gemini_client::Content {
                                             parts: vec![crate::gemini_client::Part::Text {
@@ -1057,9 +1077,8 @@ IMPORTANT: For fetching website content, use `browserbase_crawl_website(url)` �
 
             // Helper to build OpenAI-format messages for OpenAI-compatible APIs (NVIDIA, Ollama, DeepSeek)
             let build_messages = |sys_inst: &str| -> Vec<serde_json::Value> {
-                let mut msgs: Vec<serde_json::Value> = vec![
-                    serde_json::json!({"role": "system", "content": sys_inst})
-                ];
+                let mut msgs: Vec<serde_json::Value> =
+                    vec![serde_json::json!({"role": "system", "content": sys_inst})];
                 for msg in &conversation_history {
                     let role = match msg.role {
                         crate::agent::conversation_manager::MessageRole::Human => "user",
@@ -1293,20 +1312,27 @@ IMPORTANT: For fetching website content, use `browserbase_crawl_website(url)` �
                                     let tool_ms = tool_started.elapsed().as_millis() as u64;
                                     ledger.tool_calls += 1;
                                     if let Some(wid) = workflow_id {
-                                        let rt = crate::services::workflow_runtime::WorkflowRuntime::new(app_state.db_pool.clone());
-                                        let _ = rt.append_event(
-                                            wid,
-                                            "tool_trace",
-                                            Some(function_name.as_str()),
-                                            &format!("tool {function_name} finished in {tool_ms} ms"),
-                                            serde_json::json!({
-                                                "tool": function_name,
-                                                "latency_ms": tool_ms,
-                                                "result_chars": tool_result.chars().count(),
-                                                "llm_calls_so_far": ledger.llm_calls,
-                                                "tool_calls_so_far": ledger.tool_calls,
-                                            }),
-                                        ).await;
+                                        let rt =
+                                            crate::services::workflow_runtime::WorkflowRuntime::new(
+                                                app_state.db_pool.clone(),
+                                            );
+                                        let _ = rt
+                                            .append_event(
+                                                wid,
+                                                "tool_trace",
+                                                Some(function_name.as_str()),
+                                                &format!(
+                                                    "tool {function_name} finished in {tool_ms} ms"
+                                                ),
+                                                serde_json::json!({
+                                                    "tool": function_name,
+                                                    "latency_ms": tool_ms,
+                                                    "result_chars": tool_result.chars().count(),
+                                                    "llm_calls_so_far": ledger.llm_calls,
+                                                    "tool_calls_so_far": ledger.tool_calls,
+                                                }),
+                                            )
+                                            .await;
                                         ledger.flush(&exec_context).await;
                                     }
 
@@ -1323,42 +1349,41 @@ IMPORTANT: For fetching website content, use `browserbase_crawl_website(url)` �
                                     let is_output_tool = matches!(
                                         function_name.as_str(),
                                         "submit_final_answer"
-                                        | "generate_image"
-                                        | "blender_generate_scene_type"
-                                        | "manim_execute_script"
-                                        | "create_thumbnail"
-                                        | "create_thumbnail_hd"
-                                        | "merge_videos"
-                                        | "add_text_overlay"
-                                        | "add_overlay"
-                                        | "apply_ffmpeg_filter"
-                                        | "apply_audio_ffmpeg_filter"
-                                        | "trim_video"
-                                        | "split_video"
-                                        | "concat_videos"
-                                        | "generate_clip_compilation"
-                                        | "add_subtitles"
-                                        | "add_voiceover_to_video"
-                                        | "generate_narration"
-                                        | "generate_text_to_speech"
-                                        | "generate_music"
-                                        | "generate_sound_effect"
-                                        | "overlay_video"
-                                        | "crop_video"
-                                        | "rotate_video"
-                                        | "resize_video"
-                                        | "adjust_speed"
-                                        | "stabilize_video"
-                                        | "add_transition"
-                                        | "extract_audio"
-                                        | "replace_audio"
-                                        | "remove_audio"
-                                        | "concat_audio"
-                                        | "add_audio"
+                                            | "generate_image"
+                                            | "blender_generate_scene_type"
+                                            | "manim_execute_script"
+                                            | "create_thumbnail"
+                                            | "create_thumbnail_hd"
+                                            | "merge_videos"
+                                            | "add_text_overlay"
+                                            | "add_overlay"
+                                            | "apply_ffmpeg_filter"
+                                            | "apply_audio_ffmpeg_filter"
+                                            | "trim_video"
+                                            | "split_video"
+                                            | "concat_videos"
+                                            | "generate_clip_compilation"
+                                            | "add_subtitles"
+                                            | "add_voiceover_to_video"
+                                            | "generate_narration"
+                                            | "generate_text_to_speech"
+                                            | "generate_music"
+                                            | "generate_sound_effect"
+                                            | "overlay_video"
+                                            | "crop_video"
+                                            | "rotate_video"
+                                            | "resize_video"
+                                            | "adjust_speed"
+                                            | "stabilize_video"
+                                            | "add_transition"
+                                            | "extract_audio"
+                                            | "replace_audio"
+                                            | "remove_audio"
+                                            | "concat_audio"
+                                            | "add_audio"
                                     );
                                     if is_output_tool {
-                                        last_tool_result_with_output =
-                                            Some(tool_result.clone());
+                                        last_tool_result_with_output = Some(tool_result.clone());
                                     }
 
                                     function_results.push((
@@ -1367,8 +1392,12 @@ IMPORTANT: For fetching website content, use `browserbase_crawl_website(url)` �
                                         function_call.thought_signature.clone(),
                                     ));
                                 } else if function_name == "start_background_job" {
-                                    send_progress("🚀 Background job tool called — handling inline...");
-                                    tracing::info!("🚀 Gemini called start_background_job — handling inline");
+                                    send_progress(
+                                        "🚀 Background job tool called — handling inline...",
+                                    );
+                                    tracing::info!(
+                                        "🚀 Gemini called start_background_job — handling inline"
+                                    );
 
                                     let task_description = function_call
                                         .args
@@ -1547,7 +1576,10 @@ IMPORTANT: For fetching website content, use `browserbase_crawl_website(url)` �
                                                 query,
                                                 session_id,
                                                 app_state.voyage_embeddings.as_ref(),
-                                                app_state.video_gemini_client.as_ref().or(app_state.gemini_client.as_ref()),
+                                                app_state
+                                                    .video_gemini_client
+                                                    .as_ref()
+                                                    .or(app_state.gemini_client.as_ref()),
                                                 app_state.qwen_client.as_ref(),
                                             )
                                             .await
@@ -1591,17 +1623,30 @@ IMPORTANT: For fetching website content, use `browserbase_crawl_website(url)` �
                                     .await
                                     .unwrap_or_default();
 
-                                    let campaigns_list: Vec<serde_json::Value> = rows.into_iter().map(|(cid, cname, stype, cstatus, ppd, planned, published)| {
-                                        serde_json::json!({
-                                            "id": cid.to_string(),
-                                            "name": cname,
-                                            "service_type": stype,
-                                            "status": cstatus,
-                                            "posts_per_day": ppd,
-                                            "total_posts_planned": planned,
-                                            "total_posts_published": published,
-                                        })
-                                    }).collect();
+                                    let campaigns_list: Vec<serde_json::Value> = rows
+                                        .into_iter()
+                                        .map(
+                                            |(
+                                                cid,
+                                                cname,
+                                                stype,
+                                                cstatus,
+                                                ppd,
+                                                planned,
+                                                published,
+                                            )| {
+                                                serde_json::json!({
+                                                    "id": cid.to_string(),
+                                                    "name": cname,
+                                                    "service_type": stype,
+                                                    "status": cstatus,
+                                                    "posts_per_day": ppd,
+                                                    "total_posts_planned": planned,
+                                                    "total_posts_published": published,
+                                                })
+                                            },
+                                        )
+                                        .collect();
 
                                     let tool_result = serde_json::json!({
                                         "campaigns": campaigns_list,
@@ -1617,8 +1662,12 @@ IMPORTANT: For fetching website content, use `browserbase_crawl_website(url)` �
                                 } else if function_name == "get_campaign_status" {
                                     send_progress("📊 Fetching campaign details...");
                                     let user_id_i32 = user_id.unwrap_or(0);
-                                    let campaign_id = function_call.args.get("campaign_id").and_then(|v| v.as_str());
-                                    let campaign_name = function_call.args.get("name").and_then(|v| v.as_str());
+                                    let campaign_id = function_call
+                                        .args
+                                        .get("campaign_id")
+                                        .and_then(|v| v.as_str());
+                                    let campaign_name =
+                                        function_call.args.get("name").and_then(|v| v.as_str());
 
                                     let tool_result = if let Some(cid_str) = campaign_id {
                                         if let Ok(cid) = uuid::Uuid::parse_str(cid_str) {
@@ -1633,7 +1682,20 @@ IMPORTANT: For fetching website content, use `browserbase_crawl_website(url)` �
                                             .await;
 
                                             match row {
-                                                Ok(Some((cid2, cname, stype, brief, style, duration, ppd, planned, published, start, end, cstatus))) => {
+                                                Ok(Some((
+                                                    cid2,
+                                                    cname,
+                                                    stype,
+                                                    brief,
+                                                    style,
+                                                    duration,
+                                                    ppd,
+                                                    planned,
+                                                    published,
+                                                    start,
+                                                    end,
+                                                    cstatus,
+                                                ))) => {
                                                     let recent_posts = sqlx::query_as::<_, (String, String, Option<String>)>(
                                                         "SELECT scheduled_at::text, status, media_r2_url \
                                                          FROM campaign_posts WHERE campaign_id = $1 \
@@ -1644,13 +1706,17 @@ IMPORTANT: For fetching website content, use `browserbase_crawl_website(url)` �
                                                     .await
                                                     .unwrap_or_default();
 
-                                                    let posts_json: Vec<serde_json::Value> = recent_posts.into_iter().map(|(sa, ps, url)| {
-                                                        serde_json::json!({
-                                                            "scheduled_at": sa,
-                                                            "status": ps,
-                                                            "has_media": url.is_some(),
-                                                        })
-                                                    }).collect();
+                                                    let posts_json: Vec<serde_json::Value> =
+                                                        recent_posts
+                                                            .into_iter()
+                                                            .map(|(sa, ps, url)| {
+                                                                serde_json::json!({
+                                                                    "scheduled_at": sa,
+                                                                    "status": ps,
+                                                                    "has_media": url.is_some(),
+                                                                })
+                                                            })
+                                                            .collect();
 
                                                     serde_json::json!({
                                                         "found": true,
@@ -1671,8 +1737,12 @@ IMPORTANT: For fetching website content, use `browserbase_crawl_website(url)` �
                                                         "recent_posts": posts_json,
                                                     })
                                                 }
-                                                Ok(None) => serde_json::json!({"found": false, "error": "Campaign not found or access denied."}),
-                                                Err(e) => serde_json::json!({"error": format!("Database error: {e}")}),
+                                                Ok(None) => {
+                                                    serde_json::json!({"found": false, "error": "Campaign not found or access denied."})
+                                                }
+                                                Err(e) => {
+                                                    serde_json::json!({"error": format!("Database error: {e}")})
+                                                }
                                             }
                                         } else {
                                             serde_json::json!({"error": "Invalid campaign ID format."})
@@ -1696,8 +1766,12 @@ IMPORTANT: For fetching website content, use `browserbase_crawl_website(url)` �
                                                     "note": "Use get_campaign_status with this campaign_id to get full details."
                                                 })
                                             }
-                                            Ok(None) => serde_json::json!({"found": false, "error": format!("No campaign found with name matching '{cname}'.")}),
-                                            Err(e) => serde_json::json!({"error": format!("Database error: {e}")}),
+                                            Ok(None) => {
+                                                serde_json::json!({"found": false, "error": format!("No campaign found with name matching '{cname}'.")})
+                                            }
+                                            Err(e) => {
+                                                serde_json::json!({"error": format!("Database error: {e}")})
+                                            }
                                         }
                                     } else {
                                         serde_json::json!({"error": "Provide either campaign_id or name."})
@@ -1711,15 +1785,26 @@ IMPORTANT: For fetching website content, use `browserbase_crawl_website(url)` �
                                 } else if function_name == "control_campaign" {
                                     send_progress("🔄 Controlling campaign...");
                                     let user_id_i32 = user_id.unwrap_or(0);
-                                    let campaign_id = function_call.args.get("campaign_id").and_then(|v| v.as_str());
-                                    let action = function_call.args.get("action").and_then(|v| v.as_str()).unwrap_or("");
+                                    let campaign_id = function_call
+                                        .args
+                                        .get("campaign_id")
+                                        .and_then(|v| v.as_str());
+                                    let action = function_call
+                                        .args
+                                        .get("action")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("");
 
                                     let valid_actions = ["pause", "resume", "cancel"];
                                     if !valid_actions.contains(&action) {
                                         let tool_result = serde_json::json!({
                                             "error": format!("Invalid action '{action}'. Must be one of: pause, resume, cancel.")
                                         });
-                                        function_results.push((function_name.clone(), tool_result, function_call.thought_signature.clone()));
+                                        function_results.push((
+                                            function_name.clone(),
+                                            tool_result,
+                                            function_call.thought_signature.clone(),
+                                        ));
                                     } else if let Some(cid_str) = campaign_id {
                                         if let Ok(cid) = uuid::Uuid::parse_str(cid_str) {
                                             let status = match action {
@@ -1738,23 +1823,41 @@ IMPORTANT: For fetching website content, use `browserbase_crawl_website(url)` �
                                             .await;
 
                                             let tool_result = match result {
-                                                Ok(r) if r.rows_affected() > 0 => serde_json::json!({
-                                                    "success": true,
-                                                    "campaign_id": cid_str,
-                                                    "new_status": status,
-                                                    "message": format!("Campaign {}d successfully.", action)
-                                                }),
-                                                Ok(_) => serde_json::json!({"error": "Campaign not found or access denied."}),
-                                                Err(e) => serde_json::json!({"error": format!("Database error: {e}")}),
+                                                Ok(r) if r.rows_affected() > 0 => {
+                                                    serde_json::json!({
+                                                        "success": true,
+                                                        "campaign_id": cid_str,
+                                                        "new_status": status,
+                                                        "message": format!("Campaign {}d successfully.", action)
+                                                    })
+                                                }
+                                                Ok(_) => {
+                                                    serde_json::json!({"error": "Campaign not found or access denied."})
+                                                }
+                                                Err(e) => {
+                                                    serde_json::json!({"error": format!("Database error: {e}")})
+                                                }
                                             };
-                                            function_results.push((function_name.clone(), tool_result, function_call.thought_signature.clone()));
+                                            function_results.push((
+                                                function_name.clone(),
+                                                tool_result,
+                                                function_call.thought_signature.clone(),
+                                            ));
                                         } else {
                                             let tool_result = serde_json::json!({"error": "Invalid campaign ID format."});
-                                            function_results.push((function_name.clone(), tool_result, function_call.thought_signature.clone()));
+                                            function_results.push((
+                                                function_name.clone(),
+                                                tool_result,
+                                                function_call.thought_signature.clone(),
+                                            ));
                                         }
                                     } else {
                                         let tool_result = serde_json::json!({"error": "campaign_id is required."});
-                                        function_results.push((function_name.clone(), tool_result, function_call.thought_signature.clone()));
+                                        function_results.push((
+                                            function_name.clone(),
+                                            tool_result,
+                                            function_call.thought_signature.clone(),
+                                        ));
                                     }
                                 } else if function_name == "search_campaign_knowledge" {
                                     send_progress("🔍 Searching campaign knowledge...");
@@ -1771,14 +1874,26 @@ IMPORTANT: For fetching website content, use `browserbase_crawl_website(url)` �
                                         .args
                                         .get("limit")
                                         .and_then(|v| v.as_u64())
-                                        .unwrap_or(10) as usize;
+                                        .unwrap_or(10)
+                                        as usize;
 
-                                    let tool_result = if let Some(ref qdrant_client) = app_state.qdrant_client {
-                                        let gemini = app_state.video_gemini_client.as_ref()
+                                    let tool_result = if let Some(ref qdrant_client) =
+                                        app_state.qdrant_client
+                                    {
+                                        let gemini = app_state
+                                            .video_gemini_client
+                                            .as_ref()
                                             .or(app_state.gemini_client.as_ref());
                                         if let Some(g) = gemini {
                                             // Embed the query
-                                            match g.embed_content_with_model(query, "models/gemini-embedding-2", Some(1536)).await {
+                                            match g
+                                                .embed_content_with_model(
+                                                    query,
+                                                    "models/gemini-embedding-2",
+                                                    Some(1536),
+                                                )
+                                                .await
+                                            {
                                                 Ok(embedding) => {
                                                     // Build filter: feature=campaign_post + user_id + optional service_type
                                                     let mut must_conditions = vec![
@@ -1819,7 +1934,9 @@ IMPORTANT: For fetching website content, use `browserbase_crawl_website(url)` �
                                                         Err(e) => serde_json::json!({"error": format!("Search failed: {e}")}),
                                                     }
                                                 }
-                                                Err(e) => serde_json::json!({"error": format!("Embedding failed: {e}")}),
+                                                Err(e) => {
+                                                    serde_json::json!({"error": format!("Embedding failed: {e}")})
+                                                }
                                             }
                                         } else {
                                             serde_json::json!({"error": "Campaign knowledge search unavailable - no embedding client"})
@@ -2237,9 +2354,7 @@ async fn maybe_compact_tool_history(
     let assistant_idxs: Vec<usize> = messages
         .iter()
         .enumerate()
-        .filter(|(i, m)| {
-            *i > 1 && m["role"].as_str() == Some("assistant")
-        })
+        .filter(|(i, m)| *i > 1 && m["role"].as_str() == Some("assistant"))
         .map(|(i, _)| i)
         .collect();
 
@@ -2306,10 +2421,7 @@ async fn maybe_compact_tool_history(
             .take(800)
             .collect();
         let mut ctx: HashMap<String, serde_json::Value> = HashMap::new();
-        ctx.insert(
-            "source".into(),
-            serde_json::json!("ollama_tool_compaction"),
-        );
+        ctx.insert("source".into(), serde_json::json!("ollama_tool_compaction"));
         ctx.insert("summary".into(), serde_json::json!(summary.clone()));
         if let Err(e) = qd
             .store_chat_memory_with_gemini2(
@@ -2382,7 +2494,8 @@ fn extract_structured_summary(result: &str) -> String {
         return String::new();
     }
 
-    let mut summary = String::from("── STRUCTURED INDEX (all items extracted before truncation) ──\n");
+    let mut summary =
+        String::from("── STRUCTURED INDEX (all items extracted before truncation) ──\n");
     for u in &urls {
         summary.push_str(u);
         summary.push('\n');
@@ -2418,10 +2531,7 @@ fn truncate_tool_result_for_context(tool_name: &str, result: &str) -> String {
     );
     format!(
         "{}\n…[output truncated, {} chars total]…\n{}{}",
-        structured,
-        total,
-        head,
-        tail
+        structured, total, head, tail
     )
 }
 
@@ -2475,8 +2585,9 @@ async fn execute_tool_call_in_loop(
     ledger.tool_calls += 1;
 
     if let Some(wid) = exec_context.workflow_id {
-        let runtime =
-            crate::services::workflow_runtime::WorkflowRuntime::new(exec_context.app_state.db_pool.clone());
+        let runtime = crate::services::workflow_runtime::WorkflowRuntime::new(
+            exec_context.app_state.db_pool.clone(),
+        );
         let _ = runtime
             .append_event(
                 wid,
@@ -2612,7 +2723,9 @@ impl RunLedger {
             self.cloud_llm_calls += 1;
         }
         self.prompt_tokens = self.prompt_tokens.saturating_add(usage.prompt_tokens);
-        self.completion_tokens = self.completion_tokens.saturating_add(usage.completion_tokens);
+        self.completion_tokens = self
+            .completion_tokens
+            .saturating_add(usage.completion_tokens);
         let slot = self.per_provider.entry(provider.to_string()).or_default();
         slot[0] += 1;
         slot[1] = slot[1].saturating_add(usage.prompt_tokens);
@@ -2638,10 +2751,7 @@ impl RunLedger {
         }
         let total = self.prompt_tokens.saturating_add(self.completion_tokens);
         if total >= Self::max_total_tokens() {
-            return Some(format!(
-                "tokens {total} ≥ cap {}",
-                Self::max_total_tokens()
-            ));
+            return Some(format!("tokens {total} ≥ cap {}", Self::max_total_tokens()));
         }
         None
     }
@@ -2684,7 +2794,6 @@ impl RunLedger {
         }
     }
 }
-
 
 // ─── Parallel read-only tool fan-out ─────────────────────────────────────────
 //
@@ -2831,11 +2940,10 @@ async fn load_agent_checkpoint(
 }
 
 async fn clear_agent_checkpoint(pool: &sqlx::PgPool, workflow_id: uuid::Uuid) {
-    if let Err(e) =
-        sqlx::query("UPDATE app_workflows SET agent_checkpoint = NULL WHERE id = $1")
-            .bind(workflow_id)
-            .execute(pool)
-            .await
+    if let Err(e) = sqlx::query("UPDATE app_workflows SET agent_checkpoint = NULL WHERE id = $1")
+        .bind(workflow_id)
+        .execute(pool)
+        .await
     {
         tracing::warn!("⚠️ Agent checkpoint clear failed: {}", e);
     }
@@ -2920,9 +3028,7 @@ fn openai_messages_to_gemini_contents(
                                 serde_json::from_str::<std::collections::HashMap<_, _>>(s)
                                     .unwrap_or_default()
                             }
-                            Some(serde_json::Value::Object(o)) => {
-                                o.clone().into_iter().collect()
-                            }
+                            Some(serde_json::Value::Object(o)) => o.clone().into_iter().collect(),
                             _ => std::collections::HashMap::new(),
                         };
                         if let Some(id) = call.get("id").and_then(|i| i.as_str()) {
@@ -2953,7 +3059,10 @@ fn openai_messages_to_gemini_contents(
                     .get(id)
                     .cloned()
                     .unwrap_or_else(|| "tool".to_string());
-                let result = msg.get("content").cloned().unwrap_or(serde_json::Value::Null);
+                let result = msg
+                    .get("content")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null);
                 let mut response = std::collections::HashMap::new();
                 response.insert("result".to_string(), result);
                 out.push(Content {
@@ -3021,10 +3130,7 @@ fn text_contains_artifact_url(text: &str) -> bool {
 /// `artifact_requirements`: pipeline shapes (`{expects_video:true,…}` objects
 /// and non-empty `[{required:true,…}]` arrays) require tools; empty/absent
 /// requirements (pure chat) and ad-hoc contexts (`workflow_id == None`) do not.
-async fn workflow_requires_artifacts(
-    pool: &sqlx::PgPool,
-    workflow_id: Option<uuid::Uuid>,
-) -> bool {
+async fn workflow_requires_artifacts(pool: &sqlx::PgPool, workflow_id: Option<uuid::Uuid>) -> bool {
     let wid = match workflow_id {
         Some(w) => w,
         None => return false,
@@ -3040,7 +3146,9 @@ async fn workflow_requires_artifacts(
         Some((reqs,)) => match &reqs {
             serde_json::Value::Null => false,
             serde_json::Value::Array(items) => !items.is_empty(),
-            serde_json::Value::Object(map) => map.values().any(|v| v == &serde_json::Value::Bool(true)),
+            serde_json::Value::Object(map) => {
+                map.values().any(|v| v == &serde_json::Value::Bool(true))
+            }
             _ => false,
         },
     }
@@ -3112,11 +3220,13 @@ where
         .await
         .map_err(|e| tracing::warn!("⚠️ Compaction skipped: {}", e));
 
-        let response =
-            timeout(Duration::from_secs(300), qwen_client.generate_single(messages, tools))
-                .await
-                .map_err(|_| "Qwen timeout after 300s".to_string())?
-                .map_err(|e| format!("Qwen API error: {}", e))?;
+        let response = timeout(
+            Duration::from_secs(300),
+            qwen_client.generate_single(messages, tools),
+        )
+        .await
+        .map_err(|_| "Qwen timeout after 300s".to_string())?
+        .map_err(|e| format!("Qwen API error: {}", e))?;
 
         let (response, usage) = response;
         ledger.record("qwen", &usage, true);
@@ -3132,7 +3242,8 @@ where
                     if empty_responses <= MAX_EMPTY_RESPONSE_NUDGES {
                         tracing::warn!(
                             "⚠️ Qwen returned an empty reply ({}/{}); re-prompting",
-                            empty_responses, MAX_EMPTY_RESPONSE_NUDGES
+                            empty_responses,
+                            MAX_EMPTY_RESPONSE_NUDGES
                         );
                         send_progress("🔁 Model returned no content — retrying…");
                         messages.push(serde_json::json!({
@@ -3237,10 +3348,8 @@ where
                             .as_object()
                             .map(|o| o.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
                             .unwrap_or_default();
-                        execute_tool_call_in_loop(
-                            &tc.name, &args_map, exec_context, tools, ledger,
-                        )
-                        .await
+                        execute_tool_call_in_loop(&tc.name, &args_map, exec_context, tools, ledger)
+                            .await
                     };
 
                     send_progress(&format!("✅ {} done", tc.name));
@@ -3319,10 +3428,13 @@ where
         .await
         .map_err(|e| tracing::warn!("⚠️ Compaction skipped: {}", e));
 
-        let response = timeout(Duration::from_secs(300), ds_client.generate_single(messages, tools))
-            .await
-            .map_err(|_| "DeepSeek timeout after 300s".to_string())?
-            .map_err(|e| format!("DeepSeek API error: {}", e))?;
+        let response = timeout(
+            Duration::from_secs(300),
+            ds_client.generate_single(messages, tools),
+        )
+        .await
+        .map_err(|_| "DeepSeek timeout after 300s".to_string())?
+        .map_err(|e| format!("DeepSeek API error: {}", e))?;
 
         let (response, usage) = response;
         ledger.record("deepseek", &usage, true);
@@ -3337,7 +3449,8 @@ where
                     if empty_responses <= MAX_EMPTY_RESPONSE_NUDGES {
                         tracing::warn!(
                             "⚠️ DeepSeek returned an empty reply ({}/{}); re-prompting",
-                            empty_responses, MAX_EMPTY_RESPONSE_NUDGES
+                            empty_responses,
+                            MAX_EMPTY_RESPONSE_NUDGES
                         );
                         send_progress("🔁 Model returned no content — retrying…");
                         messages.push(serde_json::json!({
@@ -3442,10 +3555,8 @@ where
                             .as_object()
                             .map(|o| o.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
                             .unwrap_or_default();
-                        execute_tool_call_in_loop(
-                            &tc.name, &args_map, exec_context, tools, ledger,
-                        )
-                        .await
+                        execute_tool_call_in_loop(&tc.name, &args_map, exec_context, tools, ledger)
+                            .await
                     };
 
                     send_progress(&format!("✅ {} done", tc.name));
@@ -3515,10 +3626,13 @@ where
         .await
         .map_err(|e| tracing::warn!("⚠️ Compaction skipped: {}", e));
 
-        let response = timeout(Duration::from_secs(300), nim_client.generate_single(messages, tools))
-            .await
-            .map_err(|_| "NVIDIA NIM timeout after 300s".to_string())?
-            .map_err(|e| format!("NVIDIA NIM API error: {}", e))?;
+        let response = timeout(
+            Duration::from_secs(300),
+            nim_client.generate_single(messages, tools),
+        )
+        .await
+        .map_err(|_| "NVIDIA NIM timeout after 300s".to_string())?
+        .map_err(|e| format!("NVIDIA NIM API error: {}", e))?;
 
         let (response, usage) = response;
         ledger.record("nvidia_nim", &usage, true);
@@ -3534,7 +3648,8 @@ where
                     if empty_responses <= MAX_EMPTY_RESPONSE_NUDGES {
                         tracing::warn!(
                             "⚠️ NVIDIA NIM returned an empty reply ({}/{}); re-prompting",
-                            empty_responses, MAX_EMPTY_RESPONSE_NUDGES
+                            empty_responses,
+                            MAX_EMPTY_RESPONSE_NUDGES
                         );
                         send_progress("🔁 Model returned no content — retrying…");
                         messages.push(serde_json::json!({
@@ -3639,10 +3754,8 @@ where
                             .as_object()
                             .map(|o| o.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
                             .unwrap_or_default();
-                        execute_tool_call_in_loop(
-                            &tc.name, &args_map, exec_context, tools, ledger,
-                        )
-                        .await
+                        execute_tool_call_in_loop(&tc.name, &args_map, exec_context, tools, ledger)
+                            .await
                     };
 
                     send_progress(&format!("✅ {} done", tc.name));

@@ -52,11 +52,11 @@ pub fn campaign_app_name(app: &str) -> &'static str {
 /// One subscription price per app (owner-confirmed Oct 7 2026).
 pub fn campaign_app_price_cents(app: &str) -> u64 {
     match app {
-        "clips" => 19900,   // kick + twitch
-        "shorts" => 29700,  // youtube
-        "app" => 14900,     // landing-page campaigns (bundles separate)
-        "learn" => 19900,   // education
-        _ => 14900,         // motion (all 8 manim services)
+        "clips" => 19900,  // kick + twitch
+        "shorts" => 29700, // youtube
+        "app" => 14900,    // landing-page campaigns (bundles separate)
+        "learn" => 19900,  // education
+        _ => 14900,        // motion (all 8 manim services)
     }
 }
 
@@ -71,7 +71,10 @@ fn base_url() -> String {
 /// Client-facing campaign routes (with auth middleware).
 pub fn campaign_routes() -> Router {
     Router::new()
-        .route("/api/campaigns", get(client_list_campaigns).post(client_create_campaign))
+        .route(
+            "/api/campaigns",
+            get(client_list_campaigns).post(client_create_campaign),
+        )
         .route("/api/campaigns/:id", get(client_get_campaign))
         .route("/api/campaigns/:id/activity", get(client_campaign_activity))
         .route("/api/campaigns/:id/pause", post(client_pause_campaign))
@@ -79,8 +82,14 @@ pub fn campaign_routes() -> Router {
         .route("/api/campaigns/:id/cancel", post(client_cancel_campaign))
         .route("/api/campaigns/:id/pay-spec", get(campaign_pay_spec))
         .route("/api/campaigns/:id/settle", post(campaign_settle))
-        .route("/api/campaigns/:id/paypal-activate", post(campaign_paypal_activate))
-        .route("/api/campaigns/:id/paypal-order", post(campaign_paypal_order))
+        .route(
+            "/api/campaigns/:id/paypal-activate",
+            post(campaign_paypal_activate),
+        )
+        .route(
+            "/api/campaigns/:id/paypal-order",
+            post(campaign_paypal_order),
+        )
         .route("/api/campaign-posts/:id/stream", get(campaign_post_stream))
         .route("/api/tiers/pay-spec", post(tier_pay_spec))
         .route("/api/tiers/settle", post(tier_settle))
@@ -89,24 +98,49 @@ pub fn campaign_routes() -> Router {
         .route("/api/campaigns/:id/chat", post(campaign_chat))
         .route("/api/campaigns/:id/process-now", post(client_process_now))
         .route("/api/campaigns/assistant", post(campaign_assistant_chat))
-        .layer(axum::middleware::from_fn(crate::middleware::auth::auth_middleware))
+        .layer(axum::middleware::from_fn(
+            crate::middleware::auth::auth_middleware,
+        ))
 }
 
 /// Admin-only campaign routes (merged into admin_routes).
 pub fn admin_campaign_routes() -> Router {
     Router::new()
-        .route("/api/admin/campaigns", get(admin_list_campaigns).post(admin_create_campaign))
+        .route(
+            "/api/admin/campaigns",
+            get(admin_list_campaigns).post(admin_create_campaign),
+        )
         .route("/api/admin/campaigns/:id", get(admin_get_campaign))
         .route("/api/admin/campaigns/:id/pause", post(admin_pause_campaign))
-        .route("/api/admin/campaigns/:id/resume", post(admin_resume_campaign))
-        .route("/api/admin/campaigns/:id/cancel", post(admin_cancel_campaign))
+        .route(
+            "/api/admin/campaigns/:id/resume",
+            post(admin_resume_campaign),
+        )
+        .route(
+            "/api/admin/campaigns/:id/cancel",
+            post(admin_cancel_campaign),
+        )
         .route("/api/admin/campaigns/:id/pay-spec", get(campaign_pay_spec))
         .route("/api/admin/campaigns/:id/settle", post(campaign_settle))
-        .route("/api/admin/campaigns/:id/activate", post(admin_activate_campaign))        .route("/api/admin/campaigns/:id/files", get(list_campaign_files).post(upload_campaign_file))
-        .route("/api/admin/campaigns/:id/files/:file_id", delete(delete_campaign_file))
+        .route(
+            "/api/admin/campaigns/:id/activate",
+            post(admin_activate_campaign),
+        )
+        .route(
+            "/api/admin/campaigns/:id/files",
+            get(list_campaign_files).post(upload_campaign_file),
+        )
+        .route(
+            "/api/admin/campaigns/:id/files/:file_id",
+            delete(delete_campaign_file),
+        )
         .layer(DefaultBodyLimit::max(100 * 1024 * 1024))
-        .layer(axum::middleware::from_fn(crate::middleware::admin::admin_middleware))
-        .layer(axum::middleware::from_fn(crate::middleware::auth::auth_middleware))
+        .layer(axum::middleware::from_fn(
+            crate::middleware::admin::admin_middleware,
+        ))
+        .layer(axum::middleware::from_fn(
+            crate::middleware::auth::auth_middleware,
+        ))
 }
 
 // ── Request/Response types ──────────────────────────────────────────────────
@@ -114,15 +148,15 @@ pub fn admin_campaign_routes() -> Router {
 #[derive(Deserialize)]
 pub struct CreateCampaignRequest {
     pub name: String,
-    pub service_type: String,       // "clipping" | "education" | "landing_page" | "kick_auto_clipper" | "manim_explainer" | "whiteboard_animation" | "kinetic_typography" | "animated_infographic" | "algorithm_viz" | "investor_pitch" | "year_in_review" | "isometric_explainer"
+    pub service_type: String, // "clipping" | "education" | "landing_page" | "kick_auto_clipper" | "manim_explainer" | "whiteboard_animation" | "kinetic_typography" | "animated_infographic" | "algorithm_viz" | "investor_pitch" | "year_in_review" | "isometric_explainer"
     pub brief: String,
     pub style: Option<String>,
     pub duration: Option<f64>,
     pub schedule: serde_json::Value, // [{"time":"08:00","platform":"youtube"}, ...]
     pub platforms: serde_json::Value, // [{"platform":"youtube","account_id":"..."}, ...]
     pub posts_per_day: Option<i32>,
-    pub start_date: String,         // ISO 8601
-    pub end_date: String,           // ISO 8601
+    pub start_date: String, // ISO 8601
+    pub end_date: String,   // ISO 8601
     pub zernio_profile_id: Option<String>,
     pub source_url: Option<String>, // Source video URL (YouTube/Twitch/Kick) for clipping services
 }
@@ -181,14 +215,27 @@ async fn admin_create_campaign(
     Json(req): Json<CreateCampaignRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let start_date = chrono::DateTime::parse_from_rfc3339(&req.start_date)
-        .map_err(|e| (StatusCode::BAD_REQUEST, Json(json!({"error": format!("Invalid start_date: {e}")}))))?
+        .map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": format!("Invalid start_date: {e}")})),
+            )
+        })?
         .with_timezone(&chrono::Utc);
     let end_date = chrono::DateTime::parse_from_rfc3339(&req.end_date)
-        .map_err(|e| (StatusCode::BAD_REQUEST, Json(json!({"error": format!("Invalid end_date: {e}")}))))?
+        .map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": format!("Invalid end_date: {e}")})),
+            )
+        })?
         .with_timezone(&chrono::Utc);
 
     if end_date <= start_date {
-        return Err((StatusCode::BAD_REQUEST, Json(json!({"error": "end_date must be after start_date"}))));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "end_date must be after start_date"})),
+        ));
     }
 
     let style = req.style.unwrap_or_else(|| "cinematic".to_string());
@@ -221,7 +268,9 @@ async fn admin_create_campaign(
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
 
-    Ok(Json(json!({"success": true, "id": id.to_string(), "status": "active"})))
+    Ok(Json(
+        json!({"success": true, "id": id.to_string(), "status": "active"}),
+    ))
 }
 
 // ── Admin: Get campaign details ─────────────────────────────────────────────
@@ -230,10 +279,27 @@ async fn admin_get_campaign(
     Extension(state): Extension<Arc<AppState>>,
     Path(id): Path<Uuid>,
 ) -> Json<serde_json::Value> {
-    let campaign = sqlx::query_as::<_, (
-        Uuid, String, String, String, String, f64, serde_json::Value, serde_json::Value, i32,
-        chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>, Option<String>, Option<String>, String, i32, i32,
-    )>(
+    let campaign = sqlx::query_as::<
+        _,
+        (
+            Uuid,
+            String,
+            String,
+            String,
+            String,
+            f64,
+            serde_json::Value,
+            serde_json::Value,
+            i32,
+            chrono::DateTime<chrono::Utc>,
+            chrono::DateTime<chrono::Utc>,
+            Option<String>,
+            Option<String>,
+            String,
+            i32,
+            i32,
+        ),
+    >(
         "SELECT id, name, service_type, brief, style, duration, schedule, platforms, \
                 posts_per_day, start_date, end_date, zernio_profile_id, source_url, status, \
                 total_posts_planned, total_posts_published \
@@ -243,8 +309,24 @@ async fn admin_get_campaign(
     .fetch_optional(&state.db_pool)
     .await;
 
-    let (id, name, service_type, brief, style, duration, schedule, platforms, posts_per_day,
-         start_date, end_date, zernio_profile_id, source_url, status, total_planned, total_published) = match campaign {
+    let (
+        id,
+        name,
+        service_type,
+        brief,
+        style,
+        duration,
+        schedule,
+        platforms,
+        posts_per_day,
+        start_date,
+        end_date,
+        zernio_profile_id,
+        source_url,
+        status,
+        total_planned,
+        total_published,
+    ) = match campaign {
         Ok(Some(r)) => r,
         Ok(None) => return Json(json!({"success": false, "error": "Campaign not found"})),
         Err(e) => return Json(json!({"success": false, "error": e.to_string()})),
@@ -345,13 +427,11 @@ async fn set_campaign_status(
     id: Uuid,
     status: &str,
 ) -> Json<serde_json::Value> {
-    let result = sqlx::query(
-        "UPDATE campaigns SET status = $1, updated_at = NOW() WHERE id = $2",
-    )
-    .bind(status)
-    .bind(id)
-    .execute(&state.db_pool)
-    .await;
+    let result = sqlx::query("UPDATE campaigns SET status = $1, updated_at = NOW() WHERE id = $2")
+        .bind(status)
+        .bind(id)
+        .execute(&state.db_pool)
+        .await;
 
     match result {
         Ok(r) if r.rows_affected() > 0 => Json(json!({"success": true, "status": status})),
@@ -441,6 +521,19 @@ async fn client_create_campaign(
     headers: axum::http::HeaderMap,
     Json(req): Json<CreateCampaignRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    // Campaigns app-wide switch (owner directive Nov 8 2026): when OFF, every
+    // creation attempt (any app, any user incl. admins) gets the coming-soon
+    // response. Existing campaigns keep running — this only blocks new ones.
+    if !crate::services::service_flags::campaigns_enabled(&state.db_pool).await {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "error": crate::services::service_flags::CAMPAIGNS_OFF_MESSAGE,
+                "code": "campaigns_off",
+                "campaigns_enabled": false,
+            })),
+        ));
+    }
     let user_id: i32 = claims.sub.parse().unwrap_or(0);
     // App scoping (owner directive Oct 2026 §65): the calling campaign app
     // identifies itself via X-App; the service must belong to that app.
@@ -449,28 +542,72 @@ async fn client_create_campaign(
         let app = app.to_ascii_lowercase();
         let expected = campaign_app_slug(&req.service_type);
         if app != expected {
-            return Err((StatusCode::BAD_REQUEST, Json(json!({"error": format!("Service '{}' does not belong to app '{app}' (expected '{expected}').", req.service_type)}))));
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(
+                    json!({"error": format!("Service '{}' does not belong to app '{app}' (expected '{expected}').", req.service_type)}),
+                ),
+            ));
         }
     }
     let start_date = chrono::DateTime::parse_from_rfc3339(&req.start_date)
-        .map_err(|e| (StatusCode::BAD_REQUEST, Json(json!({"error": format!("Invalid start_date: {e}")}))))?
+        .map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": format!("Invalid start_date: {e}")})),
+            )
+        })?
         .with_timezone(&chrono::Utc);
     let end_date = chrono::DateTime::parse_from_rfc3339(&req.end_date)
-        .map_err(|e| (StatusCode::BAD_REQUEST, Json(json!({"error": format!("Invalid end_date: {e}")}))))?
+        .map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": format!("Invalid end_date: {e}")})),
+            )
+        })?
         .with_timezone(&chrono::Utc);
 
     if end_date <= start_date {
-        return Err((StatusCode::BAD_REQUEST, Json(json!({"error": "end_date must be after start_date"}))));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "end_date must be after start_date"})),
+        ));
     }
 
-    if !matches!(req.service_type.as_str(), "clipping" | "education" | "landing_page" | "kick_auto_clipper" | "manim_explainer" | "whiteboard_animation" | "kinetic_typography" | "animated_infographic" | "algorithm_viz" | "investor_pitch" | "year_in_review" | "isometric_explainer" | "youtube_clipping" | "twitch_clipping") {
-        return Err((StatusCode::BAD_REQUEST, Json(json!({"error": "service_type must be one of: clipping, education, landing_page, kick_auto_clipper, manim_explainer, whiteboard_animation, kinetic_typography, animated_infographic, algorithm_viz, investor_pitch, year_in_review, isometric_explainer, youtube_clipping, twitch_clipping"}))));
+    if !matches!(
+        req.service_type.as_str(),
+        "clipping"
+            | "education"
+            | "landing_page"
+            | "kick_auto_clipper"
+            | "manim_explainer"
+            | "whiteboard_animation"
+            | "kinetic_typography"
+            | "animated_infographic"
+            | "algorithm_viz"
+            | "investor_pitch"
+            | "year_in_review"
+            | "isometric_explainer"
+            | "youtube_clipping"
+            | "twitch_clipping"
+    ) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(
+                json!({"error": "service_type must be one of: clipping, education, landing_page, kick_auto_clipper, manim_explainer, whiteboard_animation, kinetic_typography, animated_infographic, algorithm_viz, investor_pitch, year_in_review, isometric_explainer, youtube_clipping, twitch_clipping"}),
+            ),
+        ));
     }
 
     // Service switch (owner directive Oct 2026): campaigns cannot be created for
     // disabled services — they would sit pending forever and burn no value.
     if !crate::services::service_flags::service_enabled(&state.db_pool, &req.service_type).await {
-        return Err((StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": format!("Service '{}' is currently disabled and cannot take new campaigns.", req.service_type)}))));
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(
+                json!({"error": format!("Service '{}' is currently disabled and cannot take new campaigns.", req.service_type)}),
+            ),
+        ));
     }
 
     // Platform + ownership guard (owner directive Oct 2026): targets must be
@@ -486,13 +623,27 @@ async fn client_create_campaign(
             .await
             .unwrap_or_default();
             for t in arr {
-                let plat = t.get("platform").and_then(|v| v.as_str()).unwrap_or("").to_ascii_lowercase();
+                let plat = t
+                    .get("platform")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
                 let aid = t.get("account_id").and_then(|v| v.as_str()).unwrap_or("");
                 if !crate::services::app_tiers::ALLOWED_PLATFORMS.contains(&plat.as_str()) {
-                    return Err((StatusCode::BAD_REQUEST, Json(json!({"error": format!("Platform '{plat}' is not supported — use YouTube, TikTok, Instagram, or Facebook.")}))));
+                    return Err((
+                        StatusCode::BAD_REQUEST,
+                        Json(
+                            json!({"error": format!("Platform '{plat}' is not supported — use YouTube, TikTok, Instagram, or Facebook.")}),
+                        ),
+                    ));
                 }
                 if !owned.iter().any(|o| o == aid) {
-                    return Err((StatusCode::FORBIDDEN, Json(json!({"error": "One or more target accounts are not connected to your account."}))));
+                    return Err((
+                        StatusCode::FORBIDDEN,
+                        Json(
+                            json!({"error": "One or more target accounts are not connected to your account."}),
+                        ),
+                    ));
                 }
             }
         }
@@ -510,7 +661,10 @@ async fn client_create_campaign(
     };
 
     let (status, paid_until) = if is_privileged {
-        ("active", Some(chrono::Utc::now() + chrono::Duration::days(365)))
+        (
+            "active",
+            Some(chrono::Utc::now() + chrono::Duration::days(365)),
+        )
     } else {
         ("pending_payment", None)
     };
@@ -548,10 +702,14 @@ async fn client_create_campaign(
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
 
     if is_privileged {
-        Ok(Json(json!({"success": true, "id": id.to_string(), "status": "active"})))
+        Ok(Json(
+            json!({"success": true, "id": id.to_string(), "status": "active"}),
+        ))
     } else {
         let payment_url = format!("/api/campaigns/{}/pay-spec", id);
-        Ok(Json(json!({"success": true, "id": id.to_string(), "payment_url": payment_url, "status": "pending_payment"})))
+        Ok(Json(
+            json!({"success": true, "id": id.to_string(), "payment_url": payment_url, "status": "pending_payment"}),
+        ))
     }
 }
 
@@ -563,9 +721,21 @@ async fn client_list_campaigns(
     headers: axum::http::HeaderMap,
 ) -> Json<serde_json::Value> {
     let user_id: i32 = claims.sub.parse().unwrap_or(0);
-    let rows = sqlx::query_as::<_, (
-        Uuid, String, String, String, Option<String>, serde_json::Value, i32, i32, i32, chrono::DateTime<chrono::Utc>,
-    )>(
+    let rows = sqlx::query_as::<
+        _,
+        (
+            Uuid,
+            String,
+            String,
+            String,
+            Option<String>,
+            serde_json::Value,
+            i32,
+            i32,
+            i32,
+            chrono::DateTime<chrono::Utc>,
+        ),
+    >(
         "SELECT id, name, service_type, status, source_url, schedule, posts_per_day, \
                 total_posts_planned, total_posts_published, created_at \
          FROM campaigns WHERE user_id = $1 ORDER BY created_at DESC",
@@ -575,22 +745,35 @@ async fn client_list_campaigns(
     .await;
 
     let mut campaigns: Vec<serde_json::Value> = match rows {
-        Ok(rows) => rows.into_iter().map(|(
-            id, name, service_type, status, source_url, schedule, posts_per_day,
-            total_planned, total_published, created_at,
-        )| {
-            json!({
-                "id": id.to_string(),
-                "name": name,
-                "service_type": service_type,
-                "status": status,
-                "source_url": source_url,
-                "posts_per_day": posts_per_day,
-                "total_posts_planned": total_planned,
-                "total_posts_published": total_published,
-                "created_at": created_at.to_rfc3339(),
-            })
-        }).collect(),
+        Ok(rows) => rows
+            .into_iter()
+            .map(
+                |(
+                    id,
+                    name,
+                    service_type,
+                    status,
+                    source_url,
+                    schedule,
+                    posts_per_day,
+                    total_planned,
+                    total_published,
+                    created_at,
+                )| {
+                    json!({
+                        "id": id.to_string(),
+                        "name": name,
+                        "service_type": service_type,
+                        "status": status,
+                        "source_url": source_url,
+                        "posts_per_day": posts_per_day,
+                        "total_posts_planned": total_planned,
+                        "total_posts_published": total_published,
+                        "created_at": created_at.to_rfc3339(),
+                    })
+                },
+            )
+            .collect(),
         Err(e) => return Json(json!({"success": false, "error": e.to_string()})),
     };
 
@@ -600,7 +783,10 @@ async fn client_list_campaigns(
         .and_then(|h| h.to_str().ok())
         .map(|s| s.to_ascii_lowercase())
     {
-        if matches!(app.as_str(), "clips" | "shorts" | "app" | "learn" | "motion") {
+        if matches!(
+            app.as_str(),
+            "clips" | "shorts" | "app" | "learn" | "motion"
+        ) {
             campaigns.retain(|c| {
                 c.get("service_type")
                     .and_then(|s| s.as_str())
@@ -622,10 +808,25 @@ async fn client_get_campaign(
     headers: axum::http::HeaderMap,
 ) -> Json<serde_json::Value> {
     let user_id: i32 = claims.sub.parse().unwrap_or(0);
-    let campaign = sqlx::query_as::<_, (
-        Uuid, String, String, String, String, f64, serde_json::Value, serde_json::Value,
-        i32, chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>, String, i32, i32,
-    )>(
+    let campaign = sqlx::query_as::<
+        _,
+        (
+            Uuid,
+            String,
+            String,
+            String,
+            String,
+            f64,
+            serde_json::Value,
+            serde_json::Value,
+            i32,
+            chrono::DateTime<chrono::Utc>,
+            chrono::DateTime<chrono::Utc>,
+            String,
+            i32,
+            i32,
+        ),
+    >(
         "SELECT id, name, service_type, brief, style, duration, schedule, platforms, \
                 posts_per_day, start_date, end_date, status, \
                 total_posts_planned, total_posts_published \
@@ -636,8 +837,22 @@ async fn client_get_campaign(
     .fetch_optional(&state.db_pool)
     .await;
 
-    let (id, name, service_type, brief, style, duration, schedule, platforms, posts_per_day,
-         start_date, end_date, status, total_planned, total_published) = match campaign {
+    let (
+        id,
+        name,
+        service_type,
+        brief,
+        style,
+        duration,
+        schedule,
+        platforms,
+        posts_per_day,
+        start_date,
+        end_date,
+        status,
+        total_planned,
+        total_published,
+    ) = match campaign {
         Ok(Some(r)) => r,
         Ok(None) => return Json(json!({"success": false, "error": "Campaign not found"})),
         Err(e) => return Json(json!({"success": false, "error": e.to_string()})),
@@ -649,18 +864,33 @@ async fn client_get_campaign(
         .and_then(|h| h.to_str().ok())
         .map(|s| s.to_ascii_lowercase())
     {
-        if matches!(app.as_str(), "clips" | "shorts" | "app" | "learn" | "motion")
-            && !app_owns_service(&app, &service_type)
+        if matches!(
+            app.as_str(),
+            "clips" | "shorts" | "app" | "learn" | "motion"
+        ) && !app_owns_service(&app, &service_type)
         {
             return Json(json!({"success": false, "error": "Campaign not found"}));
         }
     }
 
-    let posts = sqlx::query_as::<_, (
-        Uuid, i32, i32, chrono::DateTime<chrono::Utc>, Option<String>, Option<String>,
-        Option<String>, String, Option<String>, Option<Uuid>, Option<Uuid>, Option<String>,
-        Option<String>,
-    )>(
+    let posts = sqlx::query_as::<
+        _,
+        (
+            Uuid,
+            i32,
+            i32,
+            chrono::DateTime<chrono::Utc>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            String,
+            Option<String>,
+            Option<Uuid>,
+            Option<Uuid>,
+            Option<String>,
+            Option<String>,
+        ),
+    >(
         "SELECT cp.id, cp.day_number, cp.slot_index, cp.scheduled_at, cp.variation_prompt, \
                 cp.caption, cp.media_r2_url, cp.status, cp.zernio_post_id, cp.delivery_id, \
                 d.workflow_id, aw.status AS workflow_status, aw.current_step \
@@ -766,8 +996,10 @@ async fn client_campaign_activity(
         .and_then(|h| h.to_str().ok())
         .map(|s| s.to_ascii_lowercase())
     {
-        if matches!(app.as_str(), "clips" | "shorts" | "app" | "learn" | "motion")
-            && !app_owns_service(&app, &service_type)
+        if matches!(
+            app.as_str(),
+            "clips" | "shorts" | "app" | "learn" | "motion"
+        ) && !app_owns_service(&app, &service_type)
         {
             return Json(json!({"success": false, "error": "Campaign not found"}));
         }
@@ -820,11 +1052,9 @@ async fn client_campaign_activity(
     let mut events_by_workflow: std::collections::HashMap<Uuid, Vec<serde_json::Value>> =
         std::collections::HashMap::new();
     for (workflow_id, event_type, message, details, created_at) in event_rows {
-        let Some(label) = crate::services::activity::public_event_label(
-            &event_type,
-            &message,
-            &details,
-        ) else {
+        let Some(label) =
+            crate::services::activity::public_event_label(&event_type, &message, &details)
+        else {
             continue;
         };
         let mut event = json!({
@@ -837,7 +1067,10 @@ async fn client_campaign_activity(
                 event["note"] = json!(note);
             }
         }
-        events_by_workflow.entry(workflow_id).or_default().push(event);
+        events_by_workflow
+            .entry(workflow_id)
+            .or_default()
+            .push(event);
     }
 
     // Reverse + collapse consecutive duplicate labels (progress heartbeats are
@@ -958,14 +1191,22 @@ async fn campaign_pay_spec(
     Path(id): Path<Uuid>,
     Extension(state): Extension<Arc<AppState>>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let row = sqlx::query(
-        "SELECT service_type, status, name FROM campaigns WHERE id = $1",
-    )
-    .bind(id)
-    .fetch_optional(&state.db_pool)
-    .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?
-    .ok_or_else(|| (StatusCode::NOT_FOUND, Json(json!({"error": "Campaign not found"}))))?;
+    let row = sqlx::query("SELECT service_type, status, name FROM campaigns WHERE id = $1")
+        .bind(id)
+        .fetch_optional(&state.db_pool)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": e.to_string()})),
+            )
+        })?
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": "Campaign not found"})),
+            )
+        })?;
 
     let status: String = row.get("status");
     if status == "active" {
@@ -977,14 +1218,27 @@ async fn campaign_pay_spec(
     let price_cents = campaign_price_cents(&service_type);
     let app = campaign_app_slug(&service_type);
 
-    let recipient = std::env::var("X402_RECIPIENT_ADDRESS")
-        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "X402_RECIPIENT_ADDRESS not configured"}))))?;
+    let recipient = std::env::var("X402_RECIPIENT_ADDRESS").map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": "X402_RECIPIENT_ADDRESS not configured"})),
+        )
+    })?;
 
     let resource_url = format!("{}/api/campaigns/{}/settle", base_url(), id);
-    let description = format!("Activate campaign '{}' on {} — ${:.2}/month (covers all {} services)", name, campaign_app_name(app), price_cents as f64 / 100.0, app);
+    let description = format!(
+        "Activate campaign '{}' on {} — ${:.2}/month (covers all {} services)",
+        name,
+        campaign_app_name(app),
+        price_cents as f64 / 100.0,
+        app
+    );
 
-    let spec = crate::x402::build_payment_required(price_cents, &recipient, &resource_url, &description);
-    Ok(Json(serde_json::to_value(spec).unwrap_or(json!({"error": "spec serialise failed"}))))
+    let spec =
+        crate::x402::build_payment_required(price_cents, &recipient, &resource_url, &description);
+    Ok(Json(
+        serde_json::to_value(spec).unwrap_or(json!({"error": "spec serialise failed"})),
+    ))
 }
 
 /// POST /api/campaigns/:id/paypal-order — create a PayPal order for the app
@@ -996,15 +1250,29 @@ async fn campaign_paypal_order(
     Extension(claims): Extension<crate::models::auth::Claims>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let user_id: i32 = claims.sub.parse().unwrap_or(0);
-    let row = sqlx::query("SELECT user_id, service_type, status, name FROM campaigns WHERE id = $1")
-        .bind(id)
-        .fetch_optional(&state.db_pool)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?
-        .ok_or_else(|| (StatusCode::NOT_FOUND, Json(json!({"error": "Campaign not found"}))))?;
+    let row =
+        sqlx::query("SELECT user_id, service_type, status, name FROM campaigns WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&state.db_pool)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"error": e.to_string()})),
+                )
+            })?
+            .ok_or_else(|| {
+                (
+                    StatusCode::NOT_FOUND,
+                    Json(json!({"error": "Campaign not found"})),
+                )
+            })?;
     let owner: i32 = row.get("user_id");
     if owner != user_id && !(claims.is_superuser || claims.is_staff) {
-        return Err((StatusCode::FORBIDDEN, Json(json!({"error": "Not your campaign"}))));
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(json!({"error": "Not your campaign"})),
+        ));
     }
     let service_type: String = row.get("service_type");
     let name: String = row.get("name");
@@ -1015,11 +1283,15 @@ async fn campaign_paypal_order(
     let base_url = crate::handlers::paypal::paypal_base_url(&env);
     let (client_id, client_secret) = crate::handlers::paypal::paypal_credentials(&env);
     if client_id.is_empty() || client_secret.is_empty() {
-        return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "PayPal not configured"}))));
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": "PayPal not configured"})),
+        ));
     }
-    let token = crate::handlers::paypal::get_paypal_access_token(base_url, &client_id, &client_secret)
-        .await
-        .map_err(|e| (StatusCode::BAD_GATEWAY, Json(json!({"error": e}))))?;
+    let token =
+        crate::handlers::paypal::get_paypal_access_token(base_url, &client_id, &client_secret)
+            .await
+            .map_err(|e| (StatusCode::BAD_GATEWAY, Json(json!({"error": e}))))?;
     let amount = format!("{:.2}", price_cents as f64 / 100.0);
     let order: serde_json::Value = reqwest::Client::new()
         .post(format!("{}/v2/checkout/orders", base_url))
@@ -1038,11 +1310,20 @@ async fn campaign_paypal_order(
         .json()
         .await
         .map_err(|e| (StatusCode::BAD_GATEWAY, Json(json!({"error": format!("PayPal order parse failed: {e}")}))))?;
-    let order_id = order.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let order_id = order
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     if order_id.is_empty() {
-        return Err((StatusCode::BAD_GATEWAY, Json(json!({"error": "PayPal returned no order id"}))));
+        return Err((
+            StatusCode::BAD_GATEWAY,
+            Json(json!({"error": "PayPal returned no order id"})),
+        ));
     }
-    Ok(Json(json!({"success": true, "paypal_order_id": order_id, "amount_usd": amount})))
+    Ok(Json(
+        json!({"success": true, "paypal_order_id": order_id, "amount_usd": amount}),
+    ))
 }
 
 /// GET /api/campaign-posts/:id/stream — stream a campaign post's media through
@@ -1065,30 +1346,53 @@ async fn campaign_post_stream(
     let owner: i32 = row.get("user_id");
     let caller: i32 = claims.sub.parse().unwrap_or(-1);
     if owner != caller && !(claims.is_superuser || claims.is_staff) {
-        return Err((StatusCode::FORBIDDEN, Json(json!({"error": "Not your campaign"}))));
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(json!({"error": "Not your campaign"})),
+        ));
     }
     let media_url: Option<String> = row.get("media_r2_url");
     let media_url = media_url.ok_or_else(|| {
-        (StatusCode::NOT_FOUND, Json(json!({"error": "Post has no media yet"})))
+        (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "Post has no media yet"})),
+        )
     })?;
     let r2 = state.r2_client.as_ref().ok_or_else(|| {
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "Storage not configured"})))
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": "Storage not configured"})),
+        )
     })?;
-    let key = crate::handlers::admin::extract_r2_object_key_from_url(&media_url, &r2.bucket).ok_or_else(|| {
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "Invalid media URL"})))
-    })?;
+    let key = crate::handlers::admin::extract_r2_object_key_from_url(&media_url, &r2.bucket)
+        .ok_or_else(|| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Invalid media URL"})),
+            )
+        })?;
     let range = headers.get("range").and_then(|v| v.to_str().ok());
-    let (raw_status, resp_headers, byte_stream) = r2.stream_object(&key, range).await.map_err(|e| {
-        (StatusCode::BAD_GATEWAY, Json(json!({"error": format!("Stream failed: {e}")})))
-    })?;
+    let (raw_status, resp_headers, byte_stream) =
+        r2.stream_object(&key, range).await.map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({"error": format!("Stream failed: {e}")})),
+            )
+        })?;
     let bytes = byte_stream.collect().await.map_err(|e| {
-        (StatusCode::BAD_GATEWAY, Json(json!({"error": format!("Failed to read R2 stream: {e}")})))
+        (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({"error": format!("Failed to read R2 stream: {e}")})),
+        )
     })?;
     let mut response = axum::response::Response::new(axum::body::Body::from(bytes.to_vec()));
     *response.status_mut() = StatusCode::from_u16(raw_status).unwrap_or(StatusCode::OK);
     for (k, v) in resp_headers {
         use std::str::FromStr;
-        if let (Ok(key), Ok(val)) = (axum::http::header::HeaderName::from_str(&k), axum::http::header::HeaderValue::from_str(&v)) {
+        if let (Ok(key), Ok(val)) = (
+            axum::http::header::HeaderName::from_str(&k),
+            axum::http::header::HeaderValue::from_str(&v),
+        ) {
             response.headers_mut().insert(key, val);
         }
     }
@@ -1123,7 +1427,10 @@ async fn campaign_paypal_activate(
     .ok_or_else(|| (StatusCode::NOT_FOUND, Json(json!({"error": "Campaign not found"}))))?;
     let owner: i32 = row.get("user_id");
     if owner != user_id && !(claims.is_superuser || claims.is_staff) {
-        return Err((StatusCode::FORBIDDEN, Json(json!({"error": "Not your campaign"}))));
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(json!({"error": "Not your campaign"})),
+        ));
     }
     let status: String = row.get("status");
     if status == "active" {
@@ -1137,21 +1444,39 @@ async fn campaign_paypal_activate(
     let env = crate::handlers::paypal::get_paypal_env(&state).await;
     let base_url = crate::handlers::paypal::paypal_base_url(&env);
     let (client_id, client_secret) = crate::handlers::paypal::paypal_credentials(&env);
-    let token = crate::handlers::paypal::get_paypal_access_token(base_url, &client_id, &client_secret)
-        .await
-        .map_err(|e| (StatusCode::BAD_GATEWAY, Json(json!({"error": e}))))?;
+    let token =
+        crate::handlers::paypal::get_paypal_access_token(base_url, &client_id, &client_secret)
+            .await
+            .map_err(|e| (StatusCode::BAD_GATEWAY, Json(json!({"error": e}))))?;
     let order: serde_json::Value = reqwest::Client::new()
-        .get(format!("{}/v2/checkout/orders/{}", base_url, req.order_id.trim()))
+        .get(format!(
+            "{}/v2/checkout/orders/{}",
+            base_url,
+            req.order_id.trim()
+        ))
         .bearer_auth(token)
         .send()
         .await
-        .map_err(|e| (StatusCode::BAD_GATEWAY, Json(json!({"error": format!("PayPal order lookup failed: {e}")}))))?
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({"error": format!("PayPal order lookup failed: {e}")})),
+            )
+        })?
         .json()
         .await
-        .map_err(|e| (StatusCode::BAD_GATEWAY, Json(json!({"error": format!("PayPal order parse failed: {e}")}))))?;
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({"error": format!("PayPal order parse failed: {e}")})),
+            )
+        })?;
     let order_status = order.get("status").and_then(|s| s.as_str()).unwrap_or("");
     if order_status != "COMPLETED" && order_status != "APPROVED" {
-        return Err((StatusCode::PAYMENT_REQUIRED, Json(json!({"error": format!("PayPal order is {order_status}, not captured")}))));
+        return Err((
+            StatusCode::PAYMENT_REQUIRED,
+            Json(json!({"error": format!("PayPal order is {order_status}, not captured")})),
+        ));
     }
     let paid_cents = order
         .get("purchase_units")
@@ -1164,16 +1489,28 @@ async fn campaign_paypal_activate(
         .map(|v| (v * 100.0).round() as u64)
         .unwrap_or(0);
     if paid_cents != price_cents {
-        return Err((StatusCode::PAYMENT_REQUIRED, Json(json!({"error": format!("Order amount ${:.2} does not match the {} subscription (${:.2})", paid_cents as f64 / 100.0, campaign_app_name(campaign_app_slug(&service_type)), price_cents as f64 / 100.0)}))));
+        return Err((
+            StatusCode::PAYMENT_REQUIRED,
+            Json(
+                json!({"error": format!("Order amount ${:.2} does not match the {} subscription (${:.2})", paid_cents as f64 / 100.0, campaign_app_name(campaign_app_slug(&service_type)), price_cents as f64 / 100.0)}),
+            ),
+        ));
     }
     // Payer record (owner directive Oct 2026): email + name from the order.
     let payer = order.get("payer");
-    let payer_email = payer.and_then(|p| p.get("email_address")).and_then(|v| v.as_str()).map(str::to_string);
+    let payer_email = payer
+        .and_then(|p| p.get("email_address"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
     let payer_name = payer.and_then(|p| p.get("name")).and_then(|n| {
         let given = n.get("given_name").and_then(|v| v.as_str()).unwrap_or("");
         let surname = n.get("surname").and_then(|v| v.as_str()).unwrap_or("");
         let full = format!("{given} {surname}").trim().to_string();
-        if full.is_empty() { None } else { Some(full) }
+        if full.is_empty() {
+            None
+        } else {
+            Some(full)
+        }
     });
 
     let upd = sqlx::query(
@@ -1197,7 +1534,21 @@ async fn campaign_paypal_activate(
     if upd.rows_affected() == 0 {
         return Ok(Json(json!({"success": true, "already_active": true})));
     }
-    record_campaign_ledger(&state, &account_email, id, &campaign_name, &service_type, price_cents, "paypal", Some(req.order_id.trim()), None, payer_email.as_deref(), payer_email.as_deref(), payer_name.as_deref()).await;
+    record_campaign_ledger(
+        &state,
+        &account_email,
+        id,
+        &campaign_name,
+        &service_type,
+        price_cents,
+        "paypal",
+        Some(req.order_id.trim()),
+        None,
+        payer_email.as_deref(),
+        payer_email.as_deref(),
+        payer_name.as_deref(),
+    )
+    .await;
     Ok(Json(json!({"success": true, "status": "active"})))
 }
 
@@ -1272,12 +1623,25 @@ async fn tier_pay_spec(
     let (app, price_cents) = validate_tier_purchase(&req.app, &req.tier)
         .map_err(|e| (StatusCode::BAD_REQUEST, Json(json!({"error": e}))))?;
     let _ = (&state, &claims);
-    let recipient = std::env::var("X402_RECIPIENT_ADDRESS")
-        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "X402_RECIPIENT_ADDRESS not configured"}))))?;
+    let recipient = std::env::var("X402_RECIPIENT_ADDRESS").map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": "X402_RECIPIENT_ADDRESS not configured"})),
+        )
+    })?;
     let resource_url = format!("{}/api/tiers/settle", base_url());
-    let description = format!("{} {} tier (${:.2}/month, {} accounts)", crate::handlers::campaigns::campaign_app_name(&app), req.tier, price_cents as f64 / 100.0, crate::services::app_tiers::tier_cap(&req.tier));
-    let spec = crate::x402::build_payment_required(price_cents, &recipient, &resource_url, &description);
-    Ok(Json(serde_json::to_value(spec).unwrap_or(json!({"error": "spec serialise failed"}))))
+    let description = format!(
+        "{} {} tier (${:.2}/month, {} accounts)",
+        crate::handlers::campaigns::campaign_app_name(&app),
+        req.tier,
+        price_cents as f64 / 100.0,
+        crate::services::app_tiers::tier_cap(&req.tier)
+    );
+    let spec =
+        crate::x402::build_payment_required(price_cents, &recipient, &resource_url, &description);
+    Ok(Json(
+        serde_json::to_value(spec).unwrap_or(json!({"error": "spec serialise failed"})),
+    ))
 }
 
 async fn activate_tier(
@@ -1341,16 +1705,33 @@ async fn tier_settle(
     let user_id: i32 = claims.sub.parse().unwrap_or(0);
     let (app, price_cents) = validate_tier_purchase(&req.app, &req.tier)
         .map_err(|e| (StatusCode::BAD_REQUEST, Json(json!({"error": e}))))?;
-    let x_payment = headers.get("X-Payment").and_then(|h| h.to_str().ok())
-        .ok_or_else(|| (StatusCode::PAYMENT_REQUIRED, Json(json!({"error": "Missing X-Payment header"}))))?;
-    let recipient = std::env::var("X402_RECIPIENT_ADDRESS")
-        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "X402_RECIPIENT_ADDRESS not configured"}))))?;
+    let x_payment = headers
+        .get("X-Payment")
+        .and_then(|h| h.to_str().ok())
+        .ok_or_else(|| {
+            (
+                StatusCode::PAYMENT_REQUIRED,
+                Json(json!({"error": "Missing X-Payment header"})),
+            )
+        })?;
+    let recipient = std::env::var("X402_RECIPIENT_ADDRESS").map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": "X402_RECIPIENT_ADDRESS not configured"})),
+        )
+    })?;
     let resource_url = format!("{}/api/tiers/settle", base_url());
     let description = format!("{} {} tier", campaign_app_name(&app), req.tier);
-    let spec = crate::x402::build_payment_required(price_cents, &recipient, &resource_url, &description);
-    let preq = spec.accepts.into_iter().next()
-        .ok_or_else(|| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "No payment requirements"}))))?;
-    let tx_hash = crate::x402::settle_or_reject(x_payment, &preq).await
+    let spec =
+        crate::x402::build_payment_required(price_cents, &recipient, &resource_url, &description);
+    let preq = spec.accepts.into_iter().next().ok_or_else(|| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": "No payment requirements"})),
+        )
+    })?;
+    let tx_hash = crate::x402::settle_or_reject(x_payment, &preq)
+        .await
         .map_err(|e| (StatusCode::PAYMENT_REQUIRED, Json(json!({"error": e}))))?;
     let payer_wallet: Option<String> = {
         use base64::Engine;
@@ -1358,10 +1739,29 @@ async fn tier_settle(
             .decode(x_payment)
             .ok()
             .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
-            .and_then(|v| v.get("payload").and_then(|p| p.get("authorization")).and_then(|a| a.get("from")).and_then(|f| f.as_str()).map(str::to_string))
+            .and_then(|v| {
+                v.get("payload")
+                    .and_then(|p| p.get("authorization"))
+                    .and_then(|a| a.get("from"))
+                    .and_then(|f| f.as_str())
+                    .map(str::to_string)
+            })
     };
-    activate_tier(&state, user_id, &app, &req.tier.to_ascii_lowercase(), price_cents, "usdc", Some(&tx_hash), payer_wallet.as_deref(), None).await?;
-    Ok(Json(json!({"success": true, "tier": req.tier, "app": app, "tx_hash": tx_hash})))
+    activate_tier(
+        &state,
+        user_id,
+        &app,
+        &req.tier.to_ascii_lowercase(),
+        price_cents,
+        "usdc",
+        Some(&tx_hash),
+        payer_wallet.as_deref(),
+        None,
+    )
+    .await?;
+    Ok(Json(
+        json!({"success": true, "tier": req.tier, "app": app, "tx_hash": tx_hash}),
+    ))
 }
 
 /// POST /api/tiers/paypal-order + /api/tiers/paypal-activate — PayPal rail
@@ -1386,11 +1786,15 @@ async fn tier_paypal_order(
     let base_url = crate::handlers::paypal::paypal_base_url(&env);
     let (client_id, client_secret) = crate::handlers::paypal::paypal_credentials(&env);
     if client_id.is_empty() || client_secret.is_empty() {
-        return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "PayPal not configured"}))));
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": "PayPal not configured"})),
+        ));
     }
-    let token = crate::handlers::paypal::get_paypal_access_token(base_url, &client_id, &client_secret)
-        .await
-        .map_err(|e| (StatusCode::BAD_GATEWAY, Json(json!({"error": e}))))?;
+    let token =
+        crate::handlers::paypal::get_paypal_access_token(base_url, &client_id, &client_secret)
+            .await
+            .map_err(|e| (StatusCode::BAD_GATEWAY, Json(json!({"error": e}))))?;
     let amount = format!("{:.2}", price_cents as f64 / 100.0);
     let order: serde_json::Value = reqwest::Client::new()
         .post(format!("{}/v2/checkout/orders", base_url))
@@ -1405,15 +1809,34 @@ async fn tier_paypal_order(
         }))
         .send()
         .await
-        .map_err(|e| (StatusCode::BAD_GATEWAY, Json(json!({"error": format!("PayPal order create failed: {e}")}))))?
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({"error": format!("PayPal order create failed: {e}")})),
+            )
+        })?
         .json()
         .await
-        .map_err(|e| (StatusCode::BAD_GATEWAY, Json(json!({"error": format!("PayPal order parse failed: {e}")}))))?;
-    let order_id = order.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({"error": format!("PayPal order parse failed: {e}")})),
+            )
+        })?;
+    let order_id = order
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     if order_id.is_empty() {
-        return Err((StatusCode::BAD_GATEWAY, Json(json!({"error": "PayPal returned no order id"}))));
+        return Err((
+            StatusCode::BAD_GATEWAY,
+            Json(json!({"error": "PayPal returned no order id"})),
+        ));
     }
-    Ok(Json(json!({"success": true, "paypal_order_id": order_id, "amount_usd": amount})))
+    Ok(Json(
+        json!({"success": true, "paypal_order_id": order_id, "amount_usd": amount}),
+    ))
 }
 
 async fn tier_paypal_activate(
@@ -1427,32 +1850,73 @@ async fn tier_paypal_activate(
     let env = crate::handlers::paypal::get_paypal_env(&state).await;
     let base_url = crate::handlers::paypal::paypal_base_url(&env);
     let (client_id, client_secret) = crate::handlers::paypal::paypal_credentials(&env);
-    let token = crate::handlers::paypal::get_paypal_access_token(base_url, &client_id, &client_secret)
-        .await
-        .map_err(|e| (StatusCode::BAD_GATEWAY, Json(json!({"error": e}))))?;
+    let token =
+        crate::handlers::paypal::get_paypal_access_token(base_url, &client_id, &client_secret)
+            .await
+            .map_err(|e| (StatusCode::BAD_GATEWAY, Json(json!({"error": e}))))?;
     let order: serde_json::Value = reqwest::Client::new()
-        .get(format!("{}/v2/checkout/orders/{}", base_url, req.order_id.trim()))
+        .get(format!(
+            "{}/v2/checkout/orders/{}",
+            base_url,
+            req.order_id.trim()
+        ))
         .bearer_auth(token)
         .send()
         .await
-        .map_err(|e| (StatusCode::BAD_GATEWAY, Json(json!({"error": format!("PayPal order lookup failed: {e}")}))))?
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({"error": format!("PayPal order lookup failed: {e}")})),
+            )
+        })?
         .json()
         .await
-        .map_err(|e| (StatusCode::BAD_GATEWAY, Json(json!({"error": format!("PayPal order parse failed: {e}")}))))?;
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({"error": format!("PayPal order parse failed: {e}")})),
+            )
+        })?;
     let order_status = order.get("status").and_then(|s| s.as_str()).unwrap_or("");
     if order_status != "COMPLETED" && order_status != "APPROVED" {
-        return Err((StatusCode::PAYMENT_REQUIRED, Json(json!({"error": format!("PayPal order is {order_status}, not captured")}))));
+        return Err((
+            StatusCode::PAYMENT_REQUIRED,
+            Json(json!({"error": format!("PayPal order is {order_status}, not captured")})),
+        ));
     }
     let paid_cents = order
-        .get("purchase_units").and_then(|u| u.as_array()).and_then(|a| a.first())
-        .and_then(|pu| pu.get("amount")).and_then(|a| a.get("value")).and_then(|v| v.as_str())
-        .and_then(|v| v.parse::<f64>().ok()).map(|v| (v * 100.0).round() as u64).unwrap_or(0);
+        .get("purchase_units")
+        .and_then(|u| u.as_array())
+        .and_then(|a| a.first())
+        .and_then(|pu| pu.get("amount"))
+        .and_then(|a| a.get("value"))
+        .and_then(|v| v.as_str())
+        .and_then(|v| v.parse::<f64>().ok())
+        .map(|v| (v * 100.0).round() as u64)
+        .unwrap_or(0);
     if paid_cents != price_cents {
-        return Err((StatusCode::PAYMENT_REQUIRED, Json(json!({"error": "Order amount does not match tier price"}))));
+        return Err((
+            StatusCode::PAYMENT_REQUIRED,
+            Json(json!({"error": "Order amount does not match tier price"})),
+        ));
     }
     let payer = order.get("payer");
-    let payer_email = payer.and_then(|p| p.get("email_address")).and_then(|v| v.as_str()).map(str::to_string);
-    activate_tier(&state, user_id, &app, &req.tier.to_ascii_lowercase(), price_cents, "paypal", Some(req.order_id.trim()), None, payer_email.as_deref()).await?;
+    let payer_email = payer
+        .and_then(|p| p.get("email_address"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    activate_tier(
+        &state,
+        user_id,
+        &app,
+        &req.tier.to_ascii_lowercase(),
+        price_cents,
+        "paypal",
+        Some(req.order_id.trim()),
+        None,
+        payer_email.as_deref(),
+    )
+    .await?;
     Ok(Json(json!({"success": true, "tier": req.tier, "app": app})))
 }
 
@@ -1463,8 +1927,15 @@ async fn admin_activate_campaign(
     Extension(state): Extension<Arc<AppState>>,
     Json(req): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let payment_ref = req.get("payment_ref").and_then(|v| v.as_str()).map(str::to_string);
-    let payment_method = req.get("payment_method").and_then(|v| v.as_str()).unwrap_or("manual").to_string();
+    let payment_ref = req
+        .get("payment_ref")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let payment_method = req
+        .get("payment_method")
+        .and_then(|v| v.as_str())
+        .unwrap_or("manual")
+        .to_string();
     let upd = sqlx::query(
         "UPDATE campaigns SET status = 'active', paid_until = NOW() + INTERVAL '30 days', payment_ref = COALESCE($2, payment_ref), payment_method = $3 WHERE id = $1",
     )
@@ -1482,7 +1953,10 @@ async fn admin_activate_campaign(
         }
     })?;
     if upd.rows_affected() == 0 {
-        return Err((StatusCode::NOT_FOUND, Json(json!({"error": "Campaign not found"}))));
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "Campaign not found"})),
+        ));
     }
     // Ledger entry for manual activations (method recorded as given/manual).
     let info: Option<(String, String, String)> = sqlx::query_as(
@@ -1495,7 +1969,21 @@ async fn admin_activate_campaign(
     .flatten();
     if let Some((cname, stype, email)) = info {
         let price = campaign_price_cents(&stype);
-        record_campaign_ledger(&state, &email, id, &cname, &stype, price, &payment_method, None, payment_ref.as_deref(), None, None, None).await;
+        record_campaign_ledger(
+            &state,
+            &email,
+            id,
+            &cname,
+            &stype,
+            price,
+            &payment_method,
+            None,
+            payment_ref.as_deref(),
+            None,
+            None,
+            None,
+        )
+        .await;
     }
     Ok(Json(json!({"success": true, "status": "active"})))
 }
@@ -1526,20 +2014,37 @@ async fn campaign_settle(
     let account_email: String = row.get("user_email");
     let price_cents = campaign_price_cents(&service_type);
 
-    let x_payment = headers.get("X-Payment").and_then(|h| h.to_str().ok())
-        .ok_or_else(|| (StatusCode::PAYMENT_REQUIRED, Json(json!({"error": "Missing X-Payment header"}))))?;
+    let x_payment = headers
+        .get("X-Payment")
+        .and_then(|h| h.to_str().ok())
+        .ok_or_else(|| {
+            (
+                StatusCode::PAYMENT_REQUIRED,
+                Json(json!({"error": "Missing X-Payment header"})),
+            )
+        })?;
 
-    let recipient = std::env::var("X402_RECIPIENT_ADDRESS")
-        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "X402_RECIPIENT_ADDRESS not configured"}))))?;
+    let recipient = std::env::var("X402_RECIPIENT_ADDRESS").map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": "X402_RECIPIENT_ADDRESS not configured"})),
+        )
+    })?;
 
     let resource_url = format!("{}/api/campaigns/{}/settle", base_url(), id);
     let description = format!("Activate campaign '{}'", "campaign");
 
-    let spec = crate::x402::build_payment_required(price_cents, &recipient, &resource_url, &description);
-    let req = spec.accepts.into_iter().next()
-        .ok_or_else(|| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "No payment requirements"}))))?;
+    let spec =
+        crate::x402::build_payment_required(price_cents, &recipient, &resource_url, &description);
+    let req = spec.accepts.into_iter().next().ok_or_else(|| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": "No payment requirements"})),
+        )
+    })?;
 
-    let tx_hash = crate::x402::settle_or_reject(x_payment, &req).await
+    let tx_hash = crate::x402::settle_or_reject(x_payment, &req)
+        .await
         .map_err(|e| (StatusCode::PAYMENT_REQUIRED, Json(json!({"error": e}))))?;
 
     // Activate campaign for 30 days (owner directive Oct 2026: USDC payer =
@@ -1569,7 +2074,21 @@ async fn campaign_settle(
     .execute(&state.db_pool)
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
-    record_campaign_ledger(&state, &account_email, id, &campaign_name, &service_type, price_cents, "usdc", None, Some(&tx_hash), payer_wallet.as_deref(), None, None).await;
+    record_campaign_ledger(
+        &state,
+        &account_email,
+        id,
+        &campaign_name,
+        &service_type,
+        price_cents,
+        "usdc",
+        None,
+        Some(&tx_hash),
+        payer_wallet.as_deref(),
+        None,
+        None,
+    )
+    .await;
 
     // Auto-create referral commission if this user was referred
     let referrer_id: Option<i32> = sqlx::query_scalar(
@@ -1626,34 +2145,36 @@ async fn upload_campaign_file(
             Ok(d) => d,
             Err(_) => continue,
         };
-        if data.is_empty() { continue; }
+        if data.is_empty() {
+            continue;
+        }
 
         let ext = std::path::Path::new(&filename)
             .extension()
             .and_then(|e| e.to_str())
             .unwrap_or("bin");
         let file_type = match ext {
-            "png"|"jpg"|"jpeg"|"gif"|"webp" => "image",
-            "mp4"|"mov"|"avi"|"webm" => "video",
-            "pdf"|"doc"|"docx"|"txt" => "document",
+            "png" | "jpg" | "jpeg" | "gif" | "webp" => "image",
+            "mp4" | "mov" | "avi" | "webm" => "video",
+            "pdf" | "doc" | "docx" | "txt" => "document",
             _ => "document",
         };
 
         let tmp = format!("/tmp/campaign_{id}_{}", Uuid::new_v4());
-        if fs::write(&tmp, &data).await.is_err() { continue; }
+        if fs::write(&tmp, &data).await.is_err() {
+            continue;
+        }
 
         let r2_key = format!("campaigns/{id}/{}", Uuid::new_v4());
         let (file_backend, r2_url) = match &state.r2_client {
-            Some(r2) => {
-                match r2.upload_file_tracked(&tmp, &r2_key).await {
-                    Ok(v) => v,
-                    Err(e) => {
-                        tracing::error!("Campaign file upload failed: {e}");
-                        let _ = fs::remove_file(&tmp).await;
-                        continue;
-                    }
+            Some(r2) => match r2.upload_file_tracked(&tmp, &r2_key).await {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::error!("Campaign file upload failed: {e}");
+                    let _ = fs::remove_file(&tmp).await;
+                    continue;
                 }
-            }
+            },
             None => {
                 let _ = fs::remove_file(&tmp).await;
                 return Json(json!({"success": false, "error": "Object storage not configured"}));
@@ -1849,11 +2370,12 @@ async fn campaign_assistant_chat(
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let user_id: i32 = claims.sub.parse().unwrap_or(0);
     // Service switch (owner directive Sep 2026): campaign chats OFF.
-    if !crate::services::service_flags::service_enabled(&state.db_pool, "chat_agents").await
-    {
+    if !crate::services::service_flags::service_enabled(&state.db_pool, "chat_agents").await {
         return Err((
             StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({"success": false, "error": "Campaign chat is currently disabled (service_flags)."})),
+            Json(
+                json!({"success": false, "error": "Campaign chat is currently disabled (service_flags)."}),
+            ),
         ));
     }
     let service = req.service.clone().unwrap_or_default();
@@ -1861,7 +2383,11 @@ async fn campaign_assistant_chat(
     // Skills are already stored per-service scope — reuse them here (campaign_id = None).
     let skills = crate::services::skills::get_relevant_skills(
         &state.db_pool,
-        if service.is_empty() { None } else { Some(service.as_str()) },
+        if service.is_empty() {
+            None
+        } else {
+            Some(service.as_str())
+        },
         None,
         Some(user_id),
         5,
@@ -1889,7 +2415,8 @@ async fn campaign_assistant_chat(
     } else {
         format!("campaign-assistant-{}-{}", user_id, service)
     };
-    let _ = crate::handlers::upload::get_or_create_session(&state, &session_uuid, Some(user_id)).await;
+    let _ =
+        crate::handlers::upload::get_or_create_session(&state, &session_uuid, Some(user_id)).await;
 
     let response = bounded_chat_reply(&state, &session_uuid, &context, &req.message)
         .await
@@ -1913,18 +2440,35 @@ async fn campaign_chat(
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let user_id: i32 = claims.sub.parse().unwrap_or(0);
     // Service switch (owner directive Sep 2026): campaign chats OFF.
-    if !crate::services::service_flags::service_enabled(&state.db_pool, "chat_agents").await
-    {
+    if !crate::services::service_flags::service_enabled(&state.db_pool, "chat_agents").await {
         return Err((
             StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({"success": false, "error": "Campaign chat is currently disabled (service_flags)."})),
+            Json(
+                json!({"success": false, "error": "Campaign chat is currently disabled (service_flags)."}),
+            ),
         ));
     }
 
-    let campaign_row = sqlx::query_as::<_, (
-        Uuid, String, String, String, String, f64, serde_json::Value, serde_json::Value,
-        i32, chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>, Option<String>, String, i32, i32,
-    )>(
+    let campaign_row = sqlx::query_as::<
+        _,
+        (
+            Uuid,
+            String,
+            String,
+            String,
+            String,
+            f64,
+            serde_json::Value,
+            serde_json::Value,
+            i32,
+            chrono::DateTime<chrono::Utc>,
+            chrono::DateTime<chrono::Utc>,
+            Option<String>,
+            String,
+            i32,
+            i32,
+        ),
+    >(
         "SELECT id, name, service_type, brief, style, duration, schedule, platforms, \
                 posts_per_day, start_date, end_date, source_url, status, \
                 total_posts_planned, total_posts_published \
@@ -1934,11 +2478,36 @@ async fn campaign_chat(
     .bind(user_id)
     .fetch_optional(&state.db_pool)
     .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?
-    .ok_or_else(|| (StatusCode::NOT_FOUND, Json(json!({"error": "Campaign not found"}))))?;
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": e.to_string()})),
+        )
+    })?
+    .ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "Campaign not found"})),
+        )
+    })?;
 
-    let (campaign_id, name, service_type, brief, style, duration, _schedule, _platforms, posts_per_day,
-         start_date, end_date, source_url, status, total_planned, total_published) = campaign_row;
+    let (
+        campaign_id,
+        name,
+        service_type,
+        brief,
+        style,
+        duration,
+        _schedule,
+        _platforms,
+        posts_per_day,
+        start_date,
+        end_date,
+        source_url,
+        status,
+        total_planned,
+        total_published,
+    ) = campaign_row;
 
     let posts = sqlx::query_as::<_, (Uuid, i32, i32, chrono::DateTime<chrono::Utc>, Option<String>, Option<String>, Option<String>, String)>(
         "SELECT id, day_number, slot_index, scheduled_at, variation_prompt, caption, media_r2_url, status \
@@ -1961,20 +2530,31 @@ async fn campaign_chat(
     let posts_context = if posts.is_empty() {
         "No posts yet.".to_string()
     } else {
-        posts.iter().map(|(_, day, slot, _, variation, caption, media_url, post_status)| {
-            let var_str = variation.as_deref().unwrap_or("no prompt");
-            let cap_str = caption.as_deref().unwrap_or("no caption");
-            let url_str = media_url.as_deref().unwrap_or("no URL");
-            format!("- Day {} Slot {} [{}]: var=\"{}\" cap=\"{}\" url={}", day, slot, post_status, var_str, cap_str, url_str)
-        }).collect::<Vec<_>>().join("\n")
+        posts
+            .iter()
+            .map(
+                |(_, day, slot, _, variation, caption, media_url, post_status)| {
+                    let var_str = variation.as_deref().unwrap_or("no prompt");
+                    let cap_str = caption.as_deref().unwrap_or("no caption");
+                    let url_str = media_url.as_deref().unwrap_or("no URL");
+                    format!(
+                        "- Day {} Slot {} [{}]: var=\"{}\" cap=\"{}\" url={}",
+                        day, slot, post_status, var_str, cap_str, url_str
+                    )
+                },
+            )
+            .collect::<Vec<_>>()
+            .join("\n")
     };
 
     let files_context = if files.is_empty() {
         "No reference files.".to_string()
     } else {
-        files.iter().map(|(fname, url, ftype)| {
-            format!("- {} ({}) url={}", fname, ftype, url)
-        }).collect::<Vec<_>>().join("\n")
+        files
+            .iter()
+            .map(|(fname, url, ftype)| format!("- {} ({}) url={}", fname, ftype, url))
+            .collect::<Vec<_>>()
+            .join("\n")
     };
 
     // Load relevant skills for context injection
@@ -2024,7 +2604,8 @@ async fn campaign_chat(
     );
 
     let session_uuid = format!("campaign-chat-{}", campaign_id);
-    let _ = crate::handlers::upload::get_or_create_session(&state, &session_uuid, Some(user_id)).await;
+    let _ =
+        crate::handlers::upload::get_or_create_session(&state, &session_uuid, Some(user_id)).await;
 
     // Bounded single-turn reply (see bounded_chat_reply): full agent loops
     // exceeded Cloudflare's proxy timeout → 504s.

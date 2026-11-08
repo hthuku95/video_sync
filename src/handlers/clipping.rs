@@ -162,7 +162,8 @@ async fn clipping_job_ws(stream: WebSocket, state: Arc<AppState>, job_id: i32) {
 
     // Path 1: In-memory bridge (same-instance)
     {
-        let (pg_tx, mut pg_rx) = tokio::sync::mpsc::unbounded_channel::<crate::jobs::ProgressUpdate>();
+        let (pg_tx, mut pg_rx) =
+            tokio::sync::mpsc::unbounded_channel::<crate::jobs::ProgressUpdate>();
         state
             .job_manager
             .register_progress_sender(session_key.clone(), pg_tx)
@@ -182,7 +183,10 @@ async fn clipping_job_ws(stream: WebSocket, state: Arc<AppState>, job_id: i32) {
     // Path 2: Redis pub/sub (cross-instance)
     if let Some(ref bus) = state.pubsub_bus {
         if let Ok(mut redis_rx) = bus.subscribe(&format!("progress:{}", session_key)).await {
-            tracing::info!("📡 Subscribed to Redis progress for clipping job {}", job_id);
+            tracing::info!(
+                "📡 Subscribed to Redis progress for clipping job {}",
+                job_id
+            );
             let prog_tx = progress_tx.clone();
             tokio::spawn(async move {
                 while let Some(msg) = redis_rx.recv().await {

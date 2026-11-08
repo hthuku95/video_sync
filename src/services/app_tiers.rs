@@ -57,13 +57,12 @@ pub async fn get_user_tier(pool: &sqlx::PgPool, user_id: i32, app: &str) -> (Str
 /// Count the user's DISTINCT active connected accounts across ALL their Zernio
 /// profiles (live API; falls back to the DB cache when Zernio is unreachable).
 pub async fn count_user_accounts(state: &Arc<AppState>, user_id: i32) -> usize {
-    let profiles: Vec<String> = sqlx::query_scalar(
-        "SELECT zernio_profile_id FROM user_zernio_profiles WHERE user_id = $1",
-    )
-    .bind(user_id)
-    .fetch_all(&state.db_pool)
-    .await
-    .unwrap_or_default();
+    let profiles: Vec<String> =
+        sqlx::query_scalar("SELECT zernio_profile_id FROM user_zernio_profiles WHERE user_id = $1")
+            .bind(user_id)
+            .fetch_all(&state.db_pool)
+            .await
+            .unwrap_or_default();
     if profiles.is_empty() {
         return 0;
     }

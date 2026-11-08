@@ -2,7 +2,7 @@ use crate::models::auth::Claims;
 use crate::AppState;
 use axum::{
     extract::Request,
-    http::{StatusCode, header},
+    http::{header, StatusCode},
     middleware::Next,
     response::{Html, IntoResponse, Json, Response},
 };

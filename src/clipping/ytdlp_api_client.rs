@@ -378,7 +378,10 @@ impl YtdlpApiClient {
         }
         if !resp.status().is_success() {
             let body = resp.text().await.unwrap_or_default();
-            return Err(format!("async submit failed: {}", body.chars().take(300).collect::<String>()));
+            return Err(format!(
+                "async submit failed: {}",
+                body.chars().take(300).collect::<String>()
+            ));
         }
         let sub: AsyncSubmitResponse = resp
             .json()
@@ -413,13 +416,20 @@ impl YtdlpApiClient {
             };
             match st.status.as_str() {
                 "done" => {
-                    let r2_url = st.r2_url.filter(|u| !u.is_empty()).ok_or_else(|| {
-                        "async job done without R2 URL".to_string()
-                    })?;
+                    let r2_url = st
+                        .r2_url
+                        .filter(|u| !u.is_empty())
+                        .ok_or_else(|| "async job done without R2 URL".to_string())?;
                     if st.cached.unwrap_or(false) {
-                        info!("♻️ source cache hit — reusing {}", r2_url.chars().take(80).collect::<String>());
+                        info!(
+                            "♻️ source cache hit — reusing {}",
+                            r2_url.chars().take(80).collect::<String>()
+                        );
                     } else {
-                        info!("✅ R2 source available: {}", r2_url.chars().take(80).collect::<String>());
+                        info!(
+                            "✅ R2 source available: {}",
+                            r2_url.chars().take(80).collect::<String>()
+                        );
                     }
                     // Empty placeholder keeps downstream file validation happy
                     // (same contract as the sync r2 path).
@@ -444,7 +454,9 @@ impl YtdlpApiClient {
                     });
                 }
                 "failed" | "cancelled" => {
-                    return Err(st.error.unwrap_or_else(|| "async download failed".to_string()));
+                    return Err(st
+                        .error
+                        .unwrap_or_else(|| "async download failed".to_string()));
                 }
                 _ => {} // queued | running — keep polling
             }
@@ -544,11 +556,13 @@ impl YtdlpApiClient {
                 info!("R2 direct download: {}", r2_url);
 
                 // Create empty placeholder so file validation passes
-                file.write_all(b"").await
+                file.write_all(b"")
+                    .await
                     .map_err(|e| format!("Failed to write placeholder: {}", e))?;
 
                 // Return result with r2_url set
-                file.flush().await
+                file.flush()
+                    .await
                     .map_err(|e| format!("Failed to flush: {}", e))?;
 
                 return Ok(VideoDownloadResult {

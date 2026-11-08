@@ -1,6 +1,6 @@
 #![allow(dead_code)]
-use std::process::{Command, Stdio};
 use std::io::Read;
+use std::process::{Command, Stdio};
 
 /// Result of clip position selection
 #[derive(Debug, Clone)]
@@ -23,12 +23,18 @@ pub fn detect_scene_changes(
     let t_arg = format!("{:.1}", analysis_window);
 
     let args = vec![
-        "-v", "quiet",
-        "-i", video_url,
-        "-filter", &scene_filter,
-        "-show_entries", "frame=pts_time",
-        "-vsync", "vfr",
-        "-f", "null",
+        "-v",
+        "quiet",
+        "-i",
+        video_url,
+        "-filter",
+        &scene_filter,
+        "-show_entries",
+        "frame=pts_time",
+        "-vsync",
+        "vfr",
+        "-f",
+        "null",
     ];
 
     // If limiting analysis duration, prepend -t before -i
@@ -136,9 +142,12 @@ pub fn detect_active_audio_segments(
 pub fn get_duration(video_url: &str) -> Result<f64, String> {
     let output = Command::new("ffprobe")
         .args([
-            "-v", "error",
-            "-show_entries", "format=duration",
-            "-of", "csv=p=0",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "csv=p=0",
             video_url,
         ])
         .stdout(Stdio::piped())
@@ -184,7 +193,8 @@ pub fn select_clip_positions(
     }
 
     // Detect scene changes
-    let scene_changes = detect_scene_changes(video_url, 0.35, max_analysis_secs).unwrap_or_default();
+    let scene_changes =
+        detect_scene_changes(video_url, 0.35, max_analysis_secs).unwrap_or_default();
 
     // Detect active audio segments
     let active_segments =
@@ -260,7 +270,11 @@ fn score_candidates(
     }
 
     // Sort by score descending
-    scored.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    scored.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     // Pick top N with diversity: ensure minimum 15s gap between selected clips
     let mut selected: Vec<ClipPosition> = Vec::new();
@@ -285,7 +299,9 @@ fn score_candidates(
         let step_even = last_start / (needed as f64 + 1.0);
         for i in 1..=needed {
             let pos = step_even * (i as f64);
-            let too_close = selected.iter().any(|s| (s.start_time - pos).abs() < min_gap);
+            let too_close = selected
+                .iter()
+                .any(|s| (s.start_time - pos).abs() < min_gap);
             if !too_close {
                 selected.push(ClipPosition {
                     start_time: pos,
@@ -296,7 +312,11 @@ fn score_candidates(
     }
 
     // Sort by start time
-    selected.sort_by(|a, b| a.start_time.partial_cmp(&b.start_time).unwrap_or(std::cmp::Ordering::Equal));
+    selected.sort_by(|a, b| {
+        a.start_time
+            .partial_cmp(&b.start_time)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     selected
 }

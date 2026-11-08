@@ -9,8 +9,7 @@ use reqwest::Client;
 /// is an Alibaba Cloud International account (eu-central-1). Overridable via
 /// `QWEN_BASE_URL` (e.g. set to `https://dashscope.aliyuncs.com/compatible-mode/v1`
 /// for a mainland-China account).
-const QWEN_DEFAULT_BASE_URL: &str =
-    "https://dashscope-intl.aliyuncs.com/compatible-mode/v1";
+const QWEN_DEFAULT_BASE_URL: &str = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1";
 fn qwen_base_url() -> String {
     std::env::var("QWEN_BASE_URL").unwrap_or_else(|_| QWEN_DEFAULT_BASE_URL.to_string())
 }
@@ -48,8 +47,7 @@ pub enum QwenResponse {
 
 impl QwenClient {
     pub fn new(api_key: String) -> Self {
-        let model = std::env::var("QWEN_MODEL")
-            .unwrap_or_else(|_| QWEN_DEFAULT_MODEL.to_string());
+        let model = std::env::var("QWEN_MODEL").unwrap_or_else(|_| QWEN_DEFAULT_MODEL.to_string());
         let embedding_model = std::env::var("QWEN_EMBEDDING_MODEL")
             .unwrap_or_else(|_| QWEN_DEFAULT_EMBEDDING_MODEL.to_string());
         Self {
@@ -109,16 +107,11 @@ impl QwenClient {
             let err_body = resp.text().await.unwrap_or_default();
 
             // Non-retryable: auth / insufficient balance / invalid model
-            if status.as_u16() == 401
-                || status.as_u16() == 402
-                || status.as_u16() == 400
-            {
+            if status.as_u16() == 401 || status.as_u16() == 402 || status.as_u16() == 400 {
                 return Err(format!("Qwen {}: {}", status.as_u16(), err_body).into());
             }
 
-            if (status.as_u16() == 429 || status.as_u16() == 503)
-                && attempt < max_attempts - 1
-            {
+            if (status.as_u16() == 429 || status.as_u16() == 503) && attempt < max_attempts - 1 {
                 let wait = 10u64 * 2u64.pow(attempt);
                 tracing::warn!(
                     "⏳ Qwen {} (attempt {}/{}). Waiting {}s…",
@@ -193,16 +186,11 @@ impl QwenClient {
             let err_body = resp.text().await.unwrap_or_default();
 
             // Non-retryable: auth / insufficient balance / invalid model
-            if status.as_u16() == 401
-                || status.as_u16() == 402
-                || status.as_u16() == 400
-            {
+            if status.as_u16() == 401 || status.as_u16() == 402 || status.as_u16() == 400 {
                 return Err(format!("Qwen {}: {}", status.as_u16(), err_body).into());
             }
 
-            if (status.as_u16() == 429 || status.as_u16() == 503)
-                && attempt < max_attempts - 1
-            {
+            if (status.as_u16() == 429 || status.as_u16() == 503) && attempt < max_attempts - 1 {
                 let wait = 10u64 * 2u64.pow(attempt);
                 tracing::warn!(
                     "⏳ Qwen multimodal {} (attempt {}/{}). Waiting {}s…",
@@ -269,13 +257,8 @@ impl QwenClient {
         &self,
         messages: &[serde_json::Value],
         tools: &[crate::gemini_client::FunctionDeclaration],
-    ) -> Result<
-        (
-            QwenResponse,
-            crate::usage::UsageInfo,
-        ),
-        Box<dyn std::error::Error + Send + Sync>,
-    > {
+    ) -> Result<(QwenResponse, crate::usage::UsageInfo), Box<dyn std::error::Error + Send + Sync>>
+    {
         let openai_tools = Self::to_openai_tools(tools);
 
         let body = serde_json::json!({
@@ -340,16 +323,11 @@ impl QwenClient {
             let err_body = resp.text().await.unwrap_or_default();
 
             // Non-retryable: auth / insufficient balance / invalid model
-            if status.as_u16() == 401
-                || status.as_u16() == 402
-                || status.as_u16() == 400
-            {
+            if status.as_u16() == 401 || status.as_u16() == 402 || status.as_u16() == 400 {
                 return Err(format!("Qwen {}: {}", status.as_u16(), err_body).into());
             }
 
-            if (status.as_u16() == 429 || status.as_u16() == 503)
-                && attempt < max_attempts - 1
-            {
+            if (status.as_u16() == 429 || status.as_u16() == 503) && attempt < max_attempts - 1 {
                 let wait = 10u64 * 2u64.pow(attempt);
                 tracing::warn!(
                     "⏳ Qwen tool call {} (attempt {}/{}). Waiting {}s…",
@@ -429,36 +407,24 @@ impl QwenClient {
                     let mut merged: Vec<f32> = Vec::new();
                     for key in ["text_embedding", "image_embedding", "video_embedding"] {
                         if let Some(arr) = json["output"]["embeddings"][0][key].as_array() {
-                            merged.extend(
-                                arr.iter()
-                                    .filter_map(|v| v.as_f64().map(|f| f as f32)),
-                            );
+                            merged.extend(arr.iter().filter_map(|v| v.as_f64().map(|f| f as f32)));
                         }
                     }
                     merged
                 };
                 if vec.is_empty() {
-                    return Err(format!(
-                        "Qwen embedding: empty vector (raw: {})",
-                        json
-                    )
-                    .into());
+                    return Err(format!("Qwen embedding: empty vector (raw: {})", json).into());
                 }
                 return Ok(vec);
             }
 
             let err_body = resp.text().await.unwrap_or_default();
 
-            if status.as_u16() == 401
-                || status.as_u16() == 402
-                || status.as_u16() == 400
-            {
+            if status.as_u16() == 401 || status.as_u16() == 402 || status.as_u16() == 400 {
                 return Err(format!("Qwen embedding {}: {}", status.as_u16(), err_body).into());
             }
 
-            if (status.as_u16() == 429 || status.as_u16() == 503)
-                && attempt < max_attempts - 1
-            {
+            if (status.as_u16() == 429 || status.as_u16() == 503) && attempt < max_attempts - 1 {
                 let wait = 10u64 * 2u64.pow(attempt);
                 tracing::warn!(
                     "⏳ Qwen embedding {} (attempt {}/{}). Waiting {}s…",

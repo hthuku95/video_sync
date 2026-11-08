@@ -132,7 +132,10 @@ impl BlenderMCPClient {
         title_text: &str,
         style: &str,
     ) -> Result<String, String> {
-        let combined_prompt = format!("Generate a 3D thumbnail image. Scene: {}. Title text: {}", prompt, title_text);
+        let combined_prompt = format!(
+            "Generate a 3D thumbnail image. Scene: {}. Title text: {}",
+            prompt, title_text
+        );
         let args = json!({
             "prompt": combined_prompt,
             "duration": 0,
@@ -151,7 +154,10 @@ impl BlenderMCPClient {
         duration: f64,
         style: &str,
     ) -> Result<String, String> {
-        let combined_prompt = format!("Generate an animated title card. Title: {}. Subtitle: {}. Style: {}", title, subtitle, style);
+        let combined_prompt = format!(
+            "Generate an animated title card. Title: {}. Subtitle: {}. Style: {}",
+            title, subtitle, style
+        );
         let args = json!({
             "prompt": combined_prompt,
             "duration": duration,
@@ -170,7 +176,10 @@ impl BlenderMCPClient {
         title: &str,
         duration: f64,
     ) -> Result<String, String> {
-        let combined_prompt = format!("Generate a data visualization chart. Type: {}. Title: {}. Data: {}", chart_type, title, data_json);
+        let combined_prompt = format!(
+            "Generate a data visualization chart. Type: {}. Title: {}. Data: {}",
+            chart_type, title, data_json
+        );
         let args = json!({
             "prompt": combined_prompt,
             "duration": duration,
@@ -189,7 +198,10 @@ impl BlenderMCPClient {
         style: &str,
         duration: f64,
     ) -> Result<String, String> {
-        let combined_prompt = format!("Generate an animated lower-third overlay. Name: {}. Subtitle: {}. Style: {}", name_text, subtitle_text, style);
+        let combined_prompt = format!(
+            "Generate an animated lower-third overlay. Name: {}. Subtitle: {}. Style: {}",
+            name_text, subtitle_text, style
+        );
         let args = json!({
             "prompt": combined_prompt,
             "duration": duration,
@@ -220,7 +232,8 @@ impl BlenderMCPClient {
             }),
             "video_url",
             "mp4",
-        ).await
+        )
+        .await
     }
 
     /// Generate a device UI mockup (iPhone/MacBook/browser/iPad) with optional animation.
@@ -235,7 +248,10 @@ impl BlenderMCPClient {
         background_color: Option<&[f64; 3]>,
         accent_color: Option<&[f64; 3]>,
     ) -> Result<String, String> {
-        let mut desc = format!("Generate a UI mockup on a {}. Animation: {}. Screenshot URL: {}", device, animation, screenshot_url);
+        let mut desc = format!(
+            "Generate a UI mockup on a {}. Animation: {}. Screenshot URL: {}",
+            device, animation, screenshot_url
+        );
         if let Some(spec) = screenshot_spec {
             desc.push_str(&format!(". Screenshot spec: {}", spec));
         }
@@ -280,7 +296,8 @@ impl BlenderMCPClient {
             }),
             "video_url",
             "mp4",
-        ).await
+        )
+        .await
     }
 
     /// Generate an animated data visualisation (bar/line/pie/counter/scatter).
@@ -294,7 +311,10 @@ impl BlenderMCPClient {
         duration: f64,
         colors: serde_json::Value,
     ) -> Result<String, String> {
-        let description = format!("Create a {} chart titled '{}'. Data: {}. Labels: {}. Colors: {}", chart_type, title, data, labels, colors);
+        let description = format!(
+            "Create a {} chart titled '{}'. Data: {}. Labels: {}. Colors: {}",
+            chart_type, title, data, labels, colors
+        );
         self.render_async(
             "manim_execute_script",
             json!({
@@ -306,7 +326,8 @@ impl BlenderMCPClient {
             }),
             "video_url",
             "mp4",
-        ).await
+        )
+        .await
     }
 
     /// Consolidated bpy script execution — replaces all individual blender_generate_* tools.
@@ -490,7 +511,11 @@ impl BlenderMCPClient {
     /// Submit a tool as a background job and poll until completion.
     /// Returns the full JSON result (unlike render_async which downloads the file).
     /// Safe for any duration — never holds an HTTP connection open during render.
-    pub async fn call_tool_async(&self, tool: &str, args: serde_json::Value) -> Result<serde_json::Value, String> {
+    pub async fn call_tool_async(
+        &self,
+        tool: &str,
+        args: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
         let job_id = self.submit_job(tool, args).await?;
 
         // Poll every 5 seconds for up to 30 minutes (360 polls).

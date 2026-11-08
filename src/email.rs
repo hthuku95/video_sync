@@ -1,7 +1,6 @@
 use lettre::{
-    message::Mailbox,
-    transport::smtp::authentication::Credentials,
-    AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor,
+    message::Mailbox, transport::smtp::authentication::Credentials, AsyncSmtpTransport,
+    AsyncTransport, Message, Tokio1Executor,
 };
 
 fn smtp_config() -> Option<(String, u16, String, String)> {
@@ -10,8 +9,12 @@ fn smtp_config() -> Option<(String, u16, String, String)> {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(587);
-    let username = std::env::var("SMTP_USERNAME").ok().filter(|s| !s.is_empty())?;
-    let password = std::env::var("SMTP_PASSWORD").ok().filter(|s| !s.is_empty())?;
+    let username = std::env::var("SMTP_USERNAME")
+        .ok()
+        .filter(|s| !s.is_empty())?;
+    let password = std::env::var("SMTP_PASSWORD")
+        .ok()
+        .filter(|s| !s.is_empty())?;
     Some((host, port, username, password))
 }
 
@@ -62,13 +65,14 @@ pub async fn notify_admin(subject: &str, body: &str) {
 
     let creds = Credentials::new(username, password);
 
-    let mailer: AsyncSmtpTransport<Tokio1Executor> = match AsyncSmtpTransport::<Tokio1Executor>::relay(&host) {
-        Ok(b) => b.credentials(creds).port(port).build(),
-        Err(e) => {
-            tracing::warn!("Failed to build SMTP transport: {}", e);
-            return;
-        }
-    };
+    let mailer: AsyncSmtpTransport<Tokio1Executor> =
+        match AsyncSmtpTransport::<Tokio1Executor>::relay(&host) {
+            Ok(b) => b.credentials(creds).port(port).build(),
+            Err(e) => {
+                tracing::warn!("Failed to build SMTP transport: {}", e);
+                return;
+            }
+        };
 
     match mailer.send(message).await {
         Ok(_) => tracing::info!("Payment notification email sent to {}", to_addr),

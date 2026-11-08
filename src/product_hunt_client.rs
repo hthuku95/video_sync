@@ -61,11 +61,26 @@ pub struct GraphQLError {
 /// Top-level categories/topics on Product Hunt
 pub fn default_topics() -> Vec<&'static str> {
     vec![
-        "ai", "saas", "developer-tools", "productivity", "design-tools",
-        "marketing", "analytics", "automation", "no-code", "data-science",
-        "machine-learning", "api", "chrome-extension", "note-taking",
-        "task-management", "customer-communication", "growth-hacking",
-        "seo", "email-marketing", "social-media",
+        "ai",
+        "saas",
+        "developer-tools",
+        "productivity",
+        "design-tools",
+        "marketing",
+        "analytics",
+        "automation",
+        "no-code",
+        "data-science",
+        "machine-learning",
+        "api",
+        "chrome-extension",
+        "note-taking",
+        "task-management",
+        "customer-communication",
+        "growth-hacking",
+        "seo",
+        "email-marketing",
+        "social-media",
     ]
 }
 
@@ -81,7 +96,10 @@ pub async fn fetch_top_posts(
     // Build the GraphQL query
     let mut query_vars = HashMap::new();
     query_vars.insert("first".to_string(), serde_json::json!(first));
-    query_vars.insert("order".to_string(), serde_json::json!(order.unwrap_or("VOTES")));
+    query_vars.insert(
+        "order".to_string(),
+        serde_json::json!(order.unwrap_or("VOTES")),
+    );
 
     let topic_filter = if let Some(t) = topic {
         format!(r#", topic: "{}""#, t)
@@ -123,14 +141,21 @@ pub async fn fetch_top_posts(
         .map_err(|e| format!("Product Hunt API request failed: {}", e))?;
 
     let status = resp.status();
-    let body = resp.text().await.map_err(|e| format!("Failed to read response: {}", e))?;
+    let body = resp
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read response: {}", e))?;
 
     if !status.is_success() {
         return Err(format!("Product Hunt API returned {}: {}", status, body));
     }
 
-    let graphql_resp: GraphQLResponse = serde_json::from_str(&body)
-        .map_err(|e| format!("Failed to parse Product Hunt API response: {} (body: {})", e, body))?;
+    let graphql_resp: GraphQLResponse = serde_json::from_str(&body).map_err(|e| {
+        format!(
+            "Failed to parse Product Hunt API response: {} (body: {})",
+            e, body
+        )
+    })?;
 
     if let Some(errors) = &graphql_resp.errors {
         let msgs: Vec<&str> = errors.iter().map(|e| e.message.as_str()).collect();
@@ -187,7 +212,10 @@ pub async fn fetch_post_by_slug(slug: &str) -> Result<ProductHuntPost, String> {
         .map_err(|e| format!("Product Hunt API request failed: {}", e))?;
 
     let status = resp.status();
-    let body = resp.text().await.map_err(|e| format!("Failed to read response: {}", e))?;
+    let body = resp
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read response: {}", e))?;
 
     if !status.is_success() {
         return Err(format!("Product Hunt API returned {}: {}", status, body));
@@ -250,7 +278,10 @@ pub async fn search_posts(query: &str, first: i32) -> Result<Vec<ProductHuntPost
         .map_err(|e| format!("Product Hunt API request failed: {}", e))?;
 
     let status = resp.status();
-    let body = resp.text().await.map_err(|e| format!("Failed to read response: {}", e))?;
+    let body = resp
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read response: {}", e))?;
 
     if !status.is_success() {
         return Err(format!("Product Hunt API returned {}: {}", status, body));

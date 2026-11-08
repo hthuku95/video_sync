@@ -27,17 +27,15 @@ pub struct VideoEditingJob {
 }
 
 impl VideoEditingJob {
-    fn request_expects_generated_artifact(job_type: &str, raw_input: &str, augmented_input: &str) -> bool {
+    fn request_expects_generated_artifact(
+        job_type: &str,
+        raw_input: &str,
+        augmented_input: &str,
+    ) -> bool {
         let combined = format!("{} {}", raw_input, augmented_input).to_lowercase();
 
         let generation_intent = [
-            "create",
-            "generate",
-            "render",
-            "produce",
-            "make",
-            "build",
-            "edit",
+            "create", "generate", "render", "produce", "make", "build", "edit",
         ]
         .iter()
         .any(|needle| combined.contains(needle));
@@ -66,9 +64,15 @@ impl VideoEditingJob {
         response
             .lines()
             .flat_map(|line| {
-                ["/api/outputs/stream/", "/api/outputs/download/", "/delivery/"]
-                    .into_iter()
-                    .filter_map(move |needle| line.find(needle).map(|idx| line[idx..].trim().to_string()))
+                [
+                    "/api/outputs/stream/",
+                    "/api/outputs/download/",
+                    "/delivery/",
+                ]
+                .into_iter()
+                .filter_map(move |needle| {
+                    line.find(needle).map(|idx| line[idx..].trim().to_string())
+                })
             })
             .collect::<std::collections::BTreeSet<_>>()
             .into_iter()
@@ -137,14 +141,19 @@ impl VideoEditingJob {
             &augmented_input,
         );
 
-        let workflow_runtime = crate::services::WorkflowRuntime::new(self.app_state.db_pool.clone());
+        let workflow_runtime =
+            crate::services::WorkflowRuntime::new(self.app_state.db_pool.clone());
         let workflow_id = workflow_runtime
             .create_workflow(crate::services::NewWorkflow {
                 idempotency_key: Some(format!("background-video-job:{job_id}")),
                 workflow_type: "background_video_editing_job".to_string(),
                 status: crate::services::WorkflowStatus::Planning,
                 session_uuid: Some(session_id.clone()),
-                user_id: self.job.user_id.as_deref().and_then(|value| value.parse::<i32>().ok()),
+                user_id: self
+                    .job
+                    .user_id
+                    .as_deref()
+                    .and_then(|value| value.parse::<i32>().ok()),
                 source_table: Some("job_manager".to_string()),
                 source_record_id: uuid::Uuid::parse_str(&job_id).ok(),
                 request_summary: raw_input.chars().take(200).collect::<String>(),
@@ -466,12 +475,7 @@ impl VideoEditingJob {
                         )
                         .await;
                         let _ = workflow_runtime
-                            .mark_failed(
-                                workflow_id,
-                                Some("artifact_verification"),
-                                &error,
-                                None,
-                            )
+                            .mark_failed(workflow_id, Some("artifact_verification"), &error, None)
                             .await;
                     }
                     self.send_progress(
@@ -514,12 +518,7 @@ impl VideoEditingJob {
                         )
                         .await;
                         let _ = workflow_runtime
-                            .mark_failed(
-                                workflow_id,
-                                Some("artifact_verification"),
-                                &error,
-                                None,
-                            )
+                            .mark_failed(workflow_id, Some("artifact_verification"), &error, None)
                             .await;
                     }
                     self.send_progress(
@@ -648,16 +647,16 @@ impl VideoEditingJob {
                             files_referenced,
                             context_data,
                             self.app_state.voyage_embeddings.as_ref(),
-                            self.app_state.video_gemini_client.as_ref().or(self.app_state.gemini_client.as_ref()),
+                            self.app_state
+                                .video_gemini_client
+                                .as_ref()
+                                .or(self.app_state.gemini_client.as_ref()),
                             self.app_state.qwen_client.as_ref(),
                             Some("video_editing"),
                         )
                         .await
                     {
-                        tracing::warn!(
-                            "Failed to store conversation in Qdrant: {}",
-                            e
-                        );
+                        tracing::warn!("Failed to store conversation in Qdrant: {}", e);
                     }
                 }
 
@@ -733,13 +732,8 @@ impl VideoEditingJob {
                             .await
                     } else {
                         workflow_runtime
-                            .mark_failed(
-                                workflow_id,
-                                Some("background_video_job"),
-                                &error,
-                                None,
-                        )
-                        .await
+                            .mark_failed(workflow_id, Some("background_video_job"), &error, None)
+                            .await
                     };
                 }
                 let progress_message = if was_cancelled {
@@ -899,10 +893,16 @@ impl VideoEditingJob {
         let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
 
         let ctx = if self.job.job_type == "video_editing" {
-            let raw = self.job.input_data.get("raw_input")
+            let raw = self
+                .job
+                .input_data
+                .get("raw_input")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            let augmented = self.job.input_data.get("augmented_input")
+            let augmented = self
+                .job
+                .input_data
+                .get("augmented_input")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
             format!("Raw input: {}\nAugmented context: {}", raw, augmented)

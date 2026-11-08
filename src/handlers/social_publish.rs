@@ -7,13 +7,13 @@ use axum::{
     routing::{get, post},
     Router,
 };
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sqlx::Row;
 use std::sync::Arc;
 use tracing::{info, warn};
 use uuid::Uuid;
-use chrono::{DateTime, Utc};
 
 /// How many connected social accounts each user-owned Zernio profile may hold.
 /// Organizational only (small blast radius per profile) — it does NOT multiply
@@ -30,38 +30,49 @@ pub fn social_routes() -> Router {
         .route("/api/social/accounts", get(list_accounts))
         .route("/api/social/publish", post(publish_post))
         // Client-facing delivery Zernio self-service
-        .route("/api/deliveries/:id/social-status", get(get_delivery_social_status))
-        .route("/api/deliveries/:id/social-profile", post(create_delivery_zernio_profile))
-        .route("/api/deliveries/:id/social-targets", post(set_delivery_social_targets))
+        .route(
+            "/api/deliveries/:id/social-status",
+            get(get_delivery_social_status),
+        )
+        .route(
+            "/api/deliveries/:id/social-profile",
+            post(create_delivery_zernio_profile),
+        )
+        .route(
+            "/api/deliveries/:id/social-targets",
+            post(set_delivery_social_targets),
+        )
         // Manual retry for failed/partial Zernio posts
         .route("/api/social/posts/:id/retry", post(retry_post))
         // Zernio webhook for push-based status updates (replaces polling)
         .route("/api/social/webhook", post(zernio_webhook));
     // User-level self-service (requires auth)
     let user_routes = Router::new()
-        .route("/api/social/my-profile", post(get_or_create_my_zernio_profile))
+        .route(
+            "/api/social/my-profile",
+            post(get_or_create_my_zernio_profile),
+        )
         .route("/api/social/my-profiles", get(get_my_zernio_profiles))
         .route("/api/social/my-connect-url", post(get_my_connect_url))
         .route("/api/social/my-accounts", get(get_my_social_accounts))
         .route("/api/social/sync-accounts", post(sync_my_social_accounts))
         .route("/api/social/my-publish", post(my_publish_post))
-        .layer(axum::middleware::from_fn(crate::middleware::auth::auth_middleware));
+        .layer(axum::middleware::from_fn(
+            crate::middleware::auth::auth_middleware,
+        ));
     public.merge(user_routes)
 }
 
 fn client(state: &Arc<AppState>) -> Result<ZernioClient, (StatusCode, Json<serde_json::Value>)> {
-    state
-        .zernio_client
-        .clone()
-        .ok_or_else(|| {
-            (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(json!({
-                    "success": false,
-                    "error": "Zernio client not configured. Set ZERNIO_API_KEY."
-                })),
-            )
-        })
+    state.zernio_client.clone().ok_or_else(|| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({
+                "success": false,
+                "error": "Zernio client not configured. Set ZERNIO_API_KEY."
+            })),
+        )
+    })
 }
 
 // ── Request / Response types ───────────────────────────────────────────────
@@ -137,7 +148,14 @@ pub async fn get_connect_url(
     Query(query): Query<ConnectUrlQuery>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let z = client(&state)?;
-    match z.get_connect_url(&query.platform, &query.profile_id, query.redirect_url.as_deref()).await {
+    match z
+        .get_connect_url(
+            &query.platform,
+            &query.profile_id,
+            query.redirect_url.as_deref(),
+        )
+        .await
+    {
         Ok(resp) => Ok(Json(json!({
             "success": true,
             "authUrl": resp.auth_url,
@@ -182,7 +200,12 @@ pub async fn publish_post(
         .collect();
 
     match z
-        .publish_to_accounts(&payload.profile_id, &payload.text, targets, payload.media_urls)
+        .publish_to_accounts(
+            &payload.profile_id,
+            &payload.text,
+            targets,
+            payload.media_urls,
+        )
         .await
     {
         Ok(resp) => Ok(Json(json!({
@@ -315,12 +338,10 @@ pub async fn create_delivery_zernio_profile(
     };
 
     // Check if delivery already has a profile
-    let existing = sqlx::query(
-        "SELECT zernio_profile_id, title FROM deliveries WHERE id = $1",
-    )
-    .bind(delivery_id)
-    .fetch_optional(&state.db_pool)
-    .await;
+    let existing = sqlx::query("SELECT zernio_profile_id, title FROM deliveries WHERE id = $1")
+        .bind(delivery_id)
+        .fetch_optional(&state.db_pool)
+        .await;
 
     let (existing_profile_id, title) = match existing {
         Ok(Some(r)) => (
@@ -338,7 +359,13 @@ pub async fn create_delivery_zernio_profile(
 
     // Create profile on Zernio
     let profile_name = format!("Delivery: {}", title);
-    match z.create_profile(&profile_name, Some("Auto-created for delivery self-service")).await {
+    match z
+        .create_profile(
+            &profile_name,
+            Some("Auto-created for delivery self-service"),
+        )
+        .await
+    {
         Ok(resp) => {
             let profile_id = resp.profile.id.clone();
             let result = sqlx::query("UPDATE deliveries SET zernio_profile_id = $1 WHERE id = $2")
@@ -353,10 +380,14 @@ pub async fn create_delivery_zernio_profile(
                     "profile_id": profile_id,
                     "profile": resp.profile,
                 })),
-                Err(e) => Json(json!({"success": false, "error": format!("DB update failed: {e}")})),
+                Err(e) => {
+                    Json(json!({"success": false, "error": format!("DB update failed: {e}")}))
+                }
             }
         }
-        Err(e) => Json(json!({"success": false, "error": format!("Zernio create profile failed: {e}")})),
+        Err(e) => {
+            Json(json!({"success": false, "error": format!("Zernio create profile failed: {e}")}))
+        }
     }
 }
 
@@ -369,17 +400,19 @@ pub async fn set_delivery_social_targets(
     Json(payload): Json<DeliverySocialTargetsPayload>,
 ) -> Json<serde_json::Value> {
     // First ensure delivery has a profile_id
-    let profile_row = sqlx::query(
-        "SELECT zernio_profile_id FROM deliveries WHERE id = $1",
-    )
-    .bind(delivery_id)
-    .fetch_optional(&state.db_pool)
-    .await;
+    let profile_row = sqlx::query("SELECT zernio_profile_id FROM deliveries WHERE id = $1")
+        .bind(delivery_id)
+        .fetch_optional(&state.db_pool)
+        .await;
 
     let profile_id = match profile_row {
         Ok(Some(r)) => match r.get::<Option<String>, _>("zernio_profile_id") {
             Some(pid) => pid,
-            None => return Json(json!({"success": false, "error": "No Zernio profile for this delivery. Create one first."})),
+            None => {
+                return Json(
+                    json!({"success": false, "error": "No Zernio profile for this delivery. Create one first."}),
+                )
+            }
         },
         Ok(None) => return Json(json!({"success": false, "error": "Delivery not found"})),
         Err(e) => return Json(json!({"success": false, "error": e.to_string()})),
@@ -427,7 +460,9 @@ pub async fn try_publish_delivery_to_zernio(delivery_id: Uuid, state: &Arc<AppSt
     };
 
     let Some(profile_id) = profile_id else { return };
-    let Some(account_ids) = account_ids else { return };
+    let Some(account_ids) = account_ids else {
+        return;
+    };
     let Some(output_url) = output_url else { return };
 
     let accounts: Vec<PlatformTarget> = match account_ids {
@@ -472,7 +507,10 @@ pub async fn try_publish_delivery_to_zernio(delivery_id: Uuid, state: &Arc<AppSt
             );
         }
         Err(e) => {
-            warn!("📱 Zernio auto-publish failed for delivery {}: {}", delivery_id, e);
+            warn!(
+                "📱 Zernio auto-publish failed for delivery {}: {}",
+                delivery_id, e
+            );
         }
     }
 }
@@ -763,13 +801,17 @@ pub async fn get_my_connect_url(
     // Checked BEFORE profile resolution so refused attempts create nothing.
     let platform = payload.platform.to_ascii_lowercase();
     if !crate::services::app_tiers::ALLOWED_PLATFORMS.contains(&platform.as_str()) {
-        return Json(json!({"success": false, "error": "This platform is not supported — connect YouTube, TikTok, Instagram, or Facebook."}));
+        return Json(
+            json!({"success": false, "error": "This platform is not supported — connect YouTube, TikTok, Instagram, or Facebook."}),
+        );
     }
     let app = payload.app.as_deref().unwrap_or("clips");
     let (tier, cap) = crate::services::app_tiers::get_user_tier(&state.db_pool, user_id, app).await;
     let current = crate::services::app_tiers::count_user_accounts(&state, user_id).await;
     if current >= cap {
-        return Json(json!({"success": false, "error": format!("Account limit reached ({current}/{cap} on {tier} tier). Upgrade to an Agency tier to connect more."), "upgrade_required": true, "tier": tier, "cap": cap}));
+        return Json(
+            json!({"success": false, "error": format!("Account limit reached ({current}/{cap} on {tier} tier). Upgrade to an Agency tier to connect more."), "upgrade_required": true, "tier": tier, "cap": cap}),
+        );
     }
     let (profile_id, created, profile_name) =
         match resolve_profile_for_connect(&state, user_id).await {
@@ -781,7 +823,11 @@ pub async fn get_my_connect_url(
         None => return Json(json!({"success": false, "error": "Zernio not configured"})),
     };
     match z
-        .get_connect_url(&payload.platform, &profile_id, payload.redirect_url.as_deref())
+        .get_connect_url(
+            &payload.platform,
+            &profile_id,
+            payload.redirect_url.as_deref(),
+        )
         .await
     {
         Ok(resp) => Json(json!({
@@ -868,7 +914,10 @@ pub async fn sync_my_social_accounts(
         let accounts = match zernio.list_accounts(Some(profile_id)).await {
             Ok(r) => r.accounts,
             Err(e) => {
-                warn!("Zernio list_accounts failed for profile {}: {e}", profile_id);
+                warn!(
+                    "Zernio list_accounts failed for profile {}: {e}",
+                    profile_id
+                );
                 continue;
             }
         };
@@ -893,7 +942,12 @@ pub async fn sync_my_social_accounts(
             all_accounts.push(acc);
         }
     }
-    info!("Synced {} Zernio accounts across {} profiles for user {}", all_accounts.len(), profiles.len(), user_id);
+    info!(
+        "Synced {} Zernio accounts across {} profiles for user {}",
+        all_accounts.len(),
+        profiles.len(),
+        user_id
+    );
     Json(json!({"success": true, "synced_count": all_accounts.len(), "accounts": all_accounts}))
 }
 
@@ -926,13 +980,13 @@ async fn retry_post(
 #[derive(Deserialize)]
 struct ZernioWebhookPayload {
     #[serde(default)]
-    event: String,                          // e.g. "post.published", "post.platform.failed"
-    post_id: Option<String>,                // Zernio's post ID
-    status: Option<String>,                 // "published" | "failed" | "partial" (legacy, some events use this)
+    event: String, // e.g. "post.published", "post.platform.failed"
+    post_id: Option<String>, // Zernio's post ID
+    status: Option<String>,  // "published" | "failed" | "partial" (legacy, some events use this)
     #[serde(default)]
-    platforms: Vec<serde_json::Value>,      // Per-platform status array
+    platforms: Vec<serde_json::Value>, // Per-platform status array
     #[serde(default)]
-    error: Option<String>,                  // Top-level error message
+    error: Option<String>, // Top-level error message
     /// Per-platform event details (populated for post.platform.* events)
     platform: Option<String>,
     account_id: Option<String>,
@@ -962,10 +1016,19 @@ async fn zernio_webhook(
             return Json(json!({"success": true, "message": "event acknowledged"}));
         }
         // Per-platform events are logged but don't change post-level status
-        ev if ev.starts_with("post.platform.") || ev == "post.tiktok.url_resolved" || ev == "post.platform.deleted" => {
+        ev if ev.starts_with("post.platform.")
+            || ev == "post.tiktok.url_resolved"
+            || ev == "post.platform.deleted" =>
+        {
             info!(post_id = %post_id, event = %event_lower, platform = ?payload.platform, "Zernio per-platform event");
             // Still update extra_args with platform data but don't change post status
-            update_platform_results(&state.db_pool, &post_id, &payload.platforms, &payload.platform).await;
+            update_platform_results(
+                &state.db_pool,
+                &post_id,
+                &payload.platforms,
+                &payload.platform,
+            )
+            .await;
             return Json(json!({"success": true, "message": "per-platform event acknowledged"}));
         }
         _ => {
@@ -1000,7 +1063,13 @@ async fn zernio_webhook(
     }
 
     // Update platform results in extra_args
-    update_platform_results(&state.db_pool, &post_id, &payload.platforms, &payload.platform).await;
+    update_platform_results(
+        &state.db_pool,
+        &post_id,
+        &payload.platforms,
+        &payload.platform,
+    )
+    .await;
 
     Json(json!({"success": true, "message": "processed"}))
 }
@@ -1069,7 +1138,11 @@ pub async fn my_publish_post(
     }
 
     // Verify ownership of every target account and collect its profile.
-    let account_ids: Vec<String> = payload.targets.iter().map(|t| t.account_id.clone()).collect();
+    let account_ids: Vec<String> = payload
+        .targets
+        .iter()
+        .map(|t| t.account_id.clone())
+        .collect();
     let owned = sqlx::query(
         "SELECT zernio_account_id, zernio_profile_id FROM user_zernio_accounts \
          WHERE user_id = $1 AND zernio_account_id = ANY($2) AND is_active",
@@ -1093,7 +1166,9 @@ pub async fn my_publish_post(
         .filter_map(|r| r.try_get::<Option<String>, _>(1).ok().flatten())
         .next()
     else {
-        return Json(json!({"success": false, "error": "No Zernio profile found for these accounts"}));
+        return Json(
+            json!({"success": false, "error": "No Zernio profile found for these accounts"}),
+        );
     };
 
     let targets: Vec<PlatformTarget> = payload
@@ -1126,13 +1201,20 @@ pub async fn my_publish_post(
             content: Some(payload.text.clone()),
             platforms: targets,
             profileId: Some(profile_id.clone()),
-            media_items: if media_items.is_empty() { None } else { Some(media_items) },
+            media_items: if media_items.is_empty() {
+                None
+            } else {
+                Some(media_items)
+            },
             scheduledFor: Some(scheduled_iso.clone()),
             publishNow: false,
         };
         match z.create_post(&req).await {
             Ok(resp) => {
-                info!("User {} scheduled post {} for {}", user_id, resp.post.id, scheduled_iso);
+                info!(
+                    "User {} scheduled post {} for {}",
+                    user_id, resp.post.id, scheduled_iso
+                );
                 Json(json!({
                     "success": true,
                     "scheduled": true,
@@ -1152,7 +1234,10 @@ pub async fn my_publish_post(
             .await
         {
             Ok(resp) => {
-                info!("User {} published post {} immediately", user_id, resp.post.id);
+                info!(
+                    "User {} published post {} immediately",
+                    user_id, resp.post.id
+                );
                 Json(json!({
                     "success": true,
                     "scheduled": false,

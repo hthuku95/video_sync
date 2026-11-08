@@ -1,0 +1,51 @@
+# Manim-only image for Tencent SCF (Serverless Cloud Function) Web Server.
+# No Blender, no xvfb, no 3D tools. Renders Manim/LaTeX animations only.
+# Target: <1GB image, port 9000 (SCF web server requirement).
+#
+# Build context must be the BlenderMCPServer directory:
+#   docker build -f Dockerfile.manim -t manim-renderer:latest ./VideoSyncIntegrations/BlenderMCPServer
+
+FROM python:3.11-slim-bookworm
+
+# ---- System dependencies (minimal) ----
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        # FFmpeg — used by Manim for encoding
+        ffmpeg \
+        # Cairo + Pango — runtime + dev headers (pycairo/manim need headers to build)
+        libcairo2 \
+        libcairo2-dev \
+        libpango-1.0-0 \
+        libpangocairo-1.0-0 \
+        libpango1.0-dev \
+        pkg-config \
+        # TeX Live — minimal set for Manim's default LaTeX template
+        # (amsmath, amssymb, dsfont, tipa, mathrsfs, calligra, wasysym, physics, ...)
+        texlive-latex-base \
+        texlive-fonts-recommended \
+        texlive-latex-extra \
+        texlive-fonts-extra \
+        dvisvgm \
+        dvipng \
+        # Utilities
+        curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# ---- Python dependencies ----
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# ---- App code (manim-related: server.py, tools/, agents/, graph/, manim_scripts/) ----
+COPY . /app
+
+# Manim renders to /tmp by default; ensure it exists
+RUN mkdir -p /tmp/manim_renders
+
+# SCF web server listens on 9000
+ENV PORT=9000
+ENV JOB_STORE=memory
+EXPOSE 9000
+
+# Run the Manim render service (server.py reads PORT from env)
+CMD ["python", "server.py"]

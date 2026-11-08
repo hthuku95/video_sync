@@ -22,8 +22,8 @@ pub enum MessageRole {
     Human,
     Assistant,
     Function,
-    ToolCall,    // Agent's tool invocation (stored with metadata containing tool_name + args)
-    ToolResult,  // Tool execution result (stored with metadata containing tool_name + result)
+    ToolCall,   // Agent's tool invocation (stored with metadata containing tool_name + args)
+    ToolResult, // Tool execution result (stored with metadata containing tool_name + result)
 }
 
 impl MessageRole {
@@ -119,12 +119,18 @@ impl ConversationMessage {
         }
     }
 
-    pub fn new_tool_call(session_id: String, tool_name: &str, tool_args: Value, tool_call_id: Option<String>) -> Self {
+    pub fn new_tool_call(
+        session_id: String,
+        tool_name: &str,
+        tool_args: Value,
+        tool_call_id: Option<String>,
+    ) -> Self {
         let metadata = serde_json::to_value(ToolCallMetadata {
             tool_name: tool_name.to_string(),
             tool_args,
             tool_call_id,
-        }).ok();
+        })
+        .ok();
         Self {
             id: None,
             session_id,
@@ -140,12 +146,18 @@ impl ConversationMessage {
         }
     }
 
-    pub fn new_tool_result(session_id: String, tool_name: &str, tool_result: Value, tool_call_id: Option<String>) -> Self {
+    pub fn new_tool_result(
+        session_id: String,
+        tool_name: &str,
+        tool_result: Value,
+        tool_call_id: Option<String>,
+    ) -> Self {
         let metadata = serde_json::to_value(ToolResultMetadata {
             tool_name: tool_name.to_string(),
             tool_result,
             tool_call_id,
-        }).ok();
+        })
+        .ok();
         Self {
             id: None,
             session_id,
@@ -189,7 +201,9 @@ pub fn session_origin(session_uuid: &str) -> &'static str {
         && session_uuid.as_bytes()[13] == b'-'
         && session_uuid.as_bytes()[18] == b'-'
         && session_uuid.as_bytes()[23] == b'-'
-        && session_uuid.chars().all(|c| c.is_ascii_hexdigit() || c == '-');
+        && session_uuid
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() || c == '-');
     if is_plain_uuid {
         "user"
     } else {

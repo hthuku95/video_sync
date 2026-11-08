@@ -383,15 +383,13 @@ fn service_tool_names(scope: &str) -> Option<Vec<&'static str>> {
 pub fn search_tools_declaration() -> FunctionDeclaration {
     FunctionDeclaration {
         name: "search_tools".to_string(),
-        description: (
-            "Search the FULL tool catalog (~200 tools) by keyword when you need a \
+        description: ("Search the FULL tool catalog (~200 tools) by keyword when you need a \
              capability that is not in your current active toolset. Returns the top \
              matching tools with their names and descriptions; matched tools are \
              automatically added to your active toolset and become callable on your \
              next turn. Use this INSTEAD of guessing a tool name that was not given \
-             to you."
-        )
-        .to_string(),
+             to you.")
+            .to_string(),
         parameters: crate::gemini_client::Parameters {
             param_type: "object".to_string(),
             properties: {
@@ -400,11 +398,10 @@ pub fn search_tools_declaration() -> FunctionDeclaration {
                     "query".to_string(),
                     crate::gemini_client::PropertyDefinition {
                         prop_type: "string".to_string(),
-                        description: (
-                            "Space-separated keywords describing the capability needed, \
-                             e.g. 'audio fade volume', 'crop resize video', 'stock footage search'"
-                        )
-                        .to_string(),
+                        description:
+                            ("Space-separated keywords describing the capability needed, \
+                             e.g. 'audio fade volume', 'crop resize video', 'stock footage search'")
+                                .to_string(),
                         items: None,
                     },
                 );
@@ -449,7 +446,9 @@ pub fn search_catalog(query: &str, limit: usize) -> Vec<(String, String)> {
             for term in &terms {
                 if name_lower.contains(term.as_str()) {
                     score += 3.0;
-                    if name_lower.starts_with(term.as_str()) || name_lower.split('_').any(|p| p == term) {
+                    if name_lower.starts_with(term.as_str())
+                        || name_lower.split('_').any(|p| p == term)
+                    {
                         score += 2.0;
                     }
                 }
@@ -482,21 +481,14 @@ pub fn search_catalog(query: &str, limit: usize) -> Vec<(String, String)> {
 
 /// Execute a search_tools call: returns the JSON result text AND the names of
 /// matched tools so the caller can expand the active toolset.
-pub fn execute_search_tools(args: &std::collections::HashMap<String, serde_json::Value>) -> (String, Vec<String>) {
-    let query = args
-        .get("query")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    let limit = args
-        .get("limit")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(5) as usize;
+pub fn execute_search_tools(
+    args: &std::collections::HashMap<String, serde_json::Value>,
+) -> (String, Vec<String>) {
+    let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("");
+    let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(5) as usize;
 
     if query.trim().is_empty() {
-        return (
-            r#"{"error": "query is required"}"#.to_string(),
-            vec![],
-        );
+        return (r#"{"error": "query is required"}"#.to_string(), vec![]);
     }
 
     let matches = search_catalog(query, limit);
@@ -514,9 +506,7 @@ pub fn execute_search_tools(args: &std::collections::HashMap<String, serde_json:
     let names: Vec<String> = matches.iter().map(|(n, _)| n.clone()).collect();
     let matches_json: Vec<serde_json::Value> = matches
         .iter()
-        .map(|(name, desc)| {
-            serde_json::json!({ "name": name, "description": desc })
-        })
+        .map(|(name, desc)| serde_json::json!({ "name": name, "description": desc }))
         .collect();
     let text = serde_json::json!({
         "matches": matches_json,
@@ -535,11 +525,10 @@ pub fn service_scoped_tools(scope: &str) -> Vec<FunctionDeclaration> {
     match service_tool_names(scope) {
         Some(names) => {
             let name_strings: Vec<String> = names.iter().map(|s| s.to_string()).collect();
-            let mut tools =
-                crate::tool_registry::ToolRegistry::filter_gemini_tools_for_profile(
-                    crate::tool_registry::AgentExecutionProfile::FullProduction,
-                    &name_strings,
-                );
+            let mut tools = crate::tool_registry::ToolRegistry::filter_gemini_tools_for_profile(
+                crate::tool_registry::AgentExecutionProfile::FullProduction,
+                &name_strings,
+            );
             tracing::info!(
                 "🎯 Service-scoped toolbelt for '{}': {} tools (+search_tools)",
                 scope,

@@ -48,7 +48,10 @@ pub async fn upload_bytes_to_cloud(
     let mut public_url: Option<String> = None;
     let mut storage_backend: &str = "r2";
     if let Some(storage) = app_state.r2_client.as_ref() {
-        match storage.upload_tracked(tmp.to_str().unwrap_or(""), &storage_key).await {
+        match storage
+            .upload_tracked(tmp.to_str().unwrap_or(""), &storage_key)
+            .await
+        {
             Ok(backend) => {
                 storage_backend = backend.as_str();
                 match storage
@@ -70,7 +73,9 @@ pub async fn upload_bytes_to_cloud(
     let _ = tokio::fs::remove_file(&tmp).await;
 
     if public_url.is_none() {
-        return Err(format!("No cloud storage available (R2/S3 unavailable or failed)"));
+        return Err(format!(
+            "No cloud storage available (R2/S3 unavailable or failed)"
+        ));
     }
 
     let public_url = public_url.unwrap();
@@ -197,7 +202,13 @@ pub async fn upload_local_file_to_cloud(
     };
 
     upload_bytes_to_cloud(
-        bytes, &object_key, content_type, user_id, session_id, workflow_id, app_state,
+        bytes,
+        &object_key,
+        content_type,
+        user_id,
+        session_id,
+        workflow_id,
+        app_state,
     )
     .await
 }

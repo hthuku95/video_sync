@@ -17,7 +17,10 @@ pub fn paypal_routes() -> Router {
     Router::new()
         .route("/api/paypal/config", get(paypal_config))
         .route("/api/paypal/orders", post(create_paypal_order))
-        .route("/api/paypal/orders/:order_id/capture", post(capture_paypal_order))
+        .route(
+            "/api/paypal/orders/:order_id/capture",
+            post(capture_paypal_order),
+        )
 }
 
 #[derive(Debug, Deserialize)]
@@ -111,21 +114,25 @@ pub(crate) const PAYPAL_OFFERS: &[PayPalOffer] = &[
 /// Return the price in US cents for a given offer ID.
 pub fn get_offer_price_cents(offer_id: &str) -> Option<u64> {
     let offer = PAYPAL_OFFERS.iter().find(|o| o.id == offer_id)?;
-    let clean: String = offer.amount.chars().filter(|c| c.is_ascii_digit() || *c == '.').collect();
+    let clean: String = offer
+        .amount
+        .chars()
+        .filter(|c| c.is_ascii_digit() || *c == '.')
+        .collect();
     let dollars: f64 = clean.parse().ok()?;
     Some((dollars * 100.0) as u64)
 }
 
 /// Read paypal_env from app_config table, falling back to PAYPAL_ENV env var.
 pub async fn get_paypal_env(state: &AppState) -> String {
-    let db_value: Option<String> = sqlx::query_scalar(
-        "SELECT value FROM app_config WHERE key = 'paypal_env'"
-    )
-    .fetch_optional(&state.db_pool)
-    .await
-    .ok()
-    .flatten();
-    db_value.unwrap_or_else(|| std::env::var("PAYPAL_ENV").unwrap_or_else(|_| "sandbox".to_string()))
+    let db_value: Option<String> =
+        sqlx::query_scalar("SELECT value FROM app_config WHERE key = 'paypal_env'")
+            .fetch_optional(&state.db_pool)
+            .await
+            .ok()
+            .flatten();
+    db_value
+        .unwrap_or_else(|| std::env::var("PAYPAL_ENV").unwrap_or_else(|_| "sandbox".to_string()))
 }
 
 pub fn paypal_base_url(env: &str) -> &'static str {
@@ -159,7 +166,11 @@ pub fn paypal_credentials(env: &str) -> (String, String) {
     (client_id, client_secret)
 }
 
-pub async fn get_paypal_access_token(base_url: &str, client_id: &str, client_secret: &str) -> Result<String, String> {
+pub async fn get_paypal_access_token(
+    base_url: &str,
+    client_id: &str,
+    client_secret: &str,
+) -> Result<String, String> {
     let resp = reqwest::Client::new()
         .post(format!("{}/v1/oauth2/token", base_url))
         .header("Accept", "application/json")
@@ -170,16 +181,17 @@ pub async fn get_paypal_access_token(base_url: &str, client_id: &str, client_sec
         .await
         .map_err(|e| format!("PayPal auth request failed: {}", e))?;
 
-    let body: Value = resp.json().await.map_err(|e| format!("PayPal auth parse failed: {}", e))?;
+    let body: Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("PayPal auth parse failed: {}", e))?;
     body.get("access_token")
         .and_then(|t| t.as_str())
         .map(|s| s.to_string())
         .ok_or_else(|| "PayPal access token not returned".to_string())
 }
 
-async fn paypal_config(
-    Extension(state): Extension<Arc<AppState>>,
-) -> Json<Value> {
+async fn paypal_config(Extension(state): Extension<Arc<AppState>>) -> Json<Value> {
     let env = get_paypal_env(&state).await;
     let (client_id, _) = paypal_credentials(&env);
 
@@ -201,10 +213,12 @@ async fn create_paypal_order(
 ) -> (StatusCode, Json<Value>) {
     let offer = match find_offer(payload.offer_id.trim()) {
         Some(o) => o,
-        None => return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"success": false, "message": "Unknown PayPal offer id"})),
-        ),
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"success": false, "message": "Unknown PayPal offer id"})),
+            )
+        }
     };
 
     let env = get_paypal_env(&state).await;
@@ -220,14 +234,17 @@ async fn create_paypal_order(
 
     let access_token = match get_paypal_access_token(base_url, &client_id, &client_secret).await {
         Ok(t) => t,
-        Err(e) => return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"success": false, "message": e})),
-        ),
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"success": false, "message": e})),
+            )
+        }
     };
 
-    let studio_url = std::env::var("STUDIO_PUBLIC_BASE_URL")
-        .unwrap_or_else(|_| "https://videosync-studio-723463981172.us-central1.run.app".to_string());
+    let studio_url = std::env::var("STUDIO_PUBLIC_BASE_URL").unwrap_or_else(|_| {
+        "https://videosync-studio-723463981172.us-central1.run.app".to_string()
+    });
 
     let order_body = json!({
         "intent": "CAPTURE",
@@ -279,28 +296,39 @@ async fn create_paypal_order(
         .await
     {
         Ok(r) => r,
-        Err(e) => return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"success": false, "message": format!("PayPal order failed: {}", e)})),
-        ),
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"success": false, "message": format!("PayPal order failed: {}", e)})),
+            )
+        }
     };
 
     let order_body: Value = match order_resp.json().await {
         Ok(b) => b,
-        Err(e) => return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"success": false, "message": format!("PayPal order parse failed: {}", e)})),
-        ),
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(
+                    json!({"success": false, "message": format!("PayPal order parse failed: {}", e)}),
+                ),
+            )
+        }
     };
 
     if order_body.get("id").and_then(|id| id.as_str()).is_none() {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"success": false, "message": "PayPal did not return an order ID", "detail": order_body})),
+            Json(
+                json!({"success": false, "message": "PayPal did not return an order ID", "detail": order_body}),
+            ),
         );
     }
 
-    (StatusCode::OK, Json(json!({"success": true, "order": order_body, "offer": offer})))
+    (
+        StatusCode::OK,
+        Json(json!({"success": true, "order": order_body, "offer": offer})),
+    )
 }
 
 async fn capture_paypal_order(
@@ -320,32 +348,43 @@ async fn capture_paypal_order(
 
     let access_token = match get_paypal_access_token(base_url, &client_id, &client_secret).await {
         Ok(t) => t,
-        Err(e) => return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"success": false, "message": e})),
-        ),
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"success": false, "message": e})),
+            )
+        }
     };
 
     let capture_resp = match reqwest::Client::new()
-        .post(format!("{}/v2/checkout/orders/{}/capture", base_url, order_id))
+        .post(format!(
+            "{}/v2/checkout/orders/{}/capture",
+            base_url, order_id
+        ))
         .header("Content-Type", "application/json")
         .bearer_auth(&access_token)
         .send()
         .await
     {
         Ok(r) => r,
-        Err(e) => return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"success": false, "message": format!("PayPal capture failed: {}", e)})),
-        ),
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"success": false, "message": format!("PayPal capture failed: {}", e)})),
+            )
+        }
     };
 
     let capture_body: Value = match capture_resp.json().await {
         Ok(b) => b,
-        Err(e) => return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"success": false, "message": format!("PayPal capture parse failed: {}", e)})),
-        ),
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(
+                    json!({"success": false, "message": format!("PayPal capture parse failed: {}", e)}),
+                ),
+            )
+        }
     };
 
     let capture_status = capture_body
@@ -442,13 +481,11 @@ async fn capture_paypal_order(
 
         // Link delivery to payment
         if let (Some(pid), Some(did)) = (payment_id, delivery_id) {
-            let _ = sqlx::query(
-                "UPDATE studio_payments SET delivery_id = $1 WHERE id = $2",
-            )
-            .bind(did)
-            .bind(pid)
-            .execute(&state.db_pool)
-            .await;
+            let _ = sqlx::query("UPDATE studio_payments SET delivery_id = $1 WHERE id = $2")
+                .bind(did)
+                .bind(pid)
+                .execute(&state.db_pool)
+                .await;
         }
 
         let dollars = amount_cents as f64 / 100.0;
@@ -465,10 +502,7 @@ async fn capture_paypal_order(
             crate::telegram_bot::notify_admin(&notify_text).await;
         });
 
-        let email_subject = format!(
-            "New PayPal payment: ${:.2} — {}",
-            dollars, offer_name,
-        );
+        let email_subject = format!("New PayPal payment: ${:.2} — {}", dollars, offer_name,);
         let email_body = format!(
             "A new payment has been received.\n\n\
              Method: PayPal ({})\n\
@@ -499,10 +533,13 @@ async fn capture_paypal_order(
         }
     }
 
-    (StatusCode::OK, Json(json!({
-        "success": is_completed,
-        "status": capture_status,
-        "capture": capture_body,
-        "delivery_id": delivery_id_val,
-    })))
+    (
+        StatusCode::OK,
+        Json(json!({
+            "success": is_completed,
+            "status": capture_status,
+            "capture": capture_body,
+            "delivery_id": delivery_id_val,
+        })),
+    )
 }

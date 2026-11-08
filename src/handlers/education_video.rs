@@ -49,7 +49,9 @@ pub fn education_video_routes() -> Router {
         )
         .route("/api/education-video/generate", post(generate))
         .route("/api/education-video/videos", get(list_videos))
-        .layer(axum::middleware::from_fn(crate::middleware::auth::auth_middleware))
+        .layer(axum::middleware::from_fn(
+            crate::middleware::auth::auth_middleware,
+        ))
 }
 
 /// Map an offer id to the number of videos (credits) it grants.
@@ -62,16 +64,19 @@ fn credits_for_offer(offer_id: &str) -> Option<i32> {
 }
 
 fn user_id(claims: &Claims) -> Result<i32, (StatusCode, Json<Value>)> {
-    claims
-        .sub
-        .parse::<i32>()
-        .map_err(|_| (StatusCode::UNAUTHORIZED, Json(json!({"success": false, "error": "Invalid user token"}))))
+    claims.sub.parse::<i32>().map_err(|_| {
+        (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"success": false, "error": "Invalid user token"})),
+        )
+    })
 }
 
 /// Read PUBLIC_BASE_URL, falling back to the live ALB (videosync.video is expired).
 fn base_url() -> String {
-    std::env::var("PUBLIC_BASE_URL")
-        .unwrap_or_else(|_| "http://video-editor-api-1737481385.us-east-1.elb.amazonaws.com".to_string())
+    std::env::var("PUBLIC_BASE_URL").unwrap_or_else(|_| {
+        "http://video-editor-api-1737481385.us-east-1.elb.amazonaws.com".to_string()
+    })
 }
 
 /// Aggregate credit ledger for the authenticated user.
@@ -171,7 +176,8 @@ async fn pay_spec(
         offer_name, credits_count
     );
 
-    let spec = crate::x402::build_payment_required(price_cents, &recipient, &resource_url, &description);
+    let spec =
+        crate::x402::build_payment_required(price_cents, &recipient, &resource_url, &description);
     (
         StatusCode::OK,
         Json(serde_json::to_value(spec).unwrap_or(json!({"error": "spec serialise failed"}))),
@@ -219,7 +225,9 @@ async fn settle(
         _ => {
             return (
                 StatusCode::PAYMENT_REQUIRED,
-                Json(json!({"success": false, "error": "Missing X-Payment header. Fetch /pay-spec first."})),
+                Json(
+                    json!({"success": false, "error": "Missing X-Payment header. Fetch /pay-spec first."}),
+                ),
             )
         }
     };
@@ -241,7 +249,8 @@ async fn settle(
         .unwrap_or("Education Video Bundle");
     let resource_url = format!("{}/api/education-video/settle", base_url());
     let description = format!("{} — Education Video bundle", offer_name);
-    let spec = crate::x402::build_payment_required(price_cents, &recipient, &resource_url, &description);
+    let spec =
+        crate::x402::build_payment_required(price_cents, &recipient, &resource_url, &description);
     let requirement = match spec.accepts.first() {
         Some(r) => r.clone(),
         None => {
@@ -265,7 +274,9 @@ async fn settle(
     // Extract payer address from the signed authorization payload.
     let payer_address: Option<String> = (|| {
         use base64::Engine;
-        let bytes = base64::engine::general_purpose::STANDARD.decode(&x_payment).ok()?;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(&x_payment)
+            .ok()?;
         let parsed: Value = serde_json::from_slice(&bytes).ok()?;
         parsed
             .pointer("/payload/authorization/from")
@@ -404,15 +415,16 @@ async fn paypal_create(
         );
     }
 
-    let access_token = match paypal::get_paypal_access_token(base_url, &client_id, &client_secret).await {
-        Ok(t) => t,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"success": false, "error": e})),
-            )
-        }
-    };
+    let access_token =
+        match paypal::get_paypal_access_token(base_url, &client_id, &client_secret).await {
+            Ok(t) => t,
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"success": false, "error": e})),
+                )
+            }
+        };
 
     let order_body = json!({
         "intent": "CAPTURE",
@@ -485,7 +497,9 @@ async fn paypal_create(
         None => {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"success": false, "error": "PayPal did not return an order ID", "detail": order_json})),
+                Json(
+                    json!({"success": false, "error": "PayPal did not return an order ID", "detail": order_json}),
+                ),
             )
         }
     };
@@ -566,7 +580,9 @@ async fn paypal_capture(
         let remaining = remaining_credits(&state, uid).await.unwrap_or(0);
         return (
             StatusCode::OK,
-            Json(json!({"success": true, "credits_purchased": credits_count, "credits_remaining": remaining})),
+            Json(
+                json!({"success": true, "credits_purchased": credits_count, "credits_remaining": remaining}),
+            ),
         );
     }
     let paypal_order_id: String = row.get("paypal_order_id");
@@ -581,18 +597,22 @@ async fn paypal_capture(
         );
     }
 
-    let access_token = match paypal::get_paypal_access_token(base_url, &client_id, &client_secret).await {
-        Ok(t) => t,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"success": false, "error": e})),
-            )
-        }
-    };
+    let access_token =
+        match paypal::get_paypal_access_token(base_url, &client_id, &client_secret).await {
+            Ok(t) => t,
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"success": false, "error": e})),
+                )
+            }
+        };
 
     let capture_resp = match reqwest::Client::new()
-        .post(format!("{}/v2/checkout/orders/{}/capture", base_url, paypal_order_id))
+        .post(format!(
+            "{}/v2/checkout/orders/{}/capture",
+            base_url, paypal_order_id
+        ))
         .header("Content-Type", "application/json")
         .bearer_auth(&access_token)
         .send()
@@ -612,7 +632,9 @@ async fn paypal_capture(
         Err(e) => {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"success": false, "error": format!("PayPal capture parse failed: {e}")})),
+                Json(
+                    json!({"success": false, "error": format!("PayPal capture parse failed: {e}")}),
+                ),
             )
         }
     };
@@ -624,7 +646,9 @@ async fn paypal_capture(
     if capture_status != "COMPLETED" {
         return (
             StatusCode::BAD_REQUEST,
-            Json(json!({"success": false, "error": format!("PayPal capture not completed: {capture_status}"), "capture": capture_body})),
+            Json(
+                json!({"success": false, "error": format!("PayPal capture not completed: {capture_status}"), "capture": capture_body}),
+            ),
         );
     }
 
@@ -745,14 +769,16 @@ async fn generate(
     if consumed.is_none() {
         return (
             StatusCode::PAYMENT_REQUIRED,
-            Json(json!({"success": false, "error": "No video credits remaining. Purchase a bundle to continue."})),
+            Json(
+                json!({"success": false, "error": "No video credits remaining. Purchase a bundle to continue."}),
+            ),
         );
     }
 
     let brief = req.brief.unwrap_or_default();
-    let style = req
-        .style
-        .unwrap_or_else(|| "clean animated explainer, diagrams, motion graphics, clear narration".to_string());
+    let style = req.style.unwrap_or_else(|| {
+        "clean animated explainer, diagrams, motion graphics, clear narration".to_string()
+    });
     let duration = req.duration.unwrap_or(90.0);
 
     // Optional: crawl a course/reference page so the agent has real source
@@ -937,7 +963,10 @@ async fn list_videos(
         })
         .collect();
 
-    (StatusCode::OK, Json(json!({"success": true, "deliveries": deliveries})))
+    (
+        StatusCode::OK,
+        Json(json!({"success": true, "deliveries": deliveries})),
+    )
 }
 
 async fn remaining_credits(state: &Arc<AppState>, uid: i32) -> Result<i64, sqlx::Error> {

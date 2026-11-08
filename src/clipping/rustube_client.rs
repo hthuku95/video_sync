@@ -18,14 +18,18 @@ impl RustubeClient {
         r2_client: Option<&crate::storage::StorageRouter>,
         r2_key: Option<&str>,
     ) -> Result<VideoDownloadResult, String> {
-        tracing::info!("📥 Downloading video from YouTube using Rustube: {}", video_url);
+        tracing::info!(
+            "📥 Downloading video from YouTube using Rustube: {}",
+            video_url
+        );
 
         let video_id = Self::extract_video_id(video_url)?;
         tracing::info!("🔍 Fetching video metadata for ID: {}", video_id);
 
-        let id = Id::from_raw(&video_id)
-            .map_err(|e| format!("Invalid video ID {}: {}", video_id, e))?;
-        let video = Video::from_id(id.into_owned()).await
+        let id =
+            Id::from_raw(&video_id).map_err(|e| format!("Invalid video ID {}: {}", video_id, e))?;
+        let video = Video::from_id(id.into_owned())
+            .await
             .map_err(|e| format!("Failed to fetch video: {}", e))?;
 
         let video_details = video.video_details();
@@ -34,10 +38,16 @@ impl RustubeClient {
         tracing::info!("📹 Video: {} ({}s)", title, duration_secs);
 
         let streams = video.streams();
-        let stream = streams.iter()
+        let stream = streams
+            .iter()
             .filter(|s| s.includes_video_track && s.includes_audio_track)
             .max_by_key(|s| s.width.unwrap_or(0))
-            .or_else(|| streams.iter().filter(|s| s.includes_video_track).max_by_key(|s| s.width.unwrap_or(0)))
+            .or_else(|| {
+                streams
+                    .iter()
+                    .filter(|s| s.includes_video_track)
+                    .max_by_key(|s| s.width.unwrap_or(0))
+            })
             .ok_or_else(|| "No suitable video stream found".to_string())?;
 
         let width = stream.width.map(|w| w as i32);
@@ -47,19 +57,25 @@ impl RustubeClient {
         let temp_path = format!("/tmp/rustube_{}_{}.mp4", video_id, std::process::id());
 
         let download_future = async {
-            let downloaded_path = stream.download().await
+            let downloaded_path = stream
+                .download()
+                .await
                 .map_err(|e| format!("Failed to download video: {}", e))?;
-            fs::rename(&downloaded_path, &temp_path).await
+            fs::rename(&downloaded_path, &temp_path)
+                .await
                 .map_err(|e| format!("Failed to move downloaded file: {}", e))?;
             Ok::<(), String>(())
         };
 
-        timeout(Duration::from_secs(3600), download_future).await
+        timeout(Duration::from_secs(3600), download_future)
+            .await
             .map_err(|_| "Download timed out after 1 hour".to_string())?
             .map_err(|e: String| e)?;
 
         if let (Some(client), Some(key)) = (r2_client, r2_key) {
-            let r2_url = client.upload_file(&temp_path, key).await
+            let r2_url = client
+                .upload_file(&temp_path, key)
+                .await
                 .map_err(|e| format!("R2 upload failed: {e}"))?;
             let _ = fs::remove_file(&temp_path).await;
             tracing::info!("✅ Video uploaded to R2: {r2_url}");
@@ -74,11 +90,16 @@ impl RustubeClient {
         } else {
             let dest = if Path::new(output_path).parent().is_some() {
                 if let Some(parent) = Path::new(output_path).parent() {
-                    fs::create_dir_all(parent).await.map_err(|e| format!("Failed to create dir: {e}"))?;
+                    fs::create_dir_all(parent)
+                        .await
+                        .map_err(|e| format!("Failed to create dir: {e}"))?;
                 }
                 output_path
-            } else { output_path };
-            fs::rename(&temp_path, dest).await
+            } else {
+                output_path
+            };
+            fs::rename(&temp_path, dest)
+                .await
                 .map_err(|e| format!("Failed to save final file: {}", e))?;
             Self::validate_download(output_path).await?;
             tracing::info!("✅ Video saved: {}", output_path);

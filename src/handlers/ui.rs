@@ -50,18 +50,54 @@ pub fn ui_routes() -> Router {
         // Campaign storefront moved to the 5 apps (owner directive Oct 2026 §65):
         // /services + /campaigns render the apps directory; deep links 302 out.
         .route("/services", get(apps_directory_page))
-        .route("/services/saas-launch-pack", get(|| async { Redirect::to("https://app.videosync.ink/") }))
-        .route("/services/clipping-pack", get(|| async { Redirect::to("https://shorts.videosync.ink/") }))
-        .route("/services/kick-auto-clipper", get(|| async { Redirect::to("https://clips.videosync.ink/") }))
-        .route("/services/education-explainer-pack", get(|| async { Redirect::to("https://learn.videosync.ink/") }))
-        .route("/services/manim-explainer", get(|| async { Redirect::to("https://motion.videosync.ink/") }))
-        .route("/services/whiteboard-animation", get(|| async { Redirect::to("https://motion.videosync.ink/") }))
-        .route("/services/kinetic-typography", get(|| async { Redirect::to("https://motion.videosync.ink/") }))
-        .route("/services/animated-infographic", get(|| async { Redirect::to("https://motion.videosync.ink/") }))
-        .route("/services/algorithm-viz", get(|| async { Redirect::to("https://motion.videosync.ink/") }))
-        .route("/services/investor-pitch", get(|| async { Redirect::to("https://motion.videosync.ink/") }))
-        .route("/services/year-in-review", get(|| async { Redirect::to("https://motion.videosync.ink/") }))
-        .route("/services/isometric-explainer", get(|| async { Redirect::to("https://motion.videosync.ink/") }))
+        .route(
+            "/services/saas-launch-pack",
+            get(|| async { Redirect::to("https://app.videosync.ink/") }),
+        )
+        .route(
+            "/services/clipping-pack",
+            get(|| async { Redirect::to("https://shorts.videosync.ink/") }),
+        )
+        .route(
+            "/services/kick-auto-clipper",
+            get(|| async { Redirect::to("https://clips.videosync.ink/") }),
+        )
+        .route(
+            "/services/education-explainer-pack",
+            get(|| async { Redirect::to("https://learn.videosync.ink/") }),
+        )
+        .route(
+            "/services/manim-explainer",
+            get(|| async { Redirect::to("https://motion.videosync.ink/") }),
+        )
+        .route(
+            "/services/whiteboard-animation",
+            get(|| async { Redirect::to("https://motion.videosync.ink/") }),
+        )
+        .route(
+            "/services/kinetic-typography",
+            get(|| async { Redirect::to("https://motion.videosync.ink/") }),
+        )
+        .route(
+            "/services/animated-infographic",
+            get(|| async { Redirect::to("https://motion.videosync.ink/") }),
+        )
+        .route(
+            "/services/algorithm-viz",
+            get(|| async { Redirect::to("https://motion.videosync.ink/") }),
+        )
+        .route(
+            "/services/investor-pitch",
+            get(|| async { Redirect::to("https://motion.videosync.ink/") }),
+        )
+        .route(
+            "/services/year-in-review",
+            get(|| async { Redirect::to("https://motion.videosync.ink/") }),
+        )
+        .route(
+            "/services/isometric-explainer",
+            get(|| async { Redirect::to("https://motion.videosync.ink/") }),
+        )
         .route("/login", get(login_page))
         .route("/signup", get(signup_page))
         .route("/dashboard", get(dashboard_page))
@@ -82,9 +118,18 @@ pub fn ui_routes() -> Router {
         .merge(
             Router::new()
                 .route("/campaigns", get(apps_directory_page))
-                .route("/campaigns/new", get(|| async { Redirect::to("https://clips.videosync.ink/campaigns/new") }))
-                .route("/campaigns/chat", get(|| async { Redirect::to("https://clips.videosync.ink/") }))
-                .route("/campaigns/:id", get(|| async { Redirect::to("https://clips.videosync.ink/") }))
+                .route(
+                    "/campaigns/new",
+                    get(|| async { Redirect::to("https://clips.videosync.ink/campaigns/new") }),
+                )
+                .route(
+                    "/campaigns/chat",
+                    get(|| async { Redirect::to("https://clips.videosync.ink/") }),
+                )
+                .route(
+                    "/campaigns/:id",
+                    get(|| async { Redirect::to("https://clips.videosync.ink/") }),
+                )
                 .route("/account/social", get(account_social_page))
                 .layer(axum::middleware::from_fn(optional_auth_middleware)),
         )
@@ -248,8 +293,14 @@ pub async fn create_service_sample_request(
     .await;
 
     let request_id = uuid::Uuid::new_v4();
-    let url_line = reference_url.as_deref().map(|u| format!("Reference URL: {u}\n")).unwrap_or_default();
-    let contact_line = prospect_name.as_deref().map(|n| format!("Client: {n}\n")).unwrap_or_default();
+    let url_line = reference_url
+        .as_deref()
+        .map(|u| format!("Reference URL: {u}\n"))
+        .unwrap_or_default();
+    let contact_line = prospect_name
+        .as_deref()
+        .map(|n| format!("Client: {n}\n"))
+        .unwrap_or_default();
     let prompt = format!(
         "Custom video request.\n{url_line}{contact_line}Brief: {brief}\n\n\
          Generate the requested video from scratch using the available tools. \
@@ -736,7 +787,8 @@ pub async fn isometric_explainer_page() -> Html<String> {
 /// `redirect_to` is the URL to return to after login (must be a relative path starting with '/').
 fn login_required_page(redirect_to: &str) -> String {
     let encoded = urlencoding::encode(redirect_to);
-    format!(r#"<!DOCTYPE html>
+    format!(
+        r#"<!DOCTYPE html>
 <html lang="en">
 <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Login Required — VideoSync</title>
@@ -758,7 +810,9 @@ fn login_required_page(redirect_to: &str) -> String {
     <p style="margin-top:1rem;font-size:0.85rem;">Don't have an account? <a href="/signup?redirect_to={}" style="color:var(--blue);">Sign up</a></p>
 </div>
 </body>
-</html>"#, encoded, encoded)
+</html>"#,
+        encoded, encoded
+    )
 }
 
 pub async fn campaigns_list_page(
@@ -769,11 +823,26 @@ pub async fn campaigns_list_page(
     let user_id: i32 = match claims {
         Some(Extension(c)) => c.sub.parse().unwrap_or(0),
         None => {
-            let redirect = uri.path_and_query().map(|pq| pq.as_str()).unwrap_or("/campaigns");
+            let redirect = uri
+                .path_and_query()
+                .map(|pq| pq.as_str())
+                .unwrap_or("/campaigns");
             return Html(login_required_page(redirect));
         }
     };
-    let rows = sqlx::query_as::<_, (uuid::Uuid, String, String, String, i32, i32, i32, chrono::DateTime<chrono::Utc>)>(
+    let rows = sqlx::query_as::<
+        _,
+        (
+            uuid::Uuid,
+            String,
+            String,
+            String,
+            i32,
+            i32,
+            i32,
+            chrono::DateTime<chrono::Utc>,
+        ),
+    >(
         "SELECT id, name, service_type, status, posts_per_day, \
                 total_posts_planned, total_posts_published, created_at \
          FROM campaigns WHERE user_id = $1 ORDER BY created_at DESC",
@@ -786,17 +855,19 @@ pub async fn campaigns_list_page(
     let campaigns_html: String = if rows.is_empty() {
         r#"<div class="empty-state"><h2>No campaigns yet</h2><p>Create your first campaign to start generating and posting content automatically.</p><a class="btn btn-primary" href="/campaigns/new">Create Campaign</a></div>"#.to_string()
     } else {
-        rows.iter().map(|(id, name, service_type, status, per_day, planned, published, created)| {
-            let status_badge = match status.as_str() {
-                "active" => r#"<span class="badge badge-active">Active</span>"#,
-                "paused" => r#"<span class="badge badge-paused">Paused</span>"#,
-                "completed" => r#"<span class="badge badge-completed">Completed</span>"#,
-                "cancelled" => r#"<span class="badge badge-cancelled">Cancelled</span>"#,
-                _ => r#"<span class="badge">Pending</span>"#,
-            };
-            let service_label = format_service_type(service_type);
-            format!(
-                r#"<a class="campaign-card" href="/campaigns/{id}">
+        rows.iter()
+            .map(
+                |(id, name, service_type, status, per_day, planned, published, created)| {
+                    let status_badge = match status.as_str() {
+                        "active" => r#"<span class="badge badge-active">Active</span>"#,
+                        "paused" => r#"<span class="badge badge-paused">Paused</span>"#,
+                        "completed" => r#"<span class="badge badge-completed">Completed</span>"#,
+                        "cancelled" => r#"<span class="badge badge-cancelled">Cancelled</span>"#,
+                        _ => r#"<span class="badge">Pending</span>"#,
+                    };
+                    let service_label = format_service_type(service_type);
+                    format!(
+                        r#"<a class="campaign-card" href="/campaigns/{id}">
                     <div class="card-top">
                         <div class="service-tag">{service_label}</div>
                         {status_badge}
@@ -808,8 +879,10 @@ pub async fn campaigns_list_page(
                         <span>{created}</span>
                     </div>
                 </a>"#
+                    )
+                },
             )
-        }).collect()
+            .collect()
     };
 
     Html(format!(
@@ -928,7 +1001,10 @@ pub async fn campaign_assistant_page(
     claims: Option<Extension<Claims>>,
 ) -> Html<String> {
     if claims.is_none() {
-        let redirect = uri.path_and_query().map(|pq| pq.as_str()).unwrap_or("/campaigns/chat");
+        let redirect = uri
+            .path_and_query()
+            .map(|pq| pq.as_str())
+            .unwrap_or("/campaigns/chat");
         return Html(login_required_page(redirect));
     }
 
@@ -1060,13 +1136,18 @@ pub async fn campaigns_new_page(
     let user_id: i32 = match claims {
         Some(Extension(c)) => c.sub.parse().unwrap_or(0),
         None => {
-            let redirect = uri.path_and_query().map(|pq| pq.as_str()).unwrap_or("/campaigns/new");
+            let redirect = uri
+                .path_and_query()
+                .map(|pq| pq.as_str())
+                .unwrap_or("/campaigns/new");
             return Html(login_required_page(redirect));
         }
     };
 
     // Check subscription — non-subscribers get a paywall
-    let sub_ok = crate::handlers::chat::subscription_ok(&state, user_id).await.unwrap_or(false);
+    let sub_ok = crate::handlers::chat::subscription_ok(&state, user_id)
+        .await
+        .unwrap_or(false);
     if !sub_ok {
         return Html(format!(
             r#"<!DOCTYPE html>
@@ -1093,7 +1174,7 @@ pub async fn campaigns_new_page(
 <script>{bg_js}</script>
 </body>
 </html>"#,
-        bg_js = dynamic_bg_script(),
+            bg_js = dynamic_bg_script(),
         ));
     }
 
@@ -1119,10 +1200,17 @@ pub async fn campaigns_new_page(
         ("isometric_explainer", "Isometric Explainer"),
     ];
 
-    let options_html: String = service_options.iter().map(|(val, label)| {
-        let sel = if *val == preselect_service { " selected" } else { "" };
-        format!(r#"<option value="{val}"{sel}>{label}</option>"#)
-    }).collect();
+    let options_html: String = service_options
+        .iter()
+        .map(|(val, label)| {
+            let sel = if *val == preselect_service {
+                " selected"
+            } else {
+                ""
+            };
+            format!(r#"<option value="{val}"{sel}>{label}</option>"#)
+        })
+        .collect();
 
     Html(format!(
         r#"<!DOCTYPE html>
@@ -1410,12 +1498,35 @@ pub async fn campaigns_detail_page(
     let user_id: i32 = match claims {
         Some(Extension(c)) => c.sub.parse().unwrap_or(0),
         None => {
-            let redirect = uri.path_and_query().map(|pq| pq.as_str()).unwrap_or("/campaigns");
+            let redirect = uri
+                .path_and_query()
+                .map(|pq| pq.as_str())
+                .unwrap_or("/campaigns");
             return Html(login_required_page(redirect));
         }
     };
 
-    let campaign = sqlx::query_as::<_, (uuid::Uuid, String, String, String, String, f64, serde_json::Value, serde_json::Value, i32, chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>, Option<String>, Option<String>, String, i32, i32)>(
+    let campaign = sqlx::query_as::<
+        _,
+        (
+            uuid::Uuid,
+            String,
+            String,
+            String,
+            String,
+            f64,
+            serde_json::Value,
+            serde_json::Value,
+            i32,
+            chrono::DateTime<chrono::Utc>,
+            chrono::DateTime<chrono::Utc>,
+            Option<String>,
+            Option<String>,
+            String,
+            i32,
+            i32,
+        ),
+    >(
         "SELECT id, name, service_type, brief, style, duration, schedule, platforms, \
                 posts_per_day, start_date, end_date, zernio_profile_id, source_url, status, \
                 total_posts_planned, total_posts_published \
@@ -1681,19 +1792,20 @@ fn format_service_type(s: &str) -> &'static str {
 
 // ── Account / Social (User-Facing Social Accounts Page) ────────────────────
 
-pub async fn account_social_page(
-    uri: Uri,
-    claims: Option<Extension<Claims>>,
-) -> Html<String> {
+pub async fn account_social_page(uri: Uri, claims: Option<Extension<Claims>>) -> Html<String> {
     match claims {
         Some(Extension(_c)) => { /* authenticated, render page */ }
         None => {
-            let redirect = uri.path_and_query().map(|pq| pq.as_str()).unwrap_or("/account/social");
+            let redirect = uri
+                .path_and_query()
+                .map(|pq| pq.as_str())
+                .unwrap_or("/account/social");
             return Html(login_required_page(redirect));
         }
     };
 
-    let html = format!(r###"<!DOCTYPE html>
+    let html = format!(
+        r###"<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -2090,8 +2202,6 @@ fn service_page_theme(service_slug: &str) -> ServicePageTheme {
     }
 }
 
-
-
 fn build_services_overview_page_html() -> String {
     let cards = [
         ("saas-launch-pack", "SaaS Demo Campaign", "$149/mo", "Turn your product URL into daily buyer-facing demos — auto-posted to Twitter, LinkedIn, and YouTube.", "AI demos from any URL"),
@@ -2108,9 +2218,11 @@ fn build_services_overview_page_html() -> String {
         ("isometric-explainer", "Isometric Explainer Campaign", "$149/mo", "Isometric-style animated explainers on a 2D plane.", "Isometric animation"),
     ];
 
-    let cards_html: String = cards.iter().map(|(slug, title, price, tagline, brief)| {
-        format!(
-            r#"<article class="offer-card">
+    let cards_html: String = cards
+        .iter()
+        .map(|(slug, title, price, tagline, brief)| {
+            format!(
+                r#"<article class="offer-card">
               <div class="card-top"><div class="eyebrow">Campaign Service</div></div>
               <h2>{title}</h2>
               <div class="price">{price}</div>
@@ -2118,8 +2230,9 @@ fn build_services_overview_page_html() -> String {
               <div class="mini-list"><div><strong>What it does:</strong> {brief}</div></div>
               <a class="cta" href="/services/{slug}">See details</a>
             </article>"#
-        )
-    }).collect();
+            )
+        })
+        .collect();
 
     format!(
         r#"<!DOCTYPE html>
@@ -2231,8 +2344,6 @@ fn build_services_overview_page_html() -> String {
     )
 }
 
-
-
 fn build_service_offer_page_html(
     service_slug: &str,
     title: &str,
@@ -2250,11 +2361,13 @@ fn build_service_offer_page_html(
     let workflow_html: String = how_it_works
         .iter()
         .enumerate()
-        .map(|(idx, item)| format!(
-            r#"<div class="step"><div class="step-no">{}</div><div>{}</div></div>"#,
-            idx + 1,
-            item
-        ))
+        .map(|(idx, item)| {
+            format!(
+                r#"<div class="step"><div class="step-no">{}</div><div>{}</div></div>"#,
+                idx + 1,
+                item
+            )
+        })
         .collect();
     let personas_html: String = lead_personas
         .iter()
@@ -4857,7 +4970,8 @@ swapHomepageCtasForAuthenticatedUser();
 }
 
 fn build_studio_landing_page_html() -> String {
-    format!(r###"<!DOCTYPE html>
+    format!(
+        r###"<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -4976,7 +5090,8 @@ body {{ font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; colo
 }})();
 </script>
 </body>
-</html>"###)
+</html>"###
+    )
 }
 
 pub async fn login_page() -> Html<String> {

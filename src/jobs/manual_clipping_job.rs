@@ -6,7 +6,9 @@
 use crate::clipping::{
     ai_clipper::AiClipper, apify_client::ApifyClient, gemini_video_analyzer::VideoAnalysis,
 };
-use crate::services::agentic_service_pipeline::{AgenticServicePipeline, ServiceInput, ServiceType};
+use crate::services::agentic_service_pipeline::{
+    AgenticServicePipeline, ServiceInput, ServiceType,
+};
 use crate::AppState;
 use serde_json::json;
 use sqlx::Row;
@@ -137,7 +139,9 @@ async fn mark_manual_job_completed(
                 )
                 .await;
         }
-        return Err("Manual clipping workflow completed without any persisted clip records.".to_string());
+        return Err(
+            "Manual clipping workflow completed without any persisted clip records.".to_string(),
+        );
     }
 
     if let Some(workflow_id) = workflow_id_for_manual_job(job_id, pool).await? {

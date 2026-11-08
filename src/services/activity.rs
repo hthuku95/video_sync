@@ -48,7 +48,10 @@ pub fn public_progress_label(raw: &str) -> String {
     if lower.contains("review") {
         return "Reviewing the cut".to_string();
     }
-    if lower.contains("voiceover") || lower.contains("voice over") || lower.contains("text_to_speech") {
+    if lower.contains("voiceover")
+        || lower.contains("voice over")
+        || lower.contains("text_to_speech")
+    {
         return "Preparing narration".to_string();
     }
     if lower.contains("subtitle") || lower.contains("caption") || lower.contains("transcrib") {
@@ -150,7 +153,11 @@ pub fn public_event_label(event_type: &str, message: &str, details: &Value) -> O
 
 /// Coarse production stage used by the UI progress indicator.
 /// 1 = queued, 2 = planning, 3 = producing, 4 = review, 5 = ready.
-pub fn stage_for(status: &str, current_step: &str, latest_event: Option<&str>) -> (i32, &'static str) {
+pub fn stage_for(
+    status: &str,
+    current_step: &str,
+    latest_event: Option<&str>,
+) -> (i32, &'static str) {
     let step = current_step.to_ascii_lowercase();
     let event = latest_event.unwrap_or("").to_ascii_lowercase();
 

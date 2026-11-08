@@ -76,7 +76,9 @@ pub async fn run_clipping_supervisor_once(app_state: &Arc<AppState>) -> Result<(
     Ok(())
 }
 
-async fn requeue_completed_unpublished_clip_jobs(app_state: &Arc<AppState>) -> Result<usize, String> {
+async fn requeue_completed_unpublished_clip_jobs(
+    app_state: &Arc<AppState>,
+) -> Result<usize, String> {
     let reason = "Supervisor found a completed job with unpublished extracted clips; requeued upload-only Phase E so YouTube posting can recover without re-downloading or re-extracting.";
     let job_ids: Vec<i32> = sqlx::query_scalar(
         "UPDATE clipping_jobs cj
@@ -111,7 +113,12 @@ async fn requeue_completed_unpublished_clip_jobs(app_state: &Arc<AppState>) -> R
     .bind(reason)
     .fetch_all(&app_state.db_pool)
     .await
-    .map_err(|e| format!("Failed to requeue completed jobs with unpublished clips: {}", e))?;
+    .map_err(|e| {
+        format!(
+            "Failed to requeue completed jobs with unpublished clips: {}",
+            e
+        )
+    })?;
 
     for job_id in &job_ids {
         record_supervisor_event(
@@ -167,21 +174,26 @@ async fn suppress_duplicate_active_jobs(app_state: &Arc<AppState>) -> Result<usi
         };
 
         for duplicate_job_id in job_ids.iter().skip(1) {
-            let row: Option<(String, Option<String>)> = sqlx::query_as(
-                "SELECT status, claimed_by FROM clipping_jobs WHERE id = $1",
-            )
-            .bind(*duplicate_job_id)
-            .fetch_optional(&app_state.db_pool)
-            .await
-            .map_err(|e| format!("Failed to inspect duplicate clipping job {}: {}", duplicate_job_id, e))?;
+            let row: Option<(String, Option<String>)> =
+                sqlx::query_as("SELECT status, claimed_by FROM clipping_jobs WHERE id = $1")
+                    .bind(*duplicate_job_id)
+                    .fetch_optional(&app_state.db_pool)
+                    .await
+                    .map_err(|e| {
+                        format!(
+                            "Failed to inspect duplicate clipping job {}: {}",
+                            duplicate_job_id, e
+                        )
+                    })?;
 
             let Some((status, claimed_by)) = row else {
                 continue;
             };
 
-            let (supervisor_status, supervisor_action, message) =
-                if status == "pending" && claimed_by.is_none() {
-                    (
+            let (supervisor_status, supervisor_action, message) = if status == "pending"
+                && claimed_by.is_none()
+            {
+                (
                         "duplicate_suppressed",
                         "discarded_duplicate_pending_job",
                         format!(
@@ -189,8 +201,8 @@ async fn suppress_duplicate_active_jobs(app_state: &Arc<AppState>) -> Result<usi
                             canonical_job_id, linkage_id, source_video_id
                         ),
                     )
-                } else {
-                    (
+            } else {
+                (
                         "duplicate_active_job",
                         "flagged_duplicate_active_job",
                         format!(
@@ -198,7 +210,7 @@ async fn suppress_duplicate_active_jobs(app_state: &Arc<AppState>) -> Result<usi
                             canonical_job_id, linkage_id, source_video_id
                         ),
                     )
-                };
+            };
 
             let new_status = if supervisor_status == "duplicate_suppressed" {
                 "discarded"
@@ -262,7 +274,12 @@ async fn suppress_duplicate_active_jobs(app_state: &Arc<AppState>) -> Result<usi
         .bind(canonical_job_id)
         .execute(&app_state.db_pool)
         .await
-        .map_err(|e| format!("Failed to confirm canonical clipping job {}: {}", canonical_job_id, e))?;
+        .map_err(|e| {
+            format!(
+                "Failed to confirm canonical clipping job {}: {}",
+                canonical_job_id, e
+            )
+        })?;
     }
 
     Ok(actions)
@@ -303,7 +320,12 @@ async fn annotate_quota_pressure(app_state: &Arc<AppState>) -> Result<usize, Str
     )
     .fetch_all(&app_state.db_pool)
     .await
-    .map_err(|e| format!("Failed to fetch pending clipping jobs for quota annotation: {}", e))?;
+    .map_err(|e| {
+        format!(
+            "Failed to fetch pending clipping jobs for quota annotation: {}",
+            e
+        )
+    })?;
 
     if pending_workflows.is_empty() {
         return Ok(0);
@@ -324,7 +346,12 @@ async fn annotate_quota_pressure(app_state: &Arc<AppState>) -> Result<usize, Str
     .bind(&reason)
     .execute(&app_state.db_pool)
     .await
-    .map_err(|e| format!("Failed to annotate pending clipping jobs during quota pressure: {}", e))?;
+    .map_err(|e| {
+        format!(
+            "Failed to annotate pending clipping jobs during quota pressure: {}",
+            e
+        )
+    })?;
 
     let workflow_runtime = WorkflowRuntime::new(app_state.db_pool.clone());
     for (_, workflow_id) in &pending_workflows {
@@ -390,21 +417,35 @@ async fn escalate_download_failure_fallbacks(app_state: &Arc<AppState>) -> Resul
             .bind(job_id)
             .fetch_one(&app_state.db_pool)
             .await
-            .map_err(|e| format!("Failed to load clipping job {} for fallback escalation: {}", job_id, e))?;
+            .map_err(|e| {
+                format!(
+                    "Failed to load clipping job {} for fallback escalation: {}",
+                    job_id, e
+                )
+            })?;
         let linkage = sqlx::query_as::<_, ChannelLinkage>(
             "SELECT * FROM youtube_channel_linkages WHERE id = $1",
         )
         .bind(job.linkage_id)
         .fetch_one(&app_state.db_pool)
         .await
-        .map_err(|e| format!("Failed to load linkage {} for clipping fallback escalation: {}", job.linkage_id, e))?;
+        .map_err(|e| {
+            format!(
+                "Failed to load linkage {} for clipping fallback escalation: {}",
+                job.linkage_id, e
+            )
+        })?;
 
         let analysis_value = match job.viral_moments_json.clone() {
             Some(value) => value,
             None => continue,
         };
-        let analysis: VideoAnalysis = serde_json::from_value(analysis_value)
-            .map_err(|e| format!("Failed to deserialize VideoAnalysis for clipping job {}: {}", job_id, e))?;
+        let analysis: VideoAnalysis = serde_json::from_value(analysis_value).map_err(|e| {
+            format!(
+                "Failed to deserialize VideoAnalysis for clipping job {}: {}",
+                job_id, e
+            )
+        })?;
         let source_url = job
             .active_video_url
             .clone()
@@ -439,7 +480,12 @@ async fn escalate_download_failure_fallbacks(app_state: &Arc<AppState>) -> Resul
         .bind(job_id)
         .execute(&app_state.db_pool)
         .await
-        .map_err(|e| format!("Failed to mark clipping fallback escalation on job {}: {}", job_id, e))?;
+        .map_err(|e| {
+            format!(
+                "Failed to mark clipping fallback escalation on job {}: {}",
+                job_id, e
+            )
+        })?;
 
         record_supervisor_event(
             app_state,
@@ -664,7 +710,12 @@ async fn diagnose_problem_jobs(app_state: &Arc<AppState>) -> Result<usize, Strin
         .bind(job_id)
         .execute(&app_state.db_pool)
         .await
-        .map_err(|e| format!("Failed to store failure diagnosis for job {}: {}", job_id, e))?;
+        .map_err(|e| {
+            format!(
+                "Failed to store failure diagnosis for job {}: {}",
+                job_id, e
+            )
+        })?;
 
         if result.rows_affected() > 0 {
             record_supervisor_event(

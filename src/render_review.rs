@@ -167,9 +167,12 @@ async fn validate_video_artifact(output_url: &str) -> Option<String> {
     // unavailable (exit code NotFound) so review still runs.
     let probe = tokio::process::Command::new("ffprobe")
         .args([
-            "-v", "error",
-            "-show_entries", "format=duration",
-            "-of", "default=noprint_wrappers=1:nokey=1",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
             output_url,
         ])
         .output()
@@ -221,7 +224,11 @@ pub async fn review_render(
     // the empty-MP4 incident — every reviewer failure path used to fail OPEN
     // (pass:true, score:0), so garbage got published silently.
     if let Some(reason) = validate_video_artifact(output_url).await {
-        tracing::warn!("render_review artifact gate rejected '{}': {}", output_url, reason);
+        tracing::warn!(
+            "render_review artifact gate rejected '{}': {}",
+            output_url,
+            reason
+        );
         persist_review(
             state,
             tool_name,
@@ -230,10 +237,9 @@ pub async fn review_render(
                 score: 0,
                 feedback: reason.clone(),
                 retry_hint: Some(
-                    "Re-render the output; the previous artifact was empty or corrupt."
-                        .to_string(),
+                    "Re-render the output; the previous artifact was empty or corrupt.".to_string(),
                 ),
-        failing_section: None,
+                failing_section: None,
             },
             delivery_id,
             output_url,
@@ -244,10 +250,9 @@ pub async fn review_render(
             score: 0,
             feedback: reason,
             retry_hint: Some(
-                "Re-render the output; the previous artifact was empty or corrupt."
-                    .to_string(),
+                "Re-render the output; the previous artifact was empty or corrupt.".to_string(),
             ),
-        failing_section: None,
+            failing_section: None,
         };
     }
 
@@ -332,11 +337,7 @@ pub async fn review_render(
 /// submit its verdict) instead of a single-shot prompt. If the tool loop
 /// itself hard-fails (model error, timeout, turn exhaustion) we fall back to
 /// the single-shot `multimodal_review_via_qwen` rather than failing closed.
-async fn run_review_via_qwen(
-    qwen: &QwenClient,
-    output_url: &str,
-    prompt: &str,
-) -> ReviewResult {
+async fn run_review_via_qwen(qwen: &QwenClient, output_url: &str, prompt: &str) -> ReviewResult {
     let agentic = agentic_review_via_qwen(qwen, output_url, prompt).await;
     // A real verdict (score 1-10) means the loop succeeded. If the loop failed
     // (score 0 + "Agentic Qwen review failed/..."), degrade to single-shot.
@@ -355,7 +356,7 @@ async fn run_review_via_qwen(
                 score: 0,
                 feedback: format!("Qwen review call failed: {}", e),
                 retry_hint: None,
-        failing_section: None,
+                failing_section: None,
             };
         }
     };
@@ -515,13 +516,11 @@ async fn agentic_review_via_qwen(
     prompt: &str,
 ) -> ReviewResult {
     let tools = reviewer_tools();
-    let mut messages: Vec<serde_json::Value> = vec![
-        serde_json::json!({ "role": "system", "content": reviewer_system_prompt() }),
-    ];
+    let mut messages: Vec<serde_json::Value> =
+        vec![serde_json::json!({ "role": "system", "content": reviewer_system_prompt() })];
 
-    let mut user_content: Vec<serde_json::Value> = vec![
-        serde_json::json!({ "type": "text", "text": prompt }),
-    ];
+    let mut user_content: Vec<serde_json::Value> =
+        vec![serde_json::json!({ "type": "text", "text": prompt })];
     user_content.extend(build_media_content_parts(output_url).await);
     messages.push(serde_json::json!({ "role": "user", "content": user_content }));
 
@@ -539,7 +538,7 @@ async fn agentic_review_via_qwen(
                     score: 0,
                     feedback: format!("Agentic Qwen review tool loop failed: {}", e),
                     retry_hint: None,
-        failing_section: None,
+                    failing_section: None,
                 };
             }
             Err(_) => {
@@ -551,7 +550,7 @@ async fn agentic_review_via_qwen(
                         REVIEWER_CALL_TIMEOUT_SECS
                     ),
                     retry_hint: None,
-        failing_section: None,
+                    failing_section: None,
                 };
             }
         };
@@ -652,8 +651,9 @@ fn parse_text_verdict(text: &str) -> Option<ReviewResult> {
 /// replayed assistant messages (DashScope accepts an object or a string).
 fn reviewer_args_object(args: &serde_json::Value) -> serde_json::Value {
     match args {
-        serde_json::Value::String(s) => serde_json::from_str::<serde_json::Value>(s)
-            .unwrap_or_else(|_| args.clone()),
+        serde_json::Value::String(s) => {
+            serde_json::from_str::<serde_json::Value>(s).unwrap_or_else(|_| args.clone())
+        }
         other => other.clone(),
     }
 }
@@ -738,11 +738,15 @@ async fn probe_media_artifact(output_url: &str) -> String {
         Ok(Ok(out)) => format!(
             "probe_media: ffprobe failed ({}): {}",
             out.status,
-            String::from_utf8_lossy(&out.stderr).chars().take(300).collect::<String>()
+            String::from_utf8_lossy(&out.stderr)
+                .chars()
+                .take(300)
+                .collect::<String>()
         ),
         Ok(Err(e)) => format!("probe_media: ffprobe error: {}", e),
-        Err(_) => "probe_media: ffprobe timed out after 60s (treating artifact as unprobed)"
-            .to_string(),
+        Err(_) => {
+            "probe_media: ffprobe timed out after 60s (treating artifact as unprobed)".to_string()
+        }
     }
 }
 
@@ -793,11 +797,7 @@ fn truncate_evidence(text: &str) -> String {
 }
 
 /// Run review via NVIDIA NIM vision model (images/audio only).
-async fn run_review_via_nim(
-    nim: &NvidiaNimClient,
-    output_url: &str,
-    prompt: &str,
-) -> ReviewResult {
+async fn run_review_via_nim(nim: &NvidiaNimClient, output_url: &str, prompt: &str) -> ReviewResult {
     let response = match multimodal_review_via_nim(nim, output_url, prompt).await {
         Ok(r) => r,
         Err(e) => {
@@ -806,7 +806,7 @@ async fn run_review_via_nim(
                 score: 0,
                 feedback: format!("NIM review call failed: {}", e),
                 retry_hint: None,
-        failing_section: None,
+                failing_section: None,
             };
         }
     };
@@ -834,7 +834,7 @@ async fn run_review_via_nim_frames(
                 score: 0,
                 feedback: format!("NIM frame review failed: {}", e),
                 retry_hint: None,
-        failing_section: None,
+                failing_section: None,
             }
         }
     }
@@ -859,20 +859,27 @@ async fn nim_frames_review(
             std::time::Duration::from_secs(60),
             tokio::process::Command::new("ffprobe")
                 .args([
-                    "-v", "error", "-print_format", "json",
-                    "-show_format", "-show_streams",
+                    "-v",
+                    "error",
+                    "-print_format",
+                    "json",
+                    "-show_format",
+                    "-show_streams",
                 ])
                 .arg(&video_path)
                 .output(),
         )
         .await??;
-        let json: serde_json::Value =
-            serde_json::from_slice(&probe.stdout).unwrap_or_default();
+        let json: serde_json::Value = serde_json::from_slice(&probe.stdout).unwrap_or_default();
 
         // ffprobe emits `duration` as a string, not a number.
         let duration = json["format"]["duration"]
             .as_f64()
-            .or_else(|| json["format"]["duration"].as_str().and_then(|s| s.parse().ok()))
+            .or_else(|| {
+                json["format"]["duration"]
+                    .as_str()
+                    .and_then(|s| s.parse().ok())
+            })
             .unwrap_or(0.0);
         let (width, height) = json["streams"]
             .as_array()
@@ -970,8 +977,12 @@ pub async fn brief_violations(
         std::time::Duration::from_secs(60),
         tokio::process::Command::new("ffprobe")
             .args([
-                "-v", "error", "-print_format", "json",
-                "-show_format", "-show_streams",
+                "-v",
+                "error",
+                "-print_format",
+                "json",
+                "-show_format",
+                "-show_streams",
             ])
             .arg(&path)
             .output(),
@@ -991,7 +1002,11 @@ pub async fn brief_violations(
 
     let duration = json["format"]["duration"]
         .as_f64()
-        .or_else(|| json["format"]["duration"].as_str().and_then(|s| s.parse().ok()))
+        .or_else(|| {
+            json["format"]["duration"]
+                .as_str()
+                .and_then(|s| s.parse().ok())
+        })
         .unwrap_or(0.0);
     let streams = json["streams"].as_array().cloned().unwrap_or_default();
     let video = streams.iter().find(|s| s["codec_type"] == "video");
@@ -1074,7 +1089,7 @@ async fn run_review_via_bedrock(
                 score: 0,
                 feedback: format!("Bedrock review call failed: {}", e),
                 retry_hint: None,
-        failing_section: None,
+                failing_section: None,
             };
         }
     };
@@ -1098,7 +1113,7 @@ async fn run_review_via_gemini(
                 GEMINI_DAILY_LIMIT
             ),
             retry_hint: None,
-        failing_section: None,
+            failing_section: None,
         };
     }
 
@@ -1106,13 +1121,16 @@ async fn run_review_via_gemini(
         Ok(r) => r,
         Err(e) => {
             let err_text = e.to_string();
-            let is_429 = err_text.contains("429") || err_text.contains("RESOURCE_EXHAUSTED") || err_text.contains("quota");
+            let is_429 = err_text.contains("429")
+                || err_text.contains("RESOURCE_EXHAUSTED")
+                || err_text.contains("quota");
 
             if is_429 {
                 if let Some(delay_secs) = parse_gemini_retry_delay(&err_text) {
                     tracing::warn!(
                         "Gemini 429 (call #{}/20). Retrying after {}s delay...",
-                        calls, delay_secs
+                        calls,
+                        delay_secs
                     );
                     tokio::time::sleep(Duration::from_secs(delay_secs)).await;
 
@@ -1127,7 +1145,7 @@ async fn run_review_via_gemini(
                                     calls, retry_err
                                 ),
                                 retry_hint: None,
-        failing_section: None,
+                                failing_section: None,
                             };
                         }
                     }
@@ -1137,9 +1155,12 @@ async fn run_review_via_gemini(
             return ReviewResult {
                 pass: false,
                 score: 0,
-                feedback: format!("Gemini review call failed (call #{}/20): {}", calls, err_text),
+                feedback: format!(
+                    "Gemini review call failed (call #{}/20): {}",
+                    calls, err_text
+                ),
                 retry_hint: None,
-        failing_section: None,
+                failing_section: None,
             };
         }
     };
@@ -1192,7 +1213,7 @@ fn parse_review_response(response: &str) -> ReviewResult {
                             cleaned.chars().take(120).collect::<String>()
                         ),
                         retry_hint: None,
-        failing_section: None,
+                        failing_section: None,
                     };
                 }
             },
@@ -1283,7 +1304,9 @@ or
 
 /// Download a cloud URL to a temp file and return its path.
 /// Returns `None` if the URL doesn't look like a remote URL.
-async fn download_to_temp(output_url: &str) -> Result<Option<(PathBuf, Vec<u8>)>, Box<dyn std::error::Error + Send + Sync>> {
+async fn download_to_temp(
+    output_url: &str,
+) -> Result<Option<(PathBuf, Vec<u8>)>, Box<dyn std::error::Error + Send + Sync>> {
     if !output_url.starts_with("http://") && !output_url.starts_with("https://") {
         return Ok(None);
     }
@@ -1329,7 +1352,9 @@ async fn multimodal_review_via_nim(
         Some((path, _)) => (Some(path.clone()), Some(path.to_string_lossy().to_string())),
         None => (None, None),
     };
-    let local_path: &Path = local_path_buf.as_deref().unwrap_or_else(|| Path::new(output_url));
+    let local_path: &Path = local_path_buf
+        .as_deref()
+        .unwrap_or_else(|| Path::new(output_url));
     let local_url: &str = local_url_owned.as_deref().unwrap_or(output_url);
 
     if !local_path.exists() {
@@ -1344,12 +1369,16 @@ async fn multimodal_review_via_nim(
 
     let result = if is_image_extension(&ext) {
         let bytes = std::fs::read(local_path)?;
-        nim.analyze_image_bytes(&bytes, prompt).await.map_err(Into::into)
+        nim.analyze_image_bytes(&bytes, prompt)
+            .await
+            .map_err(Into::into)
     } else if is_video_extension(&ext) {
         Err("NVIDIA NIM does not support native video analysis — falling back to native video model".into())
     } else if let Some(mime_type) = audio_mime_type(&ext) {
         let bytes = std::fs::read(local_path)?;
-        nim.analyze_audio_bytes(&bytes, mime_type, prompt).await.map_err(Into::into)
+        nim.analyze_audio_bytes(&bytes, mime_type, prompt)
+            .await
+            .map_err(Into::into)
     } else {
         nim.generate_text(prompt).await.map_err(Into::into)
     };
@@ -1384,7 +1413,9 @@ async fn multimodal_review_via_qwen(
         Some((path, _)) => (Some(path.clone()), ()),
         None => (None, ()),
     };
-    let local_path: &Path = local_path_buf.as_deref().unwrap_or_else(|| Path::new(output_url));
+    let local_path: &Path = local_path_buf
+        .as_deref()
+        .unwrap_or_else(|| Path::new(output_url));
 
     if !local_path.exists() {
         return qwen.generate_text(prompt).await.map_err(Into::into);
@@ -1412,8 +1443,7 @@ async fn multimodal_review_via_qwen(
                 "fps": 2,
             })
         };
-        qwen
-            .generate_multimodal(prompt, &[part], 2048)
+        qwen.generate_multimodal(prompt, &[part], 2048)
             .await
             .map_err(Into::into)
     } else if is_image_extension(&ext) {
@@ -1430,8 +1460,7 @@ async fn multimodal_review_via_qwen(
                 "image_url": { "url": format!("data:image/{};base64,{}", ext, b64) },
             })
         };
-        qwen
-            .generate_multimodal(prompt, &[part], 2048)
+        qwen.generate_multimodal(prompt, &[part], 2048)
             .await
             .map_err(Into::into)
     } else if let Some(mime_type) = audio_mime_type(&ext) {
@@ -1444,8 +1473,7 @@ async fn multimodal_review_via_qwen(
                 "format": ext,
             },
         });
-        qwen
-            .generate_multimodal(prompt, &[part], 2048)
+        qwen.generate_multimodal(prompt, &[part], 2048)
             .await
             .map_err(Into::into)
     } else {
@@ -1499,7 +1527,9 @@ async fn multimodal_review_via_gemini(
         Some((path, _)) => (Some(path.clone()), Some(path.to_string_lossy().to_string())),
         None => (None, None),
     };
-    let local_path: &Path = local_path_buf.as_deref().unwrap_or_else(|| Path::new(output_url));
+    let local_path: &Path = local_path_buf
+        .as_deref()
+        .unwrap_or_else(|| Path::new(output_url));
     let local_url: &str = local_url_owned.as_deref().unwrap_or(output_url);
 
     if !local_path.exists() {

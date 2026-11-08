@@ -348,7 +348,9 @@ impl ApifyClient {
 
         // STRATEGY 1: FastAPI yt-dlp microservice (yt-dlp android - proven most reliable)
         tracing::info!("🔄 Trying Strategy 1 (FastAPI yt-dlp microservice - android client)...");
-        match YtdlpApiClient::download_video(video_url, output_path, r2_key.map(|s| s.to_string())).await {
+        match YtdlpApiClient::download_video(video_url, output_path, r2_key.map(|s| s.to_string()))
+            .await
+        {
             Ok(result) => {
                 tracing::info!("✅ Strategy 1 (FastAPI microservice) succeeded");
                 return Ok(VideoDownloadResult {
@@ -392,7 +394,10 @@ impl ApifyClient {
 
         if should_try_apify {
             tracing::info!("🔄 Trying Strategy 3 (Apify - paid service)...");
-            match self.download_via_apify(video_url, output_path, r2_client, r2_key).await {
+            match self
+                .download_via_apify(video_url, output_path, r2_client, r2_key)
+                .await
+            {
                 Ok(result) => {
                     tracing::info!("✅ Strategy 3 (Apify) succeeded");
                     let mut breaker = self.circuit_breaker.lock().unwrap();
@@ -424,7 +429,9 @@ impl ApifyClient {
 
         // STRATEGY 5: rust-yt-downloader (feature-rich yt-dlp wrapper)
         tracing::info!("🔄 Trying Strategy 5 (rust-yt-downloader)...");
-        match RustYtDownloaderClient::download_video(video_url, output_path, r2_client, r2_key).await {
+        match RustYtDownloaderClient::download_video(video_url, output_path, r2_client, r2_key)
+            .await
+        {
             Ok(result) => {
                 tracing::info!("✅ Strategy 5 (rust-yt-downloader) succeeded");
                 return Ok(result);
@@ -614,7 +621,9 @@ impl ApifyClient {
         if let (Some(client), Some(key)) = (r2_client, r2_key) {
             // Stream bytes directly to R2
             let content_type = "video/mp4";
-            let r2_url = client.upload_bytes(key, &bytes, content_type).await
+            let r2_url = client
+                .upload_bytes(key, &bytes, content_type)
+                .await
                 .map_err(|e| format!("R2 upload failed: {e}"))?;
             tracing::info!("✅ Apify video uploaded to R2: {r2_url}");
             Ok(VideoDownloadResult {
@@ -721,25 +730,27 @@ async fn download_twitch_vod(
     }
 
     tracing::info!("🔄 Twitch S1: FastAPI yt-dlp microservice...");
-    match YtdlpApiClient::download_video(video_url, output_path, r2_key.map(|s| s.to_string())).await {
+    match YtdlpApiClient::download_video(video_url, output_path, r2_key.map(|s| s.to_string()))
+        .await
+    {
         Ok(result) => {
             tracing::info!("✅ Twitch S1 (FastAPI yt-dlp) succeeded");
             return Ok(VideoDownloadResult {
-                    file_path: result.file_path,
-                    title: result.title,
-                    duration_seconds: Some(result.duration_seconds),
-                    width: result.width.map(|w| w as i32),
-                    height: result.height.map(|h| h as i32),
-                    r2_url: result.r2_url.clone(),
-                });
-            }
-            Err(e) => {
-                tracing::warn!("⚠️ Twitch S1 (FastAPI yt-dlp) failed: {}", e);
-            }
+                file_path: result.file_path,
+                title: result.title,
+                duration_seconds: Some(result.duration_seconds),
+                width: result.width.map(|w| w as i32),
+                height: result.height.map(|h| h as i32),
+                r2_url: result.r2_url.clone(),
+            });
         }
+        Err(e) => {
+            tracing::warn!("⚠️ Twitch S1 (FastAPI yt-dlp) failed: {}", e);
+        }
+    }
 
-        tracing::info!("🔄 Twitch S2: GQL access token + FFmpeg HLS...");
-        download_twitch_hls(video_url, output_path, r2_client, r2_key).await
+    tracing::info!("🔄 Twitch S2: GQL access token + FFmpeg HLS...");
+    download_twitch_hls(video_url, output_path, r2_client, r2_key).await
 }
 
 /// Download a Twitch VOD using the Twitch GQL API for a signed playback token,
@@ -854,17 +865,30 @@ async fn download_twitch_hls(
         // Download to temp, upload to R2, clean up
         let tmp_path = format!("/tmp/twitch_hls_{}_{}.mp4", vod_id, std::process::id());
         let status = TokioCommand::new("ffmpeg")
-            .args(["-y", "-i", &m3u8_url, "-c", "copy", "-bsf:a", "aac_adtstoasc", &tmp_path])
-            .status().await
+            .args([
+                "-y",
+                "-i",
+                &m3u8_url,
+                "-c",
+                "copy",
+                "-bsf:a",
+                "aac_adtstoasc",
+                &tmp_path,
+            ])
+            .status()
+            .await
             .map_err(|e| format!("FFmpeg HLS spawn failed: {e}"))?;
         if !status.success() {
             let _ = tokio::fs::remove_file(&tmp_path).await;
             return Err(format!(
                 "FFmpeg HLS download failed (exit {}): Twitch VOD {} may be deleted or restricted",
-                status.code().unwrap_or(-1), vod_id
+                status.code().unwrap_or(-1),
+                vod_id
             ));
         }
-        let r2_url = client.upload_file(&tmp_path, key).await
+        let r2_url = client
+            .upload_file(&tmp_path, key)
+            .await
             .map_err(|e| format!("R2 upload failed: {e}"))?;
         let _ = tokio::fs::remove_file(&tmp_path).await;
         tracing::info!("✅ Twitch S2 succeeded for VOD {}, uploaded to R2", vod_id);
@@ -879,16 +903,30 @@ async fn download_twitch_hls(
     } else {
         // Legacy: write directly to output_path
         let status = TokioCommand::new("ffmpeg")
-            .args(["-y", "-i", &m3u8_url, "-c", "copy", "-bsf:a", "aac_adtstoasc", output_path])
-            .status().await
+            .args([
+                "-y",
+                "-i",
+                &m3u8_url,
+                "-c",
+                "copy",
+                "-bsf:a",
+                "aac_adtstoasc",
+                output_path,
+            ])
+            .status()
+            .await
             .map_err(|e| format!("FFmpeg HLS spawn failed: {e}"))?;
         if !status.success() {
             return Err(format!(
                 "FFmpeg HLS download failed (exit {}): Twitch VOD {} may be deleted or restricted",
-                status.code().unwrap_or(-1), vod_id
+                status.code().unwrap_or(-1),
+                vod_id
             ));
         }
-        tracing::info!("✅ Twitch S2 (GQL + FFmpeg HLS) succeeded for VOD {}", vod_id);
+        tracing::info!(
+            "✅ Twitch S2 (GQL + FFmpeg HLS) succeeded for VOD {}",
+            vod_id
+        );
     }
 
     // Metadata is populated by the caller's validate_video_file → analyze_video; skip double ffprobe.
@@ -922,7 +960,9 @@ async fn download_kick_video(
     }
 
     tracing::info!("🔄 Kick S1: FastAPI yt-dlp microservice...");
-    match YtdlpApiClient::download_video(video_url, output_path, r2_key.map(|s| s.to_string())).await {
+    match YtdlpApiClient::download_video(video_url, output_path, r2_key.map(|s| s.to_string()))
+        .await
+    {
         Ok(result) => {
             tracing::info!("✅ Kick S1 (FastAPI yt-dlp) succeeded");
             return Ok(VideoDownloadResult {

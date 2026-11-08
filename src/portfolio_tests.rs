@@ -60,13 +60,14 @@ struct DfyScenario {
 }
 
 fn scenarios() -> Vec<DfyScenario> {
-    crate::portfolio_samples::dfy_services().iter().map(|svc| {
-        DfyScenario {
+    crate::portfolio_samples::dfy_services()
+        .iter()
+        .map(|svc| DfyScenario {
             slug: svc.slug,
             name: svc.name,
             description: svc.brief,
-        }
-    }).collect()
+        })
+        .collect()
 }
 
 // ── Runner ────────────────────────────────────────────────────────────────
@@ -295,7 +296,8 @@ impl PortfolioTestRunner {
     fn start_heartbeat(&self, run_id: Uuid, token: Uuid) -> HeartbeatGuard {
         let pool = self.app_state.db_pool.clone();
         let handle = tokio::spawn(async move {
-            let mut tick = tokio::time::interval(std::time::Duration::from_secs(RUN_HEARTBEAT_SECS));
+            let mut tick =
+                tokio::time::interval(std::time::Duration::from_secs(RUN_HEARTBEAT_SECS));
             tick.tick().await; // immediate first tick
             loop {
                 tick.tick().await;
@@ -448,7 +450,10 @@ impl PortfolioTestRunner {
         .fetch_one(&self.app_state.db_pool)
         .await
         {
-            Ok(r) => { let id: Uuid = r.get("id"); id }
+            Ok(r) => {
+                let id: Uuid = r.get("id");
+                id
+            }
             Err(e) => {
                 tracing::error!("DB insert failed for '{}': {e}", scenario.name);
                 return;
@@ -765,7 +770,9 @@ impl PortfolioTestRunner {
                 }
                 "failed" => {
                     let err: Option<String> = row.get("error_message");
-                    return Err(err.unwrap_or_else(|| "Delivery failed with no error message".to_string()));
+                    return Err(
+                        err.unwrap_or_else(|| "Delivery failed with no error message".to_string())
+                    );
                 }
                 _ => {
                     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
@@ -816,8 +823,7 @@ pub fn start_reconciler(state: Arc<AppState>) {
     tokio::spawn(async move {
         reconcile_orphaned_runs(&state).await;
 
-        let mut tick =
-            tokio::time::interval(std::time::Duration::from_secs(RUN_RECONCILE_SECS));
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(RUN_RECONCILE_SECS));
         tick.tick().await; // skip the immediate tick — already swept above
         loop {
             tick.tick().await;

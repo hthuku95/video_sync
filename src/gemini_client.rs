@@ -337,8 +337,8 @@ pub struct ImageCandidate {
 
 impl GeminiClient {
     pub fn new(api_key: String) -> Self {
-        let text_model = std::env::var("GEMINI_TEXT_MODEL")
-            .unwrap_or_else(|_| "gemini-2.5-flash".to_string());
+        let text_model =
+            std::env::var("GEMINI_TEXT_MODEL").unwrap_or_else(|_| "gemini-2.5-flash".to_string());
         Self {
             client: Client::new(),
             api_key,
@@ -842,7 +842,9 @@ impl GeminiClient {
 
             Err("No image data found in response".into())
         } else if response.status().as_u16() == 429 {
-            let error_json: serde_json::Value = serde_json::from_str(&response.text().await.unwrap_or_default()).unwrap_or_default();
+            let error_json: serde_json::Value =
+                serde_json::from_str(&response.text().await.unwrap_or_default())
+                    .unwrap_or_default();
             let retry_seconds = error_json["error"]["details"]
                 .as_array()
                 .and_then(|details| {
@@ -854,9 +856,14 @@ impl GeminiClient {
                 })
                 .unwrap_or(30)
                 .min(GEMINI_RETRY_MAX_SECS as u64);
-            tracing::warn!("Gemini image generation hit 429 quota, retrying after {}s", retry_seconds);
+            tracing::warn!(
+                "Gemini image generation hit 429 quota, retrying after {}s",
+                retry_seconds
+            );
             tokio::time::sleep(std::time::Duration::from_secs(retry_seconds)).await;
-            let retry_response = self.client.post(&url)
+            let retry_response = self
+                .client
+                .post(&url)
                 .header("Content-Type", "application/json")
                 .json(&request)
                 .send()
@@ -872,7 +879,10 @@ impl GeminiClient {
                                 for part in parts {
                                     if let Some(inline_data) = part.get("inlineData") {
                                         if let Some(data) = inline_data["data"].as_str() {
-                                            let image_bytes = BASE64_STANDARD.decode(data).map_err(|e| format!("Failed to decode base64 image: {}", e))?;
+                                            let image_bytes =
+                                                BASE64_STANDARD.decode(data).map_err(|e| {
+                                                    format!("Failed to decode base64 image: {}", e)
+                                                })?;
                                             return Ok(image_bytes);
                                         }
                                     }
@@ -882,7 +892,11 @@ impl GeminiClient {
                     }
                 }
             }
-            Err(format!("Gemini image generation 429 even after retry ({}): {}", model_id, retry_text).into())
+            Err(format!(
+                "Gemini image generation 429 even after retry ({}): {}",
+                model_id, retry_text
+            )
+            .into())
         } else {
             let error_text = response.text().await?;
             Err(format!(
@@ -7505,20 +7519,22 @@ Provide ONLY the JSON object, no markdown, no code blocks, no other text."#,
 
         // --- Step 1: Get the video bytes ---
         // Download from cloud URL if needed, or read local file directly.
-        let video_bytes = if video_source.starts_with("http://")
-            || video_source.starts_with("https://")
-        {
-            tracing::debug!("Downloading cloud video for Gemini analysis: {}", video_source);
-            let response = reqwest::get(video_source)
-                .await
-                .map_err(|e| format!("Failed to download video for analysis: {}", e))?;
-            response.bytes().await?.to_vec()
-        } else {
-            tracing::debug!("Reading local video for Gemini analysis: {}", video_source);
-            tokio::fs::read(video_source)
-                .await
-                .map_err(|e| format!("Failed to read video file '{}': {}", video_source, e))?
-        };
+        let video_bytes =
+            if video_source.starts_with("http://") || video_source.starts_with("https://") {
+                tracing::debug!(
+                    "Downloading cloud video for Gemini analysis: {}",
+                    video_source
+                );
+                let response = reqwest::get(video_source)
+                    .await
+                    .map_err(|e| format!("Failed to download video for analysis: {}", e))?;
+                response.bytes().await?.to_vec()
+            } else {
+                tracing::debug!("Reading local video for Gemini analysis: {}", video_source);
+                tokio::fs::read(video_source)
+                    .await
+                    .map_err(|e| format!("Failed to read video file '{}': {}", video_source, e))?
+            };
 
         if video_bytes.is_empty() {
             return Err(format!("Video source '{}' produced zero bytes", video_source).into());
@@ -7530,21 +7546,27 @@ Provide ONLY the JSON object, no markdown, no code blocks, no other text."#,
                 "Video too large for Gemini inline analysis ({:.1}MB > 10MB limit). \
                  Use Claude (direct URL) or Bedrock (S3 reference) for large video analysis.",
                 total_len_mb
-            ).into());
+            )
+            .into());
         }
 
         // Get total duration via ffprobe (download to temp, probe, clean up)
         let total_dur = {
-            let temp_probe = std::env::temp_dir().join(format!("gemini_probe_{}.mp4", uuid::Uuid::new_v4()));
+            let temp_probe =
+                std::env::temp_dir().join(format!("gemini_probe_{}.mp4", uuid::Uuid::new_v4()));
             tokio::fs::write(&temp_probe, &video_bytes).await?;
-            let dur = crate::core::get_video_duration(&temp_probe.to_string_lossy())
-                .unwrap_or(30.0);
+            let dur =
+                crate::core::get_video_duration(&temp_probe.to_string_lossy()).unwrap_or(30.0);
             let _ = tokio::fs::remove_file(&temp_probe).await;
             dur
         };
 
         // Detect MIME type from extension
-        let ext = video_source.rsplit('.').next().unwrap_or("mp4").to_lowercase();
+        let ext = video_source
+            .rsplit('.')
+            .next()
+            .unwrap_or("mp4")
+            .to_lowercase();
         let mime_type = match ext.as_str() {
             "avi" => "video/avi",
             "mov" | "qt" => "video/quicktime",

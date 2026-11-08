@@ -38,7 +38,10 @@ pub fn build_crypto_saas_prompt(target: &PortfolioTarget) -> String {
     )
 }
 
-pub fn build_crypto_saas_extra(target: &PortfolioTarget, reference_image_url: Option<&str>) -> Value {
+pub fn build_crypto_saas_extra(
+    target: &PortfolioTarget,
+    reference_image_url: Option<&str>,
+) -> Value {
     let narration_text = format!(
         "{company} powers {market}. This speculative VideoSync sample shows {angle} in a polished website-to-video explainer built for outbound sales.",
         company = target.company, market = target.market, angle = target.angle,
@@ -206,13 +209,19 @@ pub fn dfy_services() -> &'static [DfyServiceDef] {
 }
 
 /// Build an AgenticServicePipeline ServiceInput for a Managed Campaign service.
-pub fn service_input_for(def: &DfyServiceDef) -> crate::services::agentic_service_pipeline::ServiceInput {
+pub fn service_input_for(
+    def: &DfyServiceDef,
+) -> crate::services::agentic_service_pipeline::ServiceInput {
     crate::services::agentic_service_pipeline::ServiceInput {
         title: def.name.to_string(),
         brief: def.brief.to_string(),
         style: def.style.to_string(),
         duration_seconds: def.duration_seconds,
-        source_url: if def.source_url.is_empty() { None } else { Some(def.source_url.to_string()) },
+        source_url: if def.source_url.is_empty() {
+            None
+        } else {
+            Some(def.source_url.to_string())
+        },
         delivery_id: uuid::Uuid::nil(),
         prospect_id: None,
         session_uuid: None,
@@ -382,7 +391,12 @@ pub async fn resolve_service_source_url(
         // downloading within hours, and a two-day-old Kick HLS entry failed
         // every clipping attempt on 2026-10-20. Rediscover instead.
         if !url.trim().is_empty() && !url.to_ascii_lowercase().contains(".m3u8") {
-            tracing::debug!("♻️ Reusing cached {} source for '{}': {}", platform, slug, url);
+            tracing::debug!(
+                "♻️ Reusing cached {} source for '{}': {}",
+                platform,
+                slug,
+                url
+            );
             return Some(url.clone());
         }
         tracing::warn!(
@@ -463,10 +477,10 @@ async fn discover_twitch_source(state: &std::sync::Arc<crate::AppState>) -> Opti
             // would take the *newest* VOD, which may be shorter than the one we
             // just qualified. The VOD page URL already contains `/videos/<id>`,
             // so downstream source resolution passes it straight through.
-            if let Some(v) = videos
-                .iter()
-                .find(|v| crate::twitch_client::parse_duration_secs(&v.duration) >= SERVICE_SOURCE_MIN_VOD_SECS)
-            {
+            if let Some(v) = videos.iter().find(|v| {
+                crate::twitch_client::parse_duration_secs(&v.duration)
+                    >= SERVICE_SOURCE_MIN_VOD_SECS
+            }) {
                 tracing::info!(
                     "Twitch discovery: channel '{}' has a {}-second VOD ({})",
                     ch.broadcaster_login,
@@ -514,7 +528,11 @@ async fn discover_kick_source(state: &std::sync::Arc<crate::AppState>) -> Option
 /// Discover a YouTube channel via search, then resolve it to its latest upload.
 async fn discover_youtube_source(state: &std::sync::Arc<crate::AppState>) -> Option<String> {
     let client = state.youtube_client.as_ref()?;
-    for query in ["technology podcast", "gaming highlights", "educational explainer"] {
+    for query in [
+        "technology podcast",
+        "gaming highlights",
+        "educational explainer",
+    ] {
         let resp = match client.search_channels(None, query, 10, None).await {
             Ok(r) => r,
             Err(e) => {
@@ -524,7 +542,9 @@ async fn discover_youtube_source(state: &std::sync::Arc<crate::AppState>) -> Opt
         };
         for item in resp.items {
             let channel_url = format!("https://youtube.com/channel/{}", item.id.channel_id);
-            match crate::services::campaign_engine::resolve_latest_video_url(state, &channel_url).await {
+            match crate::services::campaign_engine::resolve_latest_video_url(state, &channel_url)
+                .await
+            {
                 Ok(url) if url != channel_url => return Some(url),
                 Ok(_) => {}
                 Err(e) => tracing::warn!(
@@ -549,8 +569,12 @@ mod tests {
         slugs.sort_unstable();
         slugs.dedup();
         assert_eq!(slugs.len(), targets.len());
-        assert!(targets.iter().all(|target| target.url.starts_with("https://")));
-        assert!(targets.iter().all(|target| !target.company.trim().is_empty()));
+        assert!(targets
+            .iter()
+            .all(|target| target.url.starts_with("https://")));
+        assert!(targets
+            .iter()
+            .all(|target| !target.company.trim().is_empty()));
     }
 
     #[test]
@@ -568,9 +592,14 @@ mod tests {
         assert_eq!(extra["portfolio_category"], "crypto_saas");
         assert_eq!(extra["company"], target.company);
         assert_eq!(extra["source_url"], target.url);
-        assert_eq!(extra["reference_image_url"], "https://assets.example/hero.png");
+        assert_eq!(
+            extra["reference_image_url"],
+            "https://assets.example/hero.png"
+        );
         assert_eq!(extra["include_narration"], true);
-        assert!(extra["narration_text"].as_str().is_some_and(|text| text.contains(target.company)));
+        assert!(extra["narration_text"]
+            .as_str()
+            .is_some_and(|text| text.contains(target.company)));
     }
 
     #[test]
@@ -594,14 +623,21 @@ mod tests {
             assert!(!input.style.is_empty());
             assert!(input.duration_seconds > 0.0);
             // Normalize: the slug must map to a ServiceType that round-trips
-            let normalized = crate::services::agentic_service_pipeline::ServiceType::from_normalized(service.slug);
-            let normalized_back = crate::services::agentic_service_pipeline::ServiceType::from_normalized(normalized.as_str());
+            let normalized =
+                crate::services::agentic_service_pipeline::ServiceType::from_normalized(
+                    service.slug,
+                );
+            let normalized_back =
+                crate::services::agentic_service_pipeline::ServiceType::from_normalized(
+                    normalized.as_str(),
+                );
             // Discriminant should be the same (same variant, same ServiceType)
             assert_eq!(
                 std::mem::discriminant(&normalized),
                 std::mem::discriminant(&normalized_back),
                 "slug '{}' normalized to '{}' must round-trip consistently",
-                service.slug, normalized.as_str()
+                service.slug,
+                normalized.as_str()
             );
         }
     }

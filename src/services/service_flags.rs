@@ -39,6 +39,9 @@ pub fn clipping_services() -> &'static [&'static str] {
 }
 
 /// System groups beyond the 12 managed services.
+/// `campaigns` gates monthly-campaign subscriptions app-wide (frontend
+/// coming-soon cards + prospect outreach copy). Bundled one-time offers
+/// ($50-$100 10-30 videos) and the studio DFY storefront are NOT affected.
 pub const SYSTEM_GROUPS: &[&str] = &[
     "prospecting",
     "outreach",
@@ -46,6 +49,7 @@ pub const SYSTEM_GROUPS: &[&str] = &[
     "legacy_youtube_clipping",
     "chat_agents",
     "admin_tests",
+    "campaigns",
 ];
 
 /// Whether `service` is a known flaggable name (managed service or group).
@@ -81,6 +85,19 @@ pub async fn enabled_clipping_services(pool: &sqlx::PgPool) -> Vec<String> {
     }
     out
 }
+
+/// Campaigns app-wide switch owner directive Nov 2026). Gates monthly-campaign
+/// subscriptions: `/api/campaigns` creation 503s "coming soon", the TS apps
+/// show Coming Soon cards (via `GET /api/features`), and landing_page/education
+/// prospect outreach drops the campaign mention (bundles only).
+/// Studio (videosync_studio, DFY storefront) reads this as false and doesn't
+/// advertise campaigns anyway — it is unaffected by the switch in either state.
+pub async fn campaigns_enabled(pool: &sqlx::PgPool) -> bool {
+    service_enabled(pool, "campaigns").await
+}
+
+pub const CAMPAIGNS_OFF_MESSAGE: &str =
+    "Monthly campaigns are coming soon. In the meantime, one-time bundles (10 videos for $50 or 30 for $100) are available.";
 
 /// Full enabled-service menu (managed services only, no system groups).
 pub async fn enabled_services(pool: &sqlx::PgPool) -> Vec<String> {

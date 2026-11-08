@@ -104,7 +104,10 @@ async fn space_request() {
         Ok(Some(slot)) => {
             let wait_ms = (slot - chrono::Utc::now()).num_milliseconds().max(0);
             if wait_ms > 0 {
-                tracing::debug!("NVIDIA NIM pacing: sleeping {}ms for the next slot", wait_ms);
+                tracing::debug!(
+                    "NVIDIA NIM pacing: sleeping {}ms for the next slot",
+                    wait_ms
+                );
                 tokio::time::sleep(std::time::Duration::from_millis(wait_ms as u64)).await;
             }
         }
@@ -178,7 +181,6 @@ pub async fn generate_image_flux(api_key: &str, prompt: &str) -> Result<Vec<u8>,
     Ok(bytes)
 }
 
-
 // ─── Model capabilities ─────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -190,13 +192,25 @@ pub struct NimCapabilities {
 
 impl NimCapabilities {
     const fn text_tools() -> Self {
-        Self { tool_calling: true, vision: false, audio: false }
+        Self {
+            tool_calling: true,
+            vision: false,
+            audio: false,
+        }
     }
     const fn text_vision() -> Self {
-        Self { tool_calling: true, vision: true, audio: false }
+        Self {
+            tool_calling: true,
+            vision: true,
+            audio: false,
+        }
     }
     const fn omni() -> Self {
-        Self { tool_calling: true, vision: true, audio: true }
+        Self {
+            tool_calling: true,
+            vision: true,
+            audio: true,
+        }
     }
 }
 
@@ -210,22 +224,78 @@ pub struct NimModelInfo {
 
 pub const NIM_MODELS: &[NimModelInfo] = &[
     // Verified serving on the production key 2026-10-20 (all tool-capable).
-    NimModelInfo { id: "nvidia/nemotron-3-ultra-550b-a55b", name: "Nemotron 3 Ultra 550B", capabilities: NimCapabilities::text_tools() },
-    NimModelInfo { id: "nvidia/nemotron-3.5-super-vl-120b-a12b", name: "Nemotron 3.5 Super VL 120B", capabilities: NimCapabilities::text_vision() },
-    NimModelInfo { id: "nvidia/nemotron-3.5-lightning-30b-a3b", name: "Nemotron 3.5 Lightning 30B", capabilities: NimCapabilities::text_tools() },
-    NimModelInfo { id: "openai/gpt-oss-20b", name: "GPT-OSS 20B", capabilities: NimCapabilities::text_tools() },
+    NimModelInfo {
+        id: "nvidia/nemotron-3-ultra-550b-a55b",
+        name: "Nemotron 3 Ultra 550B",
+        capabilities: NimCapabilities::text_tools(),
+    },
+    NimModelInfo {
+        id: "nvidia/nemotron-3.5-super-vl-120b-a12b",
+        name: "Nemotron 3.5 Super VL 120B",
+        capabilities: NimCapabilities::text_vision(),
+    },
+    NimModelInfo {
+        id: "nvidia/nemotron-3.5-lightning-30b-a3b",
+        name: "Nemotron 3.5 Lightning 30B",
+        capabilities: NimCapabilities::text_tools(),
+    },
+    NimModelInfo {
+        id: "openai/gpt-oss-20b",
+        name: "GPT-OSS 20B",
+        capabilities: NimCapabilities::text_tools(),
+    },
     // Tool-calling text models (entitlement not guaranteed per account)
-    NimModelInfo { id: "google/gemma-4-31b-it", name: "Gemma 4 31B", capabilities: NimCapabilities::text_tools() },
-    NimModelInfo { id: "nvidia/nemotron-3-super-120b-a12b", name: "Nemotron 3 Super 120B", capabilities: NimCapabilities::text_tools() },
-    NimModelInfo { id: "meta/llama-3.3-70b-instruct", name: "Llama 3.3 70B", capabilities: NimCapabilities::text_tools() },
-    NimModelInfo { id: "mistralai/mistral-nemo", name: "Mistral Nemo", capabilities: NimCapabilities::text_tools() },
-    NimModelInfo { id: "qwen/qwen3-coder-480b", name: "Qwen3 Coder 480B", capabilities: NimCapabilities::text_tools() },
-    NimModelInfo { id: "minimaxai/minimax-m2.7", name: "MiniMax M2.7", capabilities: NimCapabilities::text_tools() },
-    NimModelInfo { id: "moonshotai/kimi-k2.5", name: "Kimi K2.5", capabilities: NimCapabilities::text_tools() },
-    NimModelInfo { id: "z-ai/glm-5.1", name: "GLM 5.1", capabilities: NimCapabilities::text_tools() },
+    NimModelInfo {
+        id: "google/gemma-4-31b-it",
+        name: "Gemma 4 31B",
+        capabilities: NimCapabilities::text_tools(),
+    },
+    NimModelInfo {
+        id: "nvidia/nemotron-3-super-120b-a12b",
+        name: "Nemotron 3 Super 120B",
+        capabilities: NimCapabilities::text_tools(),
+    },
+    NimModelInfo {
+        id: "meta/llama-3.3-70b-instruct",
+        name: "Llama 3.3 70B",
+        capabilities: NimCapabilities::text_tools(),
+    },
+    NimModelInfo {
+        id: "mistralai/mistral-nemo",
+        name: "Mistral Nemo",
+        capabilities: NimCapabilities::text_tools(),
+    },
+    NimModelInfo {
+        id: "qwen/qwen3-coder-480b",
+        name: "Qwen3 Coder 480B",
+        capabilities: NimCapabilities::text_tools(),
+    },
+    NimModelInfo {
+        id: "minimaxai/minimax-m2.7",
+        name: "MiniMax M2.7",
+        capabilities: NimCapabilities::text_tools(),
+    },
+    NimModelInfo {
+        id: "moonshotai/kimi-k2.5",
+        name: "Kimi K2.5",
+        capabilities: NimCapabilities::text_tools(),
+    },
+    NimModelInfo {
+        id: "z-ai/glm-5.1",
+        name: "GLM 5.1",
+        capabilities: NimCapabilities::text_tools(),
+    },
     // Vision + tool-calling models (multimodal review + agentic loops)
-    NimModelInfo { id: "meta/muse-glimmer-30b", name: "Muse Glimmer 30B", capabilities: NimCapabilities::text_vision() },
-    NimModelInfo { id: "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning", name: "Nemotron Omni 30B", capabilities: NimCapabilities::omni() },
+    NimModelInfo {
+        id: "meta/muse-glimmer-30b",
+        name: "Muse Glimmer 30B",
+        capabilities: NimCapabilities::text_vision(),
+    },
+    NimModelInfo {
+        id: "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+        name: "Nemotron Omni 30B",
+        capabilities: NimCapabilities::omni(),
+    },
 ];
 
 pub fn lookup_model(model_id: &str) -> Option<&'static NimModelInfo> {
@@ -233,7 +303,9 @@ pub fn lookup_model(model_id: &str) -> Option<&'static NimModelInfo> {
 }
 
 pub fn infer_capabilities(model_id: &str) -> NimCapabilities {
-    lookup_model(model_id).map(|m| m.capabilities).unwrap_or(NimCapabilities::text_tools())
+    lookup_model(model_id)
+        .map(|m| m.capabilities)
+        .unwrap_or(NimCapabilities::text_tools())
 }
 
 // ─── Client ─────────────────────────────────────────────────────────────────
@@ -265,12 +337,15 @@ impl NvidiaNimClient {
     /// Create a new text + tool-calling NIM client.
     /// Model from `NVIDIA_NIM_MODEL` env var (default: google/gemma-4-31b-it).
     pub fn new(api_key: String) -> Self {
-        let model = std::env::var("NVIDIA_NIM_MODEL")
-            .unwrap_or_else(|_| NVIDIA_DEFAULT_MODEL.to_string());
+        let model =
+            std::env::var("NVIDIA_NIM_MODEL").unwrap_or_else(|_| NVIDIA_DEFAULT_MODEL.to_string());
         let capabilities = infer_capabilities(&model);
         tracing::info!(
             "NVIDIA NIM text client initialized: {} (tools={}, vision={}, audio={})",
-            model, capabilities.tool_calling, capabilities.vision, capabilities.audio
+            model,
+            capabilities.tool_calling,
+            capabilities.vision,
+            capabilities.audio
         );
         Self {
             client: Client::builder()
@@ -290,7 +365,10 @@ impl NvidiaNimClient {
         let capabilities = infer_capabilities(&model);
         tracing::info!(
             "NVIDIA NIM client initialized: {} (tools={}, vision={}, audio={})",
-            model, capabilities.tool_calling, capabilities.vision, capabilities.audio
+            model,
+            capabilities.tool_calling,
+            capabilities.vision,
+            capabilities.audio
         );
         Self {
             client: Client::builder()
@@ -312,7 +390,10 @@ impl NvidiaNimClient {
         let capabilities = infer_capabilities(&model);
         tracing::info!(
             "NVIDIA NIM vision client initialized: {} (tools={}, vision={}, audio={})",
-            model, capabilities.tool_calling, capabilities.vision, capabilities.audio
+            model,
+            capabilities.tool_calling,
+            capabilities.vision,
+            capabilities.audio
         );
         Self {
             client: Client::new(),
@@ -398,7 +479,9 @@ impl NvidiaNimClient {
                     let backoff = 5u64 * (attempt as u64 + 1);
                     tracing::warn!(
                         "NVIDIA NIM connection error (attempt {}/{}, retry in {}s): {e}",
-                        attempt + 1, max_attempts, backoff
+                        attempt + 1,
+                        max_attempts,
+                        backoff
                     );
                     tokio::time::sleep(tokio::time::Duration::from_secs(backoff)).await;
                     last_err = format!("NVIDIA NIM connection error: {e}").into();
@@ -444,7 +527,9 @@ impl NvidiaNimClient {
                 });
                 tracing::warn!(
                     "⏳ NVIDIA NIM 429 (attempt {}/{}). Waiting {}s…",
-                    attempt + 1, max_attempts, wait
+                    attempt + 1,
+                    max_attempts,
+                    wait
                 );
                 tokio::time::sleep(tokio::time::Duration::from_secs(wait)).await;
                 last_err = format!("NVIDIA NIM 429: {}", err_body).into();
@@ -681,13 +766,8 @@ impl NvidiaNimClient {
         &self,
         messages: &[serde_json::Value],
         tools: &[crate::gemini_client::FunctionDeclaration],
-    ) -> Result<
-        (
-            NimResponse,
-            crate::usage::UsageInfo,
-        ),
-        Box<dyn std::error::Error + Send + Sync>,
-    > {
+    ) -> Result<(NimResponse, crate::usage::UsageInfo), Box<dyn std::error::Error + Send + Sync>>
+    {
         let openai_tools = Self::to_openai_tools(tools);
 
         let body = serde_json::json!({
@@ -730,7 +810,9 @@ impl NvidiaNimClient {
                     let backoff = 5u64 * (attempt as u64 + 1);
                     tracing::warn!(
                         "NVIDIA NIM connection error (attempt {}/{}, retry in {}s): {e}",
-                        attempt + 1, max_attempts, backoff
+                        attempt + 1,
+                        max_attempts,
+                        backoff
                     );
                     tokio::time::sleep(tokio::time::Duration::from_secs(backoff)).await;
                     last_err = format!("NVIDIA NIM connection error: {e}").into();
@@ -755,9 +837,7 @@ impl NvidiaNimClient {
                 let choice = &json["choices"][0];
                 let finish_reason = choice["finish_reason"].as_str().unwrap_or("");
                 let raw_tool_calls = choice["message"]["tool_calls"].as_array();
-                let has_tool_calls = raw_tool_calls
-                    .map(|a| !a.is_empty())
-                    .unwrap_or(false);
+                let has_tool_calls = raw_tool_calls.map(|a| !a.is_empty()).unwrap_or(false);
 
                 // Do NOT key this on finish_reason alone. vLLM-backed NIM models
                 // return tool calls with `finish_reason: "stop"` in multi-turn
@@ -833,7 +913,9 @@ impl NvidiaNimClient {
                 });
                 tracing::warn!(
                     "⏳ NVIDIA NIM tool call 429 (attempt {}/{}). Waiting {}s…",
-                    attempt + 1, max_attempts, wait
+                    attempt + 1,
+                    max_attempts,
+                    wait
                 );
                 tokio::time::sleep(tokio::time::Duration::from_secs(wait)).await;
                 last_err = format!("NVIDIA NIM 429: {}", err_body).into();

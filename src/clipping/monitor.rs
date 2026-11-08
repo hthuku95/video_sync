@@ -112,8 +112,7 @@ async fn enqueue_clipping_job(
     // pipeline worker only claims agentic_* workflows, so nothing downstream
     // can pick these up either way. Kick/Twitch clipping businesses run
     // through the campaign pipeline, not this monitor.
-    if !crate::services::service_flags::service_enabled(pool, "legacy_youtube_clipping").await
-    {
+    if !crate::services::service_flags::service_enabled(pool, "legacy_youtube_clipping").await {
         tracing::debug!(
             "⏸️ Legacy auto-clip skipped for linkage {} video {} (service disabled)",
             linkage.id,
@@ -143,9 +142,9 @@ async fn enqueue_clipping_job(
     .fetch_one(pool)
     .await
     {
-            Ok(job_id) => {
-                let _ = sqlx::query(
-                    "UPDATE app_workflows
+        Ok(job_id) => {
+            let _ = sqlx::query(
+                "UPDATE app_workflows
                      SET metadata = jsonb_set(
                              COALESCE(metadata, '{}'::jsonb),
                              '{clipping_job_id}',
@@ -155,17 +154,17 @@ async fn enqueue_clipping_job(
                          updated_at = NOW()
                      WHERE id = $2
                        AND source_table = 'clipping_jobs'",
-                )
-                .bind(job_id)
-                .bind(workflow_id)
-                .execute(pool)
-                .await;
-                tokio::spawn(async move {
-                    if let Err(e) = sqs_enqueue_clipping_job(job_id).await {
-                        tracing::warn!("Queue enqueue failed (non-fatal): {}", e);
-                    }
-                });
-                Ok((job_id, true))
+            )
+            .bind(job_id)
+            .bind(workflow_id)
+            .execute(pool)
+            .await;
+            tokio::spawn(async move {
+                if let Err(e) = sqs_enqueue_clipping_job(job_id).await {
+                    tracing::warn!("Queue enqueue failed (non-fatal): {}", e);
+                }
+            });
+            Ok((job_id, true))
         }
         Err(sqlx::Error::Database(db_err)) if db_err.is_unique_violation() => {
             let existing_job_id = find_active_clipping_job(pool, linkage.id, source_video_id)
@@ -194,8 +193,11 @@ impl ChannelMonitor {
         // `enqueue_clipping_job` refused the job only after the cycle had already
         // spent YouTube quota (playlistItems per channel) and logged an error for
         // every discovered video — every 5 minutes, in all 3 API tasks.
-        if !crate::services::service_flags::service_enabled(&self.db_pool, "legacy_youtube_clipping")
-            .await
+        if !crate::services::service_flags::service_enabled(
+            &self.db_pool,
+            "legacy_youtube_clipping",
+        )
+        .await
         {
             tracing::debug!(
                 "⏸️ Legacy YouTube auto-clipping disabled (service_flags) — polling cycle skipped"

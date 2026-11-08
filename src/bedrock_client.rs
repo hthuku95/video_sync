@@ -1,6 +1,6 @@
 use aws_sdk_bedrockruntime::types::{
-    ContentBlock, ConverseOutput, InferenceConfiguration, Message, SystemContentBlock,
-    Tool, ToolConfiguration, ToolInputSchema, ToolResultContentBlock, ToolSpecification,
+    ContentBlock, ConverseOutput, InferenceConfiguration, Message, SystemContentBlock, Tool,
+    ToolConfiguration, ToolInputSchema, ToolResultContentBlock, ToolSpecification,
 };
 use aws_smithy_types::Document;
 use aws_smithy_types::Number as DocNumber;
@@ -48,8 +48,10 @@ fn value_to_doc(v: &Value) -> Document {
         Value::String(s) => Document::String(s.clone()),
         Value::Array(arr) => Document::Array(arr.iter().map(value_to_doc).collect()),
         Value::Object(obj) => {
-            let map: HashMap<String, Document> =
-                obj.iter().map(|(k, v)| (k.clone(), value_to_doc(v))).collect();
+            let map: HashMap<String, Document> = obj
+                .iter()
+                .map(|(k, v)| (k.clone(), value_to_doc(v)))
+                .collect();
             Document::Object(map)
         }
     }
@@ -68,8 +70,10 @@ fn doc_to_value(doc: &Document) -> Value {
         Document::String(s) => Value::String(s.clone()),
         Document::Array(arr) => Value::Array(arr.iter().map(doc_to_value).collect()),
         Document::Object(obj) => {
-            let map: serde_json::Map<String, Value> =
-                obj.iter().map(|(k, v)| (k.clone(), doc_to_value(v))).collect();
+            let map: serde_json::Map<String, Value> = obj
+                .iter()
+                .map(|(k, v)| (k.clone(), doc_to_value(v)))
+                .collect();
             Value::Object(map)
         }
     }
@@ -98,7 +102,9 @@ impl BedrockClient {
         messages: &[Message],
         tools: &[crate::gemini_client::FunctionDeclaration],
     ) -> Result<BedrockResponse, String> {
-        let mut builder = self.client.converse()
+        let mut builder = self
+            .client
+            .converse()
             .model_id(&self.model_id)
             .inference_config(
                 InferenceConfiguration::builder()
@@ -108,8 +114,7 @@ impl BedrockClient {
             );
 
         if !system_prompt.is_empty() {
-            builder = builder
-                .system(SystemContentBlock::Text(system_prompt.to_string()));
+            builder = builder.system(SystemContentBlock::Text(system_prompt.to_string()));
         }
 
         builder = builder.set_messages(Some(messages.to_vec()));
@@ -123,7 +128,10 @@ impl BedrockClient {
             builder = builder.tool_config(tc);
         }
 
-        let output = builder.send().await.map_err(|e| format!("Bedrock API error: {e}"))?;
+        let output = builder
+            .send()
+            .await
+            .map_err(|e| format!("Bedrock API error: {e}"))?;
 
         let converse_output = output
             .output

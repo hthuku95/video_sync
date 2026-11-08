@@ -360,7 +360,8 @@ async fn websocket(
 
     // Path 1: In-memory bridge — JobManager sends ProgressUpdate, we serialize to String
     {
-        let (pg_tx, mut pg_rx) = tokio::sync::mpsc::unbounded_channel::<crate::jobs::ProgressUpdate>();
+        let (pg_tx, mut pg_rx) =
+            tokio::sync::mpsc::unbounded_channel::<crate::jobs::ProgressUpdate>();
         state
             .job_manager
             .register_progress_sender(session_id.clone(), pg_tx)
@@ -380,7 +381,10 @@ async fn websocket(
     // Path 2: Redis pub/sub bridge — for cross-instance delivery
     if let Some(ref bus) = state.pubsub_bus {
         if let Ok(mut redis_rx) = bus.subscribe(&format!("progress:{}", session_id)).await {
-            tracing::info!("📡 Subscribed to Redis progress channel for session: {}", session_id);
+            tracing::info!(
+                "📡 Subscribed to Redis progress channel for session: {}",
+                session_id
+            );
             let prog_tx = progress_tx.clone();
             tokio::spawn(async move {
                 while let Some(msg) = redis_rx.recv().await {
@@ -2473,8 +2477,8 @@ pub(crate) async fn run_agent_background(
         let lease_minutes = crate::services::chat_agent_worker::lease_minutes();
         let max_hours = crate::services::chat_agent_worker::max_run_hours();
         let tracked_job = job_id; // Option<Uuid>; None => renewal is a no-op
-        // Always owns lease_stop_rx (even when job_id is None) so there is no
-        // unused-variable lint and the ticker can always honor the stop signal.
+                                  // Always owns lease_stop_rx (even when job_id is None) so there is no
+                                  // unused-variable lint and the ticker can always honor the stop signal.
         tokio::spawn(async move {
             let started = std::time::Instant::now();
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
@@ -2562,12 +2566,12 @@ pub(crate) async fn run_agent_background(
         }
     };
 
-    let response: Result<Result<String, String>, tokio::time::error::Elapsed> =
-        if timeout_secs > 0 {
-            tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), run_agent).await
-        } else {
-            Ok(run_agent.await)
-        };
+    let response: Result<Result<String, String>, tokio::time::error::Elapsed> = if timeout_secs > 0
+    {
+        tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), run_agent).await
+    } else {
+        Ok(run_agent.await)
+    };
 
     match response {
         Ok(Ok(response)) => {
@@ -2609,7 +2613,10 @@ pub(crate) async fn run_agent_background(
                 crate::services::skills::detect_and_store_correction(
                     _state_for_correction.db_pool.clone(),
                     _state_for_correction.qdrant_client.clone(),
-                    _state_for_correction.gemini_client.clone().map(std::sync::Arc::new),
+                    _state_for_correction
+                        .gemini_client
+                        .clone()
+                        .map(std::sync::Arc::new),
                     _state_for_correction.qwen_client.as_ref(),
                     _state_for_correction.deepseek_client.as_ref(),
                     _state_for_correction.gemini_client.as_ref(),
@@ -2618,7 +2625,8 @@ pub(crate) async fn run_agent_background(
                     None, // campaign_id — unknown in general chat
                     _user_msg_for_correction,
                     _agent_resp_for_correction,
-                ).await;
+                )
+                .await;
             });
 
             if !response.is_empty() {

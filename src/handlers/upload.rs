@@ -209,11 +209,15 @@ pub async fn upload_files(
         }
 
         // Upload bytes directly to R2 (no local disk write)
-        let content_type = detect_mime_type(&filename).unwrap_or_else(|| "application/octet-stream".to_string());
-        let r2_url = r2.upload_bytes(&r2_key, &data, &content_type).await.map_err(|e| {
-            tracing::error!("Failed to upload '{}' to R2: {}", filename, e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+        let content_type =
+            detect_mime_type(&filename).unwrap_or_else(|| "application/octet-stream".to_string());
+        let r2_url = r2
+            .upload_bytes(&r2_key, &data, &content_type)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to upload '{}' to R2: {}", filename, e);
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
 
         let mime_type = detect_mime_type(&filename);
 
@@ -446,11 +450,15 @@ pub async fn upload_files_for_session(
         }
 
         // Upload bytes directly to R2 (no local disk write)
-        let content_type = detect_mime_type(&filename).unwrap_or_else(|| "application/octet-stream".to_string());
-        let r2_url = r2.upload_bytes(&r2_key, &data, &content_type).await.map_err(|e| {
-            tracing::error!("Failed to upload '{}' to R2: {}", filename, e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+        let content_type =
+            detect_mime_type(&filename).unwrap_or_else(|| "application/octet-stream".to_string());
+        let r2_url = r2
+            .upload_bytes(&r2_key, &data, &content_type)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to upload '{}' to R2: {}", filename, e);
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
 
         let mime_type = detect_mime_type(&filename);
 
@@ -476,7 +484,7 @@ pub async fn upload_files_for_session(
                     id: file_id.clone(),
                     original_name: filename.clone(),
                     stored_name: unique_filename.clone(),
-                    path: r2_url.clone(),  // R2 URL is the path the agent will use
+                    path: r2_url.clone(), // R2 URL is the path the agent will use
                     file_size: data.len() as i64,
                     file_type: file_type.clone(),
                     status: "uploaded".to_string(),

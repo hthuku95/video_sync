@@ -124,7 +124,8 @@ fn check_rendered_artifact(output_file: &str) -> Option<String> {
 }
 
 /// Context needed for tool execution to save outputs to DB and vectorize them
-#[derive(Clone)]pub struct ToolExecutionContext {
+#[derive(Clone)]
+pub struct ToolExecutionContext {
     pub session_id: String,
     pub user_id: Option<i32>,
     pub app_state: Arc<AppState>,
@@ -188,8 +189,7 @@ async fn service_tool_deny(tool_name: &str, ctx: &ToolExecutionContext) -> Optio
     };
     let service =
         crate::services::agentic_service_pipeline::ServiceType::from_normalized(normalized);
-    let is_clipping = service
-        == crate::services::agentic_service_pipeline::ServiceType::Clipping
+    let is_clipping = service == crate::services::agentic_service_pipeline::ServiceType::Clipping
         || s == "legacy_youtube_clipping"
         || stype.as_deref() == Some("clipping");
 
@@ -223,7 +223,8 @@ async fn service_tool_deny(tool_name: &str, ctx: &ToolExecutionContext) -> Optio
     }
     tracing::warn!(
         "🚫 tool '{}' denied in clipping workflow {} (use generate_clip_compilation)",
-        tool_name, wid
+        tool_name,
+        wid
     );
     Some(format!(
         r#"{{"error":"Tool '{tool_name}' is disabled for clipping renders — 3D/animation generation cannot clip source video. Call generate_clip_compilation with the source URL instead."}}"#,
@@ -589,7 +590,11 @@ async fn persist_tool_output(
         source_type: format!("tool_output:{tool_name}"),
         service_slug: None,
         owner_user_id: Some(user_id),
-        output_url: Some(r2_url.clone().unwrap_or_else(|| normalized_output_path.clone())),
+        output_url: Some(
+            r2_url
+                .clone()
+                .unwrap_or_else(|| normalized_output_path.clone()),
+        ),
         source_url: None,
         prompt: Some(review_prompt),
         title: Path::new(&normalized_output_path)
@@ -624,15 +629,15 @@ async fn persist_tool_output(
 }
 
 /// Upload a Pexels download to cloud storage (best-effort, non-fatal)
-async fn upload_pexels_download_to_cloud(
-    local_path: &str,
-    ctx: &ToolExecutionContext,
-) {
+async fn upload_pexels_download_to_cloud(local_path: &str, ctx: &ToolExecutionContext) {
     let path = std::path::Path::new(local_path);
     if !path.exists() {
         return;
     }
-    let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("pexels_download");
+    let file_name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("pexels_download");
     let content_type = if file_name.ends_with(".mp4") || file_name.ends_with(".webm") {
         "video/mp4"
     } else if file_name.ends_with(".jpg") || file_name.ends_with(".jpeg") {
@@ -735,9 +740,15 @@ async fn finalize_special_tool_result_value(
 
 /// After a tool creates a local file, upload it to R2 and return the cloud URL.
 /// The local file is kept for pipeline QA review and cleaned up by the pipeline afterwards.
-async fn upload_tool_output_to_cloud(local_path: &str, ctx: &ToolExecutionContext) -> Option<String> {
+async fn upload_tool_output_to_cloud(
+    local_path: &str,
+    ctx: &ToolExecutionContext,
+) -> Option<String> {
     if !std::path::Path::new(local_path).exists() {
-        tracing::debug!("upload_tool_output_to_cloud: skipping non-existent file {}", local_path);
+        tracing::debug!(
+            "upload_tool_output_to_cloud: skipping non-existent file {}",
+            local_path
+        );
         return None;
     }
     let file_name = std::path::Path::new(local_path)
@@ -745,13 +756,19 @@ async fn upload_tool_output_to_cloud(local_path: &str, ctx: &ToolExecutionContex
         .and_then(|n| n.to_str())
         .unwrap_or("output");
 
-    let content_type = if file_name.ends_with(".mp4") || file_name.ends_with(".webm") || file_name.ends_with(".mov") {
+    let content_type = if file_name.ends_with(".mp4")
+        || file_name.ends_with(".webm")
+        || file_name.ends_with(".mov")
+    {
         "video/mp4"
     } else if file_name.ends_with(".png") {
         "image/png"
     } else if file_name.ends_with(".jpg") || file_name.ends_with(".jpeg") {
         "image/jpeg"
-    } else if file_name.ends_with(".mp3") || file_name.ends_with(".wav") || file_name.ends_with(".aac") {
+    } else if file_name.ends_with(".mp3")
+        || file_name.ends_with(".wav")
+        || file_name.ends_with(".aac")
+    {
         "audio/mpeg"
     } else if file_name.ends_with(".gif") {
         "image/gif"
@@ -934,7 +951,10 @@ async fn execute_tool_claude_with_context_inner(
             }
             if let Some(img_count) = args.get("number_of_images").and_then(|v| v.as_i64()) {
                 if img_count > 1 {
-                    let current = args.get("prompt").and_then(|v| v.as_str()).unwrap_or("image");
+                    let current = args
+                        .get("prompt")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("image");
                     args["prompt"] = serde_json::json!(format!("{} x{}", current, img_count));
                 }
             }
@@ -986,7 +1006,14 @@ async fn execute_tool_claude_with_context_inner(
         if !result.starts_with("❌") && !result.starts_with("Error") {
             if let Some(output_path) = extract_output_path_from_args(args) {
                 upload_pexels_download_to_cloud(&output_path, ctx).await;
-                persist_tool_output(name, &output_path, serde_json::to_string(args).ok(), &result, ctx).await;
+                persist_tool_output(
+                    name,
+                    &output_path,
+                    serde_json::to_string(args).ok(),
+                    &result,
+                    ctx,
+                )
+                .await;
             }
         }
         return result;
@@ -996,7 +1023,14 @@ async fn execute_tool_claude_with_context_inner(
         if !result.starts_with("❌") && !result.starts_with("Error") {
             if let Some(output_path) = extract_output_path_from_args(args) {
                 upload_pexels_download_to_cloud(&output_path, ctx).await;
-                persist_tool_output(name, &output_path, serde_json::to_string(args).ok(), &result, ctx).await;
+                persist_tool_output(
+                    name,
+                    &output_path,
+                    serde_json::to_string(args).ok(),
+                    &result,
+                    ctx,
+                )
+                .await;
             }
         }
         return result;
@@ -1159,13 +1193,19 @@ async fn execute_tool_gemini_with_context_inner(
 
     // ── Query Tools (read-only DB lookups for re-editing) ────────────
     if name == "get_output_videos" {
-        return execute_get_output_videos(&serde_json::to_value(args).unwrap_or_default(), ctx).await;
+        return execute_get_output_videos(&serde_json::to_value(args).unwrap_or_default(), ctx)
+            .await;
     }
     if name == "get_generated_artifacts" {
-        return execute_get_generated_artifacts(&serde_json::to_value(args).unwrap_or_default(), ctx).await;
+        return execute_get_generated_artifacts(
+            &serde_json::to_value(args).unwrap_or_default(),
+            ctx,
+        )
+        .await;
     }
     if name == "get_extracted_clips" {
-        return execute_get_extracted_clips(&serde_json::to_value(args).unwrap_or_default(), ctx).await;
+        return execute_get_extracted_clips(&serde_json::to_value(args).unwrap_or_default(), ctx)
+            .await;
     }
 
     if name == "generate_long_form_video" {
@@ -1206,10 +1246,20 @@ async fn execute_tool_gemini_with_context_inner(
             }
             if let Some(img_count) = args.get("number_of_images").and_then(|v| v.as_i64()) {
                 if img_count > 1 {
-                    args.insert("prompt".to_string(), serde_json::json!(format!("{} x{}", args.get("prompt").and_then(|v| v.as_str()).unwrap_or("image"), img_count)));
+                    args.insert(
+                        "prompt".to_string(),
+                        serde_json::json!(format!(
+                            "{} x{}",
+                            args.get("prompt")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("image"),
+                            img_count
+                        )),
+                    );
                 }
             }
-            args.entry("output_file".to_string()).or_insert_with(|| serde_json::json!("outputs/text_to_image.png"));
+            args.entry("output_file".to_string())
+                .or_insert_with(|| serde_json::json!("outputs/text_to_image.png"));
             args.remove("text");
             args.remove("number_of_images");
         }
@@ -1252,7 +1302,14 @@ async fn execute_tool_gemini_with_context_inner(
         if !result.starts_with("❌") && !result.starts_with("Error") {
             if let Some(output_path) = extract_output_path_from_gemini_args(args) {
                 upload_pexels_download_to_cloud(&output_path, ctx).await;
-                persist_tool_output(name, &output_path, serde_json::to_string(args).ok(), &result, ctx).await;
+                persist_tool_output(
+                    name,
+                    &output_path,
+                    serde_json::to_string(args).ok(),
+                    &result,
+                    ctx,
+                )
+                .await;
             }
         }
         return result;
@@ -1262,7 +1319,14 @@ async fn execute_tool_gemini_with_context_inner(
         if !result.starts_with("❌") && !result.starts_with("Error") {
             if let Some(output_path) = extract_output_path_from_gemini_args(args) {
                 upload_pexels_download_to_cloud(&output_path, ctx).await;
-                persist_tool_output(name, &output_path, serde_json::to_string(args).ok(), &result, ctx).await;
+                persist_tool_output(
+                    name,
+                    &output_path,
+                    serde_json::to_string(args).ok(),
+                    &result,
+                    ctx,
+                )
+                .await;
             }
         }
         return result;
@@ -2149,7 +2213,10 @@ pub async fn execute_tool_gemini(name: &str, args: &HashMap<String, Value>) -> S
 
 async fn execute_download_from_cloud_gemini(args: &HashMap<String, Value>) -> String {
     let url = args.get("url").and_then(|v| v.as_str()).unwrap_or("");
-    let output_path = args.get("output_path").and_then(|v| v.as_str()).unwrap_or("");
+    let output_path = args
+        .get("output_path")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     if url.is_empty() || output_path.is_empty() {
         return "❌ Error: url and output_path are required".to_string();
     }
@@ -2640,7 +2707,10 @@ async fn execute_sketchfab_search_claude(args: &Value) -> String {
         Err(e) => return format!("❌ Sketchfab search failed: {}", e),
     };
 
-    match client.search(query, categories, sort_by, None, animated, None, None, None).await {
+    match client
+        .search(query, categories, sort_by, None, animated, None, None, None)
+        .await
+    {
         Ok(response) => crate::sketchfab_client::SketchfabClient::format_search_results(&response),
         Err(e) => format!("❌ Sketchfab search failed: {}", e),
     }
@@ -2648,14 +2718,21 @@ async fn execute_sketchfab_search_claude(args: &Value) -> String {
 
 /// Download a file from a URL to a local path. Used by sketchfab_download.
 async fn download_file_to_path(url: &str, path: &str) -> Result<(), String> {
-    let resp = reqwest::get(url).await.map_err(|e| format!("download failed: {}", e))?;
+    let resp = reqwest::get(url)
+        .await
+        .map_err(|e| format!("download failed: {}", e))?;
     let status = resp.status();
     if !status.is_success() {
         let body = resp.text().await.unwrap_or_default();
         return Err(format!("HTTP {}: {}", status, body));
     }
-    let bytes = resp.bytes().await.map_err(|e| format!("read response failed: {}", e))?;
-    tokio::fs::write(path, &bytes).await.map_err(|e| format!("write file failed: {}", e))?;
+    let bytes = resp
+        .bytes()
+        .await
+        .map_err(|e| format!("read response failed: {}", e))?;
+    tokio::fs::write(path, &bytes)
+        .await
+        .map_err(|e| format!("write file failed: {}", e))?;
     Ok(())
 }
 
@@ -2690,7 +2767,10 @@ async fn execute_sketchfab_get_model_claude(args: &Value) -> String {
 
 async fn execute_sketchfab_download_claude(args: &Value) -> String {
     let uid = args["uid"].as_str().unwrap_or("");
-    let format = args.get("format").and_then(|v| v.as_str()).unwrap_or("gltf");
+    let format = args
+        .get("format")
+        .and_then(|v| v.as_str())
+        .unwrap_or("gltf");
     if uid.is_empty() {
         return "❌ Error: uid is required for sketchfab_download".to_string();
     }
@@ -2713,7 +2793,12 @@ async fn execute_sketchfab_download_claude(args: &Value) -> String {
                     // Fallback: try gltf if requested format not available
                     match download_resp.gltf.as_ref() {
                         Some(g) => g,
-                        None => return format!("❌ No downloadable archive available for model '{}'", uid),
+                        None => {
+                            return format!(
+                                "❌ No downloadable archive available for model '{}'",
+                                uid
+                            )
+                        }
                     }
                 }
             };
@@ -2723,7 +2808,8 @@ async fn execute_sketchfab_download_claude(args: &Value) -> String {
 
             // Download to temp
             let temp_dir = std::env::temp_dir();
-            let temp_path = temp_dir.join(format!("sketchfab_{}_{}.{}", uid, std::process::id(), ext));
+            let temp_path =
+                temp_dir.join(format!("sketchfab_{}_{}.{}", uid, std::process::id(), ext));
             let temp_str = temp_path.to_string_lossy().to_string();
 
             match tokio::fs::write(&temp_path, Vec::new()).await {
@@ -3517,8 +3603,6 @@ fn execute_add_audio_gemini(args: &HashMap<String, Value>) -> String {
     crate::audio::add_audio(input, audio_file, output).unwrap_or_else(|e| format!("❌ {}", e))
 }
 
-
-
 fn execute_adjust_volume_gemini(args: &HashMap<String, Value>) -> String {
     let input = args
         .get("input_file")
@@ -3926,7 +4010,10 @@ async fn execute_sketchfab_search_gemini(args: &HashMap<String, Value>) -> Strin
         Err(e) => return format!("❌ Sketchfab search failed: {}", e),
     };
 
-    match client.search(query, categories, sort_by, None, animated, None, None, None).await {
+    match client
+        .search(query, categories, sort_by, None, animated, None, None, None)
+        .await
+    {
         Ok(response) => crate::sketchfab_client::SketchfabClient::format_search_results(&response),
         Err(e) => format!("❌ Sketchfab search failed: {}", e),
     }
@@ -3953,7 +4040,10 @@ async fn execute_sketchfab_get_model_gemini(args: &HashMap<String, Value>) -> St
 
 async fn execute_sketchfab_download_gemini(args: &HashMap<String, Value>) -> String {
     let uid = args.get("uid").and_then(|v| v.as_str()).unwrap_or("");
-    let format = args.get("format").and_then(|v| v.as_str()).unwrap_or("gltf");
+    let format = args
+        .get("format")
+        .and_then(|v| v.as_str())
+        .unwrap_or("gltf");
     if uid.is_empty() {
         return "❌ Error: uid is required for sketchfab_download".to_string();
     }
@@ -3972,19 +4062,20 @@ async fn execute_sketchfab_download_gemini(args: &HashMap<String, Value>) -> Str
             };
             let archive = match archive {
                 Some(a) => a,
-                None => {
-                    match download_resp.gltf.as_ref() {
-                        Some(g) => g,
-                        None => return format!("❌ No downloadable archive available for model '{}'", uid),
+                None => match download_resp.gltf.as_ref() {
+                    Some(g) => g,
+                    None => {
+                        return format!("❌ No downloadable archive available for model '{}'", uid)
                     }
-                }
+                },
             };
 
             let url = &archive.url;
             let ext = if format == "usdz" { "usdz" } else { "zip" };
 
             let temp_dir = std::env::temp_dir();
-            let temp_path = temp_dir.join(format!("sketchfab_{}_{}.{}", uid, std::process::id(), ext));
+            let temp_path =
+                temp_dir.join(format!("sketchfab_{}_{}.{}", uid, std::process::id(), ext));
             let temp_str = temp_path.to_string_lossy().to_string();
 
             match tokio::fs::write(&temp_path, Vec::new()).await {
@@ -4379,14 +4470,19 @@ async fn execute_submit_final_answer_with_state_gemini(
     let mut output_files: Vec<String> = args
         .get("output_files")
         .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_str()).map(|s| s.to_string()).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str())
+                .map(|s| s.to_string())
+                .collect()
+        })
         .unwrap_or_default();
 
     // If no output_files provided, scan disk as fallback and check previous tool results
     if output_files.is_empty() {
         let parts: Vec<&str> = ctx.session_id.split('-').collect();
         let delivery_id: Option<String> = if parts.len() >= 7 {
-            Some(parts[1..parts.len()-1].join("-"))
+            Some(parts[1..parts.len() - 1].join("-"))
         } else {
             None
         };
@@ -4401,7 +4497,10 @@ async fn execute_submit_final_answer_with_state_gemini(
                     .filter_map(|e| {
                         let p = e.path();
                         let ext = p.extension()?.to_str()?;
-                        if matches!(ext, "mp4" | "webm" | "png" | "jpg" | "jpeg" | "mp3" | "wav" | "aac" | "gif") {
+                        if matches!(
+                            ext,
+                            "mp4" | "webm" | "png" | "jpg" | "jpeg" | "mp3" | "wav" | "aac" | "gif"
+                        ) {
                             Some(p.to_string_lossy().to_string())
                         } else {
                             None
@@ -4476,8 +4575,7 @@ async fn execute_submit_final_answer_with_state_gemini(
                 None
             };
 
-            let file_id =
-                crate::services::GeneratedArtifactService::legacy_file_id(file_name);
+            let file_id = crate::services::GeneratedArtifactService::legacy_file_id(file_name);
             response.push_str(&format!("**{}**\n", file_path));
             if let Some(url) = cloud_url {
                 response.push_str(&format!("Cloud URL: {}\n", url));
@@ -4502,9 +4600,7 @@ async fn execute_submit_final_answer_with_state_claude(
     args: &Value,
     ctx: &ToolExecutionContext,
 ) -> String {
-    let summary = args["summary"]
-        .as_str()
-        .unwrap_or("Task completed");
+    let summary = args["summary"].as_str().unwrap_or("Task completed");
     let output_files = args["output_files"]
         .as_array()
         .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>())
@@ -4557,14 +4653,19 @@ async fn execute_submit_final_answer_with_state_claude(
                 None
             };
 
-            let file_id =
-                crate::services::GeneratedArtifactService::legacy_file_id(file_name);
+            let file_id = crate::services::GeneratedArtifactService::legacy_file_id(file_name);
             response.push_str(&format!("**{}**\n", file_name));
             if let Some(url) = cloud_url {
                 response.push_str(&format!("Cloud URL: {}\n", url));
-                response.push_str(&format!("Download: `/api/outputs/download/{}`\n\n", file_id));
+                response.push_str(&format!(
+                    "Download: `/api/outputs/download/{}`\n\n",
+                    file_id
+                ));
             } else {
-                response.push_str(&format!("Download: `/api/outputs/download/{}`\n\n", file_id));
+                response.push_str(&format!(
+                    "Download: `/api/outputs/download/{}`\n\n",
+                    file_id
+                ));
             }
         }
     } else {
@@ -4657,9 +4758,7 @@ async fn generate_image_bytes(
             .unwrap_or_else(|_| std::env::var("GOOGLE_API_KEY").unwrap_or_default())
     });
     if api_key.is_empty() {
-        return Err(
-            "GEMINI_API_KEY or GOOGLE_API_KEY environment variable not set".to_string(),
-        );
+        return Err("GEMINI_API_KEY or GOOGLE_API_KEY environment variable not set".to_string());
     }
     let client = crate::gemini_client::GeminiClient::new(api_key);
     match tokio::time::timeout(
@@ -4691,8 +4790,7 @@ async fn execute_generate_image_with_state_gemini(
         return "❌ Error: prompt is required".to_string();
     }
 
-    match generate_image_bytes(prompt, aspect_ratio, image_size, model).await
-    {
+    match generate_image_bytes(prompt, aspect_ratio, image_size, model).await {
         Ok(image_bytes) => {
             let output_file = ensure_outputs_directory(output_file_raw);
             let file_name = std::path::Path::new(&output_file)
@@ -4773,8 +4871,7 @@ async fn execute_generate_image_with_state_claude(
         return "❌ Error: prompt and output_file are required".to_string();
     }
 
-    match generate_image_bytes(prompt, aspect_ratio, image_size, model).await
-    {
+    match generate_image_bytes(prompt, aspect_ratio, image_size, model).await {
         Ok(image_bytes) => {
             let file_name = std::path::Path::new(output_file_raw)
                 .file_name()
@@ -5113,21 +5210,56 @@ async fn execute_clip_compilation_gemini(
 pub fn normalize_vibevoice_speaker(name: &str) -> String {
     let lowered = name.trim().to_ascii_lowercase();
     const FEMALE: &[&str] = &[
-        "emma", "grace", // VibeVoice presets (English women)
-        "rachel", "bella", "emily", "domi", "elli", "matilda", "alice", "lisa", // ElevenLabs
-        "woman", "women", "female", "lady", "girl", "mother", "female narrator",
+        "emma",
+        "grace", // VibeVoice presets (English women)
+        "rachel",
+        "bella",
+        "emily",
+        "domi",
+        "elli",
+        "matilda",
+        "alice",
+        "lisa", // ElevenLabs
+        "woman",
+        "women",
+        "female",
+        "lady",
+        "girl",
+        "mother",
+        "female narrator",
     ];
     const MALE: &[&str] = &[
-        "carter", "davis", "frank", "mike", "samuel", // VibeVoice presets (English men)
-        "drew", "clyde", "adam", "paul", "arnold", "callum", "daniel", "ethan",
-        "liam", "thomas", "harry", // ElevenLabs
-        "man", "men", "male", "guy", "father", "male narrator", "news", "reporter",
-        "deep", "crisp", "veteran", "hoarse",
+        "carter",
+        "davis",
+        "frank",
+        "mike",
+        "samuel", // VibeVoice presets (English men)
+        "drew",
+        "clyde",
+        "adam",
+        "paul",
+        "arnold",
+        "callum",
+        "daniel",
+        "ethan",
+        "liam",
+        "thomas",
+        "harry", // ElevenLabs
+        "man",
+        "men",
+        "male",
+        "guy",
+        "father",
+        "male narrator",
+        "news",
+        "reporter",
+        "deep",
+        "crisp",
+        "veteran",
+        "hoarse",
     ];
     // Preset names for other languages (explicit requests pass through).
-    const MULTILINGUAL: &[&str] = &[
-        "de", "fr", "it", "jp", "kr", "nl", "pl", "pt", "sp", "spk",
-    ];
+    const MULTILINGUAL: &[&str] = &["de", "fr", "it", "jp", "kr", "nl", "pl", "pt", "sp", "spk"];
 
     if FEMALE.iter().any(|p| lowered.contains(p)) {
         return "Emma".to_string();
@@ -5272,10 +5404,7 @@ fn slugify_title(title: &str) -> String {
 /// Build SRT from a whisper-style transcript payload. Accepts segments with
 /// {start|begin|from, end|finish|to, text|content}; falls back to spreading
 /// the full text across the clip when no timed segments exist.
-fn build_srt_from_transcript(
-    payload: &serde_json::Value,
-    clip_duration: f64,
-) -> Option<String> {
+fn build_srt_from_transcript(payload: &serde_json::Value, clip_duration: f64) -> Option<String> {
     fn num(v: Option<&serde_json::Value>) -> Option<f64> {
         v.and_then(|x| x.as_f64().or_else(|| x.as_i64().map(|i| i as f64)))
     }
@@ -5291,8 +5420,14 @@ fn build_srt_from_transcript(
     let mut n = 0u32;
     if let Some(segs) = payload.get("segments").and_then(|v| v.as_array()) {
         for seg in segs {
-            let start = num(seg.get("start").or_else(|| seg.get("begin")).or_else(|| seg.get("from")));
-            let end = num(seg.get("end").or_else(|| seg.get("finish")).or_else(|| seg.get("to")));
+            let start = num(seg
+                .get("start")
+                .or_else(|| seg.get("begin"))
+                .or_else(|| seg.get("from")));
+            let end = num(seg
+                .get("end")
+                .or_else(|| seg.get("finish"))
+                .or_else(|| seg.get("to")));
             let text = seg
                 .get("text")
                 .or_else(|| seg.get("content"))
@@ -5308,7 +5443,13 @@ fn build_srt_from_transcript(
                 _ => continue,
             };
             n += 1;
-            out.push_str(&format!("{}\n{} --> {}\n{}\n\n", n, fmt_ts(s), fmt_ts(e), text));
+            out.push_str(&format!(
+                "{}\n{} --> {}\n{}\n\n",
+                n,
+                fmt_ts(s),
+                fmt_ts(e),
+                text
+            ));
         }
     }
     if n == 0 {
@@ -5329,7 +5470,13 @@ fn build_srt_from_transcript(
             let s = i as f64 * per;
             let e = ((i + 1) as f64 * per).min(clip_duration.max(0.5));
             n += 1;
-            out.push_str(&format!("{}\n{} --> {}\n{}\n\n", n, fmt_ts(s), fmt_ts(e), chunk));
+            out.push_str(&format!(
+                "{}\n{} --> {}\n{}\n\n",
+                n,
+                fmt_ts(s),
+                fmt_ts(e),
+                chunk
+            ));
         }
     }
     if n == 0 {
@@ -5369,7 +5516,7 @@ async fn kick_post_process_clip(
         // Full-bleed 9:16: cover-crop the source to exactly 1080x1920. The old
         // blurred-background fit left a 1080x608 foreground floating inside a
         // 1080x1920 frame, which reads as a repost rather than a native short.
-        "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1[base]"
+        "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1[base]",
     );
     let mut current_label = "base";
 
@@ -5377,7 +5524,7 @@ async fn kick_post_process_clip(
         inputs.push(logo.to_string_lossy().to_string());
         filter.push_str(
             ";[1:v]scale='min(86,iw)':-1[logo_scaled];\
-             [base][logo_scaled]overlay=40:40[with_logo]"
+             [base][logo_scaled]overlay=40:40[with_logo]",
         );
         current_label = "with_logo";
     }
@@ -5443,7 +5590,9 @@ async fn kick_post_process_clip(
     cmd.arg("-movflags").arg("+faststart");
     cmd.arg(output_path.to_str().unwrap_or(""));
 
-    let output = cmd.output().map_err(|e| format!("FFmpeg spawn failed: {}", e))?;
+    let output = cmd
+        .output()
+        .map_err(|e| format!("FFmpeg spawn failed: {}", e))?;
     if !output.status.success() {
         // Full stderr, chunked (CloudWatch + tracing handle large events;
         // previous take(2000) hid nothing — the process genuinely emits ~150
@@ -5539,10 +5688,7 @@ fn twitch_vod_id_from_url(vod_url: &str) -> Option<String> {
 /// Resolve the real channel login for a Twitch VOD URL via Helix
 /// `/videos?id=`. `.../videos/2862518334` → the streamer, never the literal
 /// URL path segment `videos`.
-async fn resolve_twitch_vod_login(
-    ctx: &ToolExecutionContext,
-    vod_url: &str,
-) -> Option<String> {
+async fn resolve_twitch_vod_login(ctx: &ToolExecutionContext, vod_url: &str) -> Option<String> {
     let video_id = twitch_vod_id_from_url(vod_url)?;
     let client = ctx.app_state.twitch_client.as_ref()?;
     match client.get_video_by_id(&video_id).await {
@@ -5588,10 +5734,7 @@ async fn resolve_twitch_latest_vod(
     Ok(pick.url.clone())
 }
 
-async fn execute_clip_compilation_value(
-    args: &Value,
-    ctx: &ToolExecutionContext,
-) -> String {
+async fn execute_clip_compilation_value(args: &Value, ctx: &ToolExecutionContext) -> String {
     let source_url = match string_arg(args, &["source_url", "url"]) {
         Some(url) => url,
         None => return r#"{"error":"source_url is required"}"#.to_string(),
@@ -5632,8 +5775,12 @@ async fn execute_clip_compilation_value(
     let source_url = match &bound_source {
         Some(campaign_url) => {
             let host_matches = |u: &str| {
-                let host = url::Url::parse(u).ok().and_then(|p| p.host_str().map(String::from));
-                let bound_host = url::Url::parse(campaign_url).ok().and_then(|p| p.host_str().map(String::from));
+                let host = url::Url::parse(u)
+                    .ok()
+                    .and_then(|p| p.host_str().map(String::from));
+                let bound_host = url::Url::parse(campaign_url)
+                    .ok()
+                    .and_then(|p| p.host_str().map(String::from));
                 match (host, bound_host) {
                     (Some(a), Some(b)) => a.eq_ignore_ascii_case(&b),
                     _ => false,
@@ -5644,23 +5791,27 @@ async fn execute_clip_compilation_value(
             } else {
                 tracing::warn!(
                     "🚫 SOURCE BINDING: agent supplied '{}' but campaign binds '{}'. Overriding.",
-                    source_url, campaign_url
+                    source_url,
+                    campaign_url
                 );
                 campaign_url.clone()
             }
         }
         None => source_url,
     };
-    let clip_duration = number_arg(args, &["clip_duration_seconds", "duration_seconds", "duration"])
-        .unwrap_or(15.0)
-        .max(5.0)
-        .min(120.0);
+    let clip_duration = number_arg(
+        args,
+        &["clip_duration_seconds", "duration_seconds", "duration"],
+    )
+    .unwrap_or(15.0)
+    .max(5.0)
+    .min(120.0);
     let max_clips = number_arg(args, &["max_clips", "count", "num_clips"])
         .unwrap_or(3.0)
         .max(1.0)
         .min(10.0) as usize;
-    let include_captions = bool_arg(args, &["include_captions", "captions", "subtitles"])
-        .unwrap_or(true);
+    let include_captions =
+        bool_arg(args, &["include_captions", "captions", "subtitles"]).unwrap_or(true);
     // ── KICK SPEC ENFORCEMENT (Fix 3, Sep 3 2026) ──
     // For campaign clipping workflows bound to a Kick source, the §25 spec
     // (logo, lower-third caption, vertical) is MANDATORY — not an agent
@@ -5676,15 +5827,14 @@ async fn execute_clip_compilation_value(
     // never fired for the entire launch-test path.
     let bound_lower = bound_source.as_deref().unwrap_or("").to_ascii_lowercase();
     let effective_lower = source_url.to_ascii_lowercase();
-    let mut spec_platform: Option<&str> = if bound_lower.contains("kick.com")
-        || effective_lower.contains("kick.com")
-    {
-        Some("Kick")
-    } else if bound_lower.contains("twitch.tv") || effective_lower.contains("twitch.tv") {
-        Some("Twitch")
-    } else {
-        None
-    };
+    let mut spec_platform: Option<&str> =
+        if bound_lower.contains("kick.com") || effective_lower.contains("kick.com") {
+            Some("Kick")
+        } else if bound_lower.contains("twitch.tv") || effective_lower.contains("twitch.tv") {
+            Some("Twitch")
+        } else {
+            None
+        };
     // Service fallback: the agent often passes an R2/presigned URL (no
     // platform marker) after the first attempt. Resolve the platform from
     // the workflow's service instead so enforcement survives URL shapes.
@@ -5723,7 +5873,11 @@ async fn execute_clip_compilation_value(
             .ok()
             .and_then(|u| u.host_str().map(String::from))
             .unwrap_or_else(|| "?".to_string()),
-        if bound_source.is_some() { "some" } else { "none" },
+        if bound_source.is_some() {
+            "some"
+        } else {
+            "none"
+        },
         if svc_seen.is_empty() { "-" } else { &svc_seen },
         spec_platform.unwrap_or("OFF"),
     );
@@ -5738,9 +5892,8 @@ async fn execute_clip_compilation_value(
             } else {
                 "TWITCH_DEFAULT_LOGO_URL"
             };
-            let logo = string_arg(args, &["logo_url"]).or_else(|| {
-                std::env::var(logo_env).ok().filter(|s| !s.is_empty())
-            });
+            let logo = string_arg(args, &["logo_url"])
+                .or_else(|| std::env::var(logo_env).ok().filter(|s| !s.is_empty()));
             let mut name = string_arg(args, &["streamer_name"]);
             if name.is_none() {
                 // Prefer the campaign binding, fall back to the effective
@@ -5765,7 +5918,8 @@ async fn execute_clip_compilation_value(
     };
 
     // Parse new params
-    let explicit_clip_times: Option<Vec<f64>> = args.get("clip_times")
+    let explicit_clip_times: Option<Vec<f64>> = args
+        .get("clip_times")
         .and_then(|v| v.as_array())
         .map(|arr| {
             arr.iter()
@@ -5774,19 +5928,23 @@ async fn execute_clip_compilation_value(
         })
         .filter(|times| !times.is_empty());
 
-    let smart_selection = bool_arg(args, &["smart_selection"])
-        .unwrap_or(explicit_clip_times.is_none()); // default: smart when no explicit times
+    let smart_selection =
+        bool_arg(args, &["smart_selection"]).unwrap_or(explicit_clip_times.is_none()); // default: smart when no explicit times
 
     let uuid = uuid::Uuid::new_v4();
     let session_slug = ctx.session_id.replace('-', "_");
-    let tmp_dir = std::path::PathBuf::from("/tmp").join(format!("clip_compilation_{}_{}", session_slug, uuid));
+    let tmp_dir = std::path::PathBuf::from("/tmp")
+        .join(format!("clip_compilation_{}_{}", session_slug, uuid));
     let _ = tokio::fs::create_dir_all(&tmp_dir).await;
     let is_kick = source_url.contains("kick.com");
     let is_twitch = source_url.contains("twitch.tv");
     // A Twitch URL that already points at a VOD (`.../videos/<id>`) needs no
     // channel→VOD resolution; only bare channel URLs do.
     let is_twitch_vod = is_twitch && source_url.contains("/videos/");
-    let r2_key = format!("downloads/clip_compilation/{}/{}/source.mp4", ctx.session_id, uuid);
+    let r2_key = format!(
+        "downloads/clip_compilation/{}/{}/source.mp4",
+        ctx.session_id, uuid
+    );
 
     let download_result = if is_kick {
         // ── KICK VIA YTDLP SERVICE (Sep 4 2026) ──
@@ -5811,14 +5969,20 @@ async fn execute_clip_compilation_value(
                         hls
                     }
                     Err(e) => {
-                        tracing::warn!("Kick HLS extraction failed ({}), trying VOD page URL directly", e);
+                        tracing::warn!(
+                            "Kick HLS extraction failed ({}), trying VOD page URL directly",
+                            e
+                        );
                         vod_url.clone()
                     }
                 };
                 let tmp_path = format!("/tmp/ytdlp_api_dl_{}", uuid);
                 let result = crate::clipping::ytdlp_api_client::YtdlpApiClient::download_video(
-                    &stream_url, &tmp_path, Some(r2_key.clone()),
-                ).await;
+                    &stream_url,
+                    &tmp_path,
+                    Some(r2_key.clone()),
+                )
+                .await;
                 let _ = tokio::fs::remove_file(&tmp_path).await;
                 result
             }
@@ -5838,8 +6002,11 @@ async fn execute_clip_compilation_value(
                 tracing::info!("🎬 Twitch resolved to latest archived VOD: {}", vod_url);
                 let tmp_path = format!("/tmp/ytdlp_api_dl_{}", uuid);
                 let result = crate::clipping::ytdlp_api_client::YtdlpApiClient::download_video(
-                    &vod_url, &tmp_path, Some(r2_key.clone()),
-                ).await;
+                    &vod_url,
+                    &tmp_path,
+                    Some(r2_key.clone()),
+                )
+                .await;
                 let _ = tokio::fs::remove_file(&tmp_path).await;
                 result
             }
@@ -5849,11 +6016,18 @@ async fn execute_clip_compilation_value(
             )),
         }
     } else {
-        tracing::info!("🎬 Clip compilation: streaming {} via ytdlp api (r2_key={})", source_url, r2_key);
+        tracing::info!(
+            "🎬 Clip compilation: streaming {} via ytdlp api (r2_key={})",
+            source_url,
+            r2_key
+        );
         let tmp_path = format!("/tmp/ytdlp_api_dl_{}", uuid);
         let result = crate::clipping::ytdlp_api_client::YtdlpApiClient::download_video(
-            &source_url, &tmp_path, Some(r2_key.clone()),
-        ).await;
+            &source_url,
+            &tmp_path,
+            Some(r2_key.clone()),
+        )
+        .await;
         let _ = tokio::fs::remove_file(&tmp_path).await;
         result
     };
@@ -5866,10 +6040,8 @@ async fn execute_clip_compilation_value(
                 Some(url) if !url.is_empty() => {
                     tracing::info!("✅ R2 source available: {}", url);
                     // Cookie health: a good download clears the failure streak.
-                    crate::services::cookie_health::note_download_success(
-                        &ctx.app_state.db_pool,
-                    )
-                    .await;
+                    crate::services::cookie_health::note_download_success(&ctx.app_state.db_pool)
+                        .await;
                     (url.to_string(), dur, Some(url.to_string()))
                 }
                 _ => {
@@ -5922,16 +6094,23 @@ async fn execute_clip_compilation_value(
             &source_for_ffmpeg,
             clip_duration,
             max_clips,
-            None, // no explicit times
+            None,         // no explicit times
             Some(1800.0), // max 30 min analysis window
         ) {
             Ok(positions) => {
                 let times: Vec<f64> = positions.iter().map(|p| p.start_time).collect();
-                tracing::info!("🎯 Smart selection picked {} positions: {:?}", times.len(), times);
+                tracing::info!(
+                    "🎯 Smart selection picked {} positions: {:?}",
+                    times.len(),
+                    times
+                );
                 times
             }
             Err(e) => {
-                tracing::warn!("⚠️ Smart selection failed ({}), falling back to even spacing", e);
+                tracing::warn!(
+                    "⚠️ Smart selection failed ({}), falling back to even spacing",
+                    e
+                );
                 // Fallback: even spacing
                 let usable = (duration / clip_duration).floor() as usize;
                 let count = max_clips.min(usable).max(1);
@@ -5963,10 +6142,15 @@ async fn execute_clip_compilation_value(
         // -ss before -i for keyframe-accurate fast seek over HTTP
         let trim_ok = StdCommand::new("ffmpeg")
             .args([
-                "-y", "-ss", &format!("{:.1}", start),
-                "-i", &source_for_ffmpeg,
-                "-t", &format!("{:.1}", clip_duration),
-                "-c", "copy",
+                "-y",
+                "-ss",
+                &format!("{:.1}", start),
+                "-i",
+                &source_for_ffmpeg,
+                "-t",
+                &format!("{:.1}", clip_duration),
+                "-c",
+                "copy",
                 raw_path.to_str().unwrap_or(""),
             ])
             .output()
@@ -5977,7 +6161,12 @@ async fn execute_clip_compilation_value(
             tracing::warn!("⚠️ Clip {} trim at {:.1}s failed, skipping", i + 1, start);
             continue;
         }
-        tracing::info!("✂️ Clip {} trimmed at {:.1}s ({}s)", i + 1, start, clip_duration);
+        tracing::info!(
+            "✂️ Clip {} trimmed at {:.1}s ({}s)",
+            i + 1,
+            start,
+            clip_duration
+        );
 
         let final_path = if kick_style {
             let (caption_srt, clip_title) = {
@@ -5988,7 +6177,8 @@ async fn execute_clip_compilation_value(
                     }
                     _ => format!("{} Highlight", platform_label),
                 };
-                transcribe_clip_to_srt(ctx, &raw_path, &tmp_dir, i + 1, clip_duration, &fallback).await
+                transcribe_clip_to_srt(ctx, &raw_path, &tmp_dir, i + 1, clip_duration, &fallback)
+                    .await
             };
             let slug = slugify_title(&clip_title);
             let kick_name = if slug.is_empty() {
@@ -6003,19 +6193,29 @@ async fn execute_clip_compilation_value(
             let logo_local = if let Some(url) = &logo_url {
                 if !url.is_empty() {
                     let logo_path = tmp_dir.join("logo.png");
-                    match download_file_to_path(url, logo_path.to_str().unwrap_or("/tmp/logo.png")).await {
+                    match download_file_to_path(url, logo_path.to_str().unwrap_or("/tmp/logo.png"))
+                        .await
+                    {
                         Ok(_) => Some(logo_path),
                         Err(e) => {
                             tracing::warn!("⚠️ Logo download failed: {}", e);
                             None
                         }
                     }
-                } else { None }
-            } else { None };
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
             tracing::info!(
                 "📝 Clip {} transcription: {}",
                 i + 1,
-                if caption_srt.is_some() { "SRT ready" } else { "fallback (static caption)" }
+                if caption_srt.is_some() {
+                    "SRT ready"
+                } else {
+                    "fallback (static caption)"
+                }
             );
 
             match kick_post_process_clip(
@@ -6027,7 +6227,9 @@ async fn execute_clip_compilation_value(
                 &caption,
                 caption_srt.as_deref(),
                 clip_duration,
-            ).await {
+            )
+            .await
+            {
                 Ok(_) => kick_path,
                 Err(e) => {
                     tracing::warn!("⚠️ Kick post-process failed ({}), using raw clip", e);
@@ -6047,9 +6249,13 @@ async fn execute_clip_compilation_value(
             let _ = tokio::fs::write(&srt, srt_content.as_bytes()).await;
             StdCommand::new("ffmpeg")
                 .args([
-                    "-y", "-i", raw_path.to_str().unwrap_or(""),
-                    "-vf", &format!("subtitles={}", srt.to_str().unwrap_or("")),
-                    "-c:a", "copy",
+                    "-y",
+                    "-i",
+                    raw_path.to_str().unwrap_or(""),
+                    "-vf",
+                    &format!("subtitles={}", srt.to_str().unwrap_or("")),
+                    "-c:a",
+                    "copy",
                     cap_path.to_str().unwrap_or(""),
                 ])
                 .output()
@@ -6679,11 +6885,13 @@ async fn execute_auto_generate_video_hybrid_gemini(
     let mut downloaded_files: Vec<String> = Vec::new();
     let mut used_ids: std::collections::HashSet<i64> = std::collections::HashSet::new();
     let search_queries = generate_search_queries_ai(
-        topic, num_clips,
+        topic,
+        num_clips,
         ctx.app_state.qwen_client.as_ref(),
         ctx.app_state.deepseek_client.as_ref(),
         ctx.app_state.gemini_client.as_ref(),
-    ).await;
+    )
+    .await;
 
     for (i, query) in search_queries.iter().enumerate().take(num_clips) {
         result.push_str(&format!(
@@ -7944,8 +8152,10 @@ async fn execute_analyze_pexels_thumbnail_claude(args: &Value) -> String {
         Format: DESCRIPTION: <text> | SCORE: <number>"
     );
 
-    format!("🖼️ Thumbnail analysis for topic '{topic}':\n{}",
-        analyze_image_gemini_nim_fallback(&image_bytes, &prompt, None).await)
+    format!(
+        "🖼️ Thumbnail analysis for topic '{topic}':\n{}",
+        analyze_image_gemini_nim_fallback(&image_bytes, &prompt, None).await
+    )
 }
 
 /// Download a Pexels thumbnail URL and analyze it with Gemini or NIM vision for topic relevance (Gemini dispatch).
@@ -7978,8 +8188,10 @@ async fn execute_analyze_pexels_thumbnail_gemini(args: &HashMap<String, Value>) 
         Format: DESCRIPTION: <text> | SCORE: <number>"
     );
 
-    format!("🖼️ Thumbnail analysis for topic '{topic}':\n{}",
-        analyze_image_gemini_nim_fallback(&image_bytes, &prompt, None).await)
+    format!(
+        "🖼️ Thumbnail analysis for topic '{topic}':\n{}",
+        analyze_image_gemini_nim_fallback(&image_bytes, &prompt, None).await
+    )
 }
 
 /// Expose verify_clip_quality as an agent-callable tool (Claude).
@@ -8195,14 +8407,7 @@ async fn generate_search_queries_ai(
          - Avoid abstract concepts; focus on concrete visual scenes\n\
          - Output ONLY the queries, one per line, no numbering, no extra text."
     );
-    match crate::llm_utils::generate_text_fast(
-        qwen,
-        deepseek,
-        gemini,
-        &prompt,
-    )
-    .await
-    {
+    match crate::llm_utils::generate_text_fast(qwen, deepseek, gemini, &prompt).await {
         Ok(response) => {
             let queries: Vec<String> = response
                 .lines()
@@ -8370,9 +8575,11 @@ async fn execute_view_video_with_state_claude(args: &Value, ctx: &ToolExecutionC
     }
 
     // Resolve file path - cloud URL → lookup original local path, else try local paths
-    let video_path = if video_path_input.starts_with("http://") || video_path_input.starts_with("https://") {
+    let video_path = if video_path_input.starts_with("http://")
+        || video_path_input.starts_with("https://")
+    {
         match sqlx::query_scalar::<_, String>(
-            "SELECT file_path FROM output_videos WHERE r2_url = $1 LIMIT 1"
+            "SELECT file_path FROM output_videos WHERE r2_url = $1 LIMIT 1",
         )
         .bind(video_path_input)
         .fetch_optional(&ctx.app_state.db_pool)
@@ -8485,9 +8692,11 @@ async fn execute_view_video_with_state_gemini(
     }
 
     // Resolve file path - cloud URL → lookup original local path, else try local paths
-    let video_path = if video_path_input.starts_with("http://") || video_path_input.starts_with("https://") {
+    let video_path = if video_path_input.starts_with("http://")
+        || video_path_input.starts_with("https://")
+    {
         match sqlx::query_scalar::<_, String>(
-            "SELECT file_path FROM output_videos WHERE r2_url = $1 LIMIT 1"
+            "SELECT file_path FROM output_videos WHERE r2_url = $1 LIMIT 1",
         )
         .bind(video_path_input)
         .fetch_optional(&ctx.app_state.db_pool)
@@ -8608,7 +8817,9 @@ async fn execute_review_video_with_state_claude(
 
     // Resolve file path - try cloud URL first (pass through to review_render),
     // then as-is, uploads/, outputs/ directories
-    let video_path = if video_path_input.starts_with("http://") || video_path_input.starts_with("https://") {
+    let video_path = if video_path_input.starts_with("http://")
+        || video_path_input.starts_with("https://")
+    {
         // Cloud URL — review_render handles download internally via download_to_temp
         video_path_input.to_string()
     } else if tokio::fs::metadata(video_path_input).await.is_ok() {
@@ -8648,15 +8859,17 @@ async fn execute_review_video_with_state_claude(
 
     // 2. Use the 4-model fallback chain for LLM-based review
     let expected_hint = if !expected_features.is_empty() {
-        format!("\nEXPECTED FEATURES to verify: {}", expected_features.join(", "))
+        format!(
+            "\nEXPECTED FEATURES to verify: {}",
+            expected_features.join(", ")
+        )
     } else {
         String::new()
     };
     let qa_prompt = format!(
         "{}. Check if the video meets these requirements.\n\
          Rate 1-10, return JSON with 'score', 'feedback', and 'retry_hint'.{}",
-        original_request,
-        expected_hint
+        original_request, expected_hint
     );
 
     let llm_review = crate::render_review::review_render(
@@ -8668,7 +8881,9 @@ async fn execute_review_video_with_state_claude(
     )
     .await;
 
-    let full_video_analysis = if let Some(gemini) = app_state.video_gemini_client.as_ref()
+    let full_video_analysis = if let Some(gemini) = app_state
+        .video_gemini_client
+        .as_ref()
         .or(app_state.gemini_client.as_ref())
     {
         // Try Gemini full video analysis for rich content description
@@ -8682,7 +8897,14 @@ async fn execute_review_video_with_state_claude(
 
     review.push_str(&format!("**LLM Review (4-model chain):**\n"));
     review.push_str(&format!("  • Score: {}/10\n", llm_review.score));
-    review.push_str(&format!("  • Verdict: {}\n", if llm_review.pass { "✅ PASS" } else { "⚠️ FAIL" }));
+    review.push_str(&format!(
+        "  • Verdict: {}\n",
+        if llm_review.pass {
+            "✅ PASS"
+        } else {
+            "⚠️ FAIL"
+        }
+    ));
     review.push_str(&format!("  • Feedback: {}\n", llm_review.feedback));
     if let Some(hint) = &llm_review.retry_hint {
         review.push_str(&format!("  • Retry Hint: {}\n", hint));
@@ -8696,8 +8918,8 @@ async fn execute_review_video_with_state_claude(
             let feature_lower = feature.to_lowercase();
             let feedback_lower = llm_review.feedback.to_lowercase();
             let summary_lower = full_video_analysis.to_lowercase();
-            let found = feedback_lower.contains(&feature_lower)
-                || summary_lower.contains(&feature_lower);
+            let found =
+                feedback_lower.contains(&feature_lower) || summary_lower.contains(&feature_lower);
 
             let status = if found { "✅" } else { "⚠️" };
             review.push_str(&format!("  {} {}\n", status, feature));
@@ -8705,8 +8927,18 @@ async fn execute_review_video_with_state_claude(
         review.push_str("\n");
     }
 
-    review.push_str(&format!("**Full Video Analysis:**\n{}\n", full_video_analysis));
-    review.push_str(&format!("\n**Review Result:** {}\n", if llm_review.pass { "✅ PASS" } else { "⚠️ FAIL" }));
+    review.push_str(&format!(
+        "**Full Video Analysis:**\n{}\n",
+        full_video_analysis
+    ));
+    review.push_str(&format!(
+        "\n**Review Result:** {}\n",
+        if llm_review.pass {
+            "✅ PASS"
+        } else {
+            "⚠️ FAIL"
+        }
+    ));
 
     review
 }
@@ -8742,7 +8974,9 @@ async fn execute_review_video_with_state_gemini(
 
     let app_state = &ctx.app_state;
 
-    let video_path = if video_path_input.starts_with("http://") || video_path_input.starts_with("https://") {
+    let video_path = if video_path_input.starts_with("http://")
+        || video_path_input.starts_with("https://")
+    {
         // Cloud URL — review_render handles download internally via download_to_temp
         video_path_input.to_string()
     } else if tokio::fs::metadata(video_path_input).await.is_ok() {
@@ -8782,15 +9016,17 @@ async fn execute_review_video_with_state_gemini(
 
     // 2. Use the 4-model fallback chain for LLM-based review
     let expected_hint = if !expected_features.is_empty() {
-        format!("\nEXPECTED FEATURES to verify: {}", expected_features.join(", "))
+        format!(
+            "\nEXPECTED FEATURES to verify: {}",
+            expected_features.join(", ")
+        )
     } else {
         String::new()
     };
     let qa_prompt = format!(
         "{}. Check if the video meets these requirements.\n\
          Rate 1-10, return JSON with 'score', 'feedback', and 'retry_hint'.{}",
-        original_request,
-        expected_hint
+        original_request, expected_hint
     );
 
     let llm_review = crate::render_review::review_render(
@@ -8802,7 +9038,9 @@ async fn execute_review_video_with_state_gemini(
     )
     .await;
 
-    let full_video_analysis = if let Some(gemini) = app_state.video_gemini_client.as_ref()
+    let full_video_analysis = if let Some(gemini) = app_state
+        .video_gemini_client
+        .as_ref()
         .or(app_state.gemini_client.as_ref())
     {
         match gemini.analyze_video_content(&video_path, None).await {
@@ -8815,7 +9053,14 @@ async fn execute_review_video_with_state_gemini(
 
     review.push_str(&format!("**LLM Review (4-model chain):**\n"));
     review.push_str(&format!("  • Score: {}/10\n", llm_review.score));
-    review.push_str(&format!("  • Verdict: {}\n", if llm_review.pass { "✅ PASS" } else { "⚠️ FAIL" }));
+    review.push_str(&format!(
+        "  • Verdict: {}\n",
+        if llm_review.pass {
+            "✅ PASS"
+        } else {
+            "⚠️ FAIL"
+        }
+    ));
     review.push_str(&format!("  • Feedback: {}\n", llm_review.feedback));
     if let Some(hint) = &llm_review.retry_hint {
         review.push_str(&format!("  • Retry Hint: {}\n", hint));
@@ -8828,8 +9073,8 @@ async fn execute_review_video_with_state_gemini(
             let feature_lower = feature.to_lowercase();
             let feedback_lower = llm_review.feedback.to_lowercase();
             let summary_lower = full_video_analysis.to_lowercase();
-            let found = feedback_lower.contains(&feature_lower)
-                || summary_lower.contains(&feature_lower);
+            let found =
+                feedback_lower.contains(&feature_lower) || summary_lower.contains(&feature_lower);
 
             let status = if found { "✅" } else { "⚠️" };
             review.push_str(&format!("  {} {}\n", status, feature));
@@ -8837,8 +9082,18 @@ async fn execute_review_video_with_state_gemini(
         review.push_str("\n");
     }
 
-    review.push_str(&format!("**Full Video Analysis:**\n{}\n", full_video_analysis));
-    review.push_str(&format!("\n**Review Result:** {}\n", if llm_review.pass { "✅ PASS" } else { "⚠️ FAIL" }));
+    review.push_str(&format!(
+        "**Full Video Analysis:**\n{}\n",
+        full_video_analysis
+    ));
+    review.push_str(&format!(
+        "\n**Review Result:** {}\n",
+        if llm_review.pass {
+            "✅ PASS"
+        } else {
+            "⚠️ FAIL"
+        }
+    ));
 
     review
 }
@@ -8871,31 +9126,32 @@ async fn execute_view_image_with_state_claude(args: &Value, ctx: &ToolExecutionC
     }
 
     // Read image bytes — from local file or download cloud URL
-    let image_bytes = if image_path_input.starts_with("http://") || image_path_input.starts_with("https://") {
-        match reqwest::get(image_path_input).await {
-            Ok(resp) => resp.bytes().await.unwrap_or_default().to_vec(),
-            Err(e) => return format!("❌ Error: Failed to download image from URL: {}", e),
-        }
-    } else {
-        // Resolve local file path — try as-is first, then try outputs/
-        let local_path = if tokio::fs::metadata(image_path_input).await.is_ok() {
-            image_path_input.to_string()
-        } else if tokio::fs::metadata(format!("outputs/{}", image_path_input))
-            .await
-            .is_ok()
-        {
-            format!("outputs/{}", image_path_input)
+    let image_bytes =
+        if image_path_input.starts_with("http://") || image_path_input.starts_with("https://") {
+            match reqwest::get(image_path_input).await {
+                Ok(resp) => resp.bytes().await.unwrap_or_default().to_vec(),
+                Err(e) => return format!("❌ Error: Failed to download image from URL: {}", e),
+            }
         } else {
-            return format!(
-                "❌ Error: Image file not found: {}. Tried both '{}' and 'outputs/{}'",
-                image_path_input, image_path_input, image_path_input
-            );
+            // Resolve local file path — try as-is first, then try outputs/
+            let local_path = if tokio::fs::metadata(image_path_input).await.is_ok() {
+                image_path_input.to_string()
+            } else if tokio::fs::metadata(format!("outputs/{}", image_path_input))
+                .await
+                .is_ok()
+            {
+                format!("outputs/{}", image_path_input)
+            } else {
+                return format!(
+                    "❌ Error: Image file not found: {}. Tried both '{}' and 'outputs/{}'",
+                    image_path_input, image_path_input, image_path_input
+                );
+            };
+            match tokio::fs::read(&local_path).await {
+                Ok(bytes) => bytes,
+                Err(e) => return format!("❌ Failed to read image file: {}", e),
+            }
         };
-        match tokio::fs::read(&local_path).await {
-            Ok(bytes) => bytes,
-            Err(e) => return format!("❌ Failed to read image file: {}", e),
-        }
-    };
 
     if image_bytes.is_empty() {
         return "❌ Error: Downloaded or read image is empty".to_string();
@@ -8907,7 +9163,10 @@ async fn execute_view_image_with_state_claude(args: &Value, ctx: &ToolExecutionC
         "Analyze this image in detail. Describe what you see, colors, composition, style, text if any, and whether it would work well as a video overlay or background.",
         ctx.app_state.nvidia_nim_vision_client.as_ref(),
     ).await;
-    format!("🖼️ **Image Analysis: {}**\n\n{}", image_path_input, analysis)
+    format!(
+        "🖼️ **Image Analysis: {}**\n\n{}",
+        image_path_input, analysis
+    )
 }
 
 /// View/analyze an image using Gemini (or NIM vision) capabilities - WITH AppState (Gemini version)
@@ -8925,30 +9184,31 @@ async fn execute_view_image_with_state_gemini(
     }
 
     // Read image bytes — from local file or download cloud URL
-    let image_bytes = if image_path_input.starts_with("http://") || image_path_input.starts_with("https://") {
-        match reqwest::get(image_path_input).await {
-            Ok(resp) => resp.bytes().await.unwrap_or_default().to_vec(),
-            Err(e) => return format!("❌ Error: Failed to download image from URL: {}", e),
-        }
-    } else {
-        let local_path = if tokio::fs::metadata(image_path_input).await.is_ok() {
-            image_path_input.to_string()
-        } else if tokio::fs::metadata(format!("outputs/{}", image_path_input))
-            .await
-            .is_ok()
-        {
-            format!("outputs/{}", image_path_input)
+    let image_bytes =
+        if image_path_input.starts_with("http://") || image_path_input.starts_with("https://") {
+            match reqwest::get(image_path_input).await {
+                Ok(resp) => resp.bytes().await.unwrap_or_default().to_vec(),
+                Err(e) => return format!("❌ Error: Failed to download image from URL: {}", e),
+            }
         } else {
-            return format!(
-                "❌ Error: Image file not found: {}. Tried both '{}' and 'outputs/{}'",
-                image_path_input, image_path_input, image_path_input
-            );
+            let local_path = if tokio::fs::metadata(image_path_input).await.is_ok() {
+                image_path_input.to_string()
+            } else if tokio::fs::metadata(format!("outputs/{}", image_path_input))
+                .await
+                .is_ok()
+            {
+                format!("outputs/{}", image_path_input)
+            } else {
+                return format!(
+                    "❌ Error: Image file not found: {}. Tried both '{}' and 'outputs/{}'",
+                    image_path_input, image_path_input, image_path_input
+                );
+            };
+            match tokio::fs::read(&local_path).await {
+                Ok(bytes) => bytes,
+                Err(e) => return format!("❌ Failed to read image file: {}", e),
+            }
         };
-        match tokio::fs::read(&local_path).await {
-            Ok(bytes) => bytes,
-            Err(e) => return format!("❌ Failed to read image file: {}", e),
-        }
-    };
 
     if image_bytes.is_empty() {
         return "❌ Error: Downloaded or read image is empty".to_string();
@@ -8959,7 +9219,10 @@ async fn execute_view_image_with_state_gemini(
         "Analyze this image in detail. Describe what you see, colors, composition, style, text if any, and whether it would work well as a video overlay or background.",
         ctx.app_state.nvidia_nim_vision_client.as_ref(),
     ).await;
-    format!("🖼️ **Image Analysis: {}**\n\n{}", image_path_input, analysis)
+    format!(
+        "🖼️ **Image Analysis: {}**\n\n{}",
+        image_path_input, analysis
+    )
 }
 
 // ============================================================================
@@ -9087,10 +9350,7 @@ async fn cleanup_narration_temps(paths: &[String]) {
 /// and returns an exact scene timeline. The agent uses those timings for the
 /// HyperFrames `data-start` / `data-duration` attributes, so scene changes can
 /// never outrun the narration.
-async fn execute_generate_narration_with_state(
-    args: &Value,
-    ctx: &ToolExecutionContext,
-) -> String {
+async fn execute_generate_narration_with_state(args: &Value, ctx: &ToolExecutionContext) -> String {
     // NIM providers sometimes serialize the array as a string or use
     // {text: ...} objects. Accept all three shapes so one bad-shaped call does
     // not force the agent into a slow per-line TTS fallback.
@@ -9379,7 +9639,13 @@ async fn execute_generate_text_to_speech_with_state_claude(
             "provider_order": "elevenlabs_then_vibevoice_then_gemini",
         });
         match vibevoice_client
-            .text_to_speech_base64(text, &normalize_vibevoice_speaker(voice), "mp3", None, Some(metadata))
+            .text_to_speech_base64(
+                text,
+                &normalize_vibevoice_speaker(voice),
+                "mp3",
+                None,
+                Some(metadata),
+            )
             .await
         {
             Ok(audio_bytes) => match tokio::fs::write(&output_file, &audio_bytes).await {
@@ -9463,7 +9729,13 @@ async fn execute_generate_text_to_speech_with_state_gemini(
             "provider_order": "elevenlabs_then_vibevoice_then_gemini",
         });
         match vibevoice_client
-            .text_to_speech_base64(text, &normalize_vibevoice_speaker(voice), "mp3", None, Some(metadata))
+            .text_to_speech_base64(
+                text,
+                &normalize_vibevoice_speaker(voice),
+                "mp3",
+                None,
+                Some(metadata),
+            )
             .await
         {
             Ok(audio_bytes) => match tokio::fs::write(&output_file, &audio_bytes).await {
@@ -10131,7 +10403,9 @@ async fn execute_optimize_youtube_metadata_with_state_claude(
         .and_then(|v| v.as_str())
         .unwrap_or("professional");
 
-    if video_path.is_empty() || (!is_cloud_url(video_path) && !std::path::Path::new(video_path).exists()) {
+    if video_path.is_empty()
+        || (!is_cloud_url(video_path) && !std::path::Path::new(video_path).exists())
+    {
         return format!("❌ Video not found: {}", video_path);
     }
 
@@ -10327,7 +10601,14 @@ async fn execute_search_youtube_channels_with_state_claude(
                         item.snippet.title,
                         item.snippet.channel_id,
                         if item.snippet.description.chars().count() > 100 {
-                            format!("{}...", item.snippet.description.chars().take(100).collect::<String>())
+                            format!(
+                                "{}...",
+                                item.snippet
+                                    .description
+                                    .chars()
+                                    .take(100)
+                                    .collect::<String>()
+                            )
                         } else {
                             item.snippet.description.clone()
                         },
@@ -19700,7 +19981,6 @@ fn blender_client_or_err(
         .ok_or_else(|| "❌ BlenderMCPServer not configured. Set BLENDER_MCP_URL in .env to enable 3D rendering.".to_string())
 }
 
-
 async fn normalize_reference_image_url_for_blender(
     ctx: &ToolExecutionContext,
     reference_image_url: Option<&str>,
@@ -19985,10 +20265,8 @@ async fn execute_run_director_impl(
                     } else if let Some(s) = result_val.as_str() {
                         // Fallback: result is a JSON string (legacy format)
                         if let Ok(inner) = serde_json::from_str::<Value>(s) {
-                            let summary = inner
-                                .get("summary")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("");
+                            let summary =
+                                inner.get("summary").and_then(|v| v.as_str()).unwrap_or("");
                             let assets = inner
                                 .get("assets")
                                 .and_then(|v| v.as_array())
@@ -19996,9 +20274,7 @@ async fn execute_run_director_impl(
                                 .unwrap_or(0);
                             final_result = format!(
                                 "✅ Director completed: {}\nProduced {} assets.\n{}",
-                                summary,
-                                assets,
-                                s
+                                summary, assets, s
                             );
                         } else {
                             let full = format!("✅ Director result: {}", s);
@@ -20059,10 +20335,7 @@ async fn execute_run_director_gemini(
 }
 
 /// Generic passthrough for new tools — forwards all args to BlenderMCPServer as-is.
-async fn execute_run_director_claude(
-    args: &Value,
-    ctx: &ToolExecutionContext,
-) -> String {
+async fn execute_run_director_claude(args: &Value, ctx: &ToolExecutionContext) -> String {
     let brief = args.get("brief").and_then(|v| v.as_str()).unwrap_or("");
     let feedback = args.get("feedback").and_then(|v| v.as_str());
     execute_run_director_impl(brief, feedback, ctx).await
@@ -20078,7 +20351,9 @@ async fn execute_browserbase_crawl_website_claude(args: &serde_json::Value) -> S
     execute_browserbase_crawl_website_inner(url).await
 }
 
-async fn execute_browserbase_crawl_website_gemini(args: &HashMap<String, serde_json::Value>) -> String {
+async fn execute_browserbase_crawl_website_gemini(
+    args: &HashMap<String, serde_json::Value>,
+) -> String {
     let url = args.get("url").and_then(|v| v.as_str()).unwrap_or("");
     execute_browserbase_crawl_website_inner(url).await
 }
@@ -20129,12 +20404,10 @@ pub(crate) async fn execute_browserbase_crawl_website_inner(url: &str) -> String
 fn is_direct_asset_url(url: &str) -> bool {
     let lower = url.to_lowercase();
     let asset_extensions = [
-        ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".ico", ".bmp", ".tiff", ".tif",
-        ".mp4", ".webm", ".mov", ".avi", ".mkv", ".m4v",
-        ".mp3", ".wav", ".ogg", ".aac", ".flac", ".m4a", ".wma",
-        ".pdf", ".zip", ".gz", ".tar",
-        ".woff", ".woff2", ".ttf", ".otf", ".eot",
-        ".glb", ".gltf", ".obj", ".fbx",
+        ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".ico", ".bmp", ".tiff", ".tif", ".mp4",
+        ".webm", ".mov", ".avi", ".mkv", ".m4v", ".mp3", ".wav", ".ogg", ".aac", ".flac", ".m4a",
+        ".wma", ".pdf", ".zip", ".gz", ".tar", ".woff", ".woff2", ".ttf", ".otf", ".eot", ".glb",
+        ".gltf", ".obj", ".fbx",
     ];
     asset_extensions.iter().any(|ext| lower.contains(ext))
 }
@@ -20156,7 +20429,9 @@ fn get_filename_from_url(url: &str) -> &str {
 
 fn get_domain_from_url(url: &str) -> String {
     // Extract domain from URL, e.g. "kick.com" from "https://kick.com/brand-assets"
-    let url = url.trim_start_matches("http://").trim_start_matches("https://");
+    let url = url
+        .trim_start_matches("http://")
+        .trim_start_matches("https://");
     let domain = url.split('/').next().unwrap_or("unknown");
     domain.to_lowercase()
 }
@@ -20190,7 +20465,8 @@ fn extract_media_urls_from_html(html: &str) -> Vec<String> {
     }
 
     // Extract from <video src="..."> and <video><source src="...">
-    if let Ok(re) = Regex::new(r#"(?i)(?:<video[^>]+src\s*=\s*"([^"]+)"|<source[^>]+src\s*=\s*"([^"]+)"|<video[^>]+poster\s*=\s*"([^"]+)")#) {
+    if let Ok(re) = Regex::new(
+        r#"(?i)(?:<video[^>]+src\s*=\s*"([^"]+)"|<source[^>]+src\s*=\s*"([^"]+)"|<video[^>]+poster\s*=\s*"([^"]+)")#) {
         for cap in re.captures_iter(html) {
             for i in 1..=3 {
                 if let Some(url) = cap.get(i) {
@@ -20204,7 +20480,8 @@ fn extract_media_urls_from_html(html: &str) -> Vec<String> {
     }
 
     // Extract <a href="..."> for download links
-    if let Ok(re) = Regex::new(r#"(?i)<a[^>]+href\s*=\s*"([^"]+)"[^>]*>(?:download|asset|file|media|logo|brand)</a>"#) {
+    if let Ok(re) = Regex::new(r#"(?i)<a[^>]+href\s*=\s*"([^"]+)"[^>]*>(?:download|asset|file|media|logo|brand)</a>"#,
+    ) {
         for cap in re.captures_iter(html) {
             if let Some(url) = cap.get(1) {
                 let u = url.as_str().to_string();
@@ -20216,7 +20493,9 @@ fn extract_media_urls_from_html(html: &str) -> Vec<String> {
     }
 
     // Also extract og:image and twitter:image meta tags
-    if let Ok(re) = Regex::new(r#"(?i)<meta[^>]+(?:property|name)\s*=\s*"(?:og:image|twitter:image)"[^>]+content\s*=\s*"([^"]+)"#) {
+    if let Ok(re) = Regex::new(
+        r#"(?i)<meta[^>]+(?:property|name)\s*=\s*"(?:og:image|twitter:image)"[^>]+content\s*=\s*"([^"]+)"#,
+    ) {
         for cap in re.captures_iter(html) {
             if let Some(url) = cap.get(1) {
                 let u = url.as_str().to_string();
@@ -20228,22 +20507,24 @@ fn extract_media_urls_from_html(html: &str) -> Vec<String> {
     }
 
     // Resolve relative URLs to absolute — filter to only media-like URLs
-    urls.retain(|u| {
-        u.starts_with("http://") || u.starts_with("https://") || u.starts_with("//")
-    });
+    urls.retain(|u| u.starts_with("http://") || u.starts_with("https://") || u.starts_with("//"));
 
     // Prepend https: for // protocol-relative URLs
-    let resolved: Vec<String> = urls.iter().map(|u| {
-        if u.starts_with("//") {
-            format!("https:{}", u)
-        } else {
-            u.clone()
-        }
-    }).collect();
+    let resolved: Vec<String> = urls
+        .iter()
+        .map(|u| {
+            if u.starts_with("//") {
+                format!("https:{}", u)
+            } else {
+                u.clone()
+            }
+        })
+        .collect();
 
     // Deduplicate and keep only media-looking URLs
     let mut seen = std::collections::HashSet::new();
-    resolved.into_iter()
+    resolved
+        .into_iter()
         .filter(|u| seen.insert(u.clone()))
         .filter(|u| is_direct_asset_url(u))
         .collect()
@@ -20262,7 +20543,11 @@ fn resolve_url(html_base_url: &str, maybe_relative: &str) -> String {
         // Absolute path relative to domain
         let domain = get_domain_from_url(base);
         // Use the protocol from the base URL
-        let protocol = if base.starts_with("https") { "https" } else { "http" };
+        let protocol = if base.starts_with("https") {
+            "https"
+        } else {
+            "http"
+        };
         format!("{}://{}{}", protocol, domain, maybe_relative)
     } else {
         // Relative path
@@ -20276,13 +20561,19 @@ fn resolve_url(html_base_url: &str, maybe_relative: &str) -> String {
 
 async fn execute_download_asset_claude(args: &Value) -> String {
     let url = args["url"].as_str().unwrap_or("");
-    let description = args.get("description").and_then(|v| v.as_str()).unwrap_or("");
+    let description = args
+        .get("description")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     execute_download_asset_inner(url, description).await
 }
 
 async fn execute_download_asset_gemini(args: &HashMap<String, Value>) -> String {
     let url = args.get("url").and_then(|v| v.as_str()).unwrap_or("");
-    let description = args.get("description").and_then(|v| v.as_str()).unwrap_or("");
+    let description = args
+        .get("description")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     execute_download_asset_inner(url, description).await
 }
 
@@ -20313,22 +20604,31 @@ async fn execute_download_asset_inner(url: &str, description: &str) -> String {
 
                 // Also try markdown-based fetch as fallback for img tags in markdown
                 if found.is_empty() {
-                    if let Ok(Some(markdown)) = crate::browserbase_client::fetch_url(&full_url).await {
+                    if let Ok(Some(markdown)) =
+                        crate::browserbase_client::fetch_url(&full_url).await
+                    {
                         // Look for markdown image syntax: ![alt](url)
                         if let Ok(re) = regex::Regex::new(r"!\[.*?\]\(([^)]+)\)") {
                             for cap in re.captures_iter(&markdown) {
                                 if let Some(url_match) = cap.get(1) {
                                     let u = url_match.as_str().to_string();
-                                    if !found.contains(&u) && (u.starts_with("http://") || u.starts_with("https://")) {
+                                    if !found.contains(&u)
+                                        && (u.starts_with("http://") || u.starts_with("https://"))
+                                    {
                                         found.push(u);
                                     }
                                 }
                             }
                         }
                         // Also look for plain URLs in markdown that end in image extensions
-                        if let Ok(re) = regex::Regex::new(r"https?://[^\s)]+\.(?:png|jpg|jpeg|gif|svg|webp)") {
+                        if let Ok(re) =
+                            regex::Regex::new(r"https?://[^\s)]+\.(?:png|jpg|jpeg|gif|svg|webp)")
+                        {
                             for cap in re.captures_iter(&markdown) {
-                                let u = cap.get(0).map(|m| m.as_str().to_string()).unwrap_or_default();
+                                let u = cap
+                                    .get(0)
+                                    .map(|m| m.as_str().to_string())
+                                    .unwrap_or_default();
                                 if !u.is_empty() && !found.contains(&u) {
                                     found.push(u);
                                 }
@@ -20338,7 +20638,8 @@ async fn execute_download_asset_inner(url: &str, description: &str) -> String {
                 }
 
                 // Resolve relative URLs
-                let resolved: Vec<String> = found.iter()
+                let resolved: Vec<String> = found
+                    .iter()
                     .map(|u| resolve_url(&full_url, u))
                     .filter(|u| is_direct_asset_url(u))
                     .collect();
@@ -20359,7 +20660,10 @@ async fn execute_download_asset_inner(url: &str, description: &str) -> String {
 
                 // Remove duplicates
                 let mut seen = std::collections::HashSet::new();
-                resolved.into_iter().filter(|u| seen.insert(u.clone())).collect()
+                resolved
+                    .into_iter()
+                    .filter(|u| seen.insert(u.clone()))
+                    .collect()
             }
             Ok(None) => {
                 return "❌ BrowserBase is not configured or returned no content. Set BROWSERBASE_API_KEY to enable web page scraping. You can also try providing a direct URL to the asset file instead.".to_string();
@@ -20381,7 +20685,11 @@ async fn execute_download_asset_inner(url: &str, description: &str) -> String {
 
     for asset_url in &asset_urls {
         let filename = get_filename_from_url(asset_url);
-        let filename = if filename.is_empty() { "asset" } else { filename };
+        let filename = if filename.is_empty() {
+            "asset"
+        } else {
+            filename
+        };
 
         // Compute cache key: sha256 of the URL
         let mut hasher = Sha256::new();
@@ -20413,7 +20721,10 @@ async fn execute_download_asset_inner(url: &str, description: &str) -> String {
             let cached_url = match r2.presign_get(&r2_key, 604800).await {
                 Ok(u) => u,
                 Err(e) => {
-                    errors.push(format!("Failed to get presigned URL for cached '{}': {e}", filename));
+                    errors.push(format!(
+                        "Failed to get presigned URL for cached '{}': {e}",
+                        filename
+                    ));
                     continue;
                 }
             };
@@ -20488,8 +20799,12 @@ async fn execute_vectorize_crawled_content_with_state_claude(
     args: &Value,
     ctx: &ToolExecutionContext,
 ) -> String {
-    let feature_tag = args.get("feature_tag").and_then(|v| v.as_str()).unwrap_or("");
-    let pages: Vec<Value> = args.get("pages")
+    let feature_tag = args
+        .get("feature_tag")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let pages: Vec<Value> = args
+        .get("pages")
         .and_then(|v| v.as_array())
         .map(|a| a.clone())
         .unwrap_or_default();
@@ -20500,8 +20815,12 @@ async fn execute_vectorize_crawled_content_with_state_gemini(
     args: &HashMap<String, Value>,
     ctx: &ToolExecutionContext,
 ) -> String {
-    let feature_tag = args.get("feature_tag").and_then(|v| v.as_str()).unwrap_or("");
-    let pages: Vec<Value> = args.get("pages")
+    let feature_tag = args
+        .get("feature_tag")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let pages: Vec<Value> = args
+        .get("pages")
         .and_then(|v| v.as_array())
         .cloned()
         .unwrap_or_default();
@@ -20524,7 +20843,9 @@ pub(crate) async fn execute_vectorize_crawled_content_inner(
         Some(q) => q,
         None => return "Error: Qdrant not configured".to_string(),
     };
-    let gemini = match app_state.video_gemini_client.as_ref()
+    let gemini = match app_state
+        .video_gemini_client
+        .as_ref()
         .or(app_state.gemini_client.as_ref())
     {
         Some(g) => g,
@@ -20535,8 +20856,14 @@ pub(crate) async fn execute_vectorize_crawled_content_inner(
     let mut errors = Vec::new();
 
     for page in pages {
-        let url = page.get("url").and_then(|v| v.as_str()).unwrap_or("unknown");
-        let title = page.get("title").and_then(|v| v.as_str()).unwrap_or("Untitled");
+        let url = page
+            .get("url")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+        let title = page
+            .get("title")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Untitled");
         let content = page.get("content").and_then(|v| v.as_str()).unwrap_or("");
 
         if content.is_empty() {
@@ -20547,26 +20874,39 @@ pub(crate) async fn execute_vectorize_crawled_content_inner(
         let mut context = HashMap::new();
         context.insert("page_url".to_string(), serde_json::json!(url));
         context.insert("page_title".to_string(), serde_json::json!(title));
-        context.insert("crawl_time".to_string(), serde_json::json!(chrono::Utc::now().to_rfc3339()));
+        context.insert(
+            "crawl_time".to_string(),
+            serde_json::json!(chrono::Utc::now().to_rfc3339()),
+        );
 
-        match qdrant.store_chat_memory_with_gemini2(
-            feature_tag,
-            None,
-            &embed_text,
-            url,
-            vec![],
-            context,
-            gemini,
-            Some(feature_tag),
-        ).await {
+        match qdrant
+            .store_chat_memory_with_gemini2(
+                feature_tag,
+                None,
+                &embed_text,
+                url,
+                vec![],
+                context,
+                gemini,
+                Some(feature_tag),
+            )
+            .await
+        {
             Ok(_) => stored += 1,
             Err(e) => errors.push(format!("{}: {}", url, e)),
         }
     }
 
-    let mut result = format!("Vectorization complete: {} pages stored with feature tag '{}'", stored, feature_tag);
+    let mut result = format!(
+        "Vectorization complete: {} pages stored with feature tag '{}'",
+        stored, feature_tag
+    );
     if !errors.is_empty() {
-        result.push_str(&format!("\nErrors ({}):\n{}", errors.len(), errors.join("\n")));
+        result.push_str(&format!(
+            "\nErrors ({}):\n{}",
+            errors.len(),
+            errors.join("\n")
+        ));
     }
     result
 }
@@ -20580,7 +20920,10 @@ async fn execute_search_crawled_content_with_state_claude(
     ctx: &ToolExecutionContext,
 ) -> String {
     let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("");
-    let feature_tag = args.get("feature_tag").and_then(|v| v.as_str()).unwrap_or("");
+    let feature_tag = args
+        .get("feature_tag")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(5) as usize;
     execute_search_crawled_content_inner(query, feature_tag, limit, &ctx.app_state).await
 }
@@ -20590,7 +20933,10 @@ async fn execute_search_crawled_content_with_state_gemini(
     ctx: &ToolExecutionContext,
 ) -> String {
     let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("");
-    let feature_tag = args.get("feature_tag").and_then(|v| v.as_str()).unwrap_or("");
+    let feature_tag = args
+        .get("feature_tag")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(5) as usize;
     execute_search_crawled_content_inner(query, feature_tag, limit, &ctx.app_state).await
 }
@@ -20612,14 +20958,19 @@ pub(crate) async fn execute_search_crawled_content_inner(
         Some(q) => q,
         None => return "Error: Qdrant not configured".to_string(),
     };
-    let gemini = match app_state.video_gemini_client.as_ref()
+    let gemini = match app_state
+        .video_gemini_client
+        .as_ref()
         .or(app_state.gemini_client.as_ref())
     {
         Some(g) => g,
         None => return "Error: Gemini client not configured for embeddings".to_string(),
     };
 
-    let embedding = match gemini.embed_content_with_model(query, "models/gemini-embedding-2", Some(1536)).await {
+    let embedding = match gemini
+        .embed_content_with_model(query, "models/gemini-embedding-2", Some(1536))
+        .await
+    {
         Ok(emb) => emb,
         Err(e) => return format!("Error embedding query: {e}"),
     };
@@ -20630,12 +20981,15 @@ pub(crate) async fn execute_search_crawled_content_inner(
         ]
     });
 
-    match qdrant.search_points(
-        &embedding,
-        limit,
-        Some(&filter),
-        crate::qdrant_client::EmbeddingProvider::GeminiEmbedding2,
-    ).await {
+    match qdrant
+        .search_points(
+            &embedding,
+            limit,
+            Some(&filter),
+            crate::qdrant_client::EmbeddingProvider::GeminiEmbedding2,
+        )
+        .await
+    {
         Ok(results) => {
             if results.is_empty() {
                 return format!("No results found for '{}' in '{}'. Make sure the content was vectorized first with vectorize_crawled_content.", query, feature_tag);
@@ -20643,15 +20997,28 @@ pub(crate) async fn execute_search_crawled_content_inner(
             let mut output = format!("Search results for '{}' ({}):\n\n", query, feature_tag);
             for (i, r) in results.iter().enumerate() {
                 let score = r.get("score").and_then(|v| v.as_f64()).unwrap_or(0.0);
-                let url = r.get("agent_response").and_then(|v| v.as_str()).unwrap_or("unknown");
-                let title = r.get("context").and_then(|c| c.get("page_title")).and_then(|v| v.as_str()).unwrap_or("");
+                let url = r
+                    .get("agent_response")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
+                let title = r
+                    .get("context")
+                    .and_then(|c| c.get("page_title"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
                 let content = r.get("user_message").and_then(|v| v.as_str()).unwrap_or("");
                 let snippet = if content.chars().count() > 500 {
                     format!("{}...", content.chars().take(500).collect::<String>())
                 } else {
                     content.to_string()
                 };
-                output.push_str(&format!("{}. [Score: {:.2}] {} ({})\n", i + 1, score, title, url));
+                output.push_str(&format!(
+                    "{}. [Score: {:.2}] {} ({})\n",
+                    i + 1,
+                    score,
+                    title,
+                    url
+                ));
                 if !snippet.is_empty() {
                     output.push_str(&format!("   {}\n\n", snippet.replace('\n', " ")));
                 }
@@ -20713,12 +21080,21 @@ fn strip_html_tags(html: &str) -> String {
 /// Query output_videos via generated_artifacts — returns output_video-kind artifacts for the session
 async fn execute_get_output_videos(_args: &Value, ctx: &ToolExecutionContext) -> String {
     let db = &ctx.app_state.db_pool;
-    match sqlx::query_as::<_, (String, String, Option<String>, Option<String>, chrono::NaiveDateTime)>(
+    match sqlx::query_as::<
+        _,
+        (
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+            chrono::NaiveDateTime,
+        ),
+    >(
         r#"SELECT artifact_id::text, file_path, public_url, mime_type, created_at
            FROM generated_artifacts
            WHERE session_uuid = $1 AND kind = 'output_video'
            ORDER BY created_at DESC
-           LIMIT 20"#
+           LIMIT 20"#,
     )
     .bind(&ctx.session_id)
     .fetch_all(db)
@@ -20733,7 +21109,10 @@ async fn execute_get_output_videos(_args: &Value, ctx: &ToolExecutionContext) ->
                 let mime_str = mime.as_deref().unwrap_or("unknown");
                 result.push_str(&format!(
                     "  - ID: {}, File: {}, Type: {}, Created: {}\n",
-                    id, path, mime_str, created_at.format("%Y-%m-%d %H:%M")
+                    id,
+                    path,
+                    mime_str,
+                    created_at.format("%Y-%m-%d %H:%M")
                 ));
                 if let Some(url) = r2_url {
                     result.push_str(&format!("    Cloud URL: {}\n", url));
@@ -20748,12 +21127,22 @@ async fn execute_get_output_videos(_args: &Value, ctx: &ToolExecutionContext) ->
 /// Query generated_artifacts table — returns generated assets for the current session
 async fn execute_get_generated_artifacts(_args: &Value, ctx: &ToolExecutionContext) -> String {
     let db = &ctx.app_state.db_pool;
-    match sqlx::query_as::<_, (String, String, Option<String>, Option<String>, String, chrono::NaiveDateTime)>(
+    match sqlx::query_as::<
+        _,
+        (
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+            String,
+            chrono::NaiveDateTime,
+        ),
+    >(
         r#"SELECT artifact_id::text, file_path, mime_type, public_url, kind, created_at
            FROM generated_artifacts
            WHERE session_uuid = $1
            ORDER BY created_at DESC
-           LIMIT 20"#
+           LIMIT 20"#,
     )
     .bind(&ctx.session_id)
     .fetch_all(db)
@@ -20768,7 +21157,11 @@ async fn execute_get_generated_artifacts(_args: &Value, ctx: &ToolExecutionConte
                 let mime_str = mime.as_deref().unwrap_or("unknown");
                 result.push_str(&format!(
                     "  - ID: {}, File: {}, Kind: {}, Type: {}, Created: {}\n",
-                    id, path, kind, mime_str, created_at.format("%Y-%m-%d %H:%M")
+                    id,
+                    path,
+                    kind,
+                    mime_str,
+                    created_at.format("%Y-%m-%d %H:%M")
                 ));
                 if let Some(public_url) = url {
                     result.push_str(&format!("    Public URL: {}\n", public_url));
@@ -20818,21 +21211,33 @@ async fn execute_get_extracted_clips(_args: &Value, ctx: &ToolExecutionContext) 
     }
 }
 
-
 async fn execute_apply_ffmpeg_filter_claude(args: &Value) -> String {
-    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
-    let output = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
-    let filter_name = args.get("filter_name").and_then(|v| v.as_str()).unwrap_or("");
+    let input = args
+        .get("input_file")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let output = args
+        .get("output_file")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let filter_name = args
+        .get("filter_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     if input.is_empty() || output.is_empty() || filter_name.is_empty() {
         return "❌ Error: input_file, output_file, and filter_name are required".to_string();
     }
     let params: Vec<(String, String)> = match args.get("params") {
-        Some(Value::Object(map)) => {
-            map.iter().map(|(k, v)| (k.clone(), v.to_string())).collect()
-        }
+        Some(Value::Object(map)) => map
+            .iter()
+            .map(|(k, v)| (k.clone(), v.to_string()))
+            .collect(),
         _ => vec![],
     };
-    let param_refs: Vec<(&str, &str)> = params.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+    let param_refs: Vec<(&str, &str)> = params
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
     match crate::visual::apply_ffmpeg_filter(input, output, filter_name, &param_refs) {
         Ok(s) => s,
         Err(e) => format!("❌ apply_ffmpeg_filter failed: {}", e),
@@ -20840,19 +21245,32 @@ async fn execute_apply_ffmpeg_filter_claude(args: &Value) -> String {
 }
 
 async fn execute_apply_ffmpeg_filter_gemini(args: &HashMap<String, Value>) -> String {
-    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
-    let output = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
-    let filter_name = args.get("filter_name").and_then(|v| v.as_str()).unwrap_or("");
+    let input = args
+        .get("input_file")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let output = args
+        .get("output_file")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let filter_name = args
+        .get("filter_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     if input.is_empty() || output.is_empty() || filter_name.is_empty() {
         return "❌ Error: input_file, output_file, and filter_name are required".to_string();
     }
     let params: Vec<(String, String)> = match args.get("params") {
-        Some(Value::Object(map)) => {
-            map.iter().map(|(k, v)| (k.clone(), v.to_string())).collect()
-        }
+        Some(Value::Object(map)) => map
+            .iter()
+            .map(|(k, v)| (k.clone(), v.to_string()))
+            .collect(),
         _ => vec![],
     };
-    let param_refs: Vec<(&str, &str)> = params.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+    let param_refs: Vec<(&str, &str)> = params
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
     match crate::visual::apply_ffmpeg_filter(input, output, filter_name, &param_refs) {
         Ok(s) => s,
         Err(e) => format!("❌ apply_ffmpeg_filter failed: {}", e),
@@ -20860,19 +21278,32 @@ async fn execute_apply_ffmpeg_filter_gemini(args: &HashMap<String, Value>) -> St
 }
 
 async fn execute_apply_audio_ffmpeg_filter_claude(args: &Value) -> String {
-    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
-    let output = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
-    let filter_name = args.get("filter_name").and_then(|v| v.as_str()).unwrap_or("");
+    let input = args
+        .get("input_file")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let output = args
+        .get("output_file")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let filter_name = args
+        .get("filter_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     if input.is_empty() || output.is_empty() || filter_name.is_empty() {
         return "❌ Error: input_file, output_file, and filter_name are required".to_string();
     }
     let params: Vec<(String, String)> = match args.get("params") {
-        Some(Value::Object(map)) => {
-            map.iter().map(|(k, v)| (k.clone(), v.to_string())).collect()
-        }
+        Some(Value::Object(map)) => map
+            .iter()
+            .map(|(k, v)| (k.clone(), v.to_string()))
+            .collect(),
         _ => vec![],
     };
-    let param_refs: Vec<(&str, &str)> = params.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+    let param_refs: Vec<(&str, &str)> = params
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
     match crate::visual::apply_audio_ffmpeg_filter(input, output, filter_name, &param_refs) {
         Ok(s) => s,
         Err(e) => format!("❌ apply_audio_ffmpeg_filter failed: {}", e),
@@ -20880,19 +21311,32 @@ async fn execute_apply_audio_ffmpeg_filter_claude(args: &Value) -> String {
 }
 
 async fn execute_apply_audio_ffmpeg_filter_gemini(args: &HashMap<String, Value>) -> String {
-    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
-    let output = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
-    let filter_name = args.get("filter_name").and_then(|v| v.as_str()).unwrap_or("");
+    let input = args
+        .get("input_file")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let output = args
+        .get("output_file")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let filter_name = args
+        .get("filter_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     if input.is_empty() || output.is_empty() || filter_name.is_empty() {
         return "❌ Error: input_file, output_file, and filter_name are required".to_string();
     }
     let params: Vec<(String, String)> = match args.get("params") {
-        Some(Value::Object(map)) => {
-            map.iter().map(|(k, v)| (k.clone(), v.to_string())).collect()
-        }
+        Some(Value::Object(map)) => map
+            .iter()
+            .map(|(k, v)| (k.clone(), v.to_string()))
+            .collect(),
         _ => vec![],
     };
-    let param_refs: Vec<(&str, &str)> = params.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+    let param_refs: Vec<(&str, &str)> = params
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
     match crate::visual::apply_audio_ffmpeg_filter(input, output, filter_name, &param_refs) {
         Ok(s) => s,
         Err(e) => format!("❌ apply_audio_ffmpeg_filter failed: {}", e),
@@ -20900,16 +21344,23 @@ async fn execute_apply_audio_ffmpeg_filter_gemini(args: &HashMap<String, Value>)
 }
 
 fn execute_export_video_claude(args: &Value) -> String {
-    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
-    let output = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let input = args
+        .get("input_file")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let output = args
+        .get("output_file")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     let codec = args.get("codec").and_then(|v| v.as_str()).unwrap_or("");
     if input.is_empty() || output.is_empty() || codec.is_empty() {
         return "❌ Error: input_file, output_file, and codec are required".to_string();
     }
     let params: Vec<(String, String)> = match args.get("params") {
-        Some(Value::Object(map)) => {
-            map.iter().map(|(k, v)| (k.clone(), v.to_string())).collect()
-        }
+        Some(Value::Object(map)) => map
+            .iter()
+            .map(|(k, v)| (k.clone(), v.to_string()))
+            .collect(),
         _ => vec![],
     };
     let mut command = std::process::Command::new("ffmpeg");
@@ -20925,16 +21376,23 @@ fn execute_export_video_claude(args: &Value) -> String {
 }
 
 fn execute_export_video_gemini(args: &HashMap<String, Value>) -> String {
-    let input = args.get("input_file").and_then(|v| v.as_str()).unwrap_or("");
-    let output = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let input = args
+        .get("input_file")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let output = args
+        .get("output_file")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     let codec = args.get("codec").and_then(|v| v.as_str()).unwrap_or("");
     if input.is_empty() || output.is_empty() || codec.is_empty() {
         return "❌ Error: input_file, output_file, and codec are required".to_string();
     }
     let params: Vec<(String, String)> = match args.get("params") {
-        Some(Value::Object(map)) => {
-            map.iter().map(|(k, v)| (k.clone(), v.to_string())).collect()
-        }
+        Some(Value::Object(map)) => map
+            .iter()
+            .map(|(k, v)| (k.clone(), v.to_string()))
+            .collect(),
         _ => vec![],
     };
     let mut command = std::process::Command::new("ffmpeg");
@@ -20955,9 +21413,18 @@ async fn execute_blender_generate_scene_type_claude(args: &Value) -> String {
         return "❌ Error: prompt is required".to_string();
     }
     let params = args.get("params");
-    let style = params.and_then(|p| p.get("style")).and_then(|v| v.as_str()).unwrap_or("cinematic");
-    let duration = params.and_then(|p| p.get("duration")).and_then(|v| v.as_f64()).unwrap_or(10.0);
-    let reference_image_url = params.and_then(|p| p.get("reference_image_url")).and_then(|v| v.as_str()).unwrap_or("");
+    let style = params
+        .and_then(|p| p.get("style"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("cinematic");
+    let duration = params
+        .and_then(|p| p.get("duration"))
+        .and_then(|v| v.as_f64())
+        .unwrap_or(10.0);
+    let reference_image_url = params
+        .and_then(|p| p.get("reference_image_url"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
 
     let base_url = std::env::var("BLENDER_MCP_URL").unwrap_or_default();
     let api_key = std::env::var("BLENDER_MCP_API_KEY").unwrap_or_default();
@@ -20965,15 +21432,18 @@ async fn execute_blender_generate_scene_type_claude(args: &Value) -> String {
         return "❌ BlenderMCPServer not configured. Set BLENDER_MCP_URL in .env.".to_string();
     }
     let client = crate::blender_mcp_client::BlenderMCPClient::new(base_url, api_key);
-    match client.call_tool_async(
-        "blender_execute_bpy_script",
-        serde_json::json!({
-            "prompt": prompt,
-            "style": style,
-            "duration": duration,
-            "reference_image_url": reference_image_url,
-        }),
-    ).await {
+    match client
+        .call_tool_async(
+            "blender_execute_bpy_script",
+            serde_json::json!({
+                "prompt": prompt,
+                "style": style,
+                "duration": duration,
+                "reference_image_url": reference_image_url,
+            }),
+        )
+        .await
+    {
         Ok(result) => extract_url_from_async_result(&result, "Output"),
         Err(e) => format!("❌ blender_generate_scene_type failed: {}", e),
     }
@@ -20985,9 +21455,18 @@ async fn execute_blender_generate_scene_type_gemini(args: &HashMap<String, Value
         return "❌ Error: prompt is required".to_string();
     }
     let params = args.get("params");
-    let style = params.and_then(|p| p.get("style")).and_then(|v| v.as_str()).unwrap_or("cinematic");
-    let duration = params.and_then(|p| p.get("duration")).and_then(|v| v.as_f64()).unwrap_or(10.0);
-    let reference_image_url = params.and_then(|p| p.get("reference_image_url")).and_then(|v| v.as_str()).unwrap_or("");
+    let style = params
+        .and_then(|p| p.get("style"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("cinematic");
+    let duration = params
+        .and_then(|p| p.get("duration"))
+        .and_then(|v| v.as_f64())
+        .unwrap_or(10.0);
+    let reference_image_url = params
+        .and_then(|p| p.get("reference_image_url"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
 
     let base_url = std::env::var("BLENDER_MCP_URL").unwrap_or_default();
     let api_key = std::env::var("BLENDER_MCP_API_KEY").unwrap_or_default();
@@ -20995,15 +21474,18 @@ async fn execute_blender_generate_scene_type_gemini(args: &HashMap<String, Value
         return "❌ BlenderMCPServer not configured. Set BLENDER_MCP_URL in .env.".to_string();
     }
     let client = crate::blender_mcp_client::BlenderMCPClient::new(base_url, api_key);
-    match client.call_tool_async(
-        "blender_execute_bpy_script",
-        serde_json::json!({
-            "prompt": prompt,
-            "style": style,
-            "duration": duration,
-            "reference_image_url": reference_image_url,
-        }),
-    ).await {
+    match client
+        .call_tool_async(
+            "blender_execute_bpy_script",
+            serde_json::json!({
+                "prompt": prompt,
+                "style": style,
+                "duration": duration,
+                "reference_image_url": reference_image_url,
+            }),
+        )
+        .await
+    {
         Ok(result) => extract_url_from_async_result(&result, "Output"),
         Err(e) => format!("❌ blender_generate_scene_type failed: {}", e),
     }
@@ -21088,17 +21570,39 @@ async fn execute_hyperframes_render_with_state_claude(
     }
 }
 
-async fn execute_manim_execute_script_claude(args: &Value) -> String {    let description = args.get("description").and_then(|v| v.as_str()).unwrap_or("");
+async fn execute_manim_execute_script_claude(args: &Value) -> String {
+    let description = args
+        .get("description")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     if description.is_empty() {
         return "❌ Error: description is required".to_string();
     }
-    let duration = args.get("duration").and_then(|v| v.as_f64()).unwrap_or(10.0);
-    let background = args.get("background").and_then(|v| v.as_str()).unwrap_or("dark");
-    let transparent = args.get("transparent").and_then(|v| v.as_bool()).unwrap_or(false);
+    let duration = args
+        .get("duration")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(10.0);
+    let background = args
+        .get("background")
+        .and_then(|v| v.as_str())
+        .unwrap_or("dark");
+    let transparent = args
+        .get("transparent")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let quality = args.get("quality").and_then(|v| v.as_str()).unwrap_or("m");
-    let include_narration = args.get("include_narration").and_then(|v| v.as_bool()).unwrap_or(false);
-    let narration_text = args.get("narration_text").and_then(|v| v.as_str()).unwrap_or("");
-    let narration_speaker = args.get("narration_speaker").and_then(|v| v.as_str()).unwrap_or("Emma");
+    let include_narration = args
+        .get("include_narration")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let narration_text = args
+        .get("narration_text")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let narration_speaker = args
+        .get("narration_speaker")
+        .and_then(|v| v.as_str())
+        .unwrap_or("Emma");
 
     let base_url = std::env::var("BLENDER_MCP_URL").unwrap_or_default();
     let api_key = std::env::var("BLENDER_MCP_API_KEY").unwrap_or_default();
@@ -21171,17 +21675,38 @@ async fn execute_hyperframes_render_with_state_gemini(
 }
 
 async fn execute_manim_execute_script_gemini(args: &HashMap<String, Value>) -> String {
-    let description = args.get("description").and_then(|v| v.as_str()).unwrap_or("");
+    let description = args
+        .get("description")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     if description.is_empty() {
         return "❌ Error: description is required".to_string();
     }
-    let duration = args.get("duration").and_then(|v| v.as_f64()).unwrap_or(10.0);
-    let background = args.get("background").and_then(|v| v.as_str()).unwrap_or("dark");
-    let transparent = args.get("transparent").and_then(|v| v.as_bool()).unwrap_or(false);
+    let duration = args
+        .get("duration")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(10.0);
+    let background = args
+        .get("background")
+        .and_then(|v| v.as_str())
+        .unwrap_or("dark");
+    let transparent = args
+        .get("transparent")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let quality = args.get("quality").and_then(|v| v.as_str()).unwrap_or("m");
-    let include_narration = args.get("include_narration").and_then(|v| v.as_bool()).unwrap_or(false);
-    let narration_text = args.get("narration_text").and_then(|v| v.as_str()).unwrap_or("");
-    let narration_speaker = args.get("narration_speaker").and_then(|v| v.as_str()).unwrap_or("Emma");
+    let include_narration = args
+        .get("include_narration")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let narration_text = args
+        .get("narration_text")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let narration_speaker = args
+        .get("narration_speaker")
+        .and_then(|v| v.as_str())
+        .unwrap_or("Emma");
 
     let base_url = std::env::var("BLENDER_MCP_URL").unwrap_or_default();
     let api_key = std::env::var("BLENDER_MCP_API_KEY").unwrap_or_default();

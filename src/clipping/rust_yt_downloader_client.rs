@@ -17,7 +17,10 @@ impl RustYtDownloaderClient {
         r2_client: Option<&crate::storage::StorageRouter>,
         r2_key: Option<&str>,
     ) -> Result<VideoDownloadResult, String> {
-        tracing::info!("📥 Downloading video using rust-yt-downloader: {}", video_url);
+        tracing::info!(
+            "📥 Downloading video using rust-yt-downloader: {}",
+            video_url
+        );
 
         use rust_yt_downloader::YtDlpClient;
         if !YtDlpClient::is_available() {
@@ -29,7 +32,8 @@ impl RustYtDownloaderClient {
             let url = video_url.to_string();
             let client = YtDlpClient::new();
             move || client.get_video_info(&url)
-        }).await
+        })
+        .await
         .map_err(|e| format!("Task join error: {}", e))?
         .map_err(|e| format!("Failed to fetch video info: {}", e))?;
 
@@ -37,8 +41,14 @@ impl RustYtDownloaderClient {
         let duration_secs = Some(video_info.duration as f64);
 
         use tokio::time::{timeout, Duration};
-        let temp_path = format!("/tmp/rustytdownloader_{}_{}.mp4", std::process::id(), std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0));
+        let temp_path = format!(
+            "/tmp/rustytdownloader_{}_{}.mp4",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        );
 
         tracing::info!("⬇️ Starting download with 1-hour timeout");
         let download_future = tokio::task::spawn_blocking({
@@ -48,13 +58,16 @@ impl RustYtDownloaderClient {
             move || client.download(&url, &output, None)
         });
 
-        timeout(Duration::from_secs(3600), download_future).await
+        timeout(Duration::from_secs(3600), download_future)
+            .await
             .map_err(|_| "Download timed out after 1 hour".to_string())?
             .map_err(|e| format!("Task join error: {}", e))?
             .map_err(|e| format!("Failed to download video: {}", e))?;
 
         if let (Some(client), Some(key)) = (r2_client, r2_key) {
-            let r2_url = client.upload_file(&temp_path, key).await
+            let r2_url = client
+                .upload_file(&temp_path, key)
+                .await
                 .map_err(|e| format!("R2 upload failed: {e}"))?;
             let _ = fs::remove_file(&temp_path).await;
             tracing::info!("✅ Video uploaded to R2: {r2_url}");
@@ -68,10 +81,12 @@ impl RustYtDownloaderClient {
             })
         } else {
             if let Some(parent) = Path::new(output_path).parent() {
-                fs::create_dir_all(parent).await
+                fs::create_dir_all(parent)
+                    .await
                     .map_err(|e| format!("Failed to create output directory: {}", e))?;
             }
-            fs::rename(&temp_path, output_path).await
+            fs::rename(&temp_path, output_path)
+                .await
                 .map_err(|e| format!("Failed to save final file: {}", e))?;
             Self::validate_download(output_path).await?;
             tracing::info!("✅ Video saved: {}", output_path);

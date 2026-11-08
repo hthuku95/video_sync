@@ -34,7 +34,9 @@ pub fn output_routes() -> Router {
         .route("/api/outputs/download/:file_id", get(download_video_output))
         .route("/api/outputs/stream/:file_id", get(stream_video_output))
         .route("/api/outputs/info/:file_id", get(get_output_info))
-        .layer(axum::middleware::from_fn(crate::middleware::auth::auth_middleware))
+        .layer(axum::middleware::from_fn(
+            crate::middleware::auth::auth_middleware,
+        ))
 }
 
 /// List all video outputs for a session
@@ -273,8 +275,13 @@ async fn get_output_info(
                     size_bytes: artifact.bytes.unwrap_or(0) as u64,
                     download_url: url.clone(),
                     stream_url: url.clone(),
-                    created_at: artifact.created_at.format("%Y-%m-%d %H:%M:%S UTC").to_string(),
-                    content_type: artifact.mime_type.unwrap_or_else(|| "application/octet-stream".to_string()),
+                    created_at: artifact
+                        .created_at
+                        .format("%Y-%m-%d %H:%M:%S UTC")
+                        .to_string(),
+                    content_type: artifact
+                        .mime_type
+                        .unwrap_or_else(|| "application/octet-stream".to_string()),
                 }));
             }
         }

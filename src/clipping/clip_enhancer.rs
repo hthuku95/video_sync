@@ -117,8 +117,7 @@ impl ClipEnhancer {
             &metadata,
             &frame_paths,
         );
-        let plan_result =
-            tokio::time::timeout(Duration::from_secs(90), plan_future).await;
+        let plan_result = tokio::time::timeout(Duration::from_secs(90), plan_future).await;
 
         // Always clean up frame files regardless of success/failure/timeout
         cleanup_temp_files(&frame_paths);
@@ -330,10 +329,7 @@ async fn ask_multimodal_for_plan(
             }
         }
         Err(e) => {
-            tracing::warn!(
-                "Gemini enhancement failed ({}), keeping original",
-                e
-            );
+            tracing::warn!("Gemini enhancement failed ({}), keeping original", e);
             Ok(ClipEnhancementPlan {
                 needs_enhancement: false,
                 tools: vec![],

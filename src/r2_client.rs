@@ -227,15 +227,22 @@ impl R2Client {
     /// Upload bytes directly to R2 without writing to local disk.
     /// Uses presigned PUT URL + reqwest for files ≤ 50 MB.
     /// For larger files, writes to a temp file and uses multipart upload.
-    pub async fn upload_bytes(&self, key: &str, data: &[u8], content_type: &str) -> Result<String, String> {
+    pub async fn upload_bytes(
+        &self,
+        key: &str,
+        data: &[u8],
+        content_type: &str,
+    ) -> Result<String, String> {
         if data.len() as u64 > MULTIPART_THRESHOLD {
             // Large file: write to temp, use multipart, clean up
             let tmp = format!("/tmp/opencode/r2_bytes_{}", key.replace('/', "_"));
             if let Some(parent) = std::path::Path::new(&tmp).parent() {
-                tokio::fs::create_dir_all(parent).await
+                tokio::fs::create_dir_all(parent)
+                    .await
                     .map_err(|e| format!("Cannot create temp dir: {e}"))?;
             }
-            tokio::fs::write(&tmp, data).await
+            tokio::fs::write(&tmp, data)
+                .await
                 .map_err(|e| format!("Cannot write temp file: {e}"))?;
             self.upload_multipart(&tmp, key).await?;
             let _ = tokio::fs::remove_file(&tmp).await;
@@ -504,13 +511,19 @@ impl R2Client {
         if let Some(range_header) = range {
             req = req.range(range_header);
         }
-        let resp = req.send().await.map_err(|e| format!("R2 stream failed for {key}: {e}"))?;
+        let resp = req
+            .send()
+            .await
+            .map_err(|e| format!("R2 stream failed for {key}: {e}"))?;
 
         let status: u16 = if range.is_some() { 206 } else { 200 };
 
         let mut headers = vec![
             ("accept-ranges".to_string(), "bytes".to_string()),
-            ("content-type".to_string(), resp.content_type.unwrap_or_else(|| "video/mp4".to_string())),
+            (
+                "content-type".to_string(),
+                resp.content_type.unwrap_or_else(|| "video/mp4".to_string()),
+            ),
         ];
         if let Some(len) = resp.content_length {
             headers.push(("content-length".to_string(), len.to_string()));
@@ -658,7 +671,11 @@ impl R2Client {
         prefix: Option<&str>,
         max_keys: i32,
     ) -> Result<Vec<String>, String> {
-        let mut req = self.client.list_objects_v2().bucket(&self.bucket).max_keys(max_keys);
+        let mut req = self
+            .client
+            .list_objects_v2()
+            .bucket(&self.bucket)
+            .max_keys(max_keys);
         if let Some(prefix) = prefix {
             req = req.prefix(prefix);
         }

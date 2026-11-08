@@ -10,13 +10,11 @@ use axum::{
 };
 
 async fn is_whitelisted(db_pool: &sqlx::PgPool, email: &str) -> bool {
-    sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS(SELECT 1 FROM whitelist_emails WHERE email = $1)",
-    )
-    .bind(email)
-    .fetch_one(db_pool)
-    .await
-    .unwrap_or(false)
+    sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM whitelist_emails WHERE email = $1)")
+        .bind(email)
+        .fetch_one(db_pool)
+        .await
+        .unwrap_or(false)
 }
 
 pub async fn admin_middleware(request: Request, next: Next) -> Result<Response, impl IntoResponse> {

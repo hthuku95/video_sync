@@ -31,8 +31,8 @@ pub enum DeepSeekResponse {
 
 impl DeepSeekClient {
     pub fn new(api_key: String) -> Self {
-        let model = std::env::var("DEEPSEEK_MODEL")
-            .unwrap_or_else(|_| DEEPSEEK_DEFAULT_MODEL.to_string());
+        let model =
+            std::env::var("DEEPSEEK_MODEL").unwrap_or_else(|_| DEEPSEEK_DEFAULT_MODEL.to_string());
         Self {
             client: Client::new(),
             api_key,
@@ -90,9 +90,7 @@ impl DeepSeekClient {
 
             // Non-retryable: insufficient balance
             if err_body.contains("Insufficient Balance") || status.as_u16() == 402 {
-                return Err(
-                    format!("DeepSeek: Insufficient Balance - add credits").into(),
-                );
+                return Err(format!("DeepSeek: Insufficient Balance - add credits").into());
             }
 
             if (status.as_u16() == 429 || status.as_u16() == 503) && attempt < max_attempts - 1 {
@@ -162,13 +160,8 @@ impl DeepSeekClient {
         &self,
         messages: &[serde_json::Value],
         tools: &[crate::gemini_client::FunctionDeclaration],
-    ) -> Result<
-        (
-            DeepSeekResponse,
-            crate::usage::UsageInfo,
-        ),
-        Box<dyn std::error::Error + Send + Sync>,
-    > {
+    ) -> Result<(DeepSeekResponse, crate::usage::UsageInfo), Box<dyn std::error::Error + Send + Sync>>
+    {
         let openai_tools = Self::to_openai_tools(tools);
 
         let body = serde_json::json!({
@@ -234,9 +227,7 @@ impl DeepSeekClient {
 
             // Non-retryable: insufficient balance
             if err_body.contains("Insufficient Balance") || status.as_u16() == 402 {
-                return Err(
-                    format!("DeepSeek: Insufficient Balance - add credits").into(),
-                );
+                return Err(format!("DeepSeek: Insufficient Balance - add credits").into());
             }
 
             if (status.as_u16() == 429 || status.as_u16() == 503) && attempt < max_attempts - 1 {

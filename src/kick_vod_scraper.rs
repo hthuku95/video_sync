@@ -63,7 +63,11 @@ pub async fn resolve_url_to_hls(url: &str) -> String {
                 return hls;
             }
             Err(e) => {
-                tracing::warn!("Kick HLS extraction failed for VOD URL: {} — {}. Using original URL.", url, e);
+                tracing::warn!(
+                    "Kick HLS extraction failed for VOD URL: {} — {}. Using original URL.",
+                    url,
+                    e
+                );
                 return url.to_string();
             }
         }
@@ -72,11 +76,7 @@ pub async fn resolve_url_to_hls(url: &str) -> String {
     // Channel URL — FAST PATH (Sep 2026): free Kick v2 API yields the latest
     // VOD's direct HLS URL with no auth, browser, or yt-dlp. Falls through to
     // the legacy BrowserBase/yt-dlp chain only when the API has nothing.
-    let slug = url
-        .trim_end_matches('/')
-        .rsplit('/')
-        .next()
-        .unwrap_or("");
+    let slug = url.trim_end_matches('/').rsplit('/').next().unwrap_or("");
     if let Some(hls) = resolve_kick_vod_direct_api(slug).await {
         tracing::info!("Kick channel {} → latest VOD HLS (direct API)", slug);
         return hls;
@@ -88,7 +88,11 @@ pub async fn resolve_url_to_hls(url: &str) -> String {
             hls_url
         }
         Err(e) => {
-            tracing::warn!("Kick VOD resolution failed for channel '{}': {}. Using original URL.", slug, e);
+            tracing::warn!(
+                "Kick VOD resolution failed for channel '{}': {}. Using original URL.",
+                slug,
+                e
+            );
             url.to_string()
         }
     }
@@ -115,14 +119,24 @@ pub async fn list_vods(slug: &str) -> Result<Vec<String>, String> {
             if !vods.is_empty() {
                 return Ok(vods);
             }
-            tracing::warn!("Kick VOD listing: BrowserBase returned page with no VODs for '{}'", slug);
+            tracing::warn!(
+                "Kick VOD listing: BrowserBase returned page with no VODs for '{}'",
+                slug
+            );
         }
         Ok(None) => {
-            tracing::warn!("Kick VOD listing: BrowserBase not configured for '{}'", slug);
+            tracing::warn!(
+                "Kick VOD listing: BrowserBase not configured for '{}'",
+                slug
+            );
         }
         Err(e) => {
             // 402 (credits exhausted) etc. — logged; fall through to yt-dlp.
-            tracing::warn!("Kick VOD listing via BrowserBase failed for '{}': {} — trying yt-dlp fallback", slug, e);
+            tracing::warn!(
+                "Kick VOD listing via BrowserBase failed for '{}': {} — trying yt-dlp fallback",
+                slug,
+                e
+            );
         }
     }
 
@@ -135,8 +149,10 @@ pub async fn list_vods(slug: &str) -> Result<Vec<String>, String> {
     let out = tokio::process::Command::new("yt-dlp")
         .args([
             "--flat-playlist",
-            "--print", "url",
-            "--playlist-items", "5",
+            "--print",
+            "url",
+            "--playlist-items",
+            "5",
             &url,
         ])
         .output()
@@ -171,7 +187,11 @@ pub async fn list_vods(slug: &str) -> Result<Vec<String>, String> {
         ));
     }
 
-    tracing::info!("Kick VOD listing via yt-dlp fallback: {} VODs for '{}'", vods.len(), slug);
+    tracing::info!(
+        "Kick VOD listing via yt-dlp fallback: {} VODs for '{}'",
+        vods.len(),
+        slug
+    );
     Ok(vods)
 }
 
@@ -246,12 +266,22 @@ pub async fn resolve_latest_stream(slug: &str) -> Result<(String, String), Strin
     for vod in vods.into_iter().take(max_attempts) {
         match extract_stream_url(&vod).await {
             Ok(hls) => {
-                tracing::info!("Kick VOD → HLS (attempt #{}/{}): {}", max_attempts - max_attempts + 1, max_attempts, hls);
+                tracing::info!(
+                    "Kick VOD → HLS (attempt #{}/{}): {}",
+                    max_attempts - max_attempts + 1,
+                    max_attempts,
+                    hls
+                );
                 return Ok((vod, hls));
             }
             Err(e) => {
-                tracing::warn!("Kick VOD failed (attempt #{}/{}): {} — {}. Trying next...",
-                    max_attempts - max_attempts + 1, max_attempts, vod, e);
+                tracing::warn!(
+                    "Kick VOD failed (attempt #{}/{}): {} — {}. Trying next...",
+                    max_attempts - max_attempts + 1,
+                    max_attempts,
+                    vod,
+                    e
+                );
                 last_error = e;
             }
         }

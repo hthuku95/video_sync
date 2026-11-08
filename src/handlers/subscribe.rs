@@ -6,7 +6,9 @@
 //! subscription columns directly instead of a separate subscriptions
 //! table — because regular-user subscription state belongs on the user row.
 
-use crate::handlers::paypal::{self, paypal_credentials, get_paypal_env, paypal_base_url, get_paypal_access_token};
+use crate::handlers::paypal::{
+    self, get_paypal_access_token, get_paypal_env, paypal_base_url, paypal_credentials,
+};
 use crate::middleware::auth::auth_middleware;
 use crate::models::auth::Claims;
 use crate::services::monetization::CREATOR_MONTHLY_USDC_CENTS;
@@ -35,7 +37,10 @@ pub fn subscribe_routes() -> Router {
         .route("/api/subscribe/unlock-spec", get(subscribe_unlock_spec))
         .route("/api/subscribe/unlock", post(subscribe_unlock))
         .route("/api/subscribe/paypal-order", post(subscribe_paypal_order))
-        .route("/api/subscribe/paypal-capture", post(subscribe_paypal_capture))
+        .route(
+            "/api/subscribe/paypal-capture",
+            post(subscribe_paypal_capture),
+        )
         .layer(axum::middleware::from_fn(auth_middleware));
 
     public.merge(protected)
@@ -201,22 +206,36 @@ async fn subscribe_paypal_order(
 ) -> (StatusCode, Json<Value>) {
     let user_id: i32 = match claims.sub.parse() {
         Ok(id) => id,
-        Err(_) => return (StatusCode::UNAUTHORIZED, Json(json!({"success": false, "error": "invalid_user_id"}))),
+        Err(_) => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({"success": false, "error": "invalid_user_id"})),
+            )
+        }
     };
 
     let env = get_paypal_env(&state).await;
     let base_url = paypal_base_url(&env);
     let (client_id, client_secret) = paypal_credentials(&env);
     if client_id.is_empty() || client_secret.is_empty() {
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"success": false, "message": "PayPal not configured"})));
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"success": false, "message": "PayPal not configured"})),
+        );
     }
 
     let token = match get_paypal_access_token(base_url, &client_id, &client_secret).await {
         Ok(t) => t,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"success": false, "message": e}))),
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"success": false, "message": e})),
+            )
+        }
     };
 
-    let studio_url = std::env::var("PUBLIC_BASE_URL").unwrap_or_else(|_| "https://videosync.video".to_string());
+    let studio_url =
+        std::env::var("PUBLIC_BASE_URL").unwrap_or_else(|_| "https://videosync.video".to_string());
     let dollars = CREATOR_MONTHLY_USDC_CENTS as f64 / 100.0;
 
     let resp = match reqwest::Client::new()
@@ -246,16 +265,29 @@ async fn subscribe_paypal_order(
         .await
     {
         Ok(r) => r,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"success": false, "message": format!("PayPal order failed: {}", e)}))),
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"success": false, "message": format!("PayPal order failed: {}", e)})),
+            )
+        }
     };
 
     let body: Value = match resp.json().await {
         Ok(b) => b,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"success": false, "message": format!("PayPal parse failed: {}", e)}))),
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"success": false, "message": format!("PayPal parse failed: {}", e)})),
+            )
+        }
     };
 
     if !body.get("id").and_then(|v| v.as_str()).is_some() {
-        return (StatusCode::BAD_REQUEST, Json(json!({"success": false, "error": body})));
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"success": false, "error": body})),
+        );
     }
 
     (StatusCode::OK, Json(body))
@@ -269,43 +301,76 @@ async fn subscribe_paypal_capture(
 ) -> (StatusCode, Json<Value>) {
     let user_id: i32 = match claims.sub.parse() {
         Ok(id) => id,
-        Err(_) => return (StatusCode::UNAUTHORIZED, Json(json!({"success": false, "error": "invalid_user_id"}))),
+        Err(_) => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({"success": false, "error": "invalid_user_id"})),
+            )
+        }
     };
 
     let env = get_paypal_env(&state).await;
     let base_url = paypal_base_url(&env);
     let (client_id, client_secret) = paypal_credentials(&env);
     if client_id.is_empty() || client_secret.is_empty() {
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"success": false, "message": "PayPal not configured"})));
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"success": false, "message": "PayPal not configured"})),
+        );
     }
 
     let token = match get_paypal_access_token(base_url, &client_id, &client_secret).await {
         Ok(t) => t,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"success": false, "message": e}))),
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"success": false, "message": e})),
+            )
+        }
     };
 
     let resp = match reqwest::Client::new()
-        .post(format!("{}/v2/checkout/orders/{}/capture", base_url, payload.order_id))
+        .post(format!(
+            "{}/v2/checkout/orders/{}/capture",
+            base_url, payload.order_id
+        ))
         .header("Content-Type", "application/json")
         .bearer_auth(&token)
         .send()
         .await
     {
         Ok(r) => r,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"success": false, "message": format!("PayPal capture failed: {}", e)}))),
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"success": false, "message": format!("PayPal capture failed: {}", e)})),
+            )
+        }
     };
 
     let body: Value = match resp.json().await {
         Ok(b) => b,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"success": false, "message": format!("Capture parse failed: {}", e)}))),
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"success": false, "message": format!("Capture parse failed: {}", e)})),
+            )
+        }
     };
 
-    let capture_status = body.get("status").and_then(|s| s.as_str()).unwrap_or("UNKNOWN");
+    let capture_status = body
+        .get("status")
+        .and_then(|s| s.as_str())
+        .unwrap_or("UNKNOWN");
     let is_completed = capture_status == "COMPLETED";
 
     if is_completed {
-        let payer_email = body.pointer("/payer/email_address").and_then(|v| v.as_str());
-        let capture_id = body.pointer("/purchase_units/0/payments/captures/0/id").and_then(|v| v.as_str());
+        let payer_email = body
+            .pointer("/payer/email_address")
+            .and_then(|v| v.as_str());
+        let capture_id = body
+            .pointer("/purchase_units/0/payments/captures/0/id")
+            .and_then(|v| v.as_str());
 
         // Flip the user to active
         let _ = sqlx::query(
@@ -341,10 +406,13 @@ async fn subscribe_paypal_capture(
         });
     }
 
-    (StatusCode::OK, Json(json!({
-        "success": is_completed,
-        "status": capture_status,
-    })))
+    (
+        StatusCode::OK,
+        Json(json!({
+            "success": is_completed,
+            "status": capture_status,
+        })),
+    )
 }
 
 #[derive(Debug, Deserialize)]

@@ -12,7 +12,8 @@
 use base64::prelude::*;
 use reqwest::Client;
 
-pub const OLLAMA_DEFAULT_URL: &str = "http://ollama-gpu-nlb-1b156c7109954cab.elb.us-east-1.amazonaws.com:11434";
+pub const OLLAMA_DEFAULT_URL: &str =
+    "http://ollama-gpu-nlb-1b156c7109954cab.elb.us-east-1.amazonaws.com:11434";
 const OLLAMA_DEFAULT_MODEL: &str = "gemma4:12b";
 
 /// Context window size for Ollama/Gemma4.
@@ -134,7 +135,9 @@ impl OllamaClient {
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         let resp = self.post_chat(&body).await?;
 
-        let json: serde_json::Value = resp.json().await
+        let json: serde_json::Value = resp
+            .json()
+            .await
             .map_err(|e| format!("Ollama native chat parse error: {}", e))?;
 
         json["message"]["content"]
@@ -144,10 +147,10 @@ impl OllamaClient {
     }
 
     pub fn new() -> Self {
-        let base_url = std::env::var("OLLAMA_BASE_URL")
-            .unwrap_or_else(|_| OLLAMA_DEFAULT_URL.to_string());
-        let model = std::env::var("OLLAMA_MODEL")
-            .unwrap_or_else(|_| OLLAMA_DEFAULT_MODEL.to_string());
+        let base_url =
+            std::env::var("OLLAMA_BASE_URL").unwrap_or_else(|_| OLLAMA_DEFAULT_URL.to_string());
+        let model =
+            std::env::var("OLLAMA_MODEL").unwrap_or_else(|_| OLLAMA_DEFAULT_MODEL.to_string());
         let fallback_base_urls = parse_fallback_urls(&base_url);
         Self {
             client: Client::builder()
@@ -163,8 +166,8 @@ impl OllamaClient {
     }
 
     pub fn new_with_model(model: &str) -> Self {
-        let base_url = std::env::var("OLLAMA_BASE_URL")
-            .unwrap_or_else(|_| OLLAMA_DEFAULT_URL.to_string());
+        let base_url =
+            std::env::var("OLLAMA_BASE_URL").unwrap_or_else(|_| OLLAMA_DEFAULT_URL.to_string());
         let fallback_base_urls = parse_fallback_urls(&base_url);
         Self {
             client: Client::builder()
@@ -183,7 +186,11 @@ impl OllamaClient {
     /// This forces the model to load into memory so subsequent calls are fast.
     /// Should be called once at server startup. Non-fatal on failure.
     pub async fn warmup(&self) {
-        tracing::info!("Ollama warmup: loading model '{}' from {}...", self.model, self.base_url);
+        tracing::info!(
+            "Ollama warmup: loading model '{}' from {}...",
+            self.model,
+            self.base_url
+        );
         let body = serde_json::json!({
             "model": self.model,
             "messages": [{"role": "user", "content": "Hello — respond with exactly 'OK'."}],
@@ -191,11 +198,7 @@ impl OllamaClient {
             "options": {"num_predict": 10, "temperature": 0.0, "num_ctx": MODEL_NUM_CTX},
             "stream": false,
         });
-        match tokio::time::timeout(
-            std::time::Duration::from_secs(180),
-            self.post_chat(&body),
-        )
-        .await
+        match tokio::time::timeout(std::time::Duration::from_secs(180), self.post_chat(&body)).await
         {
             Ok(Ok(resp)) => {
                 let status = resp.status();
@@ -203,7 +206,11 @@ impl OllamaClient {
                     tracing::info!("Ollama warmup complete — model '{}' is loaded", self.model);
                 } else {
                     let err_body = resp.text().await.unwrap_or_default();
-                    tracing::warn!("Ollama warmup returned {} (non-fatal): {}", status, err_body);
+                    tracing::warn!(
+                        "Ollama warmup returned {} (non-fatal): {}",
+                        status,
+                        err_body
+                    );
                 }
             }
             Ok(Err(e)) => {
@@ -338,13 +345,8 @@ impl OllamaClient {
         &self,
         messages: &[serde_json::Value],
         tools: &[crate::gemini_client::FunctionDeclaration],
-    ) -> Result<
-        (
-            OllamaResponse,
-            crate::usage::UsageInfo,
-        ),
-        Box<dyn std::error::Error + Send + Sync>,
-    > {
+    ) -> Result<(OllamaResponse, crate::usage::UsageInfo), Box<dyn std::error::Error + Send + Sync>>
+    {
         let openai_tools = Self::to_openai_tools(tools);
 
         let body = serde_json::json!({
@@ -375,7 +377,11 @@ impl OllamaClient {
                         let id = tc["id"].as_str()?.to_string();
                         let name = tc["function"]["name"].as_str()?.to_string();
                         let arguments = tc["function"]["arguments"].clone();
-                        Some(OllamaToolCall { id, name, arguments })
+                        Some(OllamaToolCall {
+                            id,
+                            name,
+                            arguments,
+                        })
                     })
                     .collect();
                 if !calls.is_empty() {
@@ -384,10 +390,7 @@ impl OllamaClient {
             }
         }
 
-        let text = msg["content"]
-            .as_str()
-            .unwrap_or("")
-            .to_string();
+        let text = msg["content"].as_str().unwrap_or("").to_string();
         Ok((OllamaResponse::Text(text), usage))
     }
 
@@ -509,7 +512,9 @@ Provide ONLY the JSON object, no markdown, no code blocks, no other text."#,
             .await
             .map_err(|e| format!("Ollama video analysis request failed: {}", e))?;
 
-        let json: serde_json::Value = resp.json().await
+        let json: serde_json::Value = resp
+            .json()
+            .await
             .map_err(|e| format!("Ollama video analysis parse error: {}", e))?;
 
         let raw = json["message"]["content"]
@@ -576,12 +581,7 @@ Provide ONLY the JSON object, no markdown, no code blocks, no other text."#,
         apify_client
             .download_video(video_url, &dl_path, None, None)
             .await
-            .map_err(|e| {
-                format!(
-                    "Ollama: failed to download video for analysis: {}",
-                    e
-                )
-            })?;
+            .map_err(|e| format!("Ollama: failed to download video for analysis: {}", e))?;
 
         // Validate download
         if !std::path::Path::new(&dl_path).exists() {

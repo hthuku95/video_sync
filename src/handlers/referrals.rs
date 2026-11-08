@@ -1,9 +1,9 @@
-use std::sync::Arc;
-use axum::{Extension, Json};
 use axum::routing::{get, post};
 use axum::Router;
+use axum::{Extension, Json};
 use serde::Deserialize;
 use sqlx::Row;
+use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::middleware::auth::auth_middleware;
@@ -12,7 +12,10 @@ use crate::AppState;
 
 pub fn referral_routes() -> Router {
     Router::new()
-        .route("/api/referrals/my-code", get(api_get_my_referral_code).post(api_create_my_referral_code))
+        .route(
+            "/api/referrals/my-code",
+            get(api_get_my_referral_code).post(api_create_my_referral_code),
+        )
         .route("/api/referrals/my-codes", get(api_list_my_referral_codes))
         .route("/api/referrals/my-commissions", get(api_get_my_commissions))
         .layer(axum::middleware::from_fn(auth_middleware))
@@ -65,11 +68,15 @@ async fn api_list_my_referral_codes(
     Extension(claims): Extension<Claims>,
 ) -> Json<serde_json::Value> {
     if !claims.is_superuser && !claims.is_staff && !check_whitelisted(&state, &claims.email).await {
-        return Json(serde_json::json!({"success": false, "error": "Access restricted. Email not whitelisted."}));
+        return Json(
+            serde_json::json!({"success": false, "error": "Access restricted. Email not whitelisted."}),
+        );
     }
     let user_id: i32 = match claims.sub.parse() {
         Ok(id) => id,
-        Err(_) => return Json(serde_json::json!({"success": false, "error": "Invalid user ID in token"})),
+        Err(_) => {
+            return Json(serde_json::json!({"success": false, "error": "Invalid user ID in token"}))
+        }
     };
     let mut out = Vec::new();
     for (app, name) in REFERRAL_APPS {
@@ -120,12 +127,16 @@ async fn api_get_my_referral_code(
     Extension(claims): Extension<Claims>,
 ) -> Json<serde_json::Value> {
     if !claims.is_superuser && !claims.is_staff && !check_whitelisted(&state, &claims.email).await {
-        return Json(serde_json::json!({"success": false, "error": "Access restricted. Email not whitelisted."}));
+        return Json(
+            serde_json::json!({"success": false, "error": "Access restricted. Email not whitelisted."}),
+        );
     }
 
     let user_id: i32 = match claims.sub.parse() {
         Ok(id) => id,
-        Err(_) => return Json(serde_json::json!({"success": false, "error": "Invalid user ID in token"})),
+        Err(_) => {
+            return Json(serde_json::json!({"success": false, "error": "Invalid user ID in token"}))
+        }
     };
 
     let existing = sqlx::query(
@@ -150,10 +161,10 @@ async fn api_get_my_referral_code(
                 }
             }))
         }
-        Ok(None) => {
-            Json(serde_json::json!({"success": true, "code": null}))
+        Ok(None) => Json(serde_json::json!({"success": true, "code": null})),
+        Err(e) => {
+            Json(serde_json::json!({"success": false, "error": format!("Database error: {e}")}))
         }
-        Err(e) => Json(serde_json::json!({"success": false, "error": format!("Database error: {e}")})),
     }
 }
 
@@ -171,12 +182,16 @@ async fn api_create_my_referral_code(
     Json(req): Json<CreateMyReferralCodeRequest>,
 ) -> Json<serde_json::Value> {
     if !claims.is_superuser && !claims.is_staff && !check_whitelisted(&state, &claims.email).await {
-        return Json(serde_json::json!({"success": false, "error": "Access restricted. Email not whitelisted."}));
+        return Json(
+            serde_json::json!({"success": false, "error": "Access restricted. Email not whitelisted."}),
+        );
     }
 
     let user_id: i32 = match claims.sub.parse() {
         Ok(id) => id,
-        Err(_) => return Json(serde_json::json!({"success": false, "error": "Invalid user ID in token"})),
+        Err(_) => {
+            return Json(serde_json::json!({"success": false, "error": "Invalid user ID in token"}))
+        }
     };
 
     let code = req.code.unwrap_or_else(|| {
@@ -214,8 +229,12 @@ async fn api_create_my_referral_code(
                 }
             }))
         }
-        Ok(None) => Json(serde_json::json!({"success": false, "error": "Code already taken or create failed"})),
-        Err(e) => Json(serde_json::json!({"success": false, "error": format!("Failed to create referral code: {e}")})),
+        Ok(None) => Json(
+            serde_json::json!({"success": false, "error": "Code already taken or create failed"}),
+        ),
+        Err(e) => Json(
+            serde_json::json!({"success": false, "error": format!("Failed to create referral code: {e}")}),
+        ),
     }
 }
 
@@ -225,12 +244,16 @@ async fn api_get_my_commissions(
     Extension(claims): Extension<Claims>,
 ) -> Json<serde_json::Value> {
     if !claims.is_superuser && !claims.is_staff && !check_whitelisted(&state, &claims.email).await {
-        return Json(serde_json::json!({"success": false, "error": "Access restricted. Email not whitelisted."}));
+        return Json(
+            serde_json::json!({"success": false, "error": "Access restricted. Email not whitelisted."}),
+        );
     }
 
     let user_id: i32 = match claims.sub.parse() {
         Ok(id) => id,
-        Err(_) => return Json(serde_json::json!({"success": false, "error": "Invalid user ID in token"})),
+        Err(_) => {
+            return Json(serde_json::json!({"success": false, "error": "Invalid user ID in token"}))
+        }
     };
 
     let rows = sqlx::query_as::<_, (Uuid, Uuid, i32, f64, String, Option<chrono::DateTime<chrono::Utc>>, chrono::DateTime<chrono::Utc>)>(
@@ -245,29 +268,42 @@ async fn api_get_my_commissions(
 
     match rows {
         Ok(rows) => {
-            let total_earned: i64 = rows.iter().map(|(_, _, deal, rate, status, _, _)| {
-                if status == "paid" {
-                    (*deal as f64 * rate) as i64
-                } else {
-                    0
-                }
-            }).sum();
+            let total_earned: i64 = rows
+                .iter()
+                .map(|(_, _, deal, rate, status, _, _)| {
+                    if status == "paid" {
+                        (*deal as f64 * rate) as i64
+                    } else {
+                        0
+                    }
+                })
+                .sum();
 
             let commissions: Vec<serde_json::Value> = rows
                 .into_iter()
-                .map(|(id, prospect_id, deal_amount_cents, commission_rate, status, paid_at, created_at)| {
-                    let commission_cents = (deal_amount_cents as f64 * commission_rate) as i64;
-                    serde_json::json!({
-                        "id": id,
-                        "prospect_id": prospect_id,
-                        "deal_amount_cents": deal_amount_cents,
-                        "commission_rate": commission_rate,
-                        "commission_cents": commission_cents,
-                        "status": status,
-                        "paid_at": paid_at,
-                        "created_at": created_at,
-                    })
-                })
+                .map(
+                    |(
+                        id,
+                        prospect_id,
+                        deal_amount_cents,
+                        commission_rate,
+                        status,
+                        paid_at,
+                        created_at,
+                    )| {
+                        let commission_cents = (deal_amount_cents as f64 * commission_rate) as i64;
+                        serde_json::json!({
+                            "id": id,
+                            "prospect_id": prospect_id,
+                            "deal_amount_cents": deal_amount_cents,
+                            "commission_rate": commission_rate,
+                            "commission_cents": commission_cents,
+                            "status": status,
+                            "paid_at": paid_at,
+                            "created_at": created_at,
+                        })
+                    },
+                )
                 .collect();
 
             Json(serde_json::json!({
@@ -276,6 +312,8 @@ async fn api_get_my_commissions(
                 "total_earned_cents": total_earned,
             }))
         }
-        Err(e) => Json(serde_json::json!({"success": false, "error": format!("Failed to list commissions: {e}")})),
+        Err(e) => Json(
+            serde_json::json!({"success": false, "error": format!("Failed to list commissions: {e}")}),
+        ),
     }
 }

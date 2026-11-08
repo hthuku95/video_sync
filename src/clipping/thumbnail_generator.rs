@@ -221,7 +221,10 @@ No explanation, just the number."#,
                     );
                 }
                 Ok(Err(e)) => {
-                    tracing::warn!("Ollama frame selection failed: {}, falling back to Gemini", e);
+                    tracing::warn!(
+                        "Ollama frame selection failed: {}, falling back to Gemini",
+                        e
+                    );
                 }
                 Err(_) => {
                     tracing::warn!("Ollama frame selection timed out, falling back to Gemini");

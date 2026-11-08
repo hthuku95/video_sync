@@ -127,7 +127,9 @@ impl HyperFramesClient {
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
         loop {
             if tokio::time::Instant::now() > deadline {
-                return Err(format!("Lambda render still not done after {timeout_secs}s"));
+                return Err(format!(
+                    "Lambda render still not done after {timeout_secs}s"
+                ));
             }
             tokio::time::sleep(std::time::Duration::from_secs(20)).await;
             let desc = sfn
@@ -188,11 +190,7 @@ impl HyperFramesClient {
     }
 
     /// Submit an HTML composition. Returns the shim job_id.
-    pub async fn submit(
-        &self,
-        html: &str,
-        resolution: Option<&str>,
-    ) -> Result<String, String> {
+    pub async fn submit(&self, html: &str, resolution: Option<&str>) -> Result<String, String> {
         let mut body = serde_json::json!({ "html": html });
         if let Some(r) = resolution {
             if ["portrait", "landscape", "square"].contains(&r) {
@@ -306,7 +304,9 @@ impl HyperFramesClient {
         timeout_secs: u64,
     ) -> Result<String, String> {
         if self.mode == "lambda" {
-            return self.render_lambda(html, resolution, filename, timeout_secs).await;
+            return self
+                .render_lambda(html, resolution, filename, timeout_secs)
+                .await;
         }
         let job_id = self.submit(html, resolution).await?;
         tracing::info!("🎬 HyperFrames job submitted: {job_id}");

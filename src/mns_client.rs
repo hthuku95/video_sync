@@ -50,8 +50,12 @@ impl MnsClient {
     /// Builds a client only when `MNS_ENDPOINT` + `MNS_QUEUE_NAME` are set.
     /// Returns None otherwise so callers can fall back to SQS/no-op.
     pub fn from_env() -> Option<Self> {
-        let endpoint = std::env::var("MNS_ENDPOINT").ok().filter(|s| !s.is_empty())?;
-        let queue_name = std::env::var("MNS_QUEUE_NAME").ok().filter(|s| !s.is_empty())?;
+        let endpoint = std::env::var("MNS_ENDPOINT")
+            .ok()
+            .filter(|s| !s.is_empty())?;
+        let queue_name = std::env::var("MNS_QUEUE_NAME")
+            .ok()
+            .filter(|s| !s.is_empty())?;
         let access_key_id = std::env::var("MNS_ACCESS_KEY_ID")
             .ok()
             .or_else(|| std::env::var("ALIBABA_ACCESS_KEY_ID").ok())
@@ -74,8 +78,14 @@ impl MnsClient {
 
     /// True if both MNS endpoint and queue name are configured.
     pub fn is_configured() -> bool {
-        std::env::var("MNS_ENDPOINT").ok().filter(|s| !s.is_empty()).is_some()
-            && std::env::var("MNS_QUEUE_NAME").ok().filter(|s| !s.is_empty()).is_some()
+        std::env::var("MNS_ENDPOINT")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .is_some()
+            && std::env::var("MNS_QUEUE_NAME")
+                .ok()
+                .filter(|s| !s.is_empty())
+                .is_some()
     }
 
     /// Builds the Date, Content-MD5 and Authorization headers for a request.
@@ -248,7 +258,12 @@ impl MnsClient {
         }
         xml_tag(&text, "ActiveMessages")
             .and_then(|v| v.trim().parse::<i64>().ok())
-            .ok_or_else(|| format!("MNS response missing <ActiveMessages>: {}", text.lines().next().unwrap_or("")))
+            .ok_or_else(|| {
+                format!(
+                    "MNS response missing <ActiveMessages>: {}",
+                    text.lines().next().unwrap_or("")
+                )
+            })
     }
 }
 
@@ -279,11 +294,20 @@ fn parse_messages(xml: &str) -> Vec<MnsMessage> {
         let block = &rest[block_start..block_start + block_end];
         let id = xml_tag(block, "MessageId").unwrap_or_default().to_string();
         let body_b64 = xml_tag(block, "MessageBody").unwrap_or_default();
-        let body = B64.decode(body_b64.trim()).ok().filter(|b| !b.is_empty())
+        let body = B64
+            .decode(body_b64.trim())
+            .ok()
+            .filter(|b| !b.is_empty())
             .and_then(|b| String::from_utf8(b).ok())
             .unwrap_or_default();
-        let receipt_handle = xml_tag(block, "ReceiptHandle").unwrap_or_default().to_string();
-        out.push(MnsMessage { id, body, receipt_handle });
+        let receipt_handle = xml_tag(block, "ReceiptHandle")
+            .unwrap_or_default()
+            .to_string();
+        out.push(MnsMessage {
+            id,
+            body,
+            receipt_handle,
+        });
         rest = &rest[block_start + block_end + "</Message>".len()..];
     }
 }

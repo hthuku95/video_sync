@@ -88,8 +88,7 @@ async fn create_job(
             StatusCode::SERVICE_UNAVAILABLE,
             Json(ErrorResponse {
                 success: false,
-                message: "Manual clipping is currently disabled (service_flags)."
-                    .to_string(),
+                message: "Manual clipping is currently disabled (service_flags).".to_string(),
             }),
         ));
     }

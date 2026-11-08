@@ -512,7 +512,9 @@ impl QdrantClient {
 
         let mut named_vectors = HashMap::new();
         named_vectors.insert(
-            EmbeddingProvider::GeminiEmbedding2.vector_name().to_string(),
+            EmbeddingProvider::GeminiEmbedding2
+                .vector_name()
+                .to_string(),
             embedding,
         );
 
@@ -614,10 +616,7 @@ impl QdrantClient {
             .upsert_points(UpsertPointsBuilder::new(&self.collection_name, vec![point]).wait(true))
             .await?;
 
-        tracing::debug!(
-            "Stored chat memory with Qwen-VL, ID: {}",
-            document.id
-        );
+        tracing::debug!("Stored chat memory with Qwen-VL, ID: {}", document.id);
         Ok(document.id)
     }
 
@@ -1211,7 +1210,10 @@ impl QdrantClient {
     ) -> Result<Option<String>, String> {
         // Tier 1: Gemini Embedding 2 (1536d, multimodal)
         if let Some(g) = gemini {
-            match self.build_context_for_query_with_gemini2(query, session_id, g).await {
+            match self
+                .build_context_for_query_with_gemini2(query, session_id, g)
+                .await
+            {
                 Ok(ctx) if !ctx.is_empty() => return Ok(Some(ctx)),
                 Ok(_) => {} // empty context, try next tier
                 Err(e) => tracing::warn!("Gemini Embedding 2 RAG failed: {}", e),
@@ -1220,7 +1222,10 @@ impl QdrantClient {
 
         // Tier 1b: Qwen3-VL (1536d, multimodal, DashScope)
         if let Some(q) = qwen {
-            match self.build_context_for_query_with_qwen(query, session_id, q).await {
+            match self
+                .build_context_for_query_with_qwen(query, session_id, q)
+                .await
+            {
                 Ok(ctx) if !ctx.is_empty() => return Ok(Some(ctx)),
                 Ok(_) => {}
                 Err(e) => tracing::warn!("Qwen-VL RAG failed: {}", e),
@@ -1229,7 +1234,10 @@ impl QdrantClient {
 
         // Tier 2: Voyage AI (1024d, text)
         if let Some(v) = voyage {
-            match self.build_context_for_query_with_voyage(query, session_id, v).await {
+            match self
+                .build_context_for_query_with_voyage(query, session_id, v)
+                .await
+            {
                 Ok(ctx) if !ctx.is_empty() => return Ok(Some(ctx)),
                 Ok(_) => {}
                 Err(e) => tracing::warn!("Voyage RAG failed: {}", e),
@@ -1238,7 +1246,10 @@ impl QdrantClient {
 
         // Tier 3: Gemini text-embedding-004 (768d, text)
         if let Some(g) = gemini {
-            match self.build_context_for_query_with_gemini(query, session_id, g).await {
+            match self
+                .build_context_for_query_with_gemini(query, session_id, g)
+                .await
+            {
                 Ok(ctx) if !ctx.is_empty() => return Ok(Some(ctx)),
                 Ok(_) => {}
                 Err(e) => tracing::warn!("Gemini text-embedding-004 RAG failed: {}", e),
@@ -1269,8 +1280,14 @@ impl QdrantClient {
         if let Some(g) = gemini {
             match self
                 .store_chat_memory_with_gemini2(
-                    session_id, user_id, user_message, agent_response,
-                    files_referenced.clone(), context.clone(), g, feature,
+                    session_id,
+                    user_id,
+                    user_message,
+                    agent_response,
+                    files_referenced.clone(),
+                    context.clone(),
+                    g,
+                    feature,
                 )
                 .await
             {
@@ -1286,8 +1303,14 @@ impl QdrantClient {
         if let Some(q) = qwen {
             match self
                 .store_chat_memory_with_qwen(
-                    session_id, user_id, user_message, agent_response,
-                    files_referenced.clone(), context.clone(), q, feature,
+                    session_id,
+                    user_id,
+                    user_message,
+                    agent_response,
+                    files_referenced.clone(),
+                    context.clone(),
+                    q,
+                    feature,
                 )
                 .await
             {
@@ -1303,8 +1326,14 @@ impl QdrantClient {
         if let Some(v) = voyage {
             match self
                 .store_chat_memory_with_voyage(
-                    session_id, user_id, user_message, agent_response,
-                    files_referenced.clone(), context.clone(), v, feature,
+                    session_id,
+                    user_id,
+                    user_message,
+                    agent_response,
+                    files_referenced.clone(),
+                    context.clone(),
+                    v,
+                    feature,
                 )
                 .await
             {
@@ -1320,8 +1349,14 @@ impl QdrantClient {
         if let Some(g) = gemini {
             if let Err(e) = self
                 .store_chat_memory_with_gemini(
-                    session_id, user_id, user_message, agent_response,
-                    files_referenced, context, g, feature,
+                    session_id,
+                    user_id,
+                    user_message,
+                    agent_response,
+                    files_referenced,
+                    context,
+                    g,
+                    feature,
                 )
                 .await
             {
@@ -1919,7 +1954,9 @@ impl QdrantClient {
 
         let mut named_vectors = HashMap::new();
         named_vectors.insert(
-            EmbeddingProvider::GeminiEmbedding2.vector_name().to_string(),
+            EmbeddingProvider::GeminiEmbedding2
+                .vector_name()
+                .to_string(),
             embedding,
         );
 

@@ -2,7 +2,7 @@ use crate::handlers::auth::verify_jwt_token;
 use crate::models::auth::{Claims, ErrorResponse};
 use axum::{
     extract::Request,
-    http::{HeaderMap, StatusCode, header},
+    http::{header, HeaderMap, StatusCode},
     middleware::Next,
     response::{Html, IntoResponse, Json, Response},
 };
@@ -10,7 +10,10 @@ use axum::{
 /// Extracts JWT claims from a request without requiring authentication.
 /// Returns (Option<Claims>, Option<Response>) — if the response is Some,
 /// the caller should return it immediately (error case).
-fn extract_jwt_claims(headers: &HeaderMap, uri: &axum::http::Uri) -> (Option<Claims>, Option<Response>) {
+fn extract_jwt_claims(
+    headers: &HeaderMap,
+    uri: &axum::http::Uri,
+) -> (Option<Claims>, Option<Response>) {
     let token = if let Some(auth_header) = headers.get("Authorization") {
         let auth_str = match auth_header.to_str() {
             Ok(str) => str,
@@ -21,7 +24,8 @@ fn extract_jwt_claims(headers: &HeaderMap, uri: &axum::http::Uri) -> (Option<Cla
         } else {
             return (None, Some(unauthenticated(headers)));
         }
-    } else if let Some(token) = headers.get("Cookie")
+    } else if let Some(token) = headers
+        .get("Cookie")
         .and_then(|c| c.to_str().ok())
         .and_then(|c| {
             c.split(';').find_map(|pair| {
@@ -104,12 +108,7 @@ fn is_browser_request(headers: &HeaderMap) -> bool {
 
 fn unauthenticated(headers: &HeaderMap) -> Response {
     if is_browser_request(headers) {
-        (
-            StatusCode::FOUND,
-            [(header::LOCATION, "/login")],
-            Html(""),
-        )
-            .into_response()
+        (StatusCode::FOUND, [(header::LOCATION, "/login")], Html("")).into_response()
     } else {
         (
             StatusCode::UNAUTHORIZED,
