@@ -99,6 +99,54 @@ pub async fn campaigns_enabled(pool: &sqlx::PgPool) -> bool {
 pub const CAMPAIGNS_OFF_MESSAGE: &str =
     "Monthly campaigns are coming soon. In the meantime, one-time bundles (10 videos for $50 or 30 for $100) are available.";
 
+/// OFF-state service pitch block for DM/email composers (education gets its
+/// exact bundle pricing; landing_page its own; other services get a neutral
+/// one-time description — no invented prices, no campaign/recurrence wording).
+/// The constraint paragraph is included so the LLM see it right where the
+/// service info lives.
+pub fn campaigns_off_service_block(service: Option<&str>, is_studio: bool) -> String {
+    const GENERAL: &str =
+        "OFFER (one-time only): custom animated videos as described — one-time bundles, no recurring plan (10 videos for $50 or 30 for $100 where applicable).";
+    if is_studio {
+        return "OFFER (studio / done-for-you): we produce and deliver 10-30 fully finished videos for $100-$200 — you do nothing; includes a 15-min strategy call.".to_string();
+    }
+    let pitch = match service.unwrap_or("") {
+        "education" => "OFFER (lead with this): one-time bundle — 10 animated lesson videos for $50 or 30 for $100 (math, science, coding, language, history, finance with equations, diagrams, motion graphics, VFX, 3D depth).",
+        "landing_page" => "OFFER (lead with this): one-time bundle — 10 videos for $50 or 30 for $100, generated from their website URL (any type: how-to, marketing, product demo, explainer, testimonial, brand story).",
+        "manim_explainer" | "whiteboard_animation" | "kinetic_typography" | "animated_infographic" | "algorithm_viz" | "investor_pitch" | "year_in_review" | "isometric_explainer" => GENERAL,
+        _ => GENERAL,
+    };
+    format!("{pitch}\nHARD CONSTRAINT (campaigns temporarily OFF): the message must NOT contain the words \"campaign\", \"subscription\", or any mention of recurring/monthly/daily posting or auto-posting. Everything offered is one-time: they pay once, receive their videos, done. Violating this constraint is a failed response.")
+}
+
+/// Post-LLM guard used by both composers: while the switch is OFF, drop any
+/// paragraph that leaks recurring/subscription language. (Guarantee, not
+/// trust — models have been observed echoing stored campaign wording.)
+pub fn scrub_campaign_language(text: &str, campaigns_on: bool) -> String {
+    if campaigns_on {
+        return text.to_string();
+    }
+    let forbidden = [
+        "campaign",
+        "subscription",
+        "monthly",
+        "posted daily",
+        "auto-posting",
+    ];
+    text.split("\n")
+        .map(|paragraph| {
+            let lower = paragraph.to_lowercase();
+            if forbidden.iter().any(|f| lower.contains(f)) && !lower.contains("coming soon") {
+                ""
+            } else {
+                paragraph
+            }
+        })
+        .filter(|p| !p.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// Full enabled-service menu (managed services only, no system groups).
 pub async fn enabled_services(pool: &sqlx::PgPool) -> Vec<String> {
     let mut out = Vec::new();

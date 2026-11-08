@@ -4218,33 +4218,6 @@ Legacy DM tone: {existing_dm}"#,
         },
     );
 
-    // Campaigns-off contract enforcement: field-level guard so a defiant model
-    // (observed live — it echoed stored campaign wording via tone refs) can
-    // never leak recurring/subscription language while the switch is OFF.
-    let scrub_campaign_language = |text: &str| -> String {
-        if campaigns_on {
-            return text.to_string();
-        }
-        let forbidden = [
-            "campaign",
-            "subscription",
-            "monthly",
-            "posted daily",
-            "auto-posting",
-        ];
-        text.split("\n")
-            .map(|paragraph| {
-                let lower = paragraph.to_lowercase();
-                if forbidden.iter().any(|f| lower.contains(f)) && !lower.contains("coming soon") {
-                    ""
-                } else {
-                    paragraph
-                }
-            })
-            .filter(|p| !p.is_empty())
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
     let (x_dm, email_script) = match generate_text_best_effort(
         state.qwen_client.as_ref(),
         state.nvidia_nim_client.as_ref(),
@@ -4292,10 +4265,10 @@ Legacy DM tone: {existing_dm}"#,
         }
     };
 
-    // Field-level guarantee while the switch is OFF (see scrub_campaign_language).
+    // Field-level guarantee while the switch is OFF (shared helper in service_flags).
     let (x_dm, email_script) = (
-        scrub_campaign_language(&x_dm),
-        scrub_campaign_language(&email_script),
+        crate::services::service_flags::scrub_campaign_language(&x_dm, campaigns_on),
+        crate::services::service_flags::scrub_campaign_language(&email_script, campaigns_on),
     );
 
     let _ = sqlx::query(
@@ -7570,6 +7543,21 @@ async fn instagram_generate_dm(
     };
 
     let service_block = service_offer_prompt(service.as_deref());
+    // Campaigns switch (owner directive Nov 8 2026): when OFF the IG-lead DM
+    // pitches ONLY the one-time bundle (no campaign/recurrence wording).
+    // Studio keeps its DFY pitch in either state.
+    let campaigns_on = crate::services::service_flags::campaigns_enabled(&state.db_pool).await;
+    let is_studio = contact_enrichment
+        .as_ref()
+        .and_then(|ce| ce.get("assigned_app"))
+        .and_then(|v| v.as_str())
+        .map(|s| s == "studio")
+        .unwrap_or(false);
+    let service_block = if campaigns_on {
+        service_block
+    } else {
+        crate::services::service_flags::campaigns_off_service_block(service.as_deref(), is_studio)
+    };
 
     // Referral attribution (whitelisted non-admin senders only).
     let acting_is_admin = claims.is_superuser || claims.is_staff;
@@ -7673,7 +7661,7 @@ Output ONLY the DM body. No quotes, no labels, no preamble."#,
         referral_block = referral_block,
     );
 
-    let dm_text = match generate_text_best_effort(
+    let dm_text_raw = match generate_text_best_effort(
         state.qwen_client.as_ref(),
         state.nvidia_nim_client.as_ref(),
         state.gemma_client.as_ref(),
@@ -7688,6 +7676,10 @@ Output ONLY the DM body. No quotes, no labels, no preamble."#,
             return Json(json!({"success": false, "error": format!("AI generation failed: {}", e)}))
         }
     };
+
+    // Guarantee while the switch is OFF (shared helper in service_flags).
+    let dm_text =
+        crate::services::service_flags::scrub_campaign_language(&dm_text_raw, campaigns_on);
 
     // Save the DM script to the DB
     let _ = sqlx::query(
