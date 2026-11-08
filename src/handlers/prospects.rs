@@ -3987,9 +3987,13 @@ async fn generate_outreach_message(
     // monthly-campaign / subscription wording that the LLM would echo as
     // tone references (observed live). When OFF, the tone inputs are
     // campaign-neutral by construction.
+    let campaigns_on = crate::services::service_flags::campaigns_enabled(&state.db_pool).await;
+
     let (existing_x_dm, existing_email) = if !campaigns_on {
-        ("Professional, concise, friendly; one-time product bundle offer only.".to_string(),
-         "Professional, concise, friendly; one-time product bundle offer only.".to_string())
+        (
+            "Professional, concise, friendly; one-time product bundle offer only.".to_string(),
+            "Professional, concise, friendly; one-time product bundle offer only.".to_string(),
+        )
     } else {
         (existing_x_dm, existing_email)
     };
@@ -4035,7 +4039,6 @@ async fn generate_outreach_message(
     // bundles ($50-$100 for 10-30 videos) — no monthly-campaign or
     // daily-auto-posting wording. Studio copy is untouched, and when ON
     // everything works exactly as before.
-    let campaigns_on = crate::services::service_flags::campaigns_enabled(&state.db_pool).await;
     let bundle_service = matches!(service.as_str(), "landing_page" | "education");
     let pitch_focus = if !is_studio && !campaigns_on && bundle_service {
         match service.as_str() {
@@ -4222,7 +4225,13 @@ Legacy DM tone: {existing_dm}"#,
         if campaigns_on {
             return text.to_string();
         }
-        let forbidden = ["campaign", "subscription", "monthly", "posted daily", "auto-posting"];
+        let forbidden = [
+            "campaign",
+            "subscription",
+            "monthly",
+            "posted daily",
+            "auto-posting",
+        ];
         text.split("\n")
             .map(|paragraph| {
                 let lower = paragraph.to_lowercase();
