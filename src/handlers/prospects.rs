@@ -7495,6 +7495,30 @@ async fn instagram_generate_dm(
     let service: Option<String> = row
         .get::<Option<String>, _>("service_type")
         .map(|s| normalize_revenue_service(&s).to_string());
+
+    // Disabled-service gate (owner directives Sep 2026 + Nov 8): generating a
+    // DM for a parked service wastes LLM tokens for a lead we can't sell to —
+    // and NULL service_type means the lead hasn't been scored against the
+    // enabled menu yet. Both are 503'd; only ON services can be messaged.
+    if let Some(ref st) = service {
+        if !crate::services::service_flags::service_enabled(&state.db_pool, st).await {
+            return Json(json!({
+                "success": false,
+                "code": "service_disabled",
+                "error": format!(
+                    "'{st}' outreach is switched off. Leads are only messaged for the currently enabled services ({}).",
+                    crate::services::service_flags::enabled_services(&state.db_pool).await.join(", ")
+                ),
+            }));
+        }
+    } else {
+        return Json(json!({
+            "success": false,
+            "code": "not_scored",
+            "error": "This lead has not been scored yet — run scoring first so it lands on an enabled service, then generate the DM."
+        }));
+    }
+
     let sample_id: Option<uuid::Uuid> = row.try_get("sample_delivery_id").ok().flatten();
 
     // Build the sample-link block injected into the prompt. If a sample

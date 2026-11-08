@@ -250,9 +250,11 @@ async fn handle_dm(
     }
 
     // Generate an AI reply using our LLM stack.
+    let campaigns_on =
+        crate::services::service_flags::campaigns_enabled(&state.db_pool).await;
     let prompt = format!(
         "{}\n\nIncoming message from user:\n\"\"\"\n{}\n\"\"\"\n\nYour reply:",
-        telegram_system_pitch(),
+        crate::services::monetization::telegram_system_pitch_gated(campaigns_on),
         text
     );
     let reply = match generate_text_best_effort(
