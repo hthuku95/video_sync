@@ -3970,6 +3970,23 @@ async fn generate_outreach_message(
     let service: String = row
         .get::<Option<String>, _>("service_type")
         .unwrap_or_else(|| default_service_for_prospect(&category, &pt, &platform));
+
+    // Disabled-service gate (owner directives Sep 2026 + Nov 8): outreach for
+    // parked services is 503'd before any LLM spend (same rule as the
+    // Instagram-lead composer).
+    if !crate::services::service_flags::service_enabled(&state.db_pool, &service).await {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ErrorResponse {
+                success: false,
+                message: format!(
+                    "'{service}' outreach is switched off. Prospects are only messaged for the currently enabled services ({}).",
+                    crate::services::service_flags::enabled_services(&state.db_pool).await.join(", ")
+                ),
+            }),
+        ));
+    }
+
     let sourced_by: Option<i32> = row.get::<Option<i32>, _>("sourced_by");
     let assigned_app: Option<String> = row
         .get::<Option<serde_json::Value>, _>("contact_enrichment")
