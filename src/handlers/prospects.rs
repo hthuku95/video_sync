@@ -3931,7 +3931,7 @@ async fn generate_outreach_message(
     let row = sqlx::query(
         "SELECT display_name, subscriber_count, avg_viewer_count, content_category,
                 prospect_type, dm_script_creator, service_type, x_dm_script, email_script,
-                instagram_handle, twitter_handle, platform, sourced_by
+                instagram_handle, twitter_handle, platform, sourced_by, contact_enrichment
          FROM prospects WHERE id=$1",
     )
     .bind(id)
