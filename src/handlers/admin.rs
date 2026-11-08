@@ -13098,12 +13098,6 @@ pub async fn api_list_service_flags(
     }
 }
 
-#[derive(Deserialize)]
-pub struct SetServiceFlagRequest {
-    pub service: String,
-    pub enabled: bool,
-}
-
 /// GET /api/admin/campaigns-switch — convenience single-flag reader for the
 /// campaigns ON/OFF switch (owner directive Nov 8 2026). Same state as the
 /// `campaigns` row in GET /api/admin/service-flags.
