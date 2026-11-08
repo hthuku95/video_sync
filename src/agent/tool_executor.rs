@@ -9168,7 +9168,7 @@ async fn execute_generate_narration_with_state(
         let mut last_error = String::new();
         for attempt in 0..3 {
             match client
-                .text_to_speech_base64(line, voice, "mp3", None, Some(metadata.clone()))
+                .text_to_speech_base64(line, &voice, "mp3", None, Some(metadata.clone()))
                 .await
             {
                 Ok(bytes) if bytes.len() >= 1_000 => {
@@ -9379,7 +9379,7 @@ async fn execute_generate_text_to_speech_with_state_claude(
             "provider_order": "elevenlabs_then_vibevoice_then_gemini",
         });
         match vibevoice_client
-            .text_to_speech_base64(text, normalize_vibevoice_speaker(voice), "mp3", None, Some(metadata))
+            .text_to_speech_base64(text, &normalize_vibevoice_speaker(voice), "mp3", None, Some(metadata))
             .await
         {
             Ok(audio_bytes) => match tokio::fs::write(&output_file, &audio_bytes).await {
@@ -9463,7 +9463,7 @@ async fn execute_generate_text_to_speech_with_state_gemini(
             "provider_order": "elevenlabs_then_vibevoice_then_gemini",
         });
         match vibevoice_client
-            .text_to_speech_base64(text, normalize_vibevoice_speaker(voice), "mp3", None, Some(metadata))
+            .text_to_speech_base64(text, &normalize_vibevoice_speaker(voice), "mp3", None, Some(metadata))
             .await
         {
             Ok(audio_bytes) => match tokio::fs::write(&output_file, &audio_bytes).await {
