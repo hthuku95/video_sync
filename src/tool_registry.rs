@@ -381,7 +381,7 @@ impl ToolRegistry {
             "narration_speaker".to_string(),
             gemini_property(
                 "string",
-                "Optional VibeVoice narrator/speaker name or style to use for segment narration.",
+                "Optional VibeVoice narrator/speaker name for segment narration. Presets: Emma (female), Grace (female), Carter (male), Davis (male), Frank (male), Mike (male). One voice per segment; you may alternate two voices across segments for a two-host feel.",
             ),
         );
         properties.insert(

@@ -5103,6 +5103,45 @@ async fn execute_clip_compilation_gemini(
     execute_clip_compilation_value(&Value::Object(object), ctx).await
 }
 
+/// Normalize a speaker/voice name for the VibeVoice CPU/GPU services.
+///
+/// The VibeVoice models ship named voice presets (embedded prompts) — the Rust
+/// agent may pass any TTS voice name (ElevenLabs-style labels, "female",
+/// "narrator", …). Exact preset matches pass through; anything else is mapped
+/// by gender/role heuristics so an unknown name can never silently pick a
+/// random preset on the service side.
+pub fn normalize_vibevoice_speaker(name: &str) -> String {
+    let lowered = name.trim().to_ascii_lowercase();
+    const FEMALE: &[&str] = &[
+        "emma", "grace", // VibeVoice presets (English women)
+        "rachel", "bella", "emily", "domi", "elli", "matilda", "alice", "lisa", // ElevenLabs
+        "woman", "women", "female", "lady", "girl", "mother", "female narrator",
+    ];
+    const MALE: &[&str] = &[
+        "carter", "davis", "frank", "mike", "samuel", // VibeVoice presets (English men)
+        "drew", "clyde", "adam", "paul", "arnold", "callum", "daniel", "ethan",
+        "liam", "thomas", "harry", // ElevenLabs
+        "man", "men", "male", "guy", "father", "male narrator", "news", "reporter",
+        "deep", "crisp", "veteran", "hoarse",
+    ];
+    // Preset names for other languages (explicit requests pass through).
+    const MULTILINGUAL: &[&str] = &[
+        "de", "fr", "it", "jp", "kr", "nl", "pl", "pt", "sp", "spk",
+    ];
+
+    if FEMALE.iter().any(|p| lowered.contains(p)) {
+        return "Emma".to_string();
+    }
+    if MALE.iter().any(|p| lowered.contains(p)) {
+        return "Carter".to_string();
+    }
+    if MULTILINGUAL.iter().any(|p| lowered.contains(p)) {
+        // Pass the request through; the service applies its own fallback order.
+        return name.trim().to_string();
+    }
+    "Emma".to_string()
+}
+
 /// Transcribe a trimmed clip's audio via VibeVoice: returns the timed SRT
 /// path (if speech found) plus a meaningful human title derived from the
 /// spoken words. Falls back to (None, fallback_title) on any failure.
@@ -9095,11 +9134,12 @@ async fn execute_generate_narration_with_state(
         .filter(|s| !s.trim().is_empty())
         .unwrap_or("outputs/narration.mp3");
     let output_file = ensure_outputs_directory(output_raw);
-    let voice = args
+    let voice_raw = args
         .get("voice")
         .and_then(|v| v.as_str())
         .filter(|s| !s.trim().is_empty())
         .unwrap_or("Emma");
+    let voice = crate::agent::tool_executor::normalize_vibevoice_speaker(voice_raw);
     let gap = args
         .get("gap_seconds")
         .and_then(|v| v.as_f64())
@@ -9339,7 +9379,7 @@ async fn execute_generate_text_to_speech_with_state_claude(
             "provider_order": "elevenlabs_then_vibevoice_then_gemini",
         });
         match vibevoice_client
-            .text_to_speech_base64(text, voice, "mp3", None, Some(metadata))
+            .text_to_speech_base64(text, normalize_vibevoice_speaker(voice), "mp3", None, Some(metadata))
             .await
         {
             Ok(audio_bytes) => match tokio::fs::write(&output_file, &audio_bytes).await {
@@ -9423,7 +9463,7 @@ async fn execute_generate_text_to_speech_with_state_gemini(
             "provider_order": "elevenlabs_then_vibevoice_then_gemini",
         });
         match vibevoice_client
-            .text_to_speech_base64(text, voice, "mp3", None, Some(metadata))
+            .text_to_speech_base64(text, normalize_vibevoice_speaker(voice), "mp3", None, Some(metadata))
             .await
         {
             Ok(audio_bytes) => match tokio::fs::write(&output_file, &audio_bytes).await {

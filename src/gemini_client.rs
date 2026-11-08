@@ -1184,7 +1184,7 @@ impl GeminiClient {
                     });
                     props.insert("narration_speaker".to_string(), PropertyDefinition {
                         prop_type: "string".to_string(),
-                        description: "VibeVoice speaker name (default \"Emma\")".to_string(),
+                        description: "VibeVoice speaker name (default \"Emma\"). Available male-female narrator pairs: Emma (female), Grace (female), Carter (male), Davis (male), Frank (male), Mike (male). You may reuse the same narrator across segments or switch between two voices (e.g., Emma and Carter) for a two-host feel — one voice per segment. Non-English: 'de-Spk0', 'fr-Spk1', 'it-Spk0', 'jp-Spk0', 'kr-Spk1', 'nl-Spk0', 'pl-Spk0', 'pt-Spk1', 'sp-Spk1' style names exist in the service.".to_string(),
                         items: None,
                     });
                     props
@@ -2229,7 +2229,7 @@ impl GeminiClient {
                         });
                         props.insert("voice".to_string(), PropertyDefinition {
                             prop_type: "string".to_string(),
-                            description: "Narration voice (default: Emma). Uses the same voice names as generate_text_to_speech.".to_string(),
+                            description: "Narration voice (default: Emma). This narration pipeline uses VibeVoice voice presets — use one of: Emma (female), Grace (female), Carter (male), Davis (male), Frank (male), Mike (male). Keep ONE voice per narration call for consistency; alternate voices across separate scenes/calls for a two-host feel.".to_string(),
                             items: None,
                         });
                         props.insert("gap_seconds".to_string(), PropertyDefinition {
