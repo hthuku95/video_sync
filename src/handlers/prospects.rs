@@ -7212,7 +7212,7 @@ async fn search_product_hunt_prospects(
             let scoring_description = build_scoring_description(&description);
             let (score_f64, reasoning, service, _dm_creator, _dm_clipper, x_dm, email_script) =
                 score_prospect_with_ai(
-                    state,
+                    &state,
                     &name,
                     votes,
                     &scoring_description,
@@ -7263,7 +7263,7 @@ async fn search_product_hunt_prospects(
             .bind("saas_founder")
             .bind(score_f64)
             .bind(&reasoning)
-            .bind(&x_dm_script)
+            .bind(&x_dm)
             .bind(&email_script)
             .bind(&website)
             .bind(&service)
