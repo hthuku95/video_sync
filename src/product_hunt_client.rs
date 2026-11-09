@@ -80,16 +80,17 @@ async fn access_token() -> Result<String, String> {
 
     if let Some(secret) = std::env::var(ENV_API_SECRET)
         .ok()
-        .filter(|v| !v.trim().is_empty()) {
+        .filter(|v| !v.trim().is_empty())
+    {
         let secret = secret.trim().trim_matches('"').to_string();
-        let token = mint_access_token(&client_id, &secret)?;
+        let token = mint_access_token(&client_id, &secret).await?;
         *lock = Some((token.clone(), Instant::now()));
         tracing::info!("product_hunt: minted fresh access token (client_credentials)");
         return Ok(token);
     }
 
     tracing::warn!("product_hunt: {ENV_API_SECRET} not set — trying PRODUCT_HUNT_API_KEY directly (works only for developer tokens)");
-    lock.replace((client_id.clone(), Instant::now()));
+    let _ = lock.replace((client_id.clone(), Instant::now()));
     Ok(client_id)
 }
 
@@ -210,9 +211,10 @@ async fn graphql(body: serde_json::Value) -> Result<String, String> {
 
 fn parse_graphql(text: &str) -> Result<GraphQLResponse, String> {
     serde_json::from_str(text).map_err(|e| {
-        format!("Failed to parse Product Hunt response: {e} (body head: {})", {
-            text.chars().take(240).collect::<String>()
-        })
+        format!(
+            "Failed to parse Product Hunt response: {e} (body head: {})",
+            { text.chars().take(240).collect::<String>() }
+        )
     })
 }
 
