@@ -259,7 +259,7 @@ async fn websocket_handler(
                 axum::Json(serde_json::json!({
                     "success":     false,
                     "error":       "subscription_required",
-                    "message":     "Your free trial has ended. Subscribe for $15/mo USDC to keep the chat running.",
+                    "message":     "Your free trial has ended. Subscribe for $20/mo USDC to keep the chat running.",
                     "upgrade_url": "/subscribe",
                 })),
             ).into_response();

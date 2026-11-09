@@ -939,7 +939,7 @@ pub async fn campaigns_list_page(
 }
 
 /// GET /services + /campaigns — apps directory (owner directive Oct 2026 §65).
-/// Campaign storefront moved out of the main app (now DIY $15/mo chat editing
+/// Campaign storefront moved out of the main app (now DIY $20/mo chat editing
 /// only); each campaign family lives in its own app with one subscription.
 pub async fn apps_directory_page() -> Html<String> {
     Html(r#"<!DOCTYPE html>
@@ -967,7 +967,7 @@ h1{font-size:2rem;margin-bottom:8px}
 <a class="card" href="https://learn.videosync.ink/"><h2>VideoSync Learn</h2><p>Animated explainer lesson campaigns</p><span class="price">$199/mo</span></a>
 <a class="card" href="https://motion.videosync.ink/"><h2>VideoSync Motion</h2><p>All 8 Manim motion-graphics campaigns</p><span class="price">$149/mo</span></a>
 </div>
-<a class="back" href="/">← Back to VideoSync ($15/mo DIY editing)</a>
+<a class="back" href="/">← Back to VideoSync ($20/mo DIY editing)</a>
 </div></body></html>"#.to_string())
 }
 
@@ -1168,7 +1168,7 @@ pub async fn campaigns_new_page(
 <div class="box">
     <h1>Subscription Required</h1>
     <p>Campaigns are part of our managed production service. Subscribe to get access to the campaign dashboard, daily content generation, and auto-publishing to your social accounts.</p>
-    <a class="btn" href="/subscribe">Subscribe — $15/mo</a>
+    <a class="btn" href="/subscribe">Subscribe — $20/mo</a>
     <p style="margin-top:1rem;font-size:0.85rem;">Already subscribed? <a href="/login" style="color:#93c5fd;">Log in</a></p>
 </div>
 <script>{bg_js}</script>
@@ -3240,7 +3240,7 @@ fn build_landing_page_html() -> &'static str {
     <section id="workflow" style="padding:60px 20px;background:#fff">
         <div class="container">
             <h2 style="text-align:center;margin-bottom:12px">One Chat, Full Video Production</h2>
-            <p style="text-align:center;color:#666;margin-bottom:40px;max-width:760px;margin-left:auto;margin-right:auto">The $15/month creator plan is for the core VideoSync workspace: natural-language video editing and generation after a 7-day free trial. Productized client offers live on the Services page.</p>
+            <p style="text-align:center;color:#666;margin-bottom:40px;max-width:760px;margin-left:auto;margin-right:auto">The $20/month creator plan is for the core VideoSync workspace: natural-language video editing and generation after a 7-day free trial. Productized client offers live on the Services page.</p>
 
             <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:20px;max-width:1150px;margin:0 auto">
                 <div style="background:#f8f9fa;border:1px solid #e5e7eb;border-radius:16px;padding:28px 24px">
@@ -3274,7 +3274,7 @@ fn build_landing_page_html() -> &'static str {
     <section id="pricing" style="padding:60px 20px;background:#f8f9fa">
         <div class="container">
             <h2 style="text-align:center;margin-bottom:12px">Start With the Core Creator Plan</h2>
-            <p style="text-align:center;color:#666;margin-bottom:40px;max-width:760px;margin-left:auto;margin-right:auto">The homepage subscription is simple: 7 days free, then $15/month for the AI video editing and generation workspace. Higher-priced client service packages are listed on the Services page.</p>
+            <p style="text-align:center;color:#666;margin-bottom:40px;max-width:760px;margin-left:auto;margin-right:auto">The homepage subscription is simple: 7 days free, then $20/month for the AI video editing and generation workspace. Higher-priced client service packages are listed on the Services page.</p>
 
             <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:20px;max-width:1100px;margin:0 auto">
 
@@ -3327,7 +3327,7 @@ fn build_landing_page_html() -> &'static str {
 
             <div style="text-align:center;margin-top:36px;padding:20px;background:#fff;border-radius:12px;max-width:740px;margin-left:auto;margin-right:auto;box-shadow:0 2px 10px rgba(0,0,0,0.04)">
                 <div style="font-size:13px;font-weight:600;color:#7a4cff;letter-spacing:0.05em;text-transform:uppercase;margin-bottom:6px">No lock-in, no hidden fees</div>
-                <p style="color:#666;font-size:14px;line-height:1.6;margin:0">All sample deliveries are <strong>free</strong> — send them as proofs-of-work in DMs and emails. For recurring content, move clients into <strong>$149+/mo campaigns</strong> or the <strong>$15/mo creator access</strong>.</p>
+                <p style="color:#666;font-size:14px;line-height:1.6;margin:0">All sample deliveries are <strong>free</strong> — send them as proofs-of-work in DMs and emails. For recurring content, move clients into <strong>$149+/mo campaigns</strong> or the <strong>$20/mo creator access</strong>.</p>
             </div>
         </div>
     </section>
@@ -4555,7 +4555,7 @@ fn build_modern_landing_page_html() -> &'static str {
                     <article class="hero-slide">
                         <div>
                             <span class="hero-slide-tag">Tier 1 — AI Workspace</span>
-                            <h3>The $15/month plan covers editing, generation, and posting</h3>
+                            <h3>The $20/month plan covers editing, generation, and posting</h3>
                             <p>Natural-language editing, video generation, thumbnails, voice, stock footage, and animated 3D/2D scenes. Connect your social accounts and post or schedule your videos without leaving VideoSync.</p>
                         </div>
                         <div class="hero-slide-points">
@@ -4611,7 +4611,7 @@ fn build_modern_landing_page_html() -> &'static str {
                     <p>Tier 1 is the full AI workspace: edit and generate videos, connect your social accounts, and post or schedule straight from VideoSync. Tier 2 adds managed campaigns — pick one of 12 services and the agent generates fresh content daily, posting to your connected accounts on schedule.</p>
                     <div class="hero-metrics">
                         <div class="hero-metric">
-                            <strong>$15/mo</strong>
+                            <strong>$20/mo</strong>
                             <span>AI workspace — editing, generation, social posting</span>
                         </div>
                         <div class="hero-metric">
@@ -4629,7 +4629,7 @@ fn build_modern_landing_page_html() -> &'static str {
             <div class="section-intro">
                 <div class="section-kicker">Two Ways To Work With Us</div>
                 <h2>One workspace to create. Twelve services to scale.</h2>
-                <p>The <strong>$15/month workspace</strong> gives you AI editing, video generation, and social posting under your control. The <strong>managed services</strong> add campaigns: the agent generates and posts content daily to your connected accounts, starting at $149/mo.</p>
+                <p>The <strong>$20/month workspace</strong> gives you AI editing, video generation, and social posting under your control. The <strong>managed services</strong> add campaigns: the agent generates and posts content daily to your connected accounts, starting at $149/mo.</p>
             </div>
             <div class="pricing-grid">
                 <article class="pricing-card featured">
@@ -4689,7 +4689,7 @@ fn build_modern_landing_page_html() -> &'static str {
                         </svg>
                     </div>
                     <h3>Cost</h3>
-                    <p>A $15/mo workspace replaces hours of manual editing, and managed campaigns start at $149/mo — a fraction of what agencies charge for the same output.</p>
+                    <p>A $20/mo workspace replaces hours of manual editing, and managed campaigns start at $149/mo — a fraction of what agencies charge for the same output.</p>
                 </article>
                 <article class="feature-card">
                     <div class="feature-icon">
@@ -4807,7 +4807,7 @@ fn build_modern_landing_page_html() -> &'static str {
             <div class="about-grid">
                 <article class="about-card">
                     <h3>Your workspace grows with you</h3>
-                    <p>Start by editing and generating in the $15/mo workspace. When you want content on autopilot, connect your accounts and switch on a managed campaign — no new tools, no migration, same agent.</p>
+                    <p>Start by editing and generating in the $20/mo workspace. When you want content on autopilot, connect your accounts and switch on a managed campaign — no new tools, no migration, same agent.</p>
                     <h3>Campaigns that never miss a day</h3>
                     <p>Managed services generate unique variations daily from your brief or source channel and post them on schedule. Your accounts stay active even when you don't touch them.</p>
                     <h3>Agent-ready architecture</h3>
@@ -5035,7 +5035,7 @@ body {{ font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; colo
 <p>Thumbnails, demo videos, explainers, mockups, voiceovers, and 3D scenes — all produced by our AI agent pipeline. No studio, no crew, no waiting weeks.</p>
 <p class="sub">Produce more content for less. Our automated pipeline means 3 videos cost the same per-unit as 30. Traditional agencies charge 5-10x more for the same work.</p>
 <div class="cta-row" style="margin-top:24px;">
-<a href="/subscribe" class="btn btn-primary">Subscribe — $15/mo</a>
+<a href="/subscribe" class="btn btn-primary">Subscribe — $20/mo</a>
 <a href="/services" class="btn btn-outline">Browse All Services</a>
 </div>
 </div>
@@ -5047,7 +5047,7 @@ body {{ font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; colo
 <div class="grid">
 <a href="/services/saas-launch-pack" class="card" style="text-decoration:none;color:inherit;">
 <h3>SaaS/App Demo Rush</h3>
-<div class="price">$399–$1,200</div>
+<div class="price">$100–$200 per 10-30 videos (bundle)</div>
 <p>Polished product demo videos from your URL. AI agent produces in hours.</p>
 <div class="tags"><span class="tag">Starter</span><span class="tag">Launch</span><span class="tag">Walkthrough</span></div>
 <span class="btn">Order demo</span>
@@ -5057,7 +5057,7 @@ body {{ font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; colo
 
 <a href="/services/education-explainer-pack" class="card" style="text-decoration:none;color:inherit;">
 <h3>Education Explainers</h3>
-<div class="price">$300–$1,500</div>
+<div class="price">$100–$200 per 10-30 videos (bundle)</div>
             <p>Animated visuals, diagrams, narration — full course curriculum produced automatically.</p>
 <div class="tags"><span class="tag">Course</span><span class="tag">Explainer</span><span class="tag">Tutorial</span></div>
 <span class="btn">Order explainer</span>

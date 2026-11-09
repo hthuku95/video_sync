@@ -166,43 +166,43 @@ pub fn service_menu_line(service: &str) -> Option<&'static str> {
             "- **clipping** — legacy combined clip service (superseded by youtube_clipping/twitch_clipping; do not pick for new prospects).",
         ),
         "youtube_clipping" => Some(
-            "- **youtube_clipping** — turn long-form YouTube videos and podcasts into short-form clips with captions and thumbnails. Best fit: podcasters, long-form YouTubers. $297/mo.",
+            "- **youtube_clipping** — turn long-form YouTube videos and podcasts into short-form clips with captions and thumbnails. Best fit: podcasters, long-form YouTubers. $297/mo campaigns (Starter, 20 accounts; agency tiers up to 150).",
         ),
         "twitch_clipping" => Some(
-            "- **twitch_clipping** — turn Twitch streams and VODs into short-form clips with captions and thumbnails, auto-posted daily. Best fit: Twitch streamers and their clip channels. $297/mo.",
+            "- **twitch_clipping** — turn Twitch streams and VODs into short-form clips with captions and thumbnails, auto-posted daily. Best fit: Twitch streamers and their clip channels. $199/mo campaigns (Starter, 20 accounts; agency tiers up to 150).",
         ),
         "kick_auto_clipper" => Some(
-            "- **kick_auto_clipper** — automated Kick clip generation from VODs: branding, lower thirds, outro, watermark, with daily auto-posting. Best fit: clipping channels, Kick highlight reposters, stream compilations. $297-$899/mo.",
+            "- **kick_auto_clipper** — automated Kick clip generation from VODs: branding, lower thirds, outro, watermark, with daily auto-posting. Best fit: clipping channels, Kick highlight reposters, stream compilations. $199/mo campaigns (Starter, 20 accounts; agency tiers up to 150).",
         ),
         "education" => Some(
-            "- **education** — AI-driven animated explainer scenes, data visualizations, and motion graphics. Best fit: educators, finance/crypto creators, technical YouTubers. $75-$400 per asset.",
+            "- **education** — AI-driven animated explainer lessons of any type (math, science, coding, language, history, finance). Best fit: educators, finance/crypto creators, technical YouTubers. One-time bundles: 10 videos for $50 or 30 for $100; campaigns $199/mo (Starter, 20 accounts; agency tiers up to 150).",
         ),
         "landing_page" => Some(
-            "- **landing_page** — homepage hero videos, narrated product demos, launch cutdowns from your website or app. Best fit: indie founders, SaaS teams, launch marketers. $299-$1,500+.",
+            "- **landing_page** — videos of ANY type generated from your website URL — hero videos, narrated product demos, explainers, testimonials, brand stories. Best fit: indie founders, SaaS teams, launch marketers. One-time bundles: 10 videos for $50 or 30 for $100; campaigns $149/mo (Starter, 20 accounts; agency tiers up to 150).",
         ),
         "manim_explainer" => Some(
-            "- **manim_explainer** — narrated Manim animated explainers with clean motion graphics, math/technical diagrams. Best fit: educators, course creators, math/finance channels. $75-$300 per asset.",
+            "- **manim_explainer** — narrated Manim animated explainers with clean motion graphics, math/technical diagrams. Best fit: educators, course creators, math/finance channels. $149/mo campaigns (Starter, 20 accounts; agency tiers up to 150).",
         ),
         "whiteboard_animation" => Some(
-            "- **whiteboard_animation** — narrated whiteboard-style hand-drawn sketch explainer videos. Best fit: explainer channels, SaaS/startup explainers, how-to content. $75-$300 per asset.",
+            "- **whiteboard_animation** — narrated whiteboard-style hand-drawn sketch explainer videos. Best fit: explainer channels, SaaS/startup explainers, how-to content. $149/mo campaigns (Starter, 20 accounts; agency tiers up to 150).",
         ),
         "kinetic_typography" => Some(
-            "- **kinetic_typography** — dynamic kinetic typography text animations with word-by-word reveals and bold visuals. Best fit: lyric videos, quote channels, brand taglines. $75-$250 per asset.",
+            "- **kinetic_typography** — dynamic kinetic typography text animations with word-by-word reveals and bold visuals. Best fit: lyric videos, quote channels, brand taglines. $149/mo campaigns (Starter, 20 accounts; agency tiers up to 150).",
         ),
         "animated_infographic" => Some(
-            "- **animated_infographic** — animated data infographics with charts, counters, and data-driven visuals. Best fit: data journalism, finance channels, analytics dashboards. $75-$250 per asset.",
+            "- **animated_infographic** — animated data infographics with charts, counters, and data-driven visuals. Best fit: data journalism, finance channels, analytics dashboards. $149/mo campaigns (Starter, 20 accounts; agency tiers up to 150).",
         ),
         "algorithm_viz" => Some(
-            "- **algorithm_viz** — algorithm/technology visualizations with animated data structures and step-by-step execution. Best fit: coding channels, CS educators, tech docs. $150-$500 per asset.",
+            "- **algorithm_viz** — algorithm/technology visualizations with animated data structures and step-by-step execution. Best fit: coding channels, CS educators, tech docs. $149/mo campaigns (Starter, 20 accounts; agency tiers up to 150).",
         ),
         "investor_pitch" => Some(
-            "- **investor_pitch** — professional investor pitch deck videos with clean title cards, data charts, and motion graphics. Best fit: startups raising capital, demo day prep. $150-$500 per asset.",
+            "- **investor_pitch** — professional investor pitch deck videos with clean title cards, data charts, and motion graphics. Best fit: startups raising capital, demo day prep. $149/mo campaigns (Starter, 20 accounts; agency tiers up to 150).",
         ),
         "year_in_review" => Some(
-            "- **year_in_review** — personalized year-in-review wrapped-style recap videos. Best fit: creators and brands recapping annual highlights. $100-$400 per asset.",
+            "- **year_in_review** — personalized year-in-review wrapped-style recap videos. Best fit: creators and brands recapping annual highlights. $149/mo campaigns (Starter, 20 accounts; agency tiers up to 150).",
         ),
         "isometric_explainer" => Some(
-            "- **isometric_explainer** — isometric 3D perspective explainer videos with geometric shapes and modern motion graphics. Best fit: product explainers, architectural concepts, tech demos. $100-$400 per asset.",
+            "- **isometric_explainer** — isometric 3D perspective explainer videos with geometric shapes and modern motion graphics. Best fit: product explainers, architectural concepts, tech demos. $149/mo campaigns (Starter, 20 accounts; agency tiers up to 150).",
         ),
         _ => None,
     }

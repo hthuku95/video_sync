@@ -1,4 +1,4 @@
-pub const CREATOR_MONTHLY_USDC_CENTS: u64 = 1500;
+pub const CREATOR_MONTHLY_USDC_CENTS: u64 = 2000;
 pub const AGENCY_STARTER_USDC_CENTS: u64 = 9900;
 pub const AGENCY_PRO_USDC_CENTS: u64 = 19900;
 
@@ -16,98 +16,98 @@ pub const SERVICE_OFFERS: [ServiceOffer; 14] = [
         key: "clipping",
         title: "SHORT-FORM CLIPPING (LEGACY — PARKED)",
         what_you_offer: "legacy combined clip service, superseded by YouTube/Twitch clipping — not offered to new clients.",
-        pricing_tiers: "$199/mo (parked).",
+        pricing_tiers: "$149/mo campaigns (Starter: 20 connected accounts, 3 posts/day). One-time bundles: 10 videos for $50 or 30 for $100. Agency tiers: 50 accounts $499/mo, 150 accounts $999/mo.",
         best_fit: "existing legacy campaigns only.",
     },
     ServiceOffer {
         key: "youtube_clipping",
         title: "YOUTUBE CLIPPING",
         what_you_offer: "automated daily clips from long-form YouTube videos and podcasts — captioned, thumbnailed, posted to your connected social accounts.",
-        pricing_tiers: "$297/mo for a daily campaign with up to 3 posts/day across your connected platforms.",
+        pricing_tiers: "$297/mo campaigns (Starter: 20 connected accounts, 3 posts/day). Agency tiers: 50 accounts $499/mo, 150 accounts $999/mo.",
         best_fit: "podcasters and long-form YouTubers with regular source content who want a daily short-form presence.",
     },
     ServiceOffer {
         key: "twitch_clipping",
         title: "TWITCH CLIPPING",
         what_you_offer: "automated daily clips from Twitch streams and VODs — captioned, thumbnailed, posted to your connected social accounts.",
-        pricing_tiers: "$199/mo for a daily campaign with up to 3 posts/day across your connected platforms.",
+        pricing_tiers: "$199/mo campaigns (Starter: 20 connected accounts, 3 posts/day). Agency tiers: 50 accounts $499/mo, 150 accounts $999/mo.",
         best_fit: "Twitch streamers and their clip channels who want every stream turned into daily short-form content.",
     },
     ServiceOffer {
         key: "kick_auto_clipper",
         title: "KICK AUTO-CLIPPER",
         what_you_offer: "automated daily clips from Kick streamer VODs — discover, clip, caption, and post to your connected social accounts.",
-        pricing_tiers: "$199/mo for a daily campaign with up to 3 posts/day.",
+        pricing_tiers: "$199/mo campaigns (Starter: 20 connected accounts, 3 posts/day). Agency tiers: 50 accounts $499/mo, 150 accounts $999/mo.",
         best_fit: "clipping channels that repost big Kick streamers' content and need fresh clips daily.",
     },
     ServiceOffer {
         key: "landing_page",
         title: "ANIMATED LANDING PAGE HERO",
         what_you_offer: "animated videos of ANY type generated from your website URL — how-to, marketing, product demo, explainer, testimonial, brand story. The AI crawls your site and learns your business, then produces the video you ask for — posted to your connected social accounts.",
-        pricing_tiers: "$149/mo for a daily campaign with up to 3 posts/day. One-time bundles: 10 videos for $50 or 30 for $100.",
+        pricing_tiers: "$149/mo campaigns (Starter: 20 connected accounts, 3 posts/day). One-time bundles: 10 videos for $50 or 30 for $100. Agency tiers: 50 accounts $499/mo, 150 accounts $999/mo.",
         best_fit: "SaaS founders, business owners, consultants, and marketers who want a daily video presence.",
     },
     ServiceOffer {
         key: "education",
         title: "EDUCATIONAL ANIMATED VIDEOS",
         what_you_offer: "AI-animated educational videos of ANY type — math, science, coding, language, history, finance, and more. The system produces equations, diagrams, code animations, data charts, motion graphics, VFX, and 3D depth with narration — posted to your connected social accounts.",
-        pricing_tiers: "$199/mo for a daily campaign with up to 3 posts/day. One-time bundles: 10 videos for $50 or 30 for $100.",
+        pricing_tiers: "$199/mo campaigns (Starter: 20 connected accounts, 3 posts/day). One-time bundles: 10 videos for $50 or 30 for $100. Agency tiers: 50 accounts $499/mo, 150 accounts $999/mo.",
         best_fit: "educators, course creators, edu-YouTubers, and academic content channels.",
     },
     ServiceOffer {
         key: "manim_explainer",
         title: "MANIM EXPLAINER VIDEOS",
         what_you_offer: "Manim-animated explainer videos on any topic — generated from a brief, posted daily to your connected social accounts.",
-        pricing_tiers: "$149/mo for a daily campaign with up to 3 posts/day.",
+        pricing_tiers: "$149/mo campaigns (Starter: 20 connected accounts, 3 posts/day). One-time bundles: 10 videos for $50 or 30 for $100. Agency tiers: 50 accounts $499/mo, 150 accounts $999/mo.",
         best_fit: "creators who want animated explainer content without learning Manim themselves.",
     },
     ServiceOffer {
         key: "whiteboard_animation",
         title: "WHITEBOARD ANIMATION CAMPAIGN",
         what_you_offer: "hand-drawn style whiteboard animations generated from your brief — posted daily to your connected social accounts.",
-        pricing_tiers: "$149/mo for a daily campaign with up to 3 posts/day.",
+        pricing_tiers: "$149/mo campaigns (Starter: 20 connected accounts, 3 posts/day). One-time bundles: 10 videos for $50 or 30 for $100. Agency tiers: 50 accounts $499/mo, 150 accounts $999/mo.",
         best_fit: "educators, trainers, and B2B marketers who want explainer-style whiteboard content.",
     },
     ServiceOffer {
         key: "kinetic_typography",
         title: "KINETIC TYPOGRAPHY CAMPAIGN",
         what_you_offer: "text-driven kinetic typography videos — quotes, key messages, lyric-style motion text — posted daily to your connected social accounts.",
-        pricing_tiers: "$149/mo for a daily campaign with up to 3 posts/day.",
+        pricing_tiers: "$149/mo campaigns (Starter: 20 connected accounts, 3 posts/day). One-time bundles: 10 videos for $50 or 30 for $100. Agency tiers: 50 accounts $499/mo, 150 accounts $999/mo.",
         best_fit: "quote pages, motivational content creators, and brands wanting text-driven video content.",
     },
     ServiceOffer {
         key: "animated_infographic",
         title: "ANIMATED INFOGRAPHIC CAMPAIGN",
         what_you_offer: "animated data visualizations and infographics from your data or brief — posted daily to your connected social accounts.",
-        pricing_tiers: "$149/mo for a daily campaign with up to 3 posts/day.",
+        pricing_tiers: "$149/mo campaigns (Starter: 20 connected accounts, 3 posts/day). One-time bundles: 10 videos for $50 or 30 for $100. Agency tiers: 50 accounts $499/mo, 150 accounts $999/mo.",
         best_fit: "data-driven creators, finance channels, and businesses with metrics to visualize.",
     },
     ServiceOffer {
         key: "algorithm_viz",
         title: "ALGORITHM VISUALIZATION CAMPAIGN",
         what_you_offer: "animated algorithm visualizations — sorting, searching, graph traversal, data structures — posted daily to your connected social accounts.",
-        pricing_tiers: "$149/mo for a daily campaign with up to 3 posts/day.",
+        pricing_tiers: "$149/mo campaigns (Starter: 20 connected accounts, 3 posts/day). One-time bundles: 10 videos for $50 or 30 for $100. Agency tiers: 50 accounts $499/mo, 150 accounts $999/mo.",
         best_fit: "coding bootcamps, computer science educators, and tech content creators.",
     },
     ServiceOffer {
         key: "investor_pitch",
         title: "INVESTOR PITCH DECK CAMPAIGN",
         what_you_offer: "animated investor pitch videos from your deck or brief — posted daily to your connected social accounts.",
-        pricing_tiers: "$149/mo for a daily campaign with up to 3 posts/day.",
+        pricing_tiers: "$149/mo campaigns (Starter: 20 connected accounts, 3 posts/day). One-time bundles: 10 videos for $50 or 30 for $100. Agency tiers: 50 accounts $499/mo, 150 accounts $999/mo.",
         best_fit: "startup founders preparing for fundraising who want video-enhanced pitches.",
     },
     ServiceOffer {
         key: "year_in_review",
         title: "YEAR-IN-REVIEW CAMPAIGN",
         what_you_offer: "animated year-in-review or wrapped-style recap videos — posted to your connected social accounts.",
-        pricing_tiers: "$149/mo for a daily campaign with up to 3 posts/day.",
+        pricing_tiers: "$149/mo campaigns (Starter: 20 connected accounts, 3 posts/day). One-time bundles: 10 videos for $50 or 30 for $100. Agency tiers: 50 accounts $499/mo, 150 accounts $999/mo.",
         best_fit: "creators, brands, and channels wanting regular recap/annual-style content.",
     },
     ServiceOffer {
         key: "isometric_explainer",
         title: "ISOMETRIC EXPLAINER CAMPAIGN",
         what_you_offer: "isometric 3D-style animated explainer videos from your brief — posted daily to your connected social accounts.",
-        pricing_tiers: "$149/mo for a daily campaign with up to 3 posts/day.",
+        pricing_tiers: "$149/mo campaigns (Starter: 20 connected accounts, 3 posts/day). One-time bundles: 10 videos for $50 or 30 for $100. Agency tiers: 50 accounts $499/mo, 150 accounts $999/mo.",
         best_fit: "tech companies, product marketers, and creators wanting distinctive isometric visuals.",
     },
 ];
@@ -144,8 +144,7 @@ pub fn telegram_system_pitch() -> String {
 VideoSync offers:\n\
 - Regular users: 7-day free trial, then ${}/mo USDC for AI thumbnails, Blender animations (title cards, data viz, LaTeX, lower thirds, UI mockups), full agent video pipeline, and FFmpeg tool API.\n\
 - Agencies: API access - ${}/mo Starter (1k clips + 500 thumbs + 50 animations), ${}/mo Pro (5k clips + 2.5k thumbs + 200 animations + white-label delivery pages).\n\
-- MONTHLY CAMPAIGNS: ${}/mo for clipping/kick-auto-clipper, ${}/mo for education, ${}/mo for all other services (landing page, manim, whiteboard, etc.) — daily content generation + auto-posting to connected social accounts.\n\
-- One-time bundles (10 videos for $50 or 30 for $100) for landing-page and education videos generated from a website URL.\n\n\
+- One-time bundles: 10 videos for $50 or 30 for $100 (landing page or education).\n- Campaign subscriptions (Starter tier — 20 connected accounts, 3 posts/day): $199/mo kick-auto-clipper or Twitch, $297/mo YouTube (shorts), $199/mo education, $149/mo all other services (landing page, manim, whiteboard, etc.). Agency tiers: 50 accounts $499/mo, 150 accounts $999/mo.\n\
 All payments are USDC on Base (Phantom, MetaMask, Coinbase Wallet). No Stripe, no contracts.\n\n\
 Sign up: https://www.videosync.video\n\
 Subscribe: https://www.videosync.video/subscribe\n\
@@ -158,10 +157,7 @@ RULES:\n\
 5. Never invent features or prices beyond the ranges and offers listed above.",
         CREATOR_MONTHLY_USDC_CENTS / 100,
         AGENCY_STARTER_USDC_CENTS / 100,
-        AGENCY_PRO_USDC_CENTS / 100,
-        297,
-        199,
-        149
+        AGENCY_PRO_USDC_CENTS / 100
     )
 }
 

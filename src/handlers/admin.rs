@@ -11381,8 +11381,15 @@ td{padding:8px 12px;border-bottom:1px solid #0f3460;color:#e0e0e0}
     <p style="margin-top:16px">The platform's unique advantage: <span class="highlight">any YouTube or Twitch URL to download-ready clips in ~10 minutes.</span> No manual clipper can match this. Send free demos before the first DM — that is the entire pitch.</p>
   </div>
 
-  <div class="card">
+  <div class="card" style="border:2px solid #d97706">
     <h2>Pricing Tiers</h2>
+    <p style="background:#fef3c7;border:1px solid #d97706;padding:10px;border-radius:8px;font-size:0.9rem;margin-bottom:12px">
+      <strong>⚠️ PRICING UPDATE (Nov 2026):</strong> the table below is a legacy reference.
+      Current live prices: Products via 5 apps — landing_page $149/mo, education $199/mo, kick-auto-clipper $199/mo,
+      twitch_clipping $199/mo, youtube_clipping $297/mo, manim-family services $149/mo (all Starter, 20 connected accounts;
+      Agency tiers 50 accounts $499/mo, 150 accounts $999/mo). One-time bundles: 10 videos $50 / 30 videos $100.
+      Studio (DFY): $100-$200 per 10-30 videos. Core VideoSync editor: $20/mo. The legacy kits/retainers below are no longer the live offer.
+    </p>
     <table>
       <thead><tr><th>Tier</th><th>Clips/Month</th><th>Price</th><th>Pitch</th></tr></thead>
       <tbody>
@@ -12078,7 +12085,7 @@ const HOW_WE_WORK_HTML: &str = r###"<!DOCTYPE html>
 
 <div class="intro">
   <h2>The platform in one paragraph</h2>
-  <p>VideoSync is an AI video production studio monetised 3 ways: (1) <b>service sales</b> to creators / founders you source via Instagram, LinkedIn, Telegram, YouTube, and Twitch — sample deliveries are free proofs-of-work sent to prospects; (2) <b>monthly subscriptions</b> — $15/mo creator tier + $99/$199 agency tier; (3) <b>clipping-payout platforms</b> (Whop, Reach.cat, etc.) where we post authorised clips and get paid per 1,000 views. Everything flows to USDC on Base — no Stripe, no contracts.</p>
+  <p>VideoSync is an AI video production studio monetised 3 ways: (1) <b>service sales</b> to creators / founders you source via Instagram, LinkedIn, Telegram, YouTube, and Twitch — sample deliveries are free proofs-of-work sent to prospects; (2) <b>monthly subscriptions</b> — $20/mo creator tier + $99/$199 agency tier; (3) <b>clipping-payout platforms</b> (Whop, Reach.cat, etc.) where we post authorised clips and get paid per 1,000 views. Everything flows to USDC on Base — no Stripe, no contracts.</p>
 </div>
 
 <div class="toc">
@@ -12090,7 +12097,7 @@ const HOW_WE_WORK_HTML: &str = r###"<!DOCTYPE html>
     <li><a href="#team">How the whitelisted clipping team works</a></li>
     <li><a href="#payments">Payment rails + attribution + revenue share</a></li>
     <li><a href="#qa">LLM QA review on renders</a></li>
-    <li><a href="#paywall">The $15/mo creator paywall</a></li>
+    <li><a href="#paywall">The $20/mo creator paywall</a></li>
     <li><a href="#faq">FAQ</a></li>
   </ol>
 </div>
@@ -12302,7 +12309,7 @@ const HOW_WE_WORK_HTML: &str = r###"<!DOCTYPE html>
 
 <!-- ═══════ PAYWALL ═══════ -->
 <section id="paywall">
-  <h2>7. The $15/mo creator paywall</h2>
+  <h2>7. The $20/mo creator paywall</h2>
   <p>New signups (from Twitter ads or direct) get a <strong>7-day free trial</strong>. After that, paywalled endpoints return HTTP 402 with <code>upgrade_url: /subscribe</code> until they pay.</p>
 
   <h3>What's paywalled (for regular users)</h3>
@@ -12337,7 +12344,7 @@ const HOW_WE_WORK_HTML: &str = r###"<!DOCTYPE html>
   <p>POST to <code>/api/admin/telegram/channels</code> or edit the <code>telegram_watch_channels</code> table directly. Default list: cryptojobslist, cryptojobs, web3_jobs, SaaSFounders, directoryofmarketers, contentcreators_hub.</p>
 
   <h3>How do I price custom deliveries?</h3>
-  <p>All sample deliveries are <strong>free</strong> — they're marketing proofs-of-work to send in DMs and emails. For revenue, move prospects into <a href="/services">monthly campaigns</a> ($149-$297/mo) or the <a href="/subscribe">$15/mo creator access</a>.</p>
+  <p>All sample deliveries are <strong>free</strong> — they're marketing proofs-of-work to send in DMs and emails. For revenue, move prospects into <a href="/services">monthly campaigns</a> ($149-$297/mo) or the <a href="/subscribe">$20/mo creator access</a>.</p>
 
   <h3>A team member sourced a lead that paid $500. What do I owe them?</h3>
   <p>$250 (50%). The <a href="/admin/revenue-ledger">Revenue Ledger</a> shows this as "Pending payout".</p>

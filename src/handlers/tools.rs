@@ -336,7 +336,7 @@ pub async fn start_long_form_video(
 pub fn tools_routes() -> Router {
     // Every endpoint here triggers real compute (FFmpeg / Blender / etc.)
     // — wrap with auth + subscription so trial-expired users are blocked
-    // until they upgrade to $15/mo. Staff + superusers + grandfathered
+    // until they upgrade to $20/mo. Staff + superusers + grandfathered
     // users bypass automatically inside subscription_middleware.
     Router::new()
         .route("/api/tools/stabilize", post(stabilize_video))

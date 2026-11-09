@@ -6,4 +6,4 @@ pub mod frontend_rate_limit;
 pub mod logging;
 pub mod rate_limit;
 pub mod subscription;
-pub mod youtube_access; // 💳 7-day trial → $15/mo USDC paywall on heavy-compute
+pub mod youtube_access; // 💳 7-day trial → $20/mo USDC paywall on heavy-compute

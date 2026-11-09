@@ -165,7 +165,7 @@ fn payment_required(request: &Request) -> Response {
             Json(json!({
                 "success":      false,
                 "error":        "subscription_required",
-                "message":      "Your free trial has ended. Subscribe for $15/mo USDC to continue.",
+                "message":      "Your free trial has ended. Subscribe for $20/mo USDC to continue.",
                 "upgrade_url":  "/subscribe",
             })),
         )

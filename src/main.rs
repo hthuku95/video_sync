@@ -1097,7 +1097,7 @@ async fn main() {
         .merge(handlers::prospects::instagram_routes()) // 📸 Instagram leads (whitelisted content machine users only)
         .merge(handlers::referrals::referral_routes()) // 🔗 Referral codes + commissions for content machine users
         .merge(handlers::api_access::api_access_routes()) // 💳 Agency USDC license
-        .merge(handlers::subscribe::subscribe_routes()) // 💳 Regular-user $15/mo paywall
+        .merge(handlers::subscribe::subscribe_routes()) // 💳 Regular-user $20/mo paywall
         .merge(handlers::paypal::paypal_routes()) // 💳 PayPal/card checkout for service packs
         .merge(handlers::crypto_payments::crypto_routes()) // 💳 USDC on Base checkout for service packs
         .merge(handlers::website_video::website_video_routes()) // 🌐 Website-URL→Video credits service

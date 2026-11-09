@@ -1,4 +1,4 @@
-//! $15/mo USDC subscription for regular users (post-trial paywall).
+//! $20/mo USDC subscription for regular users (post-trial paywall).
 //!
 //! Architecturally this is the **user-facing** twin of `api_access.rs`:
 //! same x402 flow, same EIP-3009 wallet dance, but the buyer is an
