@@ -5113,6 +5113,7 @@ tr:hover td{background:rgba(92,84,112,0.12)}
     <div class="tab" onclick="showSource('telegram',this)">✈️ Telegram Opportunities</div>
     <div class="tab" onclick="showSource('jobs',this)">🚦 PB Job Status</div>
     <div class="tab" onclick="showSource('instagram',this)">📸 Instagram</div>
+    <div class="tab" onclick="showSource('ph',this)">🚀 Product Hunt</div>
   </div>
 
   <!-- YouTube / Twitch Search -->
@@ -5401,7 +5402,44 @@ tr:hover td{background:rgba(92,84,112,0.12)}
   </div>
 </div>
 
-<script>
+  <!-- Product Hunt Prospects -->
+  <div id="src-ph" class="search-card" style="display:none">
+    <h2>Find Prospects on Product Hunt</h2>
+    <p>Fetches trending SaaS products, enriches contact info, scores fit 0–100 (AI), and saves them as landing_page prospects ready for outreach.</p>
+    <div class="form-grid">
+      <div>
+        <label>Topic</label>
+        <select id="ph-topic">
+          <option value="saas">SaaS</option>
+          <option value="developer-tools">Developer Tools</option>
+          <option value="productivity">Productivity</option>
+          <option value="design-tools">Design Tools</option>
+          <option value="marketing">Marketing</option>
+          <option value="analytics">Analytics</option>
+          <option value="automation">Automation</option>
+          <option value="no-code">No-Code</option>
+          <option value="artificial-intelligence">AI</option>
+        </select>
+      </div>
+      <div>
+        <label>Limit</label>
+        <input id="ph-limit" type="number" value="10" min="1" max="50">
+      </div>
+      <div>
+        <label>Sort</label>
+        <select id="ph-order">
+          <option value="NEWEST">Newest</option>
+          <option value="VOTES">Most votes</option>
+          <option value="FEATURED">Featured</option>
+        </select>
+      </div>
+    </div>
+    <button class="btn btn-primary" onclick="runProductHuntSearch()">🚀 Fetch &amp; Enrich Prospects</button>
+    <span id="ph-status" style="margin-left:12px;color:var(--dim);font-size:0.85rem"></span>
+    <div id="ph-results" style="margin-top:16px"></div>
+  </div>
+
+  <script>
 const token = localStorage.getItem('auth_token') || localStorage.getItem('admin_token') || localStorage.getItem('authToken');
 if (!token) window.location.href = '/admin';
 
@@ -5417,12 +5455,50 @@ function showMsg(text, ok=true){
 function showSource(name, btn){
   document.querySelectorAll('.tabs > .tab').forEach(t=>t.classList.remove('active'));
   btn.classList.add('active');
-  ['yt-tw','linkedin','telegram','jobs','instagram'].forEach(s=>{
+  ['yt-tw','linkedin','telegram','jobs','instagram','ph'].forEach(s=>{
     const el = document.getElementById('src-'+s);
     if(el) el.style.display = (s===name)?'block':'none';
   });
   if (name === 'jobs')     loadPbJobs();
   if (name === 'telegram') { loadTelegramStatus(); loadTelegramChannels(); loadTgOpportunities(''); }
+}
+
+// ── Product Hunt ──────────────────────────────────────────────────────────
+async function runProductHuntSearch(){
+  const status = document.getElementById('ph-status');
+  const out = document.getElementById('ph-results');
+  const topic = document.getElementById('ph-topic').value;
+  const limit = parseInt(document.getElementById('ph-limit').value || '10', 10) || 10;
+  const order = document.getElementById('ph-order').value;
+  status.textContent = 'Fetching + enriching…';
+  out.innerHTML = '<div class="loading">Contacting Product Hunt…</div>';
+  try{
+    const res = await fetch('/api/admin/prospects/product-hunt/search',{
+      method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer '+(localStorage.getItem('auth_token')||localStorage.getItem('authToken')||'')},
+      body: JSON.stringify({topic:topic, limit:limit, order:order, save:true})
+    });
+    const data = await res.json();
+    if(!data.success){ throw new Error(data.error || 'search failed'); }
+    status.textContent = data.message || ('Found ' + (data.results||[]).length);
+    const rows = (data.results||[]);
+    if(rows.length === 0){ out.innerHTML = '<div class="loading">No products found for this topic.</div>'; return; }
+    let html = '<table style="width:100%;border-collapse:collapse;font-size:0.85rem"><tbody>';
+    rows.forEach(r=>{
+      html += '<tr style="border-bottom:1px solid rgba(148,163,184,0.14)">';
+      html += '<td style="padding:8px"><b>' + (r.name||'') + '</b><br><span style="color:#94a3b8">' + ((r.tagline||'').slice(0,120)) + '</span></td>';
+      html += '<td style="padding:8px;width:70px">' + (r.votes!=null? r.votes : '') + ' votes</td>';
+      html += '<td style="padding:8px;width:80px">score ' + (r.ai_score!=null? r.ai_score : '—') + '</td>';
+      html += '<td style="padding:8px;width:180px">' + ((r.website||'').replace('https://','')) + '<br>' + (r.business_email ? '<span style="color:#34d399">' + r.business_email + '</span>' : '<span style="color:#64748b">no email found</span>') + '</td>';
+      html += '<td style="padding:8px;width:90px">' + (r.service_type||'') + '</td>';
+      html += '</tr>';
+    });
+    html += '</tbody></table>';
+    out.innerHTML = html;
+  }catch(e){
+    status.textContent = '';
+    out.innerHTML = '<div style="color:#fb7185">Product Hunt search failed: ' + (e.message||e) + '</div>';
+  }
 }
 
 // ── LinkedIn ──────────────────────────────────────────────────────────────
@@ -7116,46 +7192,110 @@ async fn search_product_hunt_prospects(
         }
 
         let votes = post.votes_count.unwrap_or(0);
-        let ai_score = (votes as f64).min(100.0).max(1.0) as i32;
 
-        let slug = post.id.clone();
-
+        // Saving = full pipeline: enrichment (Scrapling) + LLM scoring so the
+        // prospect lands ready for the outreach flow (owner directive Nov 9
+        // 2026 — "does it really work?" polish). Without save, keep it fast.
         if save {
+            let mut twitter_handle: Option<String> = None;
+            let mut instagram_handle: Option<String> = None;
+            let mut business_email: Option<String> = None;
+            let mut external_url: Option<String> = Some(website.clone());
+            let enrichment = enrich_public_contact_fields(
+                Some(website.as_str()),
+                &mut twitter_handle,
+                &mut instagram_handle,
+                &mut business_email,
+                &mut external_url,
+            )
+            .await;
+            let scoring_description = build_scoring_description(&description);
+            let (score_f64, reasoning, service, _dm_creator, _dm_clipper, x_dm, email_script) =
+                score_prospect_with_ai(
+                    state,
+                    &name,
+                    votes,
+                    &scoring_description,
+                    tagline.as_str(),
+                    "saas_founder",
+                    "product_hunt",
+                    Some("landing_page"),
+                )
+                .await;
+            let enrich_final = {
+                let mut e = enrichment.clone();
+                if let Some(obj) = e.as_object_mut() {
+                    obj.insert("votes".to_string(), serde_json::json!(votes));
+                    obj.insert("tagline".to_string(), serde_json::json!(tagline));
+                    obj.insert("ph_slug".to_string(), serde_json::json!(post.id.clone()));
+                }
+                e
+            };
             match sqlx::query(
                 "INSERT INTO prospects (platform, channel_id, display_name, platform_url,
                  subscriber_count, content_category, channel_description, prospect_type,
-                 ai_score, ai_reasoning, external_url, service_type, contact_enrichment)
-                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+                 ai_score, ai_reasoning, x_dm_script, email_script, external_url, service_type,
+                 business_email, instagram_handle, twitter_handle, contact_enrichment)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
                  ON CONFLICT (platform, channel_id) DO UPDATE SET
                    display_name = EXCLUDED.display_name,
                    platform_url = EXCLUDED.platform_url,
                    channel_description = EXCLUDED.channel_description,
-                   content_category = EXCLUDED.content_category,
                    ai_score = EXCLUDED.ai_score,
+                   ai_reasoning = EXCLUDED.ai_reasoning,
+                   x_dm_script = EXCLUDED.x_dm_script,
+                   email_script = EXCLUDED.email_script,
                    external_url = EXCLUDED.external_url,
                    service_type = EXCLUDED.service_type,
+                   business_email = COALESCE(EXCLUDED.business_email, prospects.business_email),
+                   instagram_handle = COALESCE(EXCLUDED.instagram_handle, prospects.instagram_handle),
+                   twitter_handle = COALESCE(EXCLUDED.twitter_handle, prospects.twitter_handle),
+                   contact_enrichment = COALESCE(NULLIF(EXCLUDED.contact_enrichment, '{}'::jsonb), prospects.contact_enrichment) || EXCLUDED.contact_enrichment,
                    updated_at = NOW()",
             )
             .bind("product_hunt")
-            .bind(&slug)
+            .bind(post.id.clone())
             .bind(&name)
             .bind(&website)
-            .bind(0i64)
-            .bind(req.topic.as_deref().unwrap_or("saas"))
+            .bind(votes as i64)
+            .bind(tagline.as_str())
             .bind(&description)
             .bind("saas_founder")
-            .bind(ai_score)
-            .bind(format!("Product Hunt product; {} votes", votes))
+            .bind(score_f64)
+            .bind(&reasoning)
+            .bind(&x_dm_script)
+            .bind(&email_script)
             .bind(&website)
-            .bind("landing_page")
-            .bind(serde_json::json!({"source": "product_hunt", "slug": slug, "votes": votes, "tagline": tagline}))
+            .bind(&service)
+            .bind(business_email.as_deref())
+            .bind(instagram_handle.as_deref())
+            .bind(twitter_handle.as_deref())
+            .bind(&enrich_final)
             .execute(&state.db_pool)
             .await
             {
                 Ok(_) => saved_count += 1,
-                Err(e) => tracing::warn!("Failed to save Product Hunt prospect {}: {}", slug, e),
+                Err(e) => tracing::warn!("Failed to save Product Hunt prospect {}: {e}", slug = post.id),
             }
+
+            results.push(json!({
+                "name": name,
+                "website": website,
+                "description": description,
+                "tagline": tagline,
+                "votes": votes,
+                "ai_score": score_f64,
+                "ai_reasoning": reasoning,
+                "slug": post.id.clone(),
+                "service_type": service,
+                "enriched": !enrich_final.as_object().map(|o| o.is_empty()).unwrap_or(true),
+                "business_email": business_email,
+            }));
+            continue;
         }
+
+        let slug = post.id.clone();
+        let ai_score = (votes as f64).min(100.0).max(1.0) as i32;
 
         results.push(json!({
             "name": name,
