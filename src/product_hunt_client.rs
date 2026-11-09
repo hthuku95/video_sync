@@ -80,9 +80,9 @@ async fn access_token() -> Result<String, String> {
 
     if let Some(secret) = std::env::var(ENV_API_SECRET)
         .ok()
-        .filter(|v| !v.trim().is_empty())
-    {
-        let token = mint_access_token(&client_id, secret.trim().strip_prefix('"').map(str.to_string).as_deref().unwrap_or(secret.trim()))?;
+        .filter(|v| !v.trim().is_empty()) {
+        let secret = secret.trim().trim_matches('"').to_string();
+        let token = mint_access_token(&client_id, &secret)?;
         *lock = Some((token.clone(), Instant::now()));
         tracing::info!("product_hunt: minted fresh access token (client_credentials)");
         return Ok(token);
