@@ -24,4 +24,4 @@ pub mod tools; // 🎬 On-demand FFmpeg tool endpoints
 pub mod ui;
 pub mod upload;
 pub mod website_video; // 🌐 Website-URL→Video credits service ($50/10, $100/30 bundles)
-pub mod youtube; // 📺 YouTube integration // 💳 Regular-user $15/mo USDC subscription (post 7-day trial)
+pub mod youtube; // 📺 YouTube integration // 💳 Regular-user $20/mo USDC subscription (post 7-day trial)
