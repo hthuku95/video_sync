@@ -8146,8 +8146,9 @@ pub async fn delivery_progress(
     Path(id): Path<Uuid>,
 ) -> Json<serde_json::Value> {
     use std::time::Instant;
-    static EXPLAIN_CACHE: std::sync::OnceLock<tokio::sync::Mutex<std::collections::HashMap<Uuid, (String, Instant)>>> =
-        std::sync::OnceLock::new();
+    static EXPLAIN_CACHE: std::sync::OnceLock<
+        tokio::sync::Mutex<std::collections::HashMap<Uuid, (String, Instant)>>,
+    > = std::sync::OnceLock::new();
 
     let row = sqlx::query_as::<_, (String, Option<uuid::Uuid>, Option<String>)>(
         "SELECT status, workflow_id, output_r2_url FROM deliveries WHERE id = $1",
@@ -8162,7 +8163,10 @@ pub async fn delivery_progress(
         }
     };
 
-    let output_ready = output_url.as_deref().map(|u| !u.is_empty()).unwrap_or(false);
+    let output_ready = output_url
+        .as_deref()
+        .map(|u| !u.is_empty())
+        .unwrap_or(false);
     let mut phase = String::from("queued");
     let mut detail = String::from("Waiting for the render worker…");
     let mut pct: u8 = 5;
@@ -8179,7 +8183,15 @@ pub async fn delivery_progress(
         pct = 0;
         eta_minutes = 0;
     } else if let Some(wid) = &workflow_id {
-        let wf = sqlx::query_as::<_, (String, Option<String>, Option<chrono::DateTime<chrono::Utc>>, Option<chrono::DateTime<chrono::Utc>>)>(
+        let wf = sqlx::query_as::<
+            _,
+            (
+                String,
+                Option<String>,
+                Option<chrono::DateTime<chrono::Utc>>,
+                Option<chrono::DateTime<chrono::Utc>>,
+            ),
+        >(
             "SELECT status, current_step, started_at, created_at FROM app_workflows WHERE id = $1",
         )
         .bind(wid)
