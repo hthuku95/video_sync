@@ -941,9 +941,10 @@ impl AgenticServicePipeline {
             input.delivery_id,
             input.service_filename()
         );
+        let mut final_path = output_path.to_string();
 
         // If the agent already uploaded to cloud storage, use that URL directly — no re-upload
-        let (upload_backend, public_url) = if output_path.starts_with("https://") {
+        let (upload_backend, public_url) = if final_path.starts_with("https://") {
             let url = output_path.to_string();
             tracing::info!(url = %url, "publish_output: output already in cloud, skipping re-upload");
             (None, url)
@@ -963,10 +964,10 @@ impl AgenticServicePipeline {
                     .ok()
                     .and_then(|v| v.parse().ok())
                     .unwrap_or(50_000);
-                let size = tokio::fs::metadata(output_path)
+                let size = tokio::fs::metadata(&final_path)
                     .await
                     .map(|m| m.len())
-                    .map_err(|e| format!("ARTIFACT_INVALID: cannot stat {}: {e}", output_path))?;
+                    .map_err(|e| format!("ARTIFACT_INVALID: cannot stat {}: {e}", final_path))?;
                 if size < min_bytes {
                     let msg = format!(
                         "ARTIFACT_INVALID: refusing to publish {}-byte video (minimum {}) — {}",
@@ -975,10 +976,82 @@ impl AgenticServicePipeline {
                     tracing::error!("publish_output: {}", msg);
                     return Err(msg);
                 }
+
+                // ── AUDIO BACKSTOP (Nov 10 2026) ──
+                // Narration-bearing renders were published SILENT when a later
+                // corrective ffmpeg pass (agent-chosen) dropped the audio track
+                // (observed: Monica sample published without the 5 narration
+                // segments it had generated). If the final video has no audio
+                // stream, mux the newest narration audio sitting next to it;
+                // if none exists, refuse to publish so the agent re-runs
+                // generate_text_to_speech + add_audio before exporting.
+                let has_audio = crate::core::analyze_video(&final_path)
+                    .map(|m| m.has_audio)
+                    .unwrap_or(true);
+                if !has_audio {
+                    let dir = std::path::Path::new(output_path)
+                        .parent()
+                        .map(|p| p.to_path_buf())
+                        .unwrap_or_else(|| std::path::PathBuf::from("."));
+                    let mut newest_audio: Option<(std::path::PathBuf, std::time::SystemTime)> =
+                        None;
+                    if let Ok(entries) = std::fs::read_dir(&dir) {
+                        for entry in entries.flatten() {
+                            let p = entry.path();
+                            let e = p
+                                .extension()
+                                .and_then(|x| x.to_str())
+                                .unwrap_or("")
+                                .to_lowercase();
+                            if matches!(e.as_str(), "mp3" | "wav" | "m4a" | "aac") {
+                                let modified = entry
+                                    .metadata()
+                                    .and_then(|m| m.modified())
+                                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+                                if newest_audio
+                                    .as_ref()
+                                    .map(|(_, t)| modified > *t)
+                                    .unwrap_or(true)
+                                {
+                                    newest_audio = Some((p, modified));
+                                }
+                            }
+                        }
+                    }
+                    match newest_audio {
+                        Some((audio_file, _)) => {
+                            let stem = std::path::Path::new(output_path)
+                                .file_stem()
+                                .and_then(|x| x.to_str())
+                                .unwrap_or("output")
+                                .to_string();
+                            let repaired = format!("{}/{}_with_audio.mp4", dir.display(), stem);
+                            tracing::warn!(
+                                "publish_output: final video has NO audio — auto-muxing narration {} -> {}",
+                                audio_file.display(),
+                                repaired
+                            );
+                            crate::audio::add_audio(
+                                output_path,
+                                audio_file.to_str().unwrap_or(""),
+                                &repaired,
+                            )?;
+                            final_path = repaired;
+                        }
+                        None => {
+                            let msg = format!(
+                                "ARTIFACT_INVALID: final video has NO audio stream and no narration audio file was found next to {}. Re-run generate_text_to_speech then add_audio before export_video.",
+                                final_path
+                            );
+                            tracing::error!("publish_output: {}", msg);
+                            return Err(msg);
+                        }
+                    }
+                }
             }
 
             let (backend, url) = storage
-                .upload_file_tracked(output_path, &output_key)
+                .upload_file_tracked(&final_path, &output_key)
                 .await
                 .map_err(|e| format!("Object storage upload failed: {e}"))?;
             tracing::info!(
