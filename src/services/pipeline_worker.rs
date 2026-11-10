@@ -191,7 +191,10 @@ async fn execute_claimed(
     // Cancelled while queued? Skip without executing.
     match runtime.is_cancel_requested(workflow_id).await {
         Ok(true) => {
-            tracing::info!("🚫 workflow {} was cancelled while queued — skipping", workflow_id);
+            tracing::info!(
+                "🚫 workflow {} was cancelled while queued — skipping",
+                workflow_id
+            );
             let _ = runtime
                 .mark_cancelled(workflow_id, Some("cancelled"), "Cancelled before execution")
                 .await;
@@ -216,7 +219,10 @@ async fn execute_claimed(
                 if stop.load(Ordering::Relaxed) {
                     break;
                 }
-                match runtime.renew_lease(workflow_id, instance_id(), lease_min).await {
+                match runtime
+                    .renew_lease(workflow_id, instance_id(), lease_min)
+                    .await
+                {
                     Ok(true) => {}
                     Ok(false) => {
                         tracing::warn!(
