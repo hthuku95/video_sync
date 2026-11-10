@@ -4521,11 +4521,50 @@ async fn generate_prospect_sample_pack(
                 if !crawl.css_info.is_empty() {
                     ctx.push_str(&format!("### Design Tokens\n{}\n\n", crawl.css_info));
                 }
-                ctx.push_str(&format!("### Pages ({})\n", crawl.pages.len()));
+                // Dedupe pages (locale variants of the same page carry identical
+                // content — the Monica crawl embedded the same page 6x in three
+                // languages, bloating the workflow JSONB into OOM territory on the
+                // 512MB free tier). Dedupe by URL path, then cap the payload.
+                let mut seen_paths: std::collections::HashSet<String> =
+                    std::collections::HashSet::new();
+                let mut pages_lines = Vec::new();
                 for p in &crawl.pages {
-                    ctx.push_str(&format!("- {} ({})\n", p.title, p.url));
+                    let path_only = p
+                        .url
+                        .split("://")
+                        .nth(1)
+                        .unwrap_or(&p.url)
+                        .split('?')
+                        .next()
+                        .unwrap_or("")
+                        .trim_end_matches('/')
+                        .split('#')
+                        .next()
+                        .unwrap_or("")
+                        .to_string();
+                    if !seen_paths.insert(path_only) {
+                        continue;
+                    }
+                    pages_lines.push(format!("- {} ({})", p.title, p.url));
                 }
-                ctx.push_str(&format!("\n### Full Content\n{}", crawl.combined_markdown));
+                ctx.push_str(&format!("### Pages ({})\n", pages_lines.len()));
+                for line in &pages_lines {
+                    ctx.push_str(line);
+                    ctx.push('\n');
+                }
+                ctx.push_str("\n### Full Content\n");
+                // Cap the combined crawl content — the LLM reads the first N KB and
+                // that is where the signal is; the tail is locale duplicates.
+                let crawl_cap: usize = std::env::var("CRAWL_CONTEXT_MAX_CHARS")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(48_000);
+                let mut combined = crawl.combined_markdown.clone();
+                if combined.len() > crawl_cap {
+                    combined.truncate(crawl_cap);
+                    combined.push_str("\n[... crawl truncated at cap ...]");
+                }
+                ctx.push_str(&combined);
                 extra["scraped_website_content"] = json!(ctx);
                 scraped_site = Some(ctx);
             }

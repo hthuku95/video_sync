@@ -37,10 +37,12 @@ fn instance_id() -> &'static str {
 }
 
 fn worker_count() -> usize {
+    // 0 is meaningful: web instances set AGENTIC_RENDER_WORKERS=0 so dedicated
+    // worker services own all claims (Phase-1 split, owner directive Nov 10).
     std::env::var("AGENTIC_RENDER_WORKERS")
         .ok()
         .and_then(|v| v.trim().parse::<usize>().ok())
-        .filter(|&v| v >= 1 && v <= 16)
+        .filter(|&v| v <= 16)
         .unwrap_or(1)
 }
 
