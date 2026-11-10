@@ -943,12 +943,35 @@ impl AgenticServicePipeline {
         );
         let mut final_path = output_path.to_string();
 
-        // If the agent already uploaded to cloud storage, use that URL directly — no re-upload
-        let (upload_backend, public_url) = if final_path.starts_with("https://") {
-            let url = output_path.to_string();
-            tracing::info!(url = %url, "publish_output: output already in cloud, skipping re-upload");
-            (None, url)
-        } else {
+        // If the agent already uploaded to cloud storage, pull it DOWN for the
+        // validation backstops below — the agent's own upload path is exactly
+        // where the silent-video leak happened (Monica run #2 published the
+        // same silent file through this shortcut). After validation/repair the
+        // canonical copy is re-uploaded under OUR key.
+        let mut agent_uploaded = false;
+        if final_path.starts_with("https://") {
+            agent_uploaded = true;
+            let tmp = format!("/tmp/publish_{}.mp4", uuid::Uuid::new_v4());
+            let dl = reqwest::get(&final_path).await.map_err(|e| {
+                format!("publish_output: cannot fetch agent-uploaded artifact: {e}")
+            })?;
+            let bytes = dl
+                .bytes()
+                .await
+                .map_err(|e| format!("publish_output: cannot read agent-uploaded artifact: {e}"))?;
+            tokio::fs::write(&tmp, &bytes)
+                .await
+                .map_err(|e| format!("publish_output: cannot stage agent artifact: {e}"))?;
+            tracing::info!(
+                "publish_output: agent-uploaded artifact pulled down for validation ({} bytes)",
+                bytes.len()
+            );
+            final_path = tmp;
+        }
+
+        // Always publish under OUR storage key (validation + repair happened above)
+        let (upload_backend, public_url) = {
+            let _ = agent_uploaded;
             let storage = state
                 .r2_client
                 .as_ref()
@@ -958,7 +981,7 @@ impl AgenticServicePipeline {
             // Never upload a provably-empty/corrupt artifact. The 0-byte
             // incident published 4 empty MP4s to paying campaign slots.
             // Videos smaller than this are garbage by construction.
-            let ext = output_path.rsplit('.').next().unwrap_or("").to_lowercase();
+            let ext = final_path.rsplit('.').next().unwrap_or("").to_lowercase();
             if matches!(ext.as_str(), "mp4" | "mov" | "mkv" | "webm" | "avi") {
                 let min_bytes: u64 = std::env::var("ARTIFACT_MIN_BYTES")
                     .ok()
@@ -989,7 +1012,7 @@ impl AgenticServicePipeline {
                     .map(|m| m.has_audio)
                     .unwrap_or(true);
                 if !has_audio {
-                    let dir = std::path::Path::new(output_path)
+                    let dir = std::path::Path::new(&final_path)
                         .parent()
                         .map(|p| p.to_path_buf())
                         .unwrap_or_else(|| std::path::PathBuf::from("."));
@@ -1020,7 +1043,7 @@ impl AgenticServicePipeline {
                     }
                     match newest_audio {
                         Some((audio_file, _)) => {
-                            let stem = std::path::Path::new(output_path)
+                            let stem = std::path::Path::new(&final_path)
                                 .file_stem()
                                 .and_then(|x| x.to_str())
                                 .unwrap_or("output")
