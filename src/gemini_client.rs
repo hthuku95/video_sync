@@ -270,13 +270,17 @@ pub struct SafetyRating {
     pub probability: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Default)]
 pub struct UsageMetadata {
-    #[serde(rename = "promptTokenCount")]
+    // Tolerant decode: Google occasionally REMOVES/renames usage fields
+    // (observed Nov 2026 — "missing field candidatesTokenCount" hard-failed
+    // every response body even when the answer was fine). Unknown new keys
+    // (thoughtsTokenCount etc.) are ignored automatically by serde.
+    #[serde(rename = "promptTokenCount", default)]
     pub prompt_token_count: u32,
-    #[serde(rename = "candidatesTokenCount")]
+    #[serde(rename = "candidatesTokenCount", default)]
     pub candidates_token_count: u32,
-    #[serde(rename = "totalTokenCount")]
+    #[serde(rename = "totalTokenCount", default)]
     pub total_token_count: u32,
 }
 
