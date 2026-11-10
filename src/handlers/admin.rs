@@ -32,6 +32,7 @@ pub fn admin_routes() -> Router {
         // Delivery share links — public by design
         .route("/delivery/:id", get(delivery_page))
         .route("/delivery/:id/stream", get(delivery_stream))
+        .route("/delivery/:id/progress", get(delivery_progress))
         .route("/delivery/:id/clip/:idx", get(delivery_clip_stream))
         .route("/delivery/:id/feedback", post(delivery_feedback))
         .route("/api/portfolio-samples", get(api_list_portfolio_samples))
@@ -7753,7 +7754,44 @@ function sendFeedback(){{
     }}).catch(()=>{{ st.textContent='Network error'; }});
 }}
 if(document.querySelector('.status-dot') && !document.querySelector('.status-dot').style.background.includes('22c55e')){{
-  setTimeout(()=>location.reload(), 10000);
+  // Live progress polling (owner directive Nov 10 2026): replace blind reloads
+  // with a progress bar + plain-language status + the agent's own explanation.
+  const bar = document.createElement('div');
+  bar.style.cssText = 'margin:14px 0 4px;height:10px;border-radius:999px;background:rgba(148,163,184,0.18);overflow:hidden';
+  const fill = document.createElement('div');
+  fill.style.cssText = 'height:100%;width:5%;border-radius:999px;background:linear-gradient(90deg,#6366f1,#38bdf8);transition:width .6s';
+  bar.appendChild(fill);
+  const statusEl = document.querySelector('.status-dot');
+  const statusRow = statusEl ? statusEl.closest('div') : null;
+  if (statusRow) {{
+    const line = document.createElement('div');
+    line.id = 'agent-progress-line';
+    line.style.cssText = 'margin-top:8px;font-size:14px;color:#a5b0c8';
+    line.textContent = 'Checking production status…';
+    statusRow.parentNode.insertBefore(bar, statusRow.nextSibling);
+    statusRow.parentNode.insertBefore(line, bar.nextSibling);
+  }}
+  let done = false;
+  async function pollProgress(){{
+    try{{
+      const res = await fetch('/delivery/{id}/progress?explain=1');
+      const d = await res.json();
+      if(!d.success) return;
+      fill.style.width = Math.max(4, Math.min(100, d.progress_pct || 0)) + '%';
+      const line = document.getElementById('agent-progress-line');
+      if(line) line.textContent = (d.explain ? '🤖 ' + d.explain : (d.detail || 'Producing your video…'));
+      if(d.phase === 'completed' || d.status === 'ready' || d.status === 'completed'){{
+        done = true; setTimeout(()=>location.reload(), 1200); return;
+      }}
+      if(d.phase === 'failed'){{
+        done = true;
+        if(line) line.textContent = '⚠️ This attempt failed — leave a note below and the agent will apply it on the next attempt.';
+        return;
+      }}
+    }}catch(e){{ /* keep last state on network blips */ }}
+    if(!done) setTimeout(pollProgress, 5000);
+  }}
+  pollProgress();
 }}
 </script>"#,
                     id = id
@@ -8096,6 +8134,149 @@ if(document.querySelector('.status-dot') && !document.querySelector('.status-dot
         header::HeaderValue::from_static("noindex, nofollow"),
     );
     (resp_headers, Html(html))
+}
+
+/// GET /delivery/:id/progress — live production status for the delivery page
+/// (owner directive Nov 10 2026: users must be able to see what the agent is
+/// doing while renders take minutes). `?explain=1` adds a friendly natural-
+/// language status from the NIM progress agent (cached 15 s per delivery;
+/// falls back to the deterministic sentence when NIM is busy).
+pub async fn delivery_progress(
+    Extension(state): Extension<Arc<AppState>>,
+    Path(id): Path<Uuid>,
+) -> Json<serde_json::Value> {
+    use std::time::Instant;
+    static EXPLAIN_CACHE: std::sync::OnceLock<tokio::sync::Mutex<std::collections::HashMap<Uuid, (String, Instant)>>> =
+        std::sync::OnceLock::new();
+
+    let row = sqlx::query_as::<_, (String, Option<uuid::Uuid>, Option<String>)>(
+        "SELECT status, workflow_id, output_r2_url FROM deliveries WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(&state.db_pool)
+    .await;
+    let (status, workflow_id, output_url) = match row {
+        Ok(Some(r)) => r,
+        Ok(None) | Err(_) => {
+            return Json(serde_json::json!({"success": false, "error": "Delivery not found"}))
+        }
+    };
+
+    let output_ready = output_url.as_deref().map(|u| !u.is_empty()).unwrap_or(false);
+    let mut phase = String::from("queued");
+    let mut detail = String::from("Waiting for the render worker…");
+    let mut pct: u8 = 5;
+    let mut eta_minutes: i64 = 25;
+
+    if output_ready || status == "ready" || status == "completed" {
+        phase = "completed".into();
+        detail = "Your video is ready to watch and download.".into();
+        pct = 100;
+        eta_minutes = 0;
+    } else if status == "failed" {
+        phase = "failed".into();
+        detail = "This render attempt failed — the note you leave in the feedback box is applied to the next attempt.".into();
+        pct = 0;
+        eta_minutes = 0;
+    } else if let Some(wid) = &workflow_id {
+        let wf = sqlx::query_as::<_, (String, Option<String>, Option<chrono::DateTime<chrono::Utc>>, Option<chrono::DateTime<chrono::Utc>>)>(
+            "SELECT status, current_step, started_at, created_at FROM app_workflows WHERE id = $1",
+        )
+        .bind(wid)
+        .fetch_optional(&state.db_pool)
+        .await
+        .ok()
+        .flatten();
+        if let Some((wstatus, step, started_at, created_at)) = wf {
+            let step_l = step.clone().unwrap_or_default().to_lowercase();
+            if wstatus == "queued" {
+                phase = "queued".into();
+                detail = "In the render queue — a worker picks it up within a minute.".into();
+                pct = 5;
+            } else if step_l.contains("generate_video_script") {
+                phase = "script".into();
+                detail = "Writing your video script…".into();
+                pct = 18;
+            } else if step_l.contains("text_to_speech") {
+                phase = "narration".into();
+                detail = "Recording the voiceover…".into();
+                pct = 42;
+            } else if step_l.contains("export_video") {
+                phase = "render".into();
+                detail = "Rendering the visuals…".into();
+                pct = 62;
+            } else if step_l.contains("add_audio") {
+                phase = "merge".into();
+                detail = "Syncing narration with the video…".into();
+                pct = 82;
+            } else if step_l.contains("upload") || step_l.contains("finalize") {
+                phase = "upload".into();
+                detail = "Packaging and uploading the final cut…".into();
+                pct = 94;
+            } else if wstatus == "running" || wstatus == "planning" || wstatus == "retrying" {
+                phase = "producing".into();
+                detail = "Producing your video…".into();
+                pct = 50;
+            }
+            let anchor = started_at.or(created_at);
+            if let Some(s) = anchor {
+                let elapsed_min = (chrono::Utc::now() - s).num_minutes();
+                eta_minutes = std::cmp::max(1, 25 - elapsed_min);
+            }
+        }
+    }
+
+    let mut out = serde_json::json!({
+        "success": true,
+        "status": status,
+        "phase": phase,
+        "detail": detail,
+        "progress_pct": pct,
+        "eta_minutes": eta_minutes,
+    });
+
+    let want_explain = std::env::var("DELIVERY_EXPLAIN_AGENT")
+        .map(|v| v == "1" || v == "true")
+        .unwrap_or(true);
+    if want_explain {
+        let cache = EXPLAIN_CACHE
+            .get_or_init(|| tokio::sync::Mutex::new(std::collections::HashMap::new()))
+            .lock()
+            .await;
+        if let Some((text, at)) = cache.get(&id) {
+            if at.elapsed() < std::time::Duration::from_secs(15) {
+                out["explain"] = serde_json::json!(text);
+            }
+        }
+        if out.get("explain").is_none() {
+            drop(cache);
+            let friendly = format!(
+                "{} Renders usually finish within about 20-30 minutes; this page updates live.",
+                detail
+            );
+            let mut explained = friendly.clone();
+            if let Some(nim) = &state.nvidia_nim_client {
+                let prompt = format!(
+                    "You are a friendly production assistant for a video studio. Reply with ONE short sentence (max 18 words) telling the customer the current status of their video order. Do not use the word 'error'. Status JSON: {}",
+                    serde_json::json!({"status": status, "phase": phase, "detail": detail, "eta_minutes": eta_minutes})
+                );
+                if let Ok(text) = nim.generate_text(&prompt).await {
+                    let t = text.trim().trim_matches('"').trim().to_string();
+                    if !t.is_empty() && t.len() < 400 {
+                        explained = t;
+                    }
+                }
+            }
+            out["explain"] = serde_json::json!(explained);
+            let mut cache = EXPLAIN_CACHE
+                .get_or_init(|| tokio::sync::Mutex::new(std::collections::HashMap::new()))
+                .lock()
+                .await;
+            cache.insert(id, (explained, Instant::now()));
+        }
+    }
+
+    Json(out)
 }
 
 async fn delivery_stream(
