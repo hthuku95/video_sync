@@ -7527,8 +7527,23 @@ async fn delivery_feedback(
 async fn delivery_page(
     Path(id): Path<String>,
     Query(query): Query<DeliveryViewQuery>,
+    headers: axum::http::HeaderMap,
     Extension(state): Extension<Arc<AppState>>,
 ) -> impl IntoResponse {
+    // Host-aware white-labeling (owner directive Nov 11 2026): the studio app
+    // (studio.videosync.ink) is the DFY agency storefront — clients pay for the
+    // OUTCOME and must not see AI framing, internal QA scores, or gig slugs.
+    let host = headers
+        .get(axum::http::header::HOST)
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("")
+        .to_lowercase();
+    let is_studio_surface = host.starts_with("studio.")
+        || headers
+            .get("x-forwarded-host")
+            .and_then(|h| h.to_str().ok())
+            .map(|h| h.to_lowercase().starts_with("studio."))
+            .unwrap_or(false);
     let internal_reviewer = query
         .token
         .as_deref()
@@ -7821,12 +7836,16 @@ if(document.querySelector('.status-dot') && !document.querySelector('.status-dot
                     let stars: String =
                         "★".repeat(s as usize / 2) + &"☆".repeat(5 - s as usize / 2);
                     let fb = feedback.as_deref().unwrap_or("");
-                    format!(
-                        r#"<div class="review-box">
+                    if internal_reviewer {
+                        format!(
+                            r#"<div class="review-box">
   <div class="score">AI Quality Score: <strong>{s}/10</strong> <span class="stars">{stars}</span></div>
   <p class="feedback">{fb}</p>
 </div>"#
-                    )
+                        )
+                    } else {
+                        String::new()
+                    }
                 }
                 _ => String::new(),
             };
@@ -7856,6 +7875,23 @@ if(document.querySelector('.status-dot') && !document.querySelector('.status-dot
                 "failed" => "#f87171",
                 "running" => "#60a5fa",
                 _ => "#9ca3af",
+            };
+
+            // Host-aware branding (owner directive Nov 11 2026): studio DFY clients
+            // see a professional production-house page with no AI framing. All
+            // other surfaces keep the standard VideoSync AI branding.
+            let (brand_line, gig_type_line, footer_line) = if is_studio_surface {
+                (
+                    "VideoSync Studio — Professional Video Production".to_string(),
+                    String::new(),
+                    "Delivered by <a href=\"https://videosync.video\">VideoSync Studio</a> — Professional Video Production".to_string(),
+                )
+            } else {
+                (
+                    "VideoSync — AI Video Generation".to_string(),
+                    format!("Gig type: <strong>{}</strong> &nbsp;·&nbsp; ", gig_type),
+                    "Delivered by <a href=\"https://videosync.video\">VideoSync</a> — AI-Powered Video Generation".to_string(),
+                )
             };
 
             let page = format!(
@@ -7911,11 +7947,11 @@ if(document.querySelector('.status-dot') && !document.querySelector('.status-dot
 </head>
 <body>
 <div class="card">
-  <div class="brand">VideoSync — AI Video Generation</div>
+  <div class="brand">{brand_line}</div>
   <h1>{name}</h1>
   <div class="meta">
     <span class="status-dot"></span>
-    Gig type: <strong>{gig_type}</strong> &nbsp;·&nbsp; Status: <strong>{status}</strong>
+    {gig_type_line}Status: <strong>{status}</strong>
   </div>
   <div class="media-wrap">{media_html}</div>
   {download_btn}
@@ -7925,7 +7961,7 @@ if(document.querySelector('.status-dot') && !document.querySelector('.status-dot
   <div id="zernio-section" style="margin-top:16px;"></div>
 </div>
 <div class="footer">
-  Delivered by <a href="https://videosync.video">VideoSync</a> — AI-Powered Video Generation
+  {footer_line}
 </div>
 
 </body>
@@ -8009,7 +8045,7 @@ if(document.querySelector('.status-dot') && !document.querySelector('.status-dot
           var selDisplay = isTarget ? 'inline' : 'none';
           html += '<div style="background:#12121a;border:1px solid ' + borderColor + ';border-radius:8px;padding:10px;cursor:pointer" class="zernio-account-card" data-id="' + a._id + '" data-platform="' + a.platform + '" data-selected="' + (isTarget ? '1' : '0') + '" onclick="toggleAccount(this)">' +
             '<div style="font-weight:600;font-size:14px;color:#e0e0e0">' + a.platform + '</div>' +
-            '<div style="font-size:12px;color:#9999bb">' + (a.username || '\u2014') + '</div>' +
+            '<div style="font-size:12px;color:#9999bb">' + (a.username || '—') + '</div>' +
             '<div style="margin-top:4px"><span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:' + (a.connected ? '#4ade80' : '#f87171') + ';margin-right:4px"></span>' +
             '<span style="font-size:11px;color:' + (a.connected ? '#4ade80' : '#f87171') + '">' + (a.connected ? 'Connected' : 'Pending auth') + '</span>' +
             '<span id="sel-' + a._id + '" style="display:' + selDisplay + ';margin-left:6px;font-size:11px;color:#6366f1">\u2713 Selected</span></div></div>';
@@ -8063,7 +8099,7 @@ if(document.querySelector('.status-dot') && !document.querySelector('.status-dot
         this.textContent = 'Getting URL...';
         var result = await zernioFetch('/api/social/connect-url?platform=' + encodeURIComponent(platform) + '&profile_id=' + encodeURIComponent(profileId) + '&redirect_url=' + encodeURIComponent(window.location.href));
         if (result.success) {
-          zernioToast('OAuth URL ready \u2014 opening in new tab');
+          zernioToast('OAuth URL ready — opening in new tab');
           window.open(result.authUrl, '_blank', 'width=600,height=700');
           this.textContent = '\ud83d\udd17 Connect (opened)';
           var self = this;
