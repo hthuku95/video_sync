@@ -122,7 +122,6 @@ pub fn add_background_music_impl(
             dur = dur,
             fi = fade_in,
             fo = (dur - fade_out).max(0.0),
-            fo = fade_out,
             vol = volume as f64,
             w = 1.0 - volume
         )
