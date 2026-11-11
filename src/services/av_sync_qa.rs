@@ -302,6 +302,7 @@ async fn verify_av_sync_inner(state: &Arc<AppState>, video: &str) -> Result<AvSy
     .await;
 
     // ---- 7. Aggregate. ----
+    let segments_checked = results.len();
     let mut matched = 0usize;
     let mut mismatches = Vec::new();
     let mut unclear = Vec::new();
@@ -316,7 +317,7 @@ async fn verify_av_sync_inner(state: &Arc<AppState>, video: &str) -> Result<AvSy
     let report = AvSyncReport {
         skipped_reason: None,
         video_duration: duration,
-        segments_checked: results.len(),
+        segments_checked,
         matched,
         mismatches,
         unclear,
