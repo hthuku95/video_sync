@@ -10,6 +10,7 @@ pub mod email_service;
 pub mod generated_artifacts;
 pub mod media_review;
 pub mod monetization;
+pub mod music_bed;
 pub mod output_video;
 pub mod pipeline_worker;
 pub mod redis_pubsub;

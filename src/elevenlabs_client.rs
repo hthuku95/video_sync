@@ -192,7 +192,7 @@ impl ElevenLabsClient {
         prompt: &str,
         duration_ms: u32,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        let url = format!("{}/music-generation", self.base_url);
+        let url = format!("{}/music", self.base_url);  // v1/music — the /music-generation path 404s (correct endpoint as of Nov 2026)
 
         let request_body = MusicGenerationRequest {
             prompt: prompt.to_string(),
@@ -227,7 +227,7 @@ impl ElevenLabsClient {
         &self,
         generation_id: &str,
     ) -> Result<MusicStatusResponse, Box<dyn std::error::Error + Send + Sync>> {
-        let url = format!("{}/music-generation/{}", self.base_url, generation_id);
+        let url = format!("{}/music/{}", self.base_url, generation_id);
 
         let response = self
             .client

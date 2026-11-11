@@ -1,4 +1,6 @@
-use crate::claude_client::{ClaudeTool, InputSchema, PropertyDefinition as ClaudePropertyDefinition};
+use crate::claude_client::{
+    ClaudeTool, InputSchema, PropertyDefinition as ClaudePropertyDefinition,
+};
 use crate::gemini_client::{
     FunctionDeclaration, Parameters, PropertyDefinition as GeminiPropertyDefinition,
 };
@@ -108,8 +110,7 @@ impl ToolRegistry {
                 declarations
                     .into_iter()
                     .map(|declaration| {
-                        let _is_completion_critical =
-                            mandatory.contains(declaration.name.as_str());
+                        let _is_completion_critical = mandatory.contains(declaration.name.as_str());
                         CanonicalTool { declaration }
                     })
                     .collect()
@@ -119,9 +120,15 @@ impl ToolRegistry {
 
     /// Tools to KEEP as separate tools despite starting with `apply_` prefix.
     const KEEP_APPLY_TOOLS: &'static [&'static str] = &[
-        "apply_filter", "apply_filter_chain", "apply_audio_effect",
-        "apply_lut", "apply_lut3d", "apply_lut_rgb", "apply_lut_yuv",
-        "apply_xfade_transition", "apply_maskedmerge",
+        "apply_filter",
+        "apply_filter_chain",
+        "apply_audio_effect",
+        "apply_lut",
+        "apply_lut3d",
+        "apply_lut_rgb",
+        "apply_lut_yuv",
+        "apply_xfade_transition",
+        "apply_maskedmerge",
     ];
 
     /// Tool name prefixes whose individual variants are consolidated into parameterized tools.
@@ -144,10 +151,17 @@ impl ToolRegistry {
             "analyze_video",
             "extract_audio",
             "extract_frames",
-            "apply_filter", "apply_filter_chain", "apply_audio_effect",
-            "apply_lut", "apply_lut3d", "apply_lut_rgb", "apply_lut_yuv",
-            "apply_xfade_transition", "apply_maskedmerge",
-            "apply_ffmpeg_filter", "apply_audio_ffmpeg_filter",
+            "apply_filter",
+            "apply_filter_chain",
+            "apply_audio_effect",
+            "apply_lut",
+            "apply_lut3d",
+            "apply_lut_rgb",
+            "apply_lut_yuv",
+            "apply_xfade_transition",
+            "apply_maskedmerge",
+            "apply_ffmpeg_filter",
+            "apply_audio_ffmpeg_filter",
         ];
         if keep.contains(&tool_name) {
             return false; // don't filter out these consolidated tools
@@ -183,28 +197,26 @@ impl ToolRegistry {
             .filter(|t| !Self::_is_consolidated(&t.name))
             .collect();
 
-        let mut claude_tools: Vec<ClaudeTool> = filtered
-            .into_iter()
-            .map(gemini_to_claude_tool)
-            .collect();
+        let mut claude_tools: Vec<ClaudeTool> =
+            filtered.into_iter().map(gemini_to_claude_tool).collect();
 
         claude_tools.push(gemini_to_claude_tool(
-            crate::gemini_client::GeminiClient::apply_ffmpeg_filter_tool()
+            crate::gemini_client::GeminiClient::apply_ffmpeg_filter_tool(),
         ));
         claude_tools.push(gemini_to_claude_tool(
-            crate::gemini_client::GeminiClient::apply_audio_ffmpeg_filter_tool()
+            crate::gemini_client::GeminiClient::apply_audio_ffmpeg_filter_tool(),
         ));
         claude_tools.push(gemini_to_claude_tool(
-            crate::gemini_client::GeminiClient::blender_generate_scene_type_tool()
+            crate::gemini_client::GeminiClient::blender_generate_scene_type_tool(),
         ));
         claude_tools.push(gemini_to_claude_tool(
-            crate::gemini_client::GeminiClient::manim_execute_script_tool()
+            crate::gemini_client::GeminiClient::manim_execute_script_tool(),
         ));
         claude_tools.push(gemini_to_claude_tool(
-            crate::gemini_client::GeminiClient::hyperframes_render_tool()
+            crate::gemini_client::GeminiClient::hyperframes_render_tool(),
         ));
         claude_tools.push(gemini_to_claude_tool(
-            crate::gemini_client::GeminiClient::export_video_tool()
+            crate::gemini_client::GeminiClient::export_video_tool(),
         ));
 
         claude_tools

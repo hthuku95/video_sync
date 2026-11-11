@@ -1422,6 +1422,59 @@ pub async fn execute_tool_claude(name: &str, args: &Value) -> String {
 
         // Audio operations
         "extract_audio" => execute_extract_audio_claude(args),
+        "add_background_music" => {
+            let input = args["input_file"].as_str().unwrap_or("");
+            let output_raw = args["output_file"].as_str().unwrap_or("");
+            let output = ensure_outputs_directory(output_raw);
+            let mood = args["mood"].as_str().unwrap_or("");
+            let volume = args["music_volume"].as_f64().unwrap_or(0.25) as f32;
+            let offset = args["offset_seconds"].as_f64().unwrap_or(0.0);
+            let fade = args["fade_seconds"].as_f64().unwrap_or(1.5) as f32;
+            let explicit = args["music_file"].as_str().unwrap_or("");
+
+            if input.is_empty() || output_raw.is_empty() {
+                return "❌ add_background_music: input_file and output_file are required"
+                    .to_string();
+            }
+
+            // Explicit music file wins; otherwise pick a bundled bed by mood
+            let music_file = if !explicit.is_empty() {
+                explicit.to_string()
+            } else {
+                match crate::services::music_bed::pick_music_bed(mood) {
+                    Some(bed) => {
+                        format!("{}/{}", crate::services::music_bed::MUSIC_LIBRARY_DIR, bed)
+                    }
+                    None => {
+                        let beds = crate::services::music_bed::list_music_beds();
+                        if beds.is_empty() {
+                            return "❌ add_background_music: no music beds found in music_library/".to_string();
+                        }
+                        format!(
+                            "{}/{}",
+                            crate::services::music_bed::MUSIC_LIBRARY_DIR,
+                            beds[0]
+                        )
+                    }
+                }
+            };
+            let music_file = music_file.replace(
+                "MUSIC_LIBRARY_DIR_PLACEHOLDER",
+                crate::services::music_bed::MUSIC_LIBRARY_DIR,
+            );
+
+            crate::services::music_bed::add_background_music_impl(
+                input,
+                &music_file,
+                &output,
+                volume,
+                offset,
+                fade,
+                fade,
+            )
+            .map(|out| format!("✅ Background music added ({}): {}", music_file, out))
+            .unwrap_or_else(|e| format!("❌ add_background_music failed: {e}"))
+        }
         "add_audio" => execute_add_audio_claude(args),
         "adjust_volume" => execute_adjust_volume_claude(args),
         "fade_audio" => execute_fade_audio_claude(args),
