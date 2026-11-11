@@ -77,6 +77,8 @@ pub fn add_background_music_impl(
     fade_in: f32,
     fade_out: f32,
 ) -> Result<String, String> {
+    let fade_in = fade_in as f64;
+    let fade_out = fade_out as f64;
     let dur = crate::core::analyze_video(video_file)
         .map(|m| m.duration_seconds)
         .unwrap_or(0.0);
@@ -112,7 +114,7 @@ pub fn add_background_music_impl(
         // Loop bed across the full duration
         format!(
             "[1:a]aloop=loop=-1:size=2^{}/{}:fade=t=in:st=0:d={}:fade=t=out:st={}:d={},volume={}[m];[0:a][m]amix=inputs=2:duration=first:dropout_transition=2:weights=1 {}[aout]",
-            16, music_dur, fade_in, (dur - fade_out).max(0.0), fade_out, volume, 1.0 - volume
+            16, music_dur, fade_in, (dur - fade_out).max(0.0), fade_out, volume as f64, 1.0 - volume as f64
         )
     } else {
         format!(
@@ -121,7 +123,7 @@ pub fn add_background_music_impl(
             fi = fade_in,
             fo = (dur - fade_out).max(0.0),
             fo = fade_out,
-            vol = volume,
+            vol = volume as f64,
             w = 1.0 - volume
         )
     };
