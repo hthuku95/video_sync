@@ -1674,16 +1674,46 @@ impl GeminiClient {
                         },
                     },
                     FunctionDeclaration {
-                                        name: "add_background_music".to_string(),
-                                        description: "Adds a background music bed UNDER an existing video (narration stays audible). Picks a bundled CC-BY bed by mood (corporate/electronic/ambient/upbeat), loops/fades it, mixes at -18dB. Use AFTER narration is merged, for a polished ad feel. Music by Kevin MacLeod (incompetech.com), CC BY 4.0.".to_string(),
-                        parameters: Parameters { param_type: "object", properties: {
-                            "input_file".to_string(): PropertyDefinition { prop_type: "string", description: "Video with narration to mix under", items: None },
-                            "output_file".to_string(): PropertyDefinition { prop_type: "string", description: "Output path (e.g. outputs/final_with_music.mp4)", items: None },
-                            "mood".to_string(): PropertyDefinition { prop_type: "string", description: "corporate | electronic | ambient | upbeat (auto-picked from the brief if empty)", items: None },
-                            "music_volume".to_string(): PropertyDefinition { prop_type: "number", description: "0.0-1.0, default 0.25 (music under narration)", items: None },
-                            "offset_seconds".to_string(): PropertyDefinition { prop_type: "number", description: "Music start offset (default 0)", items: None },
-                            "fade_seconds".to_string(): PropertyDefinition { prop_type: "number", description: "Fade in/out seconds (default 1.5)", items: None },
-                        }, required: vec!["input_file".to_string(), "output_file".to_string()] },
+                        name: "add_background_music".to_string(),
+                        description: "Adds a background music bed UNDER an existing video (narration stays audible). Picks a bundled CC-BY bed by mood (corporate/electronic/ambient/upbeat), loops/fades it, mixes at -18dB. Use AFTER narration is merged, for a polished ad feel. Music by Kevin MacLeod (incompetech.com), CC BY 4.0.".to_string(),
+                        parameters: Parameters {
+                            param_type: "object".to_string(),
+                            properties: {
+                                let mut props = HashMap::new();
+                                props.insert("input_file".to_string(), PropertyDefinition {
+                                    prop_type: "string".to_string(),
+                                    description: "Video with narration to mix under".to_string(),
+                                    items: None,
+                                });
+                                props.insert("output_file".to_string(), PropertyDefinition {
+                                    prop_type: "string".to_string(),
+                                    description: "Path to save the video with music".to_string(),
+                                    items: None,
+                                });
+                                props.insert("mood".to_string(), PropertyDefinition {
+                                    prop_type: "string".to_string(),
+                                    description: "corporate | electronic | ambient | upbeat (auto-picked from the brief if empty)".to_string(),
+                                    items: None,
+                                });
+                                props.insert("music_volume".to_string(), PropertyDefinition {
+                                    prop_type: "number".to_string(),
+                                    description: "0.0-1.0, default 0.25 (music under narration)".to_string(),
+                                    items: None,
+                                });
+                                props.insert("offset_seconds".to_string(), PropertyDefinition {
+                                    prop_type: "number".to_string(),
+                                    description: "Music start offset (default 0)".to_string(),
+                                    items: None,
+                                });
+                                props.insert("fade_seconds".to_string(), PropertyDefinition {
+                                    prop_type: "number".to_string(),
+                                    description: "Fade in/out seconds (default 1.5)".to_string(),
+                                    items: None,
+                                });
+                                props
+                            },
+                            required: vec!["input_file".to_string(), "output_file".to_string()],
+                        },
                     },
 
         FunctionDeclaration {
