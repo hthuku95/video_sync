@@ -8984,9 +8984,20 @@ async fn execute_review_video_with_state_claude(
         "**Full Video Analysis:**\n{}\n",
         full_video_analysis
     ));
+
+    // Timestamped AV-sync QA (owner directive Nov 12 2026): verify that what
+    // is on screen at second N matches what the narration at second N says.
+    let av_sync = crate::services::av_sync_qa::verify_av_sync(app_state, &video_path).await;
+    review.push('\n');
+    review.push_str(&av_sync.render_markdown());
+    if let Some(sync_hint) = av_sync.retry_hint() {
+        review.push_str(&format!("  • Sync Retry Hint: {sync_hint}\n"));
+    }
+
+    let overall_pass = llm_review.pass && !av_sync.hard_fail();
     review.push_str(&format!(
         "\n**Review Result:** {}\n",
-        if llm_review.pass {
+        if overall_pass {
             "✅ PASS"
         } else {
             "⚠️ FAIL"
@@ -9139,9 +9150,20 @@ async fn execute_review_video_with_state_gemini(
         "**Full Video Analysis:**\n{}\n",
         full_video_analysis
     ));
+
+    // Timestamped AV-sync QA (owner directive Nov 12 2026): verify that what
+    // is on screen at second N matches what the narration at second N says.
+    let av_sync = crate::services::av_sync_qa::verify_av_sync(app_state, &video_path).await;
+    review.push('\n');
+    review.push_str(&av_sync.render_markdown());
+    if let Some(sync_hint) = av_sync.retry_hint() {
+        review.push_str(&format!("  • Sync Retry Hint: {sync_hint}\n"));
+    }
+
+    let overall_pass = llm_review.pass && !av_sync.hard_fail();
     review.push_str(&format!(
         "\n**Review Result:** {}\n",
-        if llm_review.pass {
+        if overall_pass {
             "✅ PASS"
         } else {
             "⚠️ FAIL"
