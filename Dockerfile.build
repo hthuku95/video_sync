@@ -4,7 +4,13 @@
 # AWS build-host path (§10).
 #
 # Try with: docker build -f Dockerfile.build -t video-editor:gcp .
-FROM rust:1-bookworm AS chef
+# PINNED (Nov 13 2026): rust:1-bookworm is a floating tag that re-pulled a
+# newer rustc whose type-inference change (rustc issue #148922) breaks
+# sqlx-postgres 0.7.4's never-type usage (E0277 on `!` Decode) — 6 green
+# builds a day earlier, then suddenly red. Pin to 1.82, the proven-good
+# toolchain (matches Dockerfile.render). Bump deliberately, with a green
+# build, never by accident via a base-image digest change.
+FROM rust:1.82-bookworm AS chef
 RUN cargo install cargo-chef --locked
 WORKDIR /app
 
