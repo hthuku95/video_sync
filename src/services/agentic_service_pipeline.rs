@@ -2036,26 +2036,35 @@ async fn generate_execution_plan(
         ServiceType::Clipping => "generate_clip_compilation (downloads + extracts + captions clips), kick_post_processing happens automatically; final artifacts are clip URLs",
         ServiceType::LandingPage => "browserbase_crawl_website (read the source site first), generate_video_script, generate_narration (audio-first timing), hyperframes_render, add_audio, review_video, submit_final_answer",
         ServiceType::Education => "generate_video_script, generate_narration (audio-first timing), hyperframes_render, manim_execute_script (only for equations/diagrams/LaTeX), merge_videos, add_audio, review_video, submit_final_answer",
-        // Tailored chains for the other narrative services (owner directive
-        // Nov 13 2026): every plan must reflect how ITS video type is built,
-        // not the generic fallback.
-        ServiceType::BusinessExplainer => "generate_video_script, generate_narration (audio-first timing), hyperframes_render (kinetic typography, animated layouts, feature showcases), manim_execute_script (only for charts/timelines), merge_videos, add_audio, review_video, submit_final_answer",
-        ServiceType::InvestorPitch => "generate_video_script, generate_narration (audio-first timing), hyperframes_render (d3 charts for traction/financials, GSAP timelines for milestones, title cards), merge_videos, add_audio, review_video, submit_final_answer",
-        ServiceType::AnimatedInfographic => "generate_video_script, generate_narration (audio-first timing), hyperframes_render (d3 animated charts, counters, icon layouts, transitions), merge_videos, add_audio, review_video, submit_final_answer",
-        ServiceType::KineticTypography => "generate_video_script, generate_narration (audio-first timing), hyperframes_render ONLY (Slug word-by-word reveals, GSAP text timelines — no charts), merge_videos, add_audio, review_video, submit_final_answer",
-        ServiceType::WhiteboardAnimation => "generate_video_script, generate_narration (audio-first timing), hyperframes_render ONLY (hand-drawn stroke/line style, masks for draw-on effects), merge_videos, add_audio, review_video, submit_final_answer",
-        ServiceType::ManimExplainer | ServiceType::AlgorithmViz => "generate_video_script, generate_narration (audio-first timing), manim_execute_script (equations, algorithms, data structures, step-through animations), hyperframes_render (title cards + transitions only), merge_videos, add_audio, review_video, submit_final_answer",
-        ServiceType::YearInReview => "generate_video_script, generate_narration (audio-first timing), hyperframes_render (d3 charts for stats, counters, GSAP timelines for month milestones), merge_videos, add_audio, review_video, submit_final_answer",
-        ServiceType::IsometricExplainer => "generate_video_script, generate_narration (audio-first timing), hyperframes_render ONLY (CSS 3D isometric layouts, perspective + parallax layers — no GPU tools), merge_videos, add_audio, review_video, submit_final_answer",
-        ServiceType::FullStack | ServiceType::ProductMockup => "generate_video_script, generate_narration (audio-first timing), hyperframes_render (UI mockups, screen flows, device frames), manim_execute_script (only for technical diagrams), merge_videos, add_audio, review_video, submit_final_answer",
+        // Tailored TOOL chains for the other narrative services (owner
+        // directive Nov 13 2026): every plan must reflect how ITS video type
+        // is built. Feature narrowing is NOT allowed — every hyperframes_render
+        // call has FULL HyperFrames feature access (see the global block above).
+        ServiceType::BusinessExplainer => "generate_video_script, generate_narration (audio-first timing), hyperframes_render (FULL HyperFrames feature access), manim_execute_script (only for charts/timelines), merge_videos, add_audio, review_video, submit_final_answer",
+        ServiceType::InvestorPitch => "generate_video_script, generate_narration (audio-first timing), hyperframes_render (FULL HyperFrames feature access), merge_videos, add_audio, review_video, submit_final_answer",
+        ServiceType::AnimatedInfographic => "generate_video_script, generate_narration (audio-first timing), hyperframes_render (FULL HyperFrames feature access), merge_videos, add_audio, review_video, submit_final_answer",
+        ServiceType::KineticTypography => "generate_video_script, generate_narration (audio-first timing), hyperframes_render ONLY (FULL HyperFrames feature access), merge_videos, add_audio, review_video, submit_final_answer",
+        ServiceType::WhiteboardAnimation => "generate_video_script, generate_narration (audio-first timing), hyperframes_render ONLY (FULL HyperFrames feature access), merge_videos, add_audio, review_video, submit_final_answer",
+        ServiceType::ManimExplainer | ServiceType::AlgorithmViz => "generate_video_script, generate_narration (audio-first timing), manim_execute_script (equations, algorithms, data structures, step-through animations), hyperframes_render (FULL HyperFrames feature access), merge_videos, add_audio, review_video, submit_final_answer",
+        ServiceType::YearInReview => "generate_video_script, generate_narration (audio-first timing), hyperframes_render (FULL HyperFrames feature access), merge_videos, add_audio, review_video, submit_final_answer",
+        ServiceType::IsometricExplainer => "generate_video_script, generate_narration (audio-first timing), hyperframes_render ONLY (FULL HyperFrames feature access; CPU-safe: no GPU tools), merge_videos, add_audio, review_video, submit_final_answer",
+        ServiceType::FullStack | ServiceType::ProductMockup => "generate_video_script, generate_narration (audio-first timing), hyperframes_render (FULL HyperFrames feature access), manim_execute_script (only for technical diagrams), merge_videos, add_audio, review_video, submit_final_answer",
         ServiceType::Thumbnails => "hyperframes_render (static cover frames), submit_final_answer",
-        _ => "generate_video_script, generate_narration (audio-first timing), hyperframes_render, manim_execute_script (only for math/diagrams), merge_videos, add_audio, review_video, submit_final_answer",
+        _ => "generate_video_script, generate_narration (audio-first timing), hyperframes_render (FULL HyperFrames feature access), manim_execute_script (only for math/diagrams), merge_videos, add_audio, review_video, submit_final_answer",
     };
 
     let prompt = format!(
         "You are a render-pipeline planner for the '{service}' Managed Campaign service.\n\
          Title: {title}\nBrief: {brief}\nTarget duration: {duration}s\nStyle: {style}{source}\n\n\
          Available pipeline tools: {tools}\n\n\
+         HYPERFRAMES FEATURE ACCESS (owner directive Nov 13 2026): hyperframes_render\n\
+         grants FULL access to EVERY HyperFrames feature for EVERY service — 50+ cinematic\n\
+         VFX shaders (glitch, film grain, chromatic aberration, bloom, halftone, CRT...),\n\
+         Slug GPU vector typography, d3 animated charts, 3D scene graph (glTF + PBR),\n\
+         GSAP timelines, Lottie playback, audio-reactive motion, transitions, masks, CSS\n\
+         perspective/parallax — including for services currently gated OFF by the campaigns\n\
+         switch (the planner still plans them; the gate is at order time, not render time).\n\
+         Pick whichever combination best serves the brief (>=3 distinct features per video).\n\n\
          Write a concise numbered execution plan (5-9 steps) to produce this video.\n\
          Each step must be ONE line in exactly this format:\n\
          STEP <n>: <tool_name>(<key args>) -> <expected artifact>\n\n\
