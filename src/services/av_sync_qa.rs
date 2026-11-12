@@ -86,17 +86,26 @@ impl AvSyncReport {
         for m in &self.mismatches {
             out.push_str(&format!(
                 "  • ❌ t={:.1}s–{:.1}s — narration says \"{}\" but the frame does not match: {}\n",
-                m.start, m.end, truncate(&m.spoken, 90), truncate(&m.detail, 140)
+                m.start,
+                m.end,
+                truncate(&m.spoken, 90),
+                truncate(&m.detail, 140)
             ));
         }
         for u in &self.unclear {
             out.push_str(&format!(
                 "  • ⚠️ t={:.1}s–{:.1}s — could not confirm: {}\n",
-                u.start, u.end, truncate(&u.detail, 120)
+                u.start,
+                u.end,
+                truncate(&u.detail, 120)
             ));
         }
         if let Some(cov) = self.speech_coverage {
-            let flag = if cov < 0.60 { "❌ BELOW THE 60% FLOOR" } else { "✅" };
+            let flag = if cov < 0.60 {
+                "❌ BELOW THE 60% FLOOR"
+            } else {
+                "✅"
+            };
             out.push_str(&format!(
                 "  • Speech density: {:.0}% of runtime ({:.1}s speech / {:.0}s video) {}\n",
                 cov * 100.0,
@@ -106,7 +115,9 @@ impl AvSyncReport {
             ));
         }
         if self.ok() {
-            out.push_str("  • ✅ Every checked timestamp shows what the narration is describing.\n");
+            out.push_str(
+                "  • ✅ Every checked timestamp shows what the narration is describing.\n",
+            );
         }
         out
     }
@@ -199,9 +210,7 @@ async fn verify_av_sync_inner(state: &Arc<AppState>, video: &str) -> Result<AvSy
     let duration = probe_duration(&video_path).await?;
     if duration < MIN_VIDEO_SECONDS {
         return Ok(AvSyncReport {
-            skipped_reason: Some(format!(
-                "video too short for AV-sync QA ({duration:.1}s)"
-            )),
+            skipped_reason: Some(format!("video too short for AV-sync QA ({duration:.1}s)")),
             video_duration: duration,
             segments_checked: 0,
             matched: 0,
@@ -382,6 +391,13 @@ async fn verify_av_sync_inner(state: &Arc<AppState>, video: &str) -> Result<AvSy
 // helpers
 // ---------------------------------------------------------------------------
 
+/// Public re-entry so craft QA can audit the same video without duplicating
+/// resolution logic. Local paths pass through; URLs download to temp (120s
+/// cap, same discipline as render_review).
+pub async fn resolve_video_for_craft(video: &str) -> Result<PathBuf, String> {
+    resolve_local_video(video).await
+}
+
 type Segment = (f64, f64, String); // start, end, spoken text
 
 fn seg_verdict(seg: &Segment, verdict: &'static str, detail: &str) -> SegmentVerdict {
@@ -398,13 +414,10 @@ async fn resolve_local_video(video: &str) -> Result<PathBuf, String> {
     if video.starts_with("http://") || video.starts_with("https://") {
         // Bounded download (same discipline as render_review: an unbounded GET
         // once wedged QA for 35+ minutes).
-        let resp = tokio::time::timeout(
-            std::time::Duration::from_secs(120),
-            reqwest::get(video),
-        )
-        .await
-        .map_err(|_| "video download timed out (120s)".to_string())?
-        .map_err(|e| format!("video download failed: {e}"))?;
+        let resp = tokio::time::timeout(std::time::Duration::from_secs(120), reqwest::get(video))
+            .await
+            .map_err(|_| "video download timed out (120s)".to_string())?
+            .map_err(|e| format!("video download failed: {e}"))?;
         let bytes = resp
             .bytes()
             .await
@@ -417,11 +430,8 @@ async fn resolve_local_video(video: &str) -> Result<PathBuf, String> {
             .next()
             .filter(|s| s.len() <= 5 && !s.contains('/'))
             .unwrap_or("mp4");
-        let path = std::env::temp_dir().join(format!(
-            "avsync_video_{}.{}",
-            uuid::Uuid::new_v4(),
-            ext
-        ));
+        let path =
+            std::env::temp_dir().join(format!("avsync_video_{}.{}", uuid::Uuid::new_v4(), ext));
         tokio::fs::write(&path, &bytes)
             .await
             .map_err(|e| format!("temp write: {e}"))?;
@@ -471,12 +481,10 @@ async fn probe_duration(path: &PathBuf) -> Result<f64, String> {
 async fn run_ffmpeg_spawn_blocking(args: &[String]) -> Result<(), String> {
     use std::process::Command;
     let args = args.to_vec();
-    let out = tokio::task::spawn_blocking(move || {
-        Command::new("ffmpeg").args(&args).output()
-    })
-    .await
-    .map_err(|e| format!("ffmpeg spawn: {e}"))?
-    .map_err(|e| format!("ffmpeg failed: {e}"))?;
+    let out = tokio::task::spawn_blocking(move || Command::new("ffmpeg").args(&args).output())
+        .await
+        .map_err(|e| format!("ffmpeg spawn: {e}"))?
+        .map_err(|e| format!("ffmpeg failed: {e}"))?;
     if out.status.success() {
         Ok(())
     } else {
@@ -502,8 +510,14 @@ fn parse_segments(payload: &Value) -> Vec<Segment> {
     let mut out = Vec::new();
     if let Some(segs) = payload.get("segments").and_then(|v| v.as_array()) {
         for seg in segs {
-            let start = num(seg.get("start").or_else(|| seg.get("begin")).or_else(|| seg.get("from")));
-            let end = num(seg.get("end").or_else(|| seg.get("finish")).or_else(|| seg.get("to")));
+            let start = num(seg
+                .get("start")
+                .or_else(|| seg.get("begin"))
+                .or_else(|| seg.get("from")));
+            let end = num(seg
+                .get("end")
+                .or_else(|| seg.get("finish"))
+                .or_else(|| seg.get("to")));
             let text = seg
                 .get("text")
                 .or_else(|| seg.get("content"))

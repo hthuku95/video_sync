@@ -2055,7 +2055,12 @@ async fn generate_execution_plan(
          perspective/parallax. The planner only ever runs for services whose model-access\n\
          flag is ON, so every planned service already has the full feature menu — flipping\n\
          a service flag ON (POST /api/admin/service-flags) needs zero re-engineering.\n\
-         Pick whichever combination best serves the brief (>=3 distinct features per video).\n\n\
+         Pick whichever combination best serves the brief (>=3 distinct features per video).\n\
+         ANTI-SLIDE LAWS (Bang-Motion-derived): every scene is one continuous world with a\n\
+         persistent subject and a moving camera; scenes cut on motion (never fade-sections);\n\
+         no page chrome (no corner labels/counters/timecodes/progress bars); text lives\n\
+         inside the scene world, max 2 text levels, >=30px on 1080-wide; entries decelerate\n\
+         in, exits accelerate out, nothing grows from zero; end card <=2s.\n\n\
          Write a concise numbered execution plan (5-9 steps) to produce this video.\n\
          Each step must be ONE line in exactly this format:\n\
          STEP <n>: <tool_name>(<key args>) -> <expected artifact>\n\n\

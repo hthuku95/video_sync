@@ -5,6 +5,7 @@ pub mod app_tiers;
 pub mod artifact_verifier;
 pub mod av_sync_qa;
 pub mod campaign_engine;
+pub mod craft_qa;
 pub mod chat_agent_worker;
 pub mod cookie_health;
 pub mod email_service;

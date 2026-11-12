@@ -9099,6 +9099,7 @@ async fn execute_review_video_with_state_claude(
         full_video_analysis
     ));
 
+    let mut sync_craft_fail;
     // Timestamped AV-sync QA (owner directive Nov 12 2026): verify that what
     // is on screen at second N matches what the narration at second N says.
     let av_sync = crate::services::av_sync_qa::verify_av_sync(app_state, &video_path).await;
@@ -9108,7 +9109,22 @@ async fn execute_review_video_with_state_claude(
         review.push_str(&format!("  • Sync Retry Hint: {sync_hint}\n"));
     }
 
-    let overall_pass = llm_review.pass && !av_sync.hard_fail();
+    // Craft QA gates (Motionmaxxing-derived, owner-approved Nov 13 2026):
+    // deterministic checks for dead frames (G2) and overlong end holds (G3).
+    if let Ok(craft_path) = crate::services::av_sync_qa::resolve_video_for_craft(&video_path).await
+    {
+        let craft = crate::services::craft_qa::verify_craft(&craft_path).await;
+        review.push('\n');
+        review.push_str(&craft.render_markdown());
+        if let Some(craft_hint) = craft.retry_hint() {
+            review.push_str(&format!("  • Craft Retry Hint: {craft_hint}\n"));
+        }
+        sync_craft_fail = av_sync.hard_fail() || craft.hard_fail();
+    } else {
+        sync_craft_fail = av_sync.hard_fail();
+    }
+
+    let overall_pass = llm_review.pass && !sync_craft_fail;
     review.push_str(&format!(
         "\n**Review Result:** {}\n",
         if overall_pass {
@@ -9265,6 +9281,7 @@ async fn execute_review_video_with_state_gemini(
         full_video_analysis
     ));
 
+    let mut sync_craft_fail;
     // Timestamped AV-sync QA (owner directive Nov 12 2026): verify that what
     // is on screen at second N matches what the narration at second N says.
     let av_sync = crate::services::av_sync_qa::verify_av_sync(app_state, &video_path).await;
@@ -9274,7 +9291,22 @@ async fn execute_review_video_with_state_gemini(
         review.push_str(&format!("  • Sync Retry Hint: {sync_hint}\n"));
     }
 
-    let overall_pass = llm_review.pass && !av_sync.hard_fail();
+    // Craft QA gates (Motionmaxxing-derived, owner-approved Nov 13 2026):
+    // deterministic checks for dead frames (G2) and overlong end holds (G3).
+    if let Ok(craft_path) = crate::services::av_sync_qa::resolve_video_for_craft(&video_path).await
+    {
+        let craft = crate::services::craft_qa::verify_craft(&craft_path).await;
+        review.push('\n');
+        review.push_str(&craft.render_markdown());
+        if let Some(craft_hint) = craft.retry_hint() {
+            review.push_str(&format!("  • Craft Retry Hint: {craft_hint}\n"));
+        }
+        sync_craft_fail = av_sync.hard_fail() || craft.hard_fail();
+    } else {
+        sync_craft_fail = av_sync.hard_fail();
+    }
+
+    let overall_pass = llm_review.pass && !sync_craft_fail;
     review.push_str(&format!(
         "\n**Review Result:** {}\n",
         if overall_pass {
