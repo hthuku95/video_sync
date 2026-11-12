@@ -1914,7 +1914,14 @@ pub async fn execute_tool_gemini(name: &str, args: &HashMap<String, Value>) -> S
 
         // AI/Generation tools
         "pexels_search" => execute_pexels_search_gemini(args).await,
-        "polyfork_search_assets" => execute_polyfork_search(args).await,
+        "polyfork_search_assets" => {
+            let args_json: Value = Value::Object(
+                args.iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect::<serde_json::Map<String, Value>>(),
+            );
+            execute_polyfork_search(&args_json).await
+        }
         "pexels_download_video" => execute_pexels_download_video_gemini(args).await,
         "pexels_download_photo" => execute_pexels_download_photo_gemini(args).await,
         "pexels_get_trending" => execute_pexels_get_trending_gemini(args).await,
