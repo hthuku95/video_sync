@@ -4,15 +4,16 @@
 # AWS build-host path (§10).
 #
 # Try with: docker build -f Dockerfile.build -t video-editor:gcp .
-# PINNED (Nov 13 2026): rust:1-bookworm is a floating tag that re-pulled a
-# newer rustc whose type-inference change (rustc issue #148922) breaks
-# sqlx-postgres 0.7.4's never-type usage (E0277 on `!` Decode) — 6 green
-# builds a day earlier, then suddenly red. Pin to 1.82, the proven-good
-# toolchain (matches Dockerfile.render). Bump deliberately, with a green
+# PINNED (Nov 13 2026): rust:1-bookworm is a floating tag that re-pulled Rust
+# 1.92 (shipped Thursday Nov 12 2026 — release day) whose type-inference
+# change (rustc issue #148922) breaks sqlx-postgres 0.7.4's never-type usage
+# (E0277 on `!` Decode). 1.92 is ALSO too new to keep; 1.82 is too old (new
+# dep manifests need edition2024 / cargo >=1.85). 1.91 = the exact toolchain
+# of the 9 green builds before the breakage. Bump deliberately, with a green
 # build, never by accident via a base-image digest change.
-FROM rust:1.82-bookworm AS chef
-# cargo-chef pinned too: latest requires a newer rustc than 1.82 (hit in the
-# same Nov 13 2026 incident). 0.1.71 predates-and-supports rust 1.82.
+FROM rust:1.91-bookworm AS chef
+# cargo-chef pinned for determinism (0.1.71 was chosen during the Nov 13
+# 2026 1.82 attempt; it builds fine on 1.91 as well).
 RUN cargo install cargo-chef --locked --version 0.1.71
 WORKDIR /app
 
