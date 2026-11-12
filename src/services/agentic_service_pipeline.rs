@@ -1268,19 +1268,12 @@ The tool `generate_long_form_video` delegates to another agent and will NOT prod
 If a source URL is provided, use it as reference context for the product's look and features (crawling is OPTIONAL for this service — only LandingPage requires it). If you do crawl, get the `feature_tag` and `pages`, then call `vectorize_crawled_content(feature_tag="<tag>", pages=<array>)` to store in Qdrant, and use `search_crawled_content(query="design and features", feature_tag="<tag>")` to get specific product details. Use the extracted content to understand the product's features, design, and brand style.
 
 ## MANDATORY TOOL SEQUENCE
-0. (If the product/scene benefits from realistic pre-made geometry — devices,
-   packaging, furniture, appliances) fetch real 3D assets:
-   sketchfab_search(query="<product>") → pick a downloadable CC model →
-   sketchfab_download(uid) → returns an R2 URL. Inside your bpy script, load it
-   with the load_model_from_url() helper (provided in your system instructions),
-   then position/light/animate the imported root like any Blender object.
-   Normalize scale from its printed dimensions. Prefer this over primitive
-   shapes whenever a real-world object is central to the scene.
-1. generate_video_script(topic, duration, style, tone) — plan the content
-2. Render the product mockup using blender_generate_scene_type(prompt, params) — for device mockups, 3D product animations, UI mockups, text reveals, and animated backgrounds
-3. add_voiceover_to_video(input_video=<video path>, voiceover_text=<narration script>, output_video=<final path>) or generate_text_to_speech(text=<narration>, output_file=<path>) — narrate if it improves the result
-4. review_video(video_path_or_url) — check quality, iterate
-5. submit_final_answer(summary, output_files=[path]) — only after review passes
+1. generate_video_script(topic, duration, style, tone) — split into scenes ~20-25s each, one short narration line per scene. NARRATION DENSITY: target 70-85% speech coverage (hard floor 60%) — for a scene of T seconds its narration must run ~T*0.6s of speech. Then SELF-CHECK from SCENE_TIMELINE_JSON: (sum of speech / duration) >= 0.6 — if lower, rewrite the lines denser and re-run generate_narration BEFORE rendering.
+2. generate_narration(lines=[<one line per scene>], voice="Emma", output_file="{output_dir}/narration.mp3", gap_seconds=0.35) — AUDIO-FIRST: this call returns the exact SCENE_TIMELINE_JSON that is the clock for the whole video. Call it ONCE with all scene lines; if it errors, fix the arguments and retry once. NEVER use add_voiceover_to_video or generate_text_to_speech for this service.
+3. Render each scene to EXACTLY its timeline duration: hyperframes_render(html=..., resolution=...) — PRIMARY (FULL HyperFrames feature access: UI mockups, device frames, screen flows; Blender is DISABLED — never call blender_*).
+4. merge_videos the scene clips in narration order, then add_audio(input_file="{output_dir}/merged.mp4", audio_file="{output_dir}/narration.mp3", output_file="{output_dir}/output.mp4").
+5. review_video(video_path_or_url="{output_dir}/output.mp4", original_request="product_mockup video", expected_features=["audible narration","scene changes stay in sync with narration","no cropped or overflowing text","every scene implements the HyperFrames features named in its plan"]) — this runs the timestamped AV-sync QA; fix ONLY the flagged timestamps if it fails.
+6. submit_final_answer(summary="product_mockup video", output_files=["{output_dir}/output.mp4"])
 
 OUTPUT to: {output_dir}/
 Save final video as .mp4"#,
@@ -1535,12 +1528,12 @@ That tool delegates to another agent. For a full-stack deliverable you MUST call
 
 ## MANDATORY WORKFLOW — produce ALL three deliverables:
 
-### 1. MAIN VIDEO
-- generate_video_script(topic, duration, style, tone) — plan
-- Render using blender_generate_scene_type(prompt, params) for the main visual
-- Optionally use manim_execute_script for data/technical visuals and merge with merge_videos
-- add_voiceover_to_video(input_video=<video path>, voiceover_text=<narration script>, output_video=<final path>) or generate_text_to_speech(text=<narration>, output_file=<path>) — narrate
-- review_video — check quality, iterate
+### 1. MAIN VIDEO (AUDIO-FIRST — the narration is the clock)
+- generate_video_script(topic, duration, style, tone) — split into scenes ~20-25s each, one short narration line per scene
+- generate_narration(lines=[<one per scene>], voice="Emma", output_file="{output_dir}/narration.mp3", gap_seconds=0.35) — AUDIO-FIRST: returns the exact SCENE_TIMELINE_JSON for the whole video. NEVER use add_voiceover_to_video or generate_text_to_speech for the video narration
+- Render each scene to EXACTLY its timeline duration: hyperframes_render (FULL HyperFrames feature access; Blender is DISABLED — never call blender_*); manim_execute_script only for data/technical visuals
+- merge_videos the scene clips in narration order, then add_audio(input_file="{output_dir}/merged.mp4", audio_file="{output_dir}/narration.mp3", output_file="{output_dir}/output.mp4")
+- review_video — check quality (includes timestamped AV-sync QA), iterate
 
 ### 2. THUMBNAIL
 - Use create_thumbnail_hd or generate_image — create a click-optimized image
@@ -1576,13 +1569,12 @@ Style: {style}
 That tool delegates to another agent. Call rendering tools directly.
 
 ## MANDATORY TOOL SEQUENCE
-1. generate_video_script(topic, duration, style, tone) — plan the narrative structure
-2. Render the main visual using blender_generate_scene_type(prompt, params) — for 3D scenes, title cards, product mockups, abstract backgrounds, and branded visuals
-3. Use manim_execute_script(description, ...) — for data visualizations, charts, diagrams, flowcharts, timelines, and any analytical/technical content. Render these as separate clips.
-4. Use merge_videos to combine all rendered clips into a single cohesive video
-5. add_voiceover_to_video(input_video=<video path>, voiceover_text=<narration script>, output_video=<final path>) or generate_text_to_speech(text=<narration>, output_file=<path>) — professional narration
-6. review_video(video_path_or_url) — check quality, fix issues, iterate
-7. submit_final_answer(summary, output_files=[path]) — only after review passes
+1. generate_video_script(topic, duration, style, tone) — split into scenes ~20-25s each, one short narration line per scene. NARRATION DENSITY: target 70-85% speech coverage (hard floor 60%) — for a scene of T seconds its narration must run ~T*0.6s of speech. Then SELF-CHECK from SCENE_TIMELINE_JSON: (sum of speech / duration) >= 0.6 — if lower, rewrite the lines denser and re-run generate_narration BEFORE rendering.
+2. generate_narration(lines=[<one line per scene>], voice="Emma", output_file="{output_dir}/narration.mp3", gap_seconds=0.35) — AUDIO-FIRST: this call returns the exact SCENE_TIMELINE_JSON that is the clock for the whole video. Call it ONCE with all scene lines; if it errors, fix the arguments and retry once. NEVER use add_voiceover_to_video or generate_text_to_speech for this service.
+3. Render each scene to EXACTLY its timeline duration: hyperframes_render(html=..., resolution=...) — PRIMARY for all scenes (FULL HyperFrames feature access; Blender is DISABLED — never call blender_*). manim_execute_script only for charts/diagrams/timelines; trim/pad each clip to the exact scene duration.
+4. merge_videos the scene clips in narration order, then add_audio(input_file="{output_dir}/merged.mp4", audio_file="{output_dir}/narration.mp3", output_file="{output_dir}/output.mp4").
+5. review_video(video_path_or_url="{output_dir}/output.mp4", original_request="business_explainer video", expected_features=["audible narration","scene changes stay in sync with narration","no cropped or overflowing text","every scene implements the HyperFrames features named in its plan"]) — this runs the timestamped AV-sync QA; fix ONLY the flagged timestamps if it fails.
+6. submit_final_answer(summary="business_explainer video", output_files=["{output_dir}/output.mp4"])
 
 OUTPUT to: {output_dir}/
 Save your final video as .mp4 (landscape 16:9 recommended)"#,
@@ -1632,9 +1624,7 @@ Save your final video as .mp4 (landscape 16:9 recommended)"#,
             && !base.contains("browserbase_crawl_website")
         {
             base = format!("{}\n\n{}", Self::story_source_block(input), base);
-        } else if Self::is_narrative_service(service_type)
-            && !base.contains("THE STORY CONTRACT")
-        {
+        } else if Self::is_narrative_service(service_type) && !base.contains("THE STORY CONTRACT") {
             // All other narrative services (URL or not): brief is the source
             // of truth; the URL, when present, is reference context only.
             base = format!("{}\n\n{}", Self::story_contract_block(input), base);
@@ -1720,11 +1710,11 @@ Use ONLY manim_execute_script for ALL visual content — every render call uploa
 That tool delegates to another agent and will NOT produce the correct output.
 
 ## MANDATORY TOOL SEQUENCE
-1. generate_video_script(topic="{brief}", duration={duration}, style="{style}", tone="professional")
-2. Render ALL scenes using manim_execute_script(description=..., quality="h") — for title cards, text animations, diagrams, charts, and ALL visual content. Each call returns a Cloud URL.
-3. Use merge_videos if multiple manim clips need combining
-4. add_voiceover_to_video(input_video="{out}/output.mp4", voiceover_text="<the narration from the script above>", output_video="{out}/output.mp4")
-5. review_video(video_path_or_url="{out}/output.mp4")
+1. generate_video_script(topic="{brief}", duration={duration}, style="{style}", tone="professional") — split into scenes ~20-25s each, one short narration line per scene. NARRATION DENSITY: target 70-85% speech coverage (hard floor 60%) — for a scene of T seconds its narration must run ~T*0.6s of speech. Then SELF-CHECK from SCENE_TIMELINE_JSON: (sum of speech / duration) >= 0.6 — if lower, rewrite the lines denser and re-run generate_narration BEFORE rendering.
+2. generate_narration(lines=[<one line per scene>], voice="Emma", output_file="{out}/narration.mp3", gap_seconds=0.35) — AUDIO-FIRST: this call returns the exact SCENE_TIMELINE_JSON that is the clock for the whole video. Call it ONCE with all scene lines; if it errors, fix the arguments and retry once. NEVER use add_voiceover_to_video or generate_text_to_speech for this service.
+3. Render each scene to EXACTLY its timeline duration: manim_execute_script(description=..., duration=<scene duration>, quality="h", include_narration=false) — for equations, diagrams, step-through animations; trim/pad each clip to the exact scene duration. hyperframes_render (FULL HyperFrames feature access) for title cards and transitions only.
+4. merge_videos the scene clips in narration order, then add_audio(input_file="{out}/merged.mp4", audio_file="{out}/narration.mp3", output_file="{out}/output.mp4").
+5. review_video(video_path_or_url="{out}/output.mp4", original_request="manim explainer {title}", expected_features=["audible narration","scene changes stay in sync with narration","no cropped or overflowing text","every scene implements the HyperFrames features named in its plan"]) — this runs the timestamped AV-sync QA; fix ONLY the flagged timestamps if it fails.
 6. submit_final_answer(summary="manim explainer {title}", output_files=["{out}/output.mp4"])
 "#,
             duration = input.duration_seconds,
@@ -1760,11 +1750,11 @@ Use ONLY manim_execute_script for ALL visual content — every render call uploa
 - See manim_codegen: use background="light" for whiteboard look
 
 ## MANDATORY TOOL SEQUENCE
-1. generate_video_script(topic="{brief}", duration={duration}, style="whiteboard hand-drawn", tone="friendly educational")
-2. Render ALL scenes using manim_execute_script(description=..., quality="h", background="light") — every visual must be Manim-generated stroke-by-stroke. Each call returns a Cloud URL.
-3. Use merge_videos if multiple clips need combining
-4. add_voiceover_to_video(input_video="{out}/output.mp4", voiceover_text="<the narration from the script above>", output_video="{out}/output.mp4")
-5. review_video(video_path_or_url="{out}/output.mp4")
+1. generate_video_script(topic="{brief}", duration={duration}, style="whiteboard hand-drawn", tone="friendly educational") — split into scenes ~20-25s each, one short narration line per scene. NARRATION DENSITY: target 70-85% speech coverage (hard floor 60%) — for a scene of T seconds its narration must run ~T*0.6s of speech. Then SELF-CHECK from SCENE_TIMELINE_JSON: (sum of speech / duration) >= 0.6 — if lower, rewrite the lines denser and re-run generate_narration BEFORE rendering.
+2. generate_narration(lines=[<one line per scene>], voice="Emma", output_file="{out}/narration.mp3", gap_seconds=0.35) — AUDIO-FIRST: this call returns the exact SCENE_TIMELINE_JSON that is the clock for the whole video. Call it ONCE with all scene lines; if it errors, fix the arguments and retry once. NEVER use add_voiceover_to_video or generate_text_to_speech for this service.
+3. Render each scene to EXACTLY its timeline duration: hyperframes_render(html=..., resolution=...) — FULL HyperFrames feature access (stroke/draw-on styling via masks, GSAP, shaders). Its root data-duration and every scene's data-start/data-duration MUST equal the timeline.
+4. merge_videos the scene clips in narration order, then add_audio(input_file="{out}/merged.mp4", audio_file="{out}/narration.mp3", output_file="{out}/output.mp4").
+5. review_video(video_path_or_url="{out}/output.mp4", original_request="whiteboard animation {title}", expected_features=["audible narration","scene changes stay in sync with narration","no cropped or overflowing text","every scene implements the HyperFrames features named in its plan"]) — this runs the timestamped AV-sync QA; fix ONLY the flagged timestamps if it fails.
 6. submit_final_answer(summary="whiteboard animation {title}", output_files=["{out}/output.mp4"])
 "#,
             duration = input.duration_seconds,
@@ -1799,11 +1789,11 @@ Use ONLY manim_execute_script for ALL visual content — every render call uploa
 - See manim_codegen: use background="dark" or "light" as appropriate
 
 ## MANDATORY TOOL SEQUENCE
-1. generate_video_script(topic="{brief}", duration={duration}, style="kinetic typography", tone="dynamic energetic")
-2. Render ALL scenes using manim_execute_script(description=..., quality="h") — text animations only, no diagrams or charts. Each call returns a Cloud URL.
-3. Use merge_videos if multiple clips need combining
-4. add_voiceover_to_video(input_video="{out}/output.mp4", voiceover_text="<the narration from the script above>", output_video="{out}/output.mp4")
-5. review_video(video_path_or_url="{out}/output.mp4")
+1. generate_video_script(topic="{brief}", duration={duration}, style="kinetic typography", tone="dynamic energetic") — split into scenes ~20-25s each, one short narration line per scene. NARRATION DENSITY: target 70-85% speech coverage (hard floor 60%) — for a scene of T seconds its narration must run ~T*0.6s of speech. Then SELF-CHECK from SCENE_TIMELINE_JSON: (sum of speech / duration) >= 0.6 — if lower, rewrite the lines denser and re-run generate_narration BEFORE rendering.
+2. generate_narration(lines=[<one line per scene>], voice="Emma", output_file="{out}/narration.mp3", gap_seconds=0.35) — AUDIO-FIRST: this call returns the exact SCENE_TIMELINE_JSON that is the clock for the whole video. Call it ONCE with all scene lines; if it errors, fix the arguments and retry once. NEVER use add_voiceover_to_video or generate_text_to_speech for this service.
+3. Render each scene to EXACTLY its timeline duration: hyperframes_render(html=..., resolution=...) — FULL HyperFrames feature access (Slug reveals, GSAP text timelines, VFX shaders, Lottie, masks...). Its root data-duration and every scene's data-start/data-duration MUST equal the timeline.
+4. merge_videos the scene clips in narration order, then add_audio(input_file="{out}/merged.mp4", audio_file="{out}/narration.mp3", output_file="{out}/output.mp4").
+5. review_video(video_path_or_url="{out}/output.mp4", original_request="kinetic typography {title}", expected_features=["audible narration","scene changes stay in sync with narration","no cropped or overflowing text","every scene implements the HyperFrames features named in its plan"]) — this runs the timestamped AV-sync QA; fix ONLY the flagged timestamps if it fails.
 6. submit_final_answer(summary="kinetic typography {title}", output_files=["{out}/output.mp4"])
 "#,
             duration = input.duration_seconds,
@@ -1838,11 +1828,11 @@ Use ONLY manim_execute_script for ALL visual content — every render call uploa
 - See manim_codegen: use background="dark" or "light" as appropriate
 
 ## MANDATORY TOOL SEQUENCE
-1. generate_video_script(topic="{brief}", duration={duration}, style="infographic animated charts", tone="professional data-driven")
-2. Render ALL scenes using manim_execute_script(description=..., quality="h") — charts, counters, data viz only. Each call returns a Cloud URL.
-3. Use merge_videos if multiple clips need combining
-4. add_voiceover_to_video(input_video="{out}/output.mp4", voiceover_text="<the narration from the script above>", output_video="{out}/output.mp4")
-5. review_video(video_path_or_url="{out}/output.mp4")
+1. generate_video_script(topic="{brief}", duration={duration}, style="infographic animated charts", tone="professional data-driven") — split into scenes ~20-25s each, one short narration line per scene. NARRATION DENSITY: target 70-85% speech coverage (hard floor 60%) — for a scene of T seconds its narration must run ~T*0.6s of speech. Then SELF-CHECK from SCENE_TIMELINE_JSON: (sum of speech / duration) >= 0.6 — if lower, rewrite the lines denser and re-run generate_narration BEFORE rendering.
+2. generate_narration(lines=[<one line per scene>], voice="Emma", output_file="{out}/narration.mp3", gap_seconds=0.35) — AUDIO-FIRST: this call returns the exact SCENE_TIMELINE_JSON that is the clock for the whole video. Call it ONCE with all scene lines; if it errors, fix the arguments and retry once. NEVER use add_voiceover_to_video or generate_text_to_speech for this service.
+3. Render each scene to EXACTLY its timeline duration: hyperframes_render(html=..., resolution=...) — FULL HyperFrames feature access (d3 animated charts, counters, icon layouts, transitions). Its root data-duration and every scene's data-start/data-duration MUST equal the timeline.
+4. merge_videos the scene clips in narration order, then add_audio(input_file="{out}/merged.mp4", audio_file="{out}/narration.mp3", output_file="{out}/output.mp4").
+5. review_video(video_path_or_url="{out}/output.mp4", original_request="animated infographic {title}", expected_features=["audible narration","scene changes stay in sync with narration","no cropped or overflowing text","every scene implements the HyperFrames features named in its plan"]) — this runs the timestamped AV-sync QA; fix ONLY the flagged timestamps if it fails.
 6. submit_final_answer(summary="animated infographic {title}", output_files=["{out}/output.mp4"])
 "#,
             duration = input.duration_seconds,
@@ -1877,11 +1867,11 @@ Use ONLY manim_execute_script for ALL visual content — every render call uploa
 - Include labeled axes or coordinates when needed
 
 ## MANDATORY TOOL SEQUENCE
-1. generate_video_script(topic="{brief}", duration={duration}, style="algorithm visualization", tone="educational technical")
-2. Render ALL scenes using manim_execute_script(description=..., quality="h") — algorithm visuals, data structures, code animations. Each call returns a Cloud URL.
-3. Use merge_videos if multiple clips need combining
-4. add_voiceover_to_video(input_video="{out}/output.mp4", voiceover_text="<the narration from the script above>", output_video="{out}/output.mp4")
-5. review_video(video_path_or_url="{out}/output.mp4")
+1. generate_video_script(topic="{brief}", duration={duration}, style="algorithm visualization", tone="educational technical") — split into scenes ~20-25s each, one short narration line per scene. NARRATION DENSITY: target 70-85% speech coverage (hard floor 60%) — for a scene of T seconds its narration must run ~T*0.6s of speech. Then SELF-CHECK from SCENE_TIMELINE_JSON: (sum of speech / duration) >= 0.6 — if lower, rewrite the lines denser and re-run generate_narration BEFORE rendering.
+2. generate_narration(lines=[<one line per scene>], voice="Emma", output_file="{out}/narration.mp3", gap_seconds=0.35) — AUDIO-FIRST: this call returns the exact SCENE_TIMELINE_JSON that is the clock for the whole video. Call it ONCE with all scene lines; if it errors, fix the arguments and retry once. NEVER use add_voiceover_to_video or generate_text_to_speech for this service.
+3. Render each scene to EXACTLY its timeline duration: manim_execute_script(description=..., duration=<scene duration>, quality="h", include_narration=false) — for algorithms, data structures, step-through animations; trim/pad each clip to the exact scene duration. hyperframes_render (FULL HyperFrames feature access) for title cards and transitions only.
+4. merge_videos the scene clips in narration order, then add_audio(input_file="{out}/merged.mp4", audio_file="{out}/narration.mp3", output_file="{out}/output.mp4").
+5. review_video(video_path_or_url="{out}/output.mp4", original_request="algorithm visualization {title}", expected_features=["audible narration","scene changes stay in sync with narration","no cropped or overflowing text","every scene implements the HyperFrames features named in its plan"]) — this runs the timestamped AV-sync QA; fix ONLY the flagged timestamps if it fails.
 6. submit_final_answer(summary="algorithm visualization {title}", output_files=["{out}/output.mp4"])
 "#,
             duration = input.duration_seconds,
@@ -1916,11 +1906,11 @@ Use ONLY manim_execute_script for ALL visual content — every render call uploa
 - Voiceover should be energetic and confident
 
 ## MANDATORY TOOL SEQUENCE
-1. generate_video_script(topic="{brief}", duration={duration}, style="investor pitch deck", tone="professional confident persuasive")
-2. Render ALL scenes using manim_execute_script(description=..., quality="h") — pitch deck slides, charts, animated metrics. Each call returns a Cloud URL.
-3. Use merge_videos if multiple clips need combining
-4. add_voiceover_to_video(input_video="{out}/output.mp4", voiceover_text="<the narration from the script above>", output_video="{out}/output.mp4")
-5. review_video(video_path_or_url="{out}/output.mp4")
+1. generate_video_script(topic="{brief}", duration={duration}, style="investor pitch deck", tone="professional confident persuasive") — split into scenes ~20-25s each, one short narration line per scene. NARRATION DENSITY: target 70-85% speech coverage (hard floor 60%) — for a scene of T seconds its narration must run ~T*0.6s of speech. Then SELF-CHECK from SCENE_TIMELINE_JSON: (sum of speech / duration) >= 0.6 — if lower, rewrite the lines denser and re-run generate_narration BEFORE rendering.
+2. generate_narration(lines=[<one line per scene>], voice="Emma", output_file="{out}/narration.mp3", gap_seconds=0.35) — AUDIO-FIRST: this call returns the exact SCENE_TIMELINE_JSON that is the clock for the whole video. Call it ONCE with all scene lines; if it errors, fix the arguments and retry once. NEVER use add_voiceover_to_video or generate_text_to_speech for this service.
+3. Render each scene to EXACTLY its timeline duration: hyperframes_render(html=..., resolution=...) — FULL HyperFrames feature access (d3 charts for traction/financials, GSAP milestone timelines, title cards, shaders). Its root data-duration and every scene's data-start/data-duration MUST equal the timeline.
+4. merge_videos the scene clips in narration order, then add_audio(input_file="{out}/merged.mp4", audio_file="{out}/narration.mp3", output_file="{out}/output.mp4").
+5. review_video(video_path_or_url="{out}/output.mp4", original_request="investor pitch {title}", expected_features=["audible narration","scene changes stay in sync with narration","no cropped or overflowing text","every scene implements the HyperFrames features named in its plan"]) — this runs the timestamped AV-sync QA; fix ONLY the flagged timestamps if it fails.
 6. submit_final_answer(summary="investor pitch {title}", output_files=["{out}/output.mp4"])
 "#,
             duration = input.duration_seconds,
@@ -1956,11 +1946,11 @@ Use ONLY manim_execute_script for ALL visual content — every render call uploa
 - See manim_codegen: use background="dark" for wrapped-style aesthetic
 
 ## MANDATORY TOOL SEQUENCE
-1. generate_video_script(topic="{brief}", duration={duration}, style="year-in-review wrapped", tone="energetic celebratory")
-2. Render ALL scenes using manim_execute_script(description=..., quality="h") — stat reveals, counters, charts. Each call returns a Cloud URL.
-3. Use merge_videos if multiple clips need combining
-4. add_voiceover_to_video(input_video="{out}/output.mp4", voiceover_text="<the narration from the script above>", output_video="{out}/output.mp4")
-5. review_video(video_path_or_url="{out}/output.mp4")
+1. generate_video_script(topic="{brief}", duration={duration}, style="year-in-review wrapped", tone="energetic celebratory") — split into scenes ~20-25s each, one short narration line per scene. NARRATION DENSITY: target 70-85% speech coverage (hard floor 60%) — for a scene of T seconds its narration must run ~T*0.6s of speech. Then SELF-CHECK from SCENE_TIMELINE_JSON: (sum of speech / duration) >= 0.6 — if lower, rewrite the lines denser and re-run generate_narration BEFORE rendering.
+2. generate_narration(lines=[<one line per scene>], voice="Emma", output_file="{out}/narration.mp3", gap_seconds=0.35) — AUDIO-FIRST: this call returns the exact SCENE_TIMELINE_JSON that is the clock for the whole video. Call it ONCE with all scene lines; if it errors, fix the arguments and retry once. NEVER use add_voiceover_to_video or generate_text_to_speech for this service.
+3. Render each scene to EXACTLY its timeline duration: hyperframes_render(html=..., resolution=...) — FULL HyperFrames feature access (d3 stats charts, counters, month-by-month GSAP timelines). Its root data-duration and every scene's data-start/data-duration MUST equal the timeline.
+4. merge_videos the scene clips in narration order, then add_audio(input_file="{out}/merged.mp4", audio_file="{out}/narration.mp3", output_file="{out}/output.mp4").
+5. review_video(video_path_or_url="{out}/output.mp4", original_request="year in review {title}", expected_features=["audible narration","scene changes stay in sync with narration","no cropped or overflowing text","every scene implements the HyperFrames features named in its plan"]) — this runs the timestamped AV-sync QA; fix ONLY the flagged timestamps if it fails.
 6. submit_final_answer(summary="year in review {title}", output_files=["{out}/output.mp4"])
 "#,
             duration = input.duration_seconds,
@@ -1997,11 +1987,11 @@ Use ONLY manim_execute_script for ALL visual content — every render call uploa
 - Set background="dark" for modern tech aesthetic or "light" for clean business look
 
 ## MANDATORY TOOL SEQUENCE
-1. generate_video_script(topic="{brief}", duration={duration}, style="isometric 3D explainer", tone="professional modern")
-2. Render ALL scenes using manim_execute_script(description=..., quality="h") — isometric 3D scenes, animated objects. Each call returns a Cloud URL.
-3. Use merge_videos if multiple clips need combining
-4. add_voiceover_to_video(input_video="{out}/output.mp4", voiceover_text="<the narration from the script above>", output_video="{out}/output.mp4")
-5. review_video(video_path_or_url="{out}/output.mp4")
+1. generate_video_script(topic="{brief}", duration={duration}, style="isometric 3D explainer", tone="professional modern") — split into scenes ~20-25s each, one short narration line per scene. NARRATION DENSITY: target 70-85% speech coverage (hard floor 60%) — for a scene of T seconds its narration must run ~T*0.6s of speech. Then SELF-CHECK from SCENE_TIMELINE_JSON: (sum of speech / duration) >= 0.6 — if lower, rewrite the lines denser and re-run generate_narration BEFORE rendering.
+2. generate_narration(lines=[<one line per scene>], voice="Emma", output_file="{out}/narration.mp3", gap_seconds=0.35) — AUDIO-FIRST: this call returns the exact SCENE_TIMELINE_JSON that is the clock for the whole video. Call it ONCE with all scene lines; if it errors, fix the arguments and retry once. NEVER use add_voiceover_to_video or generate_text_to_speech for this service.
+3. Render each scene to EXACTLY its timeline duration: hyperframes_render(html=..., resolution=...) — FULL HyperFrames feature access (CSS 3D isometric layers, perspective/parallax; CPU-safe, never GPU tools). Its root data-duration and every scene's data-start/data-duration MUST equal the timeline.
+4. merge_videos the scene clips in narration order, then add_audio(input_file="{out}/merged.mp4", audio_file="{out}/narration.mp3", output_file="{out}/output.mp4").
+5. review_video(video_path_or_url="{out}/output.mp4", original_request="isometric explainer {title}", expected_features=["audible narration","scene changes stay in sync with narration","no cropped or overflowing text","every scene implements the HyperFrames features named in its plan"]) — this runs the timestamped AV-sync QA; fix ONLY the flagged timestamps if it fails.
 6. submit_final_answer(summary="isometric explainer {title}", output_files=["{out}/output.mp4"])
 "#,
             duration = input.duration_seconds,
@@ -2141,13 +2131,17 @@ fn plan_is_valid(plan: &str, service_type: ServiceType) -> bool {
 /// guaranteed-sane fallback when the LLM planner fails validation twice.
 fn canned_plan(service_type: ServiceType, delivery_id: Uuid) -> String {
     let chains: &[&str] = match service_type {
-        ServiceType::Clipping => &["download_source_media -> source.mp4",
+        ServiceType::Clipping => &[
+            "download_source_media -> source.mp4",
             "generate_clip_compilation(highlights, captions) -> clip URLs",
             "review_video(clip compilation) -> QA pass",
-            "submit_final_answer(clip URLs) -> delivered clips"],
-        ServiceType::VoiceAudio => &["generate_narration(script lines) -> audio.mp3",
+            "submit_final_answer(clip URLs) -> delivered clips",
+        ],
+        ServiceType::VoiceAudio => &[
+            "generate_narration(script lines) -> audio.mp3",
             "review_video(audio levels) -> QA pass",
-            "submit_final_answer(audio files) -> delivered audio"],
+            "submit_final_answer(audio files) -> delivered audio",
+        ],
         ServiceType::LandingPage => &[
             "browserbase_crawl_website(source url) -> crawled facts",
             "generate_video_script(facts, brief) -> scene plan",
@@ -2157,8 +2151,11 @@ fn canned_plan(service_type: ServiceType, delivery_id: Uuid) -> String {
             "review_video(output.mp4) -> QA pass",
             "submit_final_answer(output.mp4) -> delivered video",
         ],
-        ServiceType::BusinessExplainer | ServiceType::Education | ServiceType::InvestorPitch
-        | ServiceType::IsometricExplainer | ServiceType::AnimatedInfographic
+        ServiceType::BusinessExplainer
+        | ServiceType::Education
+        | ServiceType::InvestorPitch
+        | ServiceType::IsometricExplainer
+        | ServiceType::AnimatedInfographic
         | ServiceType::YearInReview => &[
             "generate_video_script(brief) -> scene plan",
             "generate_narration(scene lines) -> narration.mp3 + timeline",
