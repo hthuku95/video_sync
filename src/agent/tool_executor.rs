@@ -2735,13 +2735,12 @@ async fn execute_polyfork_search(args: &Value) -> String {
         url.push_str(&format!("&max_triangles={}", t));
     }
 
-    let resp = tokio::time::timeout(std::time::Duration::from_secs(30), reqwest::get(&url))
+    let resp = match tokio::time::timeout(std::time::Duration::from_secs(30), reqwest::get(&url))
         .await
-        .map_err(|_| "polyfork request timed out".to_string())
-        .and_then(|r| r);
-    let resp = match resp {
-        Ok(r) => r,
-        Err(e) => return format!("❌ Polyfork search failed: {}", e),
+    {
+        Ok(Ok(r)) => r,
+        Ok(Err(e)) => return format!("❌ Polyfork request failed: {}", e),
+        Err(_) => return "❌ Polyfork request timed out (30s)".to_string(),
     };
     let body: Value = match resp.json().await {
         Ok(v) => v,
