@@ -1265,7 +1265,7 @@ Style: {style}
 The tool `generate_long_form_video` delegates to another agent and will NOT produce the correct output. Call the rendering tools directly.
 
 ## STEP 0: UNDERSTAND THE WEBSITE (if source URL is provided)
-If a source URL is provided, call `browserbase_crawl_website(url="{url}")` to crawl the full website. From the response, get the `feature_tag` and `pages`, then call `vectorize_crawled_content(feature_tag="<tag>", pages=<array>)` to store in Qdrant. Use `search_crawled_content(query="design and features", feature_tag="<tag>")` to get specific product details. Use the extracted content to understand the product's features, design, and brand style.
+If a source URL is provided, use it as reference context for the product's look and features (crawling is OPTIONAL for this service — only LandingPage requires it). If you do crawl, get the `feature_tag` and `pages`, then call `vectorize_crawled_content(feature_tag="<tag>", pages=<array>)` to store in Qdrant, and use `search_crawled_content(query="design and features", feature_tag="<tag>")` to get specific product details. Use the extracted content to understand the product's features, design, and brand style.
 
 ## MANDATORY TOOL SEQUENCE
 0. (If the product/scene benefits from realistic pre-made geometry — devices,
@@ -1618,23 +1618,25 @@ Save your final video as .mp4 (landscape 16:9 recommended)"#,
             ServiceType::YearInReview => Self::year_in_review_prompt(input),
             ServiceType::IsometricExplainer => Self::isometric_explainer_prompt(input),
         };
-        // Story-source grounding (owner directive Nov 12 2026): users must be
-        // able to ask for ANY story from a website URL, and the agent has to
-        // tell that story from REAL website facts. Every service whose input
-        // carries a URL gets the crawl step prepended — unless its own prompt
-        // already contains one (LandingPage/ProductMockup have richer inline
-        // versions). This is why the scraping infrastructure exists.
+        // Story-source grounding (owner directive Nov 13 2026): ONLY the
+        // LandingPage service needs the URL crawl step — every other service
+        // treats the URL as reference context (no crawl) and obeys the same
+        // story contract. This is why the scraping infrastructure exists.
         let has_url = input
             .source_url
             .as_deref()
             .map(|u| !u.trim().is_empty())
             .unwrap_or(false);
-        if has_url && !base.contains("browserbase_crawl_website") {
+        if service_type == ServiceType::LandingPage
+            && has_url
+            && !base.contains("browserbase_crawl_website")
+        {
             base = format!("{}\n\n{}", Self::story_source_block(input), base);
-        } else if !has_url && Self::is_narrative_service(service_type) {
-            // No URL: the brief itself is the source of truth — same story
-            // contract, minus the crawl step (owner: story integrity is for
-            // ALL video types, not just landing pages).
+        } else if Self::is_narrative_service(service_type)
+            && !base.contains("THE STORY CONTRACT")
+        {
+            // All other narrative services (URL or not): brief is the source
+            // of truth; the URL, when present, is reference context only.
             base = format!("{}\n\n{}", Self::story_contract_block(input), base);
         }
         base
@@ -2033,8 +2035,21 @@ async fn generate_execution_plan(
     let tool_hints = match service_type {
         ServiceType::Clipping => "generate_clip_compilation (downloads + extracts + captions clips), kick_post_processing happens automatically; final artifacts are clip URLs",
         ServiceType::LandingPage => "browserbase_crawl_website (read the source site first), generate_video_script, generate_narration (audio-first timing), hyperframes_render, add_audio, review_video, submit_final_answer",
-        ServiceType::Education => "generate_video_script, generate_narration (audio-first timing), hyperframes_render, manim_execute_script, merge_videos, add_audio, review_video, submit_final_answer",
-        _ => "generate_video_script, hyperframes_render, manim_execute_script, merge_videos, add_voiceover_to_video, review_video, submit_final_answer",
+        ServiceType::Education => "generate_video_script, generate_narration (audio-first timing), hyperframes_render, manim_execute_script (only for equations/diagrams/LaTeX), merge_videos, add_audio, review_video, submit_final_answer",
+        // Tailored chains for the other narrative services (owner directive
+        // Nov 13 2026): every plan must reflect how ITS video type is built,
+        // not the generic fallback.
+        ServiceType::BusinessExplainer => "generate_video_script, generate_narration (audio-first timing), hyperframes_render (kinetic typography, animated layouts, feature showcases), manim_execute_script (only for charts/timelines), merge_videos, add_audio, review_video, submit_final_answer",
+        ServiceType::InvestorPitch => "generate_video_script, generate_narration (audio-first timing), hyperframes_render (d3 charts for traction/financials, GSAP timelines for milestones, title cards), merge_videos, add_audio, review_video, submit_final_answer",
+        ServiceType::AnimatedInfographic => "generate_video_script, generate_narration (audio-first timing), hyperframes_render (d3 animated charts, counters, icon layouts, transitions), merge_videos, add_audio, review_video, submit_final_answer",
+        ServiceType::KineticTypography => "generate_video_script, generate_narration (audio-first timing), hyperframes_render ONLY (Slug word-by-word reveals, GSAP text timelines — no charts), merge_videos, add_audio, review_video, submit_final_answer",
+        ServiceType::WhiteboardAnimation => "generate_video_script, generate_narration (audio-first timing), hyperframes_render ONLY (hand-drawn stroke/line style, masks for draw-on effects), merge_videos, add_audio, review_video, submit_final_answer",
+        ServiceType::ManimExplainer | ServiceType::AlgorithmViz => "generate_video_script, generate_narration (audio-first timing), manim_execute_script (equations, algorithms, data structures, step-through animations), hyperframes_render (title cards + transitions only), merge_videos, add_audio, review_video, submit_final_answer",
+        ServiceType::YearInReview => "generate_video_script, generate_narration (audio-first timing), hyperframes_render (d3 charts for stats, counters, GSAP timelines for month milestones), merge_videos, add_audio, review_video, submit_final_answer",
+        ServiceType::IsometricExplainer => "generate_video_script, generate_narration (audio-first timing), hyperframes_render ONLY (CSS 3D isometric layouts, perspective + parallax layers — no GPU tools), merge_videos, add_audio, review_video, submit_final_answer",
+        ServiceType::FullStack | ServiceType::ProductMockup => "generate_video_script, generate_narration (audio-first timing), hyperframes_render (UI mockups, screen flows, device frames), manim_execute_script (only for technical diagrams), merge_videos, add_audio, review_video, submit_final_answer",
+        ServiceType::Thumbnails => "hyperframes_render (static cover frames), submit_final_answer",
+        _ => "generate_video_script, generate_narration (audio-first timing), hyperframes_render, manim_execute_script (only for math/diagrams), merge_videos, add_audio, review_video, submit_final_answer",
     };
 
     let prompt = format!(
@@ -2123,14 +2138,23 @@ fn canned_plan(service_type: ServiceType, delivery_id: Uuid) -> String {
         ServiceType::VoiceAudio => &["generate_narration(script lines) -> audio.mp3",
             "review_video(audio levels) -> QA pass",
             "submit_final_answer(audio files) -> delivered audio"],
-        ServiceType::LandingPage | ServiceType::Education | ServiceType::BusinessExplainer
-        | ServiceType::InvestorPitch | ServiceType::IsometricExplainer
-        | ServiceType::AnimatedInfographic | ServiceType::YearInReview => &[
+        ServiceType::LandingPage => &[
             "browserbase_crawl_website(source url) -> crawled facts",
             "generate_video_script(facts, brief) -> scene plan",
             "generate_narration(scene lines) -> narration.mp3 + timeline",
             "hyperframes_render(scene compositions) -> visuals.mp4",
             "add_audio(visuals, narration) -> output.mp4",
+            "review_video(output.mp4) -> QA pass",
+            "submit_final_answer(output.mp4) -> delivered video",
+        ],
+        ServiceType::BusinessExplainer | ServiceType::Education | ServiceType::InvestorPitch
+        | ServiceType::IsometricExplainer | ServiceType::AnimatedInfographic
+        | ServiceType::YearInReview => &[
+            "generate_video_script(brief) -> scene plan",
+            "generate_narration(scene lines) -> narration.mp3 + timeline",
+            "hyperframes_render(scene compositions) -> visuals.mp4",
+            "merge_videos(scene clips) -> merged.mp4",
+            "add_audio(merged, narration) -> output.mp4",
             "review_video(output.mp4) -> QA pass",
             "submit_final_answer(output.mp4) -> delivered video",
         ],
