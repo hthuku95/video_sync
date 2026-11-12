@@ -2062,8 +2062,9 @@ async fn generate_execution_plan(
          VFX shaders (glitch, film grain, chromatic aberration, bloom, halftone, CRT...),\n\
          Slug GPU vector typography, d3 animated charts, 3D scene graph (glTF + PBR),\n\
          GSAP timelines, Lottie playback, audio-reactive motion, transitions, masks, CSS\n\
-         perspective/parallax — including for services currently gated OFF by the campaigns\n\
-         switch (the planner still plans them; the gate is at order time, not render time).\n\
+         perspective/parallax. The planner only ever runs for services whose model-access\n\
+         flag is ON, so every planned service already has the full feature menu — flipping\n\
+         a service flag ON (POST /api/admin/service-flags) needs zero re-engineering.\n\
          Pick whichever combination best serves the brief (>=3 distinct features per video).\n\n\
          Write a concise numbered execution plan (5-9 steps) to produce this video.\n\
          Each step must be ONE line in exactly this format:\n\
