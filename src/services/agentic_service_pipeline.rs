@@ -1576,7 +1576,7 @@ Save your final video as .mp4 (landscape 16:9 recommended)"#,
         input: &ServiceInput,
         output_dir: &str,
     ) -> String {
-        match service_type {
+        let mut base = match service_type {
             ServiceType::LandingPage => Self::landing_page_prompt(input),
             ServiceType::ProductMockup => Self::product_mockup_prompt(input),
             ServiceType::Thumbnails => Self::thumbnail_prompt(input),
@@ -1593,10 +1593,89 @@ Save your final video as .mp4 (landscape 16:9 recommended)"#,
             ServiceType::InvestorPitch => Self::investor_pitch_prompt(input),
             ServiceType::YearInReview => Self::year_in_review_prompt(input),
             ServiceType::IsometricExplainer => Self::isometric_explainer_prompt(input),
+        };
+        // Story-source grounding (owner directive Nov 12 2026): users must be
+        // able to ask for ANY story from a website URL, and the agent has to
+        // tell that story from REAL website facts. Every service whose input
+        // carries a URL gets the crawl step prepended — unless its own prompt
+        // already contains one (LandingPage/ProductMockup have richer inline
+        // versions). This is why the scraping infrastructure exists.
+        let has_url = input
+            .source_url
+            .as_deref()
+            .map(|u| !u.trim().is_empty())
+            .unwrap_or(false);
+        if has_url && !base.contains("browserbase_crawl_website") {
+            base = format!("{}\n\n{}", Self::story_source_block(input), base);
+        } else if !has_url && Self::is_narrative_service(service_type) {
+            // No URL: the brief itself is the source of truth — same story
+            // contract, minus the crawl step (owner: story integrity is for
+            // ALL video types, not just landing pages).
+            base = format!("{}\n\n{}", Self::story_contract_block(input), base);
         }
+        base
+    }
+
+    /// Narrative video types that must obey the story contract. Visual-tool
+    /// services (thumbnails, clipping, voice) are excluded — their outputs
+    /// are not stories.
+    fn is_narrative_service(service_type: ServiceType) -> bool {
+        !matches!(
+            service_type,
+            ServiceType::Thumbnails | ServiceType::Clipping | ServiceType::VoiceAudio
+        )
+    }
+
+    /// Story contract for brief/topic-driven services (no URL to crawl).
+    fn story_contract_block(input: &ServiceInput) -> String {
+        let brief = Self::truncate_brief(&input.brief, 400);
+        format!(
+            r#"## THE STORY CONTRACT (applies before any tool call)
+- The user asked for this story: "{brief}"
+- That brief is the CREATIVE CONTRACT — tell exactly the story they asked for, in the angle/framing they requested. Do not substitute a different story.
+- Use only facts that are real (from the brief, source material, or well-established knowledge); never invent features, numbers, or claims.
+- Every scene must ADVANCE the story: hook → problem/context → development (the interesting core) → payoff → closing takeaway. The visual plan for each scene must illustrate THAT scene's spoken line — the audience should understand the video with the sound off, and the narration should stand on its own with the visuals off."#,
+            brief = brief,
+        )
+    }
+
+    /// Prepended source-grounding block for URL-backed narrative services.
+    /// The user's brief is the creative contract (the story angle they asked
+    /// for); the crawled website is the fact material the story is built on.
+    fn story_source_block(input: &ServiceInput) -> String {
+        let url = input.source_url.as_deref().unwrap_or("");
+        let brief = Self::truncate_brief(&input.brief, 400);
+        format!(
+            r#"## STEP 0: GROUND THE STORY IN THE REAL WEBSITE (do this FIRST)
+Before writing anything, call `browserbase_crawl_website(url="{url}")` to crawl the full website, then:
+1. Call `vectorize_crawled_content(feature_tag="<the response's feature_tag>", pages=<the pages array>)` to store every page in Qdrant.
+2. Call `search_crawled_content(query="what the business does, key features, value proposition", feature_tag="<tag>")` for product facts.
+3. Call `search_crawled_content(query="pricing, offers, audience, call-to-action", feature_tag="<tag>")` for commercial facts.
+4. Call `search_crawled_content(query="brand voice, tone, design style, hero copy", feature_tag="<tag>")` for voice and design language.
+
+THE STORY CONTRACT:
+- The user asked for this story: "{brief}"
+- That brief is the CREATIVE CONTRACT — tell exactly the story they asked for, in the angle/framing they requested.
+- Build the story ONLY from the crawled website facts (features, pricing, audience, offers). Never invent features, numbers, or claims the site doesn't support.
+- Every scene must ADVANCE the story: hook (the site's strongest promise) → problem → solution (real features) → proof/results → call to action (the site's actual CTA). The visual plan for each scene must illustrate THAT scene's spoken line — the audience should understand the video with the sound off, and the narration should stand on its own with the visuals off."#,
+            url = url,
+            brief = brief,
+        )
     }
 
     // ── NEW MANIM-ONLY SERVICE PROMPTS ─────────────────────────────────────
+
+    /// Long briefs are embedded in agent prompts — cap them so the story
+    /// contract stays readable (and prompt tokens bounded).
+    fn truncate_brief(s: &str, max: usize) -> String {
+        let t = s.trim().replace('\n', " ");
+        if t.chars().count() <= max {
+            t
+        } else {
+            let cut: String = t.chars().take(max.saturating_sub(3)).collect();
+            format!("{cut}...")
+        }
+    }
 
     fn manim_explainer_prompt(input: &ServiceInput) -> String {
         let out = format!("outputs/agentic_{}", input.delivery_id);
